@@ -64,14 +64,10 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
-struct ContinuationGuardedLlmStream {
+struct ExecutionGuardedLlmStream {
     inner: LlmJsonStream,
-    guard: Option<MiddlewareContinuationGuard>,
-}
-
-struct CodecGuardedLlmStream {
-    inner: LlmJsonStream,
-    guard: Option<LlmExecutionCodecLeaseGuard>,
+    continuation_guard: Option<MiddlewareContinuationGuard>,
+    codec_guard: Option<LlmExecutionCodecLeaseGuard>,
 }
 
 struct ContextualizedLlmStream {
@@ -120,23 +116,27 @@ pub(crate) fn contextualize_stream(
     })
 }
 
-impl Stream for ContinuationGuardedLlmStream {
+impl Stream for ExecutionGuardedLlmStream {
     type Item = crate::error::Result<Json>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         let result = Pin::new(&mut this.inner).poll_next(cx);
         if matches!(&result, Poll::Ready(None)) {
-            this.guard.take();
+            this.continuation_guard.take();
+            this.codec_guard.take();
+        } else if matches!(&result, Poll::Ready(Some(Err(_)))) {
+            this.codec_guard.take();
         }
         result
     }
 }
 
-impl LlmStreamInner for ContinuationGuardedLlmStream {
+impl LlmStreamInner for ExecutionGuardedLlmStream {
     fn terminalize(self: Pin<&mut Self>) {
         let this = self.get_mut();
-        this.guard.take();
+        this.codec_guard.take();
+        this.continuation_guard.take();
         this.inner.terminalize();
     }
 
@@ -145,60 +145,24 @@ impl LlmStreamInner for ContinuationGuardedLlmStream {
     ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + '_>> {
         Box::pin(async move {
             let this = self.get_mut();
-            let guard = this.guard.take();
+            let continuation_guard = this.continuation_guard.take();
             let result = this.inner.close().await;
-            drop(guard);
+            drop(continuation_guard);
+            this.codec_guard.take();
             result
         })
     }
 }
 
-fn guard_stream_continuation(
+fn guard_execution_stream(
     stream: LlmJsonStream,
-    guard: MiddlewareContinuationGuard,
+    continuation_guard: MiddlewareContinuationGuard,
+    codec_guard: LlmExecutionCodecLeaseGuard,
 ) -> LlmJsonStream {
-    LlmJsonStream::from_closeable(ContinuationGuardedLlmStream {
+    LlmJsonStream::from_closeable(ExecutionGuardedLlmStream {
         inner: stream,
-        guard: Some(guard),
-    })
-}
-
-impl Stream for CodecGuardedLlmStream {
-    type Item = crate::error::Result<Json>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        let result = Pin::new(&mut this.inner).poll_next(cx);
-        if matches!(&result, Poll::Ready(None) | Poll::Ready(Some(Err(_)))) {
-            this.guard.take();
-        }
-        result
-    }
-}
-
-impl LlmStreamInner for CodecGuardedLlmStream {
-    fn terminalize(self: Pin<&mut Self>) {
-        let this = self.get_mut();
-        this.guard.take();
-        this.inner.terminalize();
-    }
-
-    fn close(
-        self: Pin<&mut Self>,
-    ) -> Pin<Box<dyn Future<Output = crate::error::Result<()>> + Send + '_>> {
-        Box::pin(async move {
-            let this = self.get_mut();
-            let result = this.inner.close().await;
-            this.guard.take();
-            result
-        })
-    }
-}
-
-fn guard_stream_codec(stream: LlmJsonStream, guard: LlmExecutionCodecLeaseGuard) -> LlmJsonStream {
-    LlmJsonStream::from_closeable(CodecGuardedLlmStream {
-        inner: stream,
-        guard: Some(guard),
+        continuation_guard: Some(continuation_guard),
+        codec_guard: Some(codec_guard),
     })
 }
 
@@ -1947,8 +1911,7 @@ impl NemoRelayContextState {
                     });
                     let result = callable(&current_name, request, current_context, raw_next).await;
                     result.map(|stream| {
-                        let stream = guard_stream_continuation(stream, continuation_guard);
-                        guard_stream_codec(stream, codec_guard)
+                        guard_execution_stream(stream, continuation_guard, codec_guard)
                     })
                 })
             });

@@ -100,6 +100,11 @@ impl LlmResponseCodec for RevocableResponseCodec {
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         upgrade_active_codec(&self.codec, &self.gate)?.decode_response(response)
     }
+
+    fn allows_estimated_cost(&self, response: &Json) -> bool {
+        upgrade_active_codec(&self.codec, &self.gate)
+            .is_ok_and(|codec| codec.allows_estimated_cost(response))
+    }
 }
 
 /// Codec access for one LLM execution.
@@ -112,6 +117,8 @@ impl LlmResponseCodec for RevocableResponseCodec {
 /// not select a different codec. Codec handles expire when the interceptor
 /// finishes; a streaming request handle remains valid until its returned stream
 /// ends or closes. Later use returns [`FlowError::InvalidArgument`].
+/// Public construction supports direct callback tests; only Relay can attach
+/// active, revocable codec handles.
 #[derive(Clone, Debug, Default)]
 pub struct LlmExecutionContext {
     request_codec: LlmSanitizeRequestContext,
@@ -119,7 +126,7 @@ pub struct LlmExecutionContext {
 }
 
 impl LlmExecutionContext {
-    /// Construct an execution context from its directional codec contexts.
+    /// Construct an execution context from request and optional response codec context.
     #[must_use]
     pub fn new(
         request_codec: LlmSanitizeRequestContext,
@@ -131,7 +138,7 @@ impl LlmExecutionContext {
         }
     }
 
-    /// Construct the context for a unary managed execution.
+    /// Construct the context for a non-streaming managed execution.
     pub(crate) fn for_unary_codecs(
         request_codec: Option<Arc<dyn LlmCodec>>,
         response_codec: &Option<Arc<dyn LlmResponseCodec>>,
@@ -205,7 +212,7 @@ impl LlmExecutionContext {
         &self.request_codec
     }
 
-    /// Return the unary response-direction codec identity and revocable capability.
+    /// Return the completed-response codec identity and revocable capability.
     ///
     /// Streaming execution returns `None` because Relay does not expose a
     /// completed-response codec for individual stream chunks.
@@ -216,92 +223,5 @@ impl LlmExecutionContext {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
-
-    struct LeaseProbeCodec;
-
-    impl LlmCodec for LeaseProbeCodec {
-        fn codec_identity(&self) -> LlmCodecIdentity {
-            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
-        }
-
-        fn decode(&self, _request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
-            Ok(AnnotatedLlmRequest::default())
-        }
-
-        fn encode(
-            &self,
-            _annotated: &AnnotatedLlmRequest,
-            original: &LlmRequest,
-        ) -> Result<LlmRequest> {
-            Ok(original.clone())
-        }
-    }
-
-    impl LlmResponseCodec for LeaseProbeCodec {
-        fn codec_identity(&self) -> LlmCodecIdentity {
-            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
-        }
-
-        fn decode_response(&self, _response: &Json) -> Result<AnnotatedLlmResponse> {
-            Ok(AnnotatedLlmResponse::default())
-        }
-    }
-
-    #[test]
-    fn retained_facades_forward_while_active_and_expire_with_their_lease() {
-        let backing = Arc::new(LeaseProbeCodec);
-        let backing_probe = Arc::downgrade(&backing);
-        let request_codec: Arc<dyn LlmCodec> = backing.clone();
-        let response_codec: Arc<dyn LlmResponseCodec> = backing.clone();
-        let context =
-            LlmExecutionContext::for_unary_codecs(Some(request_codec), &Some(response_codec));
-        drop(backing);
-
-        let (leased_context, guard) = context.lease();
-        let retained_request = leased_context.request_codec().resolve_codec().unwrap();
-        let retained_response = leased_context
-            .response_codec()
-            .and_then(LlmSanitizeResponseContext::resolve_codec)
-            .unwrap();
-        drop(leased_context);
-        drop(context);
-
-        let request = LlmRequest {
-            headers: serde_json::Map::new(),
-            content: Json::Null,
-        };
-        let annotated = retained_request.decode(&request).unwrap();
-        assert_eq!(
-            retained_request.encode(&annotated, &request).unwrap(),
-            request
-        );
-        assert_eq!(
-            retained_response.decode_response(&Json::Null).unwrap(),
-            AnnotatedLlmResponse::default()
-        );
-        assert!(backing_probe.upgrade().is_some());
-
-        drop(guard);
-
-        assert!(backing_probe.upgrade().is_none());
-        assert_eq!(
-            retained_request.codec_identity(),
-            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
-        );
-        assert_eq!(
-            retained_response.codec_identity(),
-            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
-        );
-        assert!(matches!(
-            retained_request.decode(&request),
-            Err(FlowError::InvalidArgument(_))
-        ));
-        assert!(matches!(
-            retained_response.decode_response(&Json::Null),
-            Err(FlowError::InvalidArgument(_))
-        ));
-    }
-}
+#[path = "../../../tests/unit/llm_execution_context_tests.rs"]
+mod tests;

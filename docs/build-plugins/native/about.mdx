@@ -33,7 +33,7 @@ The checked example registers a tool execution intercept, so it declares
 that lower bound because an older Relay cannot load the ABI v7 function table, even
 when the component itself does not register an LLM execution intercept.
 
-Relay 0.10 adds ABI v7 with directional codec context on every LLM
+Relay 0.10 adds ABI v7 with request and response codec context on every LLM
 execution callback. Rebuild all native plugins for this release; the authored
 `native_api = "1"` label does not change.
 
@@ -52,7 +52,7 @@ attributed to a particular plugin.
 ## What the SDK Owns
 
 The Rust SDK exports the stable entry symbol, converts host-owned JSON handles into
-typed DTOs, registers all 16 plugin surfaces, and drives async middleware on one
+typed DTOs, registers the supported subscriber and middleware surfaces, and drives async middleware on one
 SDK-owned multi-thread Tokio runtime per configured component. A plugin can set a
 default executor size and accept a positive `executor.worker_threads` component
 override. The default is two workers; change it only after measuring queued async work
@@ -153,7 +153,7 @@ Follow these pages in order to build, activate, exercise, and remove the native 
    including subscribers and all three event sanitizer surfaces.
 3. Add policy and request rewriting with [Control Requests](/build-plugins/native/control-requests),
    preserving annotations and making priority and `break_chain` explicit.
-4. Add tool, unary model, and lazy stream wrappers with [Wrap Execution](/build-plugins/native/wrap-execution).
+4. Add tool, non-streaming model, and lazy stream wrappers with [Wrap Execution](/build-plugins/native/wrap-execution).
 5. Verify marks, scopes, isolated stacks, cleanup, and executor control with
    [Runtime Events and Scopes](/build-plugins/native/runtime-events-and-scopes).
 6. Consult [Native ABI Reference](/build-plugins/native/native-abi-reference) only when

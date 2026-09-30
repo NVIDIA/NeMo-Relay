@@ -1860,6 +1860,14 @@ fn test_host() -> NemoRelayNativeHostApiV1 {
     }
 }
 
+fn wait_until(message: &str, mut condition: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !condition() {
+        assert!(Instant::now() < deadline, "{message}");
+        std::thread::yield_now();
+    }
+}
+
 #[derive(Debug)]
 struct MockAsyncCompletion {
     settled: Mutex<Option<std::result::Result<Json, String>>>,
@@ -1899,11 +1907,9 @@ impl MockAsyncCompletion {
     }
 
     fn wait_for_release(&self) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while self.releases.load(Ordering::SeqCst) == 0 {
-            assert!(Instant::now() < deadline, "completion was not released");
-            std::thread::yield_now();
-        }
+        wait_until("completion was not released", || {
+            self.releases.load(Ordering::SeqCst) != 0
+        });
     }
 }
 
@@ -1971,11 +1977,9 @@ impl MockAsyncOutput {
     }
 
     fn wait_for_release(&self) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while self.releases.load(Ordering::SeqCst) == 0 {
-            assert!(Instant::now() < deadline, "async output was not released");
-            std::thread::yield_now();
-        }
+        wait_until("async output was not released", || {
+            self.releases.load(Ordering::SeqCst) != 0
+        });
     }
 }
 
@@ -4882,14 +4886,9 @@ fn typed_async_unary_execution_codecs_expire_after_completion_settles() {
             .is_err()
     );
     drop(context);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while completion.releases.load(Ordering::SeqCst) < 3 {
-        assert!(
-            Instant::now() < deadline,
-            "retained codec facades were not released"
-        );
-        std::thread::yield_now();
-    }
+    wait_until("retained codec facades were not released", || {
+        completion.releases.load(Ordering::SeqCst) >= 3
+    });
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
 }
@@ -4962,14 +4961,9 @@ fn typed_async_stream_execution_codec_expires_after_stream_finishes() {
             .is_err()
     );
     drop(context);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while output.releases.load(Ordering::SeqCst) < 2 {
-        assert!(
-            Instant::now() < deadline,
-            "retained stream codec facade was not released"
-        );
-        std::thread::yield_now();
-    }
+    wait_until("retained stream codec facade was not released", || {
+        output.releases.load(Ordering::SeqCst) >= 2
+    });
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
 }
@@ -5012,14 +5006,10 @@ fn typed_async_llm_sanitize_context_decodes_oci_genai_builtin_identity() {
     // The context's retained codec capability is released on the SDK executor
     // after the result completion is delivered, so poll instead of asserting
     // immediately.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while live_host_strings() != 0 {
-        assert!(
-            Instant::now() < deadline,
-            "host strings were not released after the sanitize invocation"
-        );
-        std::thread::yield_now();
-    }
+    wait_until(
+        "host strings were not released after the sanitize invocation",
+        || live_host_strings() == 0,
+    );
 }
 
 #[test]
@@ -5062,14 +5052,10 @@ fn typed_async_llm_sanitize_context_decodes_all_builtin_identities() {
         );
         unsafe { registration.free() };
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while live_host_strings() != 0 {
-            assert!(
-                Instant::now() < deadline,
-                "host strings were not released after the sanitize invocation"
-            );
-            std::thread::yield_now();
-        }
+        wait_until(
+            "host strings were not released after the sanitize invocation",
+            || live_host_strings() == 0,
+        );
     }
 }
 
@@ -5340,14 +5326,9 @@ fn typed_async_cancellation_drops_future_and_releases_owned_handles() {
         Ok(NemoRelayNativeAsyncCallbackState::Pending)
     );
     completion.wait_for_release();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while future_drops.load(Ordering::SeqCst) == 0 || next.releases.load(Ordering::SeqCst) == 0 {
-        assert!(
-            Instant::now() < deadline,
-            "cancelled state was not reclaimed"
-        );
-        std::thread::yield_now();
-    }
+    wait_until("cancelled state was not reclaimed", || {
+        future_drops.load(Ordering::SeqCst) != 0 && next.releases.load(Ordering::SeqCst) != 0
+    });
     assert!(completion.settled.lock().unwrap().is_none());
     assert_eq!(completion.releases.load(Ordering::SeqCst), 1);
     assert_eq!(future_drops.load(Ordering::SeqCst), 1);
@@ -5389,20 +5370,14 @@ fn typed_async_cancellation_while_awaiting_reclaims_future() {
         )
     };
     unsafe { (host.v3.v1.string_free)(invocation) };
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !started.load(Ordering::SeqCst) {
-        assert!(Instant::now() < deadline, "callback future never started");
-        std::thread::yield_now();
-    }
+    wait_until("callback future never started", || {
+        started.load(Ordering::SeqCst)
+    });
     completion.cancelled.store(true, Ordering::SeqCst);
     completion.wait_for_release();
-    while future_drops.load(Ordering::SeqCst) == 0 {
-        assert!(
-            Instant::now() < deadline,
-            "cancelled future was not dropped"
-        );
-        std::thread::yield_now();
-    }
+    wait_until("cancelled future was not dropped", || {
+        future_drops.load(Ordering::SeqCst) != 0
+    });
     assert!(completion.settled.lock().unwrap().is_none());
     assert_eq!(completion.releases.load(Ordering::SeqCst), 1);
     assert_eq!(future_drops.load(Ordering::SeqCst), 1);
@@ -5559,11 +5534,9 @@ fn typed_async_stream_cancellation_while_polling_releases_output() {
         )
     };
     unsafe { (host_v1.string_free)(invocation) };
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !started.load(Ordering::SeqCst) {
-        assert!(Instant::now() < deadline, "returned stream was not polled");
-        std::thread::yield_now();
-    }
+    wait_until("returned stream was not polled", || {
+        started.load(Ordering::SeqCst)
+    });
     output.cancelled.store(true, Ordering::SeqCst);
     output.wait_for_release();
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);

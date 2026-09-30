@@ -1462,6 +1462,15 @@ fn worker_llm_execution_context_requires_zero_ten_compatibility() {
     let (_manifest_dir, manifest_ref) =
         write_manifest_with_relay(fixture.binary_path(), ">=0.9,<1.0");
 
+    let activation = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::from_iter([("event_metadata_injector_only".into(), json!(true))]),
+    }])
+    .expect("the 0.10 floor applies only to workers that register LLM execution intercepts");
+    activation.clear();
+
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),

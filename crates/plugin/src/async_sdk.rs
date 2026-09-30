@@ -244,18 +244,18 @@ impl CompletionRef {
 
     fn execution_request_context(
         self,
+        host: Arc<NemoRelayNativeHostApiV4>,
         codec: LlmCodecIdentity,
         resolved: bool,
-    ) -> Result<LlmRequestCodecContext<'static>> {
+    ) -> Result<LlmRequestCodecContext> {
         let resolved = if resolved {
-            let status = unsafe { (self.host.0.async_completion_retain)(self.raw) };
+            let status = unsafe { (host.async_completion_retain)(self.raw) };
             status_result(status, "retain native async completion capability")?;
             Some(LlmExecutionRequestCodec {
                 owner: LlmExecutionRequestCodecOwner::Completion {
-                    host: self.host.0,
+                    host,
                     completion: self.raw,
                 },
-                _lifetime: PhantomData,
             })
         } else {
             None
@@ -265,16 +265,16 @@ impl CompletionRef {
 
     fn execution_response_context(
         self,
+        host: Arc<NemoRelayNativeHostApiV4>,
         codec: LlmCodecIdentity,
         resolved: bool,
-    ) -> Result<LlmResponseCodecContext<'static>> {
+    ) -> Result<LlmResponseCodecContext> {
         let resolved = if resolved {
-            let status = unsafe { (self.host.0.async_completion_retain)(self.raw) };
+            let status = unsafe { (host.async_completion_retain)(self.raw) };
             status_result(status, "retain native async completion capability")?;
             Some(LlmExecutionResponseCodec {
-                host: self.host.0,
+                host,
                 completion: self.raw,
-                _lifetime: PhantomData,
             })
         } else {
             None
@@ -283,9 +283,8 @@ impl CompletionRef {
     }
 }
 
-#[derive(Clone, Copy)]
 struct StreamRef {
-    host: HostV7,
+    host: Arc<NemoRelayNativeHostApiV7>,
     raw: *const NemoRelayNativeAsyncStream,
 }
 
@@ -296,16 +295,15 @@ impl StreamRef {
         self,
         codec: LlmCodecIdentity,
         resolved: bool,
-    ) -> Result<LlmRequestCodecContext<'static>> {
+    ) -> Result<LlmRequestCodecContext> {
         let resolved = if resolved {
-            let status = unsafe { (self.host.0.async_stream_retain)(self.raw) };
+            let status = unsafe { (self.host.async_stream_retain)(self.raw) };
             status_result(status, "retain native async stream capability")?;
             Some(LlmExecutionRequestCodec {
                 owner: LlmExecutionRequestCodecOwner::Stream {
-                    host: self.host.0,
+                    host: self.host,
                     stream: self.raw,
                 },
-                _lifetime: PhantomData,
             })
         } else {
             None
@@ -611,17 +609,13 @@ unsafe extern "C" fn unary_next_callback(
 }
 
 type UnaryFuture = Pin<Box<dyn Future<Output = Result<Json>> + Send>>;
-type UnaryAdapter = dyn Fn(
-        Json,
-        Option<LlmExecutionContext<'static>>,
-        Option<Arc<NextInner>>,
-        CompletionRef,
-    ) -> UnaryFuture
+type UnaryAdapter = dyn Fn(Json, Option<LlmExecutionContext>, Option<Arc<NextInner>>, CompletionRef) -> UnaryFuture
     + Send
     + Sync;
 
 struct UnaryCallbackState {
     host: HostV4,
+    execution_host: Option<Arc<NemoRelayNativeHostApiV4>>,
     executor: Arc<NativeExecutor>,
     adapter: Box<UnaryAdapter>,
 }
@@ -676,7 +670,18 @@ unsafe fn unary_trampoline_impl(
     let invocation = read_json_value(&state.host.0.v3.v1, invocation_json, "async invocation")
         .map_err(|status| format!("invalid async invocation: {status:?}"));
     let context = (!context.is_null())
-        .then(|| llm_execution_context_from_completion(completion_ref, unsafe { &*context }))
+        .then(|| {
+            llm_execution_context_from_completion(
+                completion_ref,
+                Arc::clone(
+                    state
+                        .execution_host
+                        .as_ref()
+                        .expect("LLM execution callbacks have a codec host"),
+                ),
+                unsafe { &*context },
+            )
+        })
         .transpose();
     let binding = ScopePollBinding::capture(state.host.0.v3.v1);
     let future = catch_unwind(AssertUnwindSafe(|| match (invocation, context) {
@@ -956,11 +961,11 @@ struct EventMetadataInvocation {
 }
 
 type StreamFuture = Pin<Box<dyn Future<Output = Result<LlmJsonAsyncStream>> + Send>>;
-type StreamAdapter =
-    dyn Fn(Json, LlmExecutionContext<'static>, LlmStreamNext) -> StreamFuture + Send + Sync;
+type StreamAdapter = dyn Fn(Json, LlmExecutionContext, LlmStreamNext) -> StreamFuture + Send + Sync;
 
 struct StreamCallbackState {
     host: HostV7,
+    codec_host: Arc<NemoRelayNativeHostApiV7>,
     executor: Arc<NativeExecutor>,
     adapter: Box<StreamAdapter>,
 }
@@ -1076,7 +1081,7 @@ unsafe extern "C" fn stream_trampoline(
         .and_then(|context| {
             llm_stream_execution_context_from_native(
                 StreamRef {
-                    host: state.host,
+                    host: Arc::clone(&state.codec_host),
                     raw: stream,
                 },
                 context,
@@ -1220,18 +1225,20 @@ fn execution_codec_identity(
 
 fn llm_execution_context_from_completion(
     completion: CompletionRef,
+    host: Arc<NemoRelayNativeHostApiV4>,
     context: &NemoRelayNativeLlmExecutionContext,
-) -> Result<LlmExecutionContext<'static>> {
+) -> Result<LlmExecutionContext> {
     let request = context.request_codec;
-    let host = &completion.host.0.v3.v1;
     let request_codec = completion.execution_request_context(
-        execution_codec_identity(host, request.codec_kind, request.codec_id)?,
+        Arc::clone(&host),
+        execution_codec_identity(&host.v3.v1, request.codec_kind, request.codec_id)?,
         !request.codec.is_null(),
     )?;
     let response_codec = unsafe { context.response_codec.as_ref() }
         .map(|response| {
             completion.execution_response_context(
-                execution_codec_identity(host, response.codec_kind, response.codec_id)?,
+                Arc::clone(&host),
+                execution_codec_identity(&host.v3.v1, response.codec_kind, response.codec_id)?,
                 !response.codec.is_null(),
             )
         })
@@ -1245,16 +1252,17 @@ fn llm_execution_context_from_completion(
 fn llm_stream_execution_context_from_native(
     stream: StreamRef,
     context: &NemoRelayNativeLlmExecutionContext,
-) -> Result<LlmExecutionContext<'static>> {
+) -> Result<LlmExecutionContext> {
     if !context.response_codec.is_null() {
         return Err("native LLM stream execution context exposed a response codec".into());
     }
     let request = context.request_codec;
-    let host = &stream.host.0.v6.v5.v4.v3.v1;
-    let request_codec = stream.execution_request_context(
-        execution_codec_identity(host, request.codec_kind, request.codec_id)?,
-        !request.codec.is_null(),
+    let codec = execution_codec_identity(
+        &stream.host.v6.v5.v4.v3.v1,
+        request.codec_kind,
+        request.codec_id,
     )?;
+    let request_codec = stream.execution_request_context(codec, !request.codec.is_null())?;
     Ok(LlmExecutionContext {
         request_codec,
         response_codec: None,
@@ -1294,6 +1302,7 @@ impl PluginContext<'_> {
     ) -> Result<()> {
         let state = Box::into_raw(Box::new(UnaryCallbackState {
             host: self.host_v4()?,
+            execution_host: None,
             executor: Arc::clone(&self.executor),
             adapter,
         }));
@@ -1325,8 +1334,10 @@ impl PluginContext<'_> {
         priority: i32,
         adapter: Box<UnaryAdapter>,
     ) -> Result<()> {
+        let host = self.host_v4()?;
         let state = Box::into_raw(Box::new(UnaryCallbackState {
-            host: self.host_v4()?,
+            host,
+            execution_host: Some(Arc::new(host.0)),
             executor: Arc::clone(&self.executor),
             adapter,
         }));
@@ -1760,10 +1771,7 @@ impl PluginContext<'_> {
         callback: F,
     ) -> Result<()>
     where
-        F: Fn(String, LlmRequest, LlmExecutionContext<'static>, LlmNext) -> Fut
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(String, LlmRequest, LlmExecutionContext, LlmNext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Json>> + Send + 'static,
     {
         let callback = Arc::new(callback);
@@ -1794,15 +1802,17 @@ impl PluginContext<'_> {
         callback: F,
     ) -> Result<()>
     where
-        F: Fn(String, LlmRequest, LlmExecutionContext<'static>, LlmStreamNext) -> Fut
+        F: Fn(String, LlmRequest, LlmExecutionContext, LlmStreamNext) -> Fut
             + Send
             + Sync
             + 'static,
         Fut: Future<Output = Result<LlmJsonAsyncStream>> + Send + 'static,
     {
         let callback = Arc::new(callback);
+        let host = self.host_v7()?;
         let state = Box::into_raw(Box::new(StreamCallbackState {
-            host: self.host_v7()?,
+            host,
+            codec_host: Arc::new(host.0),
             executor: Arc::clone(&self.executor),
             adapter: Box::new(move |value, context, next| {
                 let callback = Arc::clone(&callback);

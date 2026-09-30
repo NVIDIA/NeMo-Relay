@@ -27,16 +27,22 @@ and declare `compat.relay` beginning at `0.8.0`. `ToolNext.call()` returns
 `ToolExecutionResult`, preserving opaque annotation metadata independently of the
 application result JSON.
 
+Relay 0.10 adds `LlmExecutionContext` to non-streaming and streaming LLM
+execution callbacks. Workers that register either surface must update their
+callback signatures, rebuild with the 0.10 SDK, and set `compat.relay` to begin
+at `0.10.0`. The protocol remains `grpc-v1`.
+
 ## Authoring Surface
 
 The following rows describe the plugin authoring surfaces available through this SDK.
 
 | Surface | Role |
 |---|---|
-| `WorkerPlugin` and `PluginContext` | Define validation and install all 16 worker-owned subscriber and middleware registrations. |
+| `WorkerPlugin` and `PluginContext` | Define validation and install all 17 worker-owned subscriber and middleware registrations. |
 | `serve_plugin` | Starts an AsyncIO gRPC server from the Relay-managed environment and authenticated local activation endpoints. |
 | Typed runtime helpers | Share JSON, event, scope, middleware, continuation, and diagnostic contracts with the Relay host. |
 | Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
+| `LlmExecutionContext` | Provides the selected request codec and, for non-streaming calls, the completed-response codec while the callback is active. |
 | Generated transport bindings | Ship private protobuf bindings in the wheel, so installation does not require `protoc` or `grpcio-tools`. |
 
 The worker process isolates Python dependencies and crashes from Relay while preserving
@@ -170,7 +176,7 @@ an application-level RPC admission limit.
 
 ## Invocation Cancellation
 
-Relay assigns every unary and streaming callback an invocation ID. The host
+Relay assigns every non-streaming and streaming callback an invocation ID. The host
 sends `CancelInvocation` when its managed caller is cancelled, its worker RPC
 times out, or it stops consuming a worker-backed stream. The SDK cancels the
 matching `asyncio.Task` and reports a structured `worker.cancelled` result.

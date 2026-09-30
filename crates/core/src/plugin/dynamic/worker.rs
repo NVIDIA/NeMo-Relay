@@ -1651,21 +1651,37 @@ impl WorkerInvocationGuard {
         }
     }
 
-    fn cancel(&mut self, reason: impl Into<String>) {
+    fn cancellation(
+        &mut self,
+        reason: impl Into<String>,
+    ) -> Option<(PluginWorkerClient<Channel>, CancelInvocationRequest)> {
         if !self.cancel_on_drop {
-            return;
+            return None;
         }
         self.cancel_on_drop = false;
-        let mut client = self.client.clone();
-        let request = CancelInvocationRequest {
-            activation_id: self.activation_id.clone(),
-            invocation_id: self.invocation_id.clone(),
-            auth_token: self.auth_token.clone(),
-            reason: reason.into(),
-        };
-        self.runtime.spawn(async move {
+        Some((
+            self.client.clone(),
+            CancelInvocationRequest {
+                activation_id: self.activation_id.clone(),
+                invocation_id: self.invocation_id.clone(),
+                auth_token: self.auth_token.clone(),
+                reason: reason.into(),
+            },
+        ))
+    }
+
+    fn cancel(&mut self, reason: impl Into<String>) {
+        if let Some((mut client, request)) = self.cancellation(reason) {
+            self.runtime.spawn(async move {
+                let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request))).await;
+            });
+        }
+    }
+
+    async fn cancel_and_wait(&mut self, reason: impl Into<String>) {
+        if let Some((mut client, request)) = self.cancellation(reason) {
             let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request))).await;
-        });
+        }
     }
 
     fn finish(&mut self) {
@@ -2068,8 +2084,11 @@ impl WorkerPluginCallback {
                 None,
             )),
         );
-        let codec_capabilities =
-            self.attach_llm_execution_codec_context(&mut invoke, &execution_context);
+        let codec_capabilities = self.attach_llm_execution_codec_context(
+            &mut invoke,
+            &execution_context,
+            WorkerLlmExecutionMode::CompleteResponse,
+        );
         let _codec_capabilities = self.cleanup_after_setup_error(&invoke, codec_capabilities)?;
         json_from_invoke_response(self.invoke_async(invoke).await?)
     }
@@ -2096,8 +2115,11 @@ impl WorkerPluginCallback {
                 None,
             )),
         );
-        let codec_capabilities =
-            self.attach_llm_execution_codec_context(&mut invoke, &execution_context);
+        let codec_capabilities = self.attach_llm_execution_codec_context(
+            &mut invoke,
+            &execution_context,
+            WorkerLlmExecutionMode::Streaming,
+        );
         let codec_capabilities = self.cleanup_after_setup_error(&invoke, codec_capabilities)?;
         let mut client = self.client.clone();
         let mut guard = WorkerInvocationGuard::new(self, &invoke);
@@ -2110,7 +2132,7 @@ impl WorkerPluginCallback {
             let result = tokio::select! {
                 result = worker_rpc(client.invoke_stream(worker_rpc_request(invoke))) => result,
                 _ = tx.closed() => {
-                    guard.cancel("host stopped consuming the worker stream");
+                    guard.cancel_and_wait("host stopped consuming the worker stream").await;
                     guard.finish();
                     return;
                 }
@@ -2123,7 +2145,7 @@ impl WorkerPluginCallback {
                         let item = tokio::select! {
                             item = stream.next() => item,
                             _ = tx.closed() => {
-                                guard.cancel("host stopped consuming the worker stream");
+                                guard.cancel_and_wait("host stopped consuming the worker stream").await;
                                 break;
                             }
                         };
@@ -2138,7 +2160,7 @@ impl WorkerPluginCallback {
                         };
                         let terminal = result.is_err();
                         if tx.send(result).await.is_err() {
-                            guard.cancel("host stopped consuming the worker stream");
+                            guard.cancel_and_wait("host stopped consuming the worker stream").await;
                             break;
                         }
                         if terminal {
@@ -2152,13 +2174,13 @@ impl WorkerPluginCallback {
                     } else {
                         "worker stream transport failed"
                     };
-                    guard.cancel(reason);
                     let _ = tx
                         .send(Err(worker_status_to_flow(
                             "worker stream invoke failed",
                             err,
                         )))
                         .await;
+                    guard.cancel_and_wait(reason).await;
                 }
             }
             guard.finish();
@@ -2178,38 +2200,52 @@ impl WorkerPluginCallback {
         &self,
         invoke: &mut InvokeRequest,
         context: &LlmExecutionContext,
-    ) -> FlowResult<Vec<WorkerCodecCapabilityGuard>> {
-        let mut guards = Vec::with_capacity(2);
-
-        let mut request = ProtoLlmSanitizeRequestContext {
-            codec: Some(codec_identity_to_proto(context.request_codec().codec())),
-            codec_capability_id: None,
-        };
-        if let Some(codec) = context.request_codec().resolve_codec() {
-            let capability = self
-                .host_state
-                .issue_request_codec(&invoke.invocation_id, codec)?;
-            request.codec_capability_id = Some(capability.id().into());
-            guards.push(capability);
+        mode: WorkerLlmExecutionMode,
+    ) -> FlowResult<WorkerCodecCapabilityGuards> {
+        match (mode, context.response_codec()) {
+            (WorkerLlmExecutionMode::CompleteResponse, None) => {
+                return Err(FlowError::InvalidArgument(
+                    "complete-response execution requires a response codec context".into(),
+                ));
+            }
+            (WorkerLlmExecutionMode::Streaming, Some(_)) => {
+                return Err(FlowError::InvalidArgument(
+                    "streaming execution cannot use a response codec context".into(),
+                ));
+            }
+            _ => {}
         }
 
-        let response = context
-            .response_codec()
-            .map(|response_context| -> FlowResult<_> {
-                let mut response = ProtoLlmSanitizeResponseContext {
-                    codec: Some(codec_identity_to_proto(response_context.codec())),
-                    codec_capability_id: None,
-                };
-                if let Some(codec) = response_context.resolve_codec() {
-                    let capability = self
-                        .host_state
-                        .issue_response_codec(&invoke.invocation_id, codec)?;
-                    response.codec_capability_id = Some(capability.id().into());
-                    guards.push(capability);
-                }
-                Ok(response)
+        let request_guard = context
+            .request_codec()
+            .resolve_codec()
+            .map(|codec| {
+                self.host_state
+                    .issue_request_codec(&invoke.invocation_id, codec)
             })
             .transpose()?;
+        let request = ProtoLlmSanitizeRequestContext {
+            codec: Some(codec_identity_to_proto(context.request_codec().codec())),
+            codec_capability_id: request_guard.as_ref().map(|guard| guard.id().into()),
+        };
+
+        let (response, response_guard) = match context.response_codec() {
+            Some(response_context) => {
+                let guard = response_context
+                    .resolve_codec()
+                    .map(|codec| {
+                        self.host_state
+                            .issue_response_codec(&invoke.invocation_id, codec)
+                    })
+                    .transpose()?;
+                let response = ProtoLlmSanitizeResponseContext {
+                    codec: Some(codec_identity_to_proto(response_context.codec())),
+                    codec_capability_id: guard.as_ref().map(|guard| guard.id().into()),
+                };
+                (Some(response), guard)
+            }
+            None => (None, None),
+        };
 
         let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut() else {
             unreachable!("LLM execution invocation must have an LLM payload");
@@ -2218,7 +2254,10 @@ impl WorkerPluginCallback {
             request: Some(request),
             response,
         }));
-        Ok(guards)
+        Ok(WorkerCodecCapabilityGuards {
+            _request: request_guard,
+            _response: response_guard,
+        })
     }
 
     fn cleanup_after_setup_error<T>(
@@ -2480,6 +2519,17 @@ struct WorkerCodecCapability {
 struct WorkerCodecCapabilityGuard {
     host_state: Arc<WorkerHostRuntimeState>,
     capability_id: String,
+}
+
+struct WorkerCodecCapabilityGuards {
+    _request: Option<WorkerCodecCapabilityGuard>,
+    _response: Option<WorkerCodecCapabilityGuard>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkerLlmExecutionMode {
+    CompleteResponse,
+    Streaming,
 }
 
 impl WorkerCodecCapabilityGuard {

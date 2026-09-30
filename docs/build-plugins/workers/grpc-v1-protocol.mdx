@@ -18,9 +18,11 @@ worker cannot decode the current `ToolNext` response or tool-execution outcome.
 
 Relay 0.10 retains those protocol identifiers and adds execution codec context to
 `LlmInvocation`. The field is protobuf-compatible, but the 0.10 Rust and Python
-SDKs intentionally change every LLM execution callback to receive
-`LlmExecutionContext` before its continuation. Rebuild workers, regenerate custom
-bindings, and declare `compat.relay` beginning at `0.10.0`.
+SDKs change non-streaming and streaming LLM execution callbacks to receive
+`LlmExecutionContext` before the continuation. Workers that register either
+surface must update their callback signatures, rebuild, and declare
+`compat.relay` beginning at `0.10.0`. Custom workers that register either
+surface must regenerate their bindings to read the field.
 
 The protocol consists of the worker-facing service implemented by the plugin process
 and the host-runtime service implemented by Relay. These are the current service
@@ -65,7 +67,7 @@ service RelayHostRuntime {
 | `Health` | Confirms the authenticated activation, protocol, plugin identity, and current worker readiness. |
 | `Validate` | Receives component config in a JSON envelope and returns encoded diagnostics or a structured worker error. It must not register behavior. |
 | `Register` | Receives valid component config and returns owned registrations with local name, surface, priority, and `break_chain`. |
-| `Invoke` | Dispatches one subscriber, sanitizer, guardrail, request intercept, or unary execution callback and returns the surface-appropriate result. |
+| `Invoke` | Dispatches one subscriber, sanitizer, guardrail, request intercept, or non-streaming execution callback and returns the surface-appropriate result. |
 | `InvokeStream` | Dispatches an LLM stream execution intercept and emits incremental value or error chunks. |
 | `CancelInvocation` | Cooperatively cancels one active invocation ID and reports whether cancellation was accepted. Unknown, completed, and already-cancelled IDs receive a negative acknowledgment. |
 | `Shutdown` | Stops new work for an activation and begins orderly worker termination with a reason. |
@@ -136,8 +138,8 @@ An invocation names the activation, invocation, registration, surface, optional
 continuation, captured scope, and token. Its payload is exactly one event, tool
 invocation, LLM invocation, or conditional middleware invocation. LLM sanitizer
 invocations additionally carry codec identity and an opaque invocation-scoped codec
-capability. LLM execution invocations carry separate request and unary-response codec
-context. Streaming execution carries only the request direction.
+capability. LLM execution invocations carry separate request and completed-response
+codec context. Streaming execution carries only the request context.
 
 For `EVENT_METADATA_INJECTOR`, Relay sends the immutable Event snapshot in
 `InvokeRequest.event`. The worker returns an `InvokeResponse.json` object containing
@@ -267,10 +269,10 @@ invocation ends.
 
 For an LLM execution invocation, `execution_codec_context.request` is required.
 Its identity is present even when no codec resolves, and its capability ID is
-present only when host codec operations are available. Unary execution also
-includes `response`; streaming execution omits it entirely because Relay's
-response codecs require a complete provider response. The worker SDK hides
-both opaque capability IDs behind `resolve_codec()` proxies.
+present only when host codec operations are available. Non-streaming execution
+also includes `response`; streaming execution omits it because Relay's response
+codecs require a complete provider response. The worker SDK hides both opaque
+capability IDs behind `resolve_codec()` proxies.
 
 ## Host-Runtime Service
 
@@ -284,7 +286,7 @@ both opaque capability IDs behind `resolve_codec()` proxies.
 | `CreateScopeStack` | Allocates an isolated stack and returns its opaque ID. |
 | `DropScopeStack` | Releases an isolated stack owned by the activation. |
 | `ToolNext` | Executes a tool continuation with JSON arguments and captured scope, returning a structural tool result or worker error. |
-| `LlmNext` | Executes a unary LLM continuation with a request and captured scope. |
+| `LlmNext` | Executes a non-streaming LLM continuation with a request and captured scope. |
 | `LlmStreamNext` | Executes a streaming LLM continuation and returns incremental chunks. |
 | `DecodeLlmCodecRequest` | Uses the invocation-scoped capability to decode a request into its annotated representation. |
 | `EncodeLlmCodecRequest` | Applies an annotated request to the original provider envelope. |
@@ -416,6 +418,6 @@ process:
    only during explicit package removal.
 
 Successful protocol verification covers authentication failures, envelope schema
-failures, every registration and result variant, repeated unary and incremental stream
+failures, every registration and result variant, repeated non-streaming and incremental stream
 continuations, cancellation before and during callbacks, codec capability expiry, host
 runtime ownership errors, health, and orderly plus forced shutdown.

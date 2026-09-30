@@ -72,10 +72,12 @@ use nemo_relay::api::tool::{
     ToolExecutionInterceptOutcome, ToolExecutionResult, tool_call, tool_call_end,
     tool_call_execute, tool_conditional_execution, tool_request_intercepts,
 };
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationTokenImpact,
     LlmOptimizationTokens,
 };
+use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::FlowError;
 use nemo_relay::json::Json;
 use nemo_relay::observability::OpenTelemetryType;
@@ -2325,15 +2327,22 @@ async fn stream_next_is_revoked_when_the_managed_stream_terminalizes_with_an_err
 
     let request = LlmRequest {
         headers: serde_json::Map::new(),
-        content: json!({"prompt": "terminal-error"}),
+        content: json!({
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "terminal-error"}]
+        }),
     };
     let upstream_error_next = Arc::new(Mutex::new(None::<LlmStreamExecutionNextFn>));
+    let upstream_error_codec = Arc::new(Mutex::new(None::<Arc<dyn LlmCodec>>));
     let captured_upstream_error_next = Arc::clone(&upstream_error_next);
+    let captured_upstream_error_codec = Arc::clone(&upstream_error_codec);
     register_llm_stream_execution_intercept(
         "upstream_error_stream_next",
         1,
-        Arc::new(move |_name, request, _context, next| {
+        Arc::new(move |_name, request, context, next| {
             *captured_upstream_error_next.lock().unwrap() = Some(next.clone());
+            *captured_upstream_error_codec.lock().unwrap() =
+                context.request_codec().resolve_codec();
             next(request)
         }),
     )
@@ -2354,6 +2363,7 @@ async fn stream_next_is_revoked_when_the_managed_stream_terminalizes_with_an_err
             }))
             .collector(Box::new(|_| Ok(())))
             .finalizer(Box::new(|| json!({})))
+            .codec(Arc::new(OpenAIChatCodec))
             .build(),
     )
     .await
@@ -2368,6 +2378,12 @@ async fn stream_next_is_revoked_when_the_managed_stream_terminalizes_with_an_err
         error,
         FlowError::InvalidArgument(message)
             if message == "execution continuation is no longer active"
+    ));
+    let codec = upstream_error_codec.lock().unwrap().take().unwrap();
+    assert!(matches!(
+        codec.decode(&request),
+        Err(FlowError::InvalidArgument(message))
+            if message == "LLM execution codec capability is no longer active"
     ));
     assert_eq!(upstream_provider_calls.load(Ordering::Acquire), 1);
     deregister_llm_stream_execution_intercept("upstream_error_stream_next").unwrap();

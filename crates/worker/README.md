@@ -26,23 +26,21 @@ for an earlier release must rebuild with this SDK and declare `compat.relay` beg
 `ToolExecutionResult`, which keeps an optional opaque annotation beside the application
 result.
 
-Relay 0.10 makes LLM execution codec context part of every unary and streaming
-execution callback. Rebuild workers with the 0.10 SDK and raise their
-`compat.relay` lower bound to `0.10.0`. The callback receives
-`LlmExecutionContext` immediately before `next`. Its request direction reports
-the active codec and may resolve request decode/encode operations. Unary
-callbacks also receive response decode context; streaming callbacks deliberately
-receive no response codec because Relay does not decode incomplete chunks. The
-wire protocol remains named `grpc-v1`.
+Relay 0.10 adds `LlmExecutionContext` to non-streaming and streaming LLM
+execution callbacks. Workers that register either surface must rebuild with the
+0.10 SDK and set `compat.relay` to begin at `0.10.0`. The context provides
+request decode and encode operations when Relay selected a codec. Non-streaming
+callbacks can also decode the completed response; streaming callbacks cannot
+decode incomplete chunks. The wire protocol remains `grpc-v1`.
 
 ## Authoring Surface
 
 | Surface | Role |
 |---|---|
 | `WorkerPlugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |
-| `PluginContext` | Installs typed handlers for all 16 supported registration surfaces. |
+| `PluginContext` | Installs typed handlers for all 17 supported registration surfaces. |
 | `PluginRuntime` and continuations | Emit marks, manage scopes, and call the remaining tool or LLM execution chain through the authenticated host service. |
-| `LlmExecutionContext` | Reports request and unary-response codec identity and exposes invocation-scoped codec operations when Relay resolved a codec. |
+| `LlmExecutionContext` | Reports the selected request and completed-response codecs and provides codec operations while the callback is active. |
 | Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
 | `serve_plugin` | Starts the Tokio gRPC server from the activation identity, local endpoints, and token supplied by Relay. |
 

@@ -116,7 +116,7 @@ Use the following procedure to register the manifest and inspect worker activati
 
 2. Start Relay from the repository root. Inspect the activation report
    and confirm the handshake reports plugin identity, SDK and runtime metadata,
-   `grpc-v1`, multiple-component behavior, and all 16 surfaces.
+   `grpc-v1`, multiple-component behavior, and all 17 surfaces.
 
    ```bash
    nemo-relay --bind 127.0.0.1:4040
@@ -202,7 +202,7 @@ async fn main() -> Result<()> {
 Use the following procedure to verify the registered callbacks and stop the worker
 cleanly:
 
-1. Exercise allowed and blocked calls, unary and streaming continuations, codec decode and
+1. Exercise allowed and blocked calls, non-streaming and streaming continuations, codec decode and
    encode proxies, pending marks, optimization contributions, nested and isolated scopes,
    and cancellation.
 2. Disable and remove the component only after in-flight invocations have settled.

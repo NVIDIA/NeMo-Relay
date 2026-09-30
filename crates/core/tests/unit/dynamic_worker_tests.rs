@@ -1266,6 +1266,43 @@ async fn llm_worker_execution_codec_context_is_required_and_ephemeral() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn worker_execution_rejects_mismatched_response_codec_context() {
+    enable_operational_logs();
+    let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
+        result: Some(InvokeResult::Empty(EmptyResult {})),
+    })
+    .await;
+    let result = callback
+        .invoke_llm_stream_execution(
+            "invalid-stream-context",
+            "model",
+            valid_llm_request(),
+            openai_execution_codec_context(),
+            Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+        )
+        .await;
+    let Err(error) = result else {
+        panic!("streaming response codec context must be rejected");
+    };
+
+    assert!(matches!(error, FlowError::InvalidArgument(_)));
+
+    let error = callback
+        .invoke_llm_execution(
+            "invalid-complete-response-context",
+            "model",
+            valid_llm_request(),
+            openai_stream_execution_codec_context(),
+            Arc::new(|_| Box::pin(async { Ok(json!({})) })),
+        )
+        .await
+        .expect_err("complete-response execution must require response codec context");
+    assert!(matches!(error, FlowError::InvalidArgument(_)));
+    assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+    assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cancelling_worker_execution_expires_context_and_continuation_state() {
     enable_operational_logs();
     let (started_tx, started_rx) = oneshot::channel();
@@ -1898,12 +1935,18 @@ async fn closing_worker_stream_waits_for_cancellation_and_codec_cleanup() {
         .await
         .expect("explicit close must wait for worker stream cleanup");
 
+    let cancellation = fixture
+        .cancel_rx
+        .try_recv()
+        .expect("close must wait for worker cancellation");
+    assert_eq!(cancellation.invocation_id, fixture.invocation_id);
+    assert!(cancellation.reason.contains("stopped consuming"));
     assert_request_codec_expired(
         &fixture.callback.host_state,
         &fixture.request_id,
         &fixture.invocation_id,
     );
-    assert_worker_stream_cancelled_and_cleaned(&mut fixture).await;
+    assert_worker_stream_dropped_and_cleaned(&mut fixture).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

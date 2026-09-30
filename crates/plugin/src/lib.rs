@@ -92,38 +92,38 @@ unsafe impl Send for LlmSanitizeResponseContext<'_> {}
 
 /// Per-call codec context delivered to an LLM execution intercept.
 ///
-/// Request codec context is always available. Unary execution also supplies a
+/// Request codec context is always available. Non-streaming execution also supplies a
 /// response codec context, while streaming execution leaves it unavailable
 /// until Relay has a completed-response streaming codec contract.
-pub struct LlmExecutionContext<'a> {
-    request_codec: LlmRequestCodecContext<'a>,
-    response_codec: Option<LlmResponseCodecContext<'a>>,
+pub struct LlmExecutionContext {
+    request_codec: LlmRequestCodecContext,
+    response_codec: Option<LlmResponseCodecContext>,
 }
 
 /// Request codec context for one LLM execution intercept invocation.
-pub struct LlmRequestCodecContext<'a> {
+pub struct LlmRequestCodecContext {
     /// Identity of the active request codec.
     pub codec: LlmCodecIdentity,
-    resolved: Option<LlmExecutionRequestCodec<'a>>,
+    resolved: Option<LlmExecutionRequestCodec>,
 }
 
-/// Response codec context for one unary LLM execution intercept invocation.
-pub struct LlmResponseCodecContext<'a> {
+/// Response codec context for one non-streaming LLM execution intercept invocation.
+pub struct LlmResponseCodecContext {
     /// Identity of the active response codec.
     pub codec: LlmCodecIdentity,
-    resolved: Option<LlmExecutionResponseCodec<'a>>,
+    resolved: Option<LlmExecutionResponseCodec>,
 }
 
-impl<'a> LlmExecutionContext<'a> {
+impl LlmExecutionContext {
     /// Return the active request codec context.
     #[must_use]
-    pub fn request_codec(&self) -> &LlmRequestCodecContext<'a> {
+    pub fn request_codec(&self) -> &LlmRequestCodecContext {
         &self.request_codec
     }
 
-    /// Return the unary response codec context, or `None` for streaming execution.
+    /// Return the completed-response codec context, or `None` for streaming execution.
     #[must_use]
-    pub fn response_codec(&self) -> Option<&LlmResponseCodecContext<'a>> {
+    pub fn response_codec(&self) -> Option<&LlmResponseCodecContext> {
         self.response_codec.as_ref()
     }
 }
@@ -165,7 +165,10 @@ pub struct NemoRelayNativeString {
     _marker: PhantomData<(*mut u8, PhantomPinned)>,
 }
 
-/// Opaque callback-scoped request codec capability owned by the host.
+/// Opaque host-owned request codec capability.
+///
+/// Its valid lifetime is defined by the callback that receives it. See
+/// [`NemoRelayNativeLlmExecutionContext`] for the streaming exception.
 #[repr(C)]
 pub struct NemoRelayNativeLlmRequestCodec {
     _private: [u8; 0],
@@ -234,7 +237,7 @@ pub struct NemoRelayNativeLlmRequestCodecContext {
     pub codec: *const NemoRelayNativeLlmRequestCodec,
 }
 
-/// Response codec context passed to a native unary LLM execution intercept.
+/// Response codec context passed to a native non-streaming LLM execution intercept.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NemoRelayNativeLlmResponseCodecContext {
@@ -247,12 +250,19 @@ pub struct NemoRelayNativeLlmResponseCodecContext {
 }
 
 /// Codec context passed to native LLM execution intercept callbacks.
+///
+/// The context and codec IDs are borrowed for the callback. A synchronous
+/// streaming callback may retain the request codec pointer only in the state
+/// of its returned [`NemoRelayNativeLlmStreamV1`]; it remains valid until Relay
+/// invokes that stream's drop callback. Other raw callbacks must not retain
+/// codec pointers. Asynchronous streaming callbacks must instead retain the
+/// output stream and use the v7 stream codec functions.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NemoRelayNativeLlmExecutionContext {
     /// Request codec context, always present.
     pub request_codec: NemoRelayNativeLlmRequestCodecContext,
-    /// Unary response codec context, or null for streaming execution.
+    /// Completed-response codec context, or null for streaming execution.
     pub response_codec: *const NemoRelayNativeLlmResponseCodecContext,
 }
 
@@ -351,49 +361,48 @@ impl LlmSanitizeResponseCodec<'_> {
 
 enum LlmExecutionRequestCodecOwner {
     Completion {
-        host: NemoRelayNativeHostApiV4,
+        host: Arc<NemoRelayNativeHostApiV4>,
         completion: *const NemoRelayNativeAsyncCompletion,
     },
     Stream {
-        host: NemoRelayNativeHostApiV7,
+        host: Arc<NemoRelayNativeHostApiV7>,
         stream: *const NemoRelayNativeAsyncStream,
     },
 }
 
 /// Invocation-lifetime request codec facade for an LLM execution intercept.
-pub struct LlmExecutionRequestCodec<'a> {
+pub struct LlmExecutionRequestCodec {
     owner: LlmExecutionRequestCodecOwner,
-    _lifetime: PhantomData<&'a NemoRelayNativeLlmRequestCodec>,
 }
 
 // SAFETY: construction retains the completion or stream that owns the codec.
 // Host operations are thread-safe and reject calls after that owner settles.
-unsafe impl Send for LlmExecutionRequestCodec<'_> {}
-unsafe impl Sync for LlmExecutionRequestCodec<'_> {}
+unsafe impl Send for LlmExecutionRequestCodec {}
+unsafe impl Sync for LlmExecutionRequestCodec {}
 
-impl Drop for LlmExecutionRequestCodec<'_> {
+impl Drop for LlmExecutionRequestCodec {
     fn drop(&mut self) {
-        match self.owner {
+        match &self.owner {
             LlmExecutionRequestCodecOwner::Completion { host, completion } => unsafe {
-                (host.v3.async_completion_release)(completion)
+                (host.v3.async_completion_release)(*completion)
             },
             LlmExecutionRequestCodecOwner::Stream { host, stream } => unsafe {
-                (host.v6.v5.v4.v3.async_stream_release)(stream)
+                (host.v6.v5.v4.v3.async_stream_release)(*stream)
             },
         }
     }
 }
 
-impl LlmExecutionRequestCodec<'_> {
+impl LlmExecutionRequestCodec {
     /// Decode an opaque request into Relay's normalized request model.
     pub fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
-        match self.owner {
+        match &self.owner {
             LlmExecutionRequestCodecOwner::Completion { host, completion } => {
                 native_codec_call(&host.v3.v1, |out| unsafe {
                     let request = HostString::from_json(&host.v3.v1, request)
                         .ok_or_else(|| "failed to serialize LLM request".to_string())?;
                     let status = (host.async_completion_llm_request_codec_decode)(
-                        completion,
+                        *completion,
                         request.as_ptr(),
                         out,
                     );
@@ -404,8 +413,11 @@ impl LlmExecutionRequestCodec<'_> {
                 native_codec_call(&host.v6.v5.v4.v3.v1, |out| unsafe {
                     let request = HostString::from_json(&host.v6.v5.v4.v3.v1, request)
                         .ok_or_else(|| "failed to serialize LLM request".to_string())?;
-                    let status =
-                        (host.async_stream_llm_request_codec_decode)(stream, request.as_ptr(), out);
+                    let status = (host.async_stream_llm_request_codec_decode)(
+                        *stream,
+                        request.as_ptr(),
+                        out,
+                    );
                     codec_status(&host.v6.v5.v4.v3.v1, status)
                 })
             }
@@ -418,7 +430,7 @@ impl LlmExecutionRequestCodec<'_> {
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
     ) -> Result<LlmRequest> {
-        match self.owner {
+        match &self.owner {
             LlmExecutionRequestCodecOwner::Completion { host, completion } => {
                 native_codec_call(&host.v3.v1, |out| unsafe {
                     let annotated = HostString::from_json(&host.v3.v1, annotated)
@@ -426,7 +438,7 @@ impl LlmExecutionRequestCodec<'_> {
                     let original = HostString::from_json(&host.v3.v1, original)
                         .ok_or_else(|| "failed to serialize original request".to_string())?;
                     let status = (host.async_completion_llm_request_codec_encode)(
-                        completion,
+                        *completion,
                         annotated.as_ptr(),
                         original.as_ptr(),
                         out,
@@ -441,7 +453,7 @@ impl LlmExecutionRequestCodec<'_> {
                     let original = HostString::from_json(&host.v6.v5.v4.v3.v1, original)
                         .ok_or_else(|| "failed to serialize original request".to_string())?;
                     let status = (host.async_stream_llm_request_codec_encode)(
-                        stream,
+                        *stream,
                         annotated.as_ptr(),
                         original.as_ptr(),
                         out,
@@ -453,25 +465,24 @@ impl LlmExecutionRequestCodec<'_> {
     }
 }
 
-/// Invocation-lifetime response codec facade for a unary LLM execution intercept.
-pub struct LlmExecutionResponseCodec<'a> {
-    host: NemoRelayNativeHostApiV4,
+/// Response codec for one non-streaming LLM execution intercept.
+pub struct LlmExecutionResponseCodec {
+    host: Arc<NemoRelayNativeHostApiV4>,
     completion: *const NemoRelayNativeAsyncCompletion,
-    _lifetime: PhantomData<&'a NemoRelayNativeLlmResponseCodec>,
 }
 
 // SAFETY: construction retains the completion that owns the codec. Host
 // operations are thread-safe and reject calls after that completion settles.
-unsafe impl Send for LlmExecutionResponseCodec<'_> {}
-unsafe impl Sync for LlmExecutionResponseCodec<'_> {}
+unsafe impl Send for LlmExecutionResponseCodec {}
+unsafe impl Sync for LlmExecutionResponseCodec {}
 
-impl Drop for LlmExecutionResponseCodec<'_> {
+impl Drop for LlmExecutionResponseCodec {
     fn drop(&mut self) {
         unsafe { (self.host.v3.async_completion_release)(self.completion) };
     }
 }
 
-impl LlmExecutionResponseCodec<'_> {
+impl LlmExecutionResponseCodec {
     /// Decode an opaque response into Relay's normalized response model.
     pub fn decode(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         native_codec_call(&self.host.v3.v1, |out| unsafe {
@@ -487,18 +498,18 @@ impl LlmExecutionResponseCodec<'_> {
     }
 }
 
-impl LlmRequestCodecContext<'_> {
+impl LlmRequestCodecContext {
     /// Resolve the active request codec capability.
     #[must_use]
-    pub fn resolve_codec(&self) -> Option<&LlmExecutionRequestCodec<'_>> {
+    pub fn resolve_codec(&self) -> Option<&LlmExecutionRequestCodec> {
         self.resolved.as_ref()
     }
 }
 
-impl LlmResponseCodecContext<'_> {
+impl LlmResponseCodecContext {
     /// Resolve the active response codec capability.
     #[must_use]
-    pub fn resolve_codec(&self) -> Option<&LlmExecutionResponseCodec<'_>> {
+    pub fn resolve_codec(&self) -> Option<&LlmExecutionResponseCodec> {
         self.resolved.as_ref()
     }
 }
@@ -1217,7 +1228,7 @@ pub type NemoRelayNativeAsyncNextStreamCb = unsafe extern "C" fn(
     done: bool,
 ) -> bool;
 
-/// Receives one completion from a unary execution-continuation invocation.
+/// Receives one completion from a non-streaming execution-continuation invocation.
 ///
 /// Exactly one of `value_json` and `error` is non-null. The callback owns its
 /// `user_data` and is invoked exactly once after a successful
@@ -1403,7 +1414,7 @@ pub struct NemoRelayNativeHostApiV3 {
         free_fn: NemoRelayNativeFreeFn,
     )
         -> NemoRelayStatus,
-    /// Invokes a unary execution continuation with an independent result sink.
+    /// Invokes a non-streaming execution continuation with an independent result sink.
     ///
     /// Unlike the legacy completion-coupled `async_next_invoke`, this hook may
     /// be called repeatedly or concurrently with distinct `user_data`. For a

@@ -75,14 +75,17 @@ same pair plus Relay-owned pending marks. Native and worker plugins built for an
 release must rebuild for this contract. Workers retain the `grpc-v1` name and protobuf
 package; their tool-result fields, not their protocol identity, changed.
 
-Relay 0.10 makes codec context part of every LLM execution callback in language
-bindings, native plugins, and worker SDKs. This is a source break. Native and worker
-plugins must rebuild and constrain `compat.relay` to `>=0.10.0`; their authored
-`native_api = "1"` and `grpc-v1` labels do not change.
+Relay 0.10 adds codec context to every LLM execution callback in language
+bindings, native plugins, and worker SDKs. Every native plugin must rebuild for
+ABI v7. Workers that register a non-streaming or streaming LLM execution
+intercept must update their callback signatures, rebuild, and set
+`compat.relay` to begin at `0.10.0`. The authored `native_api = "1"` and
+`grpc-v1` labels do not change.
 
-The codec capability belongs to that execution callback. Unary capabilities expire when
-the callback settles; streaming request capabilities remain valid until the returned
-stream completes or closes. Retaining a codec object does not extend either lifetime.
+Codec access belongs to that execution callback. For a non-streaming call, it
+expires when the callback finishes. For a streaming call, request codec access
+remains valid until the returned stream completes or closes. Retaining a codec
+object does not extend either lifetime.
 
 ## Match Behavior to a Plugin
 

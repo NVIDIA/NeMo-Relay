@@ -12,9 +12,9 @@ invocation-scoped codec proxies, transforms streams lazily, and cleans up marks,
 scopes, isolated stacks, and cancelled tasks.
 
 The worker targets Relay 0.10 while retaining the `grpc-v1` protocol name. Its tool
-continuation returns `ToolExecutionResult`. Its LLM execution callbacks receive
-directional codec context before the continuation; unary execution can decode a complete
-response, while streaming execution exposes request codec operations only.
+continuation returns `ToolExecutionResult`. Its LLM execution callbacks receive codec
+context before the continuation; non-streaming execution can decode a completed response,
+while streaming execution exposes request codec operations only.
 
 Run the example's own test project from this directory:
 

@@ -124,6 +124,19 @@ fn multi_turn_annotation() -> Arc<AnnotatedLlmRequest> {
     Arc::new(OpenAIChatCodec.decode(&multi_turn_request()).unwrap())
 }
 
+fn execution_response(content: &str) -> Json {
+    json!({
+        "id": "chatcmpl-execution-context",
+        "object": "chat.completion",
+        "model": "demo",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop"
+        }]
+    })
+}
+
 fn assert_openai_execution_context(context: &LlmExecutionContext) {
     assert_eq!(
         context.request_codec().codec(),
@@ -368,16 +381,7 @@ fn managed_execution_codec_context_decodes_encodes_and_decodes_response() {
                             json!("rewritten by interceptor")
                         );
                         assert_eq!(request.content["provider_only"], json!({"preserved": true}));
-                        Ok(json!({
-                            "id": "chatcmpl-test",
-                            "object": "chat.completion",
-                            "model": "demo",
-                            "choices": [{
-                                "index": 0,
-                                "message": {"role": "assistant", "content": "accepted"},
-                                "finish_reason": "stop"
-                            }]
-                        }))
+                        Ok(execution_response("accepted"))
                     })
                 }))
                 .codec(Arc::new(OpenAIChatCodec))
@@ -429,16 +433,7 @@ fn unary_execution_codec_facades_expire_after_interceptor_settlement() {
     )
     .unwrap();
 
-    let response = json!({
-        "id": "chatcmpl-expiry",
-        "object": "chat.completion",
-        "model": "demo",
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": "accepted"},
-            "finish_reason": "stop"
-        }]
-    });
+    let response = execution_response("accepted");
     let provider_response = response.clone();
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let actual = execute_openai_call(

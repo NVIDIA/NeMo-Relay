@@ -14,7 +14,7 @@ use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::ptr;
+use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::task::{Context, Poll};
@@ -578,15 +578,39 @@ struct NativeHostString(Vec<u8>);
 struct NativeHostLlmRequestCodec(Arc<dyn LlmCodec>);
 struct NativeHostLlmResponseCodec(Arc<dyn LlmResponseCodec>);
 
+struct OwnedNativeString {
+    ptr: NonNull<NemoRelayNativeString>,
+}
+
+impl OwnedNativeString {
+    fn new(ptr: *mut NemoRelayNativeString) -> FlowResult<Self> {
+        Ok(Self {
+            ptr: NonNull::new(ptr).ok_or_else(|| {
+                FlowError::Internal("native string allocation returned null".into())
+            })?,
+        })
+    }
+
+    fn as_ptr(&self) -> *const NemoRelayNativeString {
+        self.ptr.as_ptr()
+    }
+}
+
+impl Drop for OwnedNativeString {
+    fn drop(&mut self) {
+        unsafe { native_string_free(self.ptr.as_ptr()) };
+    }
+}
+
 /// Borrows the host codec handles and owns the native strings exposed to one
 /// native LLM execution callback.
 struct NativeLlmExecutionContextBridge<'a> {
     request_codec: Option<&'a NativeHostLlmRequestCodec>,
     request_kind: NemoRelayNativeLlmCodecKind,
-    request_id: Option<usize>,
+    request_id: Option<OwnedNativeString>,
     response_codec: Option<&'a NativeHostLlmResponseCodec>,
     response_kind: Option<NemoRelayNativeLlmCodecKind>,
-    response_id: Option<usize>,
+    response_id: Option<OwnedNativeString>,
 }
 
 impl<'a> NativeLlmExecutionContextBridge<'a> {
@@ -597,19 +621,11 @@ impl<'a> NativeLlmExecutionContextBridge<'a> {
     ) -> FlowResult<Self> {
         let (request_kind, request_id) =
             native_llm_codec_identity(context.request_codec().codec())?;
-        let request_id = request_id.map(|value| value as usize);
+        let request_id = request_id.map(OwnedNativeString::new).transpose()?;
 
         let (response_kind, response_id) = if let Some(response) = context.response_codec() {
-            let (kind, id) = match native_llm_codec_identity(response.codec()) {
-                Ok(value) => value,
-                Err(error) => {
-                    if let Some(request_id) = request_id {
-                        unsafe { native_string_free(request_id as *mut NemoRelayNativeString) };
-                    }
-                    return Err(error);
-                }
-            };
-            (Some(kind), id.map(|value| value as usize))
+            let (kind, id) = native_llm_codec_identity(response.codec())?;
+            (Some(kind), id.map(OwnedNativeString::new).transpose()?)
         } else {
             (None, None)
         };
@@ -632,7 +648,8 @@ impl<'a> NativeLlmExecutionContextBridge<'a> {
             codec_kind: self.request_kind,
             codec_id: self
                 .request_id
-                .map_or(ptr::null(), |value| value as *const NemoRelayNativeString),
+                .as_ref()
+                .map_or(ptr::null(), OwnedNativeString::as_ptr),
             codec: self
                 .request_codec
                 .map_or(ptr::null(), |value| std::ptr::from_ref(value).cast()),
@@ -643,7 +660,8 @@ impl<'a> NativeLlmExecutionContextBridge<'a> {
                     codec_kind,
                     codec_id: self
                         .response_id
-                        .map_or(ptr::null(), |value| value as *const NemoRelayNativeString),
+                        .as_ref()
+                        .map_or(ptr::null(), OwnedNativeString::as_ptr),
                     codec: self
                         .response_codec
                         .map_or(ptr::null(), |value| std::ptr::from_ref(value).cast()),
@@ -654,17 +672,6 @@ impl<'a> NativeLlmExecutionContextBridge<'a> {
                 .as_ref()
                 .map_or(ptr::null(), std::ptr::from_ref),
         })
-    }
-}
-
-impl Drop for NativeLlmExecutionContextBridge<'_> {
-    fn drop(&mut self) {
-        if let Some(request_id) = self.request_id.take() {
-            unsafe { native_string_free(request_id as *mut NemoRelayNativeString) };
-        }
-        if let Some(response_id) = self.response_id.take() {
-            unsafe { native_string_free(response_id as *mut NemoRelayNativeString) };
-        }
     }
 }
 
@@ -2179,75 +2186,77 @@ async fn invoke_native_async_callback_inner(
         before_settlement_lock: None,
         _callback_user_data: Some(user_data.clone()),
     });
-    let native_context = match &callback {
-        NativeAsyncCallback::LlmExecution { context, .. } => {
-            Some(NativeLlmExecutionContextBridge::new(
-                context,
-                completion.request_codec.as_ref(),
-                completion.response_codec.as_ref(),
-            ))
-        }
-        NativeAsyncCallback::Middleware(_) => None,
-    }
-    .transpose();
-    let native_context = match native_context {
-        Ok(context) => context,
-        Err(error) => {
-            unsafe { native_string_free(invocation as *mut NemoRelayNativeString) };
-            return Err(error);
-        }
-    };
     let mut wait = NativeAsyncWait {
         completion: Arc::clone(&completion),
         receiver,
         completed: false,
     };
-    let completion_ref = Arc::into_raw(completion.clone()) as usize;
-    let next_ref = match (next, runtime) {
-        (Some(inner), Some(runtime)) => Some(Arc::into_raw(Arc::new(
-            NativeAsyncNext::with_completion_owner(
-                inner,
-                runtime,
-                Some(user_data.clone()),
-                &completion,
-            ),
-        )) as usize),
-        (None, None) => None,
-        _ => unreachable!("runtime is present exactly for native async intercepts"),
-    };
-    // ABI v3 exposes a thread-stack capture operation. Mirror the effective
-    // task-local stack into that slot only while entering plugin code so the
-    // SDK can capture it before moving the future to its own executor.
-    let previous_thread_stack = capture_thread_scope_stack();
-    sync_thread_scope_stack(current_scope_stack());
-    let state = catch_unwind(AssertUnwindSafe(|| match callback {
-        NativeAsyncCallback::Middleware(callback) => unsafe {
-            callback(
-                user_data.ptr,
-                invocation as *const NemoRelayNativeString,
-                next_ref
-                    .map(|next| next as *const NemoRelayNativeAsyncNext)
-                    .unwrap_or(ptr::null()),
-                completion_ref as *const NemoRelayNativeAsyncCompletion,
-            )
-        },
-        NativeAsyncCallback::LlmExecution { callback, .. } => native_context
-            .as_ref()
-            .expect("LLM execution callbacks always build a native context")
-            .with_native_context(|context| unsafe {
+    let (state, completion_ref) = {
+        let native_context = match &callback {
+            NativeAsyncCallback::LlmExecution { context, .. } => {
+                Some(NativeLlmExecutionContextBridge::new(
+                    context,
+                    completion.request_codec.as_ref(),
+                    completion.response_codec.as_ref(),
+                ))
+            }
+            NativeAsyncCallback::Middleware(_) => None,
+        }
+        .transpose();
+        let native_context = match native_context {
+            Ok(context) => context,
+            Err(error) => {
+                unsafe { native_string_free(invocation as *mut NemoRelayNativeString) };
+                return Err(error);
+            }
+        };
+        let completion_ref = Arc::into_raw(completion.clone()) as usize;
+        let next_ref = match (next, runtime) {
+            (Some(inner), Some(runtime)) => Some(Arc::into_raw(Arc::new(
+                NativeAsyncNext::with_completion_owner(
+                    inner,
+                    runtime,
+                    Some(user_data.clone()),
+                    &completion,
+                ),
+            )) as usize),
+            (None, None) => None,
+            _ => unreachable!("runtime is present exactly for native async intercepts"),
+        };
+        // ABI v3 exposes a thread-stack capture operation. Mirror the effective
+        // task-local stack into that slot only while entering plugin code so the
+        // SDK can capture it before moving the future to its own executor.
+        let previous_thread_stack = capture_thread_scope_stack();
+        sync_thread_scope_stack(current_scope_stack());
+        let state = catch_unwind(AssertUnwindSafe(|| match callback {
+            NativeAsyncCallback::Middleware(callback) => unsafe {
                 callback(
                     user_data.ptr,
                     invocation as *const NemoRelayNativeString,
-                    std::ptr::from_ref(&context),
                     next_ref
                         .map(|next| next as *const NemoRelayNativeAsyncNext)
                         .unwrap_or(ptr::null()),
                     completion_ref as *const NemoRelayNativeAsyncCompletion,
                 )
-            }),
-    }));
-    restore_thread_scope_stack(previous_thread_stack);
-    drop(native_context);
+            },
+            NativeAsyncCallback::LlmExecution { callback, .. } => native_context
+                .as_ref()
+                .expect("LLM execution callbacks always build a native context")
+                .with_native_context(|context| unsafe {
+                    callback(
+                        user_data.ptr,
+                        invocation as *const NemoRelayNativeString,
+                        std::ptr::from_ref(&context),
+                        next_ref
+                            .map(|next| next as *const NemoRelayNativeAsyncNext)
+                            .unwrap_or(ptr::null()),
+                        completion_ref as *const NemoRelayNativeAsyncCompletion,
+                    )
+                }),
+        }));
+        restore_thread_scope_stack(previous_thread_stack);
+        (state, completion_ref)
+    };
     let state = match state {
         Ok(state) => state,
         Err(_) => {
@@ -3120,7 +3129,7 @@ impl<G> Drop for NativeCallbackTaskGuard<G> {
     }
 }
 
-/// Invokes a unary continuation with an independent per-call result callback.
+/// Invokes a non-streaming continuation with an independent per-call result callback.
 unsafe extern "C" fn native_async_next_invoke_result(
     next: *const NemoRelayNativeAsyncNext,
     invocation_json: *const NemoRelayNativeString,
@@ -3159,7 +3168,7 @@ unsafe extern "C" fn native_async_next_invoke_result(
         }
         NativeAsyncNextInner::LlmStream(_) => {
             set_native_last_error(
-                "stream continuations require async_next_invoke_stream; unary result callbacks cannot buffer a stream",
+                "stream continuations require async_next_invoke_stream; non-streaming result callbacks cannot buffer a stream",
             );
             return NemoRelayStatus::InvalidArg;
         }
@@ -4040,16 +4049,16 @@ fn wrap_native_incremental_llm_stream_execution_with_user_data(
                 before_settlement_lock: None,
                 _callback_user_data: Some(user_data.clone()),
             });
-            let native_context = NativeLlmExecutionContextBridge::new(
-                &context,
-                stream.request_codec.as_ref(),
-                None,
-            )?;
             let output = NativeAsyncStreamReceiver {
                 receiver,
                 stream: Arc::clone(&stream),
             };
             let state = {
+                let native_context = NativeLlmExecutionContextBridge::new(
+                    &context,
+                    stream.request_codec.as_ref(),
+                    None,
+                )?;
                 let invocation =
                     native_string_from_json(&serde_json::json!({"name": name, "request": request}))
                         .ok_or_else(|| {

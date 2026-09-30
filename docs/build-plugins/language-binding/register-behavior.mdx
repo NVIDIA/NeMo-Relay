@@ -349,8 +349,8 @@ ctx.register_llm_stream_execution_intercept(
 </Tab>
 </Tabs>
 
-Execution codec objects are scoped to the callback that received them. Unary
-capabilities expire when that callback settles. A streaming request capability remains
+Execution codec objects are scoped to the callback that received them. Non-streaming
+capabilities expire when that callback finishes. A streaming request capability remains
 usable while the returned stream is live and expires on completion, error, close, or
 drop. Retaining a codec object past that boundary produces an error; it does not extend
 the invocation lifetime.
