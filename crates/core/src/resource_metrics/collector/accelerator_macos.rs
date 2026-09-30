@@ -131,17 +131,29 @@ fn apple_processes(
     devices: &[(String, Option<u32>)],
     state: &mut SamplingState,
 ) -> Option<Vec<AcceleratorProcessMetrics>> {
+    if devices.len() != 1 {
+        return None;
+    }
+    let output = ioreg(&["-r", "-c", "AGXDeviceUserClient", "-w0", "-l", "-d1"])?;
+    apple_processes_from_registry(&output, process_ids, devices, state, Instant::now())
+}
+
+fn apple_processes_from_registry(
+    output: &str,
+    process_ids: &[u32],
+    devices: &[(String, Option<u32>)],
+    state: &mut SamplingState,
+    sampled_at: Instant,
+) -> Option<Vec<AcceleratorProcessMetrics>> {
     // AGX user-client properties do not identify their parent GPU. Avoid attributing a
     // process to the wrong device on a system with more than one selected Apple GPU.
     let [(identifier, index)] = devices else {
         return None;
     };
-    let output = ioreg(&["-r", "-c", "AGXDeviceUserClient", "-w0", "-l", "-d1"])?;
-    let sampled_at = Instant::now();
     let owned = process_ids.iter().copied().collect::<BTreeSet<_>>();
     let mut live_clients = BTreeSet::new();
     let mut process_busy = BTreeMap::<u32, Option<f64>>::new();
-    for block in registry_blocks(&output) {
+    for block in registry_blocks(output) {
         let Some(first_line) = block.lines().next() else {
             continue;
         };
@@ -199,6 +211,10 @@ fn apple_processes(
             .collect(),
     )
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/resource_metrics/accelerator_macos_tests.rs"]
+mod tests;
 
 fn registry_blocks(output: &str) -> impl Iterator<Item = &str> {
     output.split("+-o ").skip(1)

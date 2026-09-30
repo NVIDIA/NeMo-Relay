@@ -146,9 +146,17 @@ pub(super) fn collect(
 
 #[cfg(target_os = "linux")]
 fn collect_linux_drm_devices(config: &ResourceMetricsGpuConfig) -> Vec<AcceleratorDeviceMetrics> {
+    collect_linux_drm_devices_from(std::path::Path::new("/sys/class/drm"), config)
+}
+
+#[cfg(target_os = "linux")]
+fn collect_linux_drm_devices_from(
+    directory: &std::path::Path,
+    config: &ResourceMetricsGpuConfig,
+) -> Vec<AcceleratorDeviceMetrics> {
     use std::fs;
 
-    let Ok(entries) = fs::read_dir("/sys/class/drm") else {
+    let Ok(entries) = fs::read_dir(directory) else {
         return Vec::new();
     };
     let mut devices = Vec::new();
@@ -235,6 +243,15 @@ fn collect_nvml(
         cache.retry_after = None;
     }
     let session = cache.session.as_ref()?;
+    collect_nvml_with_session(session, process_ids, config, sampling_state)
+}
+
+fn collect_nvml_with_session(
+    session: &NvmlSession,
+    process_ids: &[u32],
+    config: &ResourceMetricsGpuConfig,
+    sampling_state: &mut SamplingState,
+) -> Option<AcceleratorSample> {
     // SAFETY: The session keeps the library loaded and NVML initialized for this process.
     unsafe {
         let mut count = 0_u32;
@@ -559,51 +576,71 @@ fn collect_linux_drm(
         if super::linux::process_identity(*process_id).ok() != Some(start_identity) {
             continue;
         }
-        let mut by_device = BTreeMap::<String, Vec<DrmClient>>::new();
-        for client in clients.into_values() {
-            live_counters.extend(client.engine_counters.iter().map(|(engine, _)| {
-                (
-                    *process_id,
-                    start_identity,
-                    client.identity.clone(),
-                    engine.clone(),
-                )
-            }));
-            by_device
-                .entry(client.device_identifier.clone())
-                .or_default()
-                .push(client);
-        }
-        for (device_identifier, clients) in by_device {
-            let vendor = clients[0].vendor;
-            let memory = aggregate_drm_memory(&clients);
-            let utilization = clients
-                .iter()
-                .filter_map(|client| {
-                    drm_client_utilization(
-                        *process_id,
-                        start_identity,
-                        client,
-                        sampling_state,
-                        sampled_at,
-                    )
-                })
-                .reduce(f64::max);
-            records.push(AcceleratorProcessMetrics {
-                vendor,
-                device_identifier,
-                device_index: None,
-                process_id: *process_id,
-                memory_used: memory.map(|(value, unit)| ResourceMeasurement::new(value, unit)),
-                compute_utilization: utilization.map(|value| {
-                    ResourceMeasurement::new(value, ResourceMeasurementUnit::Percentage)
-                }),
-            });
-        }
+        records.extend(drm_process_records(
+            *process_id,
+            start_identity,
+            clients,
+            sampled_at,
+            sampling_state,
+            &mut live_counters,
+        ));
     }
     sampling_state
         .drm_counter_baselines
         .retain(|key, _| live_counters.contains(key));
+    records
+}
+
+#[cfg(target_os = "linux")]
+fn drm_process_records(
+    process_id: u32,
+    start_identity: u64,
+    clients: BTreeMap<String, DrmClient>,
+    sampled_at: Instant,
+    sampling_state: &mut SamplingState,
+    live_counters: &mut BTreeSet<(u32, u64, String, String)>,
+) -> Vec<AcceleratorProcessMetrics> {
+    let mut records = Vec::new();
+    let mut by_device = BTreeMap::<String, Vec<DrmClient>>::new();
+    for client in clients.into_values() {
+        live_counters.extend(client.engine_counters.iter().map(|(engine, _)| {
+            (
+                process_id,
+                start_identity,
+                client.identity.clone(),
+                engine.clone(),
+            )
+        }));
+        by_device
+            .entry(client.device_identifier.clone())
+            .or_default()
+            .push(client);
+    }
+    for (device_identifier, clients) in by_device {
+        let vendor = clients[0].vendor;
+        let memory = aggregate_drm_memory(&clients);
+        let utilization = clients
+            .iter()
+            .filter_map(|client| {
+                drm_client_utilization(
+                    process_id,
+                    start_identity,
+                    client,
+                    sampling_state,
+                    sampled_at,
+                )
+            })
+            .reduce(f64::max);
+        records.push(AcceleratorProcessMetrics {
+            vendor,
+            device_identifier,
+            device_index: None,
+            process_id,
+            memory_used: memory.map(|(value, unit)| ResourceMeasurement::new(value, unit)),
+            compute_utilization: utilization
+                .map(|value| ResourceMeasurement::new(value, ResourceMeasurementUnit::Percentage)),
+        });
+    }
     records
 }
 
@@ -840,3 +877,7 @@ fn aggregate_drm_memory(clients: &[DrmClient]) -> Option<(u64, ResourceMeasureme
 #[cfg(all(test, target_os = "linux"))]
 #[path = "../../../tests/unit/resource_metrics/accelerator_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/resource_metrics/nvml_tests.rs"]
+mod nvml_tests;

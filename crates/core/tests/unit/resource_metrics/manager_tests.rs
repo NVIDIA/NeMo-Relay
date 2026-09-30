@@ -548,3 +548,66 @@ fn global_disk_rates_count_new_processes_and_keep_genuine_zero_rates() {
         2
     );
 }
+use crate::resource_metrics::snapshot_fixture;
+
+#[test]
+fn invalidating_a_sample_clears_all_process_measurements_and_keeps_category_shape() {
+    let invalidated = super::invalidated_snapshot(snapshot_fixture::full_snapshot());
+    let value = serde_json::to_value(&invalidated).unwrap();
+    assert!(invalidated.process_sampling.is_none());
+    for category in ["cpu", "memory", "process"] {
+        for (field, measurement) in value[category].as_object().unwrap() {
+            if field == "limit_events" {
+                assert_eq!(measurement, &serde_json::json!([]));
+            } else {
+                assert!(measurement.is_null(), "{category}.{field}: {measurement}");
+            }
+        }
+    }
+    for field in [
+        "read_data",
+        "write_data",
+        "read_throughput",
+        "write_throughput",
+        "read_operations",
+        "write_operations",
+    ] {
+        assert!(value["disk"][field].is_null());
+    }
+    for field in ["total_capacity", "available_capacity", "free_capacity"] {
+        assert!(value["disk"]["filesystems"][0][field].is_null());
+    }
+    assert!(invalidated.gpu.unwrap().device_metrics.is_none());
+    assert!(invalidated.network.unwrap().system.received_data.is_some());
+}
+#[test]
+fn manager_rejects_foreign_process_ownership_and_duplicate_activation() {
+    let mut manager = ResourceMetricsManager::new().unwrap();
+    manager.owner_pid = std::process::id().wrapping_add(1);
+    let target = current_process_target(ResourceMeasurementScope::ProcessTree).unwrap();
+    assert!(
+        manager
+            .activate(target.clone(), ResourceMetricsConfig::default())
+            .is_err()
+    );
+    assert!(manager.collect_blocking(SamplingSeries::OnDemand).is_err());
+    manager.deactivate(1);
+    let manager = Arc::new(manager);
+    drop(CliResourceMetricsLaunchGuard {
+        manager: Arc::clone(&manager),
+    });
+    drop(ResourceMetricsTargetGuard {
+        manager,
+        generation: 1,
+    });
+    let manager = ResourceMetricsManager::new().unwrap();
+    let generation = manager
+        .activate(target.clone(), ResourceMetricsConfig::default())
+        .unwrap();
+    assert!(
+        manager
+            .activate(target, ResourceMetricsConfig::default())
+            .is_err()
+    );
+    manager.deactivate(generation);
+}

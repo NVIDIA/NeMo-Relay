@@ -171,6 +171,14 @@ pub(super) fn environment_sample(
     else {
         return Ok(EnvironmentSample::default());
     };
+    environment_sample_from_cgroup(&directory, &mount_point, config)
+}
+
+fn environment_sample_from_cgroup(
+    directory: &Path,
+    mount_point: &Path,
+    config: &crate::plugins::resource_metrics::config::ResourceMetricsConfig,
+) -> io::Result<EnvironmentSample> {
     let cpu_stat = config
         .cpu
         .enabled
@@ -257,14 +265,14 @@ pub(super) fn environment_sample(
         effective_cpu_limit: config
             .cpu
             .enabled
-            .then(|| effective_cpu_limit(&directory, &mount_point))
+            .then(|| effective_cpu_limit(directory, mount_point))
             .flatten(),
         cpu_some_pressure_stall_time: cpu_pressure.0.map(milliseconds),
         cpu_full_pressure_stall_time: cpu_pressure.1.map(milliseconds),
         memory_limit: config
             .memory
             .enabled
-            .then(|| effective_memory_limit(&directory, &mount_point))
+            .then(|| effective_memory_limit(directory, mount_point))
             .flatten()
             .map(kibibytes),
         environment_accounted_memory: config

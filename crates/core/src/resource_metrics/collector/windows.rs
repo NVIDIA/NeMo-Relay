@@ -555,3 +555,6 @@ pub(super) fn thread_counts() -> io::Result<HashMap<u32, u64>> {
 fn filetime_value(value: FILETIME) -> u64 {
     (u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime)
 }
+#[cfg(test)]
+#[path = "../../../tests/unit/resource_metrics/windows_tests.rs"]
+mod tests;

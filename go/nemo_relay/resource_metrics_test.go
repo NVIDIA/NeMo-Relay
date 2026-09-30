@@ -5,9 +5,35 @@ package nemo_relay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 )
+
+func TestResourceMetricValuePreservesNumbersAndRejectsInvalidJSON(t *testing.T) {
+	for _, encoded := range []string{"0", "18446744073709551615", "1.25", "-1.25"} {
+		var value ResourceMetricValue
+		if err := json.Unmarshal([]byte(encoded), &value); err != nil {
+			t.Fatalf("decode %s: %v", encoded, err)
+		}
+		actual, err := json.Marshal(value)
+		if err != nil || string(actual) != encoded {
+			t.Fatalf("round trip %s: %s, %v", encoded, actual, err)
+		}
+	}
+	var value ResourceMetricValue
+	for _, encoded := range []string{"null", "\"1\"", "1e9999"} {
+		if err := json.Unmarshal([]byte(encoded), &value); err == nil {
+			t.Fatalf("accepted invalid measurement %s", encoded)
+		}
+	}
+	if _, err := json.Marshal(ResourceMetricValue{}); err == nil {
+		t.Fatal("serialized a measurement without a value")
+	}
+	if _, err := CollectResourceMetrics(nil); err == nil {
+		t.Fatal("accepted a nil context")
+	}
+}
 
 func TestCollectResourceMetricsRequiresActiveComponent(t *testing.T) {
 	if err := closeTestPluginHost(); err != nil {

@@ -98,3 +98,98 @@ fn effective_limits_are_unavailable_for_invalid_or_unreadable_ancestors() {
     assert!(super::effective_memory_limit(&leaf, root.path()).is_none());
     assert!(super::effective_memory_limit(root.path(), &leaf).is_none());
 }
+#[test]
+fn cgroup_sample_reads_selected_categories_and_normalizes_units() {
+    use crate::plugins::resource_metrics::config::ResourceMetricsConfig;
+    use nemo_relay_types::api::resource_metrics::ResourceMeasurementUnit;
+    let directory = tempfile::tempdir().unwrap();
+    for (name, value) in [
+        ("cpu.stat", "nr_throttled 7\nthrottled_usec 2000999\n"),
+        ("cpu.max", "50000 100000"),
+        ("cpuset.cpus.effective", "0-3"),
+        ("memory.events", "high 2\nmax 3\noom 4\n"),
+        ("memory.max", "4096"),
+        ("memory.current", "2048"),
+        ("pids.events", "max 5\n"),
+        (
+            "cpu.pressure",
+            "some avg10=0 total=3000999\nfull avg10=0 total=1000999\n",
+        ),
+        (
+            "memory.pressure",
+            "some avg10=0 total=4000999\nfull avg10=0 total=2000999\n",
+        ),
+    ] {
+        fs::write(directory.path().join(name), value).unwrap();
+    }
+    let sample = super::environment_sample_from_cgroup(
+        directory.path(),
+        directory.path(),
+        &ResourceMetricsConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(sample.cpu_throttled_time.unwrap().value, 2000);
+    assert_eq!(sample.effective_cpu_limit.unwrap().value, 0.5);
+    assert_eq!(sample.memory_limit.unwrap().value, 4);
+    let memory = sample.environment_accounted_memory.unwrap();
+    assert_eq!(memory.value, 2);
+    assert_eq!(memory.unit, ResourceMeasurementUnit::Kibibytes);
+    assert_eq!(sample.cpu_some_pressure_stall_time.unwrap().value, 3000);
+    assert_eq!(sample.memory_full_pressure_stall_time.unwrap().value, 2000);
+    assert_eq!(sample.out_of_memory_event_count.unwrap().value, 4);
+    assert_eq!(sample.resource_limit_events.len(), 5);
+    let mut config = ResourceMetricsConfig::default();
+    config.cpu.enabled = false;
+    config.memory.enabled = false;
+    config.process.enabled = false;
+    let sample =
+        super::environment_sample_from_cgroup(directory.path(), directory.path(), &config).unwrap();
+    assert!(sample.cpu_throttled_time.is_none());
+    assert!(sample.memory_limit.is_none());
+    assert!(sample.resource_limit_events.is_empty());
+}
+#[test]
+fn linux_status_io_and_processor_set_parsers_reject_invalid_counts() {
+    assert_eq!(
+        super::proc_status_kibibytes("VmSize: 4096 kB\n", "VmSize"),
+        Some(4096)
+    );
+    assert_eq!(
+        super::proc_status_kibibytes("VmSize: 4096 kB\n", "Missing"),
+        None
+    );
+    assert_eq!(
+        super::proc_status_kibibytes("VmSize: invalid kB\n", "VmSize"),
+        None
+    );
+    assert_eq!(
+        super::private_memory_kibibytes(
+            "Private_Clean: 3 kB\nPrivate_Dirty: 5 kB\nPrivate_Hugetlb: 7 kB\n"
+        ),
+        Some(15)
+    );
+    assert_eq!(
+        super::private_memory_kibibytes(
+            "Private_Clean: 18446744073709551615 kB\nPrivate_Dirty: 1 kB\n"
+        ),
+        None
+    );
+    assert_eq!(
+        super::proc_io_count("read_bytes: 1024\n", "read_bytes"),
+        Some(1024)
+    );
+    assert_eq!(
+        super::proc_io_count("read_bytes: invalid\n", "read_bytes"),
+        None
+    );
+    for (value, expected) in [
+        ("0-3,8,10-11", Some(7)),
+        ("3-1", None),
+        ("invalid", None),
+        ("0-18446744073709551615", None),
+    ] {
+        assert_eq!(super::processor_set_count(value), expected);
+    }
+    assert!(super::parse_stat("invalid").is_none());
+    assert!(super::parse_stat("123 (short process) S 1").is_none());
+}

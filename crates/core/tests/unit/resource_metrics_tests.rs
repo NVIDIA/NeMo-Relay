@@ -777,3 +777,125 @@ fn resource_metrics_host_config(
         policy: Default::default(),
     }
 }
+use crate::resource_metrics::snapshot_fixture;
+
+#[test]
+fn complete_snapshot_projects_filesystems_accelerators_and_limit_events_as_gauges() {
+    let snapshot = snapshot_fixture::full_snapshot();
+    let measurements = super::metric_measurements(&snapshot);
+    assert!(
+        measurements
+            .iter()
+            .all(|value| value.kind == super::MetricKind::Gauge)
+    );
+    let limits: Vec<_> = measurements
+        .iter()
+        .filter(|value| value.name == "nemo.relay.resource.limit.event_count")
+        .collect();
+    assert_eq!(limits.len(), 3);
+    for (resource, event) in [
+        ("cpu", "throttled"),
+        ("memory", "out_of_memory"),
+        ("processes", "maximum"),
+    ] {
+        assert!(limits.iter().any(|value| {
+            let attributes = value.attributes.as_ref().unwrap();
+            attributes["nemo_relay.resource.limit.resource"] == resource
+                && attributes["nemo_relay.resource.limit.event"] == event
+                && value.unit.as_deref() == Some("events")
+        }));
+    }
+    let filesystem = measurements
+        .iter()
+        .find(|value| value.name == "nemo.relay.resource.disk.filesystem.total_capacity")
+        .unwrap();
+    assert_eq!(
+        filesystem.attributes.as_ref().unwrap()["nemo_relay.resource.disk.filesystem_path"],
+        "/fixture"
+    );
+    let gpu = measurements
+        .iter()
+        .find(|value| value.name == "nemo.relay.resource.accelerator.process.compute_utilization")
+        .unwrap();
+    assert_eq!(gpu.value, json!(50.0));
+    assert_eq!(
+        gpu.attributes.as_ref().unwrap()["nemo_relay.resource.process_id"],
+        42
+    );
+    assert_eq!(
+        gpu.attributes.as_ref().unwrap()["nemo_relay.resource.accelerator.device_identifier"],
+        "GPU-fixture"
+    );
+    let network = measurements
+        .iter()
+        .filter(|value| value.name.starts_with("nemo.relay.resource.network."))
+        .collect::<Vec<_>>();
+    assert_eq!(network.len(), 16);
+    assert!(network.iter().all(
+        |value| value.attributes.as_ref().unwrap()["nemo_relay.resource.measurement_scope"]
+            == "global"
+    ));
+}
+#[test]
+#[cfg(not(windows))]
+fn cli_launch_guards_select_the_owned_tree_and_restore_the_application_target() {
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _runtime_lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    test_close_plugin_host().unwrap();
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    *global_context().write().unwrap() = NemoRelayContextState::new();
+    set_thread_scope_stack(create_scope_stack());
+    let launch = super::prepare_cli_resource_metrics_process_tree().unwrap();
+    assert!(super::prepare_cli_resource_metrics_process_tree().is_err());
+    let child = Child(
+        std::process::Command::new("/bin/sleep")
+            .arg("60")
+            .spawn()
+            .unwrap(),
+    );
+    assert!(
+        super::target_resource_metrics_to_owned_process_tree(child.0.id())
+            .unwrap()
+            .is_none()
+    );
+    assert!(super::target_resource_metrics_to_owned_process_tree(std::process::id()).is_err());
+    let mut config = resource_metrics_host_config(true, false, 250);
+    config.components[0]
+        .config
+        .insert("measurement_scope".into(), json!("process_tree"));
+    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+    let target = super::target_resource_metrics_to_owned_process_tree(child.0.id())
+        .unwrap()
+        .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let snapshot = runtime.block_on(super::collect()).unwrap();
+    assert_eq!(
+        snapshot.measurement_scope,
+        super::ResourceMeasurementScope::ProcessTree
+    );
+    assert!(snapshot.process.unwrap().active_count.unwrap().value >= 1_u64);
+    drop(target);
+    assert!(runtime.block_on(super::collect()).is_err());
+    let target = super::target_resource_metrics_to_owned_process_tree(child.0.id())
+        .unwrap()
+        .unwrap();
+    drop(launch);
+    drop(target);
+    let snapshot = runtime.block_on(super::collect()).unwrap();
+    assert_eq!(
+        snapshot.measurement_scope,
+        super::ResourceMeasurementScope::ProcessTree
+    );
+    test_close_plugin_host().unwrap();
+}

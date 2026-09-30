@@ -199,3 +199,81 @@ fn drm_descriptor_filter_skips_regular_files_and_non_drm_devices() {
         "/proc/self/fd/-1"
     )));
 }
+#[test]
+fn drm_device_files_normalize_amd_and_intel_memory_and_apply_selectors() {
+    use crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig;
+    use std::fs;
+    let root = tempfile::tempdir().unwrap();
+    for (card, vendor, memory, utilization) in [
+        ("card0", "0x1002", "4096", "25"),
+        ("card1", "0x8086", "8192", "50"),
+        ("card2", "0x1002", "invalid", "101"),
+        ("card3", "0x10de", "4096", "25"),
+    ] {
+        let device = root.path().join(card).join("device");
+        fs::create_dir_all(&device).unwrap();
+        for (name, value) in [
+            ("vendor", vendor),
+            ("mem_info_vram_used", memory),
+            ("gpu_busy_percent", utilization),
+        ] {
+            fs::write(device.join(name), value).unwrap();
+        }
+    }
+    let config = ResourceMetricsGpuConfig::default();
+    let mut devices = super::collect_linux_drm_devices_from(root.path(), &config);
+    devices.sort_by_key(|device| device.vendor == AcceleratorVendor::Intel);
+    assert_eq!(devices.len(), 2);
+    assert_eq!(devices[0].vendor, AcceleratorVendor::Amd);
+    assert_eq!(devices[0].memory_used.as_ref().unwrap().value, 4_u64);
+    assert_eq!(devices[0].compute_utilization.as_ref().unwrap().value, 25.0);
+    assert_eq!(devices[1].vendor, AcceleratorVendor::Intel);
+    assert_eq!(devices[1].memory_used.as_ref().unwrap().value, 8_u64);
+    assert!(devices[1].compute_utilization.is_none());
+    let config = ResourceMetricsGpuConfig {
+        devices: vec!["unselected-device".into()],
+        ..Default::default()
+    };
+    assert!(super::collect_linux_drm_devices_from(root.path(), &config).is_empty());
+    assert!(
+        super::collect_linux_drm_devices_from(&root.path().join("missing"), &config).is_empty()
+    );
+}
+#[test]
+fn drm_process_records_group_clients_by_device_and_keep_the_busiest_engine() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let clients = |busy: u64| {
+        let mut clients = BTreeMap::new();
+        for (id, memory, time) in [(1, 2, busy), (2, 4, busy / 2)] {
+            let client = parse_drm_client(&format!(
+                "drm-driver: amdgpu\ndrm-client-id: {id}\ndrm-pdev: fixture\ndrm-resident-vram: {memory} KiB\ndrm-engine-render: {time} ns\n"
+            )).unwrap();
+            clients.insert(client.identity.clone(), client);
+        }
+        clients
+    };
+    let now = Instant::now();
+    let mut state = SamplingState::default();
+    let mut live = BTreeSet::new();
+    let first = super::drm_process_records(42, 1, clients(100_000_000), now, &mut state, &mut live);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].process_id, 42);
+    assert_eq!(first[0].memory_used.as_ref().unwrap().value, 6_u64);
+    assert!(first[0].compute_utilization.is_none());
+    assert_eq!(live.len(), 2);
+    let second = super::drm_process_records(
+        42,
+        1,
+        clients(600_000_000),
+        now + Duration::from_secs(1),
+        &mut state,
+        &mut live,
+    );
+    let utilization = second[0].compute_utilization.as_ref().unwrap();
+    assert_eq!(utilization.value, 50.0);
+    assert_eq!(utilization.unit, ResourceMeasurementUnit::Percentage);
+    assert_eq!(second[0].device_identifier, "fixture");
+    assert!(
+        super::drm_process_records(42, 1, BTreeMap::new(), now, &mut state, &mut live).is_empty()
+    );
+}

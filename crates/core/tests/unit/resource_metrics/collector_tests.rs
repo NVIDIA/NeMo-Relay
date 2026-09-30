@@ -145,3 +145,49 @@ fn sums_distinguish_zero_unavailable_overflow_and_incomplete_selection() {
         assert_eq!(aggregation.field_sampled_processes["cpu.user_time"], count);
     }
 }
+#[test]
+fn an_invalid_process_identity_returns_unavailable_categories_in_the_stable_shape() {
+    let mut target =
+        super::current_process_target(super::ResourceMeasurementScope::ApplicationProcess).unwrap();
+    target.start_identity = target.start_identity.wrapping_add(1);
+    let snapshot = super::collect(
+        &target,
+        &crate::plugins::resource_metrics::config::ResourceMetricsConfig::default(),
+    )
+    .snapshot;
+    assert_eq!(
+        snapshot.measurement_scope,
+        super::ResourceMeasurementScope::ApplicationProcess
+    );
+    let value = serde_json::to_value(&snapshot).unwrap();
+    for category in ["cpu", "memory", "process", "disk"] {
+        for (field, measurement) in value[category].as_object().unwrap() {
+            if field == "limit_events" || field == "filesystems" {
+                assert_eq!(measurement, &serde_json::json!([]));
+            } else {
+                assert!(measurement.is_null(), "{category}.{field}: {measurement}");
+            }
+        }
+    }
+    assert!(snapshot.process_sampling.is_none());
+    let gpu = snapshot.gpu.unwrap();
+    assert!(gpu.device_metrics.is_none());
+    assert!(gpu.process_metrics.is_none());
+}
+
+#[test]
+fn global_cpu_sampler_requires_a_baseline_and_a_minimum_interval() {
+    let mut sampler = None;
+    assert!(super::GlobalCpuSampler::sample(&mut sampler).is_none());
+    assert!(super::GlobalCpuSampler::sample(&mut sampler).is_none());
+    // Advance the baseline rather than adding a wall-clock delay to the test.
+    sampler.as_mut().unwrap().last_sampled_at =
+        std::time::Instant::now() - sysinfo::MINIMUM_CPU_UPDATE_INTERVAL;
+    let measurement = super::GlobalCpuSampler::sample(&mut sampler).unwrap();
+    assert_eq!(
+        measurement.unit,
+        super::ResourceMeasurementUnit::LogicalProcessors
+    );
+    assert!(measurement.value.is_finite());
+    assert!(measurement.value >= 0.0);
+}
