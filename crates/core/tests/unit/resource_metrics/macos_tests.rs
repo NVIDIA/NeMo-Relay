@@ -59,6 +59,7 @@ fn child_process_query_grows_when_pid_capacity_is_full() {
 
 #[test]
 fn descriptor_count_reports_open_files_and_grows_the_query_buffer() {
+    use std::io::{Read, Write};
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
@@ -66,12 +67,12 @@ fn descriptor_count_reports_open_files_and_grows_the_query_buffer() {
         fn dup(descriptor: i32) -> i32;
     }
 
+    let mut baseline = None;
     for extra_descriptors in [0, 100] {
-        let mut command = Command::new("/bin/sleep");
+        let mut command = Command::new("/bin/cat");
         command
-            .arg("60")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null());
         // SAFETY: the child hook only calls the async-signal-safe dup syscall.
         unsafe {
@@ -84,9 +85,31 @@ fn descriptor_count_reports_open_files_and_grows_the_query_buffer() {
                 Ok(())
             });
         }
-        let children = SleepingChildren(vec![command.spawn().unwrap()]);
+        let mut children = SleepingChildren(vec![command.spawn().unwrap()]);
+        // Wait for the child's main loop so temporary loader descriptors have closed.
+        children.0[0]
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"ready\n")
+            .unwrap();
+        let mut ready = [0; 6];
+        children.0[0]
+            .stdout
+            .as_mut()
+            .unwrap()
+            .read_exact(&mut ready)
+            .unwrap();
+        assert_eq!(&ready, b"ready\n");
         let count = super::open_file_descriptor_count(children.0[0].id()).unwrap();
-        assert_eq!(count, 3 + extra_descriptors);
+        // Test runners and coverage tools can leave inherited descriptors open.
+        // Measure those along with stdin/stdout/stderr before adding duplicates.
+        if extra_descriptors == 0 {
+            assert!(count >= 3);
+            baseline = Some(count);
+        } else {
+            assert_eq!(count, baseline.unwrap() + extra_descriptors);
+        }
         let sample = super::process_sample(
             children.0[0].id(),
             super::ProcessSampleConfig {
