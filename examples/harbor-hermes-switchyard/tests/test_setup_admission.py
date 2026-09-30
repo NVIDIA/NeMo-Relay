@@ -216,8 +216,16 @@ def test_glm_stage_signal_and_classifier_arms_are_distinct_and_valid(tmp_path: P
         # Switchyard's pinned native plugin accepts routed OpenAI Chat
         # targets; the Responses API is not yet a valid router target.
         assert switchyard_routes["llm_clients"]["nvidia"]["format"] == "openai_chat"
-        assert targets["strong"]["extra_body"] == {"reasoning": {"effort": "medium"}}
-        assert targets["weak"]["extra_body"] == {"reasoning": {"enabled": False}}
+        # The signal arm raises max_tokens above the provider default after
+        # real-task failures where Hermes reported the model exhausting its
+        # output-token budget on reasoning before producing a final
+        # response; the classifier arm has not needed that adjustment.
+        if experiment == "sol56-glm52-stage-ef05-signal":
+            assert targets["strong"]["extra_body"] == {"max_tokens": 32768, "reasoning": {"effort": "medium"}}
+            assert targets["weak"]["extra_body"] == {"max_tokens": 32768, "reasoning": {"enabled": False}}
+        else:
+            assert targets["strong"]["extra_body"] == {"reasoning": {"effort": "medium"}}
+            assert targets["weak"]["extra_body"] == {"reasoning": {"enabled": False}}
         if classifier_target is None:
             assert set(targets) == {"strong", "weak"}
             assert "judge_model" not in settings

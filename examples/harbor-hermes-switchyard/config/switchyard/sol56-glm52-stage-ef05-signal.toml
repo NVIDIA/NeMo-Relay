@@ -14,12 +14,24 @@ api_key_env = "SWITCHYARD_PROVIDER_AUTHORIZATION"
 id = "openai/openai/gpt-5.6-sol"
 llm_client = "nvidia"
 
+# Raised from the provider default after repeated real-task failures where
+# Hermes reported the model exhausting its output-token budget on reasoning
+# before producing a final response ("extract-moves-from-video",
+# "path-tracing-reverse"). extra_body only fills in fields the caller
+# (Hermes) did not already specify, so this is a default floor, not an
+# override of an explicit Hermes-side value.
+[targets.strong.extra_body]
+max_tokens = 32768
+
 [targets.strong.extra_body.reasoning]
 effort = "medium"
 
 [targets.weak]
 id = "nvidia/zai-org/glm-5.2"
 llm_client = "nvidia"
+
+[targets.weak.extra_body]
+max_tokens = 32768
 
 [targets.weak.extra_body.reasoning]
 enabled = false
