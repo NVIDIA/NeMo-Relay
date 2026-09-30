@@ -182,7 +182,7 @@
     "expected_behavior": [
       "The agent recognizes that Observability established the first reusable plugin path during the default quick start",
       "The agent explains the instrument-once, change-behavior-through-plugins value of Relay",
-      "The agent maps Adaptive to optimization, NeMo Guardrails to policy, PII Redaction to sensitive telemetry, and Model Pricing to cost estimates",
+      "The agent maps Adaptive to optimization, PII Redaction to sensitive telemetry, and Model Pricing to cost estimates",
       "The agent asks or infers the user's end goal before recommending exactly one additional plugin",
       "The agent previews the smallest relevant plugin configuration and obtains confirmation before enabling it",
       "The agent recommends additional instrumentation only when the demonstrated boundary does not cover the real workflow",

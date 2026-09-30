@@ -171,10 +171,6 @@ fn edit_component_field(
             edit_config_field(theme, &mut state.config, field)?;
             state.mark_config_touched();
         }
-        EditableComponent::NemoGuardrails(state) => {
-            edit_config_field(theme, &mut state.config, field)?;
-            state.mark_config_touched();
-        }
         EditableComponent::PiiRedaction(state) => {
             edit_config_field(theme, &mut state.config, field)?;
             state.mark_config_touched();

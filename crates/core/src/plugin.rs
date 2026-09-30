@@ -1151,10 +1151,6 @@ fn register_plugin_with_owner(
 ///
 /// Built-in plugins are available to validation and initialization without a
 /// binding or application-specific registration call.
-#[allow(
-    deprecated,
-    reason = "the host must register the built-in Guardrails plugin until its scheduled removal"
-)]
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
     let all_registered = {
         let guard = PLUGIN_HANDLERS.read().map_err(|err| {
@@ -1162,7 +1158,6 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
         })?;
         [
             crate::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND,
-            crate::plugins::nemo_guardrails::component::NEMO_GUARDRAILS_PLUGIN_KIND,
             crate::plugins::model_pricing::PRICING_PLUGIN_KIND,
         ]
         .iter()
@@ -1180,7 +1175,6 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
     // call so a removed built-in is restored, a replacement is rejected, and
     // a corrected ownership conflict can be retried without restarting Relay.
     crate::observability::plugin_component::register_observability_component()?;
-    crate::plugins::nemo_guardrails::component::register_nemo_guardrails_component()?;
     crate::plugins::model_pricing::register_pricing_component()
 }
 
