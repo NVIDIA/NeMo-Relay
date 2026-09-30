@@ -14,4 +14,4 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Capture the current causal parent without a root UUID.
 
-Importing the returned context preserves Relay event parentage but starts a new local OpenTelemetry trace.
+Importing the returned context preserves Relay event parentage and any previously imported W3C parent while omitting the Relay root. A locally derived W3C parent is omitted, so the receiver starts a separate trace.

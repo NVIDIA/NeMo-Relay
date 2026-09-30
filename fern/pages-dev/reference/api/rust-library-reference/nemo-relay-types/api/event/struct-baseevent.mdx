@@ -35,11 +35,11 @@ This is runtime-only delivery state. It distinguishes an imported parent from or
 
 ### `propagation_traceparent: Option<String>`
 
-W3C traceparent imported with the propagation context. Runtime-only.
+W3C traceparent imported or derived from the local parent. Runtime-only.
 
 ### `propagation_tracestate: Option<String>`
 
-W3C tracestate imported with the propagation context. Runtime-only.
+W3C tracestate imported or inherited from the local parent. Runtime-only.
 
 ### `uuid: Uuid`
 

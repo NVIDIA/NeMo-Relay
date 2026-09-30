@@ -14,7 +14,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Create an isolated scope stack below the current causal parent.
 
-Capture the parent before spawning concurrent work, then install the returned stack with `TASK_SCOPE_STACK.scope(...)`. The fork preserves event parentage and its Relay root but does not transfer scope-local registrations.
+Capture the parent before spawning concurrent work, then install the returned stack with `TASK_SCOPE_STACK.scope(...)`. The fork preserves event parentage, its Relay root, and the current W3C Trace Context, but does not transfer scope-local registrations.
 
 ## Examples
 

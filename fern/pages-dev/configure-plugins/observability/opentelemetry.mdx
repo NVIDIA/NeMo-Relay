@@ -191,13 +191,14 @@ HTTP and HTTPS default ports are realized, repeated and trailing path slashes
 are normalized, and standardized loopback hosts such as `localhost`, names
 under `.localhost`, `127.0.0.0/8`, and `::1` are equivalent. Relay does not use
 DNS resolution for this comparison, and query strings remain significant.
-Log lineage follows the same root selection as traces. When a local parent was
-not observed by the exporters, the observed scope starts a trace using its own
-UUID; a propagation-root UUID alone does not establish an imported parent.
-Marks under that scope, including late marks within the completed-context retention
-window, use its trace identity. An explicit imported parent continues the propagated
-trace. Log-to-span joins require both exporters to observe the corresponding
-scope lifecycle.
+Log lineage follows the same root selection as traces. Relay captures parent
+trace context when it queues an event, so a subscriber registered after a
+local parent starts can still place later children in the parent's trace. When
+neither the parent lifecycle nor captured context is available, the observed
+scope starts a trace using its own UUID; a propagation-root UUID alone does not
+establish an imported parent. Marks under that scope, including late marks
+within the completed-context retention window, use its trace identity. An
+explicit imported parent continues the propagated trace.
 Relay propagation continues the Relay-derived trace across the import boundary
 by default. Use `capture_rootless_propagation_context()` only when a receiver
 must start a new Relay-derived OpenTelemetry trace when no W3C parent is

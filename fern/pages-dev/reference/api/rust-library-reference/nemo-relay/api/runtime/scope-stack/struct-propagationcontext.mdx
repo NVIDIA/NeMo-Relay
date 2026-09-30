@@ -24,7 +24,7 @@ Wire-format version. Version 1 is the only currently supported value.
 
 ### `root_uuid: Option<Uuid>`
 
-Stable session root when the sending application knows one. When this root is omitted, the first local OpenTelemetry span after import starts a new trace.
+Stable session root when the sending application knows one. When this root and a valid `traceparent` are both absent, the first local OpenTelemetry span after import starts a new trace.
 
 ### `parent_uuid: Uuid`
 
