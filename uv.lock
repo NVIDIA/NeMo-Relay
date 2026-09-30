@@ -1396,7 +1396,6 @@ wheels = [
 
 [[package]]
 name = "nemo-relay"
-version = "0.8.0rc3"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -1475,7 +1474,7 @@ requires-dist = [
     { name = "nemo-relay", extras = ["langgraph"], marker = "extra == 'deepagents'" },
     { name = "nemo-relay-cli-bin", marker = "extra == 'cli'", directory = "python/cli-bin" },
 ]
-provides-extras = ["cli", "langchain", "langgraph", "deepagents", "langchain-nvidia"]
+provides-extras = ["cli", "deepagents", "langchain", "langchain-nvidia", "langgraph"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1501,7 +1500,7 @@ test = [
 
 [[package]]
 name = "nemo-relay-cli-bin"
-version = "0.8.0rc3"
+version = "0.8.0"
 source = { directory = "python/cli-bin" }
 
 [[package]]
