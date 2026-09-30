@@ -504,7 +504,7 @@ def test_plugin_compatibility_uses_oldest_supported_base_without_secrets(
         }
     }
     command = admission_module.plugin_compatibility_command(plan)
-    assert "python:3.11-bullseye" in command
+    assert "python:3.11-trixie" in command
     assert "linux/arm64" in command
     assert "nemo_relay_register_plugin" in command[-1]
     rendered = " ".join(command)
