@@ -7,6 +7,72 @@ position: 5
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "openclaw",
+  "mode": "live",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": ".",
+  "requires": {
+    "openclaw": ">=2026.9.3",
+    "node": ">=24",
+    "npm": "available",
+    "jq (bash only)": ">=1.6"
+  },
+  "setup": [
+    "Authenticated model provider with tool-use permissions",
+    "Disposable test agent and gateway; do not change a shared gateway"
+  ],
+  "inputs": {
+    "RELAY_LOG_DIR": {
+      "kind": "path",
+      "token": "/absolute/path/to/relay-logs"
+    },
+    "AGENT_WORKSPACE": {
+      "kind": "path",
+      "token": "/absolute/path/to/agent-workspace"
+    },
+    "AGENT_ID": {
+      "kind": "argument",
+      "token": "YOUR_AGENT_ID"
+    }
+  },
+  "fresh": [
+    "/absolute/path/to/relay-logs/events.jsonl",
+    "/absolute/path/to/agent-workspace/relay-check.txt"
+  ],
+  "checks": [
+    {
+      "kind": "file-equals",
+      "path": "/absolute/path/to/agent-workspace/relay-check.txt",
+      "value": "RELAY_QUICKSTART_TOOL_OK",
+      "trim": true
+    },
+    {
+      "kind": "atof",
+      "path": "/absolute/path/to/relay-logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent"
+        },
+        {
+          "category": "tool"
+        },
+        {
+          "category": "llm"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
 Observe one gateway-backed OpenClaw agent turn and write its session, model, and
 tool lifecycle to a local ATOF event file.
 
@@ -14,14 +80,17 @@ tool lifecycle to a local ATOF event file.
 
 - OpenClaw 2026.9.3 or newer
 - Node.js 24 or newer and npm
-- A configured OpenClaw agent and model provider
+- A configured OpenClaw agent and model provider with a writable agent workspace
 - Permission to install plugins and restart the OpenClaw gateway
+
+On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 
 ## 1. Install
 
 Install and pin the verified NeMo Relay plugin. OpenClaw registers the plugin ID
 and adds it to an existing `plugins.allow` list automatically:
 
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
 ```bash
 openclaw plugins install npm:nemo-relay-openclaw@0.9.1 --pin --accept-capabilities
 ```
@@ -34,12 +103,18 @@ The npm package is named `nemo-relay-openclaw`; its OpenClaw plugin ID is
 
 ## 2. Configure
 
+Use a disposable test agent and gateway configuration; this guide changes plugin
+configuration and restarts the gateway. Do not run automated tests against your
+normal shared gateway. Use a fresh log directory and an agent workspace without
+`relay-check.txt` so previous output cannot pass verification.
+
 First, run `openclaw config file` to confirm which configuration file OpenClaw
 will update. Then save the following partial configuration as
 `relay-openclaw.patch.json5`. Replace `/absolute/path/to/relay-logs` with a
 writable absolute directory. On Windows, use forward slashes, for example
 `C:/Users/alice/.openclaw/nemo-relay-quickstart`.
 
+{/* quickstart-block {"id":"config","role":"file","cwd":".","path":"relay-openclaw.patch.json5"} */}
 ```json5
 {
   plugins: {
@@ -102,6 +177,7 @@ output file and review the full capture controls before enabling richer payloads
 Validate and apply the patch through OpenClaw instead of editing the complete
 configuration file:
 
+{/* quickstart-block {"id":"configure","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
 ```bash
 openclaw config patch --file ./relay-openclaw.patch.json5 --dry-run
 openclaw config patch --file ./relay-openclaw.patch.json5
@@ -116,40 +192,83 @@ normal configuration reload behavior.
 
 ## 3. Run
 
-Use your configured agent ID. A standard single-agent installation normally
-uses `main`:
+Run `openclaw agents list` to find your test agent ID and workspace. Replace
+`YOUR_AGENT_ID` below with that ID. The marker file is created in the agent
+workspace, not necessarily the terminal's current directory:
 
+{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
 ```bash
-openclaw agents list
-openclaw agent --agent main --message "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
+openclaw agent --agent YOUR_AGENT_ID --message "Use a file-writing tool to create relay-check.txt in the agent workspace containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 
 ## 4. Verify
 
-Inspect the ATOF file in the absolute directory configured above:
+Use the same log directory as the plugin configuration. Replace
+`/absolute/path/to/agent-workspace` with your test agent's workspace path
+(on Windows, use forward slashes, such as `C:/Users/alice/test-agent`).
+Wait for the gateway to finish writing the completed turn before checking:
 
 <Tabs>
 <Tab title="Unix shell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-test -s /absolute/path/to/relay-logs/events.jsonl &&
-tail -n 1 /absolute/path/to/relay-logs/events.jsonl &&
-printf 'RELAY_QUICKSTART_EVENTS_OK\n'
+test "$(cat "/absolute/path/to/agent-workspace/relay-check.txt")" = 'RELAY_QUICKSTART_TOOL_OK' &&
+jq -se '
+  . as $events |
+  def closed($category):
+    any($events[]; .kind == "scope" and .scope_category == "end" and
+      .category == $category and . as $end |
+      any($events[]; .kind == "scope" and .scope_category == "start" and
+        .uuid == $end.uuid and .name == $end.name and
+        .category == $end.category and .parent_uuid == $end.parent_uuid));
+  length > 0 and
+  all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
+  closed("agent") and closed("tool") and closed("llm")
+' "/absolute/path/to/relay-logs/events.jsonl" > /dev/null &&
+printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
 ```
 </Tab>
 
 <Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
 ```powershell
-$eventFile = "C:\absolute\path\to\relay-logs\events.jsonl"
-if ((Get-Item $eventFile).Length -eq 0) { throw "Relay event file is empty" }
-Get-Content $eventFile -Tail 1
-Write-Output "RELAY_QUICKSTART_EVENTS_OK"
+if ((Get-Content '/absolute/path/to/agent-workspace/relay-check.txt' -Raw -ErrorAction Stop).Trim() -ne 'RELAY_QUICKSTART_TOOL_OK') {
+  throw 'Expected tool-created marker file is missing'
+}
+$events = @(Get-Content '/absolute/path/to/relay-logs/events.jsonl' -ErrorAction Stop | ForEach-Object { ConvertFrom-Json -InputObject $_ -ErrorAction Stop })
+if (-not $events.Count -or @($events | Where-Object {
+  $_.atof_version -ne '0.1' -or $_.kind -notin @('scope', 'mark')
+}).Count) { throw 'Expected nonempty ATOF 0.1 records' }
+foreach ($category in @('agent', 'tool', 'llm')) {
+  $paired = @($events | Where-Object {
+    $end = $_
+    $end.kind -eq 'scope' -and $end.scope_category -eq 'end' -and
+    $end.category -eq $category -and @($events | Where-Object {
+      $_.kind -eq 'scope' -and $_.scope_category -eq 'start' -and
+      $_.uuid -eq $end.uuid -and $_.name -eq $end.name -and
+      $_.category -eq $end.category -and $_.parent_uuid -eq $end.parent_uuid
+    }).Count -gt 0
+  })
+  if (-not $paired.Count) { throw "Missing paired $category records" }
+}
+Write-Output 'RELAY_QUICKSTART_TOOL_OK'
+Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
 ```
 </Tab>
 </Tabs>
 
-The transcript should contain `RELAY_QUICKSTART_TOOL_OK`, the final response
-should contain `RELAY_QUICKSTART_RESPONSE_OK`, and the verification command
-should end with `RELAY_QUICKSTART_EVENTS_OK`.
+Expected output from the verification command:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+These markers confirm the tool-created file and matching start/end records for
+agent, tool, and LLM work. The agent's final reply should include
+`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary. An echoed
+prompt alone does not pass verification.
 
 ## For More Details
 

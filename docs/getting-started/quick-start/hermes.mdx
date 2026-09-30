@@ -7,6 +7,55 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "hermes",
+  "mode": "live",
+  "shells": [
+    "bash"
+  ],
+  "cwd": ".",
+  "requires": {
+    "hermes": ">=0.18.2",
+    "jq": ">=1.6"
+  },
+  "setup": [
+    "Authenticated model provider with tool-use permissions"
+  ],
+  "inputs": {},
+  "fresh": [
+    "logs/events.jsonl",
+    "relay-check.txt"
+  ],
+  "checks": [
+    {
+      "kind": "file-equals",
+      "path": "relay-check.txt",
+      "value": "RELAY_QUICKSTART_TOOL_OK",
+      "trim": true
+    },
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent"
+        },
+        {
+          "category": "tool"
+        },
+        {
+          "category": "llm"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
 Run one Hermes Agent turn and write its session, model, and tool lifecycle to a
 local ATOF event file.
 
@@ -18,12 +67,14 @@ former Hermes Relay observability plugin or launch Hermes through the
 
 - Linux, macOS, or Windows Subsystem for Linux 2 (WSL2)
 - A configured Hermes model provider
+- `jq` for the JSON event check
 - Permission to install Hermes in your user environment
 
 ## 1. Install
 
 Install Hermes on Linux, macOS, or WSL2:
 
+{/* quickstart-block {"id":"install","role":"manual","cwd":".","shells":["bash"],"session":"main","reason":"Interactive Hermes installation and provider authentication; pre-provision the declared host for unattended tests"} */}
 ```bash
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```
@@ -33,9 +84,14 @@ provider before continuing.
 
 ## 2. Configure
 
+Use a disposable working directory with no existing `logs/events.jsonl` or
+`relay-check.txt`. Permit the agent to write files there. For a repeat test,
+use another fresh directory so previous output cannot pass the checks.
+
 Save the following configuration as `plugins.toml` in the directory where you
 will start Hermes:
 
+{/* quickstart-block {"id":"plugins","role":"file","cwd":".","path":"plugins.toml"} */}
 ```toml
 version = 1
 
@@ -64,6 +120,7 @@ mode = "overwrite"
 
 Select that file in the shell that will start Hermes:
 
+{/* quickstart-block {"id":"environment","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
 export HERMES_NEMO_RELAY_PLUGINS_TOML="$PWD/plugins.toml"
 ```
@@ -75,8 +132,9 @@ results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
 From the same directory, run a one-shot turn with the common validation prompt:
 
+{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-hermes chat --oneshot -q "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
+hermes chat --oneshot -q "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 
 Hermes closes the Relay session before this command exits, allowing queued
@@ -84,16 +142,36 @@ observability records to finish writing.
 
 ## 4. Verify
 
+{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-test -s logs/events.jsonl &&
-tail -n 1 logs/events.jsonl &&
-printf 'RELAY_QUICKSTART_EVENTS_OK\n'
+test "$(cat relay-check.txt)" = 'RELAY_QUICKSTART_TOOL_OK' &&
+jq -se '
+  . as $events |
+  def closed($category):
+    any($events[]; .kind == "scope" and .scope_category == "end" and
+      .category == $category and . as $end |
+      any($events[]; .kind == "scope" and .scope_category == "start" and
+        .uuid == $end.uuid and .name == $end.name and
+        .category == $end.category and .parent_uuid == $end.parent_uuid));
+  length > 0 and
+  all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
+  closed("agent") and closed("tool") and closed("llm")
+' logs/events.jsonl > /dev/null &&
+printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
 ```
 
-The transcript should contain `RELAY_QUICKSTART_TOOL_OK`, and the final response
-should contain `RELAY_QUICKSTART_RESPONSE_OK`. The verification commands should
-print one JSON object from the Hermes session, model request, or tool lifecycle,
-then `RELAY_QUICKSTART_EVENTS_OK`.
+Expected output from the verification command:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+These markers confirm the tool-created file and matching start/end records for
+agent, tool, and LLM work. The agent's final reply should include
+`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary. An echoed
+prompt alone does not pass verification.
 
 ## For More Details
 

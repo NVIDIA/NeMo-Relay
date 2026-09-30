@@ -1045,6 +1045,7 @@ docs:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     ensure_docs_dependencies
+    uv run --no-sync python scripts/check-quickstarts.py check
     generate_docs_api_references
     cd "$NEMO_RELAY_REPO_ROOT/fern"
     npx fern check --warnings
@@ -1055,6 +1056,7 @@ docs-linkcheck:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     ensure_docs_dependencies
+    uv run --no-sync python scripts/check-quickstarts.py check
     generate_docs_api_references
     cd "$NEMO_RELAY_REPO_ROOT/fern"
     npx fern check --warnings

@@ -7,6 +7,50 @@ position: 11
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "nodejs",
+  "mode": "local",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-node-quickstart",
+  "requires": {
+    "node": ">=24",
+    "npm": "available"
+  },
+  "setup": [],
+  "inputs": {},
+  "fresh": [
+    "logs/events.jsonl"
+  ],
+  "checks": [
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent",
+          "name": "demo-agent"
+        },
+        {
+          "category": "tool",
+          "name": "emit_marker"
+        },
+        {
+          "category": "llm",
+          "name": "demo-provider"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
 Instrument one scope, tool call, and LLM call with NeMo Relay, then verify the
 result in a local ATOF event file.
 
@@ -20,6 +64,7 @@ result in a local ATOF event file.
 Create a project and install the verified published package. In an existing
 Node.js project, skip `npm init`.
 
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
 ```bash
 mkdir relay-node-quickstart
 cd relay-node-quickstart
@@ -31,6 +76,7 @@ npm install --save-exact nemo-relay-node@0.9.1
 
 Save the following configuration as `plugins.toml` in your project directory:
 
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-node-quickstart","path":"plugins.toml"} */}
 ```toml
 version = 1
 
@@ -64,6 +110,7 @@ results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
 Save this file as `quickstart.js` beside `plugins.toml`:
 
+{/* quickstart-block {"id":"program","role":"file","cwd":"relay-node-quickstart","path":"quickstart.js"} */}
 ```js
 const fs = require("node:fs");
 const relay = require("nemo-relay-node");
@@ -113,7 +160,23 @@ async function main() {
 
   const eventText = fs.readFileSync("logs/events.jsonl", "utf8").trim();
   if (!eventText) throw new Error("Relay event file is empty");
-  JSON.parse(eventText.split(/\r?\n/).at(-1));
+  const events = eventText.split(/\r?\n/).map((line) => JSON.parse(line));
+  if (events.some((event) => !event || event.atof_version !== "0.1" ||
+      !["scope", "mark"].includes(event.kind))) {
+    throw new Error("Expected ATOF 0.1 records");
+  }
+  const starts = new Map(events.filter((event) =>
+    event.kind === "scope" && event.scope_category === "start",
+  ).map((event) => [event.uuid, event]));
+  const closed = events.filter((event) => {
+    const start = starts.get(event.uuid);
+    return event.kind === "scope" && event.scope_category === "end" && start &&
+      ["name", "category", "parent_uuid"].every((key) => event[key] === start[key]);
+  });
+  if (!["agent", "tool", "llm"].every((category) =>
+      closed.some((event) => event.category === category))) {
+    throw new Error("Expected paired agent, tool, and LLM lifecycle records");
+  }
   console.log("RELAY_QUICKSTART_EVENTS_OK");
 }
 
@@ -125,14 +188,17 @@ main().catch((error) => {
 
 Run it from the project directory so the relative output path resolves there:
 
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-node-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
 ```bash
 node quickstart.js
 ```
 
 ## 4. Verify
 
-The program validates the event file and prints, in order:
+The program parses every JSONL record and checks for paired agent, tool, and
+LLM lifecycle records before printing, in order:
 
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-node-quickstart","from":"run","match":"exact-lines"} */}
 ```text
 RELAY_QUICKSTART_TOOL_OK
 RELAY_QUICKSTART_RESPONSE_OK

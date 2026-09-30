@@ -7,6 +7,53 @@ position: 6
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "switchyard",
+  "mode": "live",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-switchyard-quickstart",
+  "requires": {
+    "gh": "authenticated",
+    "jq (bash only)": ">=1.6"
+  },
+  "setup": [
+    "GitHub release access; port 4040 available"
+  ],
+  "inputs": {
+    "NVIDIA_API_KEY": {
+      "kind": "env",
+      "secret": true
+    }
+  },
+  "fresh": [
+    "logs/events.jsonl",
+    "response.json"
+  ],
+  "checks": [
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [],
+      "marks": [
+        "switchyard.routing.decision"
+      ]
+    },
+    {
+      "kind": "json-response",
+      "path": "response.json",
+      "role": "assistant",
+      "contains": "RELAY_QUICKSTART_RESPONSE_OK"
+    }
+  ]
+}
+*/}
+
 Route one OpenAI-compatible request through Switchyard inside NeMo Relay, then
 confirm the response and routing event in a local ATOF file.
 
@@ -22,6 +69,9 @@ version recorded in the published bundle's build metadata. The plugin is a
 native library loaded into the Relay process; use a bundle from a source you
 trust.
 
+On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+Use a fresh project directory and reserve local port `4040` for this test.
+
 ## 1. Install
 
 Install Relay and download the bundle for your platform. The checksum check
@@ -29,6 +79,7 @@ must succeed before you extract it.
 
 <Tabs>
 <Tab title="Unix shell">
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.9.2 sh
 export PATH="$HOME/.local/bin:$PATH"
@@ -53,6 +104,7 @@ fi
 </Tab>
 
 <Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":600} */}
 ```powershell
 $env:NEMO_RELAY_VERSION = '0.9.2'
 irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
@@ -84,6 +136,7 @@ while Relay uses the plugin.
 
 Save this file as `config.toml` in `relay-switchyard-quickstart`:
 
+{/* quickstart-block {"id":"config","role":"file","cwd":"relay-switchyard-quickstart","path":"config.toml"} */}
 ```toml
 [upstream]
 openai_base_url = "https://integrate.api.nvidia.com/v1"
@@ -91,6 +144,7 @@ openai_base_url = "https://integrate.api.nvidia.com/v1"
 
 Save this sibling file as `plugins.toml`:
 
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-switchyard-quickstart","path":"plugins.toml"} */}
 ```toml
 version = 1
 
@@ -155,8 +209,13 @@ Set your API key, enable the configured plugin, and validate it:
 
 <Tabs>
 <Tab title="Unix shell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"main","env":"NVIDIA_API_KEY"} */}
 ```bash
 export NVIDIA_API_KEY="your-api-key"
+```
+
+{/* quickstart-block {"id":"gateway","role":"run","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"gateway","timeout_seconds":300,"background":{"ready":{"tcp":"127.0.0.1:4040","timeout_seconds":60},"stop_before":"verify","stop":"interrupt","shutdown_timeout_seconds":15}} */}
+```bash
 nemo-relay --config "$PWD/config.toml" plugins enable nvidia.switchyard
 nemo-relay --config "$PWD/config.toml" plugins validate nvidia.switchyard
 nemo-relay --config "$PWD/config.toml" --bind 127.0.0.1:4040
@@ -164,8 +223,13 @@ nemo-relay --config "$PWD/config.toml" --bind 127.0.0.1:4040
 </Tab>
 
 <Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"main","env":"NVIDIA_API_KEY"} */}
 ```powershell
 $env:NVIDIA_API_KEY = 'your-api-key'
+```
+
+{/* quickstart-block {"id":"gateway","role":"run","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"gateway","timeout_seconds":300,"background":{"ready":{"tcp":"127.0.0.1:4040","timeout_seconds":60},"stop_before":"verify","stop":"interrupt","shutdown_timeout_seconds":15}} */}
+```powershell
 $config = Join-Path $PWD 'config.toml'
 nemo-relay --config $config plugins enable nvidia.switchyard
 nemo-relay --config $config plugins validate nvidia.switchyard
@@ -174,56 +238,84 @@ nemo-relay --config $config --bind 127.0.0.1:4040
 </Tab>
 </Tabs>
 
-Leave Relay running. In a second terminal, from the same directory, send one
-request to the route ID `switchyard/quickstart`:
+Leave Relay running and wait until it reports that it is listening on
+`127.0.0.1:4040`. In a second terminal, from the same directory, send one request
+to the route ID `switchyard/quickstart` and save the response:
 
 <Tabs>
 <Tab title="Unix shell">
+{/* quickstart-block {"id":"request","role":"run","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"client","timeout_seconds":150} */}
 ```bash
-curl -fsS http://127.0.0.1:4040/v1/chat/completions \
+curl -fsS --max-time 120 --output response.json http://127.0.0.1:4040/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"switchyard/quickstart","messages":[{"role":"user","content":"Reply with RELAY_QUICKSTART_RESPONSE_OK."}],"stream":false}'
 ```
 </Tab>
 
 <Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"request","role":"run","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"client","timeout_seconds":150} */}
 ```powershell
 $body = @{
   model = 'switchyard/quickstart'
   messages = @(@{ role = 'user'; content = 'Reply with RELAY_QUICKSTART_RESPONSE_OK.' })
   stream = $false
 } | ConvertTo-Json -Depth 5
-$response = Invoke-RestMethod http://127.0.0.1:4040/v1/chat/completions -Method Post -ContentType 'application/json' -Body $body
-$response.choices[0].message.content
+$response = Invoke-RestMethod http://127.0.0.1:4040/v1/chat/completions -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 120
+$response | ConvertTo-Json -Depth 50 | Set-Content response.json -Encoding utf8
 ```
 </Tab>
 </Tabs>
 
 ## 4. Verify
 
-The model response should contain `RELAY_QUICKSTART_RESPONSE_OK`. Confirm the
-ATOF file also contains a Switchyard routing decision:
+After the request finishes, stop Relay with **Ctrl+C** in its terminal to flush
+the event file. Then check the assistant response and the routing mark's
+structured fields, rather than searching arbitrary event payload text:
 
 <Tabs>
 <Tab title="Unix shell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"client","timeout_seconds":180} */}
 ```bash
-test -s logs/events.jsonl &&
-grep -q 'switchyard.routing.decision' logs/events.jsonl &&
-printf 'RELAY_QUICKSTART_EVENTS_OK\n'
+jq -e '.choices[0].message | .role == "assistant" and
+  (.content | contains("RELAY_QUICKSTART_RESPONSE_OK"))' response.json > /dev/null &&
+jq -se 'length > 0 and
+  all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
+  any(.[]; .kind == "mark" and .name == "switchyard.routing.decision")' \
+  logs/events.jsonl > /dev/null &&
+printf 'RELAY_QUICKSTART_RESPONSE_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
 ```
 </Tab>
 
 <Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"client","timeout_seconds":180} */}
 ```powershell
-$eventFile = 'logs/events.jsonl'
-if ((Get-Item $eventFile).Length -eq 0) { throw 'Relay event file is empty' }
-if (-not (Select-String -Path $eventFile -Pattern 'switchyard.routing.decision' -Quiet)) {
-  throw 'No Switchyard routing decision was recorded'
+$message = (Get-Content response.json -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).choices[0].message
+if ($message.role -ne 'assistant' -or $message.content -notlike '*RELAY_QUICKSTART_RESPONSE_OK*') {
+  throw 'Expected assistant response is missing'
 }
+$events = @(Get-Content logs/events.jsonl -ErrorAction Stop | ForEach-Object { ConvertFrom-Json -InputObject $_ -ErrorAction Stop })
+if (-not $events.Count -or @($events | Where-Object {
+  $_.atof_version -ne '0.1' -or $_.kind -notin @('scope', 'mark')
+}).Count) { throw 'Expected nonempty ATOF 0.1 records' }
+if (-not @($events | Where-Object {
+  $_.kind -eq 'mark' -and $_.name -eq 'switchyard.routing.decision'
+}).Count) { throw 'No Switchyard routing decision was recorded' }
+Write-Output 'RELAY_QUICKSTART_RESPONSE_OK'
 Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
 ```
 </Tab>
 </Tabs>
+
+Expected verification output:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-switchyard-quickstart","from":"verify","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+This is a live provider test; it does not assert identical model wording,
+timestamps, token counts, or event UUIDs.
 
 ## For More Details
 

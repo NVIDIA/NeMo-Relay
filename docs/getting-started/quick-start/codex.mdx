@@ -7,6 +7,58 @@ position: 3
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "codex",
+  "mode": "live",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": ".",
+  "requires": {
+    "codex": ">=0.143.0",
+    "jq (bash only)": ">=1.6",
+    "git": "trusted repository"
+  },
+  "setup": [
+    "Authenticated model provider with tool-use permissions",
+    "Fresh trusted Git working directory"
+  ],
+  "inputs": {},
+  "fresh": [
+    "logs/events.jsonl",
+    "relay-check.txt"
+  ],
+  "checks": [
+    {
+      "kind": "file-equals",
+      "path": "relay-check.txt",
+      "value": "RELAY_QUICKSTART_TOOL_OK",
+      "trim": true
+    },
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent"
+        },
+        {
+          "category": "tool"
+        },
+        {
+          "category": "llm"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
 Run one local Codex CLI task through NeMo Relay and write its agent, model, and
 tool lifecycle to a local ATOF event file.
 
@@ -17,8 +69,11 @@ Relay gateway.
 ## Prerequisites
 
 - `codex-cli` 0.143.0 or newer, already authenticated
+- A trusted Git working directory where Codex is permitted to create a file
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 - Permission to download the NeMo Relay 0.9.1 release
+
+On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 
 ## 1. Install
 
@@ -26,6 +81,7 @@ Install the verified NeMo Relay CLI release:
 
 <Tabs>
 <Tab title="Unix shell">
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
 export PATH="$HOME/.local/bin:$PATH"
@@ -33,6 +89,7 @@ export PATH="$HOME/.local/bin:$PATH"
 </Tab>
 
 <Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":600} */}
 ```powershell
 $env:NEMO_RELAY_VERSION = '0.9.1'
 irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
@@ -42,8 +99,13 @@ irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 
 ## 2. Configure
 
+Use a disposable working directory with no existing `logs/events.jsonl` or
+`relay-check.txt`. Permit the agent to write files there. For a repeat test,
+use another fresh directory so previous output cannot pass the checks.
+
 Save this file as `config.toml` in the directory where you will run the agent:
 
+{/* quickstart-block {"id":"config","role":"file","cwd":".","path":"config.toml"} */}
 ```toml
 [agents.codex]
 command = "codex"
@@ -51,6 +113,7 @@ command = "codex"
 
 Save this sibling file as `plugins.toml`:
 
+{/* quickstart-block {"id":"plugins","role":"file","cwd":".","path":"plugins.toml"} */}
 ```toml
 version = 1
 
@@ -86,17 +149,22 @@ From the directory containing both files, run the common validation prompt:
 
 <Tabs>
 <Tab title="Unix shell">
+{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-nemo-relay --config "$PWD/config.toml" codex -- exec "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
+nemo-relay --config "$PWD/config.toml" codex -- exec --sandbox workspace-write "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 </Tab>
 
 <Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
 ```powershell
-nemo-relay --config (Join-Path $PWD "config.toml") codex -- exec "Use one available tool to produce RELAY_QUICKSTART_TOOL_OK. Then include RELAY_QUICKSTART_RESPONSE_OK in your final response."
+nemo-relay --config (Join-Path $PWD "config.toml") codex -- exec --sandbox workspace-write "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 </Tab>
 </Tabs>
+
+The [workspace-write sandbox](https://learn.chatgpt.com/docs/non-interactive-mode#permissions-and-safety)
+permits the marker file in your working directory; it does not disable sandboxing.
 
 Relay starts a temporary local gateway and injects Codex hooks for this run. It
 does not modify your persistent Codex plugin configuration.
@@ -107,25 +175,65 @@ After the task exits, confirm that Relay wrote the local event stream:
 
 <Tabs>
 <Tab title="Unix shell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-test -s logs/events.jsonl &&
-tail -n 1 logs/events.jsonl &&
-printf 'RELAY_QUICKSTART_EVENTS_OK\n'
+test "$(cat relay-check.txt)" = 'RELAY_QUICKSTART_TOOL_OK' &&
+jq -se '
+  . as $events |
+  def closed($category):
+    any($events[]; .kind == "scope" and .scope_category == "end" and
+      .category == $category and . as $end |
+      any($events[]; .kind == "scope" and .scope_category == "start" and
+        .uuid == $end.uuid and .name == $end.name and
+        .category == $end.category and .parent_uuid == $end.parent_uuid));
+  length > 0 and
+  all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
+  closed("agent") and closed("tool") and closed("llm")
+' logs/events.jsonl > /dev/null &&
+printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
 ```
 </Tab>
 
 <Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
 ```powershell
-if ((Get-Item .\logs\events.jsonl).Length -eq 0) { throw "Relay event file is empty" }
-Get-Content .\logs\events.jsonl -Tail 1
-Write-Output "RELAY_QUICKSTART_EVENTS_OK"
+if ((Get-Content .\relay-check.txt -Raw -ErrorAction Stop).Trim() -ne 'RELAY_QUICKSTART_TOOL_OK') {
+  throw 'Expected tool-created marker file is missing'
+}
+$events = @(Get-Content .\logs\events.jsonl -ErrorAction Stop | ForEach-Object { ConvertFrom-Json -InputObject $_ -ErrorAction Stop })
+if (-not $events.Count -or @($events | Where-Object {
+  $_.atof_version -ne '0.1' -or $_.kind -notin @('scope', 'mark')
+}).Count) { throw 'Expected nonempty ATOF 0.1 records' }
+foreach ($category in @('agent', 'tool', 'llm')) {
+  $paired = @($events | Where-Object {
+    $end = $_
+    $end.kind -eq 'scope' -and $end.scope_category -eq 'end' -and
+    $end.category -eq $category -and @($events | Where-Object {
+      $_.kind -eq 'scope' -and $_.scope_category -eq 'start' -and
+      $_.uuid -eq $end.uuid -and $_.name -eq $end.name -and
+      $_.category -eq $end.category -and $_.parent_uuid -eq $end.parent_uuid
+    }).Count -gt 0
+  })
+  if (-not $paired.Count) { throw "Missing paired $category records" }
+}
+Write-Output 'RELAY_QUICKSTART_TOOL_OK'
+Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
 ```
 </Tab>
 </Tabs>
 
-The transcript should contain `RELAY_QUICKSTART_TOOL_OK`, the final response
-should contain `RELAY_QUICKSTART_RESPONSE_OK`, and the verification command
-should end with `RELAY_QUICKSTART_EVENTS_OK`.
+Expected output from the verification command:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+These markers confirm the tool-created file and matching start/end records for
+agent, tool, and LLM work. The agent's final reply should include
+`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary. An echoed
+prompt alone does not pass verification.
 
 ## For More Details
 
