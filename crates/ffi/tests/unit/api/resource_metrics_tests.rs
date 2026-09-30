@@ -151,3 +151,39 @@ fn collection_handle_delivers_errors_and_rejects_null_pointers() {
         nemo_relay_resource_metrics_collect_free(ptr::null_mut());
     }
 }
+
+#[test]
+fn asynchronous_collection_delivers_inactive_plugin_error() {
+    let _lock = super::TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    assert_eq!(super::close_test_plugin_host(), NemoRelayStatus::Ok);
+    let mut handle = ptr::null_mut();
+    // Exercise the exported C ABI entry point through an indirect call.
+    let start = std::hint::black_box(
+        nemo_relay_resource_metrics_collect_start
+            as unsafe extern "C" fn(*mut *mut FfiResourceMetricsCollection) -> NemoRelayStatus,
+    );
+    unsafe {
+        assert_eq!(start(&mut handle), NemoRelayStatus::Ok);
+        assert!(!handle.is_null());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let mut done = false;
+            let mut output = ptr::null_mut();
+            let status = nemo_relay_resource_metrics_collect_poll(handle, &mut done, &mut output);
+            assert!(output.is_null());
+            if done {
+                assert_eq!(status, NemoRelayStatus::InvalidArg);
+                break;
+            }
+            assert_eq!(status, NemoRelayStatus::Ok);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "inactive collection did not complete"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        nemo_relay_resource_metrics_collect_free(handle);
+    }
+}

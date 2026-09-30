@@ -294,6 +294,26 @@ func CollectResourceMetrics(ctx context.Context) (ResourceMetricsSnapshot, error
 		return ResourceMetricsSnapshot{}, fmt.Errorf("resource metrics FFI returned a null collection")
 	}
 	defer C.nemo_relay_resource_metrics_collect_free(collection)
+	return waitForResourceMetrics(ctx, func() (bool, []byte, error) {
+		var done C.bool
+		var out *C.char
+		err := func() error {
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			return checkStatus(C.nemo_relay_resource_metrics_collect_poll(collection, &done, &out))
+		}()
+		if err != nil || !bool(done) {
+			return false, nil, err
+		}
+		if out == nil {
+			return false, nil, fmt.Errorf("resource metrics FFI returned a null snapshot")
+		}
+		defer C.nemo_relay_string_free(out)
+		return true, []byte(C.GoString(out)), nil
+	})
+}
+
+func waitForResourceMetrics(ctx context.Context, poll func() (bool, []byte, error)) (ResourceMetricsSnapshot, error) {
 	delay := time.Millisecond
 	const maxDelay = 50 * time.Millisecond
 	timer := time.NewTimer(delay)
@@ -302,23 +322,13 @@ func CollectResourceMetrics(ctx context.Context) (ResourceMetricsSnapshot, error
 		if err := ctx.Err(); err != nil {
 			return ResourceMetricsSnapshot{}, err
 		}
-		var done C.bool
-		var out *C.char
-		err := func() error {
-			runtime.LockOSThread()
-			defer runtime.UnlockOSThread()
-			return checkStatus(C.nemo_relay_resource_metrics_collect_poll(collection, &done, &out))
-		}()
+		done, encoded, err := poll()
 		if err != nil {
 			return ResourceMetricsSnapshot{}, err
 		}
-		if bool(done) {
-			if out == nil {
-				return ResourceMetricsSnapshot{}, fmt.Errorf("resource metrics FFI returned a null snapshot")
-			}
-			defer C.nemo_relay_string_free(out)
+		if done {
 			var snapshot ResourceMetricsSnapshot
-			if err := json.Unmarshal([]byte(C.GoString(out)), &snapshot); err != nil {
+			if err := json.Unmarshal(encoded, &snapshot); err != nil {
 				return ResourceMetricsSnapshot{}, fmt.Errorf("decode resource metrics snapshot: %w", err)
 			}
 			return snapshot, nil

@@ -184,3 +184,49 @@ func TestCollectResourceMetricsHonorsCancelledContext(t *testing.T) {
 		t.Fatalf("CollectResourceMetrics() error = %v, want context.Canceled", err)
 	}
 }
+
+func TestResourceMetricsWaitHandlesPendingCompletionAndCancellation(t *testing.T) {
+	polls := 0
+	snapshot, err := waitForResourceMetrics(context.Background(), func() (bool, []byte, error) {
+		polls++
+		return polls == 9, []byte(`{"measurement_scope":"global"}`), nil
+	})
+	if err != nil || snapshot.MeasurementScope != ResourceMeasurementScopeGlobal || polls != 9 {
+		t.Fatalf("pending collection: snapshot=%+v polls=%d error=%v", snapshot, polls, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err = waitForResourceMetrics(ctx, func() (bool, []byte, error) {
+		cancel()
+		return false, nil, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("pending cancellation: %v", err)
+	}
+	polls = 0
+	_, err = waitForResourceMetrics(ctx, func() (bool, []byte, error) {
+		polls++
+		return true, nil, nil
+	})
+	if !errors.Is(err, context.Canceled) || polls != 0 {
+		t.Fatalf("cancelled collection called poll: polls=%d error=%v", polls, err)
+	}
+}
+
+func TestResourceMetricsWaitPropagatesBackendAndDecodingErrors(t *testing.T) {
+	backendError := errors.New("resource collection failed")
+	_, err := waitForResourceMetrics(context.Background(), func() (bool, []byte, error) {
+		return false, nil, backendError
+	})
+	if !errors.Is(err, backendError) {
+		t.Fatalf("backend error: %v", err)
+	}
+	for _, encoded := range []string{"invalid", `{"cpu":{"user_time":{"value":"invalid","unit":"milliseconds"}}}`} {
+		_, err := waitForResourceMetrics(context.Background(), func() (bool, []byte, error) {
+			return true, []byte(encoded), nil
+		})
+		if err == nil {
+			t.Fatalf("accepted invalid snapshot %s", encoded)
+		}
+	}
+}

@@ -2481,3 +2481,99 @@ async fn resource_metrics_target_failure_terminates_child_and_stops_gateway() {
         Some(libc::ESRCH)
     );
 }
+
+#[cfg(any(unix, windows))]
+#[tokio::test]
+async fn supervised_resource_metrics_selects_the_owned_child_and_restores_target() {
+    use nemo_relay::api::resource_metrics;
+    use nemo_relay::plugin::dynamic::PluginHostActivation;
+
+    let launch = resource_metrics::prepare_cli_resource_metrics_process_tree().unwrap();
+    let mut host = PluginHostActivation::initialize_exact(
+        serde_json::from_value(json!({
+            "components": [{"kind": "resource_metrics", "enabled": true, "config": {
+                "measurement_scope": "process_tree",
+                "cpu": {"enabled": false}, "memory": {"enabled": false},
+                "disk": {"enabled": false}, "gpu": {"enabled": false},
+                "network": {"enabled": false}
+            }}]
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let overlay = temp.path().join("private-overlay");
+    std::fs::create_dir_all(&overlay).unwrap();
+    #[cfg(unix)]
+    let argv = vec!["/bin/sleep".into(), "60".into()];
+    #[cfg(windows)]
+    let argv = vec![
+        "cmd.exe".into(),
+        "/c".into(),
+        "ping -n 60 127.0.0.1 >nul".into(),
+    ];
+    let prepared = PreparedAgentLaunch {
+        argv,
+        host_index: 0,
+        env: Vec::new(),
+        temp_dirs: vec![overlay.clone()],
+        notes: Vec::new(),
+        non_tty_warnings: Vec::new(),
+        proxy_credential: crate::provider_auth::TransparentProxyCredential::from_static(
+            "test-proxy-token",
+        ),
+        secret_env_names: Vec::new(),
+    };
+    let (snapshot_tx, snapshot_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(snapshot) = resource_metrics::collect().await {
+                let count = &snapshot
+                    .process
+                    .as_ref()
+                    .unwrap()
+                    .active_count
+                    .as_ref()
+                    .unwrap()
+                    .value;
+                #[cfg(unix)]
+                let ready = *count == 1_u64;
+                #[cfg(windows)]
+                let ready = *count == 2_u64;
+                if ready {
+                    snapshot_tx.send(snapshot).unwrap();
+                    return Err(CliError::Launch("finished observing owned metrics".into()));
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "owned target was not installed"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    });
+    let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+    let error = tokio::time::timeout(
+        Duration::from_secs(15),
+        supervise_prepared_run(&prepared, RunningGateway { shutdown_tx, task }, true),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("finished observing owned metrics")
+    );
+    assert_eq!(
+        snapshot_rx.await.unwrap().measurement_scope,
+        resource_metrics::ResourceMeasurementScope::ProcessTree
+    );
+    assert!(!overlay.exists());
+    // The target guard restores the pending launch state until shutdown.
+    assert!(resource_metrics::collect().await.is_err());
+    drop(launch);
+    host.close().unwrap();
+}
