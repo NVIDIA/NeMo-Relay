@@ -17,11 +17,13 @@ use super::network::NetworkSampler;
 use super::units::convert_snapshot;
 use crate::error::{FlowError, Result};
 
+#[cfg(not(windows))]
+use super::collector::owned_process_tree_target;
 #[cfg(windows)]
 use super::collector::owned_process_tree_target_with_job_handle;
 use super::collector::{
     self, CollectionTarget, GlobalCpuSampler, ProcessCpuSample, ProcessIoSample,
-    current_process_target, owned_process_tree_target,
+    current_process_target,
 };
 use crate::api::runtime::scope_stack::ScopeStack;
 use crate::plugins::resource_metrics::config::{
@@ -680,6 +682,7 @@ impl Drop for ResourceMetricsTargetGuard {
     }
 }
 
+#[cfg(not(windows))]
 pub(crate) fn target_owned_process_tree(
     process_id: u32,
 ) -> Result<Option<ResourceMetricsTargetGuard>> {

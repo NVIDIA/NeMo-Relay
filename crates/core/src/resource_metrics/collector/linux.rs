@@ -313,11 +313,11 @@ pub(super) fn accelerator_sample(
 
 pub(super) fn filesystem_capacity(path: &std::path::Path) -> io::Result<(u64, u64, u64)> {
     let stats = rustix::fs::statvfs(path).map_err(io::Error::from)?;
-    let block_size = u64::from(if stats.f_frsize != 0 {
+    let block_size = if stats.f_frsize != 0 {
         stats.f_frsize
     } else {
         stats.f_bsize
-    });
+    };
     if block_size == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -333,9 +333,9 @@ pub(super) fn filesystem_capacity(path: &std::path::Path) -> io::Result<(u64, u6
         })
     };
     Ok((
-        capacity(u64::from(stats.f_blocks))?,
-        capacity(u64::from(stats.f_bavail))?,
-        capacity(u64::from(stats.f_bfree))?,
+        capacity(stats.f_blocks)?,
+        capacity(stats.f_bavail)?,
+        capacity(stats.f_bfree)?,
     ))
 }
 
