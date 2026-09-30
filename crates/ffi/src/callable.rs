@@ -181,7 +181,6 @@ pub enum NemoRelayLlmSanitizeCodecKind {
 /// `codec_id` is null for `None` and `Opaque`, and is valid only for the
 /// duration of the callback.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
 pub struct NemoRelayLlmSanitizeRequestContext {
     /// Kind of active codec identity.
     pub codec_kind: NemoRelayLlmSanitizeCodecKind,
@@ -193,7 +192,6 @@ pub struct NemoRelayLlmSanitizeRequestContext {
 
 /// Response codec context shared by LLM sanitizer and execution callbacks.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
 pub struct NemoRelayLlmSanitizeResponseContext {
     /// Kind of active codec identity.
     pub codec_kind: NemoRelayLlmSanitizeCodecKind,
@@ -210,7 +208,6 @@ pub struct NemoRelayLlmSanitizeResponseContext {
 /// response to decode. Pointers reachable from this value are borrowed and
 /// valid only until the intercept callback returns.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
 pub struct NemoRelayLlmExecutionContext {
     /// Active request codec identity and capability.
     pub request_codec: NemoRelayLlmSanitizeRequestContext,
