@@ -33,6 +33,22 @@ For the full release history, including individual pull requests, refer to
 NeMo Relay 0.10 is under development. This page will track its user-visible
 changes, compatibility updates, and fixed known issues.
 
+### Compatibility and Migration
+
+<Warning title="Built-In NeMo Guardrails Component Removed">
+
+The deprecated built-in `nemo_guardrails` component has been removed. Delete
+legacy component entries before upgrading, including disabled entries. The
+local and remote backends, public Rust configuration types, CLI editor support,
+and `guardrails-remote` Cargo feature are no longer available.
+
+</Warning>
+
+Future first-party NeMo Guardrails integration will be distributed separately
+as a dynamic plugin and will not reuse the removed component configuration.
+Refer to the
+[Migration Guides](/reference/migration-guides#remove-the-built-in-nemo-guardrails-component).
+
 ## Known Issues in 0.10
 
 No known issues have been recorded for NeMo Relay 0.10 yet.

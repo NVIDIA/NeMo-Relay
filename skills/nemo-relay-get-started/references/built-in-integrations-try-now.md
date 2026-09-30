@@ -74,8 +74,8 @@ After the first proof:
 
 - Preserve the maintained attachment boundary and recommend one goal-aligned
   plugin as the primary next step. If the trial used only temporary inspection,
-  configure plugin-managed Observability first; otherwise choose Adaptive,
-  NeMo Guardrails, PII Redaction, or Model Pricing based on the user's outcome.
+  configure plugin-managed Observability first; otherwise choose Adaptive, PII
+  Redaction, or Model Pricing based on the user's outcome.
 - Use the matching maintained integration guide for broader coverage.
 - Use `nemo-relay-instrument-calls` only for application-owned calls that remain
   outside the integration.
