@@ -754,11 +754,16 @@ pub(crate) fn verify_python_environment_attestation_for_environment(
         return Ok(false);
     };
     let path = environment.join(".nemo-relay-environment.key");
-    let Some(key) = load_python_environment_hmac_key(&path)? else {
-        // Older installations kept this attestation key in the installing user's bootstrap
-        // directory. The caller also compares the measured environment tree to the attested
-        // digest, so retain read-only compatibility for existing system-owned environments.
-        return Ok(true);
+    let key = match load_python_environment_hmac_key(&path)? {
+        Some(key) => key,
+        None => {
+            // Legacy attestations require the installing user's original bootstrap key.
+            // Verification must not create a replacement key or trust an unsigned digest.
+            let Some(key) = load_existing_bootstrap_hmac_key()? else {
+                return Ok(false);
+            };
+            key
+        }
     };
     let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
     Ok(hmac::verify(

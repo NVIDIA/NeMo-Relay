@@ -2287,6 +2287,34 @@ fn python_activation_snapshot_is_attested_copied_and_tamper_evident() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("failed authentication"), "{error}");
+
+    // Recomputing the digest and removing the environment key must not bypass authentication.
+    std::fs::remove_file(environment_path.join(".nemo-relay-environment.key")).unwrap();
+    forged["environment_sha256"] =
+        serde_json::json!(environment::environment_tree_digest(&environment_path).unwrap());
+    forged["authentication"] = serde_json::json!(format!("hmac-sha256:{}", "00".repeat(32)));
+    std::fs::write(
+        &attestation_path,
+        serde_json::to_vec_pretty(&forged).unwrap(),
+    )
+    .unwrap();
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.python-snapshot",
+        DynamicPluginKind::Worker,
+        Some(environment_path.to_string_lossy().as_ref()),
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("failed authentication"), "{error}");
+    let error = dynamic_plugin_runtime_closure_digest(
+        manifest_path.to_string_lossy().as_ref(),
+        Some(environment_path.to_string_lossy().as_ref()),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("failed authentication"), "{error}");
 }
 
 #[test]

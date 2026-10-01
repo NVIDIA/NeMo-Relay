@@ -2914,7 +2914,7 @@ fn python_environment_attestation_verification_is_key_scoped_and_rejects_malform
 }
 
 #[test]
-fn python_environment_attestation_without_environment_key_keeps_legacy_compatibility() {
+fn python_environment_attestation_without_environment_key_authenticates_legacy_signatures() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
     let legacy_environment = temp.path().join("legacy-environment");
@@ -2940,11 +2940,82 @@ fn python_environment_attestation_without_environment_key_keeps_legacy_compatibi
         )
         .unwrap()
     );
+    for (source, environment, authentication) in [
+        (
+            "sha256:changed-source",
+            environment_digest,
+            authentication.clone(),
+        ),
+        (
+            source_digest,
+            "sha256:changed-environment",
+            authentication.clone(),
+        ),
+        (
+            source_digest,
+            environment_digest,
+            format!("hmac-sha256:{}", "00".repeat(32)),
+        ),
+    ] {
+        assert!(
+            !verify_python_environment_attestation_for_environment(
+                &legacy_environment,
+                source,
+                environment,
+                &authentication,
+            )
+            .unwrap(),
+            "legacy attestations must authenticate both digests"
+        );
+    }
+    std::fs::write(
+        bootstrap_hmac_key_path().unwrap(),
+        [42_u8; BOOTSTRAP_HMAC_KEY_BYTES],
+    )
+    .unwrap();
+    assert!(
+        !verify_python_environment_attestation_for_environment(
+            &legacy_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap(),
+        "a different bootstrap key must not authenticate the legacy attestation"
+    );
     assert!(
         !legacy_environment
             .join(".nemo-relay-environment.key")
             .exists(),
         "legacy verification should not create an environment key"
+    );
+}
+
+#[test]
+fn python_environment_attestation_without_any_key_rejects_forgery_without_creating_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let environment = temp.path().join("environment");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&environment).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let key_path = bootstrap_hmac_key_path().unwrap();
+    assert!(
+        !verify_python_environment_attestation_for_environment(
+            &environment,
+            "sha256:source-artifact",
+            "sha256:changed-environment",
+            &format!("hmac-sha256:{}", "00".repeat(32)),
+        )
+        .unwrap()
+    );
+    assert!(
+        !key_path.exists(),
+        "verification must not create a bootstrap key"
+    );
+    assert!(
+        !environment.join(".nemo-relay-environment.key").exists(),
+        "verification must not create an environment key"
     );
 }
 
