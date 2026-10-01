@@ -490,6 +490,52 @@ fn derive_cpu_rate(
     cpu.consumption_rate = Some(ResourceMeasurement::new(value, CpuUnit::LogicalProcessors));
 }
 
+fn calculate_disk_rate(
+    samples: &[ProcessIoSample],
+    previous: &DiskBaseline,
+    read: bool,
+    seconds: f64,
+    allow_partial: bool,
+) -> (Option<ResourceMeasurement<f64, BandwidthUnit>>, u64) {
+    let mut delta = Some(0_u64);
+    let mut supplied = 0_u64;
+    let mut missing = false;
+    let mut reset = false;
+    for sample in samples {
+        let current = if read {
+            sample.read_bytes
+        } else {
+            sample.write_bytes
+        };
+        let prior = previous
+            .counters
+            .get(&(sample.process_id, sample.start_identity))
+            .map(|(prior_read, prior_write)| if read { *prior_read } else { *prior_write })
+            .unwrap_or(Some(0));
+        let (Some(current), Some(prior)) = (current, prior) else {
+            missing = true;
+            continue;
+        };
+        let Some(change) = current.checked_sub(prior) else {
+            reset = true;
+            continue;
+        };
+        supplied += 1;
+        delta = delta.and_then(|delta| delta.checked_add(change));
+    }
+    let rate = if supplied == 0 || reset || (missing && !allow_partial) {
+        None
+    } else {
+        delta.and_then(|delta| {
+            let value = delta as f64 / seconds;
+            value
+                .is_finite()
+                .then(|| ResourceMeasurement::new(value, BandwidthUnit::BytesPerSecond))
+        })
+    };
+    (rate, supplied)
+}
+
 fn derive_disk_rates(
     snapshot: &mut ResourceMetricsSnapshot,
     sampled_at: Instant,
@@ -546,45 +592,6 @@ fn derive_disk_rates(
     if seconds <= 0.0 {
         return;
     }
-    let calculate = |read: bool| {
-        let mut delta = Some(0_u64);
-        let mut supplied = 0_u64;
-        let mut missing = false;
-        let mut reset = false;
-        for sample in samples {
-            let current = if read {
-                sample.read_bytes
-            } else {
-                sample.write_bytes
-            };
-            let prior = previous
-                .counters
-                .get(&(sample.process_id, sample.start_identity))
-                .map(|(prior_read, prior_write)| if read { *prior_read } else { *prior_write })
-                .unwrap_or(Some(0));
-            let (Some(current), Some(prior)) = (current, prior) else {
-                missing = true;
-                continue;
-            };
-            let Some(change) = current.checked_sub(prior) else {
-                reset = true;
-                continue;
-            };
-            supplied += 1;
-            delta = delta.and_then(|delta| delta.checked_add(change));
-        }
-        let rate = if supplied == 0 || reset || (missing && !allow_partial) {
-            None
-        } else {
-            delta.and_then(|delta| {
-                let value = delta as f64 / seconds;
-                value
-                    .is_finite()
-                    .then(|| ResourceMeasurement::new(value, BandwidthUnit::BytesPerSecond))
-            })
-        };
-        (rate, supplied)
-    };
     for (read, field) in [
         (true, "disk.read_throughput"),
         (false, "disk.write_throughput"),
@@ -597,7 +604,8 @@ fn derive_disk_rates(
         if !available {
             continue;
         }
-        let (rate, supplied) = calculate(read);
+        let (rate, supplied) =
+            calculate_disk_rate(samples, &previous, read, seconds, allow_partial);
         if read {
             disk.read_throughput = rate;
         } else {

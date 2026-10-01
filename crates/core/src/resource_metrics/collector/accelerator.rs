@@ -307,48 +307,16 @@ fn collect_nvml_with_session(
                     });
             }
 
-            let mut process_memory = BTreeMap::<u32, Option<u64>>::new();
-            for query in [session.compute_processes, session.graphics_processes]
-                .into_iter()
-                .flatten()
-                .filter(|_| config.process_metrics)
-            {
-                for process in read_nvml_processes(query, device) {
-                    if owned.contains(&process.process_id) {
-                        let memory = (process.used_gpu_memory != NVML_VALUE_NOT_AVAILABLE)
-                            .then_some(process.used_gpu_memory);
-                        process_memory
-                            .entry(process.process_id)
-                            .and_modify(|existing| {
-                                *existing = match (*existing, memory) {
-                                    (Some(current), Some(next)) => Some(current.max(next)),
-                                    (None, next) => next,
-                                    (current, None) => current,
-                                }
-                            })
-                            .or_insert(memory);
-                    }
-                }
-            }
-            let process_utilization = session
-                .process_utilization
-                .filter(|_| config.process_metrics)
-                .map(|query| {
-                    let timestamps = &mut sampling_state.nvml_process_timestamps;
-                    let has_previous_sample = timestamps.contains_key(&identifier);
-                    let last_seen = timestamps.get(&identifier).copied().unwrap_or(0);
-                    let (samples, newest_timestamp) =
-                        read_nvml_process_utilization(query, device, &owned, last_seen);
-                    if let Some(timestamp) = newest_timestamp {
-                        timestamps.insert(identifier.clone(), timestamp);
-                    }
-                    if has_previous_sample {
-                        samples
-                    } else {
-                        BTreeMap::new()
-                    }
-                })
-                .unwrap_or_default();
+            let process_memory =
+                collect_nvml_process_memory(session, device, &owned, config.process_metrics);
+            let process_utilization = collect_nvml_process_utilization(
+                session,
+                device,
+                &owned,
+                &identifier,
+                sampling_state,
+                config.process_metrics,
+            );
             let observed_processes = process_memory
                 .keys()
                 .chain(process_utilization.keys())
@@ -376,6 +344,74 @@ fn collect_nvml_with_session(
             }
         }
         Some(result)
+    }
+}
+
+// The caller keeps the NVML session initialized and the device handle valid.
+unsafe fn collect_nvml_process_memory(
+    session: &NvmlSession,
+    device: NvmlDevice,
+    owned: &BTreeSet<u32>,
+    enabled: bool,
+) -> BTreeMap<u32, Option<u64>> {
+    // SAFETY: The caller provides a live device from the initialized session.
+    unsafe {
+        let mut process_memory = BTreeMap::<u32, Option<u64>>::new();
+        for query in [session.compute_processes, session.graphics_processes]
+            .into_iter()
+            .flatten()
+            .filter(|_| enabled)
+        {
+            for process in read_nvml_processes(query, device) {
+                if owned.contains(&process.process_id) {
+                    let memory = (process.used_gpu_memory != NVML_VALUE_NOT_AVAILABLE)
+                        .then_some(process.used_gpu_memory);
+                    process_memory
+                        .entry(process.process_id)
+                        .and_modify(|existing| {
+                            *existing = match (*existing, memory) {
+                                (Some(current), Some(next)) => Some(current.max(next)),
+                                (None, next) => next,
+                                (current, None) => current,
+                            }
+                        })
+                        .or_insert(memory);
+                }
+            }
+        }
+        process_memory
+    }
+}
+
+unsafe fn collect_nvml_process_utilization(
+    session: &NvmlSession,
+    device: NvmlDevice,
+    owned: &BTreeSet<u32>,
+    identifier: &str,
+    sampling_state: &mut SamplingState,
+    enabled: bool,
+) -> BTreeMap<u32, f64> {
+    // SAFETY: The caller provides a live device from the initialized session.
+    unsafe {
+        session
+            .process_utilization
+            .filter(|_| enabled)
+            .map(|query| {
+                let timestamps = &mut sampling_state.nvml_process_timestamps;
+                let has_previous_sample = timestamps.contains_key(identifier);
+                let last_seen = timestamps.get(identifier).copied().unwrap_or(0);
+                let (samples, newest_timestamp) =
+                    read_nvml_process_utilization(query, device, owned, last_seen);
+                if let Some(timestamp) = newest_timestamp {
+                    timestamps.insert(identifier.to_owned(), timestamp);
+                }
+                if has_previous_sample {
+                    samples
+                } else {
+                    BTreeMap::new()
+                }
+            })
+            .unwrap_or_default()
     }
 }
 

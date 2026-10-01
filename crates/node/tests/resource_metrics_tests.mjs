@@ -16,7 +16,10 @@ const config = (resourceConfig = {}) => ({
 
 function assertMeasurement(measurement) {
   if (measurement === null) return;
-  assert.deepEqual(Object.keys(measurement).sort(), ['unit', 'value']);
+  assert.deepEqual(
+    Object.keys(measurement).sort((left, right) => left.localeCompare(right)),
+    ['unit', 'value'],
+  );
   assert.notEqual(measurement.value, null);
   assert.notEqual(measurement.unit, null);
 }
@@ -39,8 +42,10 @@ describe('resource_metrics built-in plugin API', () => {
       }
     }
     assert.deepEqual(
-      Object.values(relay.CountUnit).sort(),
-      ['processes', 'threads', 'file_descriptors', 'handles', 'events', 'operations', 'packets', 'errors'].sort(),
+      Object.values(relay.CountUnit).sort((left, right) => left.localeCompare(right)),
+      ['processes', 'threads', 'file_descriptors', 'handles', 'events', 'operations', 'packets', 'errors'].sort(
+        (left, right) => left.localeCompare(right),
+      ),
     );
     const invalid = relay.validateExact(
       config({ units: { cpu: { user_time: relay.BandwidthUnit.MegabitsPerSecond } } }),
@@ -65,10 +70,9 @@ describe('resource_metrics built-in plugin API', () => {
     try {
       const snapshot = await relay.collectResourceMetrics();
       assert.ok(Number.isFinite(Date.parse(snapshot.timestamp)));
-      assert.equal(
-        snapshot.operatingSystem,
-        process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux',
-      );
+      const operatingSystems = { darwin: 'macos', win32: 'windows' };
+      const expectedOperatingSystem = operatingSystems[process.platform] ?? 'linux';
+      assert.equal(snapshot.operatingSystem, expectedOperatingSystem);
       assert.equal(snapshot.measurementScope, 'process_tree');
       assert.ok(snapshot.processSampling.visibleProcesses >= snapshot.processSampling.sampledProcesses);
       assert.ok(snapshot.processSampling.sampledProcesses >= 1);

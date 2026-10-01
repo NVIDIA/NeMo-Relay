@@ -354,22 +354,11 @@ fn process_has_exited(error: &io::Error) -> bool {
     false
 }
 
-#[allow(clippy::cognitive_complexity)] // Keep the single collection pass and its coverage checks together.
-pub(crate) fn collect_with_state(
+fn selected_process_ids(
     target: &CollectionTarget,
-    config: &ResourceMetricsConfig,
-    sampling_state: &mut SamplingState,
-) -> CollectedSnapshot {
-    let sample_config = ProcessSampleConfig {
-        cpu: config.cpu.enabled,
-        memory: config.memory.enabled
-            && target.measurement_scope != ResourceMeasurementScope::Global,
-        process: config.process.enabled,
-        disk_io: config.disk.enabled && config.disk.process_io,
-    };
-    let needs_process_ids =
-        sample_config.any() || (config.gpu.enabled && config.gpu.process_metrics);
-    let process_ids = if !needs_process_ids {
+    needs_process_ids: bool,
+) -> io::Result<Vec<u32>> {
+    if !needs_process_ids {
         Ok(Vec::new())
     } else {
         match target.measurement_scope {
@@ -390,7 +379,157 @@ pub(crate) fn collect_with_state(
                 }
             }
         }
+    }
+}
+
+fn root_identity_is_current(target: &CollectionTarget, samples: &[ProcessSample]) -> bool {
+    let Some(root) = samples
+        .iter()
+        .find(|sample| sample.process_id == target.process_id)
+    else {
+        return false;
     };
+    if root.start_identity != target.start_identity {
+        return false;
+    }
+    match platform::process_identity(target.process_id) {
+        Ok(start_identity) if start_identity == target.start_identity => {}
+        _ => return false,
+    }
+    true
+}
+
+fn collect_environment(
+    target: &CollectionTarget,
+    process_ids: &[u32],
+    config: &ResourceMetricsConfig,
+    complete: bool,
+) -> EnvironmentSample {
+    if !(config.cpu.enabled || config.memory.enabled || config.process.enabled) {
+        EnvironmentSample::default()
+    } else if target.measurement_scope == ResourceMeasurementScope::Global {
+        platform::global_environment_sample(config).unwrap_or_default()
+    } else if complete {
+        platform::environment_sample(target, process_ids, config).unwrap_or_default()
+    } else {
+        EnvironmentSample::default()
+    }
+}
+
+fn collect_filesystems(config: &ResourceMetricsConfig) -> Vec<FilesystemCapacityMetrics> {
+    if config.disk.enabled {
+        config
+            .disk
+            .filesystem_paths
+            .iter()
+            .map(|path| match platform::filesystem_capacity(path) {
+                Ok((total, available, free)) => FilesystemCapacityMetrics {
+                    path: path.to_string_lossy().into_owned(),
+                    total_capacity: available_measurement(total, CapacityUnit::Bytes),
+                    available_capacity: available_measurement(available, CapacityUnit::Bytes),
+                    free_capacity: available_measurement(free, CapacityUnit::Bytes),
+                },
+                Err(_) => FilesystemCapacityMetrics {
+                    path: path.to_string_lossy().into_owned(),
+                    total_capacity: unavailable(),
+                    available_capacity: unavailable(),
+                    free_capacity: unavailable(),
+                },
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+fn process_rate_samples(
+    target: &CollectionTarget,
+    config: &ResourceMetricsConfig,
+    included: &[&ProcessSample],
+    complete: bool,
+    aggregation_complete: bool,
+) -> (Vec<ProcessCpuSample>, Vec<ProcessIoSample>) {
+    let process_cpu_samples = if complete
+        && config.cpu.enabled
+        && target.measurement_scope != ResourceMeasurementScope::Global
+    {
+        included
+            .iter()
+            .filter_map(|sample| {
+                Some(ProcessCpuSample {
+                    process_id: sample.process_id,
+                    start_identity: sample.start_identity,
+                    total_cpu_time_millis: sample.total_cpu_time?,
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let process_io_samples =
+        if aggregation_complete && config.disk.enabled && config.disk.process_io {
+            included
+                .iter()
+                .map(|sample| ProcessIoSample {
+                    process_id: sample.process_id,
+                    start_identity: sample.start_identity,
+                    read_bytes: sample.disk_read_bytes,
+                    write_bytes: sample.disk_write_bytes,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+    (process_cpu_samples, process_io_samples)
+}
+
+// GPU process sampling still needs identity checks when no process counters are requested.
+fn gpu_only_target_changed(
+    target: &CollectionTarget,
+    needs_process_ids: bool,
+    process_ids_unavailable: bool,
+    sample_config: ProcessSampleConfig,
+) -> bool {
+    needs_process_ids
+        && !process_ids_unavailable
+        && !sample_config.any()
+        && target.measurement_scope != ResourceMeasurementScope::Global
+        && platform::process_identity(target.process_id).ok() != Some(target.start_identity)
+}
+
+fn collect_accelerators(
+    target: &CollectionTarget,
+    config: &ResourceMetricsConfig,
+    process_ids: &[u32],
+    process_ids_unavailable: bool,
+    complete: bool,
+    sampling_state: &mut SamplingState,
+) -> AcceleratorSample {
+    let mut gpu_config = config.gpu.clone();
+    gpu_config.process_metrics &= !process_ids_unavailable
+        && (complete || target.measurement_scope == ResourceMeasurementScope::Global);
+    if gpu_config.enabled && (gpu_config.device_metrics || gpu_config.process_metrics) {
+        platform::accelerator_sample(process_ids, &gpu_config, sampling_state)
+    } else {
+        AcceleratorSample::default()
+    }
+}
+
+pub(crate) fn collect_with_state(
+    target: &CollectionTarget,
+    config: &ResourceMetricsConfig,
+    sampling_state: &mut SamplingState,
+) -> CollectedSnapshot {
+    let sample_config = ProcessSampleConfig {
+        cpu: config.cpu.enabled,
+        memory: config.memory.enabled
+            && target.measurement_scope != ResourceMeasurementScope::Global,
+        process: config.process.enabled,
+        disk_io: config.disk.enabled && config.disk.process_io,
+    };
+    let needs_process_ids =
+        sample_config.any() || (config.gpu.enabled && config.gpu.process_metrics);
+    let process_ids = selected_process_ids(target, needs_process_ids);
     let (process_ids, process_ids_unavailable) = match process_ids {
         Ok(process_ids) => (process_ids, false),
         Err(error) => {
@@ -403,12 +542,12 @@ pub(crate) fn collect_with_state(
             (Vec::new(), true)
         }
     };
-    if needs_process_ids
-        && !process_ids_unavailable
-        && !sample_config.any()
-        && target.measurement_scope != ResourceMeasurementScope::Global
-        && platform::process_identity(target.process_id).ok() != Some(target.start_identity)
-    {
+    if gpu_only_target_changed(
+        target,
+        needs_process_ids,
+        process_ids_unavailable,
+        sample_config,
+    ) {
         return unavailable_snapshot(target, config);
     }
     #[cfg(windows)]
@@ -442,20 +581,9 @@ pub(crate) fn collect_with_state(
     if sample_config.any()
         && !process_ids_unavailable
         && target.measurement_scope != ResourceMeasurementScope::Global
+        && !root_identity_is_current(target, &samples)
     {
-        let Some(root) = samples
-            .iter()
-            .find(|sample| sample.process_id == target.process_id)
-        else {
-            return unavailable_snapshot(target, config);
-        };
-        if root.start_identity != target.start_identity {
-            return unavailable_snapshot(target, config);
-        }
-        match platform::process_identity(target.process_id) {
-            Ok(start_identity) if start_identity == target.start_identity => {}
-            _ => return unavailable_snapshot(target, config),
-        }
+        return unavailable_snapshot(target, config);
     }
     let process_sampled_instant = Instant::now();
 
@@ -479,92 +607,32 @@ pub(crate) fn collect_with_state(
         allow_partial: target.measurement_scope == ResourceMeasurementScope::Global,
         field_sampled_processes: BTreeMap::new(),
     };
-    let process_cpu_samples = if complete
-        && config.cpu.enabled
-        && target.measurement_scope != ResourceMeasurementScope::Global
-    {
-        included
-            .iter()
-            .filter_map(|sample| {
-                Some(ProcessCpuSample {
-                    process_id: sample.process_id,
-                    start_identity: sample.start_identity,
-                    total_cpu_time_millis: sample.total_cpu_time?,
-                })
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let process_io_samples =
-        if aggregation_complete && config.disk.enabled && config.disk.process_io {
-            included
-                .iter()
-                .map(|sample| ProcessIoSample {
-                    process_id: sample.process_id,
-                    start_identity: sample.start_identity,
-                    read_bytes: sample.disk_read_bytes,
-                    write_bytes: sample.disk_write_bytes,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+    let (process_cpu_samples, process_io_samples) =
+        process_rate_samples(target, config, &included, complete, aggregation_complete);
     let active_process_count = if target.measurement_scope == ResourceMeasurementScope::Global {
         process_ids.len() as u64
     } else {
         included.len() as u64
     };
     let descendant_process_count = active_process_count.saturating_sub(1);
-    let environment = if !(config.cpu.enabled || config.memory.enabled || config.process.enabled) {
-        EnvironmentSample::default()
-    } else if target.measurement_scope == ResourceMeasurementScope::Global {
-        platform::global_environment_sample(config).unwrap_or_default()
-    } else if complete {
-        platform::environment_sample(target, &process_ids, config).unwrap_or_default()
-    } else {
-        EnvironmentSample::default()
-    };
-    let mut gpu_config = config.gpu.clone();
-    gpu_config.process_metrics &= !process_ids_unavailable
-        && (complete || target.measurement_scope == ResourceMeasurementScope::Global);
-    let accelerators =
-        if gpu_config.enabled && (gpu_config.device_metrics || gpu_config.process_metrics) {
-            platform::accelerator_sample(&process_ids, &gpu_config, sampling_state)
-        } else {
-            AcceleratorSample::default()
-        };
-    if needs_process_ids
-        && !process_ids_unavailable
-        && !sample_config.any()
-        && target.measurement_scope != ResourceMeasurementScope::Global
-        && platform::process_identity(target.process_id).ok() != Some(target.start_identity)
-    {
+    let environment = collect_environment(target, &process_ids, config, complete);
+    let accelerators = collect_accelerators(
+        target,
+        config,
+        &process_ids,
+        process_ids_unavailable,
+        complete,
+        sampling_state,
+    );
+    if gpu_only_target_changed(
+        target,
+        needs_process_ids,
+        process_ids_unavailable,
+        sample_config,
+    ) {
         return unavailable_snapshot(target, config);
     }
-    let filesystems = if config.disk.enabled {
-        config
-            .disk
-            .filesystem_paths
-            .iter()
-            .map(|path| match platform::filesystem_capacity(path) {
-                Ok((total, available, free)) => FilesystemCapacityMetrics {
-                    path: path.to_string_lossy().into_owned(),
-                    total_capacity: available_measurement(total, CapacityUnit::Bytes),
-                    available_capacity: available_measurement(available, CapacityUnit::Bytes),
-                    free_capacity: available_measurement(free, CapacityUnit::Bytes),
-                },
-                Err(_) => FilesystemCapacityMetrics {
-                    path: path.to_string_lossy().into_owned(),
-                    total_capacity: unavailable(),
-                    available_capacity: unavailable(),
-                    free_capacity: unavailable(),
-                },
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let filesystems = collect_filesystems(config);
 
     let limit_events = environment
         .resource_limit_events
