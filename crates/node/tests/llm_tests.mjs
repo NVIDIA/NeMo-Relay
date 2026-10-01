@@ -2570,7 +2570,15 @@ describe('LLM intercepts', () => {
     );
     assert.match(
       declarations,
-      /export interface LlmExecutionContext \{[\s\S]*?requestCodec: LlmSanitizeRequestContext[\s\S]*?responseCodec: LlmSanitizeResponseContext \| null/,
+      /export type LlmRequestContext = LlmSanitizeRequestContext/,
+    );
+    assert.match(
+      declarations,
+      /export type LlmResponseContext = LlmSanitizeResponseContext/,
+    );
+    assert.match(
+      declarations,
+      /export interface LlmExecutionContext \{[\s\S]*?requestCodec: LlmRequestContext[\s\S]*?responseCodec: LlmResponseContext \| null/,
     );
     assert.doesNotMatch(declarations, /registerToolExecutionInterceptV2|scopeRegisterToolExecutionInterceptV2/);
   });

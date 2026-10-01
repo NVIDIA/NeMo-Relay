@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity, LlmResponseContext};
 
 struct LeaseProbeCodec {
     allows_estimated_cost: bool,
@@ -55,7 +55,7 @@ fn retained_codecs_work_while_active_and_expire_with_their_lease() {
     let retained_request = leased_context.request_codec().resolve_codec().unwrap();
     let retained_response = leased_context
         .response_codec()
-        .and_then(LlmSanitizeResponseContext::resolve_codec)
+        .and_then(LlmResponseContext::resolve_codec)
         .unwrap();
     drop(leased_context);
     drop(context);
@@ -107,7 +107,7 @@ fn estimated_cost_defaults_to_false_after_expiry() {
     let (leased_context, guard) = context.lease();
     let retained = leased_context
         .response_codec()
-        .and_then(LlmSanitizeResponseContext::resolve_codec)
+        .and_then(LlmResponseContext::resolve_codec)
         .unwrap();
 
     assert!(retained.allows_estimated_cost(&Json::Null));

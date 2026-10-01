@@ -16,9 +16,9 @@ use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
 use crate::callable::{
-    NemoRelayLlmExecNextFn, NemoRelayLlmExecutionContext, NemoRelayLlmSanitizeCodecKind,
-    NemoRelayLlmSanitizeRequestContext, NemoRelayLlmSanitizeResponseContext,
-    NemoRelayToolExecNextFn,
+    NemoRelayLlmExecNextFn, NemoRelayLlmExecutionContext, NemoRelayLlmRequestContext,
+    NemoRelayLlmSanitizeCodecKind, NemoRelayLlmSanitizeRequestContext,
+    NemoRelayLlmSanitizeResponseContext, NemoRelayToolExecNextFn,
 };
 use crate::convert::nemo_relay_string_free;
 use crate::error::{NemoRelayStatus, nemo_relay_last_error};

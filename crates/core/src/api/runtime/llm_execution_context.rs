@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
-use super::callbacks::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+use super::callbacks::{LlmRequestContext, LlmResponseContext};
 use crate::api::llm::LlmRequest;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::AnnotatedLlmResponse;
@@ -121,16 +121,16 @@ impl LlmResponseCodec for RevocableResponseCodec {
 /// active, revocable codec handles.
 #[derive(Clone, Debug, Default)]
 pub struct LlmExecutionContext {
-    request_codec: LlmSanitizeRequestContext,
-    response_codec: Option<LlmSanitizeResponseContext>,
+    request_codec: LlmRequestContext,
+    response_codec: Option<LlmResponseContext>,
 }
 
 impl LlmExecutionContext {
     /// Construct an execution context from request and optional response codec context.
     #[must_use]
     pub fn new(
-        request_codec: LlmSanitizeRequestContext,
-        response_codec: Option<LlmSanitizeResponseContext>,
+        request_codec: LlmRequestContext,
+        response_codec: Option<LlmResponseContext>,
     ) -> Self {
         Self {
             request_codec,
@@ -144,19 +144,14 @@ impl LlmExecutionContext {
         response_codec: Option<Arc<dyn LlmResponseCodec>>,
     ) -> Self {
         Self::new(
-            LlmSanitizeRequestContext::for_request_codec(request_codec),
-            Some(LlmSanitizeResponseContext::for_response_codec(
-                response_codec,
-            )),
+            LlmRequestContext::for_request_codec(request_codec),
+            Some(LlmResponseContext::for_response_codec(response_codec)),
         )
     }
 
     /// Construct the context for a streaming managed execution.
     pub(crate) fn for_streaming(request_codec: Option<Arc<dyn LlmCodec>>) -> Self {
-        Self::new(
-            LlmSanitizeRequestContext::for_request_codec(request_codec),
-            None,
-        )
+        Self::new(LlmRequestContext::for_request_codec(request_codec), None)
     }
 
     /// Issue revocable codec facades for one execution-intercept invocation.
@@ -169,31 +164,31 @@ impl LlmExecutionContext {
         let gate = Arc::new(ExecutionCodecGate::new());
         let leased_request_codec = self.request_codec.resolve_codec();
         let request_codec = match leased_request_codec.as_ref() {
-            Some(codec) => LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(
-                RevocableRequestCodec {
+            Some(codec) => {
+                LlmRequestContext::for_request_codec(Some(Arc::new(RevocableRequestCodec {
                     codec: Arc::downgrade(codec),
                     identity: self.request_codec.codec().clone(),
                     gate: Arc::clone(&gate),
-                },
-            ))),
-            None => LlmSanitizeRequestContext::with_identity(self.request_codec.codec().clone()),
+                })))
+            }
+            None => LlmRequestContext::with_identity(self.request_codec.codec().clone()),
         };
         let leased_response_codec = self
             .response_codec
             .as_ref()
-            .and_then(LlmSanitizeResponseContext::resolve_codec);
+            .and_then(LlmResponseContext::resolve_codec);
         let response_codec =
             self.response_codec
                 .as_ref()
                 .map(|context| match leased_response_codec.as_ref() {
-                    Some(codec) => LlmSanitizeResponseContext::for_response_codec(Some(Arc::new(
+                    Some(codec) => LlmResponseContext::for_response_codec(Some(Arc::new(
                         RevocableResponseCodec {
                             codec: Arc::downgrade(codec),
                             identity: context.codec().clone(),
                             gate: Arc::clone(&gate),
                         },
                     ))),
-                    None => LlmSanitizeResponseContext::with_identity(context.codec().clone()),
+                    None => LlmResponseContext::with_identity(context.codec().clone()),
                 });
 
         (
@@ -208,7 +203,7 @@ impl LlmExecutionContext {
 
     /// Return the request-direction codec identity and revocable capability.
     #[must_use]
-    pub fn request_codec(&self) -> &LlmSanitizeRequestContext {
+    pub fn request_codec(&self) -> &LlmRequestContext {
         &self.request_codec
     }
 
@@ -217,7 +212,7 @@ impl LlmExecutionContext {
     /// Streaming execution returns `None` because Relay does not expose a
     /// completed-response codec for individual stream chunks.
     #[must_use]
-    pub fn response_codec(&self) -> Option<&LlmSanitizeResponseContext> {
+    pub fn response_codec(&self) -> Option<&LlmResponseContext> {
         self.response_codec.as_ref()
     }
 }

@@ -63,6 +63,8 @@ pub struct PyLlmSanitizeRequestContext {
     pub(crate) inner: LlmSanitizeRequestContext,
 }
 
+pub(crate) type PyLlmRequestContext = PyLlmSanitizeRequestContext;
+
 #[pymethods]
 impl PyLlmSanitizeRequestContext {
     /// The active codec identity for this request or response payload.
@@ -86,6 +88,8 @@ impl PyLlmSanitizeRequestContext {
 pub struct PyLlmSanitizeResponseContext {
     pub(crate) inner: LlmSanitizeResponseContext,
 }
+
+pub(crate) type PyLlmResponseContext = PyLlmSanitizeResponseContext;
 
 #[pymethods]
 impl PyLlmSanitizeResponseContext {
@@ -115,8 +119,8 @@ pub struct PyLlmExecutionContext {
 impl PyLlmExecutionContext {
     /// Request codec identity and optional decode/encode capability.
     #[getter]
-    fn request_codec(&self) -> PyLlmSanitizeRequestContext {
-        PyLlmSanitizeRequestContext {
+    fn request_codec(&self) -> PyLlmRequestContext {
+        PyLlmRequestContext {
             inner: self.inner.request_codec().clone(),
         }
     }
@@ -126,11 +130,11 @@ impl PyLlmExecutionContext {
     /// Streaming execution returns ``None`` because Relay does not have a
     /// complete-response codec contract for response chunks.
     #[getter]
-    fn response_codec(&self) -> Option<PyLlmSanitizeResponseContext> {
+    fn response_codec(&self) -> Option<PyLlmResponseContext> {
         self.inner
             .response_codec()
             .cloned()
-            .map(|inner| PyLlmSanitizeResponseContext { inner })
+            .map(|inner| PyLlmResponseContext { inner })
     }
 }
 

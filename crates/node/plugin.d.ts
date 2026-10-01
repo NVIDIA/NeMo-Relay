@@ -9,6 +9,8 @@ import type {
   Json,
   LlmExecutionContext,
   LlmRequestInterceptOutcome,
+  LlmRequestContext,
+  LlmResponseContext,
   LlmSanitizeRequestContext,
   LlmSanitizeResponseContext,
   PendingMarkSpec,
@@ -30,6 +32,8 @@ export type {
   LlmOptimizationTokenImpact,
   LlmOptimizationTokens,
   LlmRequestInterceptOutcome,
+  LlmRequestContext,
+  LlmResponseContext,
   LlmSanitizeRequestContext,
   LlmSanitizeResponseContext,
 } from './index';

@@ -40,9 +40,9 @@ use nemo_relay_plugin::{
     NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeHostApiV7,
     NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
     NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmExecutionContext,
-    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestCodecContext,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestContext,
     NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
-    NemoRelayNativeLlmResponseCodecContext, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmResponseContext, NemoRelayNativeLlmSanitizeRequestCb,
     NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
     NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
     NemoRelayNativeLlmStreamV1, NemoRelayNativeLogLevel, NemoRelayNativePluginContext,
@@ -3113,7 +3113,7 @@ fn invoke_async_llm_execution_registration(
 }
 
 struct TestExecutionContext {
-    response: Option<Box<NemoRelayNativeLlmResponseCodecContext>>,
+    response: Option<Box<NemoRelayNativeLlmResponseContext>>,
     context: NemoRelayNativeLlmExecutionContext,
 }
 
@@ -3121,14 +3121,14 @@ impl TestExecutionContext {
     fn new(unary: bool) -> Self {
         let request_codec = NonNull::<NemoRelayNativeLlmRequestCodec>::dangling().as_ptr();
         let response = unary.then(|| {
-            Box::new(NemoRelayNativeLlmResponseCodecContext {
+            Box::new(NemoRelayNativeLlmResponseContext {
                 codec_kind: NemoRelayNativeLlmCodecKind::Opaque,
                 codec_id: ptr::null(),
                 codec: NonNull::<NemoRelayNativeLlmResponseCodec>::dangling().as_ptr(),
             })
         });
         let context = NemoRelayNativeLlmExecutionContext {
-            request_codec: NemoRelayNativeLlmRequestCodecContext {
+            request_codec: NemoRelayNativeLlmRequestContext {
                 codec_kind: NemoRelayNativeLlmCodecKind::Opaque,
                 codec_id: ptr::null(),
                 codec: request_codec,

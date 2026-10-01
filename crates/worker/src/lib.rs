@@ -315,6 +315,12 @@ pub struct LlmSanitizeResponseContext {
     invocation_id: Option<String>,
 }
 
+/// Request codec context supplied to an LLM execution intercept.
+pub type LlmRequestContext = LlmSanitizeRequestContext;
+
+/// Response codec context supplied to an LLM execution intercept.
+pub type LlmResponseContext = LlmSanitizeResponseContext;
+
 impl LlmSanitizeRequestContext {
     /// Resolves the active request codec for this callback.
     #[must_use]
@@ -395,8 +401,8 @@ impl WorkerResponseCodec {
 /// not change these identities; codec operations reject incompatible payloads.
 #[derive(Clone)]
 pub struct LlmExecutionContext {
-    request_codec: LlmSanitizeRequestContext,
-    response_codec: Option<LlmSanitizeResponseContext>,
+    request_codec: LlmRequestContext,
+    response_codec: Option<LlmResponseContext>,
 }
 
 impl std::fmt::Debug for LlmExecutionContext {
@@ -415,7 +421,7 @@ impl std::fmt::Debug for LlmExecutionContext {
 impl LlmExecutionContext {
     /// Request codec identity and invocation-scoped operations.
     #[must_use]
-    pub fn request_codec(&self) -> &LlmSanitizeRequestContext {
+    pub fn request_codec(&self) -> &LlmRequestContext {
         &self.request_codec
     }
 
@@ -424,7 +430,7 @@ impl LlmExecutionContext {
     /// Streaming execution returns `None` because Relay response codecs decode
     /// completed provider responses, not individual stream chunks.
     #[must_use]
-    pub fn response_codec(&self) -> Option<&LlmSanitizeResponseContext> {
+    pub fn response_codec(&self) -> Option<&LlmResponseContext> {
         self.response_codec.as_ref()
     }
 }
@@ -2933,12 +2939,12 @@ impl LlmPayload {
         let response_codec = context
             .response
             .as_ref()
-            .map(|response| -> Result<LlmSanitizeResponseContext> {
+            .map(|response| -> Result<LlmResponseContext> {
                 let identity = require_execution_field(
                     response.codec.as_ref(),
                     "response codec identity is missing",
                 )?;
-                Ok(LlmSanitizeResponseContext {
+                Ok(LlmResponseContext {
                     codec: codec_identity_from_proto(Some(identity)),
                     runtime: Some(runtime.clone()),
                     codec_capability_id: response.codec_capability_id.clone(),
@@ -2952,7 +2958,7 @@ impl LlmPayload {
             ));
         }
         Ok(LlmExecutionContext {
-            request_codec: LlmSanitizeRequestContext {
+            request_codec: LlmRequestContext {
                 codec: codec_identity_from_proto(Some(request_identity)),
                 runtime: Some(runtime.clone()),
                 codec_capability_id: request.codec_capability_id.clone(),

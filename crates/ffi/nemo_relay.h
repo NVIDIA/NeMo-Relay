@@ -383,6 +383,16 @@ typedef NemoRelayStatus (*NemoRelayLlmRequestInterceptCb)(void *user_data,
                                                           char **out_outcome_json);
 
 /**
+ * Request codec context exposed to an LLM execution intercept.
+ */
+typedef struct NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
+
+/**
+ * Response codec context exposed to an LLM execution intercept.
+ */
+typedef struct NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
+
+/**
  * Directional codec context supplied to an LLM execution intercept.
  *
  * `request_codec` is always present. `response_codec` is non-null for unary
@@ -394,11 +404,11 @@ typedef struct NemoRelayLlmExecutionContext {
   /**
    * Active request codec identity and capability.
    */
-  struct NemoRelayLlmSanitizeRequestContext request_codec;
+  NemoRelayLlmRequestContext request_codec;
   /**
    * Active unary-response codec context, or null for streaming execution.
    */
-  const struct NemoRelayLlmSanitizeResponseContext *response_codec;
+  const NemoRelayLlmResponseContext *response_codec;
 } NemoRelayLlmExecutionContext;
 
 /**

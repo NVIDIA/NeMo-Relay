@@ -30,8 +30,8 @@ pytest.importorskip("grpc")
 from nemo_relay_plugin import (  # noqa: E402
     LlmCodecIdentity,
     LlmExecutionContext,
-    LlmSanitizeRequestContext,
-    LlmSanitizeResponseContext,
+    LlmRequestContext,
+    LlmResponseContext,
     PluginContext,
     PluginRuntime,
     ToolExecutionContext,
@@ -98,8 +98,8 @@ def callback(context: MagicMock, method: str, name: str | None = None) -> Any:
 
 
 def execution_context(*, streaming: bool = False) -> LlmExecutionContext:
-    request = LlmSanitizeRequestContext(LlmCodecIdentity("none"))
-    response = None if streaming else LlmSanitizeResponseContext(LlmCodecIdentity("none"))
+    request = LlmRequestContext(LlmCodecIdentity("none"))
+    response = None if streaming else LlmResponseContext(LlmCodecIdentity("none"))
     return LlmExecutionContext(request_codec=request, response_codec=response)
 
 

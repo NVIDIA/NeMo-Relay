@@ -70,9 +70,9 @@ use nemo_relay_plugin::{
     NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeHostApiV7,
     NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
     NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmExecutionContext,
-    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestCodecContext,
+    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestContext,
     NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
-    NemoRelayNativeLlmResponseCodecContext, NemoRelayNativeLlmSanitizeRequestCb,
+    NemoRelayNativeLlmResponseContext, NemoRelayNativeLlmSanitizeRequestCb,
     NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
     NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
     NemoRelayNativeLlmStreamV1, NemoRelayNativeLogLevel, NemoRelayNativePluginContext,
@@ -658,7 +658,7 @@ impl<'a> NativeLlmExecutionContextBridge<'a> {
         &self,
         callback: impl FnOnce(NemoRelayNativeLlmExecutionContext) -> T,
     ) -> T {
-        let request_codec = NemoRelayNativeLlmRequestCodecContext {
+        let request_codec = NemoRelayNativeLlmRequestContext {
             codec_kind: self.request_kind,
             codec_id: self
                 .request_id
@@ -670,7 +670,7 @@ impl<'a> NativeLlmExecutionContextBridge<'a> {
         };
         let response_codec =
             self.response_kind
-                .map(|codec_kind| NemoRelayNativeLlmResponseCodecContext {
+                .map(|codec_kind| NemoRelayNativeLlmResponseContext {
                     codec_kind,
                     codec_id: self
                         .response_id

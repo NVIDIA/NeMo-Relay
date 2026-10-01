@@ -96,19 +96,19 @@ unsafe impl Send for LlmSanitizeResponseContext<'_> {}
 /// response codec context, while streaming execution leaves it unavailable
 /// until Relay has a completed-response streaming codec contract.
 pub struct LlmExecutionContext {
-    request_codec: LlmRequestCodecContext,
-    response_codec: Option<LlmResponseCodecContext>,
+    request_codec: LlmRequestContext,
+    response_codec: Option<LlmResponseContext>,
 }
 
 /// Request codec context for one LLM execution intercept invocation.
-pub struct LlmRequestCodecContext {
+pub struct LlmRequestContext {
     /// Identity of the active request codec.
     pub codec: LlmCodecIdentity,
     resolved: Option<LlmExecutionRequestCodec>,
 }
 
 /// Response codec context for one non-streaming LLM execution intercept invocation.
-pub struct LlmResponseCodecContext {
+pub struct LlmResponseContext {
     /// Identity of the active response codec.
     pub codec: LlmCodecIdentity,
     resolved: Option<LlmExecutionResponseCodec>,
@@ -117,13 +117,13 @@ pub struct LlmResponseCodecContext {
 impl LlmExecutionContext {
     /// Return the active request codec context.
     #[must_use]
-    pub fn request_codec(&self) -> &LlmRequestCodecContext {
+    pub fn request_codec(&self) -> &LlmRequestContext {
         &self.request_codec
     }
 
     /// Return the completed-response codec context, or `None` for streaming execution.
     #[must_use]
-    pub fn response_codec(&self) -> Option<&LlmResponseCodecContext> {
+    pub fn response_codec(&self) -> Option<&LlmResponseContext> {
         self.response_codec.as_ref()
     }
 }
@@ -228,7 +228,7 @@ pub struct NemoRelayNativeLlmSanitizeResponseContext {
 /// Request codec context passed to a native LLM execution intercept.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NemoRelayNativeLlmRequestCodecContext {
+pub struct NemoRelayNativeLlmRequestContext {
     /// Discriminator for the active request codec.
     pub codec_kind: NemoRelayNativeLlmCodecKind,
     /// Optional borrowed built-in or runtime codec identifier.
@@ -240,7 +240,7 @@ pub struct NemoRelayNativeLlmRequestCodecContext {
 /// Response codec context passed to a native non-streaming LLM execution intercept.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NemoRelayNativeLlmResponseCodecContext {
+pub struct NemoRelayNativeLlmResponseContext {
     /// Discriminator for the active response codec.
     pub codec_kind: NemoRelayNativeLlmCodecKind,
     /// Optional borrowed built-in or runtime codec identifier.
@@ -261,9 +261,9 @@ pub struct NemoRelayNativeLlmResponseCodecContext {
 #[derive(Debug, Clone, Copy)]
 pub struct NemoRelayNativeLlmExecutionContext {
     /// Request codec context, always present.
-    pub request_codec: NemoRelayNativeLlmRequestCodecContext,
+    pub request_codec: NemoRelayNativeLlmRequestContext,
     /// Completed-response codec context, or null for streaming execution.
-    pub response_codec: *const NemoRelayNativeLlmResponseCodecContext,
+    pub response_codec: *const NemoRelayNativeLlmResponseContext,
 }
 
 /// Safe completion-backed request codec facade for typed native plugins.
@@ -498,7 +498,7 @@ impl LlmExecutionResponseCodec {
     }
 }
 
-impl LlmRequestCodecContext {
+impl LlmRequestContext {
     /// Resolve the active request codec capability.
     #[must_use]
     pub fn resolve_codec(&self) -> Option<&LlmExecutionRequestCodec> {
@@ -506,7 +506,7 @@ impl LlmRequestCodecContext {
     }
 }
 
-impl LlmResponseCodecContext {
+impl LlmResponseContext {
     /// Resolve the active response codec capability.
     #[must_use]
     pub fn resolve_codec(&self) -> Option<&LlmExecutionResponseCodec> {

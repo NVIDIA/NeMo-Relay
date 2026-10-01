@@ -14,7 +14,9 @@ typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
 typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
 typedef struct NemoRelayLlmSanitizeRequestContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeRequestCodec* codec; } NemoRelayLlmSanitizeRequestContext;
 typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeResponseCodec* codec; } NemoRelayLlmSanitizeResponseContext;
-typedef struct NemoRelayLlmExecutionContext { NemoRelayLlmSanitizeRequestContext request_codec; const NemoRelayLlmSanitizeResponseContext* response_codec; } NemoRelayLlmExecutionContext;
+typedef NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
+typedef NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
+typedef struct NemoRelayLlmExecutionContext { NemoRelayLlmRequestContext request_codec; const NemoRelayLlmResponseContext* response_codec; } NemoRelayLlmExecutionContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef char* (*NemoRelayPluginValidateCb)(void* user_data, const char* plugin_config_json);

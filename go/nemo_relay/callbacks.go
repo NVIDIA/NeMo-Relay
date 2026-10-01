@@ -38,9 +38,11 @@ typedef struct NemoRelayLlmSanitizeResponseContext {
 	const char* codec_id;
 	const FfiLlmSanitizeResponseCodec* codec;
 } NemoRelayLlmSanitizeResponseContext;
+typedef NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
+typedef NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
 typedef struct NemoRelayLlmExecutionContext {
-	NemoRelayLlmSanitizeRequestContext request_codec;
-	const NemoRelayLlmSanitizeResponseContext* response_codec;
+	NemoRelayLlmRequestContext request_codec;
+	const NemoRelayLlmResponseContext* response_codec;
 } NemoRelayLlmExecutionContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
@@ -233,31 +235,35 @@ type LLMCodec struct {
 	CodecID   *string
 }
 
-// LLMSanitizeRequestContext provides request codec context to sanitizer and
-// execution callbacks.
+// LLMSanitizeRequestContext provides request codec context to sanitizer callbacks.
 type LLMSanitizeRequestContext struct {
 	Codec    LLMCodec
 	resolved *LLMRequestSanitizeCodec
 }
+
+// LLMRequestContext is the request codec context exposed to execution intercepts.
+type LLMRequestContext = LLMSanitizeRequestContext
 
 // ResolveCodec returns the active callback-scoped request codec, if any.
 func (context LLMSanitizeRequestContext) ResolveCodec() *LLMRequestSanitizeCodec {
 	return context.resolved
 }
 
-// LLMSanitizeResponseContext provides response codec context to sanitizer and
-// execution callbacks.
+// LLMSanitizeResponseContext provides response codec context to sanitizer callbacks.
 type LLMSanitizeResponseContext struct {
 	Codec    LLMCodec
 	resolved *LLMResponseSanitizeCodec
 }
 
+// LLMResponseContext is the response codec context exposed to execution intercepts.
+type LLMResponseContext = LLMSanitizeResponseContext
+
 // LLMExecutionContext provides invocation-scoped codec access to an LLM
 // execution intercept. RequestCodec is always present. ResponseCodec is
 // available for unary execution and nil for streaming execution.
 type LLMExecutionContext struct {
-	RequestCodec  LLMSanitizeRequestContext
-	ResponseCodec *LLMSanitizeResponseContext
+	RequestCodec  LLMRequestContext
+	ResponseCodec *LLMResponseContext
 }
 
 // ResolveCodec returns the active callback-scoped response codec, if any.

@@ -2663,7 +2663,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             intercept_name.as_ptr(),
             request.as_ptr(),
             NemoRelayLlmExecutionContext {
-                request_codec: NemoRelayLlmSanitizeRequestContext {
+                request_codec: NemoRelayLlmRequestContext {
                     codec_kind: NemoRelayLlmSanitizeCodecKind::None,
                     codec_id: ptr::null(),
                     codec: ptr::null(),

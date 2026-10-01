@@ -153,9 +153,14 @@ fn register_runtime_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 fn register_llm_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLlmCodecIdentity>()?;
-    m.add_class::<PyLlmExecutionContext>()?;
     m.add_class::<PyLlmSanitizeRequestContext>()?;
     m.add_class::<PyLlmSanitizeResponseContext>()?;
+    m.add("LlmRequestContext", m.getattr("LlmSanitizeRequestContext")?)?;
+    m.add(
+        "LlmResponseContext",
+        m.getattr("LlmSanitizeResponseContext")?,
+    )?;
+    m.add_class::<PyLlmExecutionContext>()?;
     m.add_class::<PyLlmSanitizeRequestCodec>()?;
     m.add_class::<PyLlmSanitizeResponseCodec>()?;
     m.add_class::<PyPendingMarkSpec>()?;

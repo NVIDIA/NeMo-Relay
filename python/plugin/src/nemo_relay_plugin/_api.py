@@ -226,6 +226,10 @@ class LlmSanitizeResponseContext:
         return WorkerResponseCodec(self._runtime, self._capability_id, self._invocation_id)
 
 
+LlmRequestContext: TypeAlias = LlmSanitizeRequestContext
+LlmResponseContext: TypeAlias = LlmSanitizeResponseContext
+
+
 @dataclass(frozen=True)
 class WorkerRequestCodec:
     """Invocation-scoped async proxy for an active request codec."""
@@ -267,8 +271,8 @@ class LlmExecutionContext:
     not select a new codec; incompatible codec operations fail.
     """
 
-    request_codec: LlmSanitizeRequestContext
-    response_codec: LlmSanitizeResponseContext | None
+    request_codec: LlmRequestContext
+    response_codec: LlmResponseContext | None
 
 
 def _llm_codec_identity(invocation: pb.LlmInvocation) -> LlmCodecIdentity:
@@ -311,7 +315,7 @@ def _llm_execution_context(
         raise WorkerSdkError("malformed LLM execution codec context: request codec identity is missing")
 
     request_id = context.request.codec_capability_id if context.request.HasField("codec_capability_id") else None
-    request_context = LlmSanitizeRequestContext(
+    request_context = LlmRequestContext(
         codec=_codec_identity(
             context.request.codec.kind,
             context.request.codec.id if context.request.codec.HasField("id") else None,
@@ -320,12 +324,12 @@ def _llm_execution_context(
         _capability_id=request_id,
         _invocation_id=invocation_id,
     )
-    response_context: LlmSanitizeResponseContext | None = None
+    response_context: LlmResponseContext | None = None
     if context.HasField("response"):
         if not context.response.HasField("codec"):
             raise WorkerSdkError("malformed LLM execution codec context: response codec identity is missing")
         response_id = context.response.codec_capability_id if context.response.HasField("codec_capability_id") else None
-        response_context = LlmSanitizeResponseContext(
+        response_context = LlmResponseContext(
             codec=_codec_identity(
                 context.response.codec.kind,
                 context.response.codec.id if context.response.codec.HasField("id") else None,

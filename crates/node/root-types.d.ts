@@ -25,12 +25,18 @@ export interface LlmSanitizeResponseContext {
   resolveCodec(): import('./typed').LlmResponseCodec | null;
 }
 
+/** Request codec context exposed to an LLM execution intercept. */
+export type LlmRequestContext = LlmSanitizeRequestContext;
+
+/** Response codec context exposed to an LLM execution intercept. */
+export type LlmResponseContext = LlmSanitizeResponseContext;
+
 /** Codec capabilities for one managed LLM execution intercept invocation. */
 export interface LlmExecutionContext {
   /** Request codec identity plus optional decode and encode capability. */
-  requestCodec: LlmSanitizeRequestContext;
+  requestCodec: LlmRequestContext;
   /** Unary response codec identity plus optional decode capability; `null` for streaming execution. */
-  responseCodec: LlmSanitizeResponseContext | null;
+  responseCodec: LlmResponseContext | null;
 }
 
 /** Schema tag attached to an opaque optimization contribution payload. */

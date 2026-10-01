@@ -126,14 +126,6 @@ class LlmCodecIdentity:
     @property
     def id(self) -> str | None: ...
 
-class LlmExecutionContext:
-    """Codec capabilities for one managed LLM execution intercept invocation."""
-
-    @property
-    def request_codec(self) -> LlmSanitizeRequestContext: ...
-    @property
-    def response_codec(self) -> LlmSanitizeResponseContext | None: ...
-
 class LlmSanitizeRequestContext:
     """Request codec context shared by sanitizer and execution callbacks."""
 
@@ -147,6 +139,17 @@ class LlmSanitizeResponseContext:
     @property
     def codec(self) -> LlmCodecIdentity: ...
     def resolve_codec(self) -> LlmSanitizeResponseCodec | None: ...
+
+LlmRequestContext: TypeAlias = LlmSanitizeRequestContext
+LlmResponseContext: TypeAlias = LlmSanitizeResponseContext
+
+class LlmExecutionContext:
+    """Codec capabilities for one managed LLM execution intercept invocation."""
+
+    @property
+    def request_codec(self) -> LlmRequestContext: ...
+    @property
+    def response_codec(self) -> LlmResponseContext | None: ...
 
 class LlmSanitizeRequestCodec:
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...

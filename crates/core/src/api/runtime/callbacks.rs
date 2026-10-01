@@ -258,6 +258,12 @@ pub struct LlmSanitizeRequestContext {
     request_codec: Option<Arc<dyn LlmCodec>>,
 }
 
+/// Request codec context exposed to an LLM execution intercept.
+///
+/// This is the same context passed to request sanitizers. The alias keeps the
+/// execution API independent of sanitizer-specific naming.
+pub type LlmRequestContext = LlmSanitizeRequestContext;
+
 impl std::fmt::Debug for LlmSanitizeRequestContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -318,6 +324,12 @@ pub struct LlmSanitizeResponseContext {
     codec: LlmCodecIdentity,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
 }
+
+/// Response codec context exposed to a non-streaming LLM execution intercept.
+///
+/// This is the same context passed to response sanitizers. The alias keeps the
+/// execution API independent of sanitizer-specific naming.
+pub type LlmResponseContext = LlmSanitizeResponseContext;
 
 impl std::fmt::Debug for LlmSanitizeResponseContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

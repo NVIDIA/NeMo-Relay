@@ -247,7 +247,7 @@ impl CompletionRef {
         host: Arc<NemoRelayNativeHostApiV4>,
         codec: LlmCodecIdentity,
         resolved: bool,
-    ) -> Result<LlmRequestCodecContext> {
+    ) -> Result<LlmRequestContext> {
         let resolved = if resolved {
             let status = unsafe { (host.async_completion_retain)(self.raw) };
             status_result(status, "retain native async completion capability")?;
@@ -260,7 +260,7 @@ impl CompletionRef {
         } else {
             None
         };
-        Ok(LlmRequestCodecContext { codec, resolved })
+        Ok(LlmRequestContext { codec, resolved })
     }
 
     fn execution_response_context(
@@ -268,7 +268,7 @@ impl CompletionRef {
         host: Arc<NemoRelayNativeHostApiV4>,
         codec: LlmCodecIdentity,
         resolved: bool,
-    ) -> Result<LlmResponseCodecContext> {
+    ) -> Result<LlmResponseContext> {
         let resolved = if resolved {
             let status = unsafe { (host.async_completion_retain)(self.raw) };
             status_result(status, "retain native async completion capability")?;
@@ -279,7 +279,7 @@ impl CompletionRef {
         } else {
             None
         };
-        Ok(LlmResponseCodecContext { codec, resolved })
+        Ok(LlmResponseContext { codec, resolved })
     }
 }
 
@@ -295,7 +295,7 @@ impl StreamRef {
         self,
         codec: LlmCodecIdentity,
         resolved: bool,
-    ) -> Result<LlmRequestCodecContext> {
+    ) -> Result<LlmRequestContext> {
         let resolved = if resolved {
             let status = unsafe { (self.host.async_stream_retain)(self.raw) };
             status_result(status, "retain native async stream capability")?;
@@ -308,7 +308,7 @@ impl StreamRef {
         } else {
             None
         };
-        Ok(LlmRequestCodecContext { codec, resolved })
+        Ok(LlmRequestContext { codec, resolved })
     }
 }
 
