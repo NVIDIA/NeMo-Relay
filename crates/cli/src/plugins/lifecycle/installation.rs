@@ -847,61 +847,9 @@ fn extract_archive(archive: &Path, destination: &Path) -> Result<PathBuf, CliErr
         root: None,
     };
     if archive.extension().is_some_and(|ext| ext == "zip") {
-        let mut zip =
-            zip::ZipArchive::new(File::open(archive)?).map_err(|err| error(err.to_string()))?;
-        for index in 0..zip.len() {
-            let mut entry = zip.by_index(index).map_err(|err| error(err.to_string()))?;
-            let name = entry.name().trim_end_matches('/');
-            let mode = entry.unix_mode().unwrap_or(0);
-            if !matches!(mode & 0o170000, 0 | 0o040000 | 0o100000) {
-                return Err(error("archive links and special files are not allowed"));
-            }
-            if mode & 0o170000 == 0o040000 && !entry.is_dir() {
-                return Err(error("archive directory metadata disagrees with its path"));
-            }
-            let path = budget.destination(destination, Path::new(name), entry.size())?;
-            if entry.is_dir() {
-                fs::create_dir_all(&path)?;
-            } else {
-                fs::create_dir_all(
-                    path.parent()
-                        .ok_or_else(|| error("archive member has no parent"))?,
-                )?;
-                let size = entry.size();
-                write_bounded(&mut entry, &path, size)?;
-                set_executable(&path, mode)?;
-            }
-        }
+        extract_zip(archive, destination, &mut budget)?;
     } else {
-        let decoder = GzDecoder::new(File::open(archive)?);
-        let mut tar = tar::Archive::new(decoder);
-        for entry in tar.entries().map_err(|err| error(err.to_string()))? {
-            let mut entry = entry.map_err(|err| error(err.to_string()))?;
-            let kind = entry.header().entry_type();
-            if !kind.is_file() && !kind.is_dir() {
-                return Err(error("archive links and special files are not allowed"));
-            }
-            let raw = entry
-                .path()
-                .map_err(|err| error(err.to_string()))?
-                .into_owned();
-            let size = entry.size();
-            let mode = entry
-                .header()
-                .mode()
-                .map_err(|err| error(err.to_string()))?;
-            let path = budget.destination(destination, &raw, size)?;
-            if kind.is_dir() {
-                fs::create_dir_all(&path)?;
-            } else {
-                fs::create_dir_all(
-                    path.parent()
-                        .ok_or_else(|| error("archive member has no parent"))?,
-                )?;
-                write_bounded(&mut entry, &path, size)?;
-                set_executable(&path, mode)?;
-            }
-        }
+        extract_tar(archive, destination, &mut budget)?;
     }
     let root = budget
         .root
@@ -913,6 +861,76 @@ fn extract_archive(archive: &Path, destination: &Path) -> Result<PathBuf, CliErr
         ));
     }
     Ok(bundle)
+}
+
+fn extract_zip(
+    archive: &Path,
+    destination: &Path,
+    budget: &mut ExtractBudget,
+) -> Result<(), CliError> {
+    let mut zip =
+        zip::ZipArchive::new(File::open(archive)?).map_err(|err| error(err.to_string()))?;
+    for index in 0..zip.len() {
+        let mut entry = zip.by_index(index).map_err(|err| error(err.to_string()))?;
+        let name = entry.name().trim_end_matches('/');
+        let mode = entry.unix_mode().unwrap_or(0);
+        if !matches!(mode & 0o170000, 0 | 0o040000 | 0o100000) {
+            return Err(error("archive links and special files are not allowed"));
+        }
+        if mode & 0o170000 == 0o040000 && !entry.is_dir() {
+            return Err(error("archive directory metadata disagrees with its path"));
+        }
+        let path = budget.destination(destination, Path::new(name), entry.size())?;
+        if entry.is_dir() {
+            fs::create_dir_all(&path)?;
+        } else {
+            fs::create_dir_all(
+                path.parent()
+                    .ok_or_else(|| error("archive member has no parent"))?,
+            )?;
+            let size = entry.size();
+            write_bounded(&mut entry, &path, size)?;
+            set_executable(&path, mode)?;
+        }
+    }
+    Ok(())
+}
+
+fn extract_tar(
+    archive: &Path,
+    destination: &Path,
+    budget: &mut ExtractBudget,
+) -> Result<(), CliError> {
+    let decoder = GzDecoder::new(File::open(archive)?);
+    let mut tar = tar::Archive::new(decoder);
+    for entry in tar.entries().map_err(|err| error(err.to_string()))? {
+        let mut entry = entry.map_err(|err| error(err.to_string()))?;
+        let kind = entry.header().entry_type();
+        if !kind.is_file() && !kind.is_dir() {
+            return Err(error("archive links and special files are not allowed"));
+        }
+        let raw = entry
+            .path()
+            .map_err(|err| error(err.to_string()))?
+            .into_owned();
+        let size = entry.size();
+        let mode = entry
+            .header()
+            .mode()
+            .map_err(|err| error(err.to_string()))?;
+        let path = budget.destination(destination, &raw, size)?;
+        if kind.is_dir() {
+            fs::create_dir_all(&path)?;
+        } else {
+            fs::create_dir_all(
+                path.parent()
+                    .ok_or_else(|| error("archive member has no parent"))?,
+            )?;
+            write_bounded(&mut entry, &path, size)?;
+            set_executable(&path, mode)?;
+        }
+    }
+    Ok(())
 }
 
 fn write_bounded(reader: &mut impl Read, path: &Path, expected: u64) -> Result<(), CliError> {

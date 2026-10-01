@@ -133,7 +133,9 @@ describe('observability plugin helpers', () => {
           endpoint: `http://localhost:4318/v1/${signal}`,
           ...(prefixes === undefined ? {} : { promote_resource_metadata_prefixes: prefixes }),
         });
-        const serialized = JSON.parse(JSON.stringify(endpoint));
+        // Exercise the JSON wire format, including omission of undefined fields.
+        const payload = JSON.stringify(endpoint);
+        const serialized = JSON.parse(payload);
         assert.deepEqual(serialized.promote_resource_metadata_prefixes, prefixes);
         const section =
           signal === 'logs'

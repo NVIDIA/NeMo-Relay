@@ -997,11 +997,11 @@ pub struct BaseEvent {
     #[builder(default)]
     #[serde(skip)]
     pub propagation_parent_uuid: Option<Uuid>,
-    /// W3C traceparent imported with the propagation context. Runtime-only.
+    /// W3C traceparent imported or derived from the local parent. Runtime-only.
     #[builder(default)]
     #[serde(skip)]
     pub propagation_traceparent: Option<String>,
-    /// W3C tracestate imported with the propagation context. Runtime-only.
+    /// W3C tracestate imported or inherited from the local parent. Runtime-only.
     #[builder(default)]
     #[serde(skip)]
     pub propagation_tracestate: Option<String>,

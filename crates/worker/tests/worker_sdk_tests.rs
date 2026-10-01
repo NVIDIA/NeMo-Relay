@@ -2104,6 +2104,74 @@ impl Drop for FillThenPendingStream {
     }
 }
 
+async fn assert_runtime_registration_surfaces(runtime: &PluginRuntime) -> Result<()> {
+    // One request per kind: batching them would only expose the
+    // resulting set, which two swapped arms leave unchanged.
+    let expected_surfaces = REGISTRATION_KIND_SURFACES
+        .iter()
+        .map(|(_, surface)| *surface as i32)
+        .collect::<BTreeSet<_>>();
+    for (kind, _) in REGISTRATION_KIND_SURFACES {
+        let registrations = runtime
+            .list_runtime_registrations(Some(BTreeSet::from([*kind])))
+            .await?;
+        if registrations.len() != REGISTRATION_KIND_SURFACES.len() {
+            return Err(WorkerSdkError::Callback(format!(
+                "expected one registration per surface, got {}",
+                registrations.len()
+            )));
+        }
+        let mut decoded_surfaces = BTreeSet::new();
+        for registration in &registrations {
+            let surface: i32 = registration
+                .local_name
+                .strip_prefix("surface-")
+                .and_then(|value| value.parse().ok())
+                .ok_or_else(|| {
+                    WorkerSdkError::Callback(format!(
+                        "unexpected registration name {}",
+                        registration.local_name
+                    ))
+                })?;
+            let expected = REGISTRATION_KIND_SURFACES
+                .iter()
+                .find(|(_, candidate)| *candidate as i32 == surface)
+                .map(|(kind, _)| *kind)
+                .ok_or_else(|| WorkerSdkError::Callback(format!("unknown surface {surface}")))?;
+            if registration.kind != expected {
+                return Err(WorkerSdkError::Callback(format!(
+                    "surface {surface} decoded as {:?}, expected {expected:?}",
+                    registration.kind
+                )));
+            }
+            if registration.effective_name != format!("effective-{surface}") {
+                return Err(WorkerSdkError::Callback(format!(
+                    "surface {surface} decoded effective name {}",
+                    registration.effective_name
+                )));
+            }
+            if registration.owner.kind != nemo_relay_worker::RuntimeRegistrationOwnerKind::Plugin
+                || registration.owner.plugin_kind.as_deref() != Some("worker-sdk-tests")
+                || registration.owner.component_ordinal != Some(0)
+            {
+                return Err(WorkerSdkError::Callback(format!(
+                    "registration owner did not round-trip: {:?}",
+                    registration.owner
+                )));
+            }
+            decoded_surfaces.insert(surface);
+        }
+        // Set equality, so a duplicated surface standing in for a
+        // missing one cannot pass the count check.
+        if decoded_surfaces != expected_surfaces {
+            return Err(WorkerSdkError::Callback(format!(
+                "decoded surfaces {decoded_surfaces:?} do not match the table"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct SurfacePlugin {
     events: Arc<Mutex<Vec<String>>>,
@@ -2216,74 +2284,7 @@ impl WorkerPlugin for SurfacePlugin {
                 }
                 let tool_call_id = context.tool_call_id().map(str::to_owned);
                 let value = context.into_args();
-                // One request per kind: batching them would only expose the
-                // resulting set, which two swapped arms leave unchanged.
-                let expected_surfaces = REGISTRATION_KIND_SURFACES
-                    .iter()
-                    .map(|(_, surface)| *surface as i32)
-                    .collect::<BTreeSet<_>>();
-                for (kind, _) in REGISTRATION_KIND_SURFACES {
-                    let registrations = runtime
-                        .list_runtime_registrations(Some(BTreeSet::from([*kind])))
-                        .await?;
-                    if registrations.len() != REGISTRATION_KIND_SURFACES.len() {
-                        return Err(WorkerSdkError::Callback(format!(
-                            "expected one registration per surface, got {}",
-                            registrations.len()
-                        )));
-                    }
-                    let mut decoded_surfaces = BTreeSet::new();
-                    for registration in &registrations {
-                        let surface: i32 = registration
-                            .local_name
-                            .strip_prefix("surface-")
-                            .and_then(|value| value.parse().ok())
-                            .ok_or_else(|| {
-                                WorkerSdkError::Callback(format!(
-                                    "unexpected registration name {}",
-                                    registration.local_name
-                                ))
-                            })?;
-                        let expected = REGISTRATION_KIND_SURFACES
-                            .iter()
-                            .find(|(_, candidate)| *candidate as i32 == surface)
-                            .map(|(kind, _)| *kind)
-                            .ok_or_else(|| {
-                                WorkerSdkError::Callback(format!("unknown surface {surface}"))
-                            })?;
-                        if registration.kind != expected {
-                            return Err(WorkerSdkError::Callback(format!(
-                                "surface {surface} decoded as {:?}, expected {expected:?}",
-                                registration.kind
-                            )));
-                        }
-                        if registration.effective_name != format!("effective-{surface}") {
-                            return Err(WorkerSdkError::Callback(format!(
-                                "surface {surface} decoded effective name {}",
-                                registration.effective_name
-                            )));
-                        }
-                        if registration.owner.kind
-                            != nemo_relay_worker::RuntimeRegistrationOwnerKind::Plugin
-                            || registration.owner.plugin_kind.as_deref()
-                                != Some("worker-sdk-tests")
-                            || registration.owner.component_ordinal != Some(0)
-                        {
-                            return Err(WorkerSdkError::Callback(format!(
-                                "registration owner did not round-trip: {:?}",
-                                registration.owner
-                            )));
-                        }
-                        decoded_surfaces.insert(surface);
-                    }
-                    // Set equality, so a duplicated surface standing in for a
-                    // missing one cannot pass the count check.
-                    if decoded_surfaces != expected_surfaces {
-                        return Err(WorkerSdkError::Callback(format!(
-                            "decoded surfaces {decoded_surfaces:?} do not match the table"
-                        )));
-                    }
-                }
+                assert_runtime_registration_surfaces(&runtime).await?;
                 let duplicate_error = runtime
                     .register_conditional_middleware_guardrail(
                         "initial-gate",
