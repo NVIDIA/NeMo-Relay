@@ -1,9 +1,9 @@
-/**
+/*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
-const mermaidCss = `
+/* Shared diagram styles load through docs.yml so MDX pages need no component imports. */
 :where(.mermaid-container, .mermaid-container-expanded, .mermaid) {
   --surface: #ffffff;
   --border: #e0e0e0;
@@ -193,9 +193,4 @@ const mermaidCss = `
   --mermaid-fill: #04554b;
   --mermaid-stroke: #1dbba4;
   --mermaid-text: #ffffff;
-}
-`;
-
-export function MermaidStyles() {
-  return <style dangerouslySetInnerHTML={{ __html: mermaidCss }} />;
 }

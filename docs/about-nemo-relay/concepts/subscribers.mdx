@@ -3,8 +3,6 @@ title: "Subscribers"
 description: "Understand NeMo Relay subscribers, delivery behavior, scope visibility, and exporter roles."
 position: 5
 ---
-import { MermaidStyles } from "@/components/MermaidStyles";
-
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
@@ -112,8 +110,6 @@ ATOF event representation. The host integration maps those hooks into NeMo
 Relay scopes, LLM calls, tool calls, or marks. NeMo Relay emits the ATOF event
 stream, and each subscriber chooses whether to consume the native event object,
 serialized event JSON, or an exporter-specific translation.
-
-<MermaidStyles />
 
 ```mermaid
 flowchart

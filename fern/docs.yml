@@ -14,6 +14,8 @@ navbar-links:
 
 global-theme: nvidia
 
+css: ./components/MermaidStyles.css
+
 announcement:
   message: "🔔 NVIDIA NeMo Relay is <strong>beta software</strong>. APIs and behavior may change with each release."
 

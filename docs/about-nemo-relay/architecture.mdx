@@ -3,8 +3,6 @@ title: "Architecture"
 description: ""
 position: 4
 ---
-import { MermaidStyles } from "@/components/MermaidStyles";
-
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
@@ -19,8 +17,6 @@ This page explains how NeMo Relay connects [scopes](/about-nemo-relay/concepts/s
 This diagram shows how runtime hosts and integrations reach the shared Rust
 runtime. Plugin components install reusable behavior, and subscribers deliver
 event snapshots to in-process consumers or external backends.
-
-<MermaidStyles />
 
 ```mermaid
 flowchart TB
