@@ -78,22 +78,22 @@ from nemo_relay._native import (
     LLMRequest as LLMRequest,
 )
 from nemo_relay._native import (
+    LlmRequestContext as LlmRequestContext,
+)
+from nemo_relay._native import (
     LLMRequestInterceptOutcome as LLMRequestInterceptOutcome,
 )
 from nemo_relay._native import (
-    LlmSanitizeRequestCodec as LlmSanitizeRequestCodec,
+    LlmResponseContext as LlmResponseContext,
 )
 from nemo_relay._native import (
-    LlmRequestContext as LlmRequestContext,
+    LlmSanitizeRequestCodec as LlmSanitizeRequestCodec,
 )
 from nemo_relay._native import (
     LlmSanitizeRequestContext as LlmSanitizeRequestContext,
 )
 from nemo_relay._native import (
     LlmSanitizeResponseCodec as LlmSanitizeResponseCodec,
-)
-from nemo_relay._native import (
-    LlmResponseContext as LlmResponseContext,
 )
 from nemo_relay._native import (
     LlmSanitizeResponseContext as LlmSanitizeResponseContext,
