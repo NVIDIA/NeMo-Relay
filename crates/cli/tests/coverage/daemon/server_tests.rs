@@ -904,7 +904,7 @@ async fn unreachable_worker_marks_its_authenticated_route_pass_through() {
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert!(matches!(
         state.registry.resolve_target(&credential.digest()),
-        Ok(ResolvedTarget::PassThrough)
+        Err(ResolveError::Unavailable(_))
     ));
 }
 
@@ -2599,29 +2599,23 @@ fn communication_failure_invalidates_route_without_waiting_for_durable_revocatio
     });
     let completed = received.recv_timeout(Duration::from_secs(5));
     let route = state.registry.resolve_target(&digest);
-    let session_removed = state
+    let session_retained = state
         .worker_sessions
         .try_lock()
-        .is_ok_and(|sessions| !sessions.contains_key("failed-worker"));
+        .is_ok_and(|sessions| sessions.contains_key("failed-worker"));
     // Always release contention before asserting, so a regression cannot strand runtime shutdown.
     drop(publication);
     runtime.block_on(task).unwrap();
     completed.expect("failure handling waited for the publication lock");
-    assert!(matches!(route, Ok(ResolvedTarget::PassThrough)));
-    assert!(session_removed);
-    runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while state
-                .active_worker_generations
-                .matches(fingerprint, &generation)
-                .unwrap()
-            {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("generation was not durably revoked");
-    });
+    assert!(matches!(route, Err(ResolveError::Unavailable(_))));
+    assert!(session_retained);
+    assert!(
+        state
+            .active_worker_generations
+            .matches(fingerprint, &generation)
+            .unwrap(),
+        "generation remains authorized during reconnect grace"
+    );
 }
 
 #[tokio::test]
@@ -2645,32 +2639,16 @@ async fn release_actions_revoke_activation_transfer_directives_and_ignore_absent
     assert!(!lock(&state.activations).contains_key(&activation_id));
     assert!(!lock(&state.pending_directives).contains_key("launch-owner"));
 
-    let session_id = McpSessionId::new("transfer-owner").unwrap();
-    handle_release_action(
-        Arc::clone(&state),
+    nominate_relaunch(
+        &state,
         fingerprint,
-        ReleaseAction::TransferActivation {
-            session_id: session_id.clone(),
-            directive: BrokerDirective::UsePassThrough,
-        },
-    );
-    assert!(matches!(
-        lock(&state.pending_directives).get(session_id.as_str()),
-        Some(BrokerDirective::UsePassThrough)
-    ));
-
-    handle_release_action(
-        Arc::clone(&state),
-        fingerprint,
-        ReleaseAction::NominateMcp {
-            session_id: McpSessionId::new("missing-owner").unwrap(),
-        },
+        McpSessionId::new("missing-owner").unwrap(),
     );
     handle_release_action(state, fingerprint, ReleaseAction::NoChange);
 }
 
 #[tokio::test]
-async fn nominated_live_mcp_receives_a_fresh_relaunch_activation() {
+async fn retained_mcp_without_a_socket_cannot_receive_a_relaunch() {
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x4e_u8; 32]);
     let credential = RouteCredential::parse(token.clone()).unwrap();
     let state = test_daemon_state(false, &token, GatewayConfig::default());
@@ -2708,10 +2686,8 @@ async fn nominated_live_mcp_receives_a_fresh_relaunch_activation() {
         .registry
         .worker_failed(fingerprint, "failed-worker", u64::MAX)
         .unwrap();
-    let nominee = match action {
-        WorkerFailureAction::NominateMcp { session_id } => session_id,
-        WorkerFailureAction::RouteEmpty => panic!("route unexpectedly empty"),
-    };
+    assert!(matches!(action, WorkerFailureAction::RouteEmpty));
+    let nominee = session_id;
     let secret = SensitiveString::new("mcp-secret").unwrap();
     lock(&state.mcp_sessions).insert(
         nominee.as_str().to_owned(),
@@ -2728,18 +2704,13 @@ async fn nominated_live_mcp_receives_a_fresh_relaunch_activation() {
         },
     );
 
-    handle_release_action(
-        Arc::clone(&state),
-        fingerprint,
-        ReleaseAction::NominateMcp {
-            session_id: nominee.clone(),
-        },
+    nominate_relaunch(&state, fingerprint, nominee.clone());
+    assert!(
+        lock(&state.pending_directives)
+            .get(nominee.as_str())
+            .is_none()
     );
-    assert!(matches!(
-        lock(&state.pending_directives).get(nominee.as_str()),
-        Some(BrokerDirective::LaunchWorker { .. })
-    ));
-    assert_eq!(lock(&state.activations).len(), 1);
+    assert_eq!(lock(&state.activations).len(), 0);
 }
 
 #[tokio::test]

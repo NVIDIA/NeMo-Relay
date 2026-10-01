@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::daemon::common::control::ACTIVATION_LIFETIME_MS;
 use tokio::net::TcpListener;
 
 #[test]
@@ -34,6 +35,7 @@ async fn pending_worker_fixture() -> (ActivationChild, SocketAddr) {
     let child = ActivationChild {
         child: child.into(),
         published: false,
+        publication_uncertain: false,
     };
     let address = tokio::time::timeout(Duration::from_secs(10), async {
         let mut lines = tokio::io::BufReader::new(stdout).lines();
@@ -330,6 +332,7 @@ fn test_lease(daemon_origin: String) -> McpSession {
         session_id: "mcp-test-session".into(),
         session_token: SensitiveString::new("session-secret").expect("session token"),
         sequence: 0,
+        publication_cleanup: false,
     }
 }
 

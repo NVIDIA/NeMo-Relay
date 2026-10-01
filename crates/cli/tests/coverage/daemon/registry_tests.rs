@@ -60,7 +60,7 @@ fn first_mcp_wins_singleflight_and_retries_idempotently() {
     let token = TokenDigest::from_token(b"token-1");
 
     let first = registry
-        .register_mcp(registration(fingerprint, token, "mcp-a"), launch("first"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("first"))
         .expect("first registration");
     assert!(matches!(
         first,
@@ -71,7 +71,7 @@ fn first_mcp_wins_singleflight_and_retries_idempotently() {
     ));
 
     let retry = registry
-        .register_mcp(
+        .register_connected_mcp(
             registration(fingerprint, token, "mcp-a"),
             launch("must-not-replace"),
         )
@@ -85,7 +85,7 @@ fn first_mcp_wins_singleflight_and_retries_idempotently() {
     ));
 
     let concurrent = registry
-        .register_mcp(registration(fingerprint, token, "mcp-b"), launch("second"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-b"), launch("second"))
         .expect("concurrent registration");
     assert_eq!(
         concurrent,
@@ -117,7 +117,7 @@ fn concurrent_registrations_issue_exactly_one_launch() {
             std::thread::spawn(move || {
                 barrier.wait();
                 registry
-                    .register_mcp(
+                    .register_connected_mcp(
                         registration(fingerprint, token, &format!("mcp-{index:02}")),
                         launch(&format!("launch-{index:02}")),
                     )
@@ -159,7 +159,7 @@ fn ready_worker_is_reused_and_request_guard_counts_in_flight() {
     let fingerprint = fingerprint(2);
     let token = TokenDigest::from_token(b"token-2");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp-a"), launch("launch"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("launch"))
         .expect("registration");
     let target = worker("worker-1");
     registry
@@ -168,7 +168,7 @@ fn ready_worker_is_reused_and_request_guard_counts_in_flight() {
 
     assert_eq!(
         registry
-            .register_mcp(registration(fingerprint, token, "mcp-b"), launch("unused"))
+            .register_connected_mcp(registration(fingerprint, token, "mcp-b"), launch("unused"))
             .expect("reuse"),
         BrokerDirective::ReuseWorker {
             endpoint: "http://127.0.0.1:41000".to_owned()
@@ -190,7 +190,7 @@ fn worker_status_snapshots_report_assigned_workers_in_worker_id_order() {
     let ready_fingerprint = fingerprint(40);
     let ready_token = TokenDigest::from_token(b"ready-status-token");
     registry
-        .register_mcp(
+        .register_connected_mcp(
             registration(ready_fingerprint, ready_token, "ready-mcp"),
             launch("ready-activation"),
         )
@@ -213,7 +213,7 @@ fn worker_status_snapshots_report_assigned_workers_in_worker_id_order() {
     let draining_fingerprint = fingerprint(42);
     let draining_token = TokenDigest::from_token(b"draining-status-token");
     registry
-        .register_mcp(
+        .register_connected_mcp(
             registration(draining_fingerprint, draining_token, "draining-mcp"),
             launch("draining-activation"),
         )
@@ -248,7 +248,7 @@ fn worker_status_snapshots_omit_routes_without_assigned_workers() {
     let registry = Registry::new(false);
     let fallback_fingerprint = fingerprint(43);
     registry
-        .register_mcp(
+        .register_connected_mcp(
             registration(
                 fallback_fingerprint,
                 TokenDigest::from_token(b"fallback-status-token"),
@@ -304,7 +304,7 @@ fn final_reference_enters_non_revivable_drain() {
     let token = TokenDigest::from_token(b"token-5");
     let first_session = session("mcp-a");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp-a"), launch("first"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("first"))
         .expect("register");
     let target = worker("worker-1");
     registry
@@ -330,7 +330,7 @@ fn final_reference_enters_non_revivable_drain() {
     ));
     assert_eq!(
         registry
-            .register_mcp(registration(fingerprint, token, "mcp-b"), launch("second"))
+            .register_connected_mcp(registration(fingerprint, token, "mcp-b"), launch("second"))
             .expect("wait during drain"),
         BrokerDirective::WaitForWorker {
             retry_after_ms: DEFAULT_RETRY_AFTER_MS
@@ -345,7 +345,7 @@ fn final_reference_enters_non_revivable_drain() {
     );
     assert_eq!(
         registry
-            .register_mcp(registration(fingerprint, token, "mcp-c"), launch("second"))
+            .register_connected_mcp(registration(fingerprint, token, "mcp-c"), launch("second"))
             .expect("replacement waits during drain"),
         BrokerDirective::WaitForWorker {
             retry_after_ms: DEFAULT_RETRY_AFTER_MS
@@ -364,7 +364,7 @@ fn final_reference_enters_non_revivable_drain() {
     );
     assert!(matches!(
         registry
-            .register_mcp(registration(fingerprint, token, "mcp-c"), launch("second"))
+            .register_connected_mcp(registration(fingerprint, token, "mcp-c"), launch("second"))
             .expect("new generation"),
         BrokerDirective::LaunchWorker {
             ref activation_id,
@@ -380,7 +380,7 @@ fn activation_failure_is_shared_pass_through_until_zero_refs() {
     let token = TokenDigest::from_token(b"token-6");
     let session_id = session("mcp-a");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp-a"), launch("failed"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("failed"))
         .expect("register");
     registry
         .mark_activation_failed(fingerprint, "failed")
@@ -391,7 +391,7 @@ fn activation_failure_is_shared_pass_through_until_zero_refs() {
     ));
     assert_eq!(
         registry
-            .register_mcp(
+            .register_connected_mcp(
                 registration(fingerprint, token, "mcp-concurrent"),
                 launch("ignored")
             )
@@ -414,7 +414,7 @@ fn activation_failure_is_shared_pass_through_until_zero_refs() {
     );
     assert!(matches!(
         registry
-            .register_mcp(registration(fingerprint, token, "mcp-b"), launch("retry"))
+            .register_connected_mcp(registration(fingerprint, token, "mcp-b"), launch("retry"))
             .expect("retry"),
         BrokerDirective::LaunchWorker {
             ref activation_id,
@@ -430,7 +430,7 @@ fn global_pass_through_never_activates_or_accepts_workers() {
     let token = TokenDigest::from_token(b"token-7");
     assert_eq!(
         registry
-            .register_mcp(registration(fingerprint, token, "mcp-a"), launch("unused"))
+            .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("unused"))
             .expect("registration"),
         BrokerDirective::UsePassThrough
     );
@@ -453,10 +453,10 @@ fn worker_crash_nominates_one_live_mcp_and_relaunches() {
     let fingerprint = fingerprint(8);
     let token = TokenDigest::from_token(b"token-8");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp-b"), launch("first"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-b"), launch("first"))
         .expect("first");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp-a"), launch("unused"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("unused"))
         .expect("second");
     registry
         .mark_worker_ready(fingerprint, "first", worker("worker-1"))
@@ -485,7 +485,7 @@ fn worker_crash_nominates_one_live_mcp_and_relaunches() {
 }
 
 #[test]
-fn expired_launch_owner_is_transferred_idempotently() {
+fn expired_launch_owner_revokes_its_grant_before_fresh_handoff() {
     let registry = Registry::new(false);
     let fingerprint = fingerprint(9);
     let token = TokenDigest::from_token(b"token-9");
@@ -494,20 +494,17 @@ fn expired_launch_owner_is_transferred_idempotently() {
     let mut second = registration(fingerprint, token, "mcp-b");
     second.lease_expires_at_unix_ms = 1_000;
     registry
-        .register_mcp(first, launch("launch"))
+        .register_connected_mcp(first, launch("launch"))
         .expect("first");
     registry
-        .register_mcp(second, launch("unused"))
+        .register_connected_mcp(second, launch("unused"))
         .expect("second");
 
     let actions = registry.expire_mcp_leases(100, 2_000);
     assert_eq!(actions.len(), 1);
     assert!(matches!(
         &actions[0].1,
-        ReleaseAction::TransferActivation {
-            session_id,
-            directive: BrokerDirective::LaunchWorker { activation_id, .. },
-        } if session_id == &session("mcp-b") && activation_id == "launch"
+        ReleaseAction::CancelActivation { activation_id } if activation_id == "launch"
     ));
     assert_eq!(
         registry
@@ -529,10 +526,10 @@ fn simultaneous_lease_expiry_emits_one_terminal_action() {
     let mut second = registration(fingerprint, token, "mcp-b");
     second.lease_expires_at_unix_ms = 100;
     registry
-        .register_mcp(first, launch("launch"))
+        .register_connected_mcp(first, launch("launch"))
         .expect("first");
     registry
-        .register_mcp(second, launch("unused"))
+        .register_connected_mcp(second, launch("unused"))
         .expect("second");
 
     let actions = registry.expire_mcp_leases(100, 2_000);
@@ -566,7 +563,7 @@ fn recovery_waits_for_deadline_then_nominates_a_live_mcp() {
         .expect("recovery");
     assert_eq!(
         registry
-            .register_mcp(registration(fingerprint, token, "mcp-a"), launch("unused"))
+            .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("unused"))
             .expect("reconnecting MCP"),
         BrokerDirective::WaitForWorker {
             retry_after_ms: DEFAULT_RETRY_AFTER_MS
@@ -599,7 +596,7 @@ fn recovered_worker_becomes_ready_when_an_mcp_reconnects() {
         .restore_binding(fingerprint, token)
         .expect("persisted binding");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp-a"), launch("restart"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("restart"))
         .expect("reconnecting MCP");
     let permit = registry
         .authorize_worker_recovery(fingerprint, "worker-recovered")
@@ -612,7 +609,7 @@ fn recovered_worker_becomes_ready_when_an_mcp_reconnects() {
     );
     assert_eq!(
         registry
-            .register_mcp(registration(fingerprint, token, "mcp-a"), launch("unused"))
+            .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("unused"))
             .expect("reconnecting MCP"),
         BrokerDirective::ReuseWorker {
             endpoint: "http://127.0.0.1:41000".to_owned()
@@ -652,10 +649,10 @@ fn expired_activation_enters_transient_pass_through_until_all_references_leave()
     let mut expiring_launch = launch("expiring");
     expiring_launch.deadline_unix_ms = 100;
     registry
-        .register_mcp(registration(fingerprint, token, "mcp-a"), expiring_launch)
+        .register_connected_mcp(registration(fingerprint, token, "mcp-a"), expiring_launch)
         .expect("registration");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp-b"), launch("unused"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-b"), launch("unused"))
         .expect("second registration");
 
     assert!(registry.expire_activations(99).is_empty());
@@ -672,7 +669,7 @@ fn expired_activation_enters_transient_pass_through_until_all_references_leave()
     ));
     assert_eq!(
         registry
-            .register_mcp(
+            .register_connected_mcp(
                 registration(fingerprint, token, "mcp-c"),
                 launch("must-not-launch"),
             )
@@ -697,7 +694,7 @@ fn authenticated_worker_communication_failure_is_route_wide_pass_through() {
     let fingerprint = fingerprint(15);
     let token = TokenDigest::from_token(b"token-15");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp-a"), launch("launch"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("launch"))
         .expect("registration");
     registry
         .mark_worker_ready(fingerprint, "launch", worker("worker-failed"))
@@ -711,7 +708,7 @@ fn authenticated_worker_communication_failure_is_route_wide_pass_through() {
     );
     assert!(matches!(
         registry.resolve_target(&token),
-        Ok(ResolvedTarget::PassThrough)
+        Err(ResolveError::Unavailable(_))
     ));
     assert_eq!(
         registry.mark_worker_communication_failed(fingerprint, "worker-failed"),
@@ -722,7 +719,7 @@ fn authenticated_worker_communication_failure_is_route_wide_pass_through() {
         .expect("release");
     assert_eq!(
         registry.snapshot(fingerprint).expect("snapshot").state,
-        RouteStateKind::Empty
+        RouteStateKind::Draining
     );
 }
 
@@ -732,7 +729,7 @@ fn delayed_failure_from_old_worker_does_not_displace_new_ready_generation() {
     let fingerprint = fingerprint(16);
     let token = TokenDigest::from_token(b"token-16");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp-a"), launch("launch"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp-a"), launch("launch"))
         .expect("registration");
     registry
         .mark_worker_ready(fingerprint, "launch", worker("worker-old"))
@@ -763,7 +760,7 @@ fn recovered_worker_supersedes_restart_activation_without_a_second_worker() {
     let fingerprint = fingerprint(17);
     let token = TokenDigest::from_token(b"token-17");
     registry
-        .register_mcp(
+        .register_connected_mcp(
             registration(fingerprint, token, "mcp-a"),
             launch("restart-activation"),
         )
@@ -780,7 +777,7 @@ fn recovered_worker_supersedes_restart_activation_without_a_second_worker() {
     );
     assert_eq!(
         registry
-            .register_mcp(registration(fingerprint, token, "mcp-b"), launch("unused"),)
+            .register_connected_mcp(registration(fingerprint, token, "mcp-b"), launch("unused"),)
             .expect("reuse recovered worker"),
         BrokerDirective::ReuseWorker {
             endpoint: "http://127.0.0.1:41000".to_owned(),
@@ -800,7 +797,7 @@ fn recovery_requires_a_live_known_route_and_rejects_permanent_pass_through() {
     let fingerprint = fingerprint(22);
     let token = TokenDigest::from_token(b"token-22");
     pass_through
-        .register_mcp(registration(fingerprint, token, "mcp"), launch("unused"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp"), launch("unused"))
         .expect("pass-through registration");
     assert_eq!(
         pass_through.authorize_worker_recovery(fingerprint, "worker"),
@@ -814,7 +811,7 @@ fn pass_through_route_is_not_routable_without_a_live_mcp_reference() {
     let fingerprint = fingerprint(23);
     let token = TokenDigest::from_token(b"token-23");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp"), launch("unused"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp"), launch("unused"))
         .expect("registration");
     assert!(matches!(
         registry.resolve_target(&token),
@@ -836,17 +833,17 @@ fn stable_route_bindings_are_bounded_without_permitting_rebinding() {
     let second = fingerprint(25);
     let token = TokenDigest::from_token(b"bounded-token");
     registry
-        .register_mcp(registration(first, token, "mcp-a"), launch("first"))
+        .register_connected_mcp(registration(first, token, "mcp-a"), launch("first"))
         .expect("first route");
     assert_eq!(
-        registry.register_mcp(
+        registry.register_connected_mcp(
             registration(second, TokenDigest::from_token(b"another-token"), "mcp-b"),
             launch("second"),
         ),
         Err(RegistryError::RouteCapacityReached)
     );
     assert_eq!(
-        registry.register_mcp(registration(second, token, "mcp-c"), launch("rebind")),
+        registry.register_connected_mcp(registration(second, token, "mcp-c"), launch("rebind")),
         Err(RegistryError::TokenAlreadyBound)
     );
 }
@@ -857,7 +854,7 @@ fn capacity_pressure_evicts_only_a_zero_reference_empty_route() {
     let first = fingerprint(26);
     let first_token = TokenDigest::from_token(b"first-token");
     registry
-        .register_mcp(registration(first, first_token, "mcp-a"), launch("first"))
+        .register_connected_mcp(registration(first, first_token, "mcp-a"), launch("first"))
         .expect("first route");
     registry
         .release_mcp(first, &session("mcp-a"), 1_000)
@@ -867,7 +864,7 @@ fn capacity_pressure_evicts_only_a_zero_reference_empty_route() {
     let second_token = TokenDigest::from_token(b"second-token");
     assert!(matches!(
         registry
-            .register_mcp(
+            .register_connected_mcp(
                 registration(second, second_token, "mcp-b"),
                 launch("second"),
             )
@@ -886,7 +883,7 @@ fn route_wide_pass_through_cancels_activation_and_preserves_permanent_routes() {
     let route_fingerprint = fingerprint(28);
     let token = TokenDigest::from_token(b"token-28");
     registry
-        .register_mcp(
+        .register_connected_mcp(
             registration(route_fingerprint, token, "mcp"),
             launch("cancel-me"),
         )
@@ -907,7 +904,7 @@ fn route_wide_pass_through_cancels_activation_and_preserves_permanent_routes() {
     let permanent = Registry::new(true);
     let permanent_fingerprint = fingerprint(29);
     permanent
-        .register_mcp(
+        .register_connected_mcp(
             registration(
                 permanent_fingerprint,
                 TokenDigest::from_token(b"token-29"),
@@ -933,7 +930,7 @@ fn recovery_completion_covers_live_empty_and_draining_routes() {
     let live = Registry::new(false);
     let live_fingerprint = fingerprint(30);
     let live_token = TokenDigest::from_token(b"token-30");
-    live.register_mcp(
+    live.register_connected_mcp(
         registration(live_fingerprint, live_token, "mcp"),
         launch("launch"),
     )
@@ -986,7 +983,7 @@ fn current_directive_promotes_a_recovered_target_before_reusing_it() {
     let token = TokenDigest::from_token(b"token-33");
     let mcp = session("mcp");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp"), launch("launch"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp"), launch("launch"))
         .unwrap();
     registry
         .begin_recovery(fingerprint, Some(worker("survivor")), 100)
@@ -1010,7 +1007,7 @@ fn registry_rejects_stale_worker_generations_and_invalid_state_transitions() {
     let fingerprint = fingerprint(33);
     let token = TokenDigest::from_token(b"token-33");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp"), launch("active"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp"), launch("active"))
         .unwrap();
     assert_eq!(
         registry.mark_worker_ready(fingerprint, "stale", worker("worker")),
@@ -1022,10 +1019,7 @@ fn registry_rejects_stale_worker_generations_and_invalid_state_transitions() {
     );
     assert_eq!(
         registry.worker_failed(fingerprint, "worker", 100),
-        Err(RegistryError::InvalidState {
-            expected: RouteStateKind::Ready,
-            actual: RouteStateKind::Activating,
-        })
+        Ok(WorkerFailureAction::Superseded)
     );
     assert_eq!(
         registry.begin_relaunch(fingerprint, &session("mcp"), launch("new")),
@@ -1042,14 +1036,12 @@ fn registry_rejects_stale_worker_generations_and_invalid_state_transitions() {
         })
     );
     assert_eq!(
-        registry
-            .mark_worker_communication_failed(fingerprint, "worker")
-            .unwrap(),
-        Some("active".into())
+        registry.mark_worker_communication_failed(fingerprint, "worker"),
+        Err(RegistryError::WorkerMismatch)
     );
     assert!(matches!(
         registry.resolve_target(&token),
-        Ok(ResolvedTarget::PassThrough)
+        Err(ResolveError::Unavailable(_))
     ));
 }
 
@@ -1077,7 +1069,7 @@ fn registry_unknown_route_and_session_errors_are_explicit() {
 
     let fingerprint = fingerprint(35);
     registry
-        .register_mcp(
+        .register_connected_mcp(
             registration(fingerprint, TokenDigest::from_token(b"token-35"), "known"),
             launch("launch"),
         )
@@ -1100,7 +1092,7 @@ fn recovery_permits_cover_existing_ready_and_recovering_worker_generations() {
     let fingerprint = fingerprint(36);
     let token = TokenDigest::from_token(b"token-36");
     registry
-        .register_mcp(registration(fingerprint, token, "mcp"), launch("launch"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp"), launch("launch"))
         .unwrap();
     registry
         .mark_worker_ready(fingerprint, "launch", worker("survivor"))
@@ -1158,7 +1150,7 @@ fn communication_failures_preserve_draining_and_mismatched_recovery_generations(
     let draining_fingerprint = fingerprint(37);
     let token = TokenDigest::from_token(b"token-37");
     registry
-        .register_mcp(
+        .register_connected_mcp(
             registration(draining_fingerprint, token, "mcp"),
             launch("launch"),
         )
@@ -1185,7 +1177,7 @@ fn communication_failures_preserve_draining_and_mismatched_recovery_generations(
     let fingerprint = fingerprint(38);
     let token = TokenDigest::from_token(b"token-38");
     recovering
-        .register_mcp(registration(fingerprint, token, "mcp"), launch("launch"))
+        .register_connected_mcp(registration(fingerprint, token, "mcp"), launch("launch"))
         .unwrap();
     recovering
         .begin_recovery(fingerprint, Some(worker("survivor")), 1_000)
@@ -1210,6 +1202,174 @@ fn communication_failures_preserve_draining_and_mismatched_recovery_generations(
     );
     assert!(matches!(
         recovering.resolve_target(&token),
-        Ok(ResolvedTarget::PassThrough)
+        Err(ResolveError::Unavailable(_))
+    ));
+}
+
+#[test]
+fn disconnected_references_cannot_launch_and_owner_loss_requires_a_fresh_grant() {
+    let registry = Registry::new(false);
+    let fingerprint = fingerprint(81);
+    let token = TokenDigest::from_token(b"owner-handoff");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "a"), launch("old"))
+        .unwrap();
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "b"), launch("unused"))
+        .unwrap();
+    assert_eq!(
+        registry.mcp_disconnected(fingerprint, &session("a")),
+        Some("old".into())
+    );
+    assert_eq!(
+        registry.activation_candidates(u64::MAX),
+        vec![(fingerprint, session("b"))]
+    );
+    assert_eq!(
+        registry.begin_relaunch(fingerprint, &session("a"), launch("wrong")),
+        Err(RegistryError::NotLaunchOwner)
+    );
+    registry
+        .begin_relaunch(fingerprint, &session("b"), launch("fresh"))
+        .unwrap();
+    assert_eq!(
+        registry.mark_worker_ready(fingerprint, "old", worker("stale")),
+        Err(RegistryError::ActivationMismatch)
+    );
+    assert_eq!(
+        registry.mark_activation_failed(fingerprint, "old"),
+        Err(RegistryError::ActivationMismatch)
+    );
+    registry.mcp_disconnected(fingerprint, &session("b"));
+    assert_eq!(registry.snapshot(fingerprint).unwrap().reference_count, 2);
+    assert!(registry.activation_candidates(u64::MAX).is_empty());
+    registry.mcp_connected(fingerprint, &session("a"));
+    assert_eq!(
+        registry.activation_candidates(u64::MAX),
+        vec![(fingerprint, session("a"))]
+    );
+}
+
+#[test]
+fn actual_failures_retry_beyond_three_attempts_with_capped_backoff() {
+    let registry = Registry::new(false);
+    let fingerprint = fingerprint(82);
+    let token = TokenDigest::from_token(b"retry");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    registry
+        .mark_activation_failed(fingerprint, "first")
+        .unwrap();
+    assert!(registry.activation_candidates(0).is_empty());
+    for attempt in 2..=12 {
+        let id = format!("retry-{attempt}");
+        assert_eq!(
+            registry.activation_candidates(u64::MAX),
+            vec![(fingerprint, session("owner"))]
+        );
+        registry
+            .begin_relaunch(fingerprint, &session("owner"), launch(&id))
+            .unwrap();
+        assert!(registry.activation_candidates(u64::MAX).is_empty());
+        registry.mark_activation_failed(fingerprint, &id).unwrap();
+        let (issued, delay) = registry.activation_retry(fingerprint);
+        assert_eq!(issued, attempt);
+        assert!(delay <= 60_000);
+    }
+    assert_eq!(activation_retry_delay(1), 1000);
+    assert_eq!(activation_retry_delay(2), 2000);
+    assert_eq!(activation_retry_delay(u32::MAX), 60_000);
+    registry
+        .begin_relaunch(fingerprint, &session("owner"), launch("success"))
+        .unwrap();
+    registry
+        .mark_worker_ready(fingerprint, "success", worker("new"))
+        .unwrap();
+    assert_eq!(registry.activation_retry(fingerprint).0, 0);
+}
+
+#[test]
+fn cancellation_and_delayed_worker_cleanup_are_fenced_by_publication_and_identity() {
+    use crate::daemon::common::control::ActivationCancellation;
+    let registry = Registry::new(false);
+    let fingerprint = fingerprint(83);
+    let token = TokenDigest::from_token(b"cancel-race");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    assert_eq!(
+        registry
+            .cancel_activation(fingerprint, &session("owner"), "first")
+            .unwrap(),
+        ActivationCancellation::Cancelled
+    );
+    assert!(
+        registry
+            .mark_worker_ready(fingerprint, "first", worker("first"))
+            .is_err()
+    );
+    registry
+        .begin_relaunch(fingerprint, &session("owner"), launch("second"))
+        .unwrap();
+    registry
+        .mark_worker_ready(fingerprint, "second", worker("second"))
+        .unwrap();
+    assert_eq!(
+        registry
+            .cancel_activation(fingerprint, &session("owner"), "second")
+            .unwrap(),
+        ActivationCancellation::Published
+    );
+    assert_eq!(
+        registry
+            .cancel_activation(fingerprint, &session("owner"), "first")
+            .unwrap(),
+        ActivationCancellation::Superseded
+    );
+    registry
+        .release_mcp(fingerprint, &session("owner"), 100)
+        .unwrap();
+    assert_eq!(
+        registry.worker_failed(fingerprint, "second", 200).unwrap(),
+        WorkerFailureAction::Draining
+    );
+    registry
+        .finish_draining_worker(fingerprint, "second", 100)
+        .unwrap();
+    assert_eq!(
+        registry.worker_failed(fingerprint, "second", 200).unwrap(),
+        WorkerFailureAction::AlreadyRemoved
+    );
+    registry
+        .register_connected_mcp(
+            registration(fingerprint, token, "new-owner"),
+            launch("third"),
+        )
+        .unwrap();
+    assert_eq!(
+        registry
+            .finish_draining_worker(fingerprint, "second", 300)
+            .unwrap(),
+        DrainCompletion::AlreadyRemoved
+    );
+    assert_eq!(
+        registry.mark_worker_communication_failed(fingerprint, "second"),
+        Err(RegistryError::WorkerMismatch)
+    );
+    assert_eq!(
+        registry.snapshot(fingerprint).unwrap().state,
+        RouteStateKind::Activating
+    );
+    registry
+        .mark_worker_ready(fingerprint, "third", worker("third"))
+        .unwrap();
+    assert_eq!(
+        registry.worker_failed(fingerprint, "unknown", 400).unwrap(),
+        WorkerFailureAction::Superseded
+    );
+    assert!(matches!(
+        registry.resolve_target(&token),
+        Ok(ResolvedTarget::Worker(_))
     ));
 }

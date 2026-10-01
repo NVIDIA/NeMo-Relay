@@ -65,11 +65,6 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
     let tls_config = worker_tls.as_ref().map(WorkerTlsIdentity::server_config);
     let worker_id = uuid::Uuid::now_v7().to_string();
 
-    let managed = crate::configuration::resolve_managed_worker_config()?;
-    let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
-        Some(&managed.plugin_config_path),
-        &managed.resolved,
-    )?;
     let registration = control::register(
         &daemon_origin,
         &identity,
@@ -79,6 +74,12 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
         worker_tls_root.clone(),
     )
     .await?;
+
+    let managed = crate::configuration::resolve_managed_worker_config()?;
+    let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
+        Some(&managed.plugin_config_path),
+        &managed.resolved,
+    )?;
 
     runtime::serve(
         listener,

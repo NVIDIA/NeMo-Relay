@@ -119,7 +119,11 @@ impl Capabilities {
         .expect("built-in capability names are valid")
     }
 
-    #[cfg(test)]
+    pub(crate) fn with_capability(mut self, name: &str) -> Self {
+        self.0.insert(name.to_owned());
+        self
+    }
+
     pub(crate) fn contains(&self, name: &str) -> bool {
         self.0.contains(name)
     }

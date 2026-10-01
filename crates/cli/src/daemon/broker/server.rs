@@ -503,7 +503,29 @@ fn reserve_worker_session_slot(
         < capacity
 }
 
+/// Run publication-fenced control transitions without parking Tokio runtime threads.
+async fn blocking_control(
+    transition: impl FnOnce() -> Response<Body> + Send + 'static,
+) -> Response<Body> {
+    tokio::task::spawn_blocking(transition)
+        .await
+        .unwrap_or_else(|error| {
+            control_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                CliError::Launch(format!("broker control transition task failed: {error}")),
+            )
+        })
+}
+
 async fn register_mcp(
+    State(state): State<Arc<DaemonState>>,
+    headers: HeaderMap,
+    Json(request): Json<McpRegisterRequest>,
+) -> Response<Body> {
+    blocking_control(move || register_mcp_blocking(State(state), headers, Json(request))).await
+}
+
+fn register_mcp_blocking(
     State(state): State<Arc<DaemonState>>,
     headers: HeaderMap,
     Json(request): Json<McpRegisterRequest>,
@@ -667,6 +689,13 @@ async fn release_mcp(
     State(state): State<Arc<DaemonState>>,
     Json(request): Json<SessionRequest<EmptyPayload>>,
 ) -> Response<Body> {
+    blocking_control(move || release_mcp_blocking(State(state), Json(request))).await
+}
+
+fn release_mcp_blocking(
+    State(state): State<Arc<DaemonState>>,
+    Json(request): Json<SessionRequest<EmptyPayload>>,
+) -> Response<Body> {
     let authenticated = match authenticate_mcp(&state, &request, None) {
         Ok(authenticated) => authenticated,
         Err(response) => return response,
@@ -681,6 +710,10 @@ async fn release_mcp(
     if authenticated.duplicate {
         return StatusCode::NO_CONTENT.into_response();
     }
+    // Wait for durable publication before taking a route gate used by async handlers.
+    let _publication = lock(&state.worker_generation_publication);
+    let gate = state.sockets.route_gate(authenticated.fingerprint);
+    let _route = lock(&gate);
     if let Some(session) = lock(&state.mcp_sessions).get_mut(authenticated.session_id.as_str()) {
         session.released = true;
     }
@@ -706,7 +739,51 @@ async fn release_mcp(
     StatusCode::NO_CONTENT.into_response()
 }
 
+async fn cancel_activation(
+    State(state): State<Arc<DaemonState>>,
+    Json(request): Json<SessionRequest<crate::daemon::common::control::CancelActivationPayload>>,
+) -> Response<Body> {
+    blocking_control(move || cancel_activation_blocking(State(state), Json(request))).await
+}
+
+fn cancel_activation_blocking(
+    State(state): State<Arc<DaemonState>>,
+    Json(request): Json<SessionRequest<crate::daemon::common::control::CancelActivationPayload>>,
+) -> Response<Body> {
+    let authenticated = match authenticate_mcp(&state, &request, None) {
+        Ok(authenticated) => authenticated,
+        Err(response) => return response,
+    };
+    if request.payload.activation_id.len() > 128 || authenticated.released {
+        return control_message(StatusCode::BAD_REQUEST, "invalid activation cancellation");
+    }
+    // This runs on the blocking pool and fences cancellation against durable publication.
+    let _publication = lock(&state.worker_generation_publication);
+    match state.registry.cancel_activation(
+        authenticated.fingerprint,
+        &authenticated.session_id,
+        &request.payload.activation_id,
+    ) {
+        Ok(outcome) => {
+            if outcome == crate::daemon::common::control::ActivationCancellation::Cancelled {
+                revoke_activation(&state, &request.payload.activation_id);
+                cancel_staged_activation(&state, &request.payload.activation_id);
+            }
+            state.sockets.changed.notify_waiters();
+            Json(outcome).into_response()
+        }
+        Err(error) => registry_error(error),
+    }
+}
+
 async fn activation_failed(
+    State(state): State<Arc<DaemonState>>,
+    Json(request): Json<SessionRequest<ActivationFailedPayload>>,
+) -> Response<Body> {
+    blocking_control(move || activation_failed_blocking(State(state), Json(request))).await
+}
+
+fn activation_failed_blocking(
     State(state): State<Arc<DaemonState>>,
     Json(request): Json<SessionRequest<ActivationFailedPayload>>,
 ) -> Response<Body> {
@@ -726,21 +803,28 @@ async fn activation_failed(
     if authenticated.duplicate {
         return StatusCode::NO_CONTENT.into_response();
     }
+    let _publication = lock(&state.worker_generation_publication);
     match state
         .registry
         .mark_activation_failed(authenticated.fingerprint, &request.payload.activation_id)
     {
         Ok(()) => {
             revoke_activation(&state, &request.payload.activation_id);
+            cancel_staged_activation(&state, &request.payload.activation_id);
             let fingerprint = authenticated.fingerprint.to_string();
             log::error!(
                 target: "nemo_relay.daemon",
                 event = "worker_activation_failed",
                 fingerprint = fingerprint.as_str(),
                 route_mode = "pass_through",
-                failure_reason = request.payload.failure_reason.as_str();
+                failure_reason = request.payload.failure_reason.as_str(),
+                retry_after_ms = state.registry.activation_retry(authenticated.fingerprint).1;
+
                 "Worker activation failed; route changed to pass-through"
             );
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(RegistryError::ActivationMismatch | RegistryError::InvalidState { .. }) => {
             StatusCode::NO_CONTENT.into_response()
         }
         Err(error) => registry_error(error),
@@ -748,6 +832,13 @@ async fn activation_failed(
 }
 
 async fn register_worker(
+    State(state): State<Arc<DaemonState>>,
+    Json(request): Json<WorkerRegisterRequest>,
+) -> Response<Body> {
+    blocking_control(move || register_worker_blocking(State(state), Json(request))).await
+}
+
+fn register_worker_blocking(
     State(state): State<Arc<DaemonState>>,
     Json(request): Json<WorkerRegisterRequest>,
 ) -> Response<Body> {
@@ -760,6 +851,7 @@ async fn register_worker(
         Ok(proof) => proof,
         Err(response) => return response,
     };
+    let _publication = lock(&state.worker_generation_publication);
     let now = now_unix_ms();
     let (activation_fingerprint, replay) = {
         let mut activations = lock(&state.activations);
@@ -1373,10 +1465,12 @@ fn publish_ready_worker(
         session.published = true;
         session.lease_expires_at_unix_ms = u64::MAX;
     }
+    let startup_elapsed_ms = state.registry.startup_elapsed_ms(fingerprint);
     let fingerprint = fingerprint.to_string();
     log::info!(
         target: "nemo_relay.daemon",
         event = "worker_added",
+        startup_elapsed_ms = startup_elapsed_ms,
         fingerprint = fingerprint.as_str(),
         worker_id = target.worker_id(),
         endpoint = target.endpoint(),
@@ -1399,9 +1493,9 @@ fn fail_worker_publication(
             .mark_activation_failed(fingerprint, activation_id)
             .ok()
             .map(|()| activation_id.clone()),
-        WorkerPublication::Recovery { .. } => state
+        WorkerPublication::Recovery { permit } => state
             .registry
-            .mark_route_pass_through(fingerprint)
+            .mark_recovery_failed(fingerprint, permit)
             .ok()
             .flatten(),
     };
@@ -1849,37 +1943,15 @@ fn handle_worker_communication_failure(
     fingerprint: Fingerprint,
     worker_id: &str,
 ) {
-    // Remove the session and copy its generation before scheduling durable work. No filesystem
-    // operation or publication mutex acquisition may happen on the body-polling thread.
-    let generation = lock(&state.worker_sessions)
-        .remove(worker_id)
-        .map(|session| (session.fingerprint, session.generation_grant.generation_id));
-    if let Some((fingerprint, generation_id)) = generation {
-        let state = Arc::clone(state);
-        tokio::spawn(async move {
-            if let Err(error) = tokio::task::spawn_blocking(move || {
-                revoke_active_worker_generation(&state, fingerprint, &generation_id);
-            })
-            .await
-            {
-                log::error!(
-                    target: "nemo_relay.daemon",
-                    event = "worker_generation_revocation_join_failed",
-                    error_kind = if error.is_panic() { "panic" } else { "cancelled" };
-                    "Worker generation revocation task failed after communication loss"
-                );
-            }
-        });
-    }
-    let Ok(canceled_activation) = state
+    if state
         .registry
         .mark_worker_communication_failed(fingerprint, worker_id)
-    else {
+        .is_err()
+    {
         return;
-    };
-    if let Some(activation_id) = canceled_activation {
-        revoke_activation(state, &activation_id);
     }
+    // Force control reconnect, retaining the assigned generation during its 30-second grace.
+    state.sockets.cancel_worker(worker_id);
     state.sockets.changed.notify_waiters();
     let fingerprint = fingerprint.to_string();
     log::error!(
@@ -2033,14 +2105,12 @@ fn has_required_transport_capabilities(
 }
 
 fn fresh_launch(worker_network: WorkerNetworkHint) -> Result<WorkerLaunch, CliError> {
-    worker_network.validate()?;
-    let now = now_unix_ms();
     let loopback = worker_network.is_loopback();
     Ok(WorkerLaunch {
         activation_id: random_secret(16)?,
         activation_token: SensitiveString::new(random_secret(32)?)
             .map_err(|error| CliError::Launch(error.to_string()))?,
-        deadline_unix_ms: now.saturating_add(ACTIVATION_LIFETIME_MS),
+        deadline_unix_ms: u64::MAX,
         bind_ip: if loopback {
             Ipv4Addr::LOCALHOST
         } else {
@@ -2089,19 +2159,41 @@ fn revoke_activation(state: &DaemonState, activation_id: &str) {
     });
 }
 
-fn expire_activation_routes(state: &DaemonState, now_unix_ms: u64) {
+/// Release terminal activations immediately instead of retaining staged admission slots.
+fn cancel_staged_activation(state: &Arc<DaemonState>, activation_id: &str) {
+    let workers = {
+        let mut sessions = lock(&state.worker_sessions);
+        let ids: Vec<_> = sessions
+            .iter()
+            .filter(|(_, session)| {
+                !session.published && matches!(&session.publication, WorkerPublication::Activation { activation_id: staged }
+                    if staged == activation_id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| sessions.remove(&id).map(|session| (id, session)))
+            .collect::<Vec<_>>()
+    };
+    for (id, session) in workers {
+        state.sockets.cancel_worker(&id);
+        tokio::spawn(socket::cleanup_worker_session(
+            Arc::clone(state),
+            id,
+            session,
+        ));
+    }
+}
+
+fn expire_activation_routes(state: &Arc<DaemonState>, now_unix_ms: u64) {
+    let _publication = lock(&state.worker_generation_publication);
     for ExpiredActivation {
         fingerprint,
         activation_id,
     } in state.registry.expire_activations(now_unix_ms)
     {
         revoke_activation(state, &activation_id);
-        let workers: Vec<_> = lock(&state.worker_sessions).iter().filter(|(_, session)| {
-            matches!(&session.publication, WorkerPublication::Activation { activation_id: staged } if *staged == activation_id)
-        }).map(|(id, _)| id.clone()).collect();
-        for worker in workers {
-            state.sockets.cancel_worker(&worker);
-        }
+        cancel_staged_activation(state, &activation_id);
         state.sockets.changed.notify_waiters();
         let fingerprint = fingerprint.to_string();
         log::error!(
@@ -2119,6 +2211,7 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
         ReleaseAction::NoChange => {}
         ReleaseAction::CancelActivation { activation_id } => {
             revoke_activation(&state, &activation_id);
+            cancel_staged_activation(&state, &activation_id);
             let fingerprint = fingerprint.to_string();
             log::info!(
                 target: "nemo_relay.daemon",
@@ -2161,7 +2254,15 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
                     let now = now_unix_ms();
                     if target.in_flight() == 0 || now >= deadline_unix_ms {
                         let forced = target.in_flight() != 0;
-                        match state.registry.finish_draining(fingerprint, now) {
+                        match state.registry.finish_draining_worker(
+                            fingerprint,
+                            target.worker_id(),
+                            now,
+                        ) {
+                            Ok(
+                                super::registry::DrainCompletion::AlreadyRemoved
+                                | super::registry::DrainCompletion::Superseded,
+                            ) => {}
                             Ok(_) => {
                                 let fingerprint = fingerprint.to_string();
                                 log::info!(
@@ -2186,16 +2287,6 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             });
-        }
-        ReleaseAction::TransferActivation {
-            session_id,
-            directive,
-        } => {
-            lock(&state.pending_directives).insert(session_id.as_str().to_owned(), directive);
-            state.sockets.changed.notify_waiters();
-        }
-        ReleaseAction::NominateMcp { session_id } => {
-            nominate_relaunch(&state, fingerprint, session_id);
         }
     }
 }
@@ -2243,6 +2334,11 @@ fn revoke_active_worker_generation(
 }
 
 fn nominate_relaunch(state: &Arc<DaemonState>, fingerprint: Fingerprint, session_id: McpSessionId) {
+    let gate = state.sockets.route_gate(fingerprint);
+    let _route = lock(&gate);
+    if !state.sockets.mcp_connected(session_id.as_str()) {
+        return;
+    }
     let fingerprint_text = fingerprint.to_string();
     let worker_network = lock(&state.mcp_sessions)
         .get(session_id.as_str())
@@ -2297,6 +2393,7 @@ fn nominate_relaunch(state: &Arc<DaemonState>, fingerprint: Fingerprint, session
     log::info!(
         target: "nemo_relay.daemon",
         event = "worker_relaunch_requested",
+        attempt = state.registry.activation_retry(fingerprint).0,
         fingerprint = fingerprint_text.as_str(),
         mcp_session_id = session_id.as_str();
         "A live MCP session was asked to relaunch the worker"
@@ -2324,8 +2421,6 @@ fn release_action_name(action: &ReleaseAction) -> &'static str {
         ReleaseAction::NoChange => "route_retained",
         ReleaseAction::CancelActivation { .. } => "cancel_activation",
         ReleaseAction::BeginDrain { .. } => "begin_worker_drain",
-        ReleaseAction::TransferActivation { .. } => "transfer_activation",
-        ReleaseAction::NominateMcp { .. } => "nominate_relaunch",
     }
 }
 
@@ -2369,9 +2464,29 @@ fn spawn_maintenance(state: Arc<DaemonState>) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let now = now_unix_ms();
-            expire_activation_routes(&state, now);
-            lock(&state.activations).retain(|_, activation| activation.deadline_unix_ms > now);
+            let work = Arc::clone(&state);
+            if let Err(error) = tokio::task::spawn_blocking(move || {
+                let now = now_unix_ms();
+                expire_activation_routes(&work, now);
+                for (fingerprint, elapsed_ms) in work
+                    .registry
+                    .activation_progress(tokio::time::Instant::now())
+                {
+                    let fingerprint = fingerprint.to_string();
+                    log::info!(target: "nemo_relay.daemon", event = "worker_startup_pending",
+                    fingerprint = fingerprint.as_str(), elapsed_ms = elapsed_ms;
+                    "Worker startup is still in progress");
+                }
+                for (fingerprint, session_id) in work.registry.activation_candidates(now) {
+                    nominate_relaunch(&work, fingerprint, session_id);
+                }
+                lock(&work.activations).retain(|_, activation| activation.deadline_unix_ms > now);
+            })
+            .await
+            {
+                log::error!(target: "nemo_relay.daemon", event = "worker_maintenance_failed";
+                    "Worker maintenance task failed: {error}");
+            }
         }
     });
 }

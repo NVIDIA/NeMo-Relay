@@ -516,6 +516,22 @@ impl WorkerActivationFailureReason {
     }
 }
 
+/// Negotiated publication-aware cleanup of a launcher-owned activation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CancelActivationPayload {
+    pub(crate) activation_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ActivationCancellation {
+    Cancelled,
+    Published,
+    Superseded,
+}
+
+pub(crate) const ACTIVATION_CANCEL_CAPABILITY: &str = "activation_cancel_v1";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ActivationFailedPayload {
     pub(crate) activation_id: String,
@@ -567,7 +583,8 @@ pub(crate) fn descriptor(role: ComponentRole) -> ComponentDescriptor {
     ComponentDescriptor::nemo_relay(
         role,
         super::protocol::ProtocolRange::default(),
-        super::protocol::Capabilities::streaming_transport(),
+        super::protocol::Capabilities::streaming_transport()
+            .with_capability(ACTIVATION_CANCEL_CAPABILITY),
         env!("CARGO_PKG_VERSION"),
     )
 }

@@ -18,6 +18,7 @@ pub(super) struct Hub {
     pub(super) changed: Notify,
     // Fence callbacks and reconnects for one logical session without blocking other peers.
     gates: Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
+    route_gates: Mutex<HashMap<Fingerprint, std::sync::Weak<Mutex<()>>>>,
 }
 struct Peer {
     generation: String,
@@ -78,6 +79,23 @@ impl Hub {
         gate.lock_owned().await
     }
 
+    pub(super) fn route_gate(&self, fingerprint: Fingerprint) -> Arc<Mutex<()>> {
+        let mut gates = lock(&self.route_gates);
+        if let Some(gate) = gates.get(&fingerprint).and_then(std::sync::Weak::upgrade) {
+            return gate;
+        }
+        gates.retain(|_, gate| gate.strong_count() != 0);
+        let gate = Arc::new(Mutex::new(()));
+        gates.insert(fingerprint, Arc::downgrade(&gate));
+        gate
+    }
+
+    pub(super) fn mcp_connected(&self, id: &str) -> bool {
+        lock(&self.peers)
+            .get(&key(ComponentRole::Mcp, id))
+            .is_some_and(|peer| peer.sender.is_some() && peer.disconnected.is_none())
+    }
+
     pub(super) fn restarting(generations: HashMap<Fingerprint, String>) -> Self {
         Self {
             restarting: Mutex::new(generations),
@@ -92,7 +110,7 @@ impl Hub {
         lock(&self.restarting).remove(&fingerprint);
     }
     pub(super) fn defer_launch(&self, fingerprint: Fingerprint, launch: &mut WorkerLaunch) {
-        if self.deferred(fingerprint) {
+        if self.deferred(fingerprint) && launch.deadline_unix_ms != u64::MAX {
             let remaining = self
                 .restart_deadline
                 .unwrap()
@@ -274,6 +292,16 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
         tokio::pin!(changed);
         changed.as_mut().enable();
         if let Some(id) = &id {
+            let fingerprint = if role == ComponentRole::Mcp {
+                lock(&state.mcp_sessions)
+                    .get(id)
+                    .filter(|session| !session.released)
+                    .map(|session| session.fingerprint)
+            } else {
+                None
+            };
+            let route_gate = fingerprint.map(|fingerprint| state.sockets.route_gate(fingerprint));
+            let _route = route_gate.as_ref().map(|gate| lock(gate));
             let mut peers = lock(&state.sockets.peers);
             let Some(peer) = peers
                 .get_mut(&key(role, id))
@@ -281,30 +309,26 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
             else {
                 break "connection_replaced";
             };
-            if role == ComponentRole::Mcp {
-                let session = lock(&state.mcp_sessions)
-                    .get(id)
-                    .filter(|s| !s.released)
-                    .map(|s| s.fingerprint);
-                if let Some(fingerprint) = session {
-                    let directive = lock(&state.pending_directives).remove(id).or_else(|| {
-                        McpSessionId::new(id.clone())
-                            .ok()
-                            .and_then(|id| state.registry.current_directive(fingerprint, &id).ok())
-                    });
-                    if let Some(directive) = directive
-                        .map(|d| state.sockets.directive(fingerprint, d))
-                        .filter(|d| Some(d) != last_directive.as_ref())
-                    {
-                        Hub::emit(
-                            peer,
-                            Event::Directive {
-                                request_id: uuid::Uuid::now_v7().to_string(),
-                                directive: directive.clone(),
-                            },
-                        );
-                        last_directive = Some(directive);
-                    }
+            if role == ComponentRole::Mcp
+                && let Some(fingerprint) = fingerprint
+            {
+                let directive = lock(&state.pending_directives).remove(id).or_else(|| {
+                    McpSessionId::new(id.clone())
+                        .ok()
+                        .and_then(|id| state.registry.current_directive(fingerprint, &id).ok())
+                });
+                if let Some(directive) = directive
+                    .map(|d| state.sockets.directive(fingerprint, d))
+                    .filter(|d| Some(d) != last_directive.as_ref())
+                {
+                    Hub::emit(
+                        peer,
+                        Event::Directive {
+                            request_id: uuid::Uuid::now_v7().to_string(),
+                            directive: directive.clone(),
+                        },
+                    );
+                    last_directive = Some(directive);
                 }
             }
         }
@@ -407,9 +431,19 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                         log_control_connected(role, id, reconnected);
                     }
                     if role == ComponentRole::Mcp {
-                        if let Some(session) = lock(&state.mcp_sessions).get_mut(id) {
-                            session.lease_expires_at_unix_ms = u64::MAX;
-                            let _ = state.registry.renew_mcp(session.fingerprint, &McpSessionId::new(id.clone()).expect("validated session"), u64::MAX);
+                        let fingerprint = {
+                            let mut sessions = lock(&state.mcp_sessions);
+                            sessions.get_mut(id).map(|session| {
+                                session.lease_expires_at_unix_ms = u64::MAX;
+                                session.fingerprint
+                            })
+                        };
+                        if let Some(fingerprint) = fingerprint {
+                            let gate = state.sockets.route_gate(fingerprint);
+                            let _route = lock(&gate);
+                            let session_id = McpSessionId::new(id.clone()).expect("validated session");
+                            if connected || reconnected { state.registry.mcp_connected(fingerprint, &session_id); }
+                            let _ = state.registry.renew_mcp(fingerprint, &session_id, u64::MAX);
                         }
                     } else if let Some(session) = lock(&state.worker_sessions).get_mut(id) { session.lease_expires_at_unix_ms = u64::MAX; }
                 }
@@ -496,6 +530,8 @@ fn validate_ready_connection(
     Ok(())
 }
 
+// Keep the authenticated command table together so every role/session guard is visible.
+#[allow(clippy::cognitive_complexity)]
 async fn dispatch(
     state: &Arc<DaemonState>,
     role: ComponentRole,
@@ -554,6 +590,11 @@ async fn dispatch(
             if role == ComponentRole::Mcp && id.as_ref() == Some(&request.session_id) =>
         {
             release_mcp(State(state.clone()), Json(request)).await
+        }
+        Command::CancelActivation(request)
+            if role == ComponentRole::Mcp && id.as_ref() == Some(&request.session_id) =>
+        {
+            cancel_activation(State(state.clone()), Json(request)).await
         }
         Command::ActivationFailed(request)
             if role == ComponentRole::Mcp && id.as_ref() == Some(&request.session_id) =>
@@ -706,6 +747,42 @@ async fn disconnected(
     {
         session.pending_target.set_control_available(false);
     }
+    if role == ComponentRole::Mcp {
+        let fingerprint = lock(&state.mcp_sessions)
+            .get(&id)
+            .map(|session| session.fingerprint);
+        if let Some(fingerprint) = fingerprint
+            && let Ok(session_id) = McpSessionId::new(id.clone())
+        {
+            let work = Arc::clone(&state);
+            let disconnected_id = id.clone();
+            if let Err(error) = tokio::task::spawn_blocking(move || {
+                // A stalled publication must not retain a route gate used by async handlers.
+                let _publication = lock(&work.worker_generation_publication);
+                let gate = work.sockets.route_gate(fingerprint);
+                let _route = lock(&gate);
+                if let Some(activation_id) =
+                    work.registry.mcp_disconnected(fingerprint, &session_id)
+                {
+                    revoke_activation(&work, &activation_id);
+                    cancel_staged_activation(&work, &activation_id);
+                    lock(&work.pending_directives).remove(&disconnected_id);
+                }
+            })
+            .await
+            {
+                log::error!(
+                    target: "nemo_relay.daemon",
+                    event = "mcp_disconnect_transition_join_failed",
+                    error_kind = if error.is_panic() { "panic" } else { "cancelled" };
+                    "MCP disconnect transition task failed, continuing cleanup"
+                );
+            }
+            for (fingerprint, session_id) in state.registry.activation_candidates(now_unix_ms()) {
+                nominate_relaunch(&state, fingerprint, session_id);
+            }
+        }
+    }
     log_control_disconnected(role, &id, reason);
     state.sockets.changed.notify_waiters();
     drop(_transaction);
@@ -742,44 +819,67 @@ async fn disconnected(
         } else {
             let session = lock(&state.worker_sessions).remove(&id);
             if let Some(session) = session {
-                let work = state.clone();
-                let fingerprint = session.fingerprint;
-                let generation_id = session.generation_grant.generation_id;
-                let _ = tokio::task::spawn_blocking(move || {
-                    revoke_active_worker_generation(&work, fingerprint, &generation_id)
-                })
-                .await;
-                match state.registry.worker_failed(
-                    fingerprint,
-                    &id,
-                    now_unix_ms().saturating_add(RECOVERY_LIFETIME_MS),
-                ) {
-                    Ok(action) => {
-                        let fingerprint_text = fingerprint.to_string();
-                        log::error!(
-                            target: "nemo_relay.daemon",
-                            event = "worker_failed",
-                            fingerprint = fingerprint_text.as_str(),
-                            worker_id = id.as_str(),
-                            route_action = worker_failure_action_name(&action);
-                            "Worker failed after its control disconnect grace period elapsed"
-                        );
-                        if let WorkerFailureAction::NominateMcp { session_id } = action {
-                            nominate_relaunch(&state, fingerprint, session_id);
-                        }
-                    }
-                    Err(error) => log::error!(
-                        target: "nemo_relay.daemon",
-                        event = "worker_failure_transition_failed",
-                        worker_id = id.as_str();
-                        "Failed to remove disconnected worker from its route: {error}"
-                    ),
-                }
+                cleanup_worker_session(Arc::clone(&state), id.clone(), session).await;
             }
         }
         lock(&state.sockets.peers).remove(&key(role, &id));
         state.sockets.changed.notify_waiters();
     });
+}
+
+/// Complete worker cleanup after its session has been removed from admission state.
+pub(super) async fn cleanup_worker_session(
+    state: Arc<DaemonState>,
+    id: String,
+    session: WorkerControlSession,
+) {
+    let work = state.clone();
+    let fingerprint = session.fingerprint;
+    let generation_id = session.generation_grant.generation_id;
+    if let Err(error) = tokio::task::spawn_blocking(move || {
+        revoke_active_worker_generation(&work, fingerprint, &generation_id)
+    })
+    .await
+    {
+        log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_generation_revocation_join_failed",
+            error_kind = if error.is_panic() { "panic" } else { "cancelled" };
+            "Worker generation revocation task failed during cleanup, continuing cleanup"
+        );
+    }
+    match state.registry.worker_failed(
+        fingerprint,
+        &id,
+        now_unix_ms().saturating_add(RECOVERY_LIFETIME_MS),
+    ) {
+        Ok(
+            WorkerFailureAction::AlreadyRemoved
+            | WorkerFailureAction::Superseded
+            | WorkerFailureAction::Draining,
+        ) => {}
+        Ok(action) => {
+            let fingerprint_text = fingerprint.to_string();
+            log::error!(
+                target: "nemo_relay.daemon",
+                event = "worker_failed",
+                fingerprint = fingerprint_text.as_str(),
+                worker_id = id.as_str(),
+                route_action = worker_failure_action_name(&action);
+                "Worker failed after its control disconnect grace period elapsed"
+            );
+            if let WorkerFailureAction::NominateMcp { session_id } = action {
+                nominate_relaunch(&state, fingerprint, session_id);
+            }
+        }
+        Err(error) => log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_failure_transition_failed",
+            worker_id = id.as_str();
+            "Failed to remove disconnected worker from its route: {error}"
+        ),
+    }
+    state.sockets.changed.notify_waiters();
 }
 
 fn log_control_connected(role: ComponentRole, id: &str, reconnected: bool) {
@@ -838,6 +938,9 @@ fn worker_failure_action_name(action: &WorkerFailureAction) -> &'static str {
     match action {
         WorkerFailureAction::NominateMcp { .. } => "nominate_relaunch",
         WorkerFailureAction::RouteEmpty => "route_empty",
+        WorkerFailureAction::AlreadyRemoved => "already_removed",
+        WorkerFailureAction::Superseded => "superseded",
+        WorkerFailureAction::Draining => "draining",
     }
 }
 

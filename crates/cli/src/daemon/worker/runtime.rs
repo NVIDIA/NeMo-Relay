@@ -44,7 +44,6 @@ use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use super::managed::ManagedRuntime;
 
 const RESPONSE_HEAD_TIMEOUT: Duration = Duration::from_secs(60);
-const INITIAL_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(10);
@@ -303,6 +302,24 @@ impl Drop for InFlight {
     }
 }
 
+// Keep control loss/cancellation observable while plugin initialization is still pending.
+async fn initialize_managed_runtime(
+    config: GatewayConfig,
+    dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+    fingerprint: String,
+    registration: &mut Registration,
+) -> Result<Arc<ManagedRuntime>, CliError> {
+    tokio::select! {
+        result = ManagedRuntime::initialize(config, dynamic_plugins, fingerprint) => result.map(Arc::new),
+        event = registration.next() => {
+            if let Ok(super::super::common::socket::Event::Drain { request_id, .. }) = event {
+                let _ = registration.acknowledge(request_id).await;
+            }
+            Err(CliError::Launch("worker activation was interrupted during initialization".into()))
+        }
+    }
+}
+
 pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Result<(), CliError> {
     let RuntimeOptions {
         daemon_origin,
@@ -315,14 +332,13 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         dynamic_plugins,
         mut registration,
     } = options;
-    let managed = Arc::new(
-        ManagedRuntime::initialize(
-            config.clone(),
-            dynamic_plugins,
-            identity.fingerprint().to_string(),
-        )
-        .await?,
-    );
+    let managed = initialize_managed_runtime(
+        config.clone(),
+        dynamic_plugins,
+        identity.fingerprint().to_string(),
+        &mut registration,
+    )
+    .await?;
     let state = Arc::new(WorkerState::new(
         worker_id.clone(),
         config,
@@ -344,10 +360,7 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         }
     };
     tokio::pin!(server);
-    let readiness = tokio::time::timeout(
-        INITIAL_READY_TIMEOUT,
-        registration.ready(&daemon_origin, &worker_id),
-    );
+    let readiness = registration.ready(&daemon_origin, &worker_id);
     let readiness = tokio::select! {
         result = &mut server => {
             return result.and_then(|()| Err(CliError::Launch("worker listener stopped before readiness".into())));
@@ -355,13 +368,8 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         result = readiness => result,
     };
     match readiness {
-        Ok(Ok(())) => state.control_restored(&registration),
-        Ok(Err(error)) => return Err(error),
-        Err(_) => {
-            return Err(CliError::Launch(
-                "daemon worker readiness acknowledgement timed out".into(),
-            ));
-        }
+        Ok(()) => state.control_restored(&registration),
+        Err(error) => return Err(error),
     }
     log::info!(
         target: "nemo_relay.daemon.worker",
