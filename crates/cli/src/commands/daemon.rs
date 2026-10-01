@@ -36,6 +36,9 @@ pub(crate) struct DaemonCommand {
     /// Route directly to configured providers and never activate a worker.
     #[arg(long)]
     pub(crate) pass_through: bool,
+    /// Reject requests until an authenticated worker is ready.
+    #[arg(long, conflicts_with = "pass_through")]
+    pub(crate) require_worker: bool,
     #[command(subcommand)]
     pub(crate) command: Option<DaemonSubcommand>,
 }
@@ -152,6 +155,7 @@ pub(crate) async fn execute(
                 port: command.port,
                 advertise_address: command.advertise_address,
                 pass_through: command.pass_through,
+                require_worker: command.require_worker,
                 gateway: server.to_runtime(),
                 tls_cert: command.tls_cert,
                 tls_key: command.tls_key,

@@ -30,6 +30,7 @@ pub(crate) struct McpRegistration {
 /// A lock-bounded broker registry keyed by stable user-machine fingerprint.
 pub(crate) struct Registry {
     global_pass_through: bool,
+    require_worker: bool,
     retry_after_ms: u64,
     route_capacity: usize,
     inner: RwLock<RegistryInner>,
@@ -128,10 +129,16 @@ impl Registry {
     pub(crate) fn new(global_pass_through: bool) -> Self {
         Self {
             global_pass_through,
+            require_worker: false,
             retry_after_ms: DEFAULT_RETRY_AFTER_MS,
             route_capacity: MAX_ROUTE_BINDINGS,
             inner: RwLock::new(RegistryInner::default()),
         }
+    }
+
+    pub(crate) fn with_require_worker(mut self, require_worker: bool) -> Self {
+        self.require_worker = require_worker;
+        self
     }
 
     pub(crate) fn activation_progress(&self, now: tokio::time::Instant) -> Vec<(Fingerprint, u64)> {
@@ -951,9 +958,7 @@ impl Registry {
             RouteState::Ready { target } if target.control_available() => {
                 Ok(ResolvedTarget::Worker(target.acquire(*fingerprint)))
             }
-            RouteState::PassThrough { .. } if !route.refs.is_empty() => {
-                Ok(ResolvedTarget::PassThrough)
-            }
+            _ if !route.refs.is_empty() && !self.require_worker => Ok(ResolvedTarget::PassThrough),
             RouteState::PassThrough { .. } => {
                 Err(ResolveError::Unavailable(RouteStateKind::PassThrough))
             }

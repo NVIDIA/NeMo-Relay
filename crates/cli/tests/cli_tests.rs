@@ -5760,8 +5760,8 @@ fn daemon_mcp_test_command() -> Command {
 }
 
 /// Exercises the deployed daemon topology through the real CLI processes. The MCP must complete
-/// authenticated registration, launch its same-machine worker, wait for broker publication, and
-/// expose the no-tools protocol only after the route is usable. A Pi hook then traverses the
+/// authenticated registration and expose the no-tools protocol while its worker starts. Once
+/// strict routing confirms worker publication, a Pi hook traverses the
 /// daemon and worker using the same immutable managed command contract.
 #[test]
 fn cli_daemon_mcp_launches_worker_and_forwards_pi_hook() {
@@ -5779,7 +5779,12 @@ fn cli_daemon_mcp_launches_worker_and_forwards_pi_hook() {
             .env("XDG_CONFIG_HOME", &config_home)
             .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
             .env_remove("NEMO_RELAY_CLIENT_TOKEN")
-            .args(["daemon", "--port", &address.port().to_string()])
+            .args([
+                "daemon",
+                "--require-worker",
+                "--port",
+                &address.port().to_string(),
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -5827,7 +5832,7 @@ fn cli_daemon_mcp_launches_worker_and_forwards_pi_hook() {
         Err(_) => {
             let output = mcp.finish();
             panic!(
-                "daemon MCP did not initialize after worker activation:\n{}",
+                "daemon MCP did not initialize after authenticated registration:\n{}",
                 std::fs::read_to_string(&mcp_stderr_path)
                     .unwrap_or_else(|_| { String::from_utf8_lossy(&output.stderr).into_owned() })
             );
@@ -5840,6 +5845,28 @@ fn cli_daemon_mcp_launches_worker_and_forwards_pi_hook() {
         )
     });
     assert_eq!(response["result"]["serverInfo"]["name"], "nemo-relay");
+
+    let startup_deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let mut probe = TcpStream::connect_timeout(&address, Duration::from_secs(1)).unwrap();
+        probe
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        probe.write_all(format!(
+            "POST /hooks/pi HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nx-nemo-relay-client-token: {token}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        ).as_bytes()).unwrap();
+        let mut response = String::new();
+        probe.read_to_string(&mut response).unwrap();
+        if response.starts_with("HTTP/1.1 200") {
+            break;
+        }
+        assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+        assert!(
+            Instant::now() < startup_deadline,
+            "worker was not published"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
 
     let (provider_origin, provider_request) = spawn_single_request_server(
         200,
@@ -5916,7 +5943,12 @@ fn cli_daemon_mcp_launches_worker_and_forwards_pi_hook() {
             .env("XDG_CONFIG_HOME", &config_home)
             .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
             .env_remove("NEMO_RELAY_CLIENT_TOKEN")
-            .args(["daemon", "--port", &address.port().to_string()])
+            .args([
+                "daemon",
+                "--require-worker",
+                "--port",
+                &address.port().to_string(),
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -6108,4 +6140,92 @@ fn cli_pass_through_daemon_serves_managed_hooks_and_pi_provider_routing() {
             .contains("x-nemo-relay-client-token")
     );
     drop(daemon);
+}
+
+#[test]
+fn cli_daemon_mcp_initializes_while_activation_fails_and_honors_strict_routing() {
+    for strict in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let port_probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = port_probe.local_addr().unwrap();
+        drop(port_probe);
+        // Occupying the worker's port prevents publication without blocking authenticated MCP.
+        let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
+        let config_home = temp.path().join("xdg");
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x71_u8; 32]);
+        let mut command = Command::new(gateway_bin());
+        command
+            .current_dir(temp.path())
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+            .args(["daemon", "--port", &address.port().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if strict {
+            command.arg("--require-worker");
+        }
+        let _daemon = ChildGuard::new(command.spawn().unwrap());
+        wait_for_port_open(address);
+        let mut mcp = ChildGuard::new(
+            daemon_mcp_test_command()
+                .current_dir(temp.path())
+                .env("XDG_CONFIG_HOME", &config_home)
+                .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+                .env("NEMO_RELAY_CLIENT_TOKEN", &token)
+                .env(
+                    "NEMO_RELAY_WORKER_PORT",
+                    occupied.local_addr().unwrap().port().to_string(),
+                )
+                .args([
+                    "daemon",
+                    "mcp",
+                    "--daemon-address",
+                    &format!("http://{address}"),
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        mcp.child_mut().stdin.as_mut().unwrap().write_all(
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n").unwrap();
+        let stdout = mcp.child_mut().stdout.take().unwrap();
+        let (sent, received) = mpsc::channel();
+        thread::spawn(move || {
+            let mut response = String::new();
+            let result = BufReader::new(stdout)
+                .read_line(&mut response)
+                .map(|_| response);
+            let _ = sent.send(result);
+        });
+        let response = received
+            .recv_timeout(Duration::from_secs(5))
+            .expect("MCP initialization waited for worker readiness")
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["result"]["serverInfo"]["name"], "nemo-relay");
+        assert!(mcp.child_mut().try_wait().unwrap().is_none());
+        let mut request = TcpStream::connect(address).unwrap();
+        request
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write!(request, "POST /hooks/pi HTTP/1.1\r\nHost: {address}\r\nx-nemo-relay-client-token: {token}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").unwrap();
+        let mut response = String::new();
+        request.read_to_string(&mut response).unwrap();
+        assert!(
+            response.starts_with(if strict {
+                "HTTP/1.1 503"
+            } else {
+                "HTTP/1.1 200"
+            }),
+            "{response}"
+        );
+        drop(mcp.child_mut().stdin.take());
+        assert!(
+            wait_child_with_output_timeout(mcp.release(), Duration::from_secs(10))
+                .status
+                .success()
+        );
+    }
 }

@@ -337,6 +337,51 @@ fn test_lease(daemon_origin: String) -> McpSession {
 }
 
 #[tokio::test]
+async fn legacy_startup_is_not_replayed_after_mcp_initialization() {
+    use futures_util::StreamExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown, stop) = tokio::sync::watch::channel(false);
+    let (finished, finish) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let unsolicited = tokio::time::timeout(Duration::from_millis(300), socket.next()).await;
+        shutdown.send(true).unwrap();
+        assert!(
+            unsolicited.is_err(),
+            "legacy MCP replayed its completed startup instead of waiting for a new directive"
+        );
+        let _ = finish.await;
+    });
+    let mut lease = test_lease(origin);
+    assert!(!lease.publication_cleanup);
+    lease
+        .client
+        .connect(&lease.daemon_origin, ComponentRole::Mcp)
+        .await
+        .unwrap();
+    // An older daemon's startup grant has already completed before MCP begins serving stdio.
+    let initial = BrokerDirective::LaunchWorker {
+        activation_id: crate::daemon::common::control::random_secret(16).unwrap(),
+        activation_token: SensitiveString::new("completed-startup-grant").unwrap(),
+        deadline_unix_ms: u64::MAX,
+        bind_ip: Ipv4Addr::LOCALHOST,
+        port: 0,
+        advertise_address: None,
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        maintain_session(&mut lease, initial, stop),
+    )
+    .await;
+    let _ = finished.send(());
+    server.await.unwrap();
+    result.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn worker_activation_failure_sends_sequence_one_and_propagates_socket_rejection() {
     use crate::daemon::common::socket::Request;
     use futures_util::{SinkExt, StreamExt};

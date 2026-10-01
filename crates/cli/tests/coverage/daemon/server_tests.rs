@@ -463,14 +463,7 @@ async fn open_enrollment_binds_new_tokens_without_allowlist_and_prevents_route_t
                 )
                 .await
                 .unwrap();
-            assert_eq!(
-                response.status(),
-                if pass_through {
-                    StatusCode::OK
-                } else {
-                    StatusCode::SERVICE_UNAVAILABLE
-                }
-            );
+            assert_eq!(response.status(), StatusCode::OK);
         }
         assert_eq!(
             enroll_test_mcp(&state, &origin, &other_identity, &first, "takeover")
@@ -904,7 +897,7 @@ async fn unreachable_worker_marks_its_authenticated_route_pass_through() {
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert!(matches!(
         state.registry.resolve_target(&credential.digest()),
-        Err(ResolveError::Unavailable(_))
+        Ok(ResolvedTarget::PassThrough)
     ));
 }
 
@@ -1076,7 +1069,8 @@ async fn aborted_public_upload_does_not_demote_a_healthy_worker() {
 #[tokio::test]
 async fn public_ingress_rejects_credentials_methods_websockets_and_unready_routes_early() {
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x23_u8; 32]);
-    let state = test_daemon_state(false, &token, GatewayConfig::default());
+    let mut state = test_daemon_state(false, &token, GatewayConfig::default());
+    Arc::get_mut(&mut state).unwrap().registry = Registry::new(false).with_require_worker(true);
     let app = router(Arc::clone(&state));
 
     let unknown = app
@@ -1478,6 +1472,7 @@ fn advertised_https_is_valid_behind_a_reverse_proxy_without_native_tls() {
         port: 8080,
         advertise_address: Some("https://relay.example.com:443".into()),
         pass_through: false,
+        require_worker: false,
         gateway: crate::server::GatewayOverrides::default(),
         tls_cert: None,
         tls_key: None,
@@ -1504,6 +1499,7 @@ fn daemon_origin_enforces_bind_and_tls_advertisement_contracts() {
         port: 47632,
         advertise_address: None,
         pass_through: false,
+        require_worker: false,
         gateway: crate::server::GatewayOverrides::default(),
         tls_cert: None,
         tls_key: None,
@@ -1592,6 +1588,7 @@ async fn daemon_startup_rejects_an_unpaired_tls_identity_after_initializing_stat
         port: 0,
         advertise_address: None,
         pass_through: false,
+        require_worker: false,
         gateway: crate::server::GatewayOverrides::default(),
         tls_cert: Some(state_directory.path().join("certificate.pem")),
         tls_key: None,
@@ -1617,6 +1614,7 @@ async fn daemon_plain_listener_starts_and_reports_address_conflicts() {
         port: running_port,
         advertise_address: None,
         pass_through: true,
+        require_worker: false,
         gateway: crate::server::GatewayOverrides::default(),
         tls_cert: None,
         tls_key: None,
@@ -1647,6 +1645,7 @@ async fn daemon_plain_listener_starts_and_reports_address_conflicts() {
             port: 0,
             advertise_address: None,
             pass_through: true,
+            require_worker: false,
             gateway: crate::server::GatewayOverrides::default(),
             tls_cert: None,
             tls_key: None,
@@ -2607,7 +2606,7 @@ fn communication_failure_invalidates_route_without_waiting_for_durable_revocatio
     drop(publication);
     runtime.block_on(task).unwrap();
     completed.expect("failure handling waited for the publication lock");
-    assert!(matches!(route, Err(ResolveError::Unavailable(_))));
+    assert!(matches!(route, Ok(ResolvedTarget::PassThrough)));
     assert!(session_retained);
     assert!(
         state

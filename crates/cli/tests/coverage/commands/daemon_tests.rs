@@ -26,6 +26,7 @@ fn command(subcommand: Option<DaemonSubcommand>) -> DaemonCommand {
         tls_cert: None,
         tls_key: None,
         pass_through: false,
+        require_worker: false,
         command: subcommand,
     }
 }

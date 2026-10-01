@@ -708,7 +708,7 @@ fn authenticated_worker_communication_failure_is_route_wide_pass_through() {
     );
     assert!(matches!(
         registry.resolve_target(&token),
-        Err(ResolveError::Unavailable(_))
+        Ok(ResolvedTarget::PassThrough)
     ));
     assert_eq!(
         registry.mark_worker_communication_failed(fingerprint, "worker-failed"),
@@ -1041,7 +1041,7 @@ fn registry_rejects_stale_worker_generations_and_invalid_state_transitions() {
     );
     assert!(matches!(
         registry.resolve_target(&token),
-        Err(ResolveError::Unavailable(_))
+        Ok(ResolvedTarget::PassThrough)
     ));
 }
 
@@ -1202,8 +1202,73 @@ fn communication_failures_preserve_draining_and_mismatched_recovery_generations(
     );
     assert!(matches!(
         recovering.resolve_target(&token),
-        Err(ResolveError::Unavailable(_))
+        Ok(ResolvedTarget::PassThrough)
     ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn startup_has_no_deadline_reports_progress_and_cuts_over_after_readiness() {
+    for strict in [false, true] {
+        let registry = Registry::new(false).with_require_worker(strict);
+        let fingerprint = fingerprint(80);
+        let token = TokenDigest::from_token(b"slow-startup");
+        let mut grant = launch("slow");
+        grant.deadline_unix_ms = u64::MAX;
+        registry
+            .register_connected_mcp(registration(fingerprint, token, "owner"), grant)
+            .unwrap();
+        let started = tokio::time::Instant::now();
+        tokio::time::advance(std::time::Duration::from_secs(59)).await;
+        assert!(registry.expire_activations(u64::MAX - 1).is_empty());
+        assert!(registry.activation_candidates(u64::MAX).is_empty());
+        assert!(
+            registry
+                .activation_progress(tokio::time::Instant::now())
+                .is_empty()
+        );
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        assert_eq!(
+            registry.activation_progress(tokio::time::Instant::now()),
+            vec![(fingerprint, 60_000)]
+        );
+        assert!(
+            registry
+                .activation_progress(tokio::time::Instant::now())
+                .is_empty()
+        );
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        assert_eq!(
+            registry.activation_progress(tokio::time::Instant::now()),
+            vec![(fingerprint, 120_000)]
+        );
+        assert_eq!(
+            registry.startup_elapsed_ms(fingerprint),
+            started.elapsed().as_millis() as u64
+        );
+        if strict {
+            assert!(matches!(
+                registry.resolve_target(&token),
+                Err(ResolveError::Unavailable(RouteStateKind::Activating))
+            ));
+        } else {
+            assert!(matches!(
+                registry.resolve_target(&token),
+                Ok(ResolvedTarget::PassThrough)
+            ));
+        }
+        registry
+            .mark_worker_ready(fingerprint, "slow", worker("published"))
+            .unwrap();
+        assert!(matches!(
+            registry.resolve_target(&token),
+            Ok(ResolvedTarget::Worker(_))
+        ));
+        assert!(
+            registry
+                .activation_progress(tokio::time::Instant::now())
+                .is_empty()
+        );
+    }
 }
 
 #[test]

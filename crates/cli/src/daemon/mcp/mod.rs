@@ -75,25 +75,34 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
         sequence: 0,
         publication_cleanup: registration.publication_cleanup,
     };
-    make_route_ready(&mut lease, registration.directive).await?;
+    let initial = registration.directive;
+    if !lease.publication_cleanup {
+        // Older daemons cannot arbitrate shutdown racing readiness publication.
+        make_route_ready(&mut lease, initial.clone()).await?;
+    }
 
     log::info!(
         target: "nemo_relay.daemon.mcp",
         event = "daemon_mcp_ready";
         "Broker reference acquired; MCP protocol is ready"
     );
-    let result = {
-        let protocol = crate::mcp::serve_daemon_stdio();
-        let control = maintain_session(&mut lease);
-        tokio::pin!(protocol);
-        tokio::pin!(control);
-        tokio::select! {
-            result = &mut protocol => result,
-            result = &mut control => result,
+    let (shutdown, stop) = tokio::sync::watch::channel(false);
+    let mut control = tokio::spawn(async move {
+        let result = maintain_session(&mut lease, initial, stop).await;
+        release(&mut lease).await;
+        result
+    });
+    let protocol = crate::mcp::serve_daemon_stdio();
+    tokio::pin!(protocol);
+    tokio::select! {
+        result = &mut protocol => {
+            let _ = shutdown.send(true);
+            // Cooperative shutdown lets the broker arbitrate publication before child cleanup.
+            control.await.map_err(|error| CliError::Launch(format!("MCP control task failed: {error}")))??;
+            result
         }
-    };
-    release(&mut lease).await;
-    result
+        result = &mut control => result.map_err(|error| CliError::Launch(format!("MCP control task failed: {error}")))?,
+    }
 }
 
 async fn register(
@@ -734,10 +743,27 @@ async fn report_activation_failed(
         .await
 }
 
-async fn maintain_session(lease: &mut McpSession) -> Result<(), CliError> {
+async fn maintain_session(
+    lease: &mut McpSession,
+    mut directive: BrokerDirective,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<(), CliError> {
+    if !lease.publication_cleanup {
+        // Legacy startup completed before stdio began. Only a new directive can launch again.
+        directive = tokio::select! {
+            _ = shutdown.changed() => return Ok(()),
+            directive = next_directive(lease) => directive?,
+        };
+    }
     loop {
-        let directive = next_directive(lease).await?;
-        make_route_ready(lease, directive).await?;
+        supervise_route(lease, directive, Some(&mut shutdown)).await?;
+        if *shutdown.borrow() {
+            return Ok(());
+        }
+        directive = tokio::select! {
+            _ = shutdown.changed() => return Ok(()),
+            directive = next_directive(lease) => directive?,
+        };
     }
 }
 
