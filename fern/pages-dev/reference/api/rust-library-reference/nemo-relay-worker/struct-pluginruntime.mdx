@@ -139,11 +139,23 @@ This is useful for isolated stacks created with [`Self::create_scope_stack`](/re
 
 Pushes a scope through the host runtime.
 
+#### `push_scope_at`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn push_scope_at(\n    &amp;self,\n    scope_stack_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    started_at: <a href=\"https://doc.rust-lang.org/1.96.1/std/time/struct.SystemTime.html\">SystemTime</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Pushes a scope through the host runtime using an explicit start time.
+
 #### `pop_scope`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn pop_scope(\n    &amp;self,\n    scope_handle_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    output: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Pops a scope through the host runtime.
+
+#### `pop_scope_at`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn pop_scope_at(\n    &amp;self,\n    scope_handle_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    output: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    ended_at: <a href=\"https://doc.rust-lang.org/1.96.1/std/time/struct.SystemTime.html\">SystemTime</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Pops a scope through the host runtime using an explicit end time.
 
 ## Trait Implementations
 

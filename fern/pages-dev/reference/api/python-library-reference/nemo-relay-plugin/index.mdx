@@ -702,7 +702,7 @@ Drop an isolated, host-owned scope stack.
 ##### `push_scope`
 
 ```python
-async def push_scope(name: str, *, scope_type: ScopeType = ScopeType.CUSTOM, data: Json | None = None, metadata: Json | None = None, input: Json | None = None, scope_stack_id: str | None = None, parent_scope_id: str | None = None) -> str
+async def push_scope(name: str, *, scope_type: ScopeType = ScopeType.CUSTOM, data: Json | None = None, metadata: Json | None = None, input: Json | None = None, scope_stack_id: str | None = None, parent_scope_id: str | None = None, timestamp: datetime | None = None) -> str
 ```
 
 Start a scope on a Relay host-owned stack.
@@ -710,7 +710,7 @@ Start a scope on a Relay host-owned stack.
 ##### `pop_scope`
 
 ```python
-async def pop_scope(scope_handle_id: str, *, output: Json | None = None, metadata: Json | None = None) -> None
+async def pop_scope(scope_handle_id: str, *, output: Json | None = None, metadata: Json | None = None, timestamp: datetime | None = None) -> None
 ```
 
 End a host scope by its handle identifier.

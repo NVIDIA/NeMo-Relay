@@ -79,6 +79,9 @@ pub(crate) fn emit_configured_runtime_events(
 `runtime.scope` returns an owning guard. Calling `close` supplies the end-event output;
 dropping an unclosed guard still follows the SDK cleanup path. `with_current` restores
 the prior stack after either `Ok` or `Err`, and dropping `isolated` releases the stack.
+When a plugin replays work captured earlier, `runtime.scope_at` and
+`ScopeGuard::close_at` accept the original `SystemTime` values while preserving the same
+guard ownership and cleanup behavior.
 
 ## Emit Typed Telemetry and Read Diagnostics
 

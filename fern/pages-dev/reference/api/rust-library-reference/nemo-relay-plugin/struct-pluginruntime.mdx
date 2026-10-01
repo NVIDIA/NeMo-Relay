@@ -113,6 +113,14 @@ Pops a scope and emits its end event.
 
 Opens a scope that is popped automatically when the guard is closed or dropped.
 
+#### `scope_at`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_at(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    started_at: <a href=\"https://doc.rust-lang.org/1.96.1/std/time/struct.SystemTime.html\">SystemTime</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-scopeguard\">ScopeGuard</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Opens a scope and records `started_at` on its start event.
+
+This is typed SDK access to the timestamp slot already carried by the native host's `scope_push` function. It does not introduce a distinct scope event or change the native ABI.
+
 #### `emit_mark`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn emit_mark(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
