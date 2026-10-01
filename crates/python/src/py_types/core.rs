@@ -19,7 +19,7 @@ use nemo_relay::api::event::{
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::api::runtime::{
-    LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
+    LlmExecutionContext, LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
     ThreadScopeStackBinding, ToolExecutionContext,
 };
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
@@ -57,11 +57,13 @@ impl PyLlmCodecIdentity {
     }
 }
 
-/// Structured per-call context delivered to LLM request sanitizer callbacks.
+/// Per-call request codec context shared by sanitizer and execution callbacks.
 #[pyclass(name = "LlmSanitizeRequestContext", frozen)]
 pub struct PyLlmSanitizeRequestContext {
     pub(crate) inner: LlmSanitizeRequestContext,
 }
+
+pub(crate) type PyLlmRequestContext = PyLlmSanitizeRequestContext;
 
 #[pymethods]
 impl PyLlmSanitizeRequestContext {
@@ -81,11 +83,13 @@ impl PyLlmSanitizeRequestContext {
     }
 }
 
-/// Structured per-call context delivered to LLM response sanitizer callbacks.
+/// Per-call response codec context shared by sanitizer and execution callbacks.
 #[pyclass(name = "LlmSanitizeResponseContext", frozen)]
 pub struct PyLlmSanitizeResponseContext {
     pub(crate) inner: LlmSanitizeResponseContext,
 }
+
+pub(crate) type PyLlmResponseContext = PyLlmSanitizeResponseContext;
 
 #[pymethods]
 impl PyLlmSanitizeResponseContext {
@@ -102,6 +106,35 @@ impl PyLlmSanitizeResponseContext {
         self.inner
             .resolve_codec()
             .map(|inner| PyLlmSanitizeResponseCodec { inner })
+    }
+}
+
+/// Codec capabilities for one managed LLM execution intercept invocation.
+#[pyclass(name = "LlmExecutionContext", frozen)]
+pub struct PyLlmExecutionContext {
+    pub(crate) inner: LlmExecutionContext,
+}
+
+#[pymethods]
+impl PyLlmExecutionContext {
+    /// Request codec identity and optional decode/encode capability.
+    #[getter]
+    fn request_codec(&self) -> PyLlmRequestContext {
+        PyLlmRequestContext {
+            inner: self.inner.request_codec().clone(),
+        }
+    }
+
+    /// Unary response codec identity and optional decode capability.
+    ///
+    /// Streaming execution returns ``None`` because Relay does not have a
+    /// complete-response codec contract for response chunks.
+    #[getter]
+    fn response_codec(&self) -> Option<PyLlmResponseContext> {
+        self.inner
+            .response_codec()
+            .cloned()
+            .map(|inner| PyLlmResponseContext { inner })
     }
 }
 

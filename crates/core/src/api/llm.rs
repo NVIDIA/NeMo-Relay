@@ -29,8 +29,8 @@ use crate::api::runtime::subscriber_dispatcher::{
     dispatch_sanitized_event, dispatch_transformed_event, register_pending_publication,
 };
 use crate::api::runtime::{
-    EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
-    LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
+    EventSubscriberFn, LlmCollectorFn, LlmExecutionContext, LlmExecutionNextFn, LlmFinalizerFn,
+    LlmJsonStream, LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
     MiddlewareContinuationContext,
 };
 use crate::api::runtime::{ScopeStackHandle, capture_trace_context, current_scope_stack};
@@ -1739,6 +1739,8 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     );
     let execution_name = name.clone();
     let event_uuid = handle.uuid;
+    let execution_context =
+        LlmExecutionContext::for_non_streaming(request_codec, response_codec.clone());
     let execution = with_active_event_trace_context(
         event_uuid,
         Some(active_trace_context),
@@ -1757,7 +1759,12 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                     .read()
                     .map_err(|error| FlowError::Internal(error.to_string()))?
                     .registry_snapshot(&[RuntimeRegistrationKind::LlmExecutionIntercept]);
-                state.llm_build_execution_chain(&execution_name, func, &scope_local_refs)
+                state.llm_build_execution_chain(
+                    &execution_name,
+                    func,
+                    &scope_local_refs,
+                    execution_context,
+                )
             };
             execution(intercepted_request).await
         }),
@@ -1966,6 +1973,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     let execution_name = name.clone();
     let event_uuid = handle.uuid;
     let stream_started_at = Instant::now();
+    let execution_context = LlmExecutionContext::for_streaming(request_codec);
     let execution = with_active_event_trace_context(
         event_uuid,
         Some(active_trace_context),
@@ -1984,12 +1992,17 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                     .read()
                     .map_err(|error| FlowError::Internal(error.to_string()))?
                     .registry_snapshot(&[RuntimeRegistrationKind::LlmStreamExecutionIntercept]);
-                state.llm_stream_build_execution_chain(&execution_name, func, &scope_local_refs)
+                state.llm_stream_build_execution_chain(
+                    &execution_name,
+                    func,
+                    &scope_local_refs,
+                    execution_context,
+                )
             };
-            let execution_context = MiddlewareContinuationContext::capture();
+            let continuation_context = MiddlewareContinuationContext::capture();
             execution(intercepted_request)
                 .await
-                .map(|stream| contextualize_stream(stream, execution_context))
+                .map(|stream| contextualize_stream(stream, continuation_context))
         }),
     )
     .await;

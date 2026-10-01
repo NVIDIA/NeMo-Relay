@@ -1729,8 +1729,8 @@ fn deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM execution intercept that can replace the LLM call.
 ///
-/// ``callable``: ``async (native: Any, next) -> Any`` — middleware intercept function.
-/// Call ``await next(native)`` to invoke the next intercept or original
+/// ``callable``: ``async (name, request, context, next) -> Any`` — middleware intercept function.
+/// Call ``await next(request)`` to invoke the next intercept or original
 /// implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
 fn register_llm_execution_intercept(
@@ -1754,9 +1754,9 @@ fn deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM stream-execution intercept that can replace the streaming LLM call.
 ///
-/// ``callable``: ``async (native: Any, next) -> AsyncIterator[Any]`` —
+/// ``callable``: ``async (name, request, context, next) -> AsyncIterator[Any]`` —
 /// middleware streaming intercept function.
-/// Call ``await next(native)`` to invoke the next intercept or original
+/// Call ``await next(request)`` to invoke the next intercept or original
 /// streaming implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
 fn register_llm_stream_execution_intercept(

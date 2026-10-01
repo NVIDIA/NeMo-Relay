@@ -118,9 +118,7 @@ pub(super) fn validate_annotated_request_consumer_compatibility(
     relay: &str,
     plugin_kind: &str,
 ) -> crate::plugin::Result<()> {
-    let requirement = VersionReq::parse(relay).map_err(|error| {
-        PluginError::InvalidConfig(format!("invalid compat.relay version requirement: {error}"))
-    })?;
+    let requirement = parse_relay_requirement(relay)?;
     if requirement.matches(&Version::new(0, 5, u64::MAX)) {
         return Err(PluginError::InvalidConfig(format!(
             "dynamic plugin '{plugin_kind}' registers an LLM request intercept and must declare compat.relay = \">=0.6,<1.0\" or another range that excludes Relay 0.5"
@@ -133,12 +131,37 @@ pub(super) fn validate_tool_execution_context_compatibility(
     relay: &str,
     plugin_kind: &str,
 ) -> crate::plugin::Result<()> {
-    let requirement = VersionReq::parse(relay).map_err(|error| {
-        PluginError::InvalidConfig(format!("invalid compat.relay version requirement: {error}"))
-    })?;
+    let requirement = parse_relay_requirement(relay)?;
     if version_requirement_matches_minor(&requirement, 0, 8) {
         return Err(PluginError::InvalidConfig(format!(
             "dynamic plugin '{plugin_kind}' registers a context-aware tool execution intercept and must declare compat.relay = \">=0.9,<1.0\" or another range that excludes Relay 0.8"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "worker-grpc")]
+pub(super) fn validate_llm_execution_context_compatibility(
+    relay: &str,
+    plugin_kind: &str,
+) -> crate::plugin::Result<()> {
+    let requirement = parse_relay_requirement(relay)?;
+    if version_requirement_matches_minor(&requirement, 0, 9) {
+        return Err(PluginError::InvalidConfig(format!(
+            "dynamic plugin '{plugin_kind}' registers an LLM execution intercept and must declare compat.relay = \">=0.10,<1.0\" or another range that excludes Relay 0.9"
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_native_abi_compatibility(
+    relay: &str,
+    plugin_kind: &str,
+) -> crate::plugin::Result<()> {
+    let requirement = parse_relay_requirement(relay)?;
+    if version_requirement_matches_minor(&requirement, 0, 9) {
+        return Err(PluginError::InvalidConfig(format!(
+            "dynamic native plugin '{plugin_kind}' uses native ABI v7 and must declare compat.relay = \">=0.10,<1.0\" or another range that excludes Relay 0.9"
         )));
     }
     Ok(())
@@ -159,6 +182,12 @@ fn version_requirement_matches_minor(requirement: &VersionReq, major: u64, minor
     candidate < next_minor && requirement.matches(&candidate)
 }
 
+fn parse_relay_requirement(relay: &str) -> crate::plugin::Result<VersionReq> {
+    VersionReq::parse(relay).map_err(|error| {
+        PluginError::InvalidConfig(format!("invalid compat.relay version requirement: {error}"))
+    })
+}
+
 fn parse_dynamic_plugin_relay_requirement<'a>(
     relay: Option<&'a str>,
     plugin_type: &str,
@@ -167,9 +196,7 @@ fn parse_dynamic_plugin_relay_requirement<'a>(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| PluginError::InvalidConfig("compat.relay is required".into()))?;
-    let requirement = VersionReq::parse(relay).map_err(|error| {
-        PluginError::InvalidConfig(format!("invalid compat.relay version requirement: {error}"))
-    })?;
+    let requirement = parse_relay_requirement(relay)?;
     let minimum = Version::new(0, 8, 0);
     let declares_minimum = requirement
         .comparators

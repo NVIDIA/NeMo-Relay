@@ -876,26 +876,14 @@ impl PluginRegistrationContext {
         priority: i32,
         callback: LlmExecutionFn,
     ) -> Result<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_execution_intercept(&qualified_name, priority, callback).map_err(|err| {
-            PluginError::RegistrationFailed(format!("llm execution intercept: {err}"))
-        })?;
-
-        let name_owned = qualified_name;
-        self.registrations.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_llm_execution_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|err| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm execution intercept deregistration failed: {err}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
+        self.register_execution_intercept(
+            name,
+            priority,
+            callback,
+            "llm execution intercept",
+            register_llm_execution_intercept,
+            deregister_llm_execution_intercept,
+        )
     }
 
     /// Registers an LLM stream execution intercept and records its rollback closure.
@@ -905,23 +893,37 @@ impl PluginRegistrationContext {
         priority: i32,
         callback: LlmStreamExecutionFn,
     ) -> Result<()> {
+        self.register_execution_intercept(
+            name,
+            priority,
+            callback,
+            "llm stream execution intercept",
+            register_llm_stream_execution_intercept,
+            deregister_llm_stream_execution_intercept,
+        )
+    }
+
+    fn register_execution_intercept<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+        kind: &'static str,
+        register: fn(&str, i32, F) -> crate::error::Result<()>,
+        deregister: fn(&str) -> crate::error::Result<bool>,
+    ) -> Result<()> {
         let qualified_name = self.qualify_name(name);
-        register_llm_stream_execution_intercept(&qualified_name, priority, callback).map_err(
-            |err| PluginError::RegistrationFailed(format!("llm stream execution intercept: {err}")),
-        )?;
+        register(&qualified_name, priority, callback)
+            .map_err(|err| PluginError::RegistrationFailed(format!("{kind}: {err}")))?;
 
         let name_owned = qualified_name;
         self.registrations.push(PluginRegistration::new(
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                deregister_llm_stream_execution_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|err| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm stream execution intercept deregistration failed: {err}"
-                        ))
-                    })
+                deregister(&name_owned).map(|_| ()).map_err(|err| {
+                    PluginError::RegistrationFailed(format!("{kind} deregistration failed: {err}"))
+                })
             }),
         ));
         Ok(())

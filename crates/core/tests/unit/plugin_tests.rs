@@ -1377,13 +1377,13 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
     ctx.register_llm_execution_intercept(
         "llm-exec",
         1,
-        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
     )
     .unwrap();
     ctx.register_llm_stream_execution_intercept(
         "llm-stream",
         1,
-        Arc::new(|_name, request, _next| {
+        Arc::new(|_name, request, _context, _next| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                     request.content
@@ -2344,14 +2344,16 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_execution_intercept(
         "llm-exec",
         1,
-        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_execution_intercept(
             "llm-exec",
             1,
-            Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+            Arc::new(|_name, request, _context, _next| {
+                Box::pin(async move { Ok(request.content) })
+            }),
         ),
         "llm execution intercept:",
     );
@@ -2359,7 +2361,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_stream_execution_intercept(
         "llm-stream",
         1,
-        Arc::new(|_name, request, _next| {
+        Arc::new(|_name, request, _context, _next| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                     request.content
@@ -2372,7 +2374,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         ctx.register_llm_stream_execution_intercept(
             "llm-stream",
             1,
-            Arc::new(|_name, request, _next| {
+            Arc::new(|_name, request, _context, _next| {
                 Box::pin(async move {
                     Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                         request.content
@@ -2494,13 +2496,13 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     ctx.register_llm_execution_intercept(
         "llm-exec",
         1,
-        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
     )
     .unwrap();
     ctx.register_llm_stream_execution_intercept(
         "llm-stream",
         1,
-        Arc::new(|_name, request, _next| {
+        Arc::new(|_name, request, _context, _next| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                     request.content

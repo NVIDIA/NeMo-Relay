@@ -308,7 +308,7 @@ fn register_execution(context: &mut PluginContext, config: &ExampleConfig) {
     context.register_llm_execution_intercept(
         "documentation_llm_execution",
         config.execution.priority,
-        move |_model, request, next| async move {
+        move |_model, request, _context, next| async move {
             if request
                 .content
                 .get("repeat_downstream")
@@ -327,7 +327,7 @@ fn register_execution(context: &mut PluginContext, config: &ExampleConfig) {
     context.register_llm_stream_execution_intercept(
         "documentation_llm_stream_execution",
         config.execution.priority,
-        move |_model, request, next| async move {
+        move |_model, request, _context, next| async move {
             let stream = next.call(request).await?;
             let mapped: JsonStream = Box::pin(stream.map(|chunk| {
                 chunk.map(|chunk| match chunk {

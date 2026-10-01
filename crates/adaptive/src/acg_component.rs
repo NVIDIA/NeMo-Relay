@@ -666,7 +666,7 @@ pub(crate) fn create_acg_llm_execution_intercept(
     plugin: Arc<dyn ProviderPlugin>,
 ) -> LlmExecutionFn {
     Arc::new(
-        move |_name: &str, request: LlmRequest, next: LlmExecutionNextFn| {
+        move |_name: &str, request: LlmRequest, _context, next: LlmExecutionNextFn| {
             let cache = hot_cache.clone();
             let agent_id = agent_id.clone();
             let provider = provider.clone();
@@ -689,7 +689,7 @@ pub(crate) fn create_acg_llm_stream_execution_intercept(
     plugin: Arc<dyn ProviderPlugin>,
 ) -> LlmStreamExecutionFn {
     Arc::new(
-        move |_name: &str, request: LlmRequest, next: LlmStreamExecutionNextFn| {
+        move |_name: &str, request: LlmRequest, _context, next: LlmStreamExecutionNextFn| {
             let cache = hot_cache.clone();
             let agent_id = agent_id.clone();
             let provider = provider.clone();

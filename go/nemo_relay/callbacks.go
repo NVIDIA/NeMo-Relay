@@ -38,6 +38,12 @@ typedef struct NemoRelayLlmSanitizeResponseContext {
 	const char* codec_id;
 	const FfiLlmSanitizeResponseCodec* codec;
 } NemoRelayLlmSanitizeResponseContext;
+typedef NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
+typedef NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
+typedef struct NemoRelayLlmExecutionContext {
+	NemoRelayLlmRequestContext request_codec;
+	const NemoRelayLlmResponseContext* response_codec;
+} NemoRelayLlmExecutionContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef char* (*NemoRelayToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
@@ -56,7 +62,7 @@ typedef struct FfiPluginContext FfiPluginContext;
 typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
 typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* context_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
-typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* native_json, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
+typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* name, const char* native_json, NemoRelayLlmExecutionContext context, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
 
 // Helper to call the tool exec next function pointer from Go
 static inline char* callToolExecNext(NemoRelayToolExecNextFn next_fn, const char* args_json, void* next_ctx) {
@@ -229,21 +235,35 @@ type LLMCodec struct {
 	CodecID   *string
 }
 
-// LLMSanitizeRequestContext provides request codec context for one sanitizer call.
+// LLMSanitizeRequestContext provides request codec context to sanitizer callbacks.
 type LLMSanitizeRequestContext struct {
 	Codec    LLMCodec
 	resolved *LLMRequestSanitizeCodec
 }
+
+// LLMRequestContext is the request codec context exposed to execution intercepts.
+type LLMRequestContext = LLMSanitizeRequestContext
 
 // ResolveCodec returns the active callback-scoped request codec, if any.
 func (context LLMSanitizeRequestContext) ResolveCodec() *LLMRequestSanitizeCodec {
 	return context.resolved
 }
 
-// LLMSanitizeResponseContext provides response codec context for one sanitizer call.
+// LLMSanitizeResponseContext provides response codec context to sanitizer callbacks.
 type LLMSanitizeResponseContext struct {
 	Codec    LLMCodec
 	resolved *LLMResponseSanitizeCodec
+}
+
+// LLMResponseContext is the response codec context exposed to execution intercepts.
+type LLMResponseContext = LLMSanitizeResponseContext
+
+// LLMExecutionContext provides invocation-scoped codec access to an LLM
+// execution intercept. RequestCodec is always present. ResponseCodec is
+// available for unary execution and nil for streaming execution.
+type LLMExecutionContext struct {
+	RequestCodec  LLMRequestContext
+	ResponseCodec *LLMResponseContext
 }
 
 // ResolveCodec returns the active callback-scoped response codec, if any.
@@ -251,9 +271,13 @@ func (context LLMSanitizeResponseContext) ResolveCodec() *LLMResponseSanitizeCod
 	return context.resolved
 }
 
-// ErrLLMSanitizeCodecExpired is returned when a callback-scoped codec
-// capability is used after its sanitizer callback has returned.
-var ErrLLMSanitizeCodecExpired = errors.New("LLM sanitizer codec capability is no longer active")
+// ErrLLMCodecExpired is returned when a callback-scoped codec capability is
+// used after its sanitizer or execution callback has returned.
+var ErrLLMCodecExpired = errors.New("LLM codec capability is no longer active")
+
+// ErrLLMSanitizeCodecExpired is retained as an alias for callers that already
+// compare the sanitizer-specific error value.
+var ErrLLMSanitizeCodecExpired = ErrLLMCodecExpired
 
 type llmSanitizeCodecInvocation struct {
 	mu     sync.RWMutex
@@ -324,10 +348,11 @@ type LLMExecutionFunc func(requestJSON json.RawMessage) (json.RawMessage, error)
 
 // LLMExecutionInterceptFunc is a callback for LLM execution intercepts
 // following the middleware chain pattern. It receives the serialized LLMRequest
-// as JSON and a `next` function. Call `next` to invoke the next intercept in
-// the chain (or the original LLM implementation if this is the innermost
-// intercept). Skip calling `next` to short-circuit the chain entirely.
-type LLMExecutionInterceptFunc func(requestJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error)
+// as JSON, the invocation's codec context, and a `next` function. Call `next`
+// to invoke the next intercept in the chain (or the original LLM implementation
+// if this is the innermost intercept). Skip calling `next` to short-circuit the
+// chain entirely.
+type LLMExecutionInterceptFunc func(requestJSON json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error)
 
 // CollectorFunc is a callback invoked with each intercepted chunk during a
 // streaming LLM response. It is used to accumulate chunks on the Go side for
@@ -917,9 +942,20 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, contextJSON *C.char,
 }
 
 //export goLlmExecInterceptTrampoline
-func goLlmExecInterceptTrampoline(userData unsafe.Pointer, nativeJSON *C.char, nextFn C.NemoRelayLlmExecNextFn, nextCtx unsafe.Pointer) *C.char {
+func goLlmExecInterceptTrampoline(userData unsafe.Pointer, name *C.char, nativeJSON *C.char, context C.NemoRelayLlmExecutionContext, nextFn C.NemoRelayLlmExecNextFn, nextCtx unsafe.Pointer) *C.char {
+	// Go intentionally omits the interceptor name from its public callback shape.
+	_ = name
 	fn := lookupClosure(userData).(LLMExecutionInterceptFunc)
 	goJSON := json.RawMessage(C.GoString(nativeJSON))
+	invocation := newLLMSanitizeCodecInvocation()
+	defer invocation.invalidate()
+	goContext := LLMExecutionContext{
+		RequestCodec: llmSanitizeRequestContextFromC(context.request_codec, invocation),
+	}
+	if context.response_codec != nil {
+		responseCodec := llmSanitizeResponseContextFromC(*context.response_codec, invocation)
+		goContext.ResponseCodec = &responseCodec
+	}
 
 	goNext := func(reqJSON json.RawMessage) (json.RawMessage, error) {
 		cJSON := C.CString(string(reqJSON))
@@ -933,7 +969,7 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, nativeJSON *C.char, n
 		return json.RawMessage(C.GoString(result)), nil
 	}
 
-	result, err := fn(goJSON, goNext)
+	result, err := fn(goJSON, goContext, goNext)
 	if err != nil {
 		setLastErrorMessage(err.Error())
 		return nil

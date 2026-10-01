@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let include = "proto";
     let mut prost = prost_build::Config::new();
     prost.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);
+    prost.boxed(".nemo.relay.worker.v1.LlmInvocation.execution_codec_context");
 
     tonic_prost_build::configure().compile_with_config(prost, &[proto], &[include])?;
     Ok(())

@@ -106,11 +106,16 @@ _LlmRequestIntercept: TypeAlias = Callable[
     "LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome]",
 ]
 _LlmExecutionIntercept: TypeAlias = Callable[
-    [str, "LLMRequest", Callable[["LLMRequest"], Awaitable[_Json]]],
+    [str, "LLMRequest", "LlmExecutionContext", Callable[["LLMRequest"], Awaitable[_Json]]],
     _Json | Awaitable[_Json],
 ]
 _LlmStreamExecutionIntercept: TypeAlias = Callable[
-    ["LLMRequest", Callable[["LLMRequest"], Awaitable[AsyncIterator[_Json]]]],
+    [
+        str,
+        "LLMRequest",
+        "LlmExecutionContext",
+        Callable[["LLMRequest"], Awaitable[AsyncIterator[_Json]]],
+    ],
     AsyncIterator[_Json] | Awaitable[AsyncIterator[_Json]],
 ]
 
@@ -123,18 +128,29 @@ class LlmCodecIdentity:
     def id(self) -> str | None: ...
 
 class LlmSanitizeRequestContext:
-    """Per-call context passed to an LLM request sanitizer callback."""
+    """Request codec context shared by sanitizer and execution callbacks."""
 
     @property
     def codec(self) -> LlmCodecIdentity: ...
     def resolve_codec(self) -> LlmSanitizeRequestCodec | None: ...
 
 class LlmSanitizeResponseContext:
-    """Per-call context passed to an LLM response sanitizer callback."""
+    """Response codec context shared by sanitizer and execution callbacks."""
 
     @property
     def codec(self) -> LlmCodecIdentity: ...
     def resolve_codec(self) -> LlmSanitizeResponseCodec | None: ...
+
+LlmRequestContext: TypeAlias = LlmSanitizeRequestContext
+LlmResponseContext: TypeAlias = LlmSanitizeResponseContext
+
+class LlmExecutionContext:
+    """Codec capabilities for one managed LLM execution intercept invocation."""
+
+    @property
+    def request_codec(self) -> LlmRequestContext: ...
+    @property
+    def response_codec(self) -> LlmResponseContext | None: ...
 
 class LlmSanitizeRequestCodec:
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...

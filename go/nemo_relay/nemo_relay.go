@@ -42,6 +42,9 @@ typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
 typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
 typedef struct NemoRelayLlmSanitizeRequestContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeRequestCodec* codec; } NemoRelayLlmSanitizeRequestContext;
 typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeResponseCodec* codec; } NemoRelayLlmSanitizeResponseContext;
+typedef NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
+typedef NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
+typedef struct NemoRelayLlmExecutionContext { NemoRelayLlmRequestContext request_codec; const NemoRelayLlmResponseContext* response_codec; } NemoRelayLlmExecutionContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 
@@ -173,7 +176,7 @@ typedef int32_t (*NemoRelayLlmRequestInterceptCb)(void* user_data, const char* n
 extern int32_t nemo_relay_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NemoRelayLlmRequestInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_llm_request_intercept(const char* name);
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
-typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* native_json, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
+typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* name, const char* native_json, NemoRelayLlmExecutionContext context, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
 
 extern int32_t nemo_relay_register_llm_execution_intercept(const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
 extern int32_t nemo_relay_deregister_llm_execution_intercept(const char* name);
@@ -328,7 +331,7 @@ extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
 extern char* goToolExecInterceptContextTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
-extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoRelayLlmExecNextFn, void*);
+extern char* goLlmExecInterceptTrampoline(void*, const char*, const char*, NemoRelayLlmExecutionContext, NemoRelayLlmExecNextFn, void*);
 
 // Codec trampolines (used at execute time, not registration)
 extern char* goCodecDecodeTrampoline(void*, const FfiLLMRequest*);
@@ -1898,9 +1901,10 @@ func DeregisterLlmRequestIntercept(name string) error {
 }
 
 // RegisterLlmExecutionIntercept registers an execution intercept following
-// the middleware chain pattern. execFn is called with the request parameters
-// and a `next` function. Call `next` to invoke the next intercept or original
-// implementation; skip calling `next` to short-circuit the chain.
+// the middleware chain pattern. execFn is called with the request parameters,
+// codec context, and a `next` function. Call `next` to invoke the next
+// intercept or original implementation; skip calling `next` to short-circuit
+// the chain.
 func RegisterLlmExecutionIntercept(name string, priority int32, execFn LLMExecutionInterceptFunc) error {
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
@@ -1923,9 +1927,9 @@ func DeregisterLlmExecutionIntercept(name string) error {
 
 // RegisterLlmStreamExecutionIntercept registers an execution intercept for
 // streaming LLM calls following the middleware chain pattern. execFn is called
-// with the request parameters and a `next` function. Call `next` to invoke the
-// next intercept or original implementation; skip calling `next` to
-// short-circuit.
+// with the request parameters, codec context, and a `next` function. Call
+// `next` to invoke the next intercept or original implementation; skip calling
+// `next` to short-circuit.
 func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLMExecutionInterceptFunc) error {
 	execID := registerClosure(execFn)
 	cName := C.CString(name)

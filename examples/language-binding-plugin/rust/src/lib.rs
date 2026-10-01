@@ -293,14 +293,14 @@ impl Plugin for DocumentationPlugin {
                 context.register_llm_execution_intercept(
                     "llm-execution",
                     settings.execution.priority,
-                    Arc::new(move |_name, request, next| {
+                    Arc::new(move |_name, request, _context, next| {
                         Box::pin(async move { next(request).await })
                     }),
                 )?;
                 context.register_llm_stream_execution_intercept(
                     "llm-stream",
                     settings.execution.priority,
-                    Arc::new(move |_name, request, next| {
+                    Arc::new(move |_name, request, _context, next| {
                         Box::pin(async move {
                             let stream = next(request).await?;
                             Ok(LlmJsonStream::new(stream.map(|chunk| {

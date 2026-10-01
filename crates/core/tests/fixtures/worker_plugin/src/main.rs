@@ -375,7 +375,7 @@ fn register_fixture_llm_hooks(
     ctx.register_llm_execution_intercept(
         "fixture_llm_execution",
         0,
-        |_name, request, next: LlmNext| async move {
+        |_name, request, _context, next: LlmNext| async move {
             let response = next
                 .call(mark_llm_request(
                     request,
@@ -388,7 +388,7 @@ fn register_fixture_llm_hooks(
     ctx.register_llm_stream_execution_intercept(
         "fixture_llm_stream_execution",
         0,
-        move |_name, request, next: LlmStreamNext| async move {
+        move |_name, request, _context, next: LlmStreamNext| async move {
             if llm_stream_open_error {
                 return Err(WorkerSdkError::Callback(
                     "fixture LLM stream open error requested".into(),

@@ -965,47 +965,17 @@ async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
     activation.clear();
 }
 
-#[tokio::test]
-async fn native_api_one_preserves_results_after_abi_v2_negotiation() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+#[test]
+fn native_api_one_does_not_admit_a_stale_abi_v2_binary() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest_with_symbol(&fixture, "nemo_relay_fixture_abi_v2_api1");
-    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
-        .expect("native API 1 plugin should negotiate the ABI v2 host table");
-    let mut cleanup = NativePluginTestCleanup::new();
-
-    let mut plugin_config = PluginConfig::default();
-    plugin_config.components.push(PluginComponentSpec {
-        kind: "fixture_native".into(),
-        enabled: true,
-        config: Map::new(),
-    });
-    test_initialize_plugin_host_exact(plugin_config)
-        .await
-        .expect("ABI v2 native API 1 fixture should initialize");
-    cleanup.mark_plugin_configuration_active();
-
-    let result = tool_call_execute(
-        ToolCallExecuteParams::builder()
-            .name("fixture-abi-v2-api1")
-            .args(json!({"input": true}))
-            .func(Arc::new(|args| {
-                Box::pin(async move {
-                    Ok(ToolExecutionResult::annotated(
-                        args,
-                        json!({"source": "provider"}),
-                    ))
-                })
-            }))
-            .build(),
-    )
-    .await
-    .expect("ABI v2 callback should use the canonical native API 1 result contract");
-    assert_eq!(result.result, json!({"input": true}));
-    assert_eq!(result.annotation, Some(json!({"source": "provider"})));
-
-    drop(cleanup);
-    activation.clear();
+    let error = expect_native_load_error_from_specs(
+        [load_spec("fixture_native", &manifest_ref)],
+        "a native_api=1 manifest must not make an ABI-v2 binary compatible",
+    );
+    assert!(error.contains("rejected native ABI 7"), "{error}");
+    assert!(error.contains("rebuild the plugin"), "{error}");
 }
 
 #[tokio::test]
@@ -1128,6 +1098,28 @@ async fn native_loader_rejects_manifest_that_admits_pre_zero_eight_relay() {
     );
 }
 
+#[tokio::test]
+async fn native_abi_v7_rejects_manifest_that_admits_relay_zero_nine() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest_text(ManifestOptions {
+        manifest_dir: fixture.manifest_dir.path(),
+        plugin_id: "fixture_native",
+        relay: ">=0.9,<1.0",
+        library: &fixture.library_path.to_string_lossy(),
+        symbol: "nemo_relay_fixture_native_plugin",
+        integrity: None,
+    });
+    let error = expect_native_load_error_from_specs(
+        [load_spec("fixture_native", &manifest_ref)],
+        "an ABI-v7 native plugin must exclude Relay 0.9",
+    );
+    assert!(
+        error.contains("uses native ABI v7") && error.contains("excludes Relay 0.9"),
+        "{error}"
+    );
+}
+
 #[test]
 fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
@@ -1158,7 +1150,7 @@ fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
 }
 
 #[test]
-fn native_loader_falls_back_to_abi_v3_plugins() {
+fn native_loader_rejects_abi_v3_plugins() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest_text(ManifestOptions {
@@ -1170,17 +1162,21 @@ fn native_loader_falls_back_to_abi_v3_plugins() {
         integrity: None,
     });
 
-    let activation = load_native_plugins([load_spec("fixture_native_v3", &manifest_ref)])
-        .expect("ABI-v3 fixture should load through compatibility fallback");
-    activation.clear();
+    let error = expect_native_load_error_from_specs(
+        [load_spec("fixture_native_v3", &manifest_ref)],
+        "ABI-v3 plugins must be rebuilt for ABI v7",
+    );
+    assert!(error.contains("rejected native ABI 7"), "{error}");
+    assert!(error.contains("rebuild the plugin"), "{error}");
 }
 
 #[test]
-fn native_loader_supports_current_v5_frozen_v4_and_legacy_v2_plugins() {
+fn native_loader_rejects_v2_v4_v5_and_v6_plugins() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_plugin();
 
     for (plugin_id, symbol) in [
+        ("fixture_native_v6", "nemo_relay_fixture_native_plugin_v6"),
         ("fixture_native_v5", "nemo_relay_fixture_native_plugin_v5"),
         ("fixture_native_v4", "nemo_relay_fixture_native_plugin_v4"),
         ("fixture_native_v2", "nemo_relay_fixture_native_plugin_v2"),
@@ -1194,9 +1190,12 @@ fn native_loader_supports_current_v5_frozen_v4_and_legacy_v2_plugins() {
             integrity: None,
         });
 
-        let activation = load_native_plugins([load_spec(plugin_id, &manifest_ref)])
-            .unwrap_or_else(|error| panic!("ABI compatibility fixture should load: {error}"));
-        activation.clear();
+        let error = expect_native_load_error_from_specs(
+            [load_spec(plugin_id, &manifest_ref)],
+            "stale native plugins must be rebuilt for ABI v7",
+        );
+        assert!(error.contains("rejected native ABI 7"), "{error}");
+        assert!(error.contains("rebuild the plugin"), "{error}");
     }
 }
 

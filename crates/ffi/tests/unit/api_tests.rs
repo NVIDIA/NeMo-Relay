@@ -16,7 +16,8 @@ use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
 use crate::callable::{
-    NemoRelayLlmExecNextFn, NemoRelayLlmSanitizeCodecKind, NemoRelayLlmSanitizeRequestContext,
+    NemoRelayLlmExecNextFn, NemoRelayLlmExecutionContext, NemoRelayLlmRequestContext,
+    NemoRelayLlmSanitizeCodecKind, NemoRelayLlmSanitizeRequestContext,
     NemoRelayLlmSanitizeResponseContext, NemoRelayToolExecNextFn,
 };
 use crate::convert::nemo_relay_string_free;
@@ -656,7 +657,9 @@ unsafe extern "C" fn codec_encode_cb(
 
 unsafe extern "C" fn llm_exec_intercept_cb(
     _user_data: *mut libc::c_void,
+    _name: *const c_char,
     native_json: *const c_char,
+    _context: NemoRelayLlmExecutionContext,
     next_fn: NemoRelayLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {

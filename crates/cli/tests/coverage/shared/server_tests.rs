@@ -5084,7 +5084,7 @@ async fn gateway_concurrent_next_uses_canonical_selected_buffered_response() {
     register_llm_execution_intercept(
         INTERCEPT_NAME,
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             let release_losing = release_from_intercept.clone();
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
@@ -5172,7 +5172,7 @@ async fn gateway_concurrent_next_uses_canonical_selected_streaming_response() {
     register_llm_stream_execution_intercept(
         INTERCEPT_NAME,
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             let release_losing = release_from_intercept.clone();
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
@@ -5255,7 +5255,7 @@ async fn gateway_concurrent_next_relays_selected_buffered_failure() {
     register_llm_execution_intercept(
         INTERCEPT_NAME,
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             let release_losing = release_from_intercept.clone();
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
@@ -5334,7 +5334,7 @@ async fn gateway_concurrent_next_relays_selected_streaming_failure() {
     register_llm_stream_execution_intercept(
         INTERCEPT_NAME,
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             let release_losing = release_from_intercept.clone();
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
@@ -5634,7 +5634,7 @@ async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_
     register_llm_execution_intercept(
         INTERCEPT_NAME,
         1,
-        Arc::new(|_name, request, next| {
+        Arc::new(|_name, request, _context, next| {
             Box::pin(async move {
                 let marked = request.content["messages"][0]["content"].as_str() == Some(MARKER);
                 let response = next(request).await?;
@@ -6285,7 +6285,7 @@ async fn model_call_policy_still_applies_on_a_named_upstream() {
     register_llm_execution_intercept(
         INTERCEPT,
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() == Some("blocked by policy") {
                     return Err(nemo_relay::error::FlowError::GuardrailRejected(
