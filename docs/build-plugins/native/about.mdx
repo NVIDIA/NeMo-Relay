@@ -41,13 +41,13 @@ Relay 0.8 changed the native API 1 tool-result JSON contract without changing th
 host-table layout. A tool callback and `ToolNext` continuation return
 `ToolExecutionResult`, which carries `result` and optional opaque `annotation`; an
 execution intercept returns that pair plus pending marks. Rebuild native plugins for
-that contract even though its negotiated host-table ABI remains v4. Relay 0.9
+that contract even though its negotiated host-table ABI remained v4. Relay 0.9
 adds the context-carrying tool execution callback as the v5 host-table extension.
 
-The v4 SDK also lets a plugin add a data schema and log severity to a mark, or emit
-validated metric measurements. `PluginRuntime::runtime_diagnostics()` returns the
-current host-level diagnostic snapshot. The snapshot is ordered by code and is not
-attributed to a particular plugin.
+In Relay 0.8, the v4 SDK also let a plugin add a data schema and log severity to a
+mark, or emit validated metric measurements. `PluginRuntime::runtime_diagnostics()`
+returns the current host-level diagnostic snapshot. The snapshot is ordered by code
+and is not attributed to a particular plugin.
 
 ## What the SDK Owns
 

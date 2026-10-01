@@ -3201,6 +3201,10 @@ impl<'a> PluginContext<'a> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
         {
+            set_last_error(
+                self.host,
+                "LLM execution intercepts require Relay native ABI v7",
+            );
             if let Some(free_fn) = free_fn {
                 unsafe { free_fn(user_data) };
             }
@@ -3231,6 +3235,10 @@ impl<'a> PluginContext<'a> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
         {
+            set_last_error(
+                self.host,
+                "LLM execution intercepts require Relay native ABI v7",
+            );
             if let Some(free_fn) = free_fn {
                 unsafe { free_fn(user_data) };
             }
@@ -3272,6 +3280,10 @@ impl<'a> PluginContext<'a> {
             NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept
                 | NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept
         ) {
+            set_last_error(
+                self.host,
+                "LLM execution intercepts require the ABI v7 registration functions",
+            );
             if let Some(free_fn) = free_fn {
                 unsafe { free_fn(user_data) };
             }
@@ -3319,6 +3331,10 @@ impl<'a> PluginContext<'a> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
         {
+            set_last_error(
+                self.host,
+                "LLM execution intercepts require Relay native ABI v7",
+            );
             if let Some(free_fn) = free_fn {
                 unsafe { free_fn(user_data) };
             }
@@ -3356,6 +3372,10 @@ impl<'a> PluginContext<'a> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
         {
+            set_last_error(
+                self.host,
+                "LLM stream execution intercepts require Relay native ABI v7",
+            );
             if let Some(free_fn) = free_fn {
                 unsafe { free_fn(user_data) };
             }

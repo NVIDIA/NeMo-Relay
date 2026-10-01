@@ -27,6 +27,7 @@ use nemo_relay_plugin::{
     LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
     NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING,
+    NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL,
     NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT, NativeExecutorConfig, NativePlugin,
     NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
     NemoRelayNativeAsyncLlmExecutionCb, NemoRelayNativeAsyncLlmStreamOpenCb,
@@ -1976,9 +1977,9 @@ impl MockAsyncOutput {
         std::mem::take(&mut *events)
     }
 
-    fn wait_for_release(&self) {
+    fn wait_for_releases(&self, expected: usize) {
         wait_until("async output was not released", || {
-            self.releases.load(Ordering::SeqCst) != 0
+            self.releases.load(Ordering::SeqCst) >= expected
         });
     }
 }
@@ -4804,7 +4805,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
             MockOutputEvent::Finished,
         ]
     );
-    output.wait_for_release();
+    output.wait_for_releases(2);
     assert_eq!(output.releases.load(Ordering::SeqCst), 2);
     assert_eq!(pull_stream.releases.load(Ordering::SeqCst), 1);
     assert_eq!(next.releases.load(Ordering::SeqCst), 3);
@@ -5275,7 +5276,7 @@ fn typed_async_continuations_are_concurrent_and_executor_owned() {
             "host returned neither an LLM stream nor an error".into()
         )]
     );
-    output.wait_for_release();
+    output.wait_for_releases(2);
     assert_eq!(output.releases.load(Ordering::SeqCst), 2);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
@@ -5538,7 +5539,7 @@ fn typed_async_stream_cancellation_while_polling_releases_output() {
         started.load(Ordering::SeqCst)
     });
     output.cancelled.store(true, Ordering::SeqCst);
-    output.wait_for_release();
+    output.wait_for_releases(1);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
 }
@@ -5586,7 +5587,7 @@ fn typed_async_stream_restores_callback_scope_while_polling_returned_stream() {
             MockOutputEvent::Finished,
         ]
     );
-    output.wait_for_release();
+    output.wait_for_releases(1);
     assert!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst) >= 3);
     unsafe { registration.free() };
 }
@@ -5637,7 +5638,7 @@ fn typed_async_stream_rejects_item_errors_and_releases_output() {
             MockOutputEvent::Rejected("stream item failed".into()),
         ]
     );
-    output.wait_for_release();
+    output.wait_for_releases(2);
     assert_eq!(output.releases.load(Ordering::SeqCst), 2);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
@@ -5693,7 +5694,7 @@ fn typed_async_stream_rejects_poll_panics_and_releases_output() {
             MockOutputEvent::Rejected("typed native stream panicked while polling".into()),
         ]
     );
-    output.wait_for_release();
+    output.wait_for_releases(2);
     assert_eq!(output.releases.load(Ordering::SeqCst), 2);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
@@ -5742,7 +5743,7 @@ fn typed_async_stream_propagates_downstream_pull_errors() {
         output.wait_terminal(),
         vec![MockOutputEvent::Rejected("downstream pull failed".into())]
     );
-    output.wait_for_release();
+    output.wait_for_releases(2);
     assert_eq!(output.releases.load(Ordering::SeqCst), 2);
     assert_eq!(pull_stream.releases.load(Ordering::SeqCst), 1);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
@@ -5790,7 +5791,7 @@ fn typed_async_stream_rejects_missing_continuation() {
             "native stream middleware requires a continuation".into()
         )]
     );
-    output.wait_for_release();
+    output.wait_for_releases(1);
     assert_eq!(output.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
 }
@@ -6712,6 +6713,9 @@ fn exported_entry_symbol_rejects_prior_host_versions() {
     for abi_version in [
         NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
         NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
+        NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL,
+        NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT,
+        NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING,
     ] {
         let mut host = test_host();
         host.abi_version = abi_version;

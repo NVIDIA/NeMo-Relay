@@ -125,8 +125,6 @@ impl Stream for ExecutionGuardedLlmStream {
         if matches!(&result, Poll::Ready(None)) {
             this.continuation_guard.take();
             this.codec_guard.take();
-        } else if matches!(&result, Poll::Ready(Some(Err(_)))) {
-            this.codec_guard.take();
         }
         result
     }
