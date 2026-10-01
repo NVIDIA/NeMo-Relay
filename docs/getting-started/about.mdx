@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 NeMo Relay observes and controls agent work at the boundary where it runs.
 Choose the path that matches the agent runtime, framework, or application you
-already use. The [Quick Start](/getting-started/quick-start) page lists working
+already use. The [Quick Starts](/getting-started/quick-start) page lists working
 examples that install a verified release, enable built-in observability, run
 one workflow, and check the local event output.
 
@@ -22,23 +22,28 @@ Use the boundary that owns the model request or tool execution:
   integration when the framework owns callbacks and tool execution.
 - **Application:** Instrument Python, Node.js, or Rust code when your
   application owns the tool or model call.
-- **Routing plugin:** Use Switchyard when Relay should route model requests.
 
 Each path has its own requirements. You do not need a Rust compiler, a source
 checkout, or repository development tools to install a published CLI binary.
 
+## Featured External Plugins
+
+Try [Switchyard](/getting-started/quick-start/switchyard) to route model requests
+through a featured external Relay plugin.
+
 ## Go Beyond the First Run
 
-Use [Installation](/getting-started/installation) for package choices,
-supported platforms, and alternative installers. Use
-[Configuration / Setup](/getting-started/configuration) for deeper runtime and
-plugin configuration. For source builds or contributions, refer to
-[Development Setup](/contribute/development-setup).
-
-For the runtime model, read the [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer)
-and [Concepts](/about-nemo-relay/concepts). For custom integrations and reusable
-behavior, use [Integrate into Frameworks](/integrate-into-frameworks/about) and
-[Build Plugins](/build-plugins/about).
+- [Installation Overview](/getting-started/installation): Compare packages,
+  supported platforms, and alternative installers.
+- [Configuration / Setup Overview](/getting-started/configuration): Configure
+  runtime behavior and plugins in more detail.
+- [Development Setup](/contribute/development-setup): Build from source or
+  contribute to the repository.
+- [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer) and
+  [Concepts](/about-nemo-relay/concepts): Understand the runtime model.
+- [Integrate into Frameworks](/integrate-into-frameworks/about): Build custom
+  framework integrations.
+- [Build Plugins](/build-plugins/about): Package reusable Relay behavior.
 
 ## Using an AI Coding Assistant
 
