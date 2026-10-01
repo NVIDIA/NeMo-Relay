@@ -54,7 +54,7 @@ pub(super) fn register_local_backend(
         let llm_runtime = Arc::clone(&runtime);
         let enable_input = config.input;
         let enable_output = config.output;
-        let llm_execution: LlmExecutionFn = Arc::new(move |_name, request, next| {
+        let llm_execution: LlmExecutionFn = Arc::new(move |_name, request, _context, next| {
             let runtime = Arc::clone(&llm_runtime);
             Box::pin(async move {
                 runtime
@@ -71,14 +71,15 @@ pub(super) fn register_local_backend(
         let stream_runtime = Arc::clone(&runtime);
         let enable_input = config.input;
         let enable_output = config.output;
-        let llm_stream_execution: LlmStreamExecutionFn = Arc::new(move |_name, request, next| {
-            let runtime = Arc::clone(&stream_runtime);
-            Box::pin(async move {
-                runtime
-                    .execute_llm_stream(request, next, enable_input, enable_output)
-                    .await
-            })
-        });
+        let llm_stream_execution: LlmStreamExecutionFn =
+            Arc::new(move |_name, request, _context, next| {
+                let runtime = Arc::clone(&stream_runtime);
+                Box::pin(async move {
+                    runtime
+                        .execute_llm_stream(request, next, enable_input, enable_output)
+                        .await
+                })
+            });
         ctx.register_llm_stream_execution_intercept(
             "nemo_guardrails_local_stream",
             config.priority,

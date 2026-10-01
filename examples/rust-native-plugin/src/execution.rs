@@ -64,7 +64,7 @@ pub(crate) fn register(
     context.register_llm_execution_intercept(
         "documentation_llm_execution",
         config.execution.priority,
-        move |_name, request, next| async move {
+        move |_name, request, _context, next| async move {
             if request
                 .content
                 .get("repeat_downstream")
@@ -86,7 +86,7 @@ pub(crate) fn register(
     context.register_llm_stream_execution_intercept(
         "documentation_llm_stream_execution",
         config.execution.priority,
-        move |_name, request, next| async move {
+        move |_name, request, _context, next| async move {
             let stream = next.call(request).await?;
             let stream: LlmJsonAsyncStream = Box::pin(stream.map(|chunk| {
                 chunk.map(|chunk| match chunk {

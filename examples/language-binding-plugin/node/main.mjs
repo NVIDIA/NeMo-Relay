@@ -303,14 +303,18 @@ export const documentationPlugin = {
           pendingMarks: execution.emit_pending_marks ? [{ name: 'documentation-plugin.tool-complete' }] : [],
         };
       });
-      context.registerLlmExecutionIntercept('llm-execution', execution.priority, async (request, next) =>
+      context.registerLlmExecutionIntercept('llm-execution', execution.priority, async (request, _context, next) =>
         next(request),
       );
-      context.registerLlmStreamExecutionIntercept('llm-stream', execution.priority, async function* (request, next) {
-        for await (const chunk of await next(request)) {
-          yield { ...chunk, plugin_stream: true };
-        }
-      });
+      context.registerLlmStreamExecutionIntercept(
+        'llm-stream',
+        execution.priority,
+        async function* (request, _context, next) {
+          for await (const chunk of await next(request)) {
+            yield { ...chunk, plugin_stream: true };
+          }
+        },
+      );
     }
   },
 };
@@ -341,8 +345,7 @@ export async function main() {
   plugin.register('documentation-plugin', documentationPlugin);
   console.log('registered:', plugin.listKinds());
   const invalid = plugin.validate(config('invalid')).config.diagnostics;
-  const disabledInvalid = plugin.validate(config('invalid', false)).config
-    .diagnostics;
+  const disabledInvalid = plugin.validate(config('invalid', false)).config.diagnostics;
   if (disabledInvalid[0]?.code !== 'documentation-plugin.unsupported_mode') {
     throw new Error('disabled invalid configuration must still be validated');
   }

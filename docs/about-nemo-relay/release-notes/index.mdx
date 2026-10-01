@@ -33,6 +33,25 @@ For the full release history, including individual pull requests, refer to
 NeMo Relay 0.10 is under development. This page will track its user-visible
 changes, compatibility updates, and fixed known issues.
 
+### LLM Execution Codec Context
+
+Relay now passes the selected request and completed-response codec context to every
+LLM execution interceptor. Policies can use Relay's host-owned codec to inspect
+or safely rewrite the final provider request and decode a completed
+response without importing or copying Relay's codec implementations. Streaming
+interceptors receive request codec access only.
+
+**Breaking change:** Callback signatures change across Rust, Python, Node.js,
+Go, C, native plugins, and Rust and Python gRPC workers. Python
+language-binding streaming and public C callbacks also gain the logical LLM
+name. Every native plugin must rebuild for the internal ABI v7 layout. Workers
+that register an LLM execution intercept must update their callback signatures
+and rebuild. Authored compatibility labels remain `native_api = "1"` and
+`grpc-v1`; affected plugin manifests must use a Relay range that begins at 0.10
+or otherwise excludes 0.9. Refer to the
+[Migration Guides](/reference/migration-guides) for callback shapes and upgrade
+steps.
+
 ### Fixes and Other Changes
 
 - Scope-stack forks, managed LLM and tool execution callbacks, and

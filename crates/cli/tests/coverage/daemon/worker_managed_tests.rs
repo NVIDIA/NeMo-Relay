@@ -1479,7 +1479,7 @@ async fn managed_runtime_rejects_response_mutating_execution_middleware() {
     register_llm_execution_intercept(
         INTERCEPT,
         1,
-        Arc::new(|_name, _request, _next| Box::pin(async { Ok(json!({})) })),
+        Arc::new(|_name, _request, _context, _next| Box::pin(async { Ok(json!({})) })),
     )
     .expect("register execution middleware");
 

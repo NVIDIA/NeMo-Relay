@@ -72,10 +72,12 @@ use nemo_relay::api::tool::{
     ToolExecutionInterceptOutcome, ToolExecutionResult, tool_call, tool_call_end,
     tool_call_execute, tool_conditional_execution, tool_request_intercepts,
 };
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationTokenImpact,
     LlmOptimizationTokens,
 };
+use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::FlowError;
 use nemo_relay::json::Json;
 use nemo_relay::observability::OpenTelemetryType;
@@ -2228,7 +2230,7 @@ async fn execution_next_is_revoked_after_each_interceptor_settles() {
     register_llm_execution_intercept(
         "late_llm_next",
         1,
-        Arc::new(move |_name, _request, next| {
+        Arc::new(move |_name, _request, _context, next| {
             *captured_llm_next.lock().unwrap() = Some(next);
             ready_result(Ok(json!({"source": "llm-intercept"})))
         }),
@@ -2268,7 +2270,7 @@ async fn execution_next_is_revoked_after_each_interceptor_settles() {
     register_llm_stream_execution_intercept(
         "late_llm_stream_next",
         1,
-        Arc::new(move |_name, _request, next| {
+        Arc::new(move |_name, _request, _context, next| {
             *captured_stream_next.lock().unwrap() = Some(next);
             Box::pin(async {
                 Ok(LlmJsonStream::new(futures::stream::iter(vec![Ok(
@@ -2325,15 +2327,22 @@ async fn stream_next_is_revoked_when_the_managed_stream_terminalizes_with_an_err
 
     let request = LlmRequest {
         headers: serde_json::Map::new(),
-        content: json!({"prompt": "terminal-error"}),
+        content: json!({
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "terminal-error"}]
+        }),
     };
     let upstream_error_next = Arc::new(Mutex::new(None::<LlmStreamExecutionNextFn>));
+    let upstream_error_codec = Arc::new(Mutex::new(None::<Arc<dyn LlmCodec>>));
     let captured_upstream_error_next = Arc::clone(&upstream_error_next);
+    let captured_upstream_error_codec = Arc::clone(&upstream_error_codec);
     register_llm_stream_execution_intercept(
         "upstream_error_stream_next",
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, context, next| {
             *captured_upstream_error_next.lock().unwrap() = Some(next.clone());
+            *captured_upstream_error_codec.lock().unwrap() =
+                context.request_codec().resolve_codec();
             next(request)
         }),
     )
@@ -2354,6 +2363,7 @@ async fn stream_next_is_revoked_when_the_managed_stream_terminalizes_with_an_err
             }))
             .collector(Box::new(|_| Ok(())))
             .finalizer(Box::new(|| json!({})))
+            .codec(Arc::new(OpenAIChatCodec))
             .build(),
     )
     .await
@@ -2369,6 +2379,12 @@ async fn stream_next_is_revoked_when_the_managed_stream_terminalizes_with_an_err
         FlowError::InvalidArgument(message)
             if message == "execution continuation is no longer active"
     ));
+    let codec = upstream_error_codec.lock().unwrap().take().unwrap();
+    assert!(matches!(
+        codec.decode(&request),
+        Err(FlowError::InvalidArgument(message))
+            if message == "LLM execution codec capability is no longer active"
+    ));
     assert_eq!(upstream_provider_calls.load(Ordering::Acquire), 1);
     deregister_llm_stream_execution_intercept("upstream_error_stream_next").unwrap();
 
@@ -2377,7 +2393,7 @@ async fn stream_next_is_revoked_when_the_managed_stream_terminalizes_with_an_err
     register_llm_stream_execution_intercept(
         "collector_error_stream_next",
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             *captured_collector_error_next.lock().unwrap() = Some(next.clone());
             next(request)
         }),
@@ -2592,7 +2608,7 @@ async fn stream_next_preserves_each_invocation_scope_while_polling() {
     register_llm_stream_execution_intercept(
         "scoped_stream_next",
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             let first_stack = first_stack.clone();
             let second_stack = second_stack.clone();
             Box::pin(async move {
@@ -2670,7 +2686,7 @@ async fn stream_next_remains_active_during_interceptor_stream_close() {
     register_llm_stream_execution_intercept(
         "close_calls_stream_next",
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             Box::pin(async move {
                 Ok(LlmJsonStream::from_closeable(CloseCallsStreamNext {
                     next: Some(next),
@@ -3029,7 +3045,7 @@ async fn dropping_pending_llm_execution_closes_the_managed_lifecycle() {
     register_llm_execution_intercept(
         "pending_llm_execution",
         1,
-        Arc::new(move |_name, _request, _next| {
+        Arc::new(move |_name, _request, _context, _next| {
             if let Some(sender) = entered_tx.lock().unwrap().take() {
                 let _ = sender.send(());
             }
@@ -4496,7 +4512,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
     register_llm_execution_intercept(
         "lock_global_llm_execution",
         1,
-        Arc::new(move |_, request, next| {
+        Arc::new(move |_, request, _context, next| {
             record_middleware_callback(&tracked, "llm_execution_global");
             assert_middleware_callback_locks_are_free();
             Box::pin(async move { next(request).await })
@@ -4508,7 +4524,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         &scope.uuid,
         "lock_scope_llm_execution",
         2,
-        Arc::new(move |_, request, next| {
+        Arc::new(move |_, request, _context, next| {
             record_middleware_callback(&tracked, "llm_execution_scope");
             assert_middleware_callback_locks_are_free();
             Box::pin(async move { next(request).await })
@@ -4519,7 +4535,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
     register_llm_stream_execution_intercept(
         "lock_global_llm_stream_execution",
         1,
-        Arc::new(move |_, request, next| {
+        Arc::new(move |_, request, _context, next| {
             record_middleware_callback(&tracked, "llm_stream_execution_global");
             assert_middleware_callback_locks_are_free();
             Box::pin(async move { next(request).await })
@@ -4531,7 +4547,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         &scope.uuid,
         "lock_scope_llm_stream_execution",
         2,
-        Arc::new(move |_, request, next| {
+        Arc::new(move |_, request, _context, next| {
             record_middleware_callback(&tracked, "llm_stream_execution_scope");
             assert_middleware_callback_locks_are_free();
             Box::pin(async move { next(request).await })
@@ -5883,7 +5899,7 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
     register_llm_execution_intercept(
         "optimization_execution_contributor",
         1,
-        Arc::new(|_name, request, next| {
+        Arc::new(|_name, request, _context, next| {
             let contribution =
                 LlmOptimizationContribution::new("test.execution", "test_execution_kind");
             assert!(record_llm_optimization_contribution(contribution));
@@ -5986,7 +6002,7 @@ async fn execution_optimization_mark_keeps_decision_commit_timestamp_order() {
     register_llm_execution_intercept(
         "optimization_timestamp_contributor",
         1,
-        Arc::new(|_name, request, next| {
+        Arc::new(|_name, request, _context, next| {
             Box::pin(async move {
                 event(
                     EmitMarkEventParams::builder()
@@ -6096,7 +6112,7 @@ async fn test_stream_optimization_mark_uses_the_llm_captured_sanitizer_scope() {
     register_llm_stream_execution_intercept(
         "stream_optimization_sanitizer_contributor",
         1,
-        Arc::new(|_name, request, next| {
+        Arc::new(|_name, request, _context, next| {
             let mut contribution = LlmOptimizationContribution::new("test.stream", "stream_test");
             contribution.payload_schema = Some(DataSchema {
                 name: "test.stream_evidence".to_string(),
@@ -6332,7 +6348,7 @@ async fn test_llm_execution_intercept_chain() {
     register_llm_execution_intercept(
         "llm_exec_1",
         1,
-        Arc::new(move |_name, req, next| {
+        Arc::new(move |_name, req, _context, next| {
             let o = o1.clone();
             Box::pin(async move {
                 o.lock().unwrap().push("intercept_before".into());
@@ -6413,7 +6429,7 @@ async fn test_llm_start_emits_before_short_circuit_execution_intercept() {
     register_llm_execution_intercept(
         "llm_short_circuit_exec",
         1,
-        Arc::new(move |_name, mut req, _next| {
+        Arc::new(move |_name, mut req, _context, _next| {
             Box::pin(async move {
                 req.content
                     .as_object_mut()
@@ -6507,7 +6523,7 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
     register_llm_stream_execution_intercept(
         "llm_stream_short_circuit_exec",
         1,
-        Arc::new(move |_name, mut req, _next| {
+        Arc::new(move |_name, mut req, _context, _next| {
             Box::pin(async move {
                 req.content
                     .as_object_mut()

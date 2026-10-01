@@ -735,20 +735,133 @@ func TestLlmRequestInterceptRegisterDeregister(t *testing.T) {
 }
 
 func TestLlmExecutionInterceptRegisterDeregister(t *testing.T) {
+	observed := false
 	err := RegisterLlmExecutionIntercept("go_llm_exec", 1,
-		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(nativeJSON json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			if context.ResponseCodec == nil {
+				t.Fatal("unary execution context is missing its response codec")
+			}
+			if context.RequestCodec.Codec.CodecKind != LLMCodecNone || context.RequestCodec.ResolveCodec() != nil {
+				t.Fatalf("unexpected absent request codec context: %#v", context.RequestCodec)
+			}
+			if context.ResponseCodec.Codec.CodecKind != LLMCodecNone || context.ResponseCodec.ResolveCodec() != nil {
+				t.Fatalf("unexpected absent response codec context: %#v", context.ResponseCodec)
+			}
+			observed = true
 			return next(nativeJSON)
 		},
 	)
 	if err != nil {
 		t.Fatalf(llmRegisterFailed, err)
 	}
-	DeregisterLlmExecutionIntercept("go_llm_exec")
+	defer DeregisterLlmExecutionIntercept("go_llm_exec")
+
+	response, err := LlmCallExecute(
+		"go_llm_execution_context_absent",
+		makeRequest(),
+		func(json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"ok":true}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf(llmCallExecuteFailed, err)
+	}
+	if string(response) != `{"ok":true}` {
+		t.Fatalf("unexpected response: %s", response)
+	}
+	if !observed {
+		t.Fatal("execution intercept did not observe the absent codec context")
+	}
+}
+
+func TestLlmExecutionInterceptResolvesDirectionalCodecs(t *testing.T) {
+	const interceptName = "go_llm_execution_codec_context"
+	_ = DeregisterLlmExecutionIntercept(interceptName)
+	defer DeregisterLlmExecutionIntercept(interceptName)
+
+	var (
+		retainedRequestCodec  *LLMRequestSanitizeCodec
+		retainedResponseCodec *LLMResponseSanitizeCodec
+		retainedRequest       LLMRequestDTO
+	)
+	err := RegisterLlmExecutionIntercept(
+		interceptName,
+		1,
+		func(nativeJSON json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			if context.RequestCodec.Codec.CodecKind != LLMCodecOpaque {
+				return nil, fmt.Errorf("unexpected request codec identity: %#v", context.RequestCodec.Codec)
+			}
+			if context.ResponseCodec == nil ||
+				context.ResponseCodec.Codec.CodecKind != LLMCodecBuiltin ||
+				context.ResponseCodec.Codec.CodecID == nil ||
+				*context.ResponseCodec.Codec.CodecID != "openai_chat" {
+				return nil, fmt.Errorf("unexpected response codec context: %#v", context.ResponseCodec)
+			}
+			requestCodec := context.RequestCodec.ResolveCodec()
+			responseCodec := context.ResponseCodec.ResolveCodec()
+			if requestCodec == nil || responseCodec == nil {
+				return nil, errors.New("execution codec capability did not resolve")
+			}
+			var request LLMRequestDTO
+			if err := json.Unmarshal(nativeJSON, &request); err != nil {
+				return nil, err
+			}
+			annotated, err := requestCodec.Decode(request)
+			if err != nil {
+				return nil, err
+			}
+			encoded, err := requestCodec.Encode(annotated, request)
+			if err != nil {
+				return nil, err
+			}
+			encodedJSON, err := json.Marshal(encoded)
+			if err != nil {
+				return nil, err
+			}
+			response, err := next(encodedJSON)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := responseCodec.Decode(response); err != nil {
+				return nil, err
+			}
+			retainedRequestCodec = requestCodec
+			retainedResponseCodec = responseCodec
+			retainedRequest = request
+			return response, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf(llmRegisterFailed, err)
+	}
+
+	response, err := LlmCallExecute(
+		"execution_codec_context",
+		makeRequest(),
+		requireEncodedModelExecutor(t),
+		WithLLMCodec(llmRequestResponseCodec()),
+		WithLLMResponseCodec(NewOpenAIChatCodec()),
+	)
+	if err != nil {
+		t.Fatalf(llmCallExecuteFailed, err)
+	}
+	if retainedRequestCodec == nil || retainedResponseCodec == nil {
+		t.Fatal("execution intercept did not retain both codec capabilities")
+	}
+	if _, err := retainedRequestCodec.Decode(retainedRequest); !errors.Is(err, ErrLLMCodecExpired) {
+		t.Fatalf("retained request codec must expire after execution callback, got %v", err)
+	}
+	if _, err := retainedResponseCodec.Decode(response); !errors.Is(err, ErrLLMCodecExpired) {
+		t.Fatalf("retained response codec must expire after execution callback, got %v", err)
+	}
 }
 
 func TestLlmStreamExecutionInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmStreamExecutionIntercept("go_llm_sexec", 1,
-		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(nativeJSON json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			if context.ResponseCodec != nil {
+				t.Fatal("stream execution context unexpectedly exposes a response codec")
+			}
 			return next(nativeJSON)
 		},
 	)
@@ -762,7 +875,7 @@ func TestLlmStreamExecutionInterceptCanCallNext(t *testing.T) {
 	request := makeRequest()
 
 	err := RegisterLlmStreamExecutionIntercept("go_llm_stream_exec_next", 1,
-		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(nativeJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			nextResult, err := next(nativeJSON)
 			if err != nil {
 				return nil, err
@@ -839,7 +952,7 @@ func TestLlmRequestInterceptModifies(t *testing.T) {
 
 func TestLlmExecutionInterceptReplaces(t *testing.T) {
 	RegisterLlmExecutionIntercept("go_llm_exec_rep", 1,
-		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(nativeJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			return json.RawMessage(`{"from_intercept": true}`), nil
 		},
 	)
@@ -888,7 +1001,7 @@ func TestLlmCallableErrorPropagation(t *testing.T) {
 func TestLlmFullPipelineInterceptsAndExecute(t *testing.T) {
 	// Register an execution intercept
 	RegisterLlmExecutionIntercept("go_llm_pipe_exec_int", 1,
-		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(nativeJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			result, err := next(nativeJSON)
 			if err != nil {
 				return nil, err
@@ -1021,7 +1134,7 @@ func TestLlmConditionalGuardrailSelectiveReject(t *testing.T) {
 
 func TestLlmExecutionInterceptWrapsCallable(t *testing.T) {
 	RegisterLlmExecutionIntercept("go_llm_wrap_exec", 1,
-		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(nativeJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			result, err := next(nativeJSON)
 			if err != nil {
 				return nil, err
@@ -1057,7 +1170,7 @@ func TestLlmExecutionInterceptWrapsCallable(t *testing.T) {
 
 func TestLlmExecutionInterceptSeesNextError(t *testing.T) {
 	RegisterLlmExecutionIntercept("go_llm_wrap_exec_err", 1,
-		func(nativeJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(nativeJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			return next(nativeJSON)
 		},
 	)

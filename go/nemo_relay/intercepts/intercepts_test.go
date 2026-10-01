@@ -117,7 +117,7 @@ func runGlobalLLMInterceptShorthandChecks(t *testing.T) {
 	}
 
 	if err := intercepts.RegisterLlmExecution("intercepts_llm_exec", 1,
-		func(request json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(request json.RawMessage, _ nemo_relay.LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			result, err := next(request)
 			if err != nil {
 				return nil, err
@@ -154,7 +154,7 @@ func runGlobalLLMInterceptShorthandChecks(t *testing.T) {
 	}
 
 	if err := intercepts.RegisterLlmStreamExecution("intercepts_llm_stream", 1,
-		func(request json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(request json.RawMessage, _ nemo_relay.LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			return next(request)
 		},
 	); err != nil {
@@ -208,14 +208,14 @@ func runScopeLocalLLMInterceptShorthandChecks(t *testing.T, scopeUUID string) {
 		t.Fatalf("ScopeRegisterLlmRequest failed: %v", err)
 	}
 	if err := intercepts.ScopeRegisterLlmExecution(scopeUUID, "intercepts_scope_llm_exec", 1,
-		func(request json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(request json.RawMessage, _ nemo_relay.LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			return next(request)
 		},
 	); err != nil {
 		t.Fatalf("ScopeRegisterLlmExecution failed: %v", err)
 	}
 	if err := intercepts.ScopeRegisterLlmStreamExecution(scopeUUID, "intercepts_scope_llm_stream", 1,
-		func(request json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(request json.RawMessage, _ nemo_relay.LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			return next(request)
 		},
 	); err != nil {

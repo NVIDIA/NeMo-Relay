@@ -237,9 +237,10 @@ def register_llm_execution(name: str, priority: int, fn: LlmExecutionIntercept) 
     Args:
         name: Unique intercept name used for later replacement or removal.
         priority: Execution order for the intercept. Lower values run first.
-        fn: Callable invoked as ``fn(name, request, next_call)``. The callback
-            may call ``next_call(request)`` to continue execution, modify the
-            result, or short-circuit the provider call.
+        fn: Callable invoked as ``fn(name, request, context, next_call)``. The
+            context exposes the active request and unary-response codecs. The
+            callback may call ``next_call(request)`` to continue execution,
+            modify the result, or short-circuit the provider call.
 
     Returns:
         None: This function returns after the intercept is registered.
@@ -281,9 +282,10 @@ def register_llm_stream_execution(
     Args:
         name: Unique intercept name used for later replacement or removal.
         priority: Execution order for the intercept. Lower values run first.
-        fn: Callable invoked as ``fn(request, next_call)`` that returns an
-            async iterator of JSON chunks, either by delegating to
-            ``next_call(request)`` or by replacing the stream entirely.
+        fn: Callable invoked as ``fn(name, request, context, next_call)`` that
+            returns an async iterator of JSON chunks. The streaming context
+            exposes the request codec and no response codec. The callback may
+            delegate to ``next_call(request)`` or replace the stream entirely.
 
     Returns:
         None: This function returns after the intercept is registered.

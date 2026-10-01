@@ -806,7 +806,7 @@ impl AdaptiveFeature for AcgFeature {
             ctx.register_llm_execution_intercept(
                 &self.execution_name,
                 self.priority,
-                Arc::new(move |name, request, next| {
+                Arc::new(move |name, request, context, next| {
                     let execution_intercept = execution_intercept.clone();
                     let bound_scopes = bound_scopes.clone();
                     let name = name.to_string();
@@ -818,7 +818,7 @@ impl AdaptiveFeature for AcgFeature {
                         if has_bound_scopes {
                             return next(request).await;
                         }
-                        execution_intercept(&name, request, next).await
+                        execution_intercept(&name, request, context, next).await
                     })
                 }),
             )?;
@@ -832,7 +832,7 @@ impl AdaptiveFeature for AcgFeature {
             ctx.register_llm_stream_execution_intercept(
                 &self.stream_name,
                 self.priority,
-                Arc::new(move |name, request, next| {
+                Arc::new(move |name, request, context, next| {
                     let stream_intercept = stream_intercept.clone();
                     let bound_scopes = bound_scopes.clone();
                     let name = name.to_string();
@@ -844,7 +844,7 @@ impl AdaptiveFeature for AcgFeature {
                         if has_bound_scopes {
                             return next(request).await;
                         }
-                        stream_intercept(&name, request, next).await
+                        stream_intercept(&name, request, context, next).await
                     })
                 }),
             )
