@@ -375,9 +375,13 @@ The `gen_ai` output format adds the following fields after sanitization:
 
 | Field | Content |
 |---|---|
-| `gen_ai.tool.call.arguments` | Tool arguments that are JSON objects |
-| `gen_ai.tool.call.result` | Successful tool results that are JSON objects |
+| `gen_ai.tool.call.arguments` | Canonical JSON text for non-null sanitized tool arguments |
+| `gen_ai.tool.call.result` | Canonical JSON text for non-null sanitized successful tool results |
 | `gen_ai.tool.definitions` | Tool-definition identities |
+
+Arguments and successful results can be objects, arrays, strings, numbers, or
+booleans. Relay preserves each non-null sanitized value in its canonical JSON
+serialization and omits null values.
 
 Review who can access your collector and how you redact data before upgrading.
 Setting `enable_full_payloads = false` does not disable tool-content export.
