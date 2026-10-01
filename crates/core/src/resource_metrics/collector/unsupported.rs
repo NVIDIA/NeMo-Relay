@@ -3,21 +3,21 @@
 
 use std::io;
 
-use nemo_relay_types::api::resource_metrics::{ResourceMeasurementUnit, ResourceOperatingSystem};
+use nemo_relay_types::api::resource_metrics::{
+    CapacityUnit, DurationUnit, ResourceOperatingSystem,
+};
 
 use super::{
     AcceleratorSample, CollectionTarget, EnvironmentSample, ProcessSample, ProcessSampleConfig,
 };
 
 pub(super) const OPERATING_SYSTEM: ResourceOperatingSystem = ResourceOperatingSystem::Unsupported;
-pub(super) const CPU_TIME_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Milliseconds;
-pub(super) const RESIDENT_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PRIVATE_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PHYSICAL_FOOTPRINT_UNIT: ResourceMeasurementUnit =
-    ResourceMeasurementUnit::Kibibytes;
-pub(super) const VIRTUAL_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PEAK_RESIDENT_MEMORY_UNIT: ResourceMeasurementUnit =
-    ResourceMeasurementUnit::Kibibytes;
+pub(super) const CPU_TIME_UNIT: DurationUnit = DurationUnit::Milliseconds;
+pub(super) const RESIDENT_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PRIVATE_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PHYSICAL_FOOTPRINT_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const VIRTUAL_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PEAK_RESIDENT_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
 
 pub(super) fn process_identity(_process_id: u32) -> io::Result<u64> {
     Err(io::Error::new(

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::api::resource_metrics::CpuMetrics;
+use crate::api::resource_metrics::{CpuMetrics, DataUnit, DurationUnit};
 
 fn snapshot(total_time: u64) -> ResourceMetricsSnapshot {
     ResourceMetricsSnapshot {
@@ -15,7 +15,7 @@ fn snapshot(total_time: u64) -> ResourceMetricsSnapshot {
             system_time: None,
             total_time: Some(ResourceMeasurement::new(
                 total_time,
-                ResourceMeasurementUnit::Milliseconds,
+                DurationUnit::Milliseconds,
             )),
             consumption_rate: None,
             throttled_time: None,
@@ -123,14 +123,8 @@ fn cli_process_tree_waits_for_the_owned_target() {
 fn disk_throughput_uses_monotonic_deltas_and_resets_on_target_change() {
     let mut first = snapshot(0);
     first.disk = Some(crate::api::resource_metrics::DiskMetrics {
-        read_data: Some(ResourceMeasurement::new(
-            100_u64,
-            ResourceMeasurementUnit::Bytes,
-        )),
-        write_data: Some(ResourceMeasurement::new(
-            200_u64,
-            ResourceMeasurementUnit::Bytes,
-        )),
+        read_data: Some(ResourceMeasurement::new(100_u64, DataUnit::Bytes)),
+        write_data: Some(ResourceMeasurement::new(200_u64, DataUnit::Bytes)),
         read_throughput: None,
         write_throughput: None,
         read_operations: None,
@@ -150,14 +144,8 @@ fn disk_throughput_uses_monotonic_deltas_and_resets_on_target_change() {
 
     let mut second = snapshot(0);
     second.disk = Some(crate::api::resource_metrics::DiskMetrics {
-        read_data: Some(ResourceMeasurement::new(
-            200_u64,
-            ResourceMeasurementUnit::Bytes,
-        )),
-        write_data: Some(ResourceMeasurement::new(
-            250_u64,
-            ResourceMeasurementUnit::Bytes,
-        )),
+        read_data: Some(ResourceMeasurement::new(200_u64, DataUnit::Bytes)),
+        write_data: Some(ResourceMeasurement::new(250_u64, DataUnit::Bytes)),
         read_throughput: None,
         write_throughput: None,
         read_operations: None,
@@ -183,10 +171,7 @@ fn disk_throughput_uses_monotonic_deltas_and_resets_on_target_change() {
 
     let mut changed = snapshot(0);
     changed.disk = Some(crate::api::resource_metrics::DiskMetrics {
-        read_data: Some(ResourceMeasurement::new(
-            300_u64,
-            ResourceMeasurementUnit::Bytes,
-        )),
+        read_data: Some(ResourceMeasurement::new(300_u64, DataUnit::Bytes)),
         write_data: None,
         read_throughput: None,
         write_throughput: None,
@@ -216,10 +201,7 @@ fn disk_throughput_includes_newly_seen_processes() {
     let mut baseline = None;
     let mut first = snapshot(0);
     first.disk = Some(crate::api::resource_metrics::DiskMetrics {
-        read_data: Some(ResourceMeasurement::new(
-            100_u64,
-            ResourceMeasurementUnit::Bytes,
-        )),
+        read_data: Some(ResourceMeasurement::new(100_u64, DataUnit::Bytes)),
         write_data: None,
         read_throughput: None,
         write_throughput: None,
@@ -237,10 +219,7 @@ fn disk_throughput_includes_newly_seen_processes() {
 
     let mut second = snapshot(0);
     second.disk = Some(crate::api::resource_metrics::DiskMetrics {
-        read_data: Some(ResourceMeasurement::new(
-            400_u64,
-            ResourceMeasurementUnit::Bytes,
-        )),
+        read_data: Some(ResourceMeasurement::new(400_u64, DataUnit::Bytes)),
         write_data: None,
         read_throughput: None,
         write_throughput: None,
@@ -272,7 +251,7 @@ fn unit_config_rejects_incompatible_or_unknown_choices() {
     })).unwrap();
     assert_eq!(
         valid.units.cpu.user_time,
-        crate::plugins::resource_metrics::config::TimeUnit::Seconds
+        crate::plugins::resource_metrics::config::DurationUnit::Seconds
     );
     assert!(
         serde_json::from_value::<ResourceMetricsConfig>(serde_json::json!({
@@ -333,10 +312,7 @@ fn out_of_order_samples_do_not_rewind_rate_baselines() {
     for (offset, read) in [(0, 100), (2, 200), (1, 150)] {
         let mut current = snapshot(0);
         current.disk = Some(crate::api::resource_metrics::DiskMetrics {
-            read_data: Some(ResourceMeasurement::new(
-                read,
-                ResourceMeasurementUnit::Bytes,
-            )),
+            read_data: Some(ResourceMeasurement::new(read, DataUnit::Bytes)),
             write_data: None,
             read_throughput: None,
             write_throughput: None,
@@ -370,14 +346,8 @@ fn disk_rate_snapshot(scope: ResourceMeasurementScope) -> ResourceMetricsSnapsho
         ]),
     });
     value.disk = Some(crate::api::resource_metrics::DiskMetrics {
-        read_data: Some(ResourceMeasurement::new(
-            100_u64,
-            ResourceMeasurementUnit::Bytes,
-        )),
-        write_data: Some(ResourceMeasurement::new(
-            100_u64,
-            ResourceMeasurementUnit::Bytes,
-        )),
+        read_data: Some(ResourceMeasurement::new(100_u64, DataUnit::Bytes)),
+        write_data: Some(ResourceMeasurement::new(100_u64, DataUnit::Bytes)),
         read_throughput: None,
         write_throughput: None,
         read_operations: None,
@@ -735,10 +705,8 @@ fn cpu_rates_clear_missing_samples_and_reject_overflow_without_rewinding_baselin
     );
     assert!(reset.cpu.unwrap().consumption_rate.is_none());
     let mut direct = snapshot(1);
-    direct.cpu.as_mut().unwrap().consumption_rate = Some(ResourceMeasurement::new(
-        2.0,
-        ResourceMeasurementUnit::LogicalProcessors,
-    ));
+    direct.cpu.as_mut().unwrap().consumption_rate =
+        Some(ResourceMeasurement::new(2.0, CpuUnit::LogicalProcessors));
     derive_cpu_rate(
         &mut direct,
         now + Duration::from_secs(3),
@@ -762,14 +730,8 @@ fn scope_names_cpu_units_and_network_validation_match_the_public_contract() {
     ] {
         assert_eq!(scope.as_str(), name);
     }
-    assert_eq!(
-        ResourceMeasurementUnit::from(CpuUnit::Millicores),
-        ResourceMeasurementUnit::Millicores
-    );
-    assert_eq!(
-        ResourceMeasurementUnit::from(UtilizationUnit::Percentage),
-        ResourceMeasurementUnit::Percentage
-    );
+    assert_eq!(CpuUnit::Millicores, CpuUnit::Millicores);
+    assert_eq!(UtilizationUnit::Percentage, UtilizationUnit::Percentage);
     let mut config = ResourceMetricsConfig::default();
     config.network.interfaces = vec![" \t".into()];
     assert!(

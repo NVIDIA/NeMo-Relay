@@ -164,7 +164,7 @@ func TestCollectResourceMetricsAppliesUnitsAndLabelsNetworkGlobal(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CollectResourceMetrics: %v", err)
 	}
-	if snapshot.Memory == nil || snapshot.Memory.SystemTotal == nil || snapshot.Memory.SystemTotal.Unit != ResourceUnitMebibytes {
+	if snapshot.Memory == nil || snapshot.Memory.SystemTotal == nil || snapshot.Memory.SystemTotal.Unit != CapacityMebibytes {
 		t.Fatalf("configured memory unit missing: %+v", snapshot.Memory)
 	}
 	value := snapshot.Memory.SystemTotal.Value
@@ -174,7 +174,7 @@ func TestCollectResourceMetricsAppliesUnitsAndLabelsNetworkGlobal(t *testing.T) 
 	if snapshot.Network == nil || snapshot.Network.MeasurementScope != ResourceMeasurementScopeGlobal {
 		t.Fatalf("network must be global: %+v", snapshot.Network)
 	}
-	if received := snapshot.Network.System.ReceivedData; received != nil && received.Unit != ResourceUnitMegabytes {
+	if received := snapshot.Network.System.ReceivedData; received != nil && received.Unit != DataMegabytes {
 		t.Fatalf("configured network unit = %q", received.Unit)
 	}
 }
@@ -299,4 +299,46 @@ resident = "mebibytes"
 		return
 	}
 	t.Fatalf("resource metrics component is missing: %+v", report.ResolvedConfig)
+}
+
+func checkResourceUnits[U ResourceUnit](t *testing.T, units []U) {
+	t.Helper()
+	for _, unit := range units {
+		original := ResourceMeasurement[uint64, U]{Value: 1, Unit: unit}
+		wire, err := json.Marshal(original)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded ResourceMeasurement[uint64, U]
+		if err := json.Unmarshal(wire, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded != original {
+			t.Fatalf("measurement changed: %+v != %+v", decoded, original)
+		}
+		for _, invalid := range []string{`{"value":1,"unit":"invalid"}`, `{"value":1,"unit":42}`} {
+			if err := json.Unmarshal([]byte(invalid), &decoded); err == nil {
+				t.Fatalf("accepted %s", invalid)
+			}
+		}
+	}
+}
+
+func TestResourceMeasurementsUseSemanticUnitCategories(t *testing.T) {
+	checkResourceUnits(t, []DurationUnit{DurationMicroseconds, DurationMilliseconds, DurationSeconds, DurationMinutes})
+	checkResourceUnits(t, []CapacityUnit{CapacityBytes, CapacityKilobytes, CapacityMegabytes, CapacityGigabytes, CapacityTerabytes, CapacityKibibytes, CapacityMebibytes, CapacityGibibytes, CapacityTebibytes})
+	checkResourceUnits(t, []DataUnit{DataBytes, DataKilobytes, DataMegabytes, DataGigabytes, DataTerabytes, DataKibibytes, DataMebibytes, DataGibibytes, DataTebibytes})
+	checkResourceUnits(t, []BandwidthUnit{BandwidthBytesPerSecond, BandwidthKibibytesPerSecond, BandwidthMebibytesPerSecond, BandwidthGibibytesPerSecond, BandwidthBitsPerSecond, BandwidthMegabitsPerSecond, BandwidthGigabitsPerSecond})
+	checkResourceUnits(t, []CpuUnit{CpuLogicalProcessors, CpuMillicores})
+	checkResourceUnits(t, []UtilizationUnit{UtilizationPercentage, UtilizationFraction})
+	checkResourceUnits(t, []CountUnit{CountProcesses, CountThreads, CountFileDescriptors, CountHandles, CountEvents, CountOperations, CountPackets, CountErrors})
+}
+
+func TestDurationMeasurementsRejectOtherUnitCategories(t *testing.T) {
+	for _, unit := range []string{"bytes", "megabits_per_second", "logical_processors", "fraction", "events"} {
+		var measurement ResourceMeasurement[uint64, DurationUnit]
+		if err := json.Unmarshal([]byte(`{"value":1,"unit":"`+unit+`"}`), &measurement); err == nil {
+			t.Fatalf("accepted duration unit %q", unit)
+		}
+	}
 }

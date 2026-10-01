@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use libloading::Library;
 use nemo_relay_types::api::resource_metrics::{
-    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, AcceleratorVendor, ResourceMeasurement,
-    ResourceMeasurementUnit,
+    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, AcceleratorVendor, CapacityUnit,
+    ResourceMeasurement, UtilizationUnit,
 };
 
 use super::{AcceleratorSample, accelerator_device_is_selected};
@@ -204,16 +204,14 @@ fn collect_linux_drm_devices_from(
         let memory_used = fs::read_to_string(device.join("mem_info_vram_used"))
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
-            .map(|bytes| {
-                ResourceMeasurement::new(bytes / 1_024, ResourceMeasurementUnit::Kibibytes)
-            });
+            .map(|bytes| ResourceMeasurement::new(bytes / 1_024, CapacityUnit::Kibibytes));
         let compute_utilization = (vendor == AcceleratorVendor::Amd)
             .then(|| fs::read_to_string(device.join("gpu_busy_percent")).ok())
             .flatten()
             .and_then(|value| value.trim().parse::<u32>().ok())
             .filter(|percent| *percent <= 100)
             .map(|percent| {
-                ResourceMeasurement::new(f64::from(percent), ResourceMeasurementUnit::Percentage)
+                ResourceMeasurement::new(f64::from(percent), UtilizationUnit::Percentage)
             });
         if memory_used.is_none() && compute_utilization.is_none() {
             continue;
@@ -285,19 +283,14 @@ fn collect_nvml_with_session(
             let mut memory = NvmlMemory::default();
             let memory_used = (config.device_metrics
                 && (session.device_memory)(device, &mut memory) == NVML_SUCCESS)
-                .then(|| {
-                    ResourceMeasurement::new(
-                        memory.used / 1_024,
-                        ResourceMeasurementUnit::Kibibytes,
-                    )
-                });
+                .then(|| ResourceMeasurement::new(memory.used / 1_024, CapacityUnit::Kibibytes));
             let mut utilization = NvmlUtilization::default();
             let compute_utilization = (config.device_metrics
                 && (session.device_utilization)(device, &mut utilization) == NVML_SUCCESS)
                 .then(|| {
                     ResourceMeasurement::new(
                         f64::from(utilization.gpu),
-                        ResourceMeasurementUnit::Percentage,
+                        UtilizationUnit::Percentage,
                     )
                 });
             if config.device_metrics {
@@ -373,16 +366,11 @@ fn collect_nvml_with_session(
                         process_id,
                         memory_used: process_memory.get(&process_id).copied().flatten().map(
                             |value| {
-                                ResourceMeasurement::new(
-                                    value / 1_024,
-                                    ResourceMeasurementUnit::Kibibytes,
-                                )
+                                ResourceMeasurement::new(value / 1_024, CapacityUnit::Kibibytes)
                             },
                         ),
                         compute_utilization: process_utilization.get(&process_id).copied().map(
-                            |value| {
-                                ResourceMeasurement::new(value, ResourceMeasurementUnit::Percentage)
-                            },
+                            |value| ResourceMeasurement::new(value, UtilizationUnit::Percentage),
                         ),
                     });
             }
@@ -650,7 +638,7 @@ fn drm_process_records(
             process_id,
             memory_used: memory.map(|(value, unit)| ResourceMeasurement::new(value, unit)),
             compute_utilization: utilization
-                .map(|value| ResourceMeasurement::new(value, ResourceMeasurementUnit::Percentage)),
+                .map(|value| ResourceMeasurement::new(value, UtilizationUnit::Percentage)),
         });
     }
     records
@@ -662,7 +650,7 @@ struct DrmClient {
     identity: String,
     vendor: AcceleratorVendor,
     device_identifier: String,
-    memory_regions: Vec<(u64, ResourceMeasurementUnit)>,
+    memory_regions: Vec<(u64, CapacityUnit)>,
     engine_counters: Vec<(String, DrmEngineCounter)>,
 }
 
@@ -848,19 +836,16 @@ fn drm_client_utilization(
 }
 
 #[cfg(target_os = "linux")]
-fn parse_drm_memory(value: &str) -> Option<(u64, ResourceMeasurementUnit)> {
+fn parse_drm_memory(value: &str) -> Option<(u64, CapacityUnit)> {
     let mut fields = value.split_whitespace();
     let value = fields.next()?.parse::<u64>().ok()?;
     let unit = match fields.next() {
-        Some("KiB") => ResourceMeasurementUnit::Kibibytes,
+        Some("KiB") => CapacityUnit::Kibibytes,
         Some("MiB") => {
-            return Some((
-                value.checked_mul(1_024)?,
-                ResourceMeasurementUnit::Kibibytes,
-            ));
+            return Some((value.checked_mul(1_024)?, CapacityUnit::Kibibytes));
         }
         Some("bytes" | "B") | None => {
-            return Some((value / 1_024, ResourceMeasurementUnit::Kibibytes));
+            return Some((value / 1_024, CapacityUnit::Kibibytes));
         }
         _ => return None,
     };
@@ -868,7 +853,7 @@ fn parse_drm_memory(value: &str) -> Option<(u64, ResourceMeasurementUnit)> {
 }
 
 #[cfg(target_os = "linux")]
-fn aggregate_drm_memory(clients: &[DrmClient]) -> Option<(u64, ResourceMeasurementUnit)> {
+fn aggregate_drm_memory(clients: &[DrmClient]) -> Option<(u64, CapacityUnit)> {
     let mut unit = None;
     let mut total = 0_u64;
     let mut present = false;

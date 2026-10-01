@@ -101,7 +101,7 @@ fn effective_limits_are_unavailable_for_invalid_or_unreadable_ancestors() {
 #[test]
 fn cgroup_sample_reads_selected_categories_and_normalizes_units() {
     use crate::plugins::resource_metrics::config::ResourceMetricsConfig;
-    use nemo_relay_types::api::resource_metrics::ResourceMeasurementUnit;
+    use nemo_relay_types::api::resource_metrics::CapacityUnit;
     let directory = tempfile::tempdir().unwrap();
     for (name, value) in [
         ("cpu.stat", "nr_throttled 7\nthrottled_usec 2000999\n"),
@@ -133,7 +133,7 @@ fn cgroup_sample_reads_selected_categories_and_normalizes_units() {
     assert_eq!(sample.memory_limit.unwrap().value, 4);
     let memory = sample.environment_accounted_memory.unwrap();
     assert_eq!(memory.value, 2);
-    assert_eq!(memory.unit, ResourceMeasurementUnit::Kibibytes);
+    assert_eq!(memory.unit, CapacityUnit::Kibibytes);
     assert_eq!(sample.cpu_some_pressure_stall_time.unwrap().value, 3000);
     assert_eq!(sample.memory_full_pressure_stall_time.unwrap().value, 2000);
     assert_eq!(sample.out_of_memory_event_count.unwrap().value, 4);

@@ -487,6 +487,25 @@ Every available measurement contains a `value` and a `unit`. Relay collects in
 consistent base units, then applies your chosen output units. Missing unit
 settings keep the defaults. Unit names use `snake_case` in every API.
 
+The typed APIs group units by what they measure. Each measurement field uses
+its matching unit type, so a duration cannot use a capacity or bandwidth unit.
+Capacity and transferred data have separate types even though they allow the
+same byte units. Rust uses enums. Python and Node.js use string enums. JSON
+measurements still contain only a value and a unit, such as
+`{ "value": 1, "unit": "seconds" }`. An unavailable measurement is `null`.
+
+The following table maps the unit types to their measurements:
+
+| Unit type | Measurements |
+| --- | --- |
+| `DurationUnit` | CPU times, throttled time, and CPU or memory pressure time |
+| `CapacityUnit` | Memory, GPU memory, and filesystem capacity |
+| `DataUnit` | Disk and network data totals |
+| `BandwidthUnit` | Disk and network transfer rates |
+| `CpuUnit` | CPU consumption and effective CPU capacity |
+| `UtilizationUnit` | GPU compute use |
+| `CountUnit` | Processes, threads, descriptors, handles, events, operations, packets, and errors |
+
 This example sets different units for individual measurements:
 
 ```toml
@@ -520,6 +539,7 @@ The following table lists the allowed units for each measurement family:
 | --- | --- | --- |
 | CPU and pressure time | `microseconds`, `milliseconds`, `seconds`, `minutes` | `milliseconds` |
 | Memory and GPU memory | `bytes`, `kilobytes`, `megabytes`, `gigabytes`, `terabytes`, `kibibytes`, `mebibytes`, `gibibytes`, `tebibytes` | `kibibytes` |
+| Filesystem capacity | The same storage units | `bytes` |
 | Disk and network data | The same storage units | `bytes` |
 | Disk and network throughput | `bytes_per_second`, `kibibytes_per_second`, `mebibytes_per_second`, `gibibytes_per_second`, `bits_per_second`, `megabits_per_second`, `gigabits_per_second` | `bytes_per_second` |
 | CPU use and capacity | `logical_processors`, `millicores` | `logical_processors` |

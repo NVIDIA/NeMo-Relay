@@ -22,6 +22,32 @@ function assertMeasurement(measurement) {
 }
 
 describe('resource_metrics built-in plugin API', () => {
+  it('exports semantic unit enums accepted by the canonical configuration', () => {
+    for (const [unitType, category, field] of [
+      [relay.DurationUnit, 'cpu', 'user_time'],
+      [relay.CapacityUnit, 'memory', 'resident'],
+      [relay.CapacityUnit, 'disk', 'filesystem_total_capacity'],
+      [relay.DataUnit, 'disk', 'read_data'],
+      [relay.BandwidthUnit, 'disk', 'read_throughput'],
+      [relay.CpuUnit, 'cpu', 'consumption_rate'],
+      [relay.UtilizationUnit, 'gpu', 'device_compute_utilization'],
+    ]) {
+      for (const unit of Object.values(unitType)) {
+        const report = relay.validateExact(config({ units: { [category]: { [field]: unit } } }));
+        assert.deepEqual(report.config.diagnostics, [], `${category}.${field}: ${unit}`);
+        assert.equal(JSON.stringify({ value: 1, unit }), `{"value":1,"unit":"${unit}"}`);
+      }
+    }
+    assert.deepEqual(
+      Object.values(relay.CountUnit).sort(),
+      ['processes', 'threads', 'file_descriptors', 'handles', 'events', 'operations', 'packets', 'errors'].sort(),
+    );
+    const invalid = relay.validateExact(
+      config({ units: { cpu: { user_time: relay.BandwidthUnit.MegabitsPerSecond } } }),
+    );
+    assert.ok(invalid.config.diagnostics.some((diagnostic) => diagnostic.level === 'error'));
+  });
+
   it('rejects asynchronously when the component is disabled', async () => {
     const activation = await plugin.initialize({
       version: 1,

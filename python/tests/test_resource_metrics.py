@@ -5,7 +5,7 @@
 
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
-from typing import get_args
+from typing import Any
 
 import pytest
 
@@ -14,21 +14,53 @@ from nemo_relay import plugin, resource_metrics
 
 
 def _assert_measurement_state(
-    measurement: resource_metrics.ResourceMeasurement[int] | resource_metrics.ResourceMeasurement[float] | None,
+    measurement: resource_metrics.ResourceMeasurement[int | float, Any] | None,
 ) -> None:
     if measurement is None:
         return
     assert is_dataclass(measurement)
     assert tuple(asdict(measurement)) == ("value", "unit")
-    assert measurement.unit in get_args(resource_metrics.MeasurementUnit)
+    assert isinstance(
+        measurement.unit,
+        (
+            resource_metrics.DurationUnit,
+            resource_metrics.CapacityUnit,
+            resource_metrics.DataUnit,
+            resource_metrics.BandwidthUnit,
+            resource_metrics.CpuUnit,
+            resource_metrics.UtilizationUnit,
+            resource_metrics.CountUnit,
+        ),
+    )
     assert not hasattr(measurement, "timestamp")
     assert not hasattr(measurement, "status")
     assert not hasattr(measurement, "reason")
 
 
-@pytest.mark.parametrize("unit", ["seconds", "gibibytes", "megabits_per_second", "millicores", "fraction", "packets"])
-def test_measurement_helper_accepts_units_beyond_the_default_set(unit: resource_metrics.MeasurementUnit) -> None:
-    _assert_measurement_state(resource_metrics.ResourceMeasurement(value=1, unit=unit))
+@pytest.mark.parametrize(
+    "unit",
+    [
+        resource_metrics.DurationUnit.SECONDS,
+        resource_metrics.CapacityUnit.GIBIBYTES,
+        resource_metrics.DataUnit.MEGABYTES,
+        resource_metrics.BandwidthUnit.MEGABITS_PER_SECOND,
+        resource_metrics.CpuUnit.MILLICORES,
+        resource_metrics.UtilizationUnit.FRACTION,
+        resource_metrics.CountUnit.PACKETS,
+    ],
+)
+def test_measurement_helper_accepts_semantic_unit_categories(unit: Any) -> None:
+    measurement = resource_metrics._measurement({"value": 1, "unit": str(unit)}, type(unit))
+    _assert_measurement_state(measurement)
+    assert measurement is not None
+    assert isinstance(measurement.unit, type(unit))
+    assert str(measurement.unit) == str(unit)
+
+
+@pytest.mark.parametrize("unit", ["bytes", "megabits_per_second", "logical_processors", "fraction", "events"])
+def test_duration_measurement_rejects_other_categories(unit: str) -> None:
+    with pytest.raises(ValueError):
+        resource_metrics._measurement({"value": 1, "unit": unit}, resource_metrics.DurationUnit)
 
 
 def _config(**resource_config: object) -> plugin.PluginConfig:

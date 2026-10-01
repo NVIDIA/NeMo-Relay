@@ -99,7 +99,7 @@ fn global_sums_skip_unreadable_counters_and_report_field_coverage() {
     };
     let sum = aggregation.sum(
         "cpu.user_time",
-        super::ResourceMeasurementUnit::Milliseconds,
+        super::DurationUnit::Milliseconds,
         |sample| sample.user_cpu_time,
     );
     assert_eq!(sum.unwrap().value, super::ResourceMetricValue::Integer(30));
@@ -109,7 +109,7 @@ fn global_sums_skip_unreadable_counters_and_report_field_coverage() {
         aggregation
             .sum(
                 "cpu.user_time",
-                super::ResourceMeasurementUnit::Milliseconds,
+                super::DurationUnit::Milliseconds,
                 |sample| sample.user_cpu_time
             )
             .is_none()
@@ -135,7 +135,7 @@ fn sums_distinguish_zero_unavailable_overflow_and_incomplete_selection() {
         };
         let sum = aggregation.sum(
             "cpu.user_time",
-            super::ResourceMeasurementUnit::Milliseconds,
+            super::DurationUnit::Milliseconds,
             |sample| sample.user_cpu_time,
         );
         assert_eq!(
@@ -184,10 +184,7 @@ fn global_cpu_sampler_requires_a_baseline_and_a_minimum_interval() {
     sampler.as_mut().unwrap().last_sampled_at =
         std::time::Instant::now() - sysinfo::MINIMUM_CPU_UPDATE_INTERVAL;
     let measurement = super::GlobalCpuSampler::sample(&mut sampler).unwrap();
-    assert_eq!(
-        measurement.unit,
-        super::ResourceMeasurementUnit::LogicalProcessors
-    );
+    assert_eq!(measurement.unit, super::CpuUnit::LogicalProcessors);
     assert!(measurement.value.is_finite());
     assert!(measurement.value >= 0.0);
 }
@@ -230,9 +227,7 @@ fn collector_maps_source_errors_and_rejects_unowned_or_missing_targets() {
     }
     assert!(super::owned_process_tree_target(std::process::id()).is_err());
     assert!(super::owned_process_tree_target(u32::MAX).is_err());
-    assert!(
-        super::count_measurement(1, false, super::ResourceMeasurementUnit::Processes).is_none()
-    );
+    assert!(super::count_measurement(1, false, super::CountUnit::Processes).is_none());
 }
 
 fn tree_target() -> super::CollectionTarget {
@@ -295,7 +290,7 @@ fn exited_descendants_are_removed_before_environment_gpu_and_process_aggregation
             aggregation
                 .sum(
                     "cpu.user_time",
-                    super::ResourceMeasurementUnit::Milliseconds,
+                    super::DurationUnit::Milliseconds,
                     |sample| sample.user_cpu_time
                 )
                 .unwrap()

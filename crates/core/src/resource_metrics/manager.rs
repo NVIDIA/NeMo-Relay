@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use nemo_relay_types::api::resource_metrics::{
-    ResourceMeasurement, ResourceMeasurementScope, ResourceMeasurementUnit, ResourceMetricsSnapshot,
+    BandwidthUnit, CpuUnit, ResourceMeasurement, ResourceMeasurementScope, ResourceMetricsSnapshot,
 };
 
 use super::network::NetworkSampler;
@@ -487,10 +487,7 @@ fn derive_cpu_rate(
         delta = total;
     }
     let value = delta as f64 / interval_millis;
-    cpu.consumption_rate = Some(ResourceMeasurement::new(
-        value,
-        ResourceMeasurementUnit::LogicalProcessors,
-    ));
+    cpu.consumption_rate = Some(ResourceMeasurement::new(value, CpuUnit::LogicalProcessors));
 }
 
 fn derive_disk_rates(
@@ -581,9 +578,9 @@ fn derive_disk_rates(
         } else {
             delta.and_then(|delta| {
                 let value = delta as f64 / seconds;
-                value.is_finite().then(|| {
-                    ResourceMeasurement::new(value, ResourceMeasurementUnit::BytesPerSecond)
-                })
+                value
+                    .is_finite()
+                    .then(|| ResourceMeasurement::new(value, BandwidthUnit::BytesPerSecond))
             })
         };
         (rate, supplied)

@@ -48,7 +48,26 @@ fn asynchronous_collection_returns_the_active_plugins_snapshot() {
         }
         let snapshot: nemo_relay::api::resource_metrics::ResourceMetricsSnapshot =
             serde_json::from_str(std::ffi::CStr::from_ptr(output).to_str().unwrap()).unwrap();
-        assert!(snapshot.cpu.is_some());
+        let cpu = snapshot.cpu.as_ref().unwrap();
+        if let Some(total_time) = &cpu.total_time {
+            let unit: nemo_relay::api::resource_metrics::DurationUnit = total_time.unit;
+            assert_eq!(
+                unit,
+                nemo_relay::api::resource_metrics::DurationUnit::Milliseconds
+            );
+        }
+        let memory = snapshot
+            .memory
+            .as_ref()
+            .unwrap()
+            .system_total
+            .as_ref()
+            .unwrap();
+        let unit: nemo_relay::api::resource_metrics::CapacityUnit = memory.unit;
+        assert_eq!(
+            unit,
+            nemo_relay::api::resource_metrics::CapacityUnit::Kibibytes
+        );
         assert!(snapshot.gpu.is_none());
         assert_eq!(
             snapshot.measurement_scope,

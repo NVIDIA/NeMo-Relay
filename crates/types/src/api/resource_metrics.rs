@@ -57,19 +57,99 @@ impl ResourceOperatingSystem {
     }
 }
 
-/// Native or mathematically defined unit for one resource measurement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// A unit with a stable name in snapshots and metric marks.
+pub trait ResourceUnit: Copy {
+    /// Return the canonical snake_case unit name.
+    fn as_str(self) -> &'static str;
+}
+
+/// Units for elapsed and cumulative durations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum ResourceMeasurementUnit {
+pub enum DurationUnit {
     /// Microseconds.
     Microseconds,
     /// Milliseconds.
+    #[default]
     Milliseconds,
     /// Seconds.
     Seconds,
     /// Minutes.
     Minutes,
+}
+
+impl DurationUnit {
+    /// Return the canonical snake_case unit name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Microseconds => "microseconds",
+            Self::Milliseconds => "milliseconds",
+            Self::Seconds => "seconds",
+            Self::Minutes => "minutes",
+        }
+    }
+}
+
+impl ResourceUnit for DurationUnit {
+    fn as_str(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+/// Units for memory and filesystem capacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CapacityUnit {
     /// Bytes.
+    Bytes,
+    /// Kilobytes.
+    Kilobytes,
+    /// Megabytes.
+    Megabytes,
+    /// Gigabytes.
+    Gigabytes,
+    /// Terabytes.
+    Terabytes,
+    /// Kibibytes.
+    #[default]
+    Kibibytes,
+    /// Mebibytes.
+    Mebibytes,
+    /// Gibibytes.
+    Gibibytes,
+    /// Tebibytes.
+    Tebibytes,
+}
+
+impl CapacityUnit {
+    /// Return the canonical snake_case unit name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bytes => "bytes",
+            Self::Kilobytes => "kilobytes",
+            Self::Megabytes => "megabytes",
+            Self::Gigabytes => "gigabytes",
+            Self::Terabytes => "terabytes",
+            Self::Kibibytes => "kibibytes",
+            Self::Mebibytes => "mebibytes",
+            Self::Gibibytes => "gibibytes",
+            Self::Tebibytes => "tebibytes",
+        }
+    }
+}
+
+impl ResourceUnit for CapacityUnit {
+    fn as_str(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+/// Units for cumulative transferred data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DataUnit {
+    /// Bytes.
+    #[default]
     Bytes,
     /// Kilobytes.
     Kilobytes,
@@ -87,54 +167,12 @@ pub enum ResourceMeasurementUnit {
     Gibibytes,
     /// Tebibytes.
     Tebibytes,
-    /// Bytes Per Second.
-    BytesPerSecond,
-    /// Kibibytes Per Second.
-    KibibytesPerSecond,
-    /// Mebibytes Per Second.
-    MebibytesPerSecond,
-    /// Gibibytes Per Second.
-    GibibytesPerSecond,
-    /// Bits Per Second.
-    BitsPerSecond,
-    /// Megabits Per Second.
-    MegabitsPerSecond,
-    /// Gigabits Per Second.
-    GigabitsPerSecond,
-    /// Logical processor equivalents, including fractional processors.
-    LogicalProcessors,
-    /// Millicores.
-    Millicores,
-    /// Percentage from zero through one hundred.
-    Percentage,
-    /// Fraction.
-    Fraction,
-    /// Process count.
-    Processes,
-    /// Thread count.
-    Threads,
-    /// Open file-descriptor count.
-    FileDescriptors,
-    /// Windows kernel-handle count.
-    Handles,
-    /// Resource-limit event count.
-    Events,
-    /// Disk operation count.
-    Operations,
-    /// Network packet count.
-    Packets,
-    /// Network interface error count.
-    Errors,
 }
 
-impl ResourceMeasurementUnit {
-    /// Return the stable wire name used by metric projections.
+impl DataUnit {
+    /// Return the canonical snake_case unit name.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Microseconds => "microseconds",
-            Self::Milliseconds => "milliseconds",
-            Self::Seconds => "seconds",
-            Self::Minutes => "minutes",
             Self::Bytes => "bytes",
             Self::Kilobytes => "kilobytes",
             Self::Megabytes => "megabytes",
@@ -144,6 +182,42 @@ impl ResourceMeasurementUnit {
             Self::Mebibytes => "mebibytes",
             Self::Gibibytes => "gibibytes",
             Self::Tebibytes => "tebibytes",
+        }
+    }
+}
+
+impl ResourceUnit for DataUnit {
+    fn as_str(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+/// Units for data transferred per second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)] // Preserve canonical unit names, including per-second denominators.
+pub enum BandwidthUnit {
+    /// Bytes per second.
+    #[default]
+    BytesPerSecond,
+    /// Kibibytes per second.
+    KibibytesPerSecond,
+    /// Mebibytes per second.
+    MebibytesPerSecond,
+    /// Gibibytes per second.
+    GibibytesPerSecond,
+    /// Bits per second.
+    BitsPerSecond,
+    /// Megabits per second.
+    MegabitsPerSecond,
+    /// Gigabits per second.
+    GigabitsPerSecond,
+}
+
+impl BandwidthUnit {
+    /// Return the canonical snake_case unit name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
             Self::BytesPerSecond => "bytes_per_second",
             Self::KibibytesPerSecond => "kibibytes_per_second",
             Self::MebibytesPerSecond => "mebibytes_per_second",
@@ -151,10 +225,96 @@ impl ResourceMeasurementUnit {
             Self::BitsPerSecond => "bits_per_second",
             Self::MegabitsPerSecond => "megabits_per_second",
             Self::GigabitsPerSecond => "gigabits_per_second",
+        }
+    }
+}
+
+impl ResourceUnit for BandwidthUnit {
+    fn as_str(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+/// Units for CPU consumption and effective capacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CpuUnit {
+    /// Logical processors.
+    #[default]
+    LogicalProcessors,
+    /// Millicores.
+    Millicores,
+}
+
+impl CpuUnit {
+    /// Return the canonical snake_case unit name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
             Self::LogicalProcessors => "logical_processors",
             Self::Millicores => "millicores",
+        }
+    }
+}
+
+impl ResourceUnit for CpuUnit {
+    fn as_str(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+/// Units for GPU compute utilization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UtilizationUnit {
+    /// Percentage.
+    #[default]
+    Percentage,
+    /// Fraction.
+    Fraction,
+}
+
+impl UtilizationUnit {
+    /// Return the canonical snake_case unit name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
             Self::Percentage => "percentage",
             Self::Fraction => "fraction",
+        }
+    }
+}
+
+impl ResourceUnit for UtilizationUnit {
+    fn as_str(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+/// Fixed units for process, resource, and operation counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CountUnit {
+    /// Processes.
+    Processes,
+    /// Threads.
+    Threads,
+    /// File descriptors.
+    FileDescriptors,
+    /// Handles.
+    Handles,
+    /// Events.
+    Events,
+    /// Operations.
+    Operations,
+    /// Packets.
+    Packets,
+    /// Errors.
+    Errors,
+}
+
+impl CountUnit {
+    /// Return the canonical snake_case unit name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
             Self::Processes => "processes",
             Self::Threads => "threads",
             Self::FileDescriptors => "file_descriptors",
@@ -164,6 +324,12 @@ impl ResourceMeasurementUnit {
             Self::Packets => "packets",
             Self::Errors => "errors",
         }
+    }
+}
+
+impl ResourceUnit for CountUnit {
+    fn as_str(self) -> &'static str {
+        self.as_str()
     }
 }
 
@@ -241,16 +407,16 @@ impl PartialOrd<u64> for ResourceMetricValue {
 
 /// One available resource measurement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResourceMeasurement<T> {
+pub struct ResourceMeasurement<T, U: ResourceUnit> {
     /// Acquired value. The containing category field is `None` when unavailable.
     pub value: T,
     /// Unit for the acquired value.
-    pub unit: ResourceMeasurementUnit,
+    pub unit: U,
 }
 
-impl<T> ResourceMeasurement<T> {
+impl<T, U: ResourceUnit> ResourceMeasurement<T, U> {
     /// Construct an available measurement.
-    pub fn new(value: impl Into<T>, unit: ResourceMeasurementUnit) -> Self {
+    pub fn new(value: impl Into<T>, unit: U) -> Self {
         Self {
             value: value.into(),
             unit,
@@ -294,7 +460,7 @@ pub struct ResourceLimitEventCount {
     /// Event reported by the operating system.
     pub event: ResourceLimitEventKind,
     /// Cumulative event count.
-    pub count: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub count: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
 }
 
 /// Accelerator vendor associated with a metric record.
@@ -323,9 +489,9 @@ pub struct AcceleratorDeviceMetrics {
     /// API-local device index, when supplied by the acquisition API.
     pub device_index: Option<u32>,
     /// Device memory currently in use.
-    pub memory_used: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub memory_used: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Device compute-engine utilization.
-    pub compute_utilization: Option<ResourceMeasurement<f64>>,
+    pub compute_utilization: Option<ResourceMeasurement<f64, UtilizationUnit>>,
 }
 
 /// Accelerator measurements attributed to one process in the selected scope.
@@ -340,9 +506,9 @@ pub struct AcceleratorProcessMetrics {
     /// Process identifier.
     pub process_id: u32,
     /// Device memory attributed to this process.
-    pub memory_used: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub memory_used: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Compute-engine utilization attributed to this process.
-    pub compute_utilization: Option<ResourceMeasurement<f64>>,
+    pub compute_utilization: Option<ResourceMeasurement<f64, UtilizationUnit>>,
 }
 
 /// Filesystem capacity for one configured path.
@@ -351,11 +517,11 @@ pub struct FilesystemCapacityMetrics {
     /// Configured path identifying the filesystem.
     pub path: String,
     /// Total filesystem capacity in the configured unit.
-    pub total_capacity: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub total_capacity: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Capacity available to the calling user, including any applicable quota.
-    pub available_capacity: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub available_capacity: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Total free capacity, including space reserved from ordinary callers.
-    pub free_capacity: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub free_capacity: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
 }
 
 /// Coverage of process queries used for process-summed measurements.
@@ -374,21 +540,21 @@ pub struct ProcessSamplingMetadata {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CpuMetrics {
     /// Cumulative user-mode CPU time, in milliseconds by default.
-    pub user_time: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub user_time: Option<ResourceMeasurement<ResourceMetricValue, DurationUnit>>,
     /// Cumulative system-mode CPU time, in milliseconds by default.
-    pub system_time: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub system_time: Option<ResourceMeasurement<ResourceMetricValue, DurationUnit>>,
     /// Cumulative user plus system CPU time, in milliseconds by default.
-    pub total_time: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub total_time: Option<ResourceMeasurement<ResourceMetricValue, DurationUnit>>,
     /// CPU capacity consumed, in logical processors by default.
-    pub consumption_rate: Option<ResourceMeasurement<f64>>,
+    pub consumption_rate: Option<ResourceMeasurement<f64, CpuUnit>>,
     /// Cumulative time during which the owned environment was CPU-throttled.
-    pub throttled_time: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub throttled_time: Option<ResourceMeasurement<ResourceMetricValue, DurationUnit>>,
     /// Effective CPU capacity, in logical processors by default.
-    pub effective_limit: Option<ResourceMeasurement<f64>>,
+    pub effective_limit: Option<ResourceMeasurement<f64, CpuUnit>>,
     /// Cumulative CPU pressure time during which some work was stalled.
-    pub some_pressure_stall_time: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub some_pressure_stall_time: Option<ResourceMeasurement<ResourceMetricValue, DurationUnit>>,
     /// Cumulative CPU pressure time during which all work was stalled.
-    pub full_pressure_stall_time: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub full_pressure_stall_time: Option<ResourceMeasurement<ResourceMetricValue, DurationUnit>>,
     /// CPU resource-limit event counters.
     pub limit_events: Vec<ResourceLimitEventCount>,
 }
@@ -397,31 +563,31 @@ pub struct CpuMetrics {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryMetrics {
     /// System memory currently in use, in KiB by default, in every scope.
-    pub system_used: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub system_used: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Total system memory, in KiB by default, in every scope.
-    pub system_total: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub system_total: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// System memory available for use, in KiB by default, in every scope.
-    pub system_available: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub system_available: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Resident memory, in KiB by default.
-    pub resident: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub resident: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Private memory, in KiB by default.
-    pub private: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub private: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Physical footprint, in KiB by default.
-    pub physical_footprint: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub physical_footprint: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Virtual memory, in KiB by default.
-    pub virtual_memory: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub virtual_memory: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Lifetime peak resident memory, in KiB by default.
-    pub peak_resident: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub peak_resident: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Effective environment memory limit, in KiB by default.
-    pub limit: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub limit: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Memory charged to the owned environment, in KiB by default.
-    pub environment_accounted: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub environment_accounted: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
     /// Cumulative memory pressure time during which some work was stalled.
-    pub some_pressure_stall_time: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub some_pressure_stall_time: Option<ResourceMeasurement<ResourceMetricValue, DurationUnit>>,
     /// Cumulative memory pressure time during which all work was stalled.
-    pub full_pressure_stall_time: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub full_pressure_stall_time: Option<ResourceMeasurement<ResourceMetricValue, DurationUnit>>,
     /// Cumulative out-of-memory event count.
-    pub out_of_memory_event_count: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub out_of_memory_event_count: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Memory resource-limit event counters.
     pub limit_events: Vec<ResourceLimitEventCount>,
 }
@@ -430,17 +596,17 @@ pub struct MemoryMetrics {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessMetrics {
     /// Number of active processes in the measured scope.
-    pub active_count: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub active_count: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Number of active descendants below the measured root process.
-    pub descendant_count: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub descendant_count: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Number of threads across the measured scope.
-    pub thread_count: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub thread_count: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Lifetime count of processes created inside the owned environment.
-    pub lifetime_creation_count: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub lifetime_creation_count: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Number of open file descriptors across the measured scope.
-    pub open_file_descriptor_count: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub open_file_descriptor_count: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Number of Windows kernel handles across the measured scope.
-    pub windows_handle_count: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub windows_handle_count: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Process resource-limit event counters.
     pub limit_events: Vec<ResourceLimitEventCount>,
 }
@@ -449,17 +615,17 @@ pub struct ProcessMetrics {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiskMetrics {
     /// Cumulative disk data read by processes in the selected scope.
-    pub read_data: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub read_data: Option<ResourceMeasurement<ResourceMetricValue, DataUnit>>,
     /// Cumulative disk data written by processes in the selected scope.
-    pub write_data: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub write_data: Option<ResourceMeasurement<ResourceMetricValue, DataUnit>>,
     /// Read transfer rate since the previous sample.
-    pub read_throughput: Option<ResourceMeasurement<f64>>,
+    pub read_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
     /// Write transfer rate since the previous sample.
-    pub write_throughput: Option<ResourceMeasurement<f64>>,
+    pub write_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
     /// Cumulative read operations in the measured process scope.
-    pub read_operations: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub read_operations: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Cumulative write operations in the measured process scope.
-    pub write_operations: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub write_operations: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Filesystem-capacity observations for configured paths.
     pub filesystems: Vec<FilesystemCapacityMetrics>,
 }
@@ -468,21 +634,21 @@ pub struct DiskMetrics {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NetworkTrafficMetrics {
     /// Received data.
-    pub received_data: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub received_data: Option<ResourceMeasurement<ResourceMetricValue, DataUnit>>,
     /// Transmitted data.
-    pub transmitted_data: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub transmitted_data: Option<ResourceMeasurement<ResourceMetricValue, DataUnit>>,
     /// Receive throughput.
-    pub receive_throughput: Option<ResourceMeasurement<f64>>,
+    pub receive_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
     /// Transmit throughput.
-    pub transmit_throughput: Option<ResourceMeasurement<f64>>,
+    pub transmit_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
     /// Received packets.
-    pub received_packets: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub received_packets: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Transmitted packets.
-    pub transmitted_packets: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub transmitted_packets: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Receive errors.
-    pub receive_errors: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub receive_errors: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
     /// Transmit errors.
-    pub transmit_errors: Option<ResourceMeasurement<ResourceMetricValue>>,
+    pub transmit_errors: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>,
 }
 
 /// Network traffic for one visible interface.

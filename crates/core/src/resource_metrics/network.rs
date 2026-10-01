@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use nemo_relay_types::api::resource_metrics::{
-    NetworkInterfaceMetrics, NetworkMetrics, NetworkTrafficMetrics, ResourceMeasurement,
-    ResourceMeasurementScope, ResourceMeasurementUnit as Unit,
+    BandwidthUnit, CountUnit, DataUnit, NetworkInterfaceMetrics, NetworkMetrics,
+    NetworkTrafficMetrics, ResourceMeasurement, ResourceMeasurementScope, ResourceUnit,
 };
 use sysinfo::Networks;
 
@@ -54,7 +54,7 @@ fn rate(
     previous: Option<Counters>,
     get: impl Fn(Counters) -> u64,
     now: Instant,
-) -> Option<ResourceMeasurement<f64>> {
+) -> Option<ResourceMeasurement<f64, BandwidthUnit>> {
     let previous = previous?;
     let elapsed = now
         .checked_duration_since(previous.sampled_at)?
@@ -66,7 +66,7 @@ fn rate(
     let value = delta as f64 / elapsed;
     value
         .is_finite()
-        .then(|| ResourceMeasurement::new(value, Unit::BytesPerSecond))
+        .then(|| ResourceMeasurement::new(value, BandwidthUnit::BytesPerSecond))
 }
 
 fn sum_integer(
@@ -108,8 +108,11 @@ impl NetworkSampler {
             let previous = self.previous.get(name).copied();
             next.insert(name.clone(), counters);
             let traffic = NetworkTrafficMetrics {
-                received_data: Some(ResourceMeasurement::new(counters.received, Unit::Bytes)),
-                transmitted_data: Some(ResourceMeasurement::new(counters.transmitted, Unit::Bytes)),
+                received_data: Some(ResourceMeasurement::new(counters.received, DataUnit::Bytes)),
+                transmitted_data: Some(ResourceMeasurement::new(
+                    counters.transmitted,
+                    DataUnit::Bytes,
+                )),
                 receive_throughput: rate(
                     counters.received,
                     previous,
@@ -124,19 +127,19 @@ impl NetworkSampler {
                 ),
                 received_packets: Some(ResourceMeasurement::new(
                     counters.received_packets,
-                    Unit::Packets,
+                    CountUnit::Packets,
                 )),
                 transmitted_packets: Some(ResourceMeasurement::new(
                     counters.transmitted_packets,
-                    Unit::Packets,
+                    CountUnit::Packets,
                 )),
                 receive_errors: Some(ResourceMeasurement::new(
                     counters.receive_errors,
-                    Unit::Errors,
+                    CountUnit::Errors,
                 )),
                 transmit_errors: Some(ResourceMeasurement::new(
                     counters.transmit_errors,
-                    Unit::Errors,
+                    CountUnit::Errors,
                 )),
             };
             interfaces.push(NetworkInterfaceMetrics {
@@ -146,15 +149,22 @@ impl NetworkSampler {
         }
         self.previous = next;
         interfaces.sort_by(|a, b| a.name.cmp(&b.name));
-        let integer = |get: fn(&NetworkTrafficMetrics) -> Option<u64>, unit| {
-            sum_integer(&interfaces, get).map(|value| ResourceMeasurement::new(value, unit))
-        };
+        fn integer<U: ResourceUnit>(
+            interfaces: &[NetworkInterfaceMetrics],
+            get: fn(&NetworkTrafficMetrics) -> Option<u64>,
+            unit: U,
+        ) -> Option<
+            ResourceMeasurement<nemo_relay_types::api::resource_metrics::ResourceMetricValue, U>,
+        > {
+            sum_integer(interfaces, get).map(|value| ResourceMeasurement::new(value, unit))
+        }
         let floating = |get: fn(&NetworkTrafficMetrics) -> Option<f64>| {
             sum_rate(&interfaces, get)
-                .map(|value| ResourceMeasurement::new(value, Unit::BytesPerSecond))
+                .map(|value| ResourceMeasurement::new(value, BandwidthUnit::BytesPerSecond))
         };
         let system = NetworkTrafficMetrics {
             received_data: integer(
+                &interfaces,
                 |traffic| {
                     traffic.received_data.as_ref().and_then(|m| match m.value {
                         nemo_relay_types::api::resource_metrics::ResourceMetricValue::Integer(
@@ -163,13 +173,14 @@ impl NetworkSampler {
                         _ => None,
                     })
                 },
-                Unit::Bytes,
+                DataUnit::Bytes,
             ),
             transmitted_data: integer(
+                &interfaces,
                 |traffic| {
                     traffic.transmitted_data.as_ref().and_then(|m| match m.value { nemo_relay_types::api::resource_metrics::ResourceMetricValue::Integer(value) => Some(value), _ => None })
                 },
-                Unit::Bytes,
+                DataUnit::Bytes,
             ),
             receive_throughput: floating(|traffic| {
                 traffic.receive_throughput.as_ref().map(|m| m.value)
@@ -178,18 +189,21 @@ impl NetworkSampler {
                 traffic.transmit_throughput.as_ref().map(|m| m.value)
             }),
             received_packets: integer(
+                &interfaces,
                 |traffic| {
                     traffic.received_packets.as_ref().and_then(|m| match m.value { nemo_relay_types::api::resource_metrics::ResourceMetricValue::Integer(value) => Some(value), _ => None })
                 },
-                Unit::Packets,
+                CountUnit::Packets,
             ),
             transmitted_packets: integer(
+                &interfaces,
                 |traffic| {
                     traffic.transmitted_packets.as_ref().and_then(|m| match m.value { nemo_relay_types::api::resource_metrics::ResourceMetricValue::Integer(value) => Some(value), _ => None })
                 },
-                Unit::Packets,
+                CountUnit::Packets,
             ),
             receive_errors: integer(
+                &interfaces,
                 |traffic| {
                     traffic.receive_errors.as_ref().and_then(|m| match m.value {
                         nemo_relay_types::api::resource_metrics::ResourceMetricValue::Integer(
@@ -198,13 +212,14 @@ impl NetworkSampler {
                         _ => None,
                     })
                 },
-                Unit::Errors,
+                CountUnit::Errors,
             ),
             transmit_errors: integer(
+                &interfaces,
                 |traffic| {
                     traffic.transmit_errors.as_ref().and_then(|m| match m.value { nemo_relay_types::api::resource_metrics::ResourceMetricValue::Integer(value) => Some(value), _ => None })
                 },
-                Unit::Errors,
+                CountUnit::Errors,
             ),
         };
         NetworkMetrics {

@@ -24,43 +24,191 @@ import (
 	"time"
 )
 
-// ResourceMeasurementUnit is the selected unit attached to an available measurement.
-type ResourceMeasurementUnit string
+// DurationUnit identifies units for duration measurements.
+type DurationUnit string
 
 const (
-	ResourceUnitMilliseconds       ResourceMeasurementUnit = "milliseconds"
-	ResourceUnitBytes              ResourceMeasurementUnit = "bytes"
-	ResourceUnitKibibytes          ResourceMeasurementUnit = "kibibytes"
-	ResourceUnitLogicalProcessors  ResourceMeasurementUnit = "logical_processors"
-	ResourceUnitPercentage         ResourceMeasurementUnit = "percentage"
-	ResourceUnitProcesses          ResourceMeasurementUnit = "processes"
-	ResourceUnitThreads            ResourceMeasurementUnit = "threads"
-	ResourceUnitFileDescriptors    ResourceMeasurementUnit = "file_descriptors"
-	ResourceUnitHandles            ResourceMeasurementUnit = "handles"
-	ResourceUnitEvents             ResourceMeasurementUnit = "events"
-	ResourceUnitOperations         ResourceMeasurementUnit = "operations"
-	ResourceUnitMicroseconds       ResourceMeasurementUnit = "microseconds"
-	ResourceUnitSeconds            ResourceMeasurementUnit = "seconds"
-	ResourceUnitMinutes            ResourceMeasurementUnit = "minutes"
-	ResourceUnitKilobytes          ResourceMeasurementUnit = "kilobytes"
-	ResourceUnitMegabytes          ResourceMeasurementUnit = "megabytes"
-	ResourceUnitGigabytes          ResourceMeasurementUnit = "gigabytes"
-	ResourceUnitTerabytes          ResourceMeasurementUnit = "terabytes"
-	ResourceUnitMebibytes          ResourceMeasurementUnit = "mebibytes"
-	ResourceUnitGibibytes          ResourceMeasurementUnit = "gibibytes"
-	ResourceUnitTebibytes          ResourceMeasurementUnit = "tebibytes"
-	ResourceUnitBytesPerSecond     ResourceMeasurementUnit = "bytes_per_second"
-	ResourceUnitKibibytesPerSecond ResourceMeasurementUnit = "kibibytes_per_second"
-	ResourceUnitMebibytesPerSecond ResourceMeasurementUnit = "mebibytes_per_second"
-	ResourceUnitGibibytesPerSecond ResourceMeasurementUnit = "gibibytes_per_second"
-	ResourceUnitBitsPerSecond      ResourceMeasurementUnit = "bits_per_second"
-	ResourceUnitMegabitsPerSecond  ResourceMeasurementUnit = "megabits_per_second"
-	ResourceUnitGigabitsPerSecond  ResourceMeasurementUnit = "gigabits_per_second"
-	ResourceUnitMillicores         ResourceMeasurementUnit = "millicores"
-	ResourceUnitFraction           ResourceMeasurementUnit = "fraction"
-	ResourceUnitPackets            ResourceMeasurementUnit = "packets"
-	ResourceUnitErrors             ResourceMeasurementUnit = "errors"
+	DurationMicroseconds DurationUnit = "microseconds"
+	DurationMilliseconds DurationUnit = "milliseconds"
+	DurationSeconds      DurationUnit = "seconds"
+	DurationMinutes      DurationUnit = "minutes"
 )
+
+func (unit *DurationUnit) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return err
+	}
+	switch DurationUnit(name) {
+	case DurationMicroseconds, DurationMilliseconds, DurationSeconds, DurationMinutes:
+		*unit = DurationUnit(name)
+		return nil
+	default:
+		return fmt.Errorf("invalid duration unit: %q", name)
+	}
+}
+
+// CapacityUnit identifies units for capacity measurements.
+type CapacityUnit string
+
+const (
+	CapacityBytes     CapacityUnit = "bytes"
+	CapacityKilobytes CapacityUnit = "kilobytes"
+	CapacityMegabytes CapacityUnit = "megabytes"
+	CapacityGigabytes CapacityUnit = "gigabytes"
+	CapacityTerabytes CapacityUnit = "terabytes"
+	CapacityKibibytes CapacityUnit = "kibibytes"
+	CapacityMebibytes CapacityUnit = "mebibytes"
+	CapacityGibibytes CapacityUnit = "gibibytes"
+	CapacityTebibytes CapacityUnit = "tebibytes"
+)
+
+func (unit *CapacityUnit) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return err
+	}
+	switch CapacityUnit(name) {
+	case CapacityBytes, CapacityKilobytes, CapacityMegabytes, CapacityGigabytes, CapacityTerabytes, CapacityKibibytes, CapacityMebibytes, CapacityGibibytes, CapacityTebibytes:
+		*unit = CapacityUnit(name)
+		return nil
+	default:
+		return fmt.Errorf("invalid capacity unit: %q", name)
+	}
+}
+
+// DataUnit identifies units for data measurements.
+type DataUnit string
+
+const (
+	DataBytes     DataUnit = "bytes"
+	DataKilobytes DataUnit = "kilobytes"
+	DataMegabytes DataUnit = "megabytes"
+	DataGigabytes DataUnit = "gigabytes"
+	DataTerabytes DataUnit = "terabytes"
+	DataKibibytes DataUnit = "kibibytes"
+	DataMebibytes DataUnit = "mebibytes"
+	DataGibibytes DataUnit = "gibibytes"
+	DataTebibytes DataUnit = "tebibytes"
+)
+
+func (unit *DataUnit) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return err
+	}
+	switch DataUnit(name) {
+	case DataBytes, DataKilobytes, DataMegabytes, DataGigabytes, DataTerabytes, DataKibibytes, DataMebibytes, DataGibibytes, DataTebibytes:
+		*unit = DataUnit(name)
+		return nil
+	default:
+		return fmt.Errorf("invalid data unit: %q", name)
+	}
+}
+
+// BandwidthUnit identifies units for bandwidth measurements.
+type BandwidthUnit string
+
+const (
+	BandwidthBytesPerSecond     BandwidthUnit = "bytes_per_second"
+	BandwidthKibibytesPerSecond BandwidthUnit = "kibibytes_per_second"
+	BandwidthMebibytesPerSecond BandwidthUnit = "mebibytes_per_second"
+	BandwidthGibibytesPerSecond BandwidthUnit = "gibibytes_per_second"
+	BandwidthBitsPerSecond      BandwidthUnit = "bits_per_second"
+	BandwidthMegabitsPerSecond  BandwidthUnit = "megabits_per_second"
+	BandwidthGigabitsPerSecond  BandwidthUnit = "gigabits_per_second"
+)
+
+func (unit *BandwidthUnit) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return err
+	}
+	switch BandwidthUnit(name) {
+	case BandwidthBytesPerSecond, BandwidthKibibytesPerSecond, BandwidthMebibytesPerSecond, BandwidthGibibytesPerSecond, BandwidthBitsPerSecond, BandwidthMegabitsPerSecond, BandwidthGigabitsPerSecond:
+		*unit = BandwidthUnit(name)
+		return nil
+	default:
+		return fmt.Errorf("invalid bandwidth unit: %q", name)
+	}
+}
+
+// CpuUnit identifies units for CPU measurements.
+type CpuUnit string
+
+const (
+	CpuLogicalProcessors CpuUnit = "logical_processors"
+	CpuMillicores        CpuUnit = "millicores"
+)
+
+func (unit *CpuUnit) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return err
+	}
+	switch CpuUnit(name) {
+	case CpuLogicalProcessors, CpuMillicores:
+		*unit = CpuUnit(name)
+		return nil
+	default:
+		return fmt.Errorf("invalid cpu unit: %q", name)
+	}
+}
+
+// UtilizationUnit identifies units for utilization measurements.
+type UtilizationUnit string
+
+const (
+	UtilizationPercentage UtilizationUnit = "percentage"
+	UtilizationFraction   UtilizationUnit = "fraction"
+)
+
+func (unit *UtilizationUnit) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return err
+	}
+	switch UtilizationUnit(name) {
+	case UtilizationPercentage, UtilizationFraction:
+		*unit = UtilizationUnit(name)
+		return nil
+	default:
+		return fmt.Errorf("invalid utilization unit: %q", name)
+	}
+}
+
+// CountUnit identifies units for count measurements.
+type CountUnit string
+
+const (
+	CountProcesses       CountUnit = "processes"
+	CountThreads         CountUnit = "threads"
+	CountFileDescriptors CountUnit = "file_descriptors"
+	CountHandles         CountUnit = "handles"
+	CountEvents          CountUnit = "events"
+	CountOperations      CountUnit = "operations"
+	CountPackets         CountUnit = "packets"
+	CountErrors          CountUnit = "errors"
+)
+
+func (unit *CountUnit) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return err
+	}
+	switch CountUnit(name) {
+	case CountProcesses, CountThreads, CountFileDescriptors, CountHandles, CountEvents, CountOperations, CountPackets, CountErrors:
+		*unit = CountUnit(name)
+		return nil
+	default:
+		return fmt.Errorf("invalid count unit: %q", name)
+	}
+}
+
+// ResourceUnit is one semantic measurement unit category.
+type ResourceUnit interface {
+	DurationUnit | CapacityUnit | DataUnit | BandwidthUnit | CpuUnit | UtilizationUnit | CountUnit
+}
 
 type ResourceOperatingSystem string
 
@@ -139,99 +287,99 @@ func (v ResourceMetricValue) MarshalJSON() ([]byte, error) {
 }
 
 // ResourceMeasurement contains only the available measurement's value and unit.
-type ResourceMeasurement[T any] struct {
-	Value T                       `json:"value"`
-	Unit  ResourceMeasurementUnit `json:"unit"`
+type ResourceMeasurement[T any, U ResourceUnit] struct {
+	Value T `json:"value"`
+	Unit  U `json:"unit"`
 }
 
 type ResourceLimitEventCount struct {
-	Resource ResourceLimitResource                     `json:"resource"`
-	Event    ResourceLimitEventKind                    `json:"event"`
-	Count    *ResourceMeasurement[ResourceMetricValue] `json:"count"`
+	Resource ResourceLimitResource                                `json:"resource"`
+	Event    ResourceLimitEventKind                               `json:"event"`
+	Count    *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"count"`
 }
 
 type AcceleratorDeviceMetrics struct {
-	Vendor             AcceleratorVendor                         `json:"vendor"`
-	DeviceIdentifier   string                                    `json:"device_identifier"`
-	DeviceIndex        *uint32                                   `json:"device_index"`
-	MemoryUsed         *ResourceMeasurement[ResourceMetricValue] `json:"memory_used"`
-	ComputeUtilization *ResourceMeasurement[float64]             `json:"compute_utilization"`
+	Vendor             AcceleratorVendor                                       `json:"vendor"`
+	DeviceIdentifier   string                                                  `json:"device_identifier"`
+	DeviceIndex        *uint32                                                 `json:"device_index"`
+	MemoryUsed         *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"memory_used"`
+	ComputeUtilization *ResourceMeasurement[float64, UtilizationUnit]          `json:"compute_utilization"`
 }
 
 type AcceleratorProcessMetrics struct {
-	Vendor             AcceleratorVendor                         `json:"vendor"`
-	DeviceIdentifier   string                                    `json:"device_identifier"`
-	DeviceIndex        *uint32                                   `json:"device_index"`
-	ProcessID          uint32                                    `json:"process_id"`
-	MemoryUsed         *ResourceMeasurement[ResourceMetricValue] `json:"memory_used"`
-	ComputeUtilization *ResourceMeasurement[float64]             `json:"compute_utilization"`
+	Vendor             AcceleratorVendor                                       `json:"vendor"`
+	DeviceIdentifier   string                                                  `json:"device_identifier"`
+	DeviceIndex        *uint32                                                 `json:"device_index"`
+	ProcessID          uint32                                                  `json:"process_id"`
+	MemoryUsed         *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"memory_used"`
+	ComputeUtilization *ResourceMeasurement[float64, UtilizationUnit]          `json:"compute_utilization"`
 }
 
 type FilesystemCapacityMetrics struct {
-	Path              string                                    `json:"path"`
-	TotalCapacity     *ResourceMeasurement[ResourceMetricValue] `json:"total_capacity"`
-	AvailableCapacity *ResourceMeasurement[ResourceMetricValue] `json:"available_capacity"`
-	FreeCapacity      *ResourceMeasurement[ResourceMetricValue] `json:"free_capacity"`
+	Path              string                                                  `json:"path"`
+	TotalCapacity     *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"total_capacity"`
+	AvailableCapacity *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"available_capacity"`
+	FreeCapacity      *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"free_capacity"`
 }
 
 type CPUMetrics struct {
-	UserTime              *ResourceMeasurement[ResourceMetricValue] `json:"user_time"`
-	SystemTime            *ResourceMeasurement[ResourceMetricValue] `json:"system_time"`
-	TotalTime             *ResourceMeasurement[ResourceMetricValue] `json:"total_time"`
-	ConsumptionRate       *ResourceMeasurement[float64]             `json:"consumption_rate"`
-	ThrottledTime         *ResourceMeasurement[ResourceMetricValue] `json:"throttled_time"`
-	EffectiveLimit        *ResourceMeasurement[float64]             `json:"effective_limit"`
-	SomePressureStallTime *ResourceMeasurement[ResourceMetricValue] `json:"some_pressure_stall_time"`
-	FullPressureStallTime *ResourceMeasurement[ResourceMetricValue] `json:"full_pressure_stall_time"`
-	LimitEvents           []ResourceLimitEventCount                 `json:"limit_events"`
+	UserTime              *ResourceMeasurement[ResourceMetricValue, DurationUnit] `json:"user_time"`
+	SystemTime            *ResourceMeasurement[ResourceMetricValue, DurationUnit] `json:"system_time"`
+	TotalTime             *ResourceMeasurement[ResourceMetricValue, DurationUnit] `json:"total_time"`
+	ConsumptionRate       *ResourceMeasurement[float64, CpuUnit]                  `json:"consumption_rate"`
+	ThrottledTime         *ResourceMeasurement[ResourceMetricValue, DurationUnit] `json:"throttled_time"`
+	EffectiveLimit        *ResourceMeasurement[float64, CpuUnit]                  `json:"effective_limit"`
+	SomePressureStallTime *ResourceMeasurement[ResourceMetricValue, DurationUnit] `json:"some_pressure_stall_time"`
+	FullPressureStallTime *ResourceMeasurement[ResourceMetricValue, DurationUnit] `json:"full_pressure_stall_time"`
+	LimitEvents           []ResourceLimitEventCount                               `json:"limit_events"`
 }
 
 type MemoryMetrics struct {
-	SystemUsed            *ResourceMeasurement[ResourceMetricValue] `json:"system_used"`
-	SystemTotal           *ResourceMeasurement[ResourceMetricValue] `json:"system_total"`
-	SystemAvailable       *ResourceMeasurement[ResourceMetricValue] `json:"system_available"`
-	Resident              *ResourceMeasurement[ResourceMetricValue] `json:"resident"`
-	Private               *ResourceMeasurement[ResourceMetricValue] `json:"private"`
-	PhysicalFootprint     *ResourceMeasurement[ResourceMetricValue] `json:"physical_footprint"`
-	VirtualMemory         *ResourceMeasurement[ResourceMetricValue] `json:"virtual_memory"`
-	PeakResident          *ResourceMeasurement[ResourceMetricValue] `json:"peak_resident"`
-	Limit                 *ResourceMeasurement[ResourceMetricValue] `json:"limit"`
-	EnvironmentAccounted  *ResourceMeasurement[ResourceMetricValue] `json:"environment_accounted"`
-	SomePressureStallTime *ResourceMeasurement[ResourceMetricValue] `json:"some_pressure_stall_time"`
-	FullPressureStallTime *ResourceMeasurement[ResourceMetricValue] `json:"full_pressure_stall_time"`
-	OutOfMemoryEventCount *ResourceMeasurement[ResourceMetricValue] `json:"out_of_memory_event_count"`
-	LimitEvents           []ResourceLimitEventCount                 `json:"limit_events"`
+	SystemUsed            *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"system_used"`
+	SystemTotal           *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"system_total"`
+	SystemAvailable       *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"system_available"`
+	Resident              *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"resident"`
+	Private               *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"private"`
+	PhysicalFootprint     *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"physical_footprint"`
+	VirtualMemory         *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"virtual_memory"`
+	PeakResident          *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"peak_resident"`
+	Limit                 *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"limit"`
+	EnvironmentAccounted  *ResourceMeasurement[ResourceMetricValue, CapacityUnit] `json:"environment_accounted"`
+	SomePressureStallTime *ResourceMeasurement[ResourceMetricValue, DurationUnit] `json:"some_pressure_stall_time"`
+	FullPressureStallTime *ResourceMeasurement[ResourceMetricValue, DurationUnit] `json:"full_pressure_stall_time"`
+	OutOfMemoryEventCount *ResourceMeasurement[ResourceMetricValue, CountUnit]    `json:"out_of_memory_event_count"`
+	LimitEvents           []ResourceLimitEventCount                               `json:"limit_events"`
 }
 
 type ProcessMetrics struct {
-	ActiveCount             *ResourceMeasurement[ResourceMetricValue] `json:"active_count"`
-	DescendantCount         *ResourceMeasurement[ResourceMetricValue] `json:"descendant_count"`
-	ThreadCount             *ResourceMeasurement[ResourceMetricValue] `json:"thread_count"`
-	LifetimeCreationCount   *ResourceMeasurement[ResourceMetricValue] `json:"lifetime_creation_count"`
-	OpenFileDescriptorCount *ResourceMeasurement[ResourceMetricValue] `json:"open_file_descriptor_count"`
-	WindowsHandleCount      *ResourceMeasurement[ResourceMetricValue] `json:"windows_handle_count"`
-	LimitEvents             []ResourceLimitEventCount                 `json:"limit_events"`
+	ActiveCount             *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"active_count"`
+	DescendantCount         *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"descendant_count"`
+	ThreadCount             *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"thread_count"`
+	LifetimeCreationCount   *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"lifetime_creation_count"`
+	OpenFileDescriptorCount *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"open_file_descriptor_count"`
+	WindowsHandleCount      *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"windows_handle_count"`
+	LimitEvents             []ResourceLimitEventCount                            `json:"limit_events"`
 }
 
 type DiskMetrics struct {
-	ReadData        *ResourceMeasurement[ResourceMetricValue] `json:"read_data"`
-	WriteData       *ResourceMeasurement[ResourceMetricValue] `json:"write_data"`
-	ReadThroughput  *ResourceMeasurement[float64]             `json:"read_throughput"`
-	WriteThroughput *ResourceMeasurement[float64]             `json:"write_throughput"`
-	ReadOperations  *ResourceMeasurement[ResourceMetricValue] `json:"read_operations"`
-	WriteOperations *ResourceMeasurement[ResourceMetricValue] `json:"write_operations"`
-	Filesystems     []FilesystemCapacityMetrics               `json:"filesystems"`
+	ReadData        *ResourceMeasurement[ResourceMetricValue, DataUnit]  `json:"read_data"`
+	WriteData       *ResourceMeasurement[ResourceMetricValue, DataUnit]  `json:"write_data"`
+	ReadThroughput  *ResourceMeasurement[float64, BandwidthUnit]         `json:"read_throughput"`
+	WriteThroughput *ResourceMeasurement[float64, BandwidthUnit]         `json:"write_throughput"`
+	ReadOperations  *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"read_operations"`
+	WriteOperations *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"write_operations"`
+	Filesystems     []FilesystemCapacityMetrics                          `json:"filesystems"`
 }
 
 type NetworkTrafficMetrics struct {
-	ReceivedData       *ResourceMeasurement[ResourceMetricValue] `json:"received_data"`
-	TransmittedData    *ResourceMeasurement[ResourceMetricValue] `json:"transmitted_data"`
-	ReceiveThroughput  *ResourceMeasurement[float64]             `json:"receive_throughput"`
-	TransmitThroughput *ResourceMeasurement[float64]             `json:"transmit_throughput"`
-	ReceivedPackets    *ResourceMeasurement[ResourceMetricValue] `json:"received_packets"`
-	TransmittedPackets *ResourceMeasurement[ResourceMetricValue] `json:"transmitted_packets"`
-	ReceiveErrors      *ResourceMeasurement[ResourceMetricValue] `json:"receive_errors"`
-	TransmitErrors     *ResourceMeasurement[ResourceMetricValue] `json:"transmit_errors"`
+	ReceivedData       *ResourceMeasurement[ResourceMetricValue, DataUnit]  `json:"received_data"`
+	TransmittedData    *ResourceMeasurement[ResourceMetricValue, DataUnit]  `json:"transmitted_data"`
+	ReceiveThroughput  *ResourceMeasurement[float64, BandwidthUnit]         `json:"receive_throughput"`
+	TransmitThroughput *ResourceMeasurement[float64, BandwidthUnit]         `json:"transmit_throughput"`
+	ReceivedPackets    *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"received_packets"`
+	TransmittedPackets *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"transmitted_packets"`
+	ReceiveErrors      *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"receive_errors"`
+	TransmitErrors     *ResourceMeasurement[ResourceMetricValue, CountUnit] `json:"transmit_errors"`
 }
 
 type NetworkInterfaceMetrics struct {

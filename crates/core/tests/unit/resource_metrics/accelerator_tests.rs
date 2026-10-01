@@ -7,27 +7,24 @@ use super::{
     DrmClient, DrmEngineCounter, SamplingState, aggregate_drm_memory, drm_client_utilization,
     parse_drm_client, parse_drm_memory,
 };
-use nemo_relay_types::api::resource_metrics::{AcceleratorVendor, ResourceMeasurementUnit};
+use nemo_relay_types::api::resource_metrics::{AcceleratorVendor, CapacityUnit, UtilizationUnit};
 
 #[test]
 fn drm_memory_units_normalize_to_kibibytes() {
     assert_eq!(
         parse_drm_memory("2 MiB"),
-        Some((2_048, ResourceMeasurementUnit::Kibibytes))
+        Some((2_048, CapacityUnit::Kibibytes))
     );
     assert_eq!(
         parse_drm_memory("2 KiB"),
-        Some((2, ResourceMeasurementUnit::Kibibytes))
+        Some((2, CapacityUnit::Kibibytes))
     );
     assert_eq!(
         parse_drm_memory("2048 bytes"),
-        Some((2, ResourceMeasurementUnit::Kibibytes))
+        Some((2, CapacityUnit::Kibibytes))
     );
     assert_eq!(parse_drm_memory("18446744073709551615 MiB"), None);
-    assert_eq!(
-        parse_drm_memory("2048"),
-        Some((2, ResourceMeasurementUnit::Kibibytes))
-    );
+    assert_eq!(parse_drm_memory("2048"), Some((2, CapacityUnit::Kibibytes)));
 }
 
 #[test]
@@ -160,7 +157,7 @@ fn drm_parser_reads_current_resident_memory() {
     .unwrap();
     assert_eq!(
         aggregate_drm_memory(&[client]),
-        Some((24_184, ResourceMeasurementUnit::Kibibytes))
+        Some((24_184, CapacityUnit::Kibibytes))
     );
 }
 
@@ -170,12 +167,12 @@ fn drm_memory_aggregates_only_consistent_units() {
         identity: "test-client".into(),
         vendor: AcceleratorVendor::Amd,
         device_identifier: "test-device".into(),
-        memory_regions: vec![(2, ResourceMeasurementUnit::Kibibytes)],
+        memory_regions: vec![(2, CapacityUnit::Kibibytes)],
         engine_counters: Vec::new(),
     };
     assert_eq!(
         aggregate_drm_memory(&[client]),
-        Some((2, ResourceMeasurementUnit::Kibibytes))
+        Some((2, CapacityUnit::Kibibytes))
     );
 }
 
@@ -275,7 +272,7 @@ fn drm_process_records_group_clients_by_device_and_keep_the_busiest_engine() {
     );
     let utilization = second[0].compute_utilization.as_ref().unwrap();
     assert_eq!(utilization.value, 50.0);
-    assert_eq!(utilization.unit, ResourceMeasurementUnit::Percentage);
+    assert_eq!(utilization.unit, UtilizationUnit::Percentage);
     assert_eq!(second[0].device_identifier, "fixture");
     assert!(
         super::drm_process_records(42, 1, BTreeMap::new(), now, &mut state, &mut live).is_empty()

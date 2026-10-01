@@ -7,7 +7,9 @@ use std::io;
 use std::mem::{MaybeUninit, size_of};
 use std::sync::LazyLock;
 
-use nemo_relay_types::api::resource_metrics::{ResourceMeasurementUnit, ResourceOperatingSystem};
+use nemo_relay_types::api::resource_metrics::{
+    CapacityUnit, DurationUnit, ResourceOperatingSystem,
+};
 
 use super::{
     AcceleratorSample, CollectionTarget, EnvironmentSample, ProcessSample, ProcessSampleConfig,
@@ -15,14 +17,12 @@ use super::{
 };
 
 pub(super) const OPERATING_SYSTEM: ResourceOperatingSystem = ResourceOperatingSystem::Macos;
-pub(super) const CPU_TIME_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Milliseconds;
-pub(super) const RESIDENT_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PRIVATE_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PHYSICAL_FOOTPRINT_UNIT: ResourceMeasurementUnit =
-    ResourceMeasurementUnit::Kibibytes;
-pub(super) const VIRTUAL_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PEAK_RESIDENT_MEMORY_UNIT: ResourceMeasurementUnit =
-    ResourceMeasurementUnit::Kibibytes;
+pub(super) const CPU_TIME_UNIT: DurationUnit = DurationUnit::Milliseconds;
+pub(super) const RESIDENT_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PRIVATE_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PHYSICAL_FOOTPRINT_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const VIRTUAL_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PEAK_RESIDENT_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
 
 const PROC_PIDLISTFDS: i32 = 1;
 const PROC_PIDTBSDINFO: i32 = 3;

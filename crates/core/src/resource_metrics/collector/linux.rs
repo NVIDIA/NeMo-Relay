@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use nemo_relay_types::api::resource_metrics::{
-    ResourceLimitEventKind, ResourceLimitResource, ResourceMeasurementUnit, ResourceOperatingSystem,
+    CapacityUnit, CountUnit, CpuUnit, DurationUnit, ResourceLimitEventKind, ResourceLimitResource,
+    ResourceOperatingSystem,
 };
 
 use super::{
@@ -18,14 +19,12 @@ use super::{
 };
 
 pub(super) const OPERATING_SYSTEM: ResourceOperatingSystem = ResourceOperatingSystem::Linux;
-pub(super) const CPU_TIME_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Milliseconds;
-pub(super) const RESIDENT_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PRIVATE_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PHYSICAL_FOOTPRINT_UNIT: ResourceMeasurementUnit =
-    ResourceMeasurementUnit::Kibibytes;
-pub(super) const VIRTUAL_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PEAK_RESIDENT_MEMORY_UNIT: ResourceMeasurementUnit =
-    ResourceMeasurementUnit::Kibibytes;
+pub(super) const CPU_TIME_UNIT: DurationUnit = DurationUnit::Milliseconds;
+pub(super) const RESIDENT_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PRIVATE_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PHYSICAL_FOOTPRINT_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const VIRTUAL_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PEAK_RESIDENT_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
 
 static CLOCK_TICKS_PER_SECOND: LazyLock<Option<u64>> = LazyLock::new(|| {
     let rate = rustix::param::clock_ticks_per_second();
@@ -269,7 +268,7 @@ fn environment_sample_from_cgroup(
             .and_then(|values| values.get("throttled_usec").copied())
             .map(|value| IntegerSample {
                 value: value / 1_000,
-                unit: ResourceMeasurementUnit::Milliseconds,
+                unit: DurationUnit::Milliseconds,
             }),
         effective_cpu_limit: config
             .cpu
@@ -537,7 +536,7 @@ fn effective_memory_limit(directory: &Path, mount_point: &Path) -> Option<u64> {
     limit
 }
 
-fn effective_cpu_limit(directory: &Path, mount_point: &Path) -> Option<FloatSample> {
+fn effective_cpu_limit(directory: &Path, mount_point: &Path) -> Option<FloatSample<CpuUnit>> {
     let mut quota_limit: Option<f64> = None;
     for value in cgroup_limit_files(directory, mount_point, "cpu.max")? {
         let mut fields = value.split_whitespace();
@@ -565,7 +564,7 @@ fn effective_cpu_limit(directory: &Path, mount_point: &Path) -> Option<FloatSamp
     };
     Some(FloatSample {
         value,
-        unit: ResourceMeasurementUnit::LogicalProcessors,
+        unit: CpuUnit::LogicalProcessors,
     })
 }
 
@@ -602,17 +601,17 @@ fn append_limit_event(
     }
 }
 
-fn milliseconds(value: u64) -> IntegerSample {
+fn milliseconds(value: u64) -> IntegerSample<DurationUnit> {
     IntegerSample {
         value: value / 1_000,
-        unit: ResourceMeasurementUnit::Milliseconds,
+        unit: DurationUnit::Milliseconds,
     }
 }
 
-fn kibibytes(value: u64) -> IntegerSample {
+fn kibibytes(value: u64) -> IntegerSample<CapacityUnit> {
     IntegerSample {
         value: value / 1_024,
-        unit: ResourceMeasurementUnit::Kibibytes,
+        unit: CapacityUnit::Kibibytes,
     }
 }
 
@@ -631,9 +630,9 @@ fn proc_io_count(contents: &str, key: &str) -> Option<u64> {
     })
 }
 
-fn events(value: u64) -> IntegerSample {
+fn events(value: u64) -> IntegerSample<CountUnit> {
     IntegerSample {
         value,
-        unit: ResourceMeasurementUnit::Events,
+        unit: CountUnit::Events,
     }
 }

@@ -105,7 +105,7 @@ fn owned_job_collection_reads_limits_processes_and_normalized_counters() {
     let environment = environment_sample(&target, &members, &config).unwrap();
     let memory = environment.memory_limit.unwrap();
     assert_eq!(memory.value, 1_048_576);
-    assert_eq!(memory.unit, ResourceMeasurementUnit::Kibibytes);
+    assert_eq!(memory.unit, CapacityUnit::Kibibytes);
     assert!(environment.effective_cpu_limit.unwrap().value > 0.0);
     assert!(environment.lifetime_process_creation_count.unwrap().value >= 1);
     let snapshot = super::super::collect(&target, &config).snapshot;
@@ -204,7 +204,7 @@ fn job_cpu_limits_distinguish_default_weight_based_and_min_max_control() {
             let limit = environment.effective_cpu_limit.unwrap();
             let processors = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };
             assert_eq!(limit.value, f64::from(processors) / 2.0);
-            assert_eq!(limit.unit, ResourceMeasurementUnit::LogicalProcessors);
+            assert_eq!(limit.unit, CpuUnit::LogicalProcessors);
         }
     }
 }

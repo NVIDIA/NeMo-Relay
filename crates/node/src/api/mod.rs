@@ -33,12 +33,14 @@ use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::registry as core_registry_api;
 use nemo_relay::api::resource_metrics as core_resource_metrics_api;
 use nemo_relay::api::resource_metrics::{
-    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, CpuMetrics, DiskMetrics,
-    FilesystemCapacityMetrics, GpuMetrics, MemoryMetrics, NetworkInterfaceMetrics, NetworkMetrics,
-    NetworkTrafficMetrics, ProcessMetrics, ProcessSamplingMetadata as CoreProcessSamplingMetadata,
+    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, BandwidthUnit, CapacityUnit, CountUnit,
+    CpuMetrics, CpuUnit, DataUnit, DiskMetrics, DurationUnit, FilesystemCapacityMetrics,
+    GpuMetrics, MemoryMetrics, NetworkInterfaceMetrics, NetworkMetrics, NetworkTrafficMetrics,
+    ProcessMetrics, ProcessSamplingMetadata as CoreProcessSamplingMetadata,
     ResourceLimitEventCount, ResourceLimitEventKind, ResourceLimitResource, ResourceMeasurement,
-    ResourceMeasurementScope, ResourceMeasurementUnit, ResourceMetricValue,
-    ResourceMetricsSnapshot as CoreResourceMetricsSnapshot, ResourceOperatingSystem,
+    ResourceMeasurementScope, ResourceMetricValue,
+    ResourceMetricsSnapshot as CoreResourceMetricsSnapshot, ResourceOperatingSystem, ResourceUnit,
+    UtilizationUnit,
 };
 use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
@@ -216,13 +218,15 @@ impl Serialize for NodeResourceMetricInteger {
 }
 
 #[derive(Serialize)]
-struct NodeIntegerResourceMeasurement {
+struct NodeIntegerResourceMeasurement<U> {
     value: NodeResourceMetricInteger,
-    unit: ResourceMeasurementUnit,
+    unit: U,
 }
 
-impl From<ResourceMeasurement<ResourceMetricValue>> for NodeIntegerResourceMeasurement {
-    fn from(measurement: ResourceMeasurement<ResourceMetricValue>) -> Self {
+impl<U: ResourceUnit> From<ResourceMeasurement<ResourceMetricValue, U>>
+    for NodeIntegerResourceMeasurement<U>
+{
+    fn from(measurement: ResourceMeasurement<ResourceMetricValue, U>) -> Self {
         Self {
             value: match measurement.value {
                 ResourceMetricValue::Integer(value) => NodeResourceMetricInteger::from(value),
@@ -238,7 +242,7 @@ impl From<ResourceMeasurement<ResourceMetricValue>> for NodeIntegerResourceMeasu
 struct NodeResourceLimitEventCount {
     resource: ResourceLimitResource,
     event: ResourceLimitEventKind,
-    count: Option<NodeIntegerResourceMeasurement>,
+    count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
 }
 
 impl From<ResourceLimitEventCount> for NodeResourceLimitEventCount {
@@ -257,8 +261,8 @@ struct NodeAcceleratorDeviceMetrics {
     vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
     device_identifier: String,
     device_index: Option<u32>,
-    memory_used: Option<NodeIntegerResourceMeasurement>,
-    compute_utilization: Option<ResourceMeasurement<f64>>,
+    memory_used: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    compute_utilization: Option<ResourceMeasurement<f64, UtilizationUnit>>,
 }
 
 impl From<AcceleratorDeviceMetrics> for NodeAcceleratorDeviceMetrics {
@@ -280,8 +284,8 @@ struct NodeAcceleratorProcessMetrics {
     device_identifier: String,
     device_index: Option<u32>,
     process_id: u32,
-    memory_used: Option<NodeIntegerResourceMeasurement>,
-    compute_utilization: Option<ResourceMeasurement<f64>>,
+    memory_used: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    compute_utilization: Option<ResourceMeasurement<f64, UtilizationUnit>>,
 }
 
 impl From<AcceleratorProcessMetrics> for NodeAcceleratorProcessMetrics {
@@ -301,9 +305,9 @@ impl From<AcceleratorProcessMetrics> for NodeAcceleratorProcessMetrics {
 #[serde(rename_all = "camelCase")]
 struct NodeFilesystemCapacityMetrics {
     path: String,
-    total_capacity: Option<NodeIntegerResourceMeasurement>,
-    available_capacity: Option<NodeIntegerResourceMeasurement>,
-    free_capacity: Option<NodeIntegerResourceMeasurement>,
+    total_capacity: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    available_capacity: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    free_capacity: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
 }
 
 impl From<FilesystemCapacityMetrics> for NodeFilesystemCapacityMetrics {
@@ -320,14 +324,14 @@ impl From<FilesystemCapacityMetrics> for NodeFilesystemCapacityMetrics {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeCpuMetrics {
-    user_time: Option<NodeIntegerResourceMeasurement>,
-    system_time: Option<NodeIntegerResourceMeasurement>,
-    total_time: Option<NodeIntegerResourceMeasurement>,
-    consumption_rate: Option<ResourceMeasurement<f64>>,
-    throttled_time: Option<NodeIntegerResourceMeasurement>,
-    effective_limit: Option<ResourceMeasurement<f64>>,
-    some_pressure_stall_time: Option<NodeIntegerResourceMeasurement>,
-    full_pressure_stall_time: Option<NodeIntegerResourceMeasurement>,
+    user_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    system_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    total_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    consumption_rate: Option<ResourceMeasurement<f64, CpuUnit>>,
+    throttled_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    effective_limit: Option<ResourceMeasurement<f64, CpuUnit>>,
+    some_pressure_stall_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    full_pressure_stall_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
     limit_events: Vec<NodeResourceLimitEventCount>,
 }
 
@@ -350,19 +354,19 @@ impl From<CpuMetrics> for NodeCpuMetrics {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeMemoryMetrics {
-    system_used: Option<NodeIntegerResourceMeasurement>,
-    system_total: Option<NodeIntegerResourceMeasurement>,
-    system_available: Option<NodeIntegerResourceMeasurement>,
-    resident: Option<NodeIntegerResourceMeasurement>,
-    private: Option<NodeIntegerResourceMeasurement>,
-    physical_footprint: Option<NodeIntegerResourceMeasurement>,
-    virtual_memory: Option<NodeIntegerResourceMeasurement>,
-    peak_resident: Option<NodeIntegerResourceMeasurement>,
-    limit: Option<NodeIntegerResourceMeasurement>,
-    environment_accounted: Option<NodeIntegerResourceMeasurement>,
-    some_pressure_stall_time: Option<NodeIntegerResourceMeasurement>,
-    full_pressure_stall_time: Option<NodeIntegerResourceMeasurement>,
-    out_of_memory_event_count: Option<NodeIntegerResourceMeasurement>,
+    system_used: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    system_total: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    system_available: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    resident: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    private: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    physical_footprint: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    virtual_memory: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    peak_resident: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    limit: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    environment_accounted: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    some_pressure_stall_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    full_pressure_stall_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    out_of_memory_event_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
     limit_events: Vec<NodeResourceLimitEventCount>,
 }
 
@@ -390,12 +394,12 @@ impl From<MemoryMetrics> for NodeMemoryMetrics {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeProcessMetrics {
-    active_count: Option<NodeIntegerResourceMeasurement>,
-    descendant_count: Option<NodeIntegerResourceMeasurement>,
-    thread_count: Option<NodeIntegerResourceMeasurement>,
-    lifetime_creation_count: Option<NodeIntegerResourceMeasurement>,
-    open_file_descriptor_count: Option<NodeIntegerResourceMeasurement>,
-    windows_handle_count: Option<NodeIntegerResourceMeasurement>,
+    active_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    descendant_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    thread_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    lifetime_creation_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    open_file_descriptor_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    windows_handle_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
     limit_events: Vec<NodeResourceLimitEventCount>,
 }
 
@@ -416,12 +420,12 @@ impl From<ProcessMetrics> for NodeProcessMetrics {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeDiskMetrics {
-    read_data: Option<NodeIntegerResourceMeasurement>,
-    write_data: Option<NodeIntegerResourceMeasurement>,
-    read_throughput: Option<ResourceMeasurement<f64>>,
-    write_throughput: Option<ResourceMeasurement<f64>>,
-    read_operations: Option<NodeIntegerResourceMeasurement>,
-    write_operations: Option<NodeIntegerResourceMeasurement>,
+    read_data: Option<NodeIntegerResourceMeasurement<DataUnit>>,
+    write_data: Option<NodeIntegerResourceMeasurement<DataUnit>>,
+    read_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
+    write_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
+    read_operations: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    write_operations: Option<NodeIntegerResourceMeasurement<CountUnit>>,
     filesystems: Vec<NodeFilesystemCapacityMetrics>,
 }
 
@@ -462,14 +466,14 @@ impl From<GpuMetrics> for NodeGpuMetrics {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeNetworkTrafficMetrics {
-    received_data: Option<NodeIntegerResourceMeasurement>,
-    transmitted_data: Option<NodeIntegerResourceMeasurement>,
-    receive_throughput: Option<ResourceMeasurement<f64>>,
-    transmit_throughput: Option<ResourceMeasurement<f64>>,
-    received_packets: Option<NodeIntegerResourceMeasurement>,
-    transmitted_packets: Option<NodeIntegerResourceMeasurement>,
-    receive_errors: Option<NodeIntegerResourceMeasurement>,
-    transmit_errors: Option<NodeIntegerResourceMeasurement>,
+    received_data: Option<NodeIntegerResourceMeasurement<DataUnit>>,
+    transmitted_data: Option<NodeIntegerResourceMeasurement<DataUnit>>,
+    receive_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
+    transmit_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
+    received_packets: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    transmitted_packets: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    receive_errors: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    transmit_errors: Option<NodeIntegerResourceMeasurement<CountUnit>>,
 }
 impl From<NetworkTrafficMetrics> for NodeNetworkTrafficMetrics {
     fn from(traffic: NetworkTrafficMetrics) -> Self {

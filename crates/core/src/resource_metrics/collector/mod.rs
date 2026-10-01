@@ -8,11 +8,11 @@ use std::time::Instant;
 
 use chrono::Utc;
 use nemo_relay_types::api::resource_metrics::{
-    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, CpuMetrics, DiskMetrics,
-    FilesystemCapacityMetrics, GpuMetrics, MemoryMetrics, ProcessMetrics, ProcessSamplingMetadata,
-    ResourceLimitEventCount, ResourceLimitEventKind, ResourceLimitResource, ResourceMeasurement,
-    ResourceMeasurementScope, ResourceMeasurementUnit, ResourceMetricValue,
-    ResourceMetricsSnapshot,
+    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, CapacityUnit, CountUnit, CpuMetrics,
+    CpuUnit, DataUnit, DiskMetrics, DurationUnit, FilesystemCapacityMetrics, GpuMetrics,
+    MemoryMetrics, ProcessMetrics, ProcessSamplingMetadata, ResourceLimitEventCount,
+    ResourceLimitEventKind, ResourceLimitResource, ResourceMeasurement, ResourceMeasurementScope,
+    ResourceMetricValue, ResourceMetricsSnapshot, ResourceUnit,
 };
 
 use crate::error::{FlowError, Result};
@@ -99,15 +99,15 @@ pub(crate) struct ProcessIoSample {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct IntegerSample {
+pub(super) struct IntegerSample<U> {
     pub(super) value: u64,
-    pub(super) unit: ResourceMeasurementUnit,
+    pub(super) unit: U,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct FloatSample {
+pub(super) struct FloatSample<U> {
     pub(super) value: f64,
-    pub(super) unit: ResourceMeasurementUnit,
+    pub(super) unit: U,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -119,16 +119,16 @@ pub(super) struct LimitEventSample {
 
 #[derive(Debug, Default)]
 pub(super) struct EnvironmentSample {
-    pub(super) cpu_throttled_time: Option<IntegerSample>,
-    pub(super) effective_cpu_limit: Option<FloatSample>,
-    pub(super) cpu_some_pressure_stall_time: Option<IntegerSample>,
-    pub(super) cpu_full_pressure_stall_time: Option<IntegerSample>,
-    pub(super) memory_limit: Option<IntegerSample>,
-    pub(super) environment_accounted_memory: Option<IntegerSample>,
-    pub(super) memory_some_pressure_stall_time: Option<IntegerSample>,
-    pub(super) memory_full_pressure_stall_time: Option<IntegerSample>,
-    pub(super) out_of_memory_event_count: Option<IntegerSample>,
-    pub(super) lifetime_process_creation_count: Option<IntegerSample>,
+    pub(super) cpu_throttled_time: Option<IntegerSample<DurationUnit>>,
+    pub(super) effective_cpu_limit: Option<FloatSample<CpuUnit>>,
+    pub(super) cpu_some_pressure_stall_time: Option<IntegerSample<DurationUnit>>,
+    pub(super) cpu_full_pressure_stall_time: Option<IntegerSample<DurationUnit>>,
+    pub(super) memory_limit: Option<IntegerSample<CapacityUnit>>,
+    pub(super) environment_accounted_memory: Option<IntegerSample<CapacityUnit>>,
+    pub(super) memory_some_pressure_stall_time: Option<IntegerSample<DurationUnit>>,
+    pub(super) memory_full_pressure_stall_time: Option<IntegerSample<DurationUnit>>,
+    pub(super) out_of_memory_event_count: Option<IntegerSample<CountUnit>>,
+    pub(super) lifetime_process_creation_count: Option<IntegerSample<CountUnit>>,
     pub(super) resource_limit_events: Vec<LimitEventSample>,
 }
 
@@ -157,9 +157,9 @@ pub(crate) struct CollectedSnapshot {
 
 #[derive(Debug, Default, Clone)]
 struct SystemMemorySample {
-    used: Option<ResourceMeasurement<ResourceMetricValue>>,
-    total: Option<ResourceMeasurement<ResourceMetricValue>>,
-    available: Option<ResourceMeasurement<ResourceMetricValue>>,
+    used: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
+    total: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
+    available: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>,
 }
 
 pub(crate) struct GlobalCpuSampler {
@@ -175,7 +175,7 @@ static SYSTEM_MEMORY_SAMPLER: LazyLock<Mutex<sysinfo::System>> = LazyLock::new(|
 });
 
 impl GlobalCpuSampler {
-    pub(crate) fn sample(sampler: &mut Option<Self>) -> Option<ResourceMeasurement<f64>> {
+    pub(crate) fn sample(sampler: &mut Option<Self>) -> Option<ResourceMeasurement<f64, CpuUnit>> {
         if sampler.is_none() {
             let system = sysinfo::System::new_with_specifics(
                 sysinfo::RefreshKind::nothing()
@@ -203,7 +203,7 @@ impl GlobalCpuSampler {
             .map(|cpu| f64::from(cpu.cpu_usage()) / 100.0)
             .sum::<f64>();
         rate.is_finite()
-            .then(|| ResourceMeasurement::new(rate, ResourceMeasurementUnit::LogicalProcessors))
+            .then(|| ResourceMeasurement::new(rate, CpuUnit::LogicalProcessors))
     }
 }
 
@@ -550,12 +550,9 @@ pub(crate) fn collect_with_state(
             .map(|path| match platform::filesystem_capacity(path) {
                 Ok((total, available, free)) => FilesystemCapacityMetrics {
                     path: path.to_string_lossy().into_owned(),
-                    total_capacity: available_measurement(total, ResourceMeasurementUnit::Bytes),
-                    available_capacity: available_measurement(
-                        available,
-                        ResourceMeasurementUnit::Bytes,
-                    ),
-                    free_capacity: available_measurement(free, ResourceMeasurementUnit::Bytes),
+                    total_capacity: available_measurement(total, CapacityUnit::Bytes),
+                    available_capacity: available_measurement(available, CapacityUnit::Bytes),
+                    free_capacity: available_measurement(free, CapacityUnit::Bytes),
                 },
                 Err(_) => FilesystemCapacityMetrics {
                     path: path.to_string_lossy().into_owned(),
@@ -575,7 +572,7 @@ pub(crate) fn collect_with_state(
         .map(|sample| ResourceLimitEventCount {
             resource: sample.resource,
             event: sample.event,
-            count: available_measurement(sample.count, ResourceMeasurementUnit::Events),
+            count: available_measurement(sample.count, CountUnit::Events),
         })
         .collect::<Vec<_>>();
     let cpu = config.cpu.enabled.then(|| CpuMetrics {
@@ -675,31 +672,23 @@ pub(crate) fn collect_with_state(
             active_process_count,
             !process_ids_unavailable
                 && (target.measurement_scope == ResourceMeasurementScope::Global || complete),
-            ResourceMeasurementUnit::Processes,
+            CountUnit::Processes,
         ),
         descendant_count: process_scope
-            .then(|| {
-                count_measurement(
-                    descendant_process_count,
-                    complete,
-                    ResourceMeasurementUnit::Processes,
-                )
-            })
+            .then(|| count_measurement(descendant_process_count, complete, CountUnit::Processes))
             .flatten(),
-        thread_count: aggregation.sum(
-            "process.thread_count",
-            ResourceMeasurementUnit::Threads,
-            |sample| sample.thread_count,
-        ),
+        thread_count: aggregation.sum("process.thread_count", CountUnit::Threads, |sample| {
+            sample.thread_count
+        }),
         lifetime_creation_count: integer_measurement(environment.lifetime_process_creation_count),
         open_file_descriptor_count: aggregation.sum(
             "process.open_file_descriptor_count",
-            ResourceMeasurementUnit::FileDescriptors,
+            CountUnit::FileDescriptors,
             |sample| sample.open_file_descriptor_count,
         ),
         windows_handle_count: aggregation.sum(
             "process.windows_handle_count",
-            ResourceMeasurementUnit::Handles,
+            CountUnit::Handles,
             |sample| sample.windows_handle_count,
         ),
         limit_events: limit_events
@@ -713,7 +702,7 @@ pub(crate) fn collect_with_state(
             .disk
             .process_io
             .then(|| {
-                aggregation.sum("disk.read_data", ResourceMeasurementUnit::Bytes, |sample| {
+                aggregation.sum("disk.read_data", DataUnit::Bytes, |sample| {
                     sample.disk_read_bytes
                 })
             })
@@ -722,11 +711,9 @@ pub(crate) fn collect_with_state(
             .disk
             .process_io
             .then(|| {
-                aggregation.sum(
-                    "disk.write_data",
-                    ResourceMeasurementUnit::Bytes,
-                    |sample| sample.disk_write_bytes,
-                )
+                aggregation.sum("disk.write_data", DataUnit::Bytes, |sample| {
+                    sample.disk_write_bytes
+                })
             })
             .flatten(),
         read_throughput: None,
@@ -735,22 +722,18 @@ pub(crate) fn collect_with_state(
             .disk
             .process_io
             .then(|| {
-                aggregation.sum(
-                    "disk.read_operations",
-                    ResourceMeasurementUnit::Operations,
-                    |sample| sample.disk_read_operations,
-                )
+                aggregation.sum("disk.read_operations", CountUnit::Operations, |sample| {
+                    sample.disk_read_operations
+                })
             })
             .flatten(),
         write_operations: config
             .disk
             .process_io
             .then(|| {
-                aggregation.sum(
-                    "disk.write_operations",
-                    ResourceMeasurementUnit::Operations,
-                    |sample| sample.disk_write_operations,
-                )
+                aggregation.sum("disk.write_operations", CountUnit::Operations, |sample| {
+                    sample.disk_write_operations
+                })
             })
             .flatten(),
         filesystems,
@@ -813,12 +796,12 @@ struct ProcessAggregation<'a> {
 }
 
 impl ProcessAggregation<'_> {
-    fn sum(
+    fn sum<U: ResourceUnit>(
         &mut self,
         field: &str,
-        unit: ResourceMeasurementUnit,
+        unit: U,
         value: impl Fn(&ProcessSample) -> Option<u64>,
-    ) -> Option<ResourceMeasurement<ResourceMetricValue>> {
+    ) -> Option<ResourceMeasurement<ResourceMetricValue, U>> {
         let mut supplied = 0_u64;
         let mut total = Some(0_u64);
         for sample in self.samples {
@@ -841,8 +824,8 @@ impl ProcessAggregation<'_> {
 fn count_measurement(
     value: u64,
     complete: bool,
-    unit: ResourceMeasurementUnit,
-) -> Option<ResourceMeasurement<ResourceMetricValue>> {
+    unit: CountUnit,
+) -> Option<ResourceMeasurement<ResourceMetricValue, CountUnit>> {
     if complete {
         available_measurement(value, unit)
     } else {
@@ -862,36 +845,32 @@ fn system_memory_sample() -> Option<SystemMemorySample> {
     let used = system.used_memory();
     let available = system.available_memory();
     Some(SystemMemorySample {
-        used: available_measurement(bytes_to_kibibytes(used), ResourceMeasurementUnit::Kibibytes),
-        total: available_measurement(
-            bytes_to_kibibytes(total),
-            ResourceMeasurementUnit::Kibibytes,
-        ),
-        available: available_measurement(
-            bytes_to_kibibytes(available),
-            ResourceMeasurementUnit::Kibibytes,
-        ),
+        used: available_measurement(bytes_to_kibibytes(used), CapacityUnit::Kibibytes),
+        total: available_measurement(bytes_to_kibibytes(total), CapacityUnit::Kibibytes),
+        available: available_measurement(bytes_to_kibibytes(available), CapacityUnit::Kibibytes),
     })
 }
 
-fn integer_measurement(
-    sample: Option<IntegerSample>,
-) -> Option<ResourceMeasurement<ResourceMetricValue>> {
+fn integer_measurement<U: ResourceUnit>(
+    sample: Option<IntegerSample<U>>,
+) -> Option<ResourceMeasurement<ResourceMetricValue, U>> {
     sample.map_or_else(unavailable, |sample| {
         available_measurement(sample.value, sample.unit)
     })
 }
 
-fn float_measurement(sample: Option<FloatSample>) -> Option<ResourceMeasurement<f64>> {
+fn float_measurement<U: ResourceUnit>(
+    sample: Option<FloatSample<U>>,
+) -> Option<ResourceMeasurement<f64, U>> {
     sample.map_or_else(unavailable, |sample| {
         available_measurement(sample.value, sample.unit)
     })
 }
 
-fn available_measurement<T>(
+fn available_measurement<T, U: ResourceUnit>(
     value: impl Into<T>,
-    unit: ResourceMeasurementUnit,
-) -> Option<ResourceMeasurement<T>> {
+    unit: U,
+) -> Option<ResourceMeasurement<T, U>> {
     Some(ResourceMeasurement::new(value, unit))
 }
 
@@ -970,7 +949,7 @@ fn unavailable_snapshot(
     }
 }
 
-fn unavailable<T>() -> Option<ResourceMeasurement<T>> {
+fn unavailable<T, U: ResourceUnit>() -> Option<ResourceMeasurement<T, U>> {
     None
 }
 

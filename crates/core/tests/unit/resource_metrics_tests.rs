@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use nemo_relay_types::api::resource_metrics::ResourceMeasurementUnit;
+use nemo_relay_types::api::resource_metrics::{CapacityUnit, CpuUnit, DataUnit, DurationUnit};
 use serde_json::json;
 
 use crate::api::event::Event;
@@ -141,7 +141,7 @@ fn global_scope_reports_system_memory_and_all_visible_processes() {
     let memory = snapshot.memory.unwrap();
     let total = memory.system_total.unwrap();
     assert!(total.value > 0);
-    assert_eq!(total.unit, ResourceMeasurementUnit::Kibibytes);
+    assert_eq!(total.unit, CapacityUnit::Kibibytes);
     assert!(memory.system_used.is_some());
     assert!(memory.system_available.is_some());
     assert!(memory.resident.is_none());
@@ -212,7 +212,7 @@ fn collector_uses_canonical_units_and_serialization() {
             .as_ref()
             .unwrap()
             .unit,
-        ResourceMeasurementUnit::Milliseconds
+        DurationUnit::Milliseconds
     );
     assert_eq!(
         snapshot
@@ -223,7 +223,7 @@ fn collector_uses_canonical_units_and_serialization() {
             .as_ref()
             .unwrap()
             .unit,
-        ResourceMeasurementUnit::Milliseconds
+        DurationUnit::Milliseconds
     );
     assert_eq!(
         snapshot
@@ -234,7 +234,7 @@ fn collector_uses_canonical_units_and_serialization() {
             .as_ref()
             .unwrap()
             .unit,
-        ResourceMeasurementUnit::Kibibytes
+        CapacityUnit::Kibibytes
     );
     let serialized = serde_json::to_value(&snapshot).unwrap();
     let timestamp = serialized["timestamp"].as_str().unwrap();
@@ -318,14 +318,14 @@ fn metric_marks_use_the_converted_snapshot_units() {
     snapshot.cpu.as_mut().unwrap().user_time =
         Some(crate::api::resource_metrics::ResourceMeasurement::new(
             1_500_u64,
-            ResourceMeasurementUnit::Milliseconds,
+            DurationUnit::Milliseconds,
         ));
     snapshot.network = Some(crate::api::resource_metrics::NetworkMetrics {
         measurement_scope: crate::api::resource_metrics::ResourceMeasurementScope::Global,
         system: crate::api::resource_metrics::NetworkTrafficMetrics {
             received_data: Some(crate::api::resource_metrics::ResourceMeasurement::new(
                 1_000_000_u64,
-                ResourceMeasurementUnit::Bytes,
+                DataUnit::Bytes,
             )),
             transmitted_data: None,
             receive_throughput: None,
@@ -338,7 +338,7 @@ fn metric_marks_use_the_converted_snapshot_units() {
         interfaces: Vec::new(),
     });
     let mut units = config.units;
-    units.cpu.user_time = crate::api::resource_metrics::TimeUnit::Seconds;
+    units.cpu.user_time = crate::api::resource_metrics::DurationUnit::Seconds;
     units.network.system.received_data = crate::api::resource_metrics::DataUnit::Megabytes;
     crate::resource_metrics::units::convert_snapshot(&mut snapshot, &units);
     let measurements = super::metric_measurements(&snapshot);
@@ -394,7 +394,7 @@ fn configured_filesystem_paths_produce_byte_capacity_measurements() {
         filesystems[0].available_capacity.as_ref().unwrap(),
         filesystems[0].free_capacity.as_ref().unwrap(),
     ] {
-        assert_eq!(measurement.unit, ResourceMeasurementUnit::Bytes);
+        assert_eq!(measurement.unit, CapacityUnit::Bytes);
         assert!(measurement.value > 0);
     }
 }
@@ -908,15 +908,15 @@ fn metric_projection_omits_nonfinite_values_and_integers_outside_the_exporter_ra
     let mut snapshot = crate::resource_metrics::snapshot_fixture::full_snapshot();
     snapshot.cpu.as_mut().unwrap().consumption_rate = Some(ResourceMeasurement::new(
         f64::NAN,
-        ResourceMeasurementUnit::LogicalProcessors,
+        CpuUnit::LogicalProcessors,
     ));
     snapshot.cpu.as_mut().unwrap().total_time = Some(ResourceMeasurement::new(
         u64::MAX,
-        ResourceMeasurementUnit::Milliseconds,
+        DurationUnit::Milliseconds,
     ));
     snapshot.memory.as_mut().unwrap().resident = Some(ResourceMeasurement::new(
         ResourceMetricValue::Decimal(f64::INFINITY),
-        ResourceMeasurementUnit::Kibibytes,
+        CapacityUnit::Kibibytes,
     ));
     let metrics = super::metric_measurements(&snapshot);
     for excluded in [

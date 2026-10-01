@@ -29,7 +29,7 @@ fn registry_device_statistics_normalize_vendor_memory_and_utilization() {
         assert_eq!(devices[index].vendor, vendor);
         assert_eq!(devices[index].device_index, Some(index as u32));
         let measurement = devices[index].memory_used.as_ref().unwrap();
-        assert_eq!(measurement.unit, ResourceMeasurementUnit::Kibibytes);
+        assert_eq!(measurement.unit, CapacityUnit::Kibibytes);
         assert_eq!(measurement.value, memory);
     }
     assert_eq!(devices[0].compute_utilization.as_ref().unwrap().value, 25.0);

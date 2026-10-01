@@ -6,7 +6,9 @@ use std::io;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 
-use nemo_relay_types::api::resource_metrics::{ResourceMeasurementUnit, ResourceOperatingSystem};
+use nemo_relay_types::api::resource_metrics::{
+    CapacityUnit, CountUnit, CpuUnit, DurationUnit, ResourceOperatingSystem,
+};
 use windows_sys::Win32::Foundation::{
     CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_NO_MORE_FILES, FILETIME, HANDLE,
     INVALID_HANDLE_VALUE,
@@ -32,14 +34,12 @@ use super::{
 };
 
 pub(super) const OPERATING_SYSTEM: ResourceOperatingSystem = ResourceOperatingSystem::Windows;
-pub(super) const CPU_TIME_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Milliseconds;
-pub(super) const RESIDENT_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PRIVATE_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PHYSICAL_FOOTPRINT_UNIT: ResourceMeasurementUnit =
-    ResourceMeasurementUnit::Kibibytes;
-pub(super) const VIRTUAL_MEMORY_UNIT: ResourceMeasurementUnit = ResourceMeasurementUnit::Kibibytes;
-pub(super) const PEAK_RESIDENT_MEMORY_UNIT: ResourceMeasurementUnit =
-    ResourceMeasurementUnit::Kibibytes;
+pub(super) const CPU_TIME_UNIT: DurationUnit = DurationUnit::Milliseconds;
+pub(super) const RESIDENT_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PRIVATE_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PHYSICAL_FOOTPRINT_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const VIRTUAL_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
+pub(super) const PEAK_RESIDENT_MEMORY_UNIT: CapacityUnit = CapacityUnit::Kibibytes;
 
 #[derive(Debug)]
 pub(super) struct OwnedJobHandle(HANDLE);
@@ -383,14 +383,14 @@ pub(super) fn environment_sample(
         let processors = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };
         (processors > 0).then_some(FloatSample {
             value: f64::from(maximum_rate) / 10_000.0 * f64::from(processors),
-            unit: ResourceMeasurementUnit::LogicalProcessors,
+            unit: CpuUnit::LogicalProcessors,
         })
     });
     let memory_limit = limits.and_then(|limits| {
         (limits.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY != 0).then_some(
             IntegerSample {
                 value: bytes_to_kibibytes(limits.JobMemoryLimit as u64),
-                unit: ResourceMeasurementUnit::Kibibytes,
+                unit: CapacityUnit::Kibibytes,
             },
         )
     });
@@ -399,7 +399,7 @@ pub(super) fn environment_sample(
         memory_limit,
         lifetime_process_creation_count: accounting.map(|accounting| IntegerSample {
             value: u64::from(accounting.TotalProcesses),
-            unit: ResourceMeasurementUnit::Processes,
+            unit: CountUnit::Processes,
         }),
         ..EnvironmentSample::default()
     })

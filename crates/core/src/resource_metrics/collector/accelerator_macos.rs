@@ -6,8 +6,8 @@ use std::process::Command;
 use std::time::Instant;
 
 use nemo_relay_types::api::resource_metrics::{
-    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, AcceleratorVendor, ResourceMeasurement,
-    ResourceMeasurementUnit,
+    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, AcceleratorVendor, CapacityUnit,
+    ResourceMeasurement, UtilizationUnit,
 };
 
 use crate::plugins::resource_metrics::config::ResourceMetricsGpuConfig;
@@ -133,12 +133,10 @@ fn macos_devices(output: &str) -> Vec<AcceleratorDeviceMetrics> {
             }
             _ => None,
         }
-        .map(|bytes| ResourceMeasurement::new(bytes / 1_024, ResourceMeasurementUnit::Kibibytes));
+        .map(|bytes| ResourceMeasurement::new(bytes / 1_024, CapacityUnit::Kibibytes));
         let compute_utilization = registry_number(block, "Device Utilization %")
             .filter(|percent| *percent <= 100)
-            .map(|percent| {
-                ResourceMeasurement::new(percent as f64, ResourceMeasurementUnit::Percentage)
-            });
+            .map(|percent| ResourceMeasurement::new(percent as f64, UtilizationUnit::Percentage));
         devices.push(AcceleratorDeviceMetrics {
             vendor,
             device_identifier: identifier,
@@ -216,9 +214,8 @@ fn apple_processes_from_registry(
                 device_index: *index,
                 process_id,
                 memory_used: None,
-                compute_utilization: utilization.map(|percent| {
-                    ResourceMeasurement::new(percent, ResourceMeasurementUnit::Percentage)
-                }),
+                compute_utilization: utilization
+                    .map(|percent| ResourceMeasurement::new(percent, UtilizationUnit::Percentage)),
             })
             .collect(),
     )

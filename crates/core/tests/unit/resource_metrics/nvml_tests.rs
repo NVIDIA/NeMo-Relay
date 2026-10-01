@@ -101,7 +101,7 @@ fn nvml_snapshot_normalizes_memory_filters_processes_and_uses_a_fresh_utilizatio
     assert_eq!(devices[0].memory_used.as_ref().unwrap().value, 4096_u64);
     assert_eq!(
         devices[0].memory_used.as_ref().unwrap().unit,
-        ResourceMeasurementUnit::Kibibytes
+        CapacityUnit::Kibibytes
     );
     assert_eq!(devices[0].compute_utilization.as_ref().unwrap().value, 25.0);
     let processes = first.processes.unwrap();

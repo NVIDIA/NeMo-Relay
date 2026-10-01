@@ -142,199 +142,26 @@ impl Default for ResourceMetricsGpuConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-/// Time units available for resource measurements.
-pub enum TimeUnit {
-    /// Microseconds.
-    Microseconds,
-    /// Milliseconds.
-    #[default]
-    Milliseconds,
-    /// Seconds.
-    Seconds,
-    /// Minutes.
-    Minutes,
-}
-impl From<TimeUnit> for nemo_relay_types::api::resource_metrics::ResourceMeasurementUnit {
-    fn from(unit: TimeUnit) -> Self {
-        match unit {
-            TimeUnit::Microseconds => Self::Microseconds,
-            TimeUnit::Milliseconds => Self::Milliseconds,
-            TimeUnit::Seconds => Self::Seconds,
-            TimeUnit::Minutes => Self::Minutes,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-/// Storage units for memory and GPU readings.
-pub enum MemoryUnit {
-    /// Bytes.
-    Bytes,
-    /// Kilobytes.
-    Kilobytes,
-    /// Megabytes.
-    Megabytes,
-    /// Gigabytes.
-    Gigabytes,
-    /// Terabytes.
-    Terabytes,
-    /// Kibibytes.
-    #[default]
-    Kibibytes,
-    /// Mebibytes.
-    Mebibytes,
-    /// Gibibytes.
-    Gibibytes,
-    /// Tebibytes.
-    Tebibytes,
-}
-impl From<MemoryUnit> for nemo_relay_types::api::resource_metrics::ResourceMeasurementUnit {
-    fn from(unit: MemoryUnit) -> Self {
-        match unit {
-            MemoryUnit::Bytes => Self::Bytes,
-            MemoryUnit::Kilobytes => Self::Kilobytes,
-            MemoryUnit::Megabytes => Self::Megabytes,
-            MemoryUnit::Gigabytes => Self::Gigabytes,
-            MemoryUnit::Terabytes => Self::Terabytes,
-            MemoryUnit::Kibibytes => Self::Kibibytes,
-            MemoryUnit::Mebibytes => Self::Mebibytes,
-            MemoryUnit::Gibibytes => Self::Gibibytes,
-            MemoryUnit::Tebibytes => Self::Tebibytes,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-/// Storage units for disk and network readings.
-pub enum DataUnit {
-    /// Bytes.
-    #[default]
-    Bytes,
-    /// Kilobytes.
-    Kilobytes,
-    /// Megabytes.
-    Megabytes,
-    /// Gigabytes.
-    Gigabytes,
-    /// Terabytes.
-    Terabytes,
-    /// Kibibytes.
-    Kibibytes,
-    /// Mebibytes.
-    Mebibytes,
-    /// Gibibytes.
-    Gibibytes,
-    /// Tebibytes.
-    Tebibytes,
-}
-impl From<DataUnit> for nemo_relay_types::api::resource_metrics::ResourceMeasurementUnit {
-    fn from(unit: DataUnit) -> Self {
-        match unit {
-            DataUnit::Bytes => Self::Bytes,
-            DataUnit::Kilobytes => Self::Kilobytes,
-            DataUnit::Megabytes => Self::Megabytes,
-            DataUnit::Gigabytes => Self::Gigabytes,
-            DataUnit::Terabytes => Self::Terabytes,
-            DataUnit::Kibibytes => Self::Kibibytes,
-            DataUnit::Mebibytes => Self::Mebibytes,
-            DataUnit::Gibibytes => Self::Gibibytes,
-            DataUnit::Tebibytes => Self::Tebibytes,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-/// Transfer-rate units for disk and network readings.
-pub enum ThroughputUnit {
-    /// Bytes per second.
-    #[default]
-    BytesPerSecond,
-    /// Kibibytes per second.
-    KibibytesPerSecond,
-    /// Mebibytes per second.
-    MebibytesPerSecond,
-    /// Gibibytes per second.
-    GibibytesPerSecond,
-    /// Bits per second.
-    BitsPerSecond,
-    /// Megabits per second.
-    MegabitsPerSecond,
-    /// Gigabits per second.
-    GigabitsPerSecond,
-}
-impl From<ThroughputUnit> for nemo_relay_types::api::resource_metrics::ResourceMeasurementUnit {
-    fn from(unit: ThroughputUnit) -> Self {
-        match unit {
-            ThroughputUnit::BytesPerSecond => Self::BytesPerSecond,
-            ThroughputUnit::KibibytesPerSecond => Self::KibibytesPerSecond,
-            ThroughputUnit::MebibytesPerSecond => Self::MebibytesPerSecond,
-            ThroughputUnit::GibibytesPerSecond => Self::GibibytesPerSecond,
-            ThroughputUnit::BitsPerSecond => Self::BitsPerSecond,
-            ThroughputUnit::MegabitsPerSecond => Self::MegabitsPerSecond,
-            ThroughputUnit::GigabitsPerSecond => Self::GigabitsPerSecond,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-/// Units for CPU use and capacity.
-pub enum CpuUnit {
-    /// Logical processors.
-    #[default]
-    LogicalProcessors,
-    /// Millicores.
-    Millicores,
-}
-impl From<CpuUnit> for nemo_relay_types::api::resource_metrics::ResourceMeasurementUnit {
-    fn from(unit: CpuUnit) -> Self {
-        match unit {
-            CpuUnit::LogicalProcessors => Self::LogicalProcessors,
-            CpuUnit::Millicores => Self::Millicores,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-/// Units for GPU utilization.
-pub enum UtilizationUnit {
-    /// Percentage.
-    #[default]
-    Percentage,
-    /// Fraction.
-    Fraction,
-}
-impl From<UtilizationUnit> for nemo_relay_types::api::resource_metrics::ResourceMeasurementUnit {
-    fn from(unit: UtilizationUnit) -> Self {
-        match unit {
-            UtilizationUnit::Percentage => Self::Percentage,
-            UtilizationUnit::Fraction => Self::Fraction,
-        }
-    }
-}
+pub use nemo_relay_types::api::resource_metrics::{
+    BandwidthUnit, CapacityUnit, CpuUnit, DataUnit, DurationUnit, UtilizationUnit,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 /// CPU measurement unit choices.
 pub struct ResourceMetricsCpuUnits {
     /// User time.
-    pub user_time: TimeUnit,
+    pub user_time: DurationUnit,
     /// System time.
-    pub system_time: TimeUnit,
+    pub system_time: DurationUnit,
     /// Total time.
-    pub total_time: TimeUnit,
+    pub total_time: DurationUnit,
     /// Throttled time.
-    pub throttled_time: TimeUnit,
+    pub throttled_time: DurationUnit,
     /// Some pressure stall time.
-    pub some_pressure_stall_time: TimeUnit,
+    pub some_pressure_stall_time: DurationUnit,
     /// Full pressure stall time.
-    pub full_pressure_stall_time: TimeUnit,
+    pub full_pressure_stall_time: DurationUnit,
     /// Consumption rate.
     pub consumption_rate: CpuUnit,
     /// Effective limit.
@@ -359,29 +186,29 @@ crate::editor_config! {
 /// Memory measurement unit choices.
 pub struct ResourceMetricsMemoryUnits {
     /// System used.
-    pub system_used: MemoryUnit,
+    pub system_used: CapacityUnit,
     /// System total.
-    pub system_total: MemoryUnit,
+    pub system_total: CapacityUnit,
     /// System available.
-    pub system_available: MemoryUnit,
+    pub system_available: CapacityUnit,
     /// Resident.
-    pub resident: MemoryUnit,
+    pub resident: CapacityUnit,
     /// Private.
-    pub private: MemoryUnit,
+    pub private: CapacityUnit,
     /// Physical footprint.
-    pub physical_footprint: MemoryUnit,
+    pub physical_footprint: CapacityUnit,
     /// Virtual memory.
-    pub virtual_memory: MemoryUnit,
+    pub virtual_memory: CapacityUnit,
     /// Peak resident.
-    pub peak_resident: MemoryUnit,
+    pub peak_resident: CapacityUnit,
     /// Limit.
-    pub limit: MemoryUnit,
+    pub limit: CapacityUnit,
     /// Environment accounted.
-    pub environment_accounted: MemoryUnit,
+    pub environment_accounted: CapacityUnit,
     /// Some pressure stall time.
-    pub some_pressure_stall_time: TimeUnit,
+    pub some_pressure_stall_time: DurationUnit,
     /// Full pressure stall time.
-    pub full_pressure_stall_time: TimeUnit,
+    pub full_pressure_stall_time: DurationUnit,
 }
 
 crate::editor_config! {
@@ -401,7 +228,7 @@ crate::editor_config! {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 /// Disk measurement unit choices.
 pub struct ResourceMetricsDiskUnits {
@@ -410,15 +237,29 @@ pub struct ResourceMetricsDiskUnits {
     /// Write data.
     pub write_data: DataUnit,
     /// Filesystem total capacity.
-    pub filesystem_total_capacity: DataUnit,
+    pub filesystem_total_capacity: CapacityUnit,
     /// Filesystem available capacity.
-    pub filesystem_available_capacity: DataUnit,
+    pub filesystem_available_capacity: CapacityUnit,
     /// Filesystem free capacity.
-    pub filesystem_free_capacity: DataUnit,
+    pub filesystem_free_capacity: CapacityUnit,
     /// Read throughput.
-    pub read_throughput: ThroughputUnit,
+    pub read_throughput: BandwidthUnit,
     /// Write throughput.
-    pub write_throughput: ThroughputUnit,
+    pub write_throughput: BandwidthUnit,
+}
+
+impl Default for ResourceMetricsDiskUnits {
+    fn default() -> Self {
+        Self {
+            read_data: DataUnit::Bytes,
+            write_data: DataUnit::Bytes,
+            filesystem_total_capacity: CapacityUnit::Bytes,
+            filesystem_available_capacity: CapacityUnit::Bytes,
+            filesystem_free_capacity: CapacityUnit::Bytes,
+            read_throughput: BandwidthUnit::BytesPerSecond,
+            write_throughput: BandwidthUnit::BytesPerSecond,
+        }
+    }
 }
 
 crate::editor_config! {
@@ -438,9 +279,9 @@ crate::editor_config! {
 /// GPU measurement unit choices.
 pub struct ResourceMetricsGpuUnits {
     /// Device memory used.
-    pub device_memory_used: MemoryUnit,
+    pub device_memory_used: CapacityUnit,
     /// Process memory used.
-    pub process_memory_used: MemoryUnit,
+    pub process_memory_used: CapacityUnit,
     /// Device compute utilization.
     pub device_compute_utilization: UtilizationUnit,
     /// Process compute utilization.
@@ -465,9 +306,9 @@ pub struct ResourceMetricsNetworkTrafficUnits {
     /// Transmitted data.
     pub transmitted_data: DataUnit,
     /// Receive throughput.
-    pub receive_throughput: ThroughputUnit,
+    pub receive_throughput: BandwidthUnit,
     /// Transmit throughput.
-    pub transmit_throughput: ThroughputUnit,
+    pub transmit_throughput: BandwidthUnit,
 }
 
 crate::editor_config! {

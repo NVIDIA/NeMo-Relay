@@ -9,12 +9,13 @@ use std::sync::{Arc, LazyLock, Mutex, RwLock, Weak};
 
 use nemo_relay_types::api::event::{MetricKind, MetricMeasurement, MetricValueType};
 pub use nemo_relay_types::api::resource_metrics::{
-    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, AcceleratorVendor, CpuMetrics,
-    DiskMetrics, FilesystemCapacityMetrics, GpuMetrics, MemoryMetrics, NetworkInterfaceMetrics,
-    NetworkMetrics, NetworkTrafficMetrics, ProcessMetrics, ProcessSamplingMetadata,
-    ResourceLimitEventCount, ResourceLimitEventKind, ResourceLimitResource, ResourceMeasurement,
-    ResourceMeasurementScope, ResourceMeasurementUnit, ResourceMetricValue,
-    ResourceMetricsSnapshot, ResourceOperatingSystem,
+    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, AcceleratorVendor, BandwidthUnit,
+    CapacityUnit, CountUnit, CpuMetrics, CpuUnit, DataUnit, DiskMetrics, DurationUnit,
+    FilesystemCapacityMetrics, GpuMetrics, MemoryMetrics, NetworkInterfaceMetrics, NetworkMetrics,
+    NetworkTrafficMetrics, ProcessMetrics, ProcessSamplingMetadata, ResourceLimitEventCount,
+    ResourceLimitEventKind, ResourceLimitResource, ResourceMeasurement, ResourceMeasurementScope,
+    ResourceMetricValue, ResourceMetricsSnapshot, ResourceOperatingSystem, ResourceUnit,
+    UtilizationUnit,
 };
 use serde_json::{Value, json};
 
@@ -22,12 +23,12 @@ use crate::api::runtime::scope_stack::{ScopeStack, ScopeStackHandle};
 use crate::api::scope::{self, ScopeHandle};
 use crate::error::Result;
 pub use crate::plugins::resource_metrics::config::{
-    CpuUnit, DataUnit, MemoryUnit, ResourceMetricsConfig, ResourceMetricsCpuConfig,
-    ResourceMetricsCpuUnits, ResourceMetricsDiskConfig, ResourceMetricsDiskUnits,
-    ResourceMetricsGpuConfig, ResourceMetricsGpuUnits, ResourceMetricsMeasurementScope,
-    ResourceMetricsMemoryConfig, ResourceMetricsMemoryUnits, ResourceMetricsNetworkConfig,
-    ResourceMetricsNetworkTrafficUnits, ResourceMetricsNetworkUnits, ResourceMetricsPollingConfig,
-    ResourceMetricsProcessConfig, ResourceMetricsUnits, ThroughputUnit, TimeUnit, UtilizationUnit,
+    ResourceMetricsConfig, ResourceMetricsCpuConfig, ResourceMetricsCpuUnits,
+    ResourceMetricsDiskConfig, ResourceMetricsDiskUnits, ResourceMetricsGpuConfig,
+    ResourceMetricsGpuUnits, ResourceMetricsMeasurementScope, ResourceMetricsMemoryConfig,
+    ResourceMetricsMemoryUnits, ResourceMetricsNetworkConfig, ResourceMetricsNetworkTrafficUnits,
+    ResourceMetricsNetworkUnits, ResourceMetricsPollingConfig, ResourceMetricsProcessConfig,
+    ResourceMetricsUnits,
 };
 #[doc(hidden)]
 pub use crate::resource_metrics::manager::CliResourceMetricsLaunchGuard;
@@ -196,7 +197,7 @@ fn metric_measurements(snapshot: &ResourceMetricsSnapshot) -> Vec<MetricMeasurem
     let mut measurements = Vec::new();
     // Every successful poll needs a valid metric mark, even if its selected
     // categories have no available measurements on this host.
-    let sample = ResourceMeasurement::new(1_u64, ResourceMeasurementUnit::Events);
+    let sample = ResourceMeasurement::new(1_u64, CountUnit::Events);
     push_integer(
         &mut measurements,
         "nemo.relay.resource.sample_count",
@@ -549,14 +550,8 @@ fn metric_measurements(snapshot: &ResourceMetricsSnapshot) -> Vec<MetricMeasurem
         }
     }
     if let Some(coverage) = &snapshot.process_sampling {
-        let visible = ResourceMeasurement::new(
-            coverage.visible_processes,
-            ResourceMeasurementUnit::Processes,
-        );
-        let sampled = ResourceMeasurement::new(
-            coverage.sampled_processes,
-            ResourceMeasurementUnit::Processes,
-        );
+        let visible = ResourceMeasurement::new(coverage.visible_processes, CountUnit::Processes);
+        let sampled = ResourceMeasurement::new(coverage.sampled_processes, CountUnit::Processes);
         push_integer(
             &mut measurements,
             "nemo.relay.resource.process_sampling.visible_count",
@@ -574,7 +569,7 @@ fn metric_measurements(snapshot: &ResourceMetricsSnapshot) -> Vec<MetricMeasurem
             Some(&sampled),
         );
         for (field, count) in &coverage.field_sampled_processes {
-            let count = ResourceMeasurement::new(*count, ResourceMeasurementUnit::Processes);
+            let count = ResourceMeasurement::new(*count, CountUnit::Processes);
             push_integer_with_attributes(
                 &mut measurements,
                 "nemo.relay.resource.process_sampling.field_sampled_count",
@@ -596,23 +591,25 @@ fn push_network_traffic(
     traffic: &NetworkTrafficMetrics,
     attributes: Value,
 ) {
-    let mut integer = |field: &str, value: &Option<ResourceMeasurement<ResourceMetricValue>>| {
-        push_integer_with_attributes(
-            measurements,
-            &format!("{prefix}.{field}"),
-            "System network interface counter",
-            operating_system,
-            ResourceMeasurementScope::Global.as_str(),
-            value.as_ref(),
-            attributes.clone(),
-        );
-    };
-    integer("received_data", &traffic.received_data);
-    integer("transmitted_data", &traffic.transmitted_data);
-    integer("received_packets", &traffic.received_packets);
-    integer("transmitted_packets", &traffic.transmitted_packets);
-    integer("receive_errors", &traffic.receive_errors);
-    integer("transmit_errors", &traffic.transmit_errors);
+    macro_rules! integer {
+        ($field:literal, $value:expr) => {
+            push_integer_with_attributes(
+                measurements,
+                &format!("{prefix}.{}", $field),
+                "System network interface counter",
+                operating_system,
+                ResourceMeasurementScope::Global.as_str(),
+                $value.as_ref(),
+                attributes.clone(),
+            );
+        };
+    }
+    integer!("received_data", traffic.received_data);
+    integer!("transmitted_data", traffic.transmitted_data);
+    integer!("received_packets", traffic.received_packets);
+    integer!("transmitted_packets", traffic.transmitted_packets);
+    integer!("receive_errors", traffic.receive_errors);
+    integer!("transmit_errors", traffic.transmit_errors);
     for (field, value) in [
         ("receive_throughput", &traffic.receive_throughput),
         ("transmit_throughput", &traffic.transmit_throughput),
@@ -629,13 +626,13 @@ fn push_network_traffic(
     }
 }
 
-fn push_float(
+fn push_float<U: ResourceUnit>(
     measurements: &mut Vec<MetricMeasurement>,
     name: &str,
     description: &str,
     operating_system: &str,
     measurement_scope: &str,
-    measurement: Option<&ResourceMeasurement<f64>>,
+    measurement: Option<&ResourceMeasurement<f64, U>>,
 ) {
     push_float_with_attributes(
         measurements,
@@ -648,13 +645,13 @@ fn push_float(
     );
 }
 
-fn push_float_with_attributes(
+fn push_float_with_attributes<U: ResourceUnit>(
     measurements: &mut Vec<MetricMeasurement>,
     name: &str,
     description: &str,
     operating_system: &str,
     measurement_scope: &str,
-    measurement: Option<&ResourceMeasurement<f64>>,
+    measurement: Option<&ResourceMeasurement<f64, U>>,
     additional_attributes: Value,
 ) {
     let Some(measurement) = measurement else {
@@ -681,13 +678,13 @@ fn push_float_with_attributes(
     );
 }
 
-fn push_integer(
+fn push_integer<U: ResourceUnit>(
     measurements: &mut Vec<MetricMeasurement>,
     name: &str,
     description: &str,
     operating_system: &str,
     measurement_scope: &str,
-    measurement: Option<&ResourceMeasurement<ResourceMetricValue>>,
+    measurement: Option<&ResourceMeasurement<ResourceMetricValue, U>>,
 ) {
     push_integer_with_attributes(
         measurements,
@@ -700,13 +697,13 @@ fn push_integer(
     );
 }
 
-fn push_integer_with_attributes(
+fn push_integer_with_attributes<U: ResourceUnit>(
     measurements: &mut Vec<MetricMeasurement>,
     name: &str,
     description: &str,
     operating_system: &str,
     measurement_scope: &str,
-    measurement: Option<&ResourceMeasurement<ResourceMetricValue>>,
+    measurement: Option<&ResourceMeasurement<ResourceMetricValue, U>>,
     additional_attributes: Value,
 ) {
     let Some(measurement) = measurement else {
@@ -715,17 +712,10 @@ fn push_integer_with_attributes(
     // OpenTelemetry keeps one numeric type per instrument name. A unit that can
     // produce a fractional conversion must use f64 even when this poll's value
     // happens to be whole, or the next poll can reject the entire metric mark.
-    let fractional_unit = match measurement.unit {
-        ResourceMeasurementUnit::Seconds
-        | ResourceMeasurementUnit::Minutes
-        | ResourceMeasurementUnit::Kilobytes
-        | ResourceMeasurementUnit::Megabytes
-        | ResourceMeasurementUnit::Gigabytes
-        | ResourceMeasurementUnit::Terabytes
-        | ResourceMeasurementUnit::Mebibytes
-        | ResourceMeasurementUnit::Gibibytes
-        | ResourceMeasurementUnit::Tebibytes => true,
-        ResourceMeasurementUnit::Kibibytes => {
+    let fractional_unit = match measurement.unit.as_str() {
+        "seconds" | "minutes" | "kilobytes" | "megabytes" | "gigabytes" | "terabytes"
+        | "mebibytes" | "gibibytes" | "tebibytes" => true,
+        "kibibytes" => {
             name.starts_with("nemo.relay.resource.disk.")
                 || name.starts_with("nemo.relay.resource.network.")
         }
