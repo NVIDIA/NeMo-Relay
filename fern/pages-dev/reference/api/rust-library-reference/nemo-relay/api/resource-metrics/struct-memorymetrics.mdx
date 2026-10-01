@@ -1,0 +1,127 @@
+---
+title: "Struct Memory Metrics"
+sidebar-title: "MemoryMetrics"
+slug: "/reference/api/rust-library-reference/nemo-relay/api/resource_metrics/struct-memorymetrics"
+description: "Memory measurements and memory limit events."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct MemoryMetrics &#123;Show 14 fields\n    pub system_used: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-capacityunit\">CapacityUnit</a>&gt;&gt;,\n    pub system_total: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-capacityunit\">CapacityUnit</a>&gt;&gt;,\n    pub system_available: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-capacityunit\">CapacityUnit</a>&gt;&gt;,\n    pub resident: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-capacityunit\">CapacityUnit</a>&gt;&gt;,\n    pub private: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-capacityunit\">CapacityUnit</a>&gt;&gt;,\n    pub physical_footprint: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-capacityunit\">CapacityUnit</a>&gt;&gt;,\n    pub virtual_memory: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-capacityunit\">CapacityUnit</a>&gt;&gt;,\n    pub peak_resident: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-capacityunit\">CapacityUnit</a>&gt;&gt;,\n    pub limit: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-capacityunit\">CapacityUnit</a>&gt;&gt;,\n    pub environment_accounted: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-capacityunit\">CapacityUnit</a>&gt;&gt;,\n    pub some_pressure_stall_time: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-durationunit\">DurationUnit</a>&gt;&gt;,\n    pub full_pressure_stall_time: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-durationunit\">DurationUnit</a>&gt;&gt;,\n    pub out_of_memory_event_count: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcemeasurement\">ResourceMeasurement</a>&lt;<a href=\"enum-resourcemetricvalue\">ResourceMetricValue</a>, <a href=\"enum-countunit\">CountUnit</a>&gt;&gt;,\n    pub limit_events: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-resourcelimiteventcount\">ResourceLimitEventCount</a>&gt;,\n&#125;"}} /></pre>
+
+Memory measurements and memory limit events.
+
+## Fields
+
+### `system_used: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>`
+
+System memory currently in use, in KiB by default, in every scope.
+
+### `system_total: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>`
+
+Total system memory, in KiB by default, in every scope.
+
+### `system_available: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>`
+
+System memory available for use, in KiB by default, in every scope.
+
+### `resident: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>`
+
+Resident memory, in KiB by default.
+
+### `private: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>`
+
+Private memory, in KiB by default.
+
+### `physical_footprint: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>`
+
+Physical footprint, in KiB by default.
+
+### `virtual_memory: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>`
+
+Virtual memory, in KiB by default.
+
+### `peak_resident: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>`
+
+Lifetime peak resident memory, in KiB by default.
+
+### `limit: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>`
+
+Effective environment memory limit, in KiB by default.
+
+### `environment_accounted: Option<ResourceMeasurement<ResourceMetricValue, CapacityUnit>>`
+
+Memory charged to the owned environment, in KiB by default.
+
+### `some_pressure_stall_time: Option<ResourceMeasurement<ResourceMetricValue, DurationUnit>>`
+
+Cumulative memory pressure time during which some work was stalled.
+
+### `full_pressure_stall_time: Option<ResourceMeasurement<ResourceMetricValue, DurationUnit>>`
+
+Cumulative memory pressure time during which all work was stalled.
+
+### `out_of_memory_event_count: Option<ResourceMeasurement<ResourceMetricValue, CountUnit>>`
+
+Cumulative out-of-memory event count.
+
+### `limit_events: Vec<ResourceLimitEventCount>`
+
+Memory resource-limit event counters.
+
+## Trait Implementations
+
+### `impl Clone for MemoryMetrics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-memorymetrics\">MemoryMetrics</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-memorymetrics\">MemoryMetrics</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for MemoryMetrics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-memorymetrics\">MemoryMetrics</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for MemoryMetrics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-memorymetrics\">MemoryMetrics</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(\n    __deserializer: __D,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-memorymetrics\">MemoryMetrics</a>, &lt;__D as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl PartialEq for MemoryMetrics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-memorymetrics\">MemoryMetrics</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-memorymetrics\">MemoryMetrics</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for MemoryMetrics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-memorymetrics\">MemoryMetrics</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(\n    &amp;self,\n    __serializer: __S,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, &lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl StructuralPartialEq for MemoryMetrics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-memorymetrics\">MemoryMetrics</a>"}} /></pre>

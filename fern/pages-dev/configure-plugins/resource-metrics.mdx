@@ -1,0 +1,1002 @@
+---
+title: "Resource Metrics"
+description: "Configure collection, read snapshots, and check platform support."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+# Resource Metrics
+
+The built-in `resource_metrics` plugin collects central processing unit (CPU),
+memory, process, disk, network, and graphics processing unit (GPU) data. It can
+collect on a timer and emit metric marks. A mark is an event that subscribers
+can record. Your program can also call `collect()` for a fresh snapshot. A
+snapshot is a set of readings taken at one time.
+
+The plugin is configured through the standard plugin host. Use the same
+`resource_metrics` component in `plugins.toml` or in a plugin configuration
+object. For setup and activation details, refer to
+[Configure and Initialize Plugins](/configure-plugins/initialize-plugins).
+
+## Enable the Component
+
+This example enables every category and starts polling every 5 seconds:
+
+```toml
+version = 1
+
+[[components]]
+kind = "resource_metrics"
+enabled = true
+
+[components.config]
+measurement_scope = "runtime_default"
+
+[components.config.polling]
+enabled = true
+interval_millis = 5000
+
+[components.config.cpu]
+enabled = true
+
+[components.config.memory]
+enabled = true
+
+[components.config.process]
+enabled = true
+
+[components.config.disk]
+enabled = true
+process_io = true
+filesystem_paths = ["/"]
+
+[components.config.gpu]
+enabled = true
+devices = []
+device_metrics = true
+process_metrics = true
+
+[components.config.network]
+enabled = true
+interfaces = []
+```
+
+Replace `/` with an absolute path on your system, or use `[]` when you do not
+need filesystem capacity data. The example uses the default values for most
+fields; showing them makes each option clear.
+
+The component and polling have separate switches:
+
+- `components[].enabled` activates the plugin.
+- `components.config.polling.enabled` starts or stops periodic collection.
+- `components.config.polling.interval_millis` sets the delay between polls.
+
+Polling is disabled by default. Its default interval is 5,000 milliseconds.
+The interval must be greater than zero even when polling is disabled. Each
+category is enabled by default. A disabled category is `null` in the snapshot.
+For a ready collection target, the first poll starts when the component
+activates. Later polls wait for the configured interval.
+
+Each poll reads current values and running totals. Some values, such as total
+system memory, can stay the same across many polls. Relay still includes them
+so each snapshot stands on its own. Relay also checks for devices and
+processes on each poll. Global scope can query many processes, so collection
+can take longer. Increase the interval or turn off process input/output (I/O)
+and GPU process metrics if you do not need them.
+
+Relay keeps the Linux process clock rate and its NVIDIA Management Library
+(NVML) connection between polls. If NVML is unavailable, Relay tries to find
+it again after one minute. Relay checks capacity, limits, and device lists on
+each poll so it can detect changes.
+
+On macOS, GPU sampling runs the system `ioreg` utility to read driver
+diagnostics. Disable the GPU category or its process group if you do not need
+those readings.
+
+You can activate the component with polling disabled and call the on-demand
+collection API. On-demand collection does not require polling to be enabled.
+
+## Configuration Fields
+
+All fields use `snake_case` in plugin configuration. Missing fields use the
+defaults below. Unknown fields and invalid values are rejected during
+validation.
+
+### Measurement Scope
+
+`measurement_scope` defaults to `runtime_default`. A scope is the process or
+system resources included in a reading. This setting chooses that scope.
+
+The default depends on where the plugin runs. The CLI uses `global` to measure
+system resources visible to Relay. Embedded Rust, Python, and Node.js APIs use
+`process_tree`, rooted at the current process ID.
+
+Set `global`, `application_process`, or `process_tree` to choose a scope. When
+you choose `process_tree`, the CLI measures its launched agent and children.
+Embedded APIs measure the tree rooted at their current process.
+
+### Polling
+
+These fields control when the plugin collects a snapshot:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Collect and emit a mark on each poll. |
+| `interval_millis` | `5000` | Milliseconds between polls. Must be greater than zero. |
+
+### Categories
+
+These fields control which measurements each snapshot includes:
+
+| Section | Field | Default | Meaning |
+| --- | --- | --- | --- |
+| `cpu` | `enabled` | `true` | Include CPU data. |
+| `memory` | `enabled` | `true` | Include memory data. |
+| `process` | `enabled` | `true` | Include process and thread data. |
+| `disk` | `enabled` | `true` | Include process I/O and configured filesystem data. |
+| `disk` | `process_io` | `true` | Collect read/write counters for selected processes. |
+| `disk` | `filesystem_paths` | `[]` | Absolute paths. Empty means no capacity data. |
+| `gpu` | `enabled` | `true` | Include GPU data. |
+| `gpu` | `devices` | `[]` | IDs or indexes. Empty selects supported devices. |
+| `gpu` | `device_metrics` | `true` | Collect device-wide GPU data. |
+| `gpu` | `process_metrics` | `true` | Collect GPU data for processes in the scope. |
+| `network` | `enabled` | `true` | Include system interface traffic. |
+| `network` | `interfaces` | `[]` | Interface names. Empty selects all visible interfaces. |
+
+Every path in `filesystem_paths` must be absolute and non-empty. GPU selectors
+and network interface names must not be blank. A device index is matched as a
+decimal string, such as `"0"`; not every backend provides an index. Device
+identifiers come from the GPU backend and can differ between systems.
+
+Linux AMD and Intel Direct Rendering Manager (DRM) devices do not report an
+index through this collector. Select them by identifier. macOS registry
+identifiers can change after a restart. Read a current snapshot before you
+set a fixed selector.
+
+Turning off `disk.enabled` disables both disk subgroups. Turning off
+`process_io` keeps filesystem capacity data active. Turning off either GPU
+measurement group does not turn off the other group. Network readings are
+system-wide in every collection mode. They do not measure an agent process.
+
+## Snapshot Shape
+
+Each snapshot has one UTC `timestamp`, an `operating_system`, a
+`measurement_scope`, and optional `process_sampling` metadata. Rust and Python
+use `snake_case` field names. Node.js uses `camelCase` property names. The
+values and meanings are the same.
+
+The snapshot always has `cpu`, `memory`, `process`, `disk`, `gpu`, and
+`network` category fields. A disabled category is `null`. An enabled category
+is an object with a stable set of fields. A value that could not be collected
+is `null`, never zero. Each available measurement has only a `value` and a
+`unit`. This example has CPU enabled and every other category disabled:
+
+```json
+{
+  "timestamp": "2026-09-29T14:30:00Z",
+  "operating_system": "linux",
+  "measurement_scope": "process_tree",
+  "process_sampling": {
+    "visible_processes": 1,
+    "sampled_processes": 1,
+    "field_sampled_processes": {
+      "cpu.user_time": 1,
+      "cpu.system_time": 1,
+      "cpu.total_time": 1
+    }
+  },
+  "cpu": {
+    "user_time": { "value": 120, "unit": "milliseconds" },
+    "system_time": { "value": 30, "unit": "milliseconds" },
+    "total_time": { "value": 150, "unit": "milliseconds" },
+    "consumption_rate": null,
+    "throttled_time": null,
+    "effective_limit": null,
+    "some_pressure_stall_time": null,
+    "full_pressure_stall_time": null,
+    "limit_events": []
+  },
+  "memory": null,
+  "process": null,
+  "disk": null,
+  "gpu": null,
+  "network": null
+}
+```
+
+Every enabled category contains all of its fields. `timestamp` is the time
+collection finished. `operating_system` is `linux`, `macos`, or `windows`.
+`measurement_scope` gives the scope that Relay collected: `global`,
+`application_process`, or `process_tree`.
+
+Global scope covers resources the operating system exposes to Relay. A
+process-tree snapshot includes its root and active children. The scope selects
+which process readings to include. System memory, filesystem capacity,
+device-wide GPU readings, and network readings describe their wider resources
+in every mode. `network.measurement_scope` is always `global`.
+
+Some values are running totals. CPU time and disk I/O fields add the lifetime
+counters of processes visible at collection time. These sums can fall when a
+process exits. Relay can miss a process that starts and exits between polls.
+
+If a process query shows that a child exited after Relay listed the process
+tree, Relay skips that child and reports metrics for the remaining live tree. The
+exited child does not make the process totals unavailable. Relay also excludes
+that child from the process IDs used for environment and GPU readings. This
+behavior is the same for polling and on-demand collection in every language.
+
+A process total is still unavailable if Relay cannot read a remaining process,
+access is denied, a process ID has been reused, or any sampled process lacks
+that counter. If the root exits or its identity changes, Relay returns an
+unavailable snapshot. In global scope,
+each total adds only the processes that supply that counter. A global total is
+`null` if no process supplies the counter or the sum exceeds its numeric range.
+
+Use `process_sampling` to check coverage before treating a global total as complete:
+
+- `visible_processes` counts processes listed when collection began, including
+  children that exit before sampling. In process-tree mode, it can therefore be
+  larger than `sampled_processes` even when the remaining tree is fully sampled.
+- `sampled_processes` counts processes whose base query succeeded.
+- `field_sampled_processes` counts readable values for each process-summed field.
+  Keys use canonical paths, such as `cpu.total_time`, in every language. A zero
+  count means no process supplied a usable value. Disk throughput keys count
+  processes with a usable change over the sampling interval; they are zero on
+  the first reading. A missing key means Relay did not attempt a process sum
+  or disk-rate calculation for that field. Compare a field's count with
+  `visible_processes` to check its coverage of the listed processes.
+
+The `process_sampling` metadata is `null` when Relay did not sample process
+counters or could not list processes. Polling marks include three coverage
+gauges, each measured in `processes`:
+
+- `nemo.relay.resource.process_sampling.visible_count`
+- `nemo.relay.resource.process_sampling.sampled_count`
+- `nemo.relay.resource.process_sampling.field_sampled_count`, with the canonical
+  field path in the `nemo_relay.resource.field` attribute
+
+If Relay cannot list processes, independent readings such as system memory,
+filesystem capacity, and device-wide GPU data can still be available.
+
+Arrays have separate empty and unavailable meanings:
+
+- `limit_events` is an empty array when no supported limit events are present.
+- `disk.filesystems` is an empty array when no paths are configured.
+- `network.interfaces` is empty when no selected interface is visible.
+- A GPU subgroup is `null` when disabled or collection cannot start. It can be
+  an empty array when collection finds no supported or matching records.
+- A configured filesystem path stays in `filesystems` when its capacity query
+  fails; that entry's capacity measurements are `null`.
+
+## CPU Category
+
+CPU time uses milliseconds by default. For a process tree or global scope,
+the time fields add lifetime values from processes visible during collection.
+These sums can fall when a process exits.
+
+For application-process and process-tree modes, CPU rate uses the change in
+each process's CPU time between samples. A newly seen process contributes its
+current lifetime CPU time. Relay can miss work from processes that exit before
+the next sample. In global mode, CPU rate comes from system-wide CPU use
+reported by the operating system. Relay measures the time between samples
+with a clock that only moves forward, so changes to the system clock do not
+affect the calculated rate.
+
+The CPU category contains these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `user_time` | Time spent running application code across the measured process scope. |
+| `system_time` | Time spent in operating-system code for those processes. |
+| `total_time` | User time plus system time across the measured process scope. |
+| `consumption_rate` | Average CPU use, in logical processors by default. |
+| `throttled_time` | Time the operating system stopped the environment from using CPU. |
+| `effective_limit` | CPU capacity available, in logical processors by default. |
+| `some_pressure_stall_time` | Time when CPU pressure stalled some work. |
+| `full_pressure_stall_time` | Time when CPU pressure stalled all work. |
+| `limit_events` | Supported cumulative CPU limit-event counts. |
+
+`consumption_rate` is not a percentage. With the default `logical_processors`
+unit, a value of `1.0` means the selected scope used about one logical
+processor over the sample interval. One logical processor is one CPU hardware
+thread working at full capacity. The same use is 1,000 millicores.
+
+Pressure stall time measures how long work waited for CPU or memory resources.
+Pressure, throttling, limits, and event counts need operating-system support,
+so these values can be unavailable.
+
+Very short polling intervals can also leave the global CPU rate `null` until
+the operating system provides another usable reading.
+
+## Memory Category
+
+Memory values, including GPU memory, use KiB by default (1 KiB is 1,024 bytes).
+Collection converts byte and page values to KiB and drops any remainder before
+applying the selected output unit.
+
+The memory category contains these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `system_used` | System memory currently in use, in every mode. |
+| `system_total` | Total system memory, in every mode. |
+| `system_available` | System memory available for use, in every mode. |
+| `resident` | Memory used by the process or tree that is currently in physical RAM. |
+| `private` | Private memory that is not shared with other processes. |
+| `physical_footprint` | Memory footprint as reported by the operating system. |
+| `virtual_memory` | Virtual address space reported for the process. |
+| `peak_resident` | Peak memory for one process; unavailable for process trees. |
+| `limit` | Memory limit for the measured environment, when one exists. |
+| `environment_accounted` | Memory charged to the measured environment. |
+| `some_pressure_stall_time` | Time some work stalled from memory pressure. |
+| `full_pressure_stall_time` | Time all work stalled from memory pressure. |
+| `out_of_memory_event_count` | Cumulative out-of-memory (OOM) events, when reported. |
+| `limit_events` | Supported cumulative memory limit-event counts. |
+
+The meaning of resident, private, footprint, and environment-accounted memory
+depends on the operating system. Refer to the
+[compatibility tables](#platform-and-collection-mode-compatibility).
+The three `system_` fields describe system memory visible to Relay in every
+mode. They do not describe the selected process or tree. In global mode,
+per-process memory fields are `null`.
+
+## Process Category
+
+Counts add across the measured process scope unless the description says
+otherwise. Global counts cover processes visible to the operating system.
+A process-tree count includes its root and active descendants.
+
+The process category contains these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `active_count` | Number of process IDs found when collection began. |
+| `descendant_count` | Active descendants, excluding the root process. |
+| `thread_count` | Threads across the measured scope. |
+| `lifetime_creation_count` | Cumulative creations inside a Windows Job Object. |
+| `open_file_descriptor_count` | Open files or descriptors reported by the OS. |
+| `windows_handle_count` | Windows kernel handles across the measured scope. |
+| `limit_events` | Supported cumulative process-limit event counts. |
+
+`open_file_descriptor_count` is not a count of every Windows kernel handle.
+Windows reports those separately as `windows_handle_count`.
+
+Each `limit_events` entry has a `resource` (`cpu`, `memory`, or `processes`),
+an `event` name, and an optional `count` measurement in `events`. Current
+collectors report CPU `throttled`, memory `high`, `maximum`, or
+`out_of_memory`, and process `maximum` events where supported.
+
+## Disk Category
+
+Disk transfer and filesystem capacity use bytes by default. Process I/O
+totals add lifetime counters and can fall when a process exits. Throughput
+uses the change between two samples and defaults to bytes per second. A newly
+seen process contributes its current lifetime counter to that interval. Relay
+can miss transfers from a process that exits before the next sample. Disk rates
+in global mode skip processes whose current or previous I/O counter is
+unavailable. Check `process_sampling.field_sampled_processes` for
+`disk.read_throughput` and `disk.write_throughput` to see how many processes
+supplied usable interval values. A rate is unavailable if no process supplies
+a usable change, a readable counter decreases, or the sum overflows. Rates for
+an application process or process tree require every sampled process to supply
+the required current and previous counters.
+
+The operating systems count I/O differently. Linux byte fields count storage
+traffic, while its operation fields count read and write system calls. macOS
+reports disk-transfer bytes but not operation counts. Windows reports transfers
+and operations handled by its I/O manager. Those values can include activity
+beyond physical disk traffic. Compare samples from the same operating system.
+The shared unit does not mean the counters measure the same activity.
+
+The disk category contains these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `read_data` | Data read by processes in the measured scope. |
+| `write_data` | Data written by processes in the measured scope. |
+| `read_throughput` | Average read transfer rate since the previous sample. |
+| `write_throughput` | Average write transfer rate since the previous sample. |
+| `read_operations` | Read operations reported by the operating system. |
+| `write_operations` | Write operations reported by the operating system. |
+| `filesystems` | Capacity values for each configured path. |
+
+Each `filesystems` entry contains the configured `path` and three optional
+measurements:
+
+- `total_capacity` is the filesystem's total capacity.
+- `available_capacity` is the space available to the calling user.
+- `free_capacity` is total free space, which can include space reserved for an
+  administrator.
+
+For `global` scope, process I/O covers all processes visible to the operating
+system. For `process_tree` scope, it covers that tree. Set
+`filesystem_paths = []` when you only want process I/O. Path capacity is
+measured for the filesystem containing each path, so two paths on the same
+filesystem can produce repeated capacity values. Throughput is `null` on the
+first sample, after a counter reset, or when Relay cannot read every needed
+process counter. Polling and on-demand collection keep separate earlier samples.
+
+## Network Category
+
+Network data always describes selected system interfaces. It does not measure
+the selected process or its children. The `network.measurement_scope` field is
+`global` even when the snapshot's `measurement_scope` is `process_tree`.
+
+The category includes `system`, an aggregate of selected interfaces, and
+`interfaces`, one record per selected interface. Each record has the following
+measurements:
+
+| Field | Meaning | Default Unit |
+| --- | --- | --- |
+| `received_data` | Data received by the interface. | `bytes` |
+| `transmitted_data` | Data sent by the interface. | `bytes` |
+| `receive_throughput` | Average receive rate since the previous sample. | `bytes_per_second` |
+| `transmit_throughput` | Average send rate since the previous sample. | `bytes_per_second` |
+| `received_packets` | Received packet count. | `packets` |
+| `transmitted_packets` | Sent packet count. | `packets` |
+| `receive_errors` | Receive error count. | `errors` |
+| `transmit_errors` | Send error count. | `errors` |
+
+The `system` record has the same measurements. Each interface record also has
+its `name`. Set `network.interfaces` to names from a current snapshot, or
+leave it empty to include all visible interfaces.
+An unknown name produces no interface record. If no interfaces match, the
+system measurements are `null`. The first sample has no throughput reading.
+A counter reset makes that interval's throughput `null`. If a new interface
+appears, the system throughput is `null` until that interface has two readings.
+
+System values add selected interface counters. Traffic can cross both a virtual
+interface and a physical interface, so the aggregate can count it twice.
+Interface data totals and process disk totals come from different sources and
+should not be compared as if they measured the same traffic.
+On Windows, the network backend omits some disconnected and software
+interfaces. The aggregate covers the interfaces listed in the snapshot.
+
+## GPU Category
+
+The `gpu` object has two optional groups: `device_metrics` and
+`process_metrics`. Each record can contain:
+
+| Field | Meaning |
+| --- | --- |
+| `vendor` | `nvidia`, `amd`, `intel`, `apple`, or `other`. |
+| `device_identifier` | ID supplied by the GPU backend. |
+| `device_index` | Backend-local index, when supplied. |
+| `memory_used` | GPU memory in use, in KiB by default. |
+| `compute_utilization` | GPU activity reported by the driver, from 0% to 100% by default. |
+| `process_id` | The owning process ID; present only in process records. |
+
+Device records describe the whole GPU. Process records describe GPU use by a
+process in the measured scope. A record can have one available measurement
+and one `null` measurement if the driver cannot provide both. An empty
+`devices` list selects all supported devices that Relay detects. A selector
+can match a reported identifier or an index written as a string.
+
+GPU compute use measures recent activity. NVML reports process activity since
+the previous query in the same polling or on-demand series. Linux DRM uses
+changes in GPU cycle counters or engine busy time. Apple uses changes in GPU
+time reported by its AGX driver. The first sample has no earlier reading, so
+process compute use is `null`. Process memory can still be available. Changing
+the collection target clears the earlier reading. GPU process records also
+depend on driver access and can be incomplete in global scope.
+
+## Configure Units
+
+Every available measurement contains a `value` and a `unit`. Relay collects in
+consistent base units, then applies your chosen output units. Missing unit
+settings keep the defaults. Unit names use `snake_case` in every API.
+
+The typed APIs group units by what they measure. Each measurement field uses
+its matching unit type, so a duration cannot use a capacity or bandwidth unit.
+Capacity and transferred data have separate types even though they allow the
+same byte units. Rust uses enums. Python and Node.js use string enums. JSON
+measurements still contain only a value and a unit, such as
+`{ "value": 1, "unit": "seconds" }`. An unavailable measurement is `null`.
+
+The following table maps the unit types to their measurements:
+
+| Unit type | Measurements |
+| --- | --- |
+| `DurationUnit` | CPU times, throttled time, and CPU or memory pressure time |
+| `CapacityUnit` | Memory, GPU memory, and filesystem capacity |
+| `DataUnit` | Disk and network data totals |
+| `BandwidthUnit` | Disk and network transfer rates |
+| `CpuUnit` | CPU consumption and effective CPU capacity |
+| `UtilizationUnit` | GPU compute use |
+| `CountUnit` | Processes, threads, descriptors, handles, events, operations, packets, and errors |
+
+This example sets different units for individual measurements:
+
+```toml
+[components.config.units.cpu]
+user_time = "seconds"
+consumption_rate = "millicores"
+
+[components.config.units.memory]
+resident = "gibibytes"
+
+[components.config.units.disk]
+read_data = "megabytes"
+read_throughput = "megabits_per_second"
+filesystem_available_capacity = "gibibytes"
+
+[components.config.units.gpu]
+device_memory_used = "gibibytes"
+device_compute_utilization = "fraction"
+
+[components.config.units.network.system]
+received_data = "gigabytes"
+receive_throughput = "megabits_per_second"
+
+[components.config.units.network.interface]
+received_data = "mebibytes"
+```
+
+The following table lists the allowed units for each measurement family:
+
+| Measurements | Allowed units | Default |
+| --- | --- | --- |
+| CPU and pressure time | `microseconds`, `milliseconds`, `seconds`, `minutes` | `milliseconds` |
+| Memory and GPU memory | `bytes`, `kilobytes`, `megabytes`, `gigabytes`, `terabytes`, `kibibytes`, `mebibytes`, `gibibytes`, `tebibytes` | `kibibytes` |
+| Filesystem capacity | The same storage units | `bytes` |
+| Disk and network data | The same storage units | `bytes` |
+| Disk and network throughput | `bytes_per_second`, `kibibytes_per_second`, `mebibytes_per_second`, `gibibytes_per_second`, `bits_per_second`, `megabits_per_second`, `gigabits_per_second` | `bytes_per_second` |
+| CPU use and capacity | `logical_processors`, `millicores` | `logical_processors` |
+| GPU compute use | `percentage`, `fraction` | `percentage` |
+
+Each decimal storage unit is 1,000 times larger than the previous unit. Each
+binary unit is 1,024 times larger than the previous unit. A byte has 8 bits.
+One logical processor equals 1,000 millicores. A value of 100% equals a
+fraction of 1.
+
+A unit choice for one field applies to every record of that kind, such as
+every filesystem or GPU device. System and interface network readings have
+separate choices. Counts, including packets, errors, processes, and disk
+operations, keep their named units.
+
+Exact whole-number conversions stay integers. Conversions that produce a
+fraction use a decimal number. Rust, Python, and Node.js expose the same
+value and unit; Node.js uses `bigint` for integers above its safe integer
+range. If the operating system rounded a reading, changing its unit cannot
+restore the lost detail. Measurements that Relay cannot collect or convert
+remain `null`.
+
+Metric marks use a decimal number for a unit that can produce fractions, even
+when one reading happens to be whole. This keeps the mark's number type the
+same across polls. Snapshots keep exact integers when the conversion allows
+them. The metric event format cannot carry an integer above
+`9,223,372,036,854,775,807`. A snapshot can still contain that value, but
+its mark omits the measurement.
+
+If you change a unit after an OpenTelemetry metrics exporter has received that
+metric, restart the exporter before collecting again. The exporter keeps the
+first unit registered for each metric name.
+
+## Platform and Collection-Mode Compatibility
+
+Choose a collection mode below to compare Linux, macOS, and Windows. These
+tables apply when the category is enabled. They cover both polling and
+on-demand `collect()`. Polling emits marks. `collect()` returns a snapshot
+without emitting a mark.
+
+The tables use these terms:
+
+- **Yes:** Relay can collect the field, though a reading can still fail.
+- **If available:** Relay needs the named system interface, driver, or process
+  group.
+- **No:** The field could apply, but Relay does not collect it on that system.
+- **N/A:** The field does not apply to that mode or operating system.
+
+Both **No** and **N/A** give a `null` field or an empty event list. A field
+marked **Yes** can also be `null` if a process exits, access is denied, or a
+counter cannot be read.
+
+A Linux control group (cgroup) sets limits for a group of processes. An
+*exclusive cgroup* contains only the process or tree that Relay measures. A
+Windows Job Object also groups processes so Relay can read group limits.
+
+Linux CPU and memory limits include restrictions from parent cgroups up to
+the visible cgroup mount. These limits are upper bounds. Other processes
+that share a parent cgroup can reduce the resources available to the measured
+process or tree. Relay cannot read restrictions above the visible mount.
+
+<Tabs>
+<Tab title="Global">
+
+This is the CLI default. Process totals cover processes visible to Relay.
+Relay might see fewer processes than the machine runs. Check
+`process_sampling` for the number of visible and sampled processes.
+
+The following table shows what global collection can measure:
+
+| Category and Fields | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| CPU: user, system, and total time | Yes | Yes | Yes |
+| CPU: consumption rate | Yes | Yes | Yes |
+| CPU: pressure stall times | If `/proc/pressure/cpu` is readable | No | No |
+| Memory: system used, total, available | Yes | Yes | Yes |
+| Memory: pressure stall times | If `/proc/pressure/memory` is readable | No | No |
+| Process: active count and thread count | Yes | Yes | Yes |
+| Process: open file descriptors | Yes | Yes | N/A |
+| Process: Windows handles | N/A | N/A | Yes |
+| Disk: process read and write data and throughput | Yes | Yes | Yes |
+| Disk: process read and write operations | Yes | No | Yes |
+| Disk: filesystem total, available, free capacity | Yes | Yes | Yes |
+| GPU: device memory and compute use | If supported backend is available | If driver diagnostics exist | If NVML is available |
+| GPU: process memory and compute use | If supported backend is available | Apple compute only | If NVML is available |
+| Network: system/interface data, packets, errors, throughput | Yes | Yes | Yes |
+
+Global CPU and disk totals add readable values for each counter. CPU use and
+system memory use system-wide readings. Linux pressure values come from the
+system pressure interface. GPU process records include only visible processes
+that the driver can identify. Global mode has no owned process group, so group
+limits and descendant counts do not apply. It reports system memory instead
+of per-process memory.
+
+</Tab>
+
+<Tab title="Application Process">
+
+This mode measures the selected process ID without its children.
+
+The following table shows what application-process collection can measure:
+
+| Category and Fields | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| CPU: user, system, total time; consumption rate | Yes | Yes | Yes |
+| CPU: throttled time, effective limit, limit events | If exclusive cgroup | No | N/A |
+| CPU: pressure stall times | If exclusive cgroup | No | No |
+| Memory: resident | Yes | Yes | Yes |
+| Memory: private | Yes | No | Yes |
+| Memory: physical footprint | N/A | Yes | N/A |
+| Memory: virtual | Yes | Yes | No |
+| Memory: peak resident | Yes | No | Yes |
+| Memory: limit, environment accounted, pressure, OOM and limit events | If exclusive cgroup | No | No |
+| Memory: system used, total, available | Yes | Yes | Yes |
+| Process: active and descendant counts; threads | Yes | Yes | Yes |
+| Process: open file descriptors | Yes | Yes | N/A |
+| Process: Windows handles | N/A | N/A | Yes |
+| Process: limit events | If exclusive cgroup | No | No |
+| Disk: process read and write data and throughput | Yes | Yes | Yes |
+| Disk: process read and write operations | Yes | No | Yes |
+| Disk: filesystem total, available, free capacity | Yes | Yes | Yes |
+| GPU: device memory and compute use | If supported backend is available | If driver diagnostics exist | If NVML is available |
+| GPU: process memory and compute use | If supported backend is available | Apple compute only | If NVML is available |
+| Network: system/interface data, packets, errors, throughput | Yes | Yes | Yes |
+
+An exclusive Linux cgroup contains only the measured process. If other
+processes share its cgroup, Relay cannot report the group counters for that
+process alone. macOS physical footprint differs from peak resident memory.
+System memory describes the system, not the selected process. Lifetime process
+creations need an owned Windows Job Object, which this mode does not use.
+
+</Tab>
+
+<Tab title="Process Tree">
+
+This is the default for embedded Rust, Python, and Node.js applications. In
+the CLI, choosing `process_tree` selects the launched agent and its children.
+
+The following table shows what process-tree collection can measure:
+
+| Category and Fields | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| CPU: user, system, total time; consumption rate | Yes | Yes | Yes |
+| CPU: throttled time, effective limit, limit events | If exclusive cgroup | No | If CLI Job Object (limit only) |
+| CPU: pressure stall times | If exclusive cgroup | No | No |
+| Memory: resident | Yes | Yes | Yes |
+| Memory: private | Yes | No | Yes |
+| Memory: physical footprint | N/A | Yes | N/A |
+| Memory: virtual | Yes | Yes | No |
+| Memory: limit | If exclusive cgroup | No | If CLI Job Object |
+| Memory: environment accounted, pressure, OOM and limit events | If exclusive cgroup | No | No |
+| Memory: system used, total, available | Yes | Yes | Yes |
+| Process: active and descendant counts; threads | Yes | Yes | Yes |
+| Process: open file descriptors | Yes | Yes | N/A |
+| Process: Windows handles | N/A | N/A | Yes |
+| Process: lifetime creations | N/A | N/A | If CLI Job Object |
+| Process: limit events | If exclusive cgroup | No | No |
+| Disk: process read and write data and throughput | Yes | Yes | Yes |
+| Disk: process read and write operations | Yes | No | Yes |
+| Disk: filesystem total, available, free capacity | Yes | Yes | Yes |
+| GPU: device memory and compute use | If supported backend is available | If driver diagnostics exist | If NVML is available |
+| GPU: process memory and compute use | If supported backend is available | Apple compute only | If NVML is available |
+| Network: system/interface data, packets, errors, throughput | Yes | Yes | Yes |
+
+An exclusive Linux cgroup contains only the measured tree. The Windows CLI
+uses a Job Object to own the launched processes. Embedded process trees do not
+have that group, so they cannot report its CPU limit, memory limit, or lifetime
+process count. Windows Job Objects do not provide CPU throttling or limit
+events here.
+
+Process-tree memory and I/O fields add counters from active processes. A total
+can fall when a child exits. System memory describes the system, not the tree.
+There is no single peak-resident value for a changing tree, so that field is
+unavailable in this mode.
+</Tab>
+</Tabs>
+
+### GPU Vendor Support in Every Collection Mode
+
+Device records describe the whole GPU, even in application-process or
+process-tree mode. Process records cover visible processes in global mode, the
+selected process ID in application-process mode, or the selected process and
+its children in process-tree mode. A driver can provide memory without compute
+use, or compute use without memory. Choose a vendor to compare operating
+systems. These tables apply to every collection mode.
+
+<Tabs>
+<Tab title="NVIDIA">
+
+This table shows NVIDIA GPU measurements by operating system:
+
+| Measurement | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Device memory | NVML | No | NVML |
+| Device compute use | NVML | No | NVML |
+| Process memory | NVML | No | NVML |
+| Process compute use | NVML, if supported | No | NVML, if supported |
+
+</Tab>
+
+<Tab title="AMD">
+
+This table shows AMD GPU measurements by operating system:
+
+| Measurement | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Device memory | DRM sysfs, if reported | IORegistry, if reported | No |
+| Device compute use | DRM sysfs, if reported | IORegistry, if reported | No |
+| Process memory | DRM `fdinfo`, if reported | No | No |
+| Process compute use | DRM `fdinfo`, if reported | No | No |
+
+</Tab>
+
+<Tab title="Intel">
+
+This table shows Intel GPU measurements by operating system:
+
+| Measurement | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Device memory | DRM sysfs, if reported | IORegistry, if reported | No |
+| Device compute use | No | IORegistry, if reported | No |
+| Process memory | DRM `fdinfo`, if reported | No | No |
+| Process compute use | DRM `fdinfo`, if reported | No | No |
+
+</Tab>
+
+<Tab title="Apple">
+
+This table shows Apple GPU measurements by operating system:
+
+| Measurement | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Device memory | No | IORegistry diagnostics | N/A |
+| Device compute use | No | IORegistry diagnostics | N/A |
+| Process memory | No | No | N/A |
+| Process compute use | No | IORegistry diagnostics | N/A |
+
+</Tab>
+
+<Tab title="Other">
+
+This table shows measurements for other GPU vendors by operating system:
+
+| Measurement | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Device memory | No | No | No |
+| Device compute use | No | No | No |
+| Process memory | DRM `fdinfo`, if reported | No | No |
+| Process compute use | DRM `fdinfo`, if reported | No | No |
+
+</Tab>
+</Tabs>
+
+A backend is the driver interface that provides GPU readings. Each backend
+has different requirements:
+
+- **NVIDIA:** NVML needs a working NVIDIA driver and library. Process compute
+  use also needs the optional process-use API and an earlier reading in the
+  same polling or on-demand series.
+- **Linux AMD and Intel:** Process readings need readable DRM `fdinfo` files
+  and driver counters. Device readings come from Linux system files (`sysfs`).
+  AMD device readings use `mem_info_vram_used` for memory and
+  `gpu_busy_percent` for compute use. Intel device memory needs
+  `mem_info_vram_used`. Relay does not collect Intel device compute use on
+  Linux.
+- **macOS:** Device readings use driver `PerformanceStatistics` values when
+  available. Apple process compute use comes from changes in AGX GPU time.
+  These diagnostic values can change between macOS versions. Relay needs the
+  `ioreg` utility and permission to read the device registry. Apple process
+  data also needs exactly one detected Apple GPU that matches the selector.
+- **Windows AMD and Intel:** Relay has no collector for these GPUs.
+
+Relay cannot collect Apple, AMD, or Intel process GPU memory on macOS. Apple
+process compute use needs an earlier reading. Relay caps it at 100% when
+parallel GPU work overlaps. A missing backend or field gives no record or a
+`null` measurement.
+
+GPU memory has different meanings across backends. Linux AMD and Intel drivers
+report used video memory. NVIDIA NVML reports used device memory. macOS drivers
+can report video or system memory. Relay converts these readings to KiB before
+applying your output unit, but they do not measure the same kind of memory.
+
+Compute percentages also cover different periods of activity. AMD reports
+whole-GPU busy time, NVIDIA reports GPU use, and macOS reports device use.
+Linux AMD and Intel drivers and macOS omit a device record when neither memory
+nor compute use is available. NVIDIA NVML can return a device record with both
+measurements `null`.
+
+### Limits That Apply to Every Mode
+
+These conditions apply in every collection mode:
+
+- Filesystem capacity needs at least one configured `filesystem_paths` entry
+  and a successful query for that path. An empty list produces an empty array.
+- Process I/O needs `disk.process_io = true`. macOS currently reports bytes,
+  but not read or write operation counts.
+- Device-wide GPU records need `gpu.device_metrics = true`. Process GPU records
+  need `gpu.process_metrics = true`. Both groups also need driver access.
+- GPU process utilization and CPU consumption rate need two readings in the
+  same polling or on-demand series. Disk and network throughput also need two
+  readings. Their first values are `null`.
+
+By default, CPU and pressure times use milliseconds, memory uses KiB, disk
+transfers and capacity use bytes, network data uses bytes, and GPU use is a
+percentage. Operating systems can define similar counters differently, so
+compare them with care.
+
+On platforms other than Linux, macOS, and Windows, the plugin cannot create a
+collection target and activation fails.
+
+## Polling Marks and Scope Behavior
+
+When the component and polling are enabled, each poll collects one snapshot and
+emits a `nemo.relay.resource_metrics` mark. The CLI pauses process-tree polls
+until it has a launched process to measure. The mark uses Relay's reserved
+`nemo.relay.metric_measurements` schema. An enabled Agent Trajectory
+Observability Format (ATOF) subscriber writes the mark through the usual event
+path. An enabled OpenTelemetry metrics pipeline exports available measurements
+as metrics. Refer to
+[ATOF](/configure-plugins/observability/atof)
+and [OpenTelemetry](/configure-plugins/observability/opentelemetry) for exporter
+configuration.
+
+Each mark includes `nemo.relay.resource.sample_count` with value `1` and unit
+`events`. This records the poll even when the selected categories have no
+available measurements on the host.
+
+The same selected-scope sample is copied under each active explicit `Agent`
+scope. A custom scope does not receive a copy. If there are no active Agent
+scopes, Relay emits one mark under the runtime root. Copies have the same
+measurements and timestamp. They help each trace see the sample; they do not
+represent separate per-agent resource use and must not be added together.
+
+Agent scope start and end events only update the list of active scopes. They do
+not trigger an extra sample. Each copy goes through the target scope's
+subscriber and sanitizer settings.
+
+The CLI uses global scope by default. Embedded applications use the process tree
+rooted at the current process ID by default. This can include child processes
+that the host application started for other work. In the CLI, explicitly
+selecting `process_tree` measures the launched agent process and its active
+descendants. The runtime chooses the process ID; plugin configuration does not.
+
+## Collect One Snapshot
+
+On-demand collection requires an active `resource_metrics` component, but it
+does not require polling. Await the collection call to get a snapshot. The call
+does not emit a polling mark. The first sample in a sampling series has no
+`consumption_rate`, because that value needs two samples to calculate a change
+over time.
+
+After a Unix `fork`, the child cannot use the parent's active plugin or its
+collection target. Start a new executable in the child and activate the plugin
+there before calling `collect()`.
+
+Collection runs OS and driver queries on a worker so they do not block your
+async runtime. Rust requires a Tokio runtime, and Python requires an active
+async event loop. Cancelling the wait does not stop a query already running.
+That query may finish and update the baseline used to calculate rates.
+
+Each example activates the plugin, collects one snapshot, and closes the
+activation. Polling stays disabled by default. Choose your language:
+
+<Tabs>
+<Tab title="Rust" language="rust">
+
+Add these dependencies to your project's `Cargo.toml`:
+
+```toml
+[dependencies]
+nemo-relay = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Save the following code as `src/main.rs`, then run `cargo run`:
+
+```rust
+use nemo_relay::api::resource_metrics;
+use nemo_relay::plugin::dynamic::initialize;
+use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec::new("resource_metrics")],
+        ..PluginConfig::default()
+    };
+    let mut activation = initialize(config, None).await?;
+
+    let result = resource_metrics::collect().await;
+    activation.close()?;
+    let snapshot = result?;
+    println!("{snapshot:#?}");
+    Ok(())
+}
+```
+
+</Tab>
+
+<Tab title="Python" language="python">
+
+```python
+import asyncio
+
+from nemo_relay import plugin, resource_metrics
+
+
+async def main() -> None:
+    config = plugin.PluginConfig(
+        components=[plugin.ComponentSpec(kind="resource_metrics")]
+    )
+    async with plugin.activate(config):
+        snapshot = await resource_metrics.collect()
+        print(snapshot)
+
+
+asyncio.run(main())
+```
+
+</Tab>
+
+<Tab title="Node.js" language="node">
+
+Install `nemo-relay-node` with npm. Save this example as `collect-metrics.cjs`
+and run `node collect-metrics.cjs`:
+
+```js
+const { collectResourceMetrics } = require("nemo-relay-node");
+const plugin = require("nemo-relay-node/plugin");
+
+async function main() {
+  const activation = await plugin.initialize({
+    version: 1,
+    components: [{ kind: "resource_metrics", enabled: true }],
+  });
+
+  try {
+    const snapshot = await collectResourceMetrics();
+    console.dir(snapshot, { depth: null });
+  } finally {
+    await activation.close();
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+
+</Tab>
+</Tabs>
+
+Python returns the timestamp as a timezone-aware `datetime`. Rust returns a
+UTC `DateTime`. Node.js returns a Promise. Await it to get a snapshot with an
+ISO string timestamp. Node.js uses `bigint` for integer measurements and
+process-sampling counts above JavaScript's safe-integer range.
+
+For plugin configuration files, precedence, and CLI editing, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).

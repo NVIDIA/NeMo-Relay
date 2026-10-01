@@ -153,6 +153,13 @@ reaches no OTLP signal and produces a rate-limited operational diagnostic.
 Other marks retain the existing projection-specific trace behavior and can be
 exported as logs.
 
+When the `resource_metrics` component and polling are enabled, each poll emits
+marks with the reserved metric schema. An enabled metric pipeline exports
+available numerical measurements. It omits unavailable measurements instead
+of recording them as zero. Refer to
+[Resource Metrics](/configure-plugins/resource-metrics) for snapshot and
+polling details.
+
 <Note>
 The metric schema is a NeMo Relay routing contract, not an ATOF-wide metric
 semantic. ATOF remains at version `0.1`, treats `data_schema` as opaque, and

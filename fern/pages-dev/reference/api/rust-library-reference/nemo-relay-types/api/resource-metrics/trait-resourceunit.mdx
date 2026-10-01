@@ -1,0 +1,59 @@
+---
+title: "Trait Resource Unit"
+sidebar-title: "ResourceUnit"
+slug: "/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/trait-resourceunit"
+description: "A unit with a stable name in snapshots and metric marks."
+position: 29
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait ResourceUnit: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> &#123;\n    // Required method\n    fn as_str(self) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>;\n&#125;"}} /></pre>
+
+A unit with a stable name in snapshots and metric marks.
+
+## Required Methods
+
+#### `as_str`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn as_str(self) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Return the canonical snake_case unit name.
+
+## Dyn Compatibility
+
+This trait is not [dyn compatible](https://doc.rust-lang.org/1.96.1/reference/items/traits.html#dyn-compatibility).
+
+In older versions of Rust, dyn compatibility was called "object safety", so this trait is not object safe.
+
+## Implementors
+
+### `impl ResourceUnit for BandwidthUnit`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-resourceunit\">ResourceUnit</a> for <a href=\"enum-bandwidthunit\">BandwidthUnit</a>"}} /></pre>
+
+### `impl ResourceUnit for CapacityUnit`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-resourceunit\">ResourceUnit</a> for <a href=\"enum-capacityunit\">CapacityUnit</a>"}} /></pre>
+
+### `impl ResourceUnit for CountUnit`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-resourceunit\">ResourceUnit</a> for <a href=\"enum-countunit\">CountUnit</a>"}} /></pre>
+
+### `impl ResourceUnit for CpuUnit`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-resourceunit\">ResourceUnit</a> for <a href=\"enum-cpuunit\">CpuUnit</a>"}} /></pre>
+
+### `impl ResourceUnit for DataUnit`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-resourceunit\">ResourceUnit</a> for <a href=\"enum-dataunit\">DataUnit</a>"}} /></pre>
+
+### `impl ResourceUnit for DurationUnit`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-resourceunit\">ResourceUnit</a> for <a href=\"enum-durationunit\">DurationUnit</a>"}} /></pre>
+
+### `impl ResourceUnit for UtilizationUnit`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-resourceunit\">ResourceUnit</a> for <a href=\"enum-utilizationunit\">UtilizationUnit</a>"}} /></pre>
