@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -248,4 +250,53 @@ func TestResourceMetricsCollectionRejectsStartupErrorsAndNullFFIOutputs(t *testi
 	if data, err := resourceMetricsJSON(nil); err == nil || data != nil {
 		t.Fatalf("accepted a null snapshot from FFI: data=%s error=%v", data, err)
 	}
+}
+
+func TestResourceMetricsValidatesThroughTheNativePluginHostWithAnExplicitConfigFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resource-metrics.toml")
+	document := `# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[[components]]
+kind = "resource_metrics"
+enabled = true
+
+[components.config.polling]
+enabled = false
+interval_millis = 3210
+
+[components.config.units.memory]
+resident = "mebibytes"
+`
+	if err := os.WriteFile(path, []byte(document), 0600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Validate(PluginConfig{Version: 1}, &path)
+	if err != nil {
+		t.Fatalf("validate explicit resource metrics configuration: %v", err)
+	}
+	for _, diagnostic := range report.Config.Diagnostics {
+		if diagnostic.Level == DiagnosticLevelError {
+			t.Fatalf("invalid resource metrics configuration: %+v", diagnostic)
+		}
+	}
+	components, ok := report.ResolvedConfig["components"].([]any)
+	if !ok {
+		t.Fatalf("resolved components are missing: %+v", report.ResolvedConfig)
+	}
+	for _, raw := range components {
+		component := raw.(map[string]any)
+		if component["kind"] != "resource_metrics" {
+			continue
+		}
+		config := component["config"].(map[string]any)
+		polling := config["polling"].(map[string]any)
+		units := config["units"].(map[string]any)
+		memory := units["memory"].(map[string]any)
+		if polling["enabled"] != false || polling["interval_millis"] != float64(3210) || memory["resident"] != "mebibytes" {
+			t.Fatalf("resolved resource metrics options do not match the file: %+v", config)
+		}
+		return
+	}
+	t.Fatalf("resource metrics component is missing: %+v", report.ResolvedConfig)
 }
