@@ -436,6 +436,7 @@ message PushScopeRequest {
   JsonEnvelope data = 6;
   JsonEnvelope metadata = 7;
   JsonEnvelope input = 8;
+  optional int64 timestamp_unix_micros = 9;
 }
 
 message PushScopeResponse {
@@ -449,6 +450,7 @@ message PopScopeRequest {
   string scope_handle_id = 3;
   JsonEnvelope output = 4;
   JsonEnvelope metadata = 5;
+  optional int64 timestamp_unix_micros = 6;
 }
 
 message CreateScopeStackRequest {

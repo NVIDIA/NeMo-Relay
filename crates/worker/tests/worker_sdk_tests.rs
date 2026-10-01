@@ -1083,6 +1083,25 @@ async fn worker_service_invokes_every_registration_surface() {
     assert!(calls.contains(&"mark:stream-poll:stack-1:parent-1".into()));
     assert!(calls.contains(&"push:scope-agent:explicit-stack:".into()));
     assert!(calls.contains(&"push:scope-unknown:explicit-stack:".into()));
+    let scope_requests = host.scope_requests();
+    let historical_push = scope_requests
+        .push
+        .iter()
+        .find(|request| request.name == "worker-scope")
+        .expect("historical scope push");
+    assert_eq!(historical_push.timestamp_unix_micros, Some(-2));
+    let historical_pop = scope_requests
+        .pop
+        .iter()
+        .find(|request| request.scope_handle_id == "scope-handle-1")
+        .expect("historical scope pop");
+    assert_eq!(historical_pop.timestamp_unix_micros, Some(0));
+    let ordinary_push = scope_requests
+        .push
+        .iter()
+        .find(|request| request.name == "scope-agent")
+        .expect("ordinary scope push");
+    assert_eq!(ordinary_push.timestamp_unix_micros, None);
     let telemetry_mark = host
         .marks()
         .into_iter()
@@ -2381,9 +2400,19 @@ impl WorkerPlugin for SurfacePlugin {
                     .await?;
                 runtime.emit_mark("tool-exec-restored", None, None).await?;
                 let handle = runtime
-                    .push_scope(None, "worker-scope", ScopeType::Function, None, None, None)
+                    .push_scope_at(
+                        None,
+                        "worker-scope",
+                        ScopeType::Function,
+                        None,
+                        None,
+                        None,
+                        UNIX_EPOCH - Duration::from_nanos(1_500),
+                    )
                     .await?;
-                runtime.pop_scope(&handle, None, None).await?;
+                runtime
+                    .pop_scope_at(&handle, None, None, UNIX_EPOCH)
+                    .await?;
                 runtime.drop_scope_stack(&stack_id).await?;
                 let mut next_value = next.call(value).await?;
                 next_value.result = set_json_field(next_value.result, "phase", "tool_exec");
@@ -2614,12 +2643,19 @@ struct RuntimeRegistrationRequests {
 }
 
 #[derive(Clone, Default)]
+struct ScopeRequests {
+    push: Vec<PushScopeRequest>,
+    pop: Vec<PopScopeRequest>,
+}
+
+#[derive(Clone, Default)]
 struct MockHost {
     calls: Arc<Mutex<Vec<String>>>,
     logs: Arc<Mutex<Vec<LogRequest>>>,
     marks: Arc<Mutex<Vec<EmitMarkRequest>>>,
     failures: Arc<Mutex<MockHostFailures>>,
     runtime_registration_requests: Arc<Mutex<RuntimeRegistrationRequests>>,
+    scope_requests: Arc<Mutex<ScopeRequests>>,
 }
 
 impl MockHost {
@@ -2651,6 +2687,13 @@ impl MockHost {
         self.runtime_registration_requests
             .lock()
             .expect("runtime registration requests lock")
+            .clone()
+    }
+
+    fn scope_requests(&self) -> ScopeRequests {
+        self.scope_requests
+            .lock()
+            .expect("scope requests lock")
             .clone()
     }
 }
@@ -2793,6 +2836,11 @@ impl RelayHostRuntime for MockHost {
     ) -> std::result::Result<Response<PushScopeResponse>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.scope_requests
+            .lock()
+            .expect("scope requests lock")
+            .push
+            .push(request.clone());
         let scope = request.scope.expect("scope context");
         self.record(format!(
             "push:{}:{}:{}",
@@ -2816,6 +2864,11 @@ impl RelayHostRuntime for MockHost {
     ) -> std::result::Result<Response<HostAck>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.scope_requests
+            .lock()
+            .expect("scope requests lock")
+            .pop
+            .push(request.clone());
         self.record(format!("pop:{}", request.scope_handle_id));
         match self.failures().pop_scope {
             HostFailure::None => {}

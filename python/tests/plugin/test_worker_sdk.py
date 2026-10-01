@@ -12,6 +12,7 @@ import os
 import socket
 import tempfile
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 from unittest import mock
@@ -2374,7 +2375,25 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         await runtime.emit_mark("mark", {"ok": True})
         await runtime.emit_mark("override-parent", parent_scope_id="parent-2")
         scope_id = await runtime.push_scope("scope", scope_type=ScopeType.TOOL, input={"in": True})
+        ordinary_push = _last_request(host_stub, pb.PushScopeRequest)
+        assert not ordinary_push.HasField("timestamp_unix_micros")
         await runtime.pop_scope(scope_id, output={"out": True})
+        ordinary_pop = _last_request(host_stub, pb.PopScopeRequest)
+        assert not ordinary_pop.HasField("timestamp_unix_micros")
+        historical_scope_id = await runtime.push_scope(
+            "historical-scope",
+            timestamp=datetime(1969, 12, 31, 23, 59, 59, 999998, tzinfo=timezone.utc),
+        )
+        historical_push = _last_request(host_stub, pb.PushScopeRequest)
+        assert historical_push.HasField("timestamp_unix_micros")
+        assert historical_push.timestamp_unix_micros == -2
+        await runtime.pop_scope(
+            historical_scope_id,
+            timestamp=datetime(1970, 1, 1, tzinfo=timezone.utc),
+        )
+        historical_pop = _last_request(host_stub, pb.PopScopeRequest)
+        assert historical_pop.HasField("timestamp_unix_micros")
+        assert historical_pop.timestamp_unix_micros == 0
         tool_next = await ToolNext(runtime, "tool-next").call({"value": 1})
         llm_next = await _llm_next(runtime, {"content": {"prompt": "hello"}})
         stream_next = [chunk async for chunk in _llm_stream_next(runtime, {"content": {"prompt": "hello"}})]
@@ -2692,6 +2711,30 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub) -> No
     with pytest.raises(WorkerSdkError, match="stream chunk is empty"):
         async for _chunk in _llm_stream_next(runtime, {"content": {}}):
             pass
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "error_type", "message"),
+    [
+        (datetime(2026, 1, 1), ValueError, "timezone-aware"),
+        ("2026-01-01T00:00:00Z", TypeError, "datetime.datetime"),
+    ],
+)
+async def test_runtime_scope_timestamps_reject_invalid_values_before_host_call(
+    host_stub: RecordingHostStub,
+    timestamp: Any,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
+    request_count = len(host_stub.requests)
+
+    with pytest.raises(error_type, match=message):
+        await runtime.push_scope("scope", timestamp=timestamp)
+    with pytest.raises(error_type, match=message):
+        await runtime.pop_scope("scope", timestamp=timestamp)
+
+    assert len(host_stub.requests) == request_count
 
 
 async def test_lifecycle_acks(service: _WorkerService) -> None:

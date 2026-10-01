@@ -76,6 +76,7 @@ import tempfile
 import tomllib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
@@ -1917,6 +1918,7 @@ class PluginRuntime:
         input: Json | None = None,
         scope_stack_id: str | None = None,
         parent_scope_id: str | None = None,
+        timestamp: datetime | None = None,
     ) -> str:
         """Start a scope on a Relay host-owned stack.
 
@@ -1930,6 +1932,9 @@ class PluginRuntime:
                 the current local binding is used.
             parent_scope_id: Optional parent scope. When omitted, the parent
                 from the selected stack binding is used.
+            timestamp: Optional timezone-aware start time recorded on the
+                scope handle and start event. When omitted, Relay uses the
+                current time.
 
         Returns:
             An opaque scope handle to pass to :meth:`pop_scope`.
@@ -1937,21 +1942,25 @@ class PluginRuntime:
         Raises:
             WorkerSdkError: The scope selection is invalid or the host rejects
                 the request.
-            TypeError: A payload is not JSON-serializable.
-            ValueError: ``scope_type`` is not a supported :class:`ScopeType`.
+            TypeError: A payload is not JSON-serializable or ``timestamp`` is
+                not a :class:`datetime.datetime`.
+            ValueError: ``scope_type`` is unsupported or ``timestamp`` is
+                timezone-naive.
         """
-        response = await self._host_stub.PushScope(
-            pb.PushScopeRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
-                scope=self._scope_context(scope_stack_id, parent_scope_id),
-                name=name,
-                scope_type=_proto_scope_type(scope_type),
-                data=_optional_json_envelope(data),
-                metadata=_optional_json_envelope(metadata),
-                input=_optional_json_envelope(input),
-            )
+        request = pb.PushScopeRequest(
+            activation_id=self._activation_id,
+            auth_token=self._auth_token,
+            scope=self._scope_context(scope_stack_id, parent_scope_id),
+            name=name,
+            scope_type=_proto_scope_type(scope_type),
+            data=_optional_json_envelope(data),
+            metadata=_optional_json_envelope(metadata),
+            input=_optional_json_envelope(input),
         )
+        timestamp_unix_micros = _datetime_to_unix_micros(timestamp)
+        if timestamp_unix_micros is not None:
+            request.timestamp_unix_micros = timestamp_unix_micros
+        response = await self._host_stub.PushScope(request)
         if response.HasField("error"):
             raise _worker_error_to_sdk(response.error)
         return response.scope_handle_id
@@ -1962,6 +1971,7 @@ class PluginRuntime:
         *,
         output: Json | None = None,
         metadata: Json | None = None,
+        timestamp: datetime | None = None,
     ) -> None:
         """End a host scope by its handle identifier.
 
@@ -1970,20 +1980,26 @@ class PluginRuntime:
             output: Optional JSON semantic output attached to the scope end
                 event.
             metadata: Optional JSON metadata attached to the end event.
+            timestamp: Optional timezone-aware time recorded on the end event.
+                When omitted, Relay uses its default end time.
 
         Raises:
             WorkerSdkError: The host rejects the request.
-            TypeError: A payload is not JSON-serializable.
+            TypeError: A payload is not JSON-serializable or ``timestamp`` is
+                not a :class:`datetime.datetime`.
+            ValueError: ``timestamp`` is timezone-naive.
         """
-        response = await self._host_stub.PopScope(
-            pb.PopScopeRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
-                scope_handle_id=scope_handle_id,
-                output=_optional_json_envelope(output),
-                metadata=_optional_json_envelope(metadata),
-            )
+        request = pb.PopScopeRequest(
+            activation_id=self._activation_id,
+            auth_token=self._auth_token,
+            scope_handle_id=scope_handle_id,
+            output=_optional_json_envelope(output),
+            metadata=_optional_json_envelope(metadata),
         )
+        timestamp_unix_micros = _datetime_to_unix_micros(timestamp)
+        if timestamp_unix_micros is not None:
+            request.timestamp_unix_micros = timestamp_unix_micros
+        response = await self._host_stub.PopScope(request)
         _ack_to_result(response)
 
     @contextlib.contextmanager
@@ -2798,6 +2814,18 @@ def _optional_json_envelope(value: Json | None, schema: str = JSON_SCHEMA) -> An
     if value is None:
         return None
     return _json_envelope(schema, value)
+
+
+def _datetime_to_unix_micros(value: datetime | None) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, datetime):
+        raise TypeError("timestamp must be a datetime.datetime object")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("timestamp datetime must be timezone-aware")
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    delta = value.astimezone(timezone.utc) - epoch
+    return (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
 
 
 def _data_schema_json(value: DataSchema | Mapping[str, Json] | None) -> dict[str, str] | None:

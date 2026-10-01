@@ -29,6 +29,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures_util::{Stream, StreamExt};
 #[cfg(unix)]
@@ -1440,6 +1441,54 @@ impl PluginRuntime {
         metadata: Option<Json>,
         input: Option<Json>,
     ) -> Result<String> {
+        self.push_scope_with_timestamp(
+            scope_stack_id,
+            name,
+            scope_type,
+            data,
+            metadata,
+            input,
+            None,
+        )
+        .await
+    }
+
+    /// Pushes a scope through the host runtime using an explicit start time.
+    #[allow(clippy::too_many_arguments)] // Mirrors `push_scope` with one additive timestamp.
+    pub async fn push_scope_at(
+        &self,
+        scope_stack_id: Option<&str>,
+        name: &str,
+        scope_type: ScopeType,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        input: Option<Json>,
+        started_at: SystemTime,
+    ) -> Result<String> {
+        let timestamp = unix_micros(started_at)?;
+        self.push_scope_with_timestamp(
+            scope_stack_id,
+            name,
+            scope_type,
+            data,
+            metadata,
+            input,
+            Some(timestamp),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // Shared implementation for the parallel public methods.
+    async fn push_scope_with_timestamp(
+        &self,
+        scope_stack_id: Option<&str>,
+        name: &str,
+        scope_type: ScopeType,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        input: Option<Json>,
+        timestamp_unix_micros: Option<i64>,
+    ) -> Result<String> {
         let scope = scope_stack_id
             .map(scope_context)
             .or_else(|| self.current_scope_context());
@@ -1454,6 +1503,7 @@ impl PluginRuntime {
                 data: optional_json_envelope(data)?,
                 metadata: optional_json_envelope(metadata)?,
                 input: optional_json_envelope(input)?,
+                timestamp_unix_micros,
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
@@ -1471,6 +1521,30 @@ impl PluginRuntime {
         output: Option<Json>,
         metadata: Option<Json>,
     ) -> Result<()> {
+        self.pop_scope_with_timestamp(scope_handle_id, output, metadata, None)
+            .await
+    }
+
+    /// Pops a scope through the host runtime using an explicit end time.
+    pub async fn pop_scope_at(
+        &self,
+        scope_handle_id: &str,
+        output: Option<Json>,
+        metadata: Option<Json>,
+        ended_at: SystemTime,
+    ) -> Result<()> {
+        let timestamp = unix_micros(ended_at)?;
+        self.pop_scope_with_timestamp(scope_handle_id, output, metadata, Some(timestamp))
+            .await
+    }
+
+    async fn pop_scope_with_timestamp(
+        &self,
+        scope_handle_id: &str,
+        output: Option<Json>,
+        metadata: Option<Json>,
+        timestamp_unix_micros: Option<i64>,
+    ) -> Result<()> {
         let mut client = self.host_client().await?;
         let response = client
             .pop_scope(Request::new(PopScopeRequest {
@@ -1479,6 +1553,7 @@ impl PluginRuntime {
                 scope_handle_id: scope_handle_id.into(),
                 output: optional_json_envelope(output)?,
                 metadata: optional_json_envelope(metadata)?,
+                timestamp_unix_micros,
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
@@ -1497,6 +1572,26 @@ impl PluginRuntime {
     fn current_scope_context(&self) -> Option<ScopeContext> {
         current_scope_context()
     }
+}
+
+fn unix_micros(timestamp: SystemTime) -> Result<i64> {
+    let micros = match timestamp.duration_since(UNIX_EPOCH) {
+        Ok(duration) => i128::try_from(duration.as_micros()),
+        Err(error) => {
+            let duration = error.duration();
+            i128::try_from(duration.as_micros()).map(|micros| {
+                // `Duration::as_micros` truncates toward zero, but a signed
+                // Unix timestamp must floor pre-epoch sub-microsecond values.
+                -micros - i128::from(duration.subsec_nanos() % 1_000 != 0)
+            })
+        }
+    }
+    .map_err(|_| {
+        WorkerSdkError::InvalidInput("scope timestamp exceeds the supported range".into())
+    })?;
+    i64::try_from(micros).map_err(|_| {
+        WorkerSdkError::InvalidInput("scope timestamp exceeds the supported range".into())
+    })
 }
 
 /// Explicit worker server configuration for tests and custom launchers.
@@ -3581,3 +3676,7 @@ fn rustc_version_runtime() -> String {
 #[cfg(test)]
 #[path = "../tests/unit/codec_identity_tests.rs"]
 mod codec_identity_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/timestamp_tests.rs"]
+mod timestamp_tests;

@@ -18,7 +18,7 @@ scope context while the `RelayHostRuntime` service performs the real work.
 | Emit a mark | Await `emit_mark` with name, data, and metadata. | Await `emit_mark` with the same JSON fields. |
 | Create or drop an isolated stack | Await `create_scope_stack` and `drop_scope_stack`. | Await the same operations and retain the returned stack ID only for its owned lifetime. |
 | Bind and restore a stack | Run a future through `with_scope_stack`. | Enter `bind_scope_stack`; use `clear_scope_stack` when code must deliberately run without a bound stack. |
-| Push and pop a scope | Await `push_scope`, retain its handle, and await `pop_scope`. | Await the same pair; the handle, not a guessed scope ID, owns the pop. |
+| Push and pop a scope | Await `push_scope`, retain its handle, and await `pop_scope`. Use `push_scope_at` and `pop_scope_at` when replaying captured work at its original `SystemTime`. | Await the same pair; pass a timezone-aware `timestamp` when replaying captured work. The handle, not a guessed scope ID, owns the pop. |
 | Inspect inherited context | The runtime proxy carries the task scope snapshot. | `current_scope_stack_id` and `current_parent_scope_id` expose the current binding. |
 | Emit typed telemetry | Use `emit_mark_with_options` or `emit_metric`. | Use the matching async runtime methods. |
 | Read runtime diagnostics | Await `runtime_diagnostics`. | Await `runtime_diagnostics`. |
@@ -28,6 +28,7 @@ scope context while the `RelayHostRuntime` service performs the real work.
 Every host request carries the activation ID, token, and relevant scope context. A worker
 must not expose, log, or persist the activation token or codec capability IDs. Those
 values identify a live local capability and expire with the activation or invocation.
+Ordinary scope calls omit the timestamp and retain Relay's current-time behavior.
 
 ## Control a Registration from a Background Task
 

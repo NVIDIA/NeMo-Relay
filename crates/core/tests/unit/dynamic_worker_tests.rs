@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use crate::api::event::{BaseEvent, MarkEvent};
+use crate::api::event::{BaseEvent, Event, MarkEvent, ScopeCategory};
 use crate::api::optimization::{
     LlmOptimizationRecorder, record_llm_optimization_contribution, scope_llm_optimization_recorder,
 };
@@ -1480,6 +1480,7 @@ async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
                 data: None,
                 metadata: None,
                 input: None,
+                timestamp_unix_micros: None,
             }))
             .await
             .expect("worker scope should push")
@@ -2188,6 +2189,7 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             }),
             metadata: None,
             input: None,
+            timestamp_unix_micros: None,
         }))
         .await
         .expect("invalid JSON should be structured")
@@ -2199,6 +2201,119 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             .contains("invalid JSON")
     );
 
+    let historical_events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured_historical_events = Arc::clone(&historical_events);
+    crate::api::subscriber::register_subscriber(
+        "worker-historical-scope-timestamps",
+        Arc::new(move |event| {
+            if event.name() == "historical-scope" {
+                captured_historical_events
+                    .lock()
+                    .expect("historical events lock")
+                    .push(event.clone());
+            }
+        }),
+    )
+    .expect("historical timestamp subscriber should register");
+
+    let historical_push = service
+        .push_scope(Request::new(PushScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope: None,
+            name: "historical-scope".into(),
+            scope_type: ProtoScopeType::Custom as i32,
+            data: None,
+            metadata: None,
+            input: None,
+            timestamp_unix_micros: Some(-2),
+        }))
+        .await
+        .expect("historical scope should push")
+        .into_inner();
+    assert!(historical_push.error.is_none());
+    let historical_handle_id = historical_push.scope_handle_id;
+    assert_eq!(
+        state
+            .scope_handles
+            .lock()
+            .expect("scope handles lock")
+            .get(&historical_handle_id)
+            .expect("historical scope handle")
+            .handle
+            .started_at
+            .timestamp_micros(),
+        -2
+    );
+
+    let invalid_pop = service
+        .pop_scope(Request::new(PopScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope_handle_id: historical_handle_id.clone(),
+            output: None,
+            metadata: None,
+            timestamp_unix_micros: Some(i64::MAX),
+        }))
+        .await
+        .expect("invalid timestamp should return a host ack")
+        .into_inner();
+    assert!(!invalid_pop.ok);
+    assert!(
+        invalid_pop
+            .error
+            .expect("invalid timestamp error")
+            .message
+            .contains("outside supported range")
+    );
+    assert!(
+        state
+            .scope_handles
+            .lock()
+            .expect("scope handles lock")
+            .contains_key(&historical_handle_id),
+        "an invalid timestamp must not consume the pop handle"
+    );
+
+    let historical_pop = service
+        .pop_scope(Request::new(PopScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope_handle_id: historical_handle_id.clone(),
+            output: None,
+            metadata: None,
+            timestamp_unix_micros: Some(0),
+        }))
+        .await
+        .expect("epoch timestamp should pop")
+        .into_inner();
+    assert!(historical_pop.ok, "{:?}", historical_pop.error);
+    assert!(
+        !state
+            .scope_handles
+            .lock()
+            .expect("scope handles lock")
+            .contains_key(&historical_handle_id)
+    );
+    crate::api::subscriber::flush_subscribers().expect("historical timestamp events should flush");
+    assert!(
+        crate::api::subscriber::deregister_subscriber("worker-historical-scope-timestamps")
+            .expect("historical timestamp subscriber should deregister")
+    );
+    {
+        let historical_events = historical_events.lock().expect("historical events lock");
+        let historical_start = historical_events
+            .iter()
+            .find(|event| event.scope_category() == Some(ScopeCategory::Start))
+            .expect("historical start event");
+        let historical_end = historical_events
+            .iter()
+            .find(|event| event.scope_category() == Some(ScopeCategory::End))
+            .expect("historical end event");
+        assert_eq!(historical_start.timestamp().timestamp_micros(), -2);
+        assert_eq!(historical_end.timestamp().timestamp_micros(), 0);
+    }
+
     let pop_error = service
         .pop_scope(Request::new(PopScopeRequest {
             activation_id: ACTIVATION_ID.into(),
@@ -2206,6 +2321,7 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             scope_handle_id: "missing-scope".into(),
             output: None,
             metadata: None,
+            timestamp_unix_micros: None,
         }))
         .await
         .expect_err("missing scope handle should fail");
@@ -2443,6 +2559,7 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
             data: None,
             metadata: None,
             input: None,
+            timestamp_unix_micros: None,
         }))
         .await
         .expect_err("poisoned scope handle lock should fail");
@@ -2455,6 +2572,7 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
             scope_handle_id: "missing".into(),
             output: None,
             metadata: None,
+            timestamp_unix_micros: None,
         }))
         .await
         .expect_err("poisoned scope handle lock should fail");
