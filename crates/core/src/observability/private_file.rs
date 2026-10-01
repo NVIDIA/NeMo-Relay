@@ -79,24 +79,8 @@ fn open_or_create_private_dir(path: &Path) -> io::Result<ConfinedDir> {
 }
 
 #[cfg(all(test, windows))]
-mod tests {
-    use super::{atomic_private_write, create_private_dir_all};
-
-    #[test]
-    fn absolute_temp_directory_is_accepted() {
-        let temporary = tempfile::tempdir().expect("temporary directory should be created");
-        let output = temporary.path().join("atof");
-
-        create_private_dir_all(&output).expect("absolute Windows output directory should open");
-        atomic_private_write(&output, &output.join("trajectory.json"), b"{}")
-            .expect("absolute Windows output file should write atomically");
-
-        assert_eq!(
-            std::fs::read(output.join("trajectory.json")).unwrap(),
-            b"{}"
-        );
-    }
-}
+#[path = "../../tests/unit/observability/private_file_tests.rs"]
+mod tests;
 
 pub(super) fn open_private(root: &Path, path: &Path, append: bool) -> io::Result<File> {
     let (parent, filename) = prepare_confined_parent(root, path)?;

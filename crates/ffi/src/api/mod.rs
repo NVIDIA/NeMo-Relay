@@ -47,6 +47,111 @@ pub use crate::types::{
     nemo_relay_otel_log_subscriber_free, nemo_relay_otel_metric_subscriber_free,
     nemo_relay_otel_subscriber_free,
 };
+
+/// Start an asynchronous resource metrics collection using the active plugin.
+///
+/// Poll the returned handle with `nemo_relay_resource_metrics_collect_poll`.
+/// Release it with `nemo_relay_resource_metrics_collect_free`, including when
+/// abandoning a pending collection.
+///
+/// # Safety
+/// `out_collection` must point to writable pointer storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_resource_metrics_collect_start(
+    out_collection: *mut *mut crate::types::FfiResourceMetricsCollection,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out_collection.is_null() {
+        set_last_error("resource metrics collection output pointer must not be null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_collection = std::ptr::null_mut() };
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let task = tokio_runtime().spawn(async move {
+        let result = match nemo_relay::api::resource_metrics::collect().await {
+            Ok(snapshot) => serde_json::to_string(&snapshot).map_err(|error| {
+                FlowError::Internal(format!(
+                    "failed to serialize resource metrics snapshot: {error}"
+                ))
+            }),
+            Err(error) => Err(error),
+        };
+        let _ = sender.send(result);
+    });
+    let collection = crate::types::FfiResourceMetricsCollection {
+        receiver: std::sync::Mutex::new(Some(receiver)),
+        task: task.abort_handle(),
+    };
+    unsafe { *out_collection = Box::into_raw(Box::new(collection)) };
+    NemoRelayStatus::Ok
+}
+
+/// Check a collection without blocking. `out_done` is false while pending.
+///
+/// Once done, this function returns the collection status and, on success, a
+/// canonical JSON string owned by the caller. Free the string with
+/// `nemo_relay_string_free`. A completed result can be retrieved only once.
+///
+/// # Safety
+/// The collection must be live. Both output pointers must be writable.
+/// Do not free the handle while another thread is polling it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_resource_metrics_collect_poll(
+    collection: *mut crate::types::FfiResourceMetricsCollection,
+    out_done: *mut bool,
+    out_json: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if collection.is_null() || out_done.is_null() || out_json.is_null() {
+        set_last_error("resource metrics collection and output pointers must not be null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe {
+        *out_done = false;
+        *out_json = std::ptr::null_mut();
+    }
+    let collection = unsafe { &*collection };
+    let mut receiver = collection
+        .receiver
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let Some(pending) = receiver.as_mut() else {
+        set_last_error("resource metrics collection result has already been retrieved");
+        return NemoRelayStatus::InvalidArg;
+    };
+    let result = match pending.try_recv() {
+        Ok(result) => result,
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty) => return NemoRelayStatus::Ok,
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed) => Err(FlowError::Internal(
+            "resource metrics collection task ended without a result".into(),
+        )),
+    };
+    *receiver = None;
+    unsafe { *out_done = true };
+    match result {
+        Ok(json) => {
+            unsafe { *out_json = str_to_c_string(&json) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => status_from_error(&error),
+    }
+}
+
+/// Release a collection handle and cancel its pending wait.
+///
+/// An OS query already running on a worker may finish after this call returns.
+///
+/// # Safety
+/// `collection` must be null or a live handle, freed exactly once and not in use.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_resource_metrics_collect_free(
+    collection: *mut crate::types::FfiResourceMetricsCollection,
+) {
+    if !collection.is_null() {
+        drop(unsafe { Box::from_raw(collection) });
+    }
+}
+
 use libc::c_char;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};

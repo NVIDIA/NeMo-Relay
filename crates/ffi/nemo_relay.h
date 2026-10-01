@@ -220,6 +220,11 @@ typedef struct FfiPluginContext FfiPluginContext;
 typedef struct FfiPluginHostActivation FfiPluginHostActivation;
 
 /**
+ * Opaque handle for an asynchronous resource metrics collection.
+ */
+typedef struct FfiResourceMetricsCollection FfiResourceMetricsCollection;
+
+/**
  * Opaque handle representing an active execution scope.
  */
 typedef struct FfiScopeHandle FfiScopeHandle;
@@ -677,6 +682,43 @@ typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
  * Read `f64_value`.
  */
 #define NEMO_RELAY_METRIC_VALUE_TYPE_F64 3
+
+/**
+ * Start an asynchronous resource metrics collection using the active plugin.
+ *
+ * Poll the returned handle with `nemo_relay_resource_metrics_collect_poll`.
+ * Release it with `nemo_relay_resource_metrics_collect_free`, including when
+ * abandoning a pending collection.
+ *
+ * # Safety
+ * `out_collection` must point to writable pointer storage.
+ */
+NemoRelayStatus nemo_relay_resource_metrics_collect_start(struct FfiResourceMetricsCollection **out_collection);
+
+/**
+ * Check a collection without blocking. `out_done` is false while pending.
+ *
+ * Once done, this function returns the collection status and, on success, a
+ * canonical JSON string owned by the caller. Free the string with
+ * `nemo_relay_string_free`. A completed result can be retrieved only once.
+ *
+ * # Safety
+ * The collection must be live. Both output pointers must be writable.
+ * Do not free the handle while another thread is polling it.
+ */
+NemoRelayStatus nemo_relay_resource_metrics_collect_poll(struct FfiResourceMetricsCollection *collection,
+                                                         bool *out_done,
+                                                         char **out_json);
+
+/**
+ * Release a collection handle and cancel its pending wait.
+ *
+ * An OS query already running on a worker may finish after this call returns.
+ *
+ * # Safety
+ * `collection` must be null or a live handle, freed exactly once and not in use.
+ */
+void nemo_relay_resource_metrics_collect_free(struct FfiResourceMetricsCollection *collection);
 
 /**
  * Initializes the Go binding runtime and installs default operational logging.

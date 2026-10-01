@@ -243,6 +243,57 @@ impl ScopeStack {
         }
     }
 
+    pub(crate) fn root_only_snapshot(&self) -> Self {
+        let root = self
+            .stack
+            .first()
+            .expect("scope stack should never be empty")
+            .clone();
+        let mut scope_registries = HashMap::new();
+        if let Some(registries) = self.scope_registries.get(&root.uuid) {
+            scope_registries.insert(root.uuid, registries.clone());
+        }
+        Self {
+            stack: vec![root.clone()],
+            scope_registries,
+            fresh_agents: self
+                .fresh_agents
+                .contains(&root.uuid)
+                .then_some(root.uuid)
+                .into_iter()
+                .collect(),
+            propagated_parent_uuid: self.propagated_parent_uuid,
+            propagated_root_uuid: self.propagated_root_uuid,
+            propagated_traceparent: self.propagated_traceparent.clone(),
+            propagated_tracestate: self.propagated_tracestate.clone(),
+            is_rootless_propagation: self.is_rootless_propagation,
+        }
+    }
+
+    pub(crate) fn snapshot_through_scope(&self, scope_uuid: &Uuid) -> Option<Self> {
+        let end = self
+            .stack
+            .iter()
+            .position(|scope| scope.uuid == *scope_uuid)?;
+        let stack = self.stack[..=end].to_vec();
+        let visible = stack.iter().map(|scope| scope.uuid).collect::<HashSet<_>>();
+        Some(Self {
+            stack,
+            scope_registries: self
+                .scope_registries
+                .iter()
+                .filter(|(uuid, _)| visible.contains(uuid))
+                .map(|(uuid, registries)| (*uuid, registries.clone()))
+                .collect(),
+            fresh_agents: self.fresh_agents.intersection(&visible).copied().collect(),
+            propagated_parent_uuid: self.propagated_parent_uuid,
+            propagated_root_uuid: self.propagated_root_uuid,
+            propagated_traceparent: self.propagated_traceparent.clone(),
+            propagated_tracestate: self.propagated_tracestate.clone(),
+            is_rootless_propagation: self.is_rootless_propagation,
+        })
+    }
+
     /// Create a new scope stack containing only the implicit root scope.
     ///
     /// # Returns
@@ -625,6 +676,14 @@ impl ThreadScopeStackBinding {
 /// The root scope is always present and cannot be removed.
 pub fn create_scope_stack() -> ScopeStackHandle {
     Arc::new(RwLock::new(ScopeStack::new()))
+}
+
+pub(crate) fn root_scope_stack_snapshot(stack: &ScopeStackHandle) -> Result<ScopeStackHandle> {
+    let root_only = stack
+        .read()
+        .map_err(|error| FlowError::Internal(format!("scope stack lock poisoned: {error}")))?
+        .root_only_snapshot();
+    Ok(Arc::new(RwLock::new(root_only)))
 }
 
 /// Clone a scope stack into an isolated emission-time snapshot.

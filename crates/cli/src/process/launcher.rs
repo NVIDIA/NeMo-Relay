@@ -182,6 +182,19 @@ async fn execute_live_run_with_dynamic(
     gateway_url: &str,
     prepared: PreparedAgentLaunch,
 ) -> Result<ExitCode, CliError> {
+    let target_resource_metrics = cli_process_tree_metrics_enabled(&gateway_config);
+    let _resource_metrics_launch = if target_resource_metrics {
+        Some(
+            nemo_relay::api::resource_metrics::prepare_cli_resource_metrics_process_tree()
+                .map_err(|error| {
+                    CliError::Launch(format!(
+                        "failed to prepare resource metrics process-tree target: {error}"
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
     let bootstrap_fingerprint = crate::configuration::transparent_gateway_fingerprint(gateway_url);
     let proxy_credential = prepared.proxy_credential.clone();
     let running_server = RunningGateway::start(
@@ -198,12 +211,68 @@ async fn execute_live_run_with_dynamic(
         server_result?;
         return Err(error);
     }
-    supervise_prepared_run(&prepared, running_server).await
+    supervise_prepared_run(&prepared, running_server, target_resource_metrics).await
+}
+
+fn cli_process_tree_metrics_enabled(config: &GatewayConfig) -> bool {
+    config
+        .plugin_config
+        .as_ref()
+        .and_then(|config| serde_json::from_value::<PluginConfig>(config.clone()).ok())
+        .is_some_and(|config| {
+            config.components.iter().any(|component| {
+                component.enabled
+                    && component.kind == "resource_metrics"
+                    && component
+                        .config
+                        .get("measurement_scope")
+                        .and_then(|value| value.as_str())
+                        == Some("process_tree")
+            })
+        })
 }
 
 async fn supervise_prepared_run(
     prepared: &PreparedAgentLaunch,
+    running_server: RunningGateway,
+    target_resource_metrics: bool,
+) -> Result<ExitCode, CliError> {
+    supervise_prepared_run_with_target(prepared, running_server, target_resource_metrics, |child| {
+        let child_process_id = child.process_id().ok_or_else(|| {
+            CliError::Launch("spawned coding-agent process did not expose a process ID".into())
+        })?;
+        #[cfg(not(windows))]
+        let result =
+            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
+                child_process_id,
+            );
+        #[cfg(windows)]
+        // SAFETY: The supervised child owns this live job. The API duplicates it here.
+        let result = unsafe {
+            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
+                child_process_id,
+                child.resource_metrics_job_handle(),
+            )
+        };
+        result.map_err(|error| {
+            CliError::Launch(format!(
+                "resource metrics could not target the launched agent process tree: {error}"
+            ))
+        })
+    })
+    .await
+}
+
+async fn supervise_prepared_run_with_target(
+    prepared: &PreparedAgentLaunch,
     mut running_server: RunningGateway,
+    target_resource_metrics: bool,
+    select_target: impl FnOnce(
+        &super::SupervisedChild,
+    ) -> Result<
+        Option<nemo_relay::api::resource_metrics::ResourceMetricsTargetGuard>,
+        CliError,
+    >,
 ) -> Result<ExitCode, CliError> {
     let mut child = match prepared.spawn().await {
         Ok(child) => child,
@@ -214,6 +283,22 @@ async fn supervise_prepared_run(
             server_result?;
             return Err(error);
         }
+    };
+    let _resource_metrics_target = if target_resource_metrics {
+        match select_target(&child) {
+            Ok(target) => target,
+            Err(error) => {
+                let child_result = child.terminate().await;
+                let restore = prepared.restore();
+                let server_result = running_server.stop().await;
+                restore?;
+                child_result?;
+                server_result?;
+                return Err(error);
+            }
+        }
+    } else {
+        None
     };
 
     tokio::select! {

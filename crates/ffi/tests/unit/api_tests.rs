@@ -848,3 +848,6 @@ mod execution_tests;
 mod plugin_tests;
 #[path = "api/registry_tests.rs"]
 mod registry_tests;
+
+#[path = "api/resource_metrics_tests.rs"]
+mod resource_metrics_tests;

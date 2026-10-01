@@ -351,6 +351,48 @@ enabled = true
     }
   });
 
+  it('rejects a required native plugin with an incorrect digest before registering callbacks', async () => {
+    const invalidManifestRef = path.join(tempRoot, 'invalid-integrity.toml');
+    writeFileSync(
+      invalidManifestRef,
+      readFileSync(nativeManifestRef, 'utf8').replace(/sha256:[a-f0-9]{64}/, `sha256:${'0'.repeat(64)}`),
+    );
+    const config = { version: 1, components: [] };
+    const invalidConfigPath = writePluginHostConfig([
+      activationSpec('fixture_native', 'rust_dynamic', invalidManifestRef),
+    ]);
+    const validation = plugin.validate(config, invalidConfigPath);
+    assert.equal(validation.dynamic_plugins.length, 1);
+    assert.equal(validation.dynamic_plugins[0].selected, false);
+    assert.equal(validation.dynamic_plugins[0].status.integrity, 'invalid');
+    assert.equal(validation.dynamic_plugins[0].failure.code, 'integrity_failed');
+    await assert.rejects(() => plugin.initialize(config, invalidConfigPath), /failed integrity verification/);
+    assert.deepEqual(await executeTool('node_invalid_integrity_tool'), {
+      result: { original: true, downstream: true },
+    });
+    const llmAfterRejection = await executeLlm('node_invalid_integrity_llm');
+    assert.equal(llmAfterRejection.requestContent.native_plugin_llm_execution_request, undefined);
+    assert.equal(llmAfterRejection.native_plugin_llm_execution, undefined);
+
+    const validConfigPath = writePluginHostConfig([
+      activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
+    ]);
+    const validValidation = plugin.validate(config, validConfigPath);
+    assert.equal(validValidation.dynamic_plugins[0].status.integrity, 'valid');
+    const activation = await plugin.initialize(config, validConfigPath);
+    try {
+      assert.equal(activation.isActive, true);
+      const toolResult = await executeTool('node_valid_integrity_tool');
+      assert.equal(toolResult.result.native_plugin_tool_execution_request, true);
+      assert.equal(toolResult.result.native_plugin_tool_execution, true);
+      const llmResult = await executeLlm('node_valid_integrity_llm');
+      assert.equal(llmResult.requestContent.native_plugin_llm_execution_request, true);
+      assert.equal(llmResult.native_plugin_llm_execution, true);
+    } finally {
+      await activation.close();
+    }
+  });
+
   it('supports structured async disposal when the managed scope throws', async () => {
     let disposedActivation;
     await assert.rejects(async () => {

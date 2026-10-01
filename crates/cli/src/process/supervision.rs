@@ -41,6 +41,17 @@ impl SupervisedChild {
         })
     }
 
+    /// Return the operating-system process ID of the direct supervised child.
+    pub(crate) fn process_id(&self) -> Option<u32> {
+        self.child.id()
+    }
+
+    /// Return the existing private Job Object handle for read-only metrics duplication.
+    #[cfg(windows)]
+    pub(crate) fn resource_metrics_job_handle(&self) -> isize {
+        self.tree.resource_metrics_job_handle()
+    }
+
     /// Waits for the wrapper and terminates any descendants it left behind.
     pub(crate) async fn wait(&mut self) -> std::io::Result<ExitStatus> {
         let status = match platform::wait(&mut self.tree, &mut self.child).await {

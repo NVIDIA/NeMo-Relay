@@ -5,3 +5,4 @@
 
 pub mod model_pricing;
 pub mod nemo_guardrails;
+pub mod resource_metrics;

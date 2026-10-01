@@ -1939,6 +1939,30 @@ async fn wait_for_health_reports_unready_gateway() {
     assert!(error.contains("gateway did not become ready"), "{error}");
 }
 
+#[test]
+fn only_explicit_cli_process_tree_metrics_need_an_owned_target() {
+    let mut gateway = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": "resource_metrics",
+                "enabled": true,
+                "config": {"measurement_scope": "process_tree"}
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+    assert!(cli_process_tree_metrics_enabled(&gateway));
+
+    gateway.plugin_config.as_mut().unwrap()["components"][0]["config"] = json!({});
+    assert!(!cli_process_tree_metrics_enabled(&gateway));
+
+    gateway.plugin_config.as_mut().unwrap()["components"][0]["config"] =
+        json!({"measurement_scope": "process_tree"});
+    gateway.plugin_config.as_mut().unwrap()["components"][0]["enabled"] = json!(false);
+    assert!(!cli_process_tree_metrics_enabled(&gateway));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
@@ -1990,7 +2014,7 @@ async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
 
     let error = tokio::time::timeout(
         Duration::from_secs(10),
-        supervise_prepared_run(&prepared, running_server),
+        supervise_prepared_run(&prepared, running_server, false),
     )
     .await
     .expect("agent supervision did not finish")
@@ -2397,4 +2421,160 @@ fn pi_launch_refuses_to_promote_a_project_scoped_install() {
         error.to_string().contains("trust-gated"),
         "the launch error should say why the install it can see was not used: {error}"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn resource_metrics_target_failure_terminates_child_and_stops_gateway() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+    let temp = tempfile::tempdir().unwrap();
+    let overlay = temp.path().join("private-overlay");
+    std::fs::create_dir_all(&overlay).unwrap();
+    let prepared = PreparedAgentLaunch {
+        argv: vec!["/bin/sleep".into(), "60".into()],
+        host_index: 0,
+        env: Vec::new(),
+        temp_dirs: vec![overlay.clone()],
+        notes: Vec::new(),
+        non_tty_warnings: Vec::new(),
+        proxy_credential: crate::provider_auth::TransparentProxyCredential::from_static(
+            "test-proxy-token",
+        ),
+        secret_env_names: Vec::new(),
+    };
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopped_by_gateway = Arc::clone(&stopped);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        shutdown_rx.await.unwrap();
+        stopped_by_gateway.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+    let process_id = AtomicU32::new(0);
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        supervise_prepared_run_with_target(
+            &prepared,
+            RunningGateway { shutdown_tx, task },
+            true,
+            |child| {
+                process_id.store(child.process_id().unwrap(), Ordering::SeqCst);
+                Err(CliError::Launch("injected metric target failure".into()))
+            },
+        ),
+    )
+    .await
+    .expect("target failure cleanup did not finish")
+    .unwrap_err();
+    assert!(error.to_string().contains("injected metric target failure"));
+    assert!(stopped.load(Ordering::SeqCst));
+    assert!(!overlay.exists());
+    // SAFETY: Signal 0 only checks whether the reaped child still exists.
+    assert_eq!(
+        unsafe { libc::kill(process_id.load(Ordering::SeqCst) as i32, 0) },
+        -1
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[tokio::test]
+async fn supervised_resource_metrics_selects_the_owned_child_and_restores_target() {
+    use nemo_relay::api::resource_metrics;
+    use nemo_relay::plugin::dynamic::PluginHostActivation;
+
+    let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let launch = resource_metrics::prepare_cli_resource_metrics_process_tree().unwrap();
+    let mut host = PluginHostActivation::initialize_exact(
+        serde_json::from_value(json!({
+            "components": [{"kind": "resource_metrics", "enabled": true, "config": {
+                "measurement_scope": "process_tree",
+                "cpu": {"enabled": false}, "memory": {"enabled": false},
+                "disk": {"enabled": false}, "gpu": {"enabled": false},
+                "network": {"enabled": false}
+            }}]
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let overlay = temp.path().join("private-overlay");
+    std::fs::create_dir_all(&overlay).unwrap();
+    #[cfg(unix)]
+    let argv = vec!["/bin/sleep".into(), "60".into()];
+    #[cfg(windows)]
+    let argv = vec![
+        "cmd.exe".into(),
+        "/c".into(),
+        "ping -n 60 127.0.0.1 >nul".into(),
+    ];
+    let prepared = PreparedAgentLaunch {
+        argv,
+        host_index: 0,
+        env: Vec::new(),
+        temp_dirs: vec![overlay.clone()],
+        notes: Vec::new(),
+        non_tty_warnings: Vec::new(),
+        proxy_credential: crate::provider_auth::TransparentProxyCredential::from_static(
+            "test-proxy-token",
+        ),
+        secret_env_names: Vec::new(),
+    };
+    let (snapshot_tx, snapshot_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(snapshot) = resource_metrics::collect().await {
+                let count = &snapshot
+                    .process
+                    .as_ref()
+                    .unwrap()
+                    .active_count
+                    .as_ref()
+                    .unwrap()
+                    .value;
+                #[cfg(unix)]
+                let ready = *count == 1_u64;
+                #[cfg(windows)]
+                let ready = *count == 2_u64;
+                if ready {
+                    snapshot_tx.send(snapshot).unwrap();
+                    return Err(CliError::Launch("finished observing owned metrics".into()));
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "owned target was not installed"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    });
+    let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+    let error = tokio::time::timeout(
+        Duration::from_secs(15),
+        supervise_prepared_run(&prepared, RunningGateway { shutdown_tx, task }, true),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("finished observing owned metrics")
+    );
+    assert_eq!(
+        snapshot_rx.await.unwrap().measurement_scope,
+        resource_metrics::ResourceMeasurementScope::ProcessTree
+    );
+    assert!(!overlay.exists());
+    // The target guard restores the pending launch state until shutdown.
+    assert!(resource_metrics::collect().await.is_err());
+    drop(launch);
+    host.close().unwrap();
 }

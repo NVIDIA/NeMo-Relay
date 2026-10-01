@@ -1568,6 +1568,248 @@ async fn close_all_waits_for_an_in_flight_permission_decision() {
     assert!(denied_tool_ends[0].0 < containing_scope_end);
 }
 
+#[tokio::test]
+async fn invalid_permission_requests_do_not_emit_policy_marks() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const SUBSCRIBER: &str = "cli-invalid-permission-policy-mark-test";
+    let _ = deregister_subscriber(SUBSCRIBER);
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let events = Arc::clone(&captured);
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let session_id = "permission-policy-mark-invalid";
+    let arguments = json!({"outcome": "pass"});
+    let mut session = Session::new(
+        session_id.into(),
+        AgentKind::ClaudeCode,
+        SessionConfig::default(),
+    );
+    session.pending_tool_hints.push(PendingToolHint {
+        hint: ToolHint {
+            tool_call_id: Some("call-1".into()),
+            tool_name: Some("PermissionAuditTool".into()),
+            subagent_id: None,
+            arguments: arguments.clone(),
+            source: "test".into(),
+        },
+        inserted_at: Instant::now(),
+    });
+    manager
+        .inner
+        .lock()
+        .await
+        .insert(session_id.into(), session);
+    manager
+        .authenticated_owners
+        .lock()
+        .await
+        .insert(session_id.into(), "client-a".into());
+
+    let result = manager
+        .authorize_tool_permission(
+            &ToolEvent {
+                session_id: session_id.into(),
+                agent_kind: AgentKind::ClaudeCode,
+                event_name: "PermissionRequest".into(),
+                tool_call_id: "call-1".into(),
+                tool_name: "DifferentTool".into(),
+                subagent_id: None,
+                arguments,
+                result: Value::Null,
+                status: None,
+                payload: json!({"permission_mode": "default"}),
+                metadata: json!({}),
+            },
+            "client-a",
+        )
+        .await;
+    assert!(result.is_err());
+
+    flush_subscribers().unwrap();
+    assert!(captured.lock().unwrap().iter().all(|event| {
+        event.name() != "nemo_relay.permission.policy_decision"
+            || event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str)
+                != Some(session_id)
+    }));
+    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
+}
+
+#[tokio::test]
+async fn permission_requests_emit_policy_decision_marks() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
+    const SUBSCRIBER: &str = "cli-permission-policy-mark-atof-test";
+    let _ = deregister_subscriber(SUBSCRIBER);
+    register_subscriber(SUBSCRIBER, exporter.subscriber()).unwrap();
+
+    const GUARDRAIL: &str = "cli-permission-policy-mark-guardrail";
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|name, args| {
+            Box::pin(async move {
+                if name != "PermissionAuditTool" {
+                    return Ok(None);
+                }
+                match args["outcome"].as_str() {
+                    Some("reject") => Ok(Some("blocked by permission test".into())),
+                    Some("error") => {
+                        Err(FlowError::Internal("permission backend unavailable".into()))
+                    }
+                    _ => Ok(None),
+                }
+            })
+        }),
+    )
+    .unwrap();
+    let _cleanup = ToolGuardrailCleanup(GUARDRAIL);
+    let manager = SessionManager::new(session_test_config());
+
+    for (index, (outcome, policy_outcome, reason_fragment)) in [
+        ("pass", "pass", None),
+        ("reject", "reject", Some("blocked by permission test")),
+        ("error", "error", Some("permission backend unavailable")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let session_id = format!("permission-policy-mark-{index}");
+        let arguments = json!({"outcome": outcome});
+        let mut session = Session::new(
+            session_id.clone(),
+            AgentKind::ClaudeCode,
+            SessionConfig::default(),
+        );
+        session.pending_tool_hints.push(PendingToolHint {
+            hint: ToolHint {
+                tool_call_id: Some("call-1".into()),
+                tool_name: Some("PermissionAuditTool".into()),
+                subagent_id: None,
+                arguments: arguments.clone(),
+                source: "test".into(),
+            },
+            inserted_at: Instant::now(),
+        });
+        manager
+            .inner
+            .lock()
+            .await
+            .insert(session_id.clone(), session);
+        manager
+            .authenticated_owners
+            .lock()
+            .await
+            .insert(session_id.clone(), "client-a".into());
+        let payload = match index {
+            0 => json!({"permission_mode": "future-mode"}),
+            1 => json!({}),
+            _ => json!({"permission_mode": false}),
+        };
+        let metadata = match index {
+            0 => json!({
+                "hook_event_name": "PermissionRequest",
+                "session_id": "spoofed-session",
+                "agent_version": "spoofed-version",
+                "test_context": "preserved",
+            }),
+            1 => json!({}),
+            _ => Value::Null,
+        };
+        let request = ToolEvent {
+            session_id: session_id.clone(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: "PermissionRequest".into(),
+            tool_call_id: "call-1".into(),
+            tool_name: "PermissionAuditTool".into(),
+            subagent_id: None,
+            arguments,
+            result: Value::Null,
+            status: None,
+            payload,
+            metadata,
+        };
+
+        let result = manager
+            .authorize_tool_permission(&request, "client-a")
+            .await;
+        assert_eq!(result.is_ok(), outcome == "pass");
+        if outcome == "reject" {
+            assert_eq!(
+                result.unwrap_err().guardrail_rejection_reason(),
+                Some("blocked by permission test")
+            );
+        } else if outcome == "error" {
+            assert!(result.unwrap_err().guardrail_rejection_reason().is_none());
+        }
+        flush_subscribers().unwrap();
+        exporter.force_flush().unwrap();
+        let events = read_atof_events(exporter.path().expect("file sink path"));
+        let marks: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event["name"] == "nemo_relay.permission.policy_decision"
+                    && event["metadata"]["session_id"] == session_id
+            })
+            .collect();
+        assert_eq!(marks.len(), 1);
+        let mark = marks[0];
+        assert_eq!(mark["kind"], "mark");
+        assert_eq!(mark["category"], "custom");
+        assert_eq!(
+            mark["category_profile"]["subtype"],
+            "nemo_relay.permission.policy_decision"
+        );
+        assert!(mark["data"].get("decision").is_none());
+        assert_eq!(mark["data"]["decision_source"], "nemo_relay");
+        assert_eq!(mark["data"]["policy_outcome"], policy_outcome);
+        assert_eq!(mark["data"]["agent_kind"], "claude-code");
+        assert_eq!(mark["data"]["event_name"], "PermissionRequest");
+        assert_eq!(mark["data"]["tool_call_id"], "call-1");
+        assert_eq!(mark["data"]["tool_name"], "PermissionAuditTool");
+        assert_eq!(mark["metadata"]["session_id"], session_id);
+        assert_eq!(mark["metadata"]["turn_id"], "0");
+        assert_eq!(mark["metadata"]["harness"], "claude-code");
+        assert_eq!(mark["metadata"]["source"], "hook");
+        assert_eq!(mark["metadata"]["identity_quality"], "native");
+        if index == 0 {
+            assert_eq!(mark["metadata"]["hook_event_name"], "PermissionRequest");
+            assert_eq!(mark["metadata"]["test_context"], "preserved");
+            assert!(mark["metadata"].get("agent_version").is_none());
+        }
+        assert!(mark["metadata"].get("owner").is_none());
+        assert!(!mark.to_string().contains("client-a"));
+        assert_eq!(
+            mark["data"].get("harness_permission_mode"),
+            request
+                .payload
+                .get("permission_mode")
+                .filter(|value| value.as_str().is_some_and(|mode| !mode.is_empty()))
+        );
+        assert!(mark["metadata"].get("permission_mode").is_none());
+        match reason_fragment {
+            Some(fragment) => assert!(
+                mark["data"]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains(fragment)),
+                "unexpected policy reason: {}",
+                mark["data"]["reason"]
+            ),
+            None => assert!(mark["data"].get("reason").is_none()),
+        }
+    }
+
+    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
+}
+
 #[test]
 fn routing_identity_enrichment_replaces_untrusted_reserved_headers() {
     let mut request = LlmRequest {

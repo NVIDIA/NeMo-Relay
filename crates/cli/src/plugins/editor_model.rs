@@ -5,9 +5,11 @@
 
 use std::path::Path;
 
+use nemo_relay::api::resource_metrics::ResourceMetricsConfig;
 use nemo_relay::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
+use nemo_relay::plugins::resource_metrics::RESOURCE_METRICS_PLUGIN_KIND;
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
@@ -46,6 +48,7 @@ pub(super) struct ComponentEditorState<T> {
 #[derive(Debug)]
 pub(super) enum EditableComponent {
     Observability(Box<ComponentEditorState<ObservabilityConfig>>),
+    ResourceMetrics(Box<ComponentEditorState<ResourceMetricsConfig>>),
     Adaptive(Box<ComponentEditorState<AdaptiveConfig>>),
     NemoGuardrails(Box<ComponentEditorState<NeMoGuardrailsConfig>>),
     PiiRedaction(Box<ComponentEditorState<PiiRedactionConfig>>),
@@ -55,6 +58,7 @@ impl EditableComponent {
     pub(super) fn label(&self) -> &'static str {
         match self {
             Self::Observability(_) => "Observability",
+            Self::ResourceMetrics(_) => "Resource Metrics",
             Self::Adaptive(_) => "Adaptive",
             Self::NemoGuardrails(_) => "NeMo Guardrails (Deprecated)",
             Self::PiiRedaction(_) => "PII Redaction",
@@ -64,6 +68,7 @@ impl EditableComponent {
     pub(super) fn fields(&self) -> &'static [EditorFieldSpec] {
         match self {
             Self::Observability(_) => ObservabilityConfig::editor_schema().fields,
+            Self::ResourceMetrics(_) => ResourceMetricsConfig::editor_schema().fields,
             Self::Adaptive(_) => AdaptiveConfig::editor_schema().fields,
             Self::NemoGuardrails(_) => NeMoGuardrailsConfig::editor_schema().fields,
             Self::PiiRedaction(_) => PiiRedactionConfig::editor_schema().fields,
@@ -73,6 +78,7 @@ impl EditableComponent {
     pub(super) fn enabled(&self) -> bool {
         match self {
             Self::Observability(state) => state.enabled,
+            Self::ResourceMetrics(state) => state.enabled,
             Self::Adaptive(state) => state.enabled,
             Self::NemoGuardrails(state) => state.enabled,
             Self::PiiRedaction(state) => state.enabled,
@@ -82,6 +88,7 @@ impl EditableComponent {
     pub(super) fn toggle_enabled(&mut self) {
         match self {
             Self::Observability(state) => state.toggle_enabled(),
+            Self::ResourceMetrics(state) => state.toggle_enabled(),
             Self::Adaptive(state) => state.toggle_enabled(),
             Self::NemoGuardrails(state) => state.toggle_enabled(),
             Self::PiiRedaction(state) => state.toggle_enabled(),
@@ -91,6 +98,7 @@ impl EditableComponent {
     pub(super) fn set_enabled(&mut self, enabled: bool) {
         match self {
             Self::Observability(state) => state.set_enabled(enabled),
+            Self::ResourceMetrics(state) => state.set_enabled(enabled),
             Self::Adaptive(state) => state.set_enabled(enabled),
             Self::NemoGuardrails(state) => state.set_enabled(enabled),
             Self::PiiRedaction(state) => state.set_enabled(enabled),
@@ -100,6 +108,7 @@ impl EditableComponent {
     pub(super) fn reset_enabled(&mut self) {
         match self {
             Self::Observability(state) => state.reset_enabled(),
+            Self::ResourceMetrics(state) => state.reset_enabled(),
             Self::Adaptive(state) => state.reset_enabled(),
             Self::NemoGuardrails(state) => state.reset_enabled(),
             Self::PiiRedaction(state) => state.reset_enabled(),
@@ -109,6 +118,7 @@ impl EditableComponent {
     pub(super) fn summary(&self) -> String {
         match self {
             Self::Observability(state) => observability_summary(state),
+            Self::ResourceMetrics(state) => resource_metrics_summary(state),
             Self::Adaptive(state) => adaptive_summary(state),
             Self::NemoGuardrails(state) => nemo_guardrails_summary(state),
             Self::PiiRedaction(state) => pii_redaction_summary(state),
@@ -118,6 +128,9 @@ impl EditableComponent {
     pub(super) fn field_configured(&self, field: EditorFieldSpec) -> bool {
         match self {
             Self::Observability(state) => section_configured(&state.config, field),
+            Self::ResourceMetrics(state) => {
+                config_field_configured(&state.config, field).unwrap_or(false)
+            }
             Self::Adaptive(state) => config_field_configured(&state.config, field).unwrap_or(false),
             Self::NemoGuardrails(state) => {
                 config_field_configured(&state.config, field).unwrap_or(false)
@@ -131,6 +144,10 @@ impl EditableComponent {
     pub(super) fn reset_field(&mut self, field: EditorFieldSpec) -> Result<(), CliError> {
         match self {
             Self::Observability(state) => {
+                reset_config_field(&mut state.config, field)?;
+                state.mark_config_touched();
+            }
+            Self::ResourceMetrics(state) => {
                 reset_config_field(&mut state.config, field)?;
                 state.mark_config_touched();
             }
@@ -159,6 +176,10 @@ impl EditableComponent {
                 remove_struct_field(&mut state.config, field.name)?;
                 state.mark_config_touched();
             }
+            Self::ResourceMetrics(state) => {
+                remove_struct_field(&mut state.config, field.name)?;
+                state.mark_config_touched();
+            }
             Self::Adaptive(state) => {
                 remove_struct_field(&mut state.config, field.name)?;
                 state.mark_config_touched();
@@ -178,6 +199,7 @@ impl EditableComponent {
     pub(super) fn store(&self, config: &mut PluginConfig) -> Result<(), CliError> {
         match self {
             Self::Observability(state) => store_observability_state(config, state),
+            Self::ResourceMetrics(state) => store_resource_metrics_state(config, state),
             Self::Adaptive(state) => store_adaptive_state(config, state),
             Self::NemoGuardrails(state) => store_nemo_guardrails_state(config, state),
             Self::PiiRedaction(state) => store_pii_redaction_state(config, state),
@@ -206,6 +228,7 @@ pub(super) fn editable_components(
 ) -> Result<Vec<EditableComponent>, CliError> {
     let components = vec![
         EditableComponent::Observability(Box::new(component_observability_state(config)?)),
+        EditableComponent::ResourceMetrics(Box::new(component_resource_metrics_state(config)?)),
         EditableComponent::Adaptive(Box::new(component_adaptive_state(config)?)),
         EditableComponent::NemoGuardrails(Box::new(component_nemo_guardrails_state(config)?)),
         EditableComponent::PiiRedaction(Box::new(component_pii_redaction_state(config)?)),
@@ -397,6 +420,12 @@ pub(super) fn component_observability_state(
     component_editor_state(config, OBSERVABILITY_PLUGIN_KIND, true)
 }
 
+pub(super) fn component_resource_metrics_state(
+    config: &PluginConfig,
+) -> Result<ComponentEditorState<ResourceMetricsConfig>, CliError> {
+    component_editor_state(config, RESOURCE_METRICS_PLUGIN_KIND, false)
+}
+
 pub(super) fn component_adaptive_state(
     config: &PluginConfig,
 ) -> Result<ComponentEditorState<AdaptiveConfig>, CliError> {
@@ -426,6 +455,22 @@ pub(super) fn store_observability_state(
             state.enabled,
             observability_config_map(&state.config)?,
             merge_observability_editor_config,
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn store_resource_metrics_state(
+    config: &mut PluginConfig,
+    state: &ComponentEditorState<ResourceMetricsConfig>,
+) -> Result<(), CliError> {
+    if state.should_store(state.config_touched) {
+        store_component_editor_config(
+            config,
+            RESOURCE_METRICS_PLUGIN_KIND,
+            state.enabled,
+            resource_metrics_config_map(&state.config)?,
+            merge_resource_metrics_editor_config,
         );
     }
     Ok(())
@@ -778,6 +823,18 @@ pub(super) fn observability_config_map(
     }
 }
 
+pub(super) fn resource_metrics_config_map(
+    config: &ResourceMetricsConfig,
+) -> Result<Map<String, Value>, CliError> {
+    let value = serde_json::to_value(config).map_err(serde_error)?;
+    match value {
+        Value::Object(map) => Ok(map),
+        _ => Err(CliError::Config(
+            "resource_metrics config must serialize to an object".into(),
+        )),
+    }
+}
+
 pub(super) fn adaptive_config_map(config: &AdaptiveConfig) -> Result<Map<String, Value>, CliError> {
     let value = serde_json::to_value(config).map_err(serde_error)?;
     match value {
@@ -837,6 +894,14 @@ pub(super) fn merge_observability_editor_config(
         &observability_editor_fields_with_version(),
         ObservabilityConfig::editor_schema(),
     );
+}
+
+pub(super) fn merge_resource_metrics_editor_config(
+    existing: &mut Map<String, Value>,
+    edited: Map<String, Value>,
+) {
+    let schema = ResourceMetricsConfig::editor_schema();
+    merge_known_editor_object(existing, edited, &nested_editor_keys(schema), schema);
 }
 
 pub(super) fn merge_adaptive_editor_config(
@@ -1062,6 +1127,28 @@ pub(super) fn observability_summary(state: &ComponentEditorState<ObservabilityCo
         } else {
             enabled_sections.join(", ")
         }
+    )
+}
+
+pub(super) fn resource_metrics_summary(
+    state: &ComponentEditorState<ResourceMetricsConfig>,
+) -> String {
+    let config = &state.config;
+    format!(
+        "component {}, scope {}, polling {}, categories cpu={} memory={} process={} disk={} gpu={} network={}",
+        if state.enabled { "enabled" } else { "disabled" },
+        config.measurement_scope.as_str(),
+        if config.polling.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        config.cpu.enabled,
+        config.memory.enabled,
+        config.process.enabled,
+        config.disk.enabled,
+        config.gpu.enabled,
+        config.network.enabled,
     )
 }
 

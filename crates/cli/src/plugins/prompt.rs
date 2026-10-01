@@ -167,6 +167,10 @@ fn edit_component_field(
             edit_section(theme, &mut state.config, field)?;
             state.mark_config_touched();
         }
+        EditableComponent::ResourceMetrics(state) => {
+            edit_config_field(theme, &mut state.config, field)?;
+            state.mark_config_touched();
+        }
         EditableComponent::Adaptive(state) => {
             edit_config_field(theme, &mut state.config, field)?;
             state.mark_config_touched();

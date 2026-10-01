@@ -19,6 +19,7 @@ The main entry points are:
 - ``nemo_relay.observability`` for observability component configuration helpers
 - ``nemo_relay.pii_redaction`` for PII redaction component configuration helpers
 - ``nemo_relay.model_pricing`` for model pricing component configuration helpers
+- ``nemo_relay.resource_metrics`` for resource metric snapshots
 
 Top-level exports also include:
 
@@ -317,6 +318,7 @@ from nemo_relay import (  # noqa: E402
     observability,
     pii_redaction,
     plugin,
+    resource_metrics,
     runtime_registrations,
     scope,
     scope_local,
@@ -774,6 +776,7 @@ __all__ = [
     "observability",
     "pii_redaction",
     "model_pricing",
+    "resource_metrics",
     # Scope stack isolation
     "ScopeStack",
     "PropagationContext",
