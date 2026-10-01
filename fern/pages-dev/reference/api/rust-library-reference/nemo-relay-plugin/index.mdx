@@ -33,6 +33,9 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [EventCategory](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventcategory): Semantic category carried by ATOF `category`.
 - [EventSanitizeFields](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventsanitizefields): Observability fields that event sanitizers may rewrite.
 - [LlmAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmattributes): Bitflags that modify LLM-call behavior and observability.
+- [LlmExecutionContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmexecutioncontext): Per-call codec context delivered to an LLM execution intercept.
+- [LlmExecutionRequestCodec](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmexecutionrequestcodec): Invocation-lifetime request codec facade for an LLM execution intercept.
+- [LlmExecutionResponseCodec](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmexecutionresponsecodec): Response codec for one non-streaming LLM execution intercept.
 - [LlmNext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmnext): Cloneable asynchronous LLM execution continuation.
 - [LlmOptimizationContribution](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationcontribution): One optimizer's evidence for a change to an LLM call.
 - [LlmOptimizationKind](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationkind): Open, forward-compatible optimization classification.
@@ -42,7 +45,9 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [LlmOptimizationTokenImpact](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationtokenimpact): Shared token evidence that Relay can aggregate without understanding a plugin payload.
 - [LlmOptimizationTokens](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationtokens): Token quantities retained independently from pricing arithmetic.
 - [LlmRequest](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmrequest): JSON-shaped LLM request payload passed through the runtime.
+- [LlmRequestContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmrequestcontext): Request codec context for one LLM execution intercept invocation.
 - [LlmRequestInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmrequestinterceptoutcome): Result of an LLM request intercept that can schedule lifecycle marks.
+- [LlmResponseContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmresponsecontext): Response codec context for one non-streaming LLM execution intercept invocation.
 - [LlmSanitizeRequestCodec](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmsanitizerequestcodec): Safe completion-backed request codec facade for typed native plugins.
 - [LlmSanitizeRequestContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmsanitizerequestcontext): Per-call request codec context delivered to an LLM sanitizer.
 - [LlmSanitizeResponseCodec](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmsanitizeresponsecodec): Safe completion-backed response codec facade for typed native plugins.
@@ -60,9 +65,13 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [NemoRelayNativeHostApiV4](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv4): ABI-v4 host extension for typed asynchronous middleware, mark options, diagnostics, and activation-owned dynamic gate control.
 - [NemoRelayNativeHostApiV5](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv5): ABI-v5 host extension for context-aware raw tool execution intercepts.
 - [NemoRelayNativeHostApiV6](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv6): ABI-v6 host extension for operational logging.
+- [NemoRelayNativeHostApiV7](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv7): ABI-v7 host table for context-aware LLM execution intercept callbacks.
 - [NemoRelayNativeLlmAsyncStream](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmasyncstream): Opaque pull-based downstream LLM stream owned by the host.
-- [NemoRelayNativeLlmRequestCodec](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmrequestcodec): Opaque callback-scoped request codec capability owned by the host.
+- [NemoRelayNativeLlmExecutionContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmexecutioncontext): Codec context passed to native LLM execution intercept callbacks.
+- [NemoRelayNativeLlmRequestCodec](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmrequestcodec): Opaque host-owned request codec capability.
+- [NemoRelayNativeLlmRequestContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmrequestcontext): Request codec context passed to a native LLM execution intercept.
 - [NemoRelayNativeLlmResponseCodec](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmresponsecodec): Opaque callback-scoped response codec capability owned by the host.
+- [NemoRelayNativeLlmResponseContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmresponsecontext): Response codec context passed to a native non-streaming LLM execution intercept.
 - [NemoRelayNativeLlmSanitizeRequestContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmsanitizerequestcontext): Per-call LLM sanitizer context passed over the native ABI.
 - [NemoRelayNativeLlmSanitizeResponseContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmsanitizeresponsecontext): Per-call response sanitizer context passed over the native ABI.
 - [NemoRelayNativeLlmStreamV1](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmstreamv1): Native LLM JSON stream handle table.
@@ -121,6 +130,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [NEMO_RELAY_NATIVE_ABI_VERSION](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version): Native plugin ABI version supported by this crate.
 - [NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version-async-middleware): ABI version that introduced completion-based asynchronous middleware.
 - [NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version-legacy): Legacy native plugin ABI accepted by Relay hosts for compatibility.
+- [NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version-llm-execution-context): ABI version that introduced uniform LLM execution codec context.
 - [NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version-logging): ABI version that introduced host-routed operational logging.
 - [NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version-runtime-control): ABI version that introduced runtime diagnostics and dynamic gate control.
 - [NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version-tool-execution-context): ABI version that introduced context-aware raw tool execution intercepts.
@@ -147,10 +157,11 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [Json](/reference/api/rust-library-reference/nemo-relay-plugin/type-json): Type alias for [`serde_json::Value`](https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html), used as the universal JSON representation throughout NeMo Relay APIs.
 - [LlmJsonAsyncStream](/reference/api/rust-library-reference/nemo-relay-plugin/type-llmjsonasyncstream): Asynchronous JSON stream returned by a native typed stream interceptor.
 - [LlmJsonStream](/reference/api/rust-library-reference/nemo-relay-plugin/type-llmjsonstream): Synchronous JSON chunk stream used by native LLM stream intercept helpers.
+- [NemoRelayNativeAsyncLlmExecutionCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeasyncllmexecutioncb): Completion-based native LLM execution callback.
 - [NemoRelayNativeAsyncLlmStreamOpenCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeasyncllmstreamopencb): Receives the result of asynchronously opening a downstream LLM stream.
 - [NemoRelayNativeAsyncLlmStreamPullCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeasyncllmstreampullcb): Receives one item from a pull-based downstream LLM stream.
 - [NemoRelayNativeAsyncMiddlewareCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeasyncmiddlewarecb): Completion-based native middleware callback.
-- [NemoRelayNativeAsyncNextResultCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeasyncnextresultcb): Receives one completion from a unary execution-continuation invocation.
+- [NemoRelayNativeAsyncNextResultCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeasyncnextresultcb): Receives one completion from a non-streaming execution-continuation invocation.
 - [NemoRelayNativeAsyncNextStreamCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeasyncnextstreamcb): Receives one downstream stream item. `chunk_json` is non-null for a chunk, `error` is non-null for failure or consumer cancellation, and `done` marks clean completion. Unless the callback itself returns `false`, the host invokes one terminal callback so the plugin can reclaim `user_data`. Return `false` to cancel downstream production after the current callback; in that case, reclaim `user_data` before returning because no later callback is made.
 - [NemoRelayNativeAsyncStreamMiddlewareCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeasyncstreammiddlewarecb): Incremental native LLM stream intercept callback.
 - [NemoRelayNativeConditionalMiddlewareCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeconditionalmiddlewarecb): Native callback deciding whether a matching runtime registration is eligible.

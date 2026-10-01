@@ -2,7 +2,7 @@
 title: "Struct Plugin Context"
 sidebar-title: "PluginContext"
 description: "Borrowed safe wrapper around a host plugin registration context."
-position: 57
+position: 66
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -101,13 +101,13 @@ Registers an asynchronous LLM request intercept.
 
 #### `register_llm_execution_intercept`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_execution_intercept&lt;F, Fut&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"struct-llmnext\">LlmNext</a>) -&gt; Fut + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n    Fut: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"type-result\">Result</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Json</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_execution_intercept&lt;F, Fut&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"struct-llmexecutioncontext\">LlmExecutionContext</a>, <a href=\"struct-llmnext\">LlmNext</a>) -&gt; Fut + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n    Fut: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"type-result\">Result</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Json</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
 
 Registers an asynchronous LLM execution intercept.
 
 #### `register_llm_stream_execution_intercept`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_stream_execution_intercept&lt;F, Fut&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"struct-llmstreamnext\">LlmStreamNext</a>) -&gt; Fut + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n    Fut: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"type-result\">Result</a>&lt;<a href=\"type-llmjsonasyncstream\">LlmJsonAsyncStream</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_stream_execution_intercept&lt;F, Fut&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"struct-llmexecutioncontext\">LlmExecutionContext</a>, <a href=\"struct-llmstreamnext\">LlmStreamNext</a>) -&gt; Fut + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n    Fut: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"type-result\">Result</a>&lt;<a href=\"type-llmjsonasyncstream\">LlmJsonAsyncStream</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
 
 Registers an asynchronous LLM stream execution intercept.
 
@@ -289,7 +289,7 @@ Registers a raw LLM execution intercept callback.
 
 ##### Safety
 
-`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`. Registration consumes that ownership even when ABI v7 is unavailable.
 
 #### `register_llm_stream_execution_intercept_raw`
 
@@ -299,7 +299,7 @@ Registers a raw LLM stream execution intercept callback.
 
 ##### Safety
 
-`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`. Registration consumes that ownership even when ABI v7 is unavailable.
 
 #### `register_async_middleware_raw`
 
@@ -313,6 +313,16 @@ Plugins built against older hosts receive [`NemoRelayStatus::InvalidArg`](/refer
 
 `cb`, `user_data`, and `free_fn` must remain valid until the host deregisters the callback or invokes `free_fn`. This call consumes the `user_data` ownership even when it rejects the host ABI. A callback returning `Pending` must settle and release its completion/next references. [`NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaynativeasyncmiddlewarekind) is rejected; use [`Self::register_async_stream_middleware_raw`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-plugincontext) instead.
 
+#### `register_async_llm_execution_intercept_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_async_llm_execution_intercept_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativeasyncllmexecutioncb\">NemoRelayNativeAsyncLlmExecutionCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a completion-based asynchronous LLM execution intercept.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid until the host deregisters the callback or invokes `free_fn`. This call consumes the `user_data` ownership even when it rejects the host ABI. A callback returning `Pending` must settle and release its completion and `next` references exactly once.
+
 #### `register_async_stream_middleware_raw`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_async_stream_middleware_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativeasyncstreammiddlewarecb\">NemoRelayNativeAsyncStreamMiddlewareCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
@@ -321,4 +331,4 @@ Registers an incremental completion-based LLM stream intercept.
 
 ##### Safety
 
-The callback and user data must remain valid until deregistration or `free_fn`; this call consumes `user_data` even when it rejects the host ABI. Callback-owned `next` and `stream` handles must each be released exactly once. Stream pushes and rejection are nonblocking: Retry only [`NemoRelayStatus::Backpressured`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus) operations. The output stream owns the callback lifetime. `next` may be invoked repeatedly or concurrently until that stream settles; Relay then rejects or cancels unfinished and later calls.
+The callback and user data must remain valid until deregistration or `free_fn`; this call consumes `user_data` even when it rejects the host ABI. Callback-owned `next` and `stream` handles must each be released exactly once. Stream pushes and rejection are nonblocking: Retry only [`NemoRelayStatus::Backpressured`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus) operations. The output stream owns the callback lifetime. `next` may be invoked repeatedly or concurrently until that stream settles; Relay then rejects or cancels unfinished and later calls. This execution-specific callback requires native ABI v7 because its callback context and stream-scoped request-codec operations are part of that ABI.

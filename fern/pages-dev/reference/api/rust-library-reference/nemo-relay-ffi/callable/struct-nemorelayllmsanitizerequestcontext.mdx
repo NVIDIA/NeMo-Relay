@@ -1,8 +1,8 @@
 ---
 title: "Struct Nemo Relay LlmSanitize Request Context"
 sidebar-title: "NemoRelayLlmSanitizeRequestContext"
-description: "Codec identity supplied to an LLM sanitizer. `codec_id` is null for `None` and `Opaque`, and is valid only for the duration of the callback."
-position: 1
+description: "Request codec context shared by LLM sanitizer and execution callbacks. `codec_id` is null for `None` and `Opaque`, and is valid only for the duration of the callback."
+position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayLlmSanitizeRequestContext &#123;\n    pub codec_kind: <a href=\"enum-nemorelayllmsanitizecodeckind\">NemoRelayLlmSanitizeCodecKind</a>,\n    pub codec_id: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    pub codec: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffillmsanitizerequestcodec\">FfiLlmSanitizeRequestCodec</a>,\n&#125;"}} /></pre>
 
-Codec identity supplied to an LLM sanitizer. `codec_id` is null for `None` and `Opaque`, and is valid only for the duration of the callback.
+Request codec context shared by LLM sanitizer and execution callbacks. `codec_id` is null for `None` and `Opaque`, and is valid only for the duration of the callback.
 
 ## Fields
 

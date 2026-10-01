@@ -534,7 +534,7 @@ export interface ResourceMetricsSnapshot {
 
 ### `LlmSanitizeRequestContext`
 
-Codec context available while an LLM request is sanitized.
+Request codec context shared by sanitizer and execution callbacks.
 
 ```ts
 export interface LlmSanitizeRequestContext {
@@ -546,13 +546,26 @@ export interface LlmSanitizeRequestContext {
 
 ### `LlmSanitizeResponseContext`
 
-Codec context available while an LLM response is sanitized.
+Response codec context shared by sanitizer and execution callbacks.
 
 ```ts
 export interface LlmSanitizeResponseContext {
   codec: LlmCodecIdentity;
   /** Resolve the active codec for this callback. Do not retain the result after the callback returns. */
   resolveCodec(): import('./typed').LlmResponseCodec | null;
+}
+```
+
+### `LlmExecutionContext`
+
+Codec capabilities for one managed LLM execution intercept invocation.
+
+```ts
+export interface LlmExecutionContext {
+  /** Request codec identity plus optional decode and encode capability. */
+  requestCodec: LlmRequestContext;
+  /** Unary response codec identity plus optional decode capability; `null` for streaming execution. */
+  responseCodec: LlmResponseContext | null;
 }
 ```
 
@@ -1963,10 +1976,10 @@ export declare function deregisterLlmRequestIntercept(name: string): boolean
 
 Register an LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
+The `callable` receives the request, codec context, and a `next` function. Call `next(request)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
 
 ```ts
-export declare function registerLlmExecutionIntercept(name: string, priority: number, callable: (request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>): void
+export declare function registerLlmExecutionIntercept(name: string, priority: number, callable: (request: Json, context: LlmExecutionContext, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>): void
 ```
 
 ### `deregisterLlmExecutionIntercept`
@@ -1983,10 +1996,10 @@ export declare function deregisterLlmExecutionIntercept(name: string): boolean
 
 Register a streaming LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
+The `callable` receives the request, request-codec context, and a `next` function. The response codec is `null` because streaming execution has no complete-response codec. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
 
 ```ts
-export declare function registerLlmStreamExecutionIntercept(name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>): void
+export declare function registerLlmStreamExecutionIntercept(name: string, priority: number, callable: (request: Json, context: LlmExecutionContext, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>): void
 ```
 
 ### `deregisterLlmStreamExecutionIntercept`
@@ -2281,10 +2294,10 @@ export declare function scopeDeregisterLlmRequestIntercept(scopeUuid: string, na
 
 Register a scope-local LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
+The `callable` receives the request, codec context, and a `next` function. Call `next(request)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
 
 ```ts
-export declare function scopeRegisterLlmExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>): void
+export declare function scopeRegisterLlmExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (request: Json, context: LlmExecutionContext, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>): void
 ```
 
 ### `scopeDeregisterLlmExecutionIntercept`
@@ -2301,10 +2314,10 @@ export declare function scopeDeregisterLlmExecutionIntercept(scopeUuid: string, 
 
 Register a scope-local streaming LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
+The `callable` receives the request, request-codec context, and a `next` function. The response codec is `null` because streaming execution has no complete-response codec. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
 
 ```ts
-export declare function scopeRegisterLlmStreamExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>): void
+export declare function scopeRegisterLlmStreamExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (request: Json, context: LlmExecutionContext, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>): void
 ```
 
 ### `scopeDeregisterLlmStreamExecutionIntercept`
@@ -2480,6 +2493,22 @@ export type LlmCodecIdentity =
   | { kind: 'none' }
   | {
       kind: 'builtin';
+```
+
+### `LlmRequestContext`
+
+Request codec context exposed to an LLM execution intercept.
+
+```ts
+export type LlmRequestContext = LlmSanitizeRequestContext;
+```
+
+### `LlmResponseContext`
+
+Response codec context exposed to an LLM execution intercept.
+
+```ts
+export type LlmResponseContext = LlmSanitizeResponseContext;
 ```
 
 ### `EventMetadataScalar`

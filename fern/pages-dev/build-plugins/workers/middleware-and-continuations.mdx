@@ -313,6 +313,7 @@ from collections.abc import AsyncIterator
 from nemo_relay_plugin import (
     Json,
     LlmExecutionCallback,
+    LlmExecutionContext,
     LlmNext,
     LlmRequest,
     LlmStreamExecutionCallback,
@@ -344,7 +345,13 @@ async def tool_execution(
         pending_marks=marks,
     )
 
-async def llm_execution(_name: str, request: LlmRequest, next_call: LlmNext) -> Json:
+async def llm_execution(
+    _name: str,
+    request: LlmRequest,
+    context: LlmExecutionContext,
+    next_call: LlmNext,
+) -> Json:
+    assert context.response_codec is not None
     content = request.get("content")
     repeat = isinstance(content, dict) and content.get("repeat_downstream") is True
     if repeat:
@@ -359,8 +366,12 @@ async def llm_execution(_name: str, request: LlmRequest, next_call: LlmNext) -> 
     return await next_call.call(request)
 
 async def llm_stream_execution(
-    _name: str, request: LlmRequest, next_call: LlmStreamNext
+    _name: str,
+    request: LlmRequest,
+    context: LlmExecutionContext,
+    next_call: LlmStreamNext,
 ) -> AsyncIterator[Json]:
+    assert context.response_codec is None
     async for chunk in next_call.call(request):
         if isinstance(chunk, dict):
             yield {**chunk, "plugin_stream": True}
@@ -405,7 +416,8 @@ context.register_tool_execution_intercept(
 context.register_llm_execution_intercept(
     "documentation_llm_execution",
     config.execution.priority,
-    move |_model, request, next| async move {
+    move |_model, request, context, next| async move {
+        debug_assert!(context.response_codec().is_some());
         if request.content
             .get("repeat_downstream")
             .and_then(Json::as_bool)
@@ -426,7 +438,8 @@ context.register_llm_execution_intercept(
 context.register_llm_stream_execution_intercept(
     "documentation_llm_stream_execution",
     config.execution.priority,
-    move |_model, request, next| async move {
+    move |_model, request, context, next| async move {
+        debug_assert!(context.response_codec().is_none());
         let downstream = next.call(request).await?;
         let mapped: JsonStream = Box::pin(downstream.map(|chunk| {
             chunk.map(|mut value| {
@@ -442,6 +455,15 @@ context.register_llm_stream_execution_intercept(
 ```
 </Tab>
 </Tabs>
+
+`LlmExecutionContext` describes the codecs selected by the host for this
+managed invocation. `request_codec` is always present as an identity-bearing
+subcontext; `resolve_codec()` returns a request decode/encode proxy only when
+Relay resolved a codec. Unary execution also provides `response_codec` with an
+optional decode proxy. Streaming execution sets `response_codec` to `None`
+instead of implying that individual chunks can be decoded as completed
+responses. Codec proxies are invocation-scoped and must not be retained after
+the callback or returned stream finishes.
 
 The second unary result is awaited even though the first response is selected. That
 prevents an unobserved continuation from outliving the worker callback. In the stream

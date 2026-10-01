@@ -1,0 +1,26 @@
+---
+title: "Struct Nemo Relay LlmExecution Context"
+sidebar-title: "NemoRelayLlmExecutionContext"
+description: "Directional codec context supplied to an LLM execution intercept."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayLlmExecutionContext &#123;\n    pub request_codec: <a href=\"type-nemorelayllmrequestcontext\">NemoRelayLlmRequestContext</a>,\n    pub response_codec: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"type-nemorelayllmresponsecontext\">NemoRelayLlmResponseContext</a>,\n&#125;"}} /></pre>
+
+Directional codec context supplied to an LLM execution intercept.
+
+`request_codec` is always present. `response_codec` is non-null for unary execution and null for streaming execution, where Relay has no completed response to decode. Pointers reachable from this value are borrowed and valid only until the intercept callback returns.
+
+## Fields
+
+### `request_codec: NemoRelayLlmRequestContext`
+
+Active request codec identity and capability.
+
+### `response_codec: *const NemoRelayLlmResponseContext`
+
+Active unary-response codec context, or null for streaming execution.

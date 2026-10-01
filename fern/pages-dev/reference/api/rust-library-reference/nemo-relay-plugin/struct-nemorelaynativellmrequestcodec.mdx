@@ -1,8 +1,8 @@
 ---
 title: "Struct Nemo Relay Native LlmRequest Codec"
 sidebar-title: "NemoRelayNativeLlmRequestCodec"
-description: "Opaque callback-scoped request codec capability owned by the host."
-position: 44
+description: "Opaque host-owned request codec capability."
+position: 51
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -13,4 +13,6 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 pub struct NemoRelayNativeLlmRequestCodec { /* private fields */ }
 ```
 
-Opaque callback-scoped request codec capability owned by the host.
+Opaque host-owned request codec capability.
+
+Its valid lifetime is defined by the callback that receives it. See [`NemoRelayNativeLlmExecutionContext`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmexecutioncontext) for the streaming exception.

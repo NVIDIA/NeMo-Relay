@@ -35,6 +35,7 @@ Cancellation is cooperative. Dropping an async callback future releases its Rust
 - [EmitMarkOptions](/reference/api/rust-library-reference/nemo-relay-worker/struct-emitmarkoptions): Optional fields supported by the additive `grpc-v1` mark-emission request.
 - [EventCategory](/reference/api/rust-library-reference/nemo-relay-worker/struct-eventcategory): Semantic category carried by ATOF `category`.
 - [EventSanitizeFields](/reference/api/rust-library-reference/nemo-relay-worker/struct-eventsanitizefields): Observability fields that event sanitizers may rewrite.
+- [LlmExecutionContext](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmexecutioncontext): Invocation-scoped codec identities and operations for an LLM execution interceptor.
 - [LlmNext](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmnext): Continuation handle for LLM execution intercepts.
 - [LlmOptimizationContribution](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmoptimizationcontribution): One optimizer's evidence for a change to an LLM call.
 - [LlmOptimizationKind](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmoptimizationkind): Open, forward-compatible optimization classification.
@@ -45,8 +46,8 @@ Cancellation is cooperative. Dropping an async callback future releases its Rust
 - [LlmOptimizationTokens](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmoptimizationtokens): Token quantities retained independently from pricing arithmetic.
 - [LlmRequest](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmrequest): JSON-shaped LLM request payload passed through the runtime.
 - [LlmRequestInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmrequestinterceptoutcome): Result of an LLM request intercept that can schedule lifecycle marks.
-- [LlmSanitizeRequestContext](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmsanitizerequestcontext): Active codec context supplied to an LLM request sanitizer.
-- [LlmSanitizeResponseContext](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmsanitizeresponsecontext): Active codec context supplied to an LLM response sanitizer.
+- [LlmSanitizeRequestContext](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmsanitizerequestcontext): Active codec identity and capability for an LLM request.
+- [LlmSanitizeResponseContext](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmsanitizeresponsecontext): Active codec identity and capability for an LLM response.
 - [LlmStreamNext](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmstreamnext): Continuation handle for LLM stream execution intercepts.
 - [MetricEnvelope](/reference/api/rust-library-reference/nemo-relay-worker/struct-metricenvelope): Payload stored in a mark using [`METRIC_DATA_SCHEMA_NAME`](/reference/api/rust-library-reference/nemo-relay-worker/constant-metric-data-schema-name).
 - [MetricMeasurement](/reference/api/rust-library-reference/nemo-relay-worker/struct-metricmeasurement): One recording operation in a Relay metric mark.
@@ -104,4 +105,6 @@ Cancellation is cooperative. Dropping an async callback future releases its Rust
 - [BoxFutureResult](/reference/api/rust-library-reference/nemo-relay-worker/type-boxfutureresult): Boxed future returned by async worker callbacks.
 - [Json](/reference/api/rust-library-reference/nemo-relay-worker/type-json): Type alias for [`serde_json::Value`](https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html), used as the universal JSON representation throughout NeMo Relay APIs.
 - [JsonStream](/reference/api/rust-library-reference/nemo-relay-worker/type-jsonstream): Boxed JSON stream returned by streaming worker callbacks.
+- [LlmRequestContext](/reference/api/rust-library-reference/nemo-relay-worker/type-llmrequestcontext): Request codec context supplied to an LLM execution intercept.
+- [LlmResponseContext](/reference/api/rust-library-reference/nemo-relay-worker/type-llmresponsecontext): Response codec context supplied to an LLM execution intercept.
 - [Result](/reference/api/rust-library-reference/nemo-relay-worker/type-result): SDK result type.

@@ -1,0 +1,24 @@
+---
+title: "Type Alias LlmRequest Context"
+sidebar-title: "LlmRequestContext"
+description: "Request codec context supplied to an LLM execution intercept."
+position: 69
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type LlmRequestContext = <a href=\"struct-llmsanitizerequestcontext\">LlmSanitizeRequestContext</a>;"}} /></pre>
+
+Request codec context supplied to an LLM execution intercept.
+
+## Aliased Type
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LlmRequestContext &#123;\n    pub codec: <a href=\"enum-llmcodecidentity\">LlmCodecIdentity</a>,\n    /* private fields */\n&#125;"}} /></pre>
+
+## Fields
+
+### `codec: LlmCodecIdentity`
+
+Identity of the active codec.

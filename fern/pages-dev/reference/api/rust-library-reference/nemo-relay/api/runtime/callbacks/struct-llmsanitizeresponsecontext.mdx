@@ -1,8 +1,8 @@
 ---
 title: "Struct LlmSanitize Response Context"
 sidebar-title: "LlmSanitizeResponseContext"
-description: "Per-call codec context for LLM response sanitize guardrails."
-position: 14
+description: "Per-call codec identity and capability for an LLM response."
+position: 16
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -13,7 +13,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 pub struct LlmSanitizeResponseContext { /* private fields */ }
 ```
 
-Per-call codec context for LLM response sanitize guardrails.
+Per-call codec identity and capability for an LLM response.
 
 The context distinguishes no codec, Relay built-ins, runtime-registered codecs, and active codecs with no stable identity.
 
@@ -35,7 +35,7 @@ Identity-only contexts do not carry a codec handle, so [`Self::resolve_codec`](/
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn for_response_codec(codec: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../../../codec/traits/trait-llmresponsecodec\">LlmResponseCodec</a>&gt;&gt;) -&gt; Self"}} /></pre>
 
-Construct response-sanitizer context from the active response codec.
+Construct response codec context from the active response codec.
 
 #### `codec`
 

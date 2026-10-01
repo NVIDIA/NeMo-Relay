@@ -63,7 +63,7 @@ Return the diagnostic with `code`, when present.
 
 ### `LlmSanitizeRequestContext`
 
-Structured per-call context provided to an LLM request sanitizer.
+Request codec context shared by sanitizer and execution callbacks.
 
 #### Methods
 
@@ -77,7 +77,7 @@ Return the active request-codec proxy for this invocation.
 
 ### `LlmSanitizeResponseContext`
 
-Structured per-call context provided to an LLM response sanitizer.
+Response codec context shared by sanitizer and execution callbacks.
 
 #### Methods
 
@@ -124,6 +124,10 @@ async def decode(response: Json) -> Json
 ```
 
 Decode a wire response with the active host codec.
+
+### `LlmExecutionContext`
+
+Directional codec context for one LLM execution invocation.
 
 ### `DataSchema`
 
@@ -837,6 +841,8 @@ Run a local `grpc-v1` worker until the Relay host shuts it down.
 - `LlmExecutionCallback`
 - `LlmRequest`
 - `LlmRequestCallback`
+- `LlmRequestContext`
+- `LlmResponseContext`
 - `LlmSanitizeRequestCallback`
 - `LlmSanitizeResponseCallback`
 - `LlmStreamExecutionCallback`
