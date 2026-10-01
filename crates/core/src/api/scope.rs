@@ -452,7 +452,8 @@ fn pop_scope_inner(
 /// # Errors
 /// Returns an error when the runtime owner check fails or when internal state
 /// cannot be read safely. Returns [`FlowError::InvalidArgument`] when a typed
-/// severity is provided with non-object metadata.
+/// severity is provided with non-object metadata or when a reserved
+/// `tool_end_without_start` mark lacks a nonblank string in `data.tool_name`.
 ///
 /// # Notes
 /// The mark event is queued with subscriber and sanitizer snapshots captured

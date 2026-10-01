@@ -10,6 +10,7 @@ const CAPACITY: usize = 4_096;
 const RETENTION: Duration = Duration::from_secs(300);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
+/// Scope source identifiers to their authenticated owner, session, harness, and lifecycle.
 pub(super) struct CompletionKey {
     owner: String,
     session: String,
@@ -41,6 +42,7 @@ impl CompletionCache {
         self.expire(Instant::now());
         self.entries.contains_key(key)
     }
+    /// Record a completion once so retries do not extend its retention period.
     pub(super) fn record(&mut self, key: CompletionKey) {
         let now = Instant::now();
         self.expire(now);
@@ -59,6 +61,7 @@ impl CompletionCache {
     }
 }
 
+/// Correlate retries and late starts using stable source IDs, excluding generated IDs.
 pub(super) fn completion_key(
     event: &NormalizedEvent,
     owner: Option<&str>,

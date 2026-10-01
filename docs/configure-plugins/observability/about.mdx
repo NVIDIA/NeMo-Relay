@@ -7,14 +7,14 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use the Observability plugin when you need to inspect NeMo Relay lifecycle events
-in process or export agent activity to tracing, trajectory, or analysis
-systems from one plugin configuration document.
+Use the Observability plugin to inspect NeMo Relay lifecycle events in your
+application. You can also export agent activity to tracing, trajectory, or
+analysis systems. One plugin configuration controls these outputs.
 
 ## Shortest Path
 
-Start with one plugin-managed exporter before layering in additional formats or
-manual subscribers. A common first path is:
+Start with one plugin-managed exporter. Add other formats or manual subscribers
+after you confirm that it works. Follow these steps to set up your first exporter:
 
 1. Instrument one scope, tool call, or LLM call in your application.
 2. Enable the Observability plugin with only one exporter, such as ATOF JSONL.
@@ -25,30 +25,30 @@ manual subscribers. A common first path is:
 Observability in NeMo Relay starts with events. Scopes, marks, managed tool
 calls, managed LLM calls, middleware, and manual lifecycle APIs emit the
 canonical Agent Trajectory Observability Format (ATOF) event stream.
-Subscribers consume that stream in process, and exporter-oriented subscribers
-write raw ATOF JSONL or translate events into Agent Trajectory Interchange
-Format (ATIF) or a typed OpenTelemetry projection.
+Subscribers read that stream within the application. Exporters write raw ATOF
+JSONL or convert events to Agent Trajectory Interchange Format (ATIF) or a typed
+OpenTelemetry projection.
 
-That makes observability downstream from the runtime contract:
+The runtime and its components determine what exporters receive:
 
 - Scopes decide ownership and parentage.
 - Middleware decides whether execution continues or what payloads are sanitized.
-- Codecs provide normalized request and response data when available.
+- Codecs convert request and response data to a common format when available.
 - Events record the canonical runtime stream.
-- Subscribers and exporters consume or project that stream.
+- Subscribers and exporters read that stream and convert it to other formats.
 
-Exporters should not redefine execution semantics. They should preserve the
-meaning of the underlying events while translating them into the shape expected
-by the downstream system.
+Exporters preserve the meaning of runtime events. They convert those events to
+the format expected by the receiving system.
 
-Configuration and activation failures are setup failures for the observability
-component. Delivery failures after activation are downstream exporter failures:
-application work continues, and explicit exporter barriers such as flush or
-shutdown can report stored delivery problems. Refer to
+Configuration and activation errors mean that observability setup failed.
+If an exporter fails to deliver data after activation, application work
+continues. Exporter operations such as flush or shutdown can report those
+delivery errors. Refer to
 [Observability Configuration](/configure-plugins/observability/configuration) for the
 failure table.
 
-The first-party plugin component has kind `observability`. It can install:
+The Observability plugin uses the component kind `observability` and supports
+these outputs:
 
 - Agent Trajectory Observability Format (ATOF) JSONL export for raw lifecycle events.
 - Agent Trajectory Interchange Format (ATIF) trajectory export for each top-level
@@ -61,25 +61,26 @@ The first-party plugin component has kind `observability`. It can install:
 
 ## Plugin-Managed Versus Manual Export
 
-Use the Observability plugin for process-level exporter setup that should be
-activated from config, `plugins.toml`, or a shared plugin document.
+Use the Observability plugin to set up exporters for a process through
+configuration, `plugins.toml`, or a shared plugin document.
 
 Use manual subscriber or exporter APIs when a test, script, or application
 needs direct control over registration names, collection windows, explicit
 flush timing, or per-run exporter objects. The plugin owns subscriber names and
 teardown for the sections it enables.
 
-Both paths consume the same runtime event contract. Choose plugin-managed export
-for reusable process configuration, and choose manual APIs only when the caller
-needs direct control over registration or lifetime.
+Both paths use the same runtime events. Choose plugin-managed export for
+reusable process configuration. Choose manual APIs when you need direct control
+over registration or lifetime.
 
 ## Delivery and Shutdown
 
-All built-in exporters begin with the same asynchronous native subscriber
-dispatcher. An event-producing API can return before the exporter subscriber
-runs. The subscriber flush API waits for callbacks queued before that barrier,
-but some exporters then hand work to their own stream worker, trajectory
-builder, batch processor, or remote backend.
+All built-in exporters use the same asynchronous native subscriber dispatcher.
+An API that emits an event can return before the exporter handles it.
+The subscriber flush API waits for callbacks already in its queue.
+Some exporters then send that work to a separate stream worker, trajectory
+builder, batch processor, or remote system. Those exporters have their own
+operations to wait for delivery.
 
 Use the barrier that matches how you manage the exporter lifecycle:
 
@@ -97,7 +98,7 @@ for the complete delivery-barrier contract.
 
 ## Use Observability When
 
-Start here when you need to:
+Use observability for these tasks:
 
 - Verify that instrumentation is attached to the right scope.
 - Inspect tool and LLM inputs and outputs after sanitization.
@@ -124,16 +125,16 @@ guardrails before exporters receive sensitive payloads.
 
 ## What Success Looks Like
 
-Your first exporter path works correctly when:
+Use these checks to confirm that your first exporter works:
 
 - The instrumented request still completes successfully.
-- After the appropriate exporter or plugin barrier returns, the output contains
-  scope data for that request, plus tool or LLM lifecycle data when the request
-  exercises those paths.
+- After the exporter or plugin barrier returns, the output contains scope data
+  for that request. It also contains tool or LLM lifecycle data if the request
+  uses those operations.
 - The exported output shows the same NeMo Relay scope hierarchy you expect from that request.
 
-Application success alone does not prove telemetry delivery because exporter
-work is downstream from runtime execution.
+An application can finish its work before exporters deliver the telemetry.
+Check the exported output to confirm delivery.
 
 If that basic check fails, use the
 [Trace Incident Runbook](/resources/troubleshooting/trace-incident-runbook)
@@ -141,12 +142,12 @@ before adding more exporters or extra config layers.
 
 ## Correlating Trajectories and Traces
 
-When ATIF and trace exporters observe the same NeMo Relay events, they share
-NeMo Relay UUIDs for cross-format joins. Plugin-managed ATIF uses the top-level
-trajectory scope UUID as `trajectory_id` and uses the propagation root UUID as
-the run-scoped `session_id` when one is present. ATIF step lineage stores the event UUID as
-`step.extra.ancestry.function_id` and the parent UUID as
-`step.extra.ancestry.parent_id`.
+ATIF and trace exporters share NeMo Relay UUIDs when they observe the same
+events. Use those UUIDs to match records across formats. Plugin-managed ATIF
+uses the top-level trajectory scope UUID as `trajectory_id`. If a propagation
+root exists, it uses that root's UUID as the run's `session_id`. Each ATIF step
+stores the event UUID in `step.extra.ancestry.function_id` and the parent UUID
+in `step.extra.ancestry.parent_id`.
 
 The `full` and `openinference` OpenTelemetry projections carry the same values
 as `nemo_relay.uuid` and `nemo_relay.parent_uuid` span attributes. Mark events
@@ -154,24 +155,26 @@ use `nemo_relay.mark.uuid` and `nemo_relay.mark.parent_uuid`. The `gen_ai`
 projection intentionally omits `nemo_relay.*` attributes. Native backend
 `trace_id` and `span_id` values are not written into ATIF.
 
-For coding-agent sessions, `full` and `openinference` OTLP trace roots
-additionally carry the logical `session.id`, optional `user.id`, and Relay-owned
-`nemo_relay.session.instance_id`. The instance value is the existing root scope
-UUID and is shared across trace roots created by the same runtime session.
+For coding-agent sessions, `full` and `openinference` OTLP trace roots also
+include `session.id`, optional `user.id`, and `nemo_relay.session.instance_id`.
+The instance value is the root scope UUID. Trace roots created by the same
+runtime session share this value.
 The `gen_ai` projection uses the standard `gen_ai.conversation.id` when the
 event supplies a conversation, session, or thread identifier. Coding-agent LLM
-events prefer an explicit provider conversation identifier and otherwise use
-the resolved logical harness session identifier. Typed endpoints derive the
-same native trace and span IDs from the same Relay lifecycle UUIDs, so the
-backend IDs also correlate across exporters. ATIF artifact filenames and storage
-keys remain based on the trajectory scope UUID. Logical coding-session values
-also remain available under `extra.nemo_relay`.
+events use the provider's conversation identifier if one is supplied.
+Otherwise, they use the harness session identifier. Typed endpoints create
+the same native trace and span IDs from the same Relay lifecycle UUIDs.
+Those IDs also let you match records across exporters. ATIF filenames and
+storage keys use the trajectory scope UUID. Coding-session values are also
+available under `extra.nemo_relay`.
 
 OTLP metrics do not automatically add `nemo_relay.session.instance_id` to
 measurement attributes. Measurements with the same resource, instrumentation
 scope, and metric attributes can aggregate across sessions.
 
 ## Pages
+
+Use these pages for exporter setup and reference details:
 
 - [Observability Configuration](/configure-plugins/observability/configuration) documents the whole plugin
   component shape, activation, validation, and teardown.
@@ -183,3 +186,47 @@ scope, and metric attributes can aggregate across sessions.
   OTLP trace, log, and metric export.
 - [OpenInference Projection](/configure-plugins/observability/openinference)
   covers OpenInference-oriented OTLP trace export.
+
+## Completion Hooks Without a Start
+
+A worker can receive an end hook without its start hook. This can happen when
+traffic switches from passthrough to a worker while an operation is running.
+If the worker has a matching start, it ends the existing lifecycle. Otherwise,
+it emits a mark that records completion at one point in time.
+
+Relay uses four mark names for endings without a matching start:
+
+- `agent_end_without_start`
+- `turn_end_without_start`
+- `subagent_end_without_start`
+- `tool_end_without_start`
+
+Each mark includes the available completion data and identifiers. It sets
+`start_observed=false` and leaves out unknown start times and run durations.
+Relay attaches the mark to an existing parent scope if it can verify that parent.
+Otherwise, the mark has no parent. An unmatched ending does not create a lasting
+session ownership record.
+
+Tool completion marks run the tool request and response sanitizers before the
+normal event sanitizers. They do not create a tool-start event.
+
+Relay reserves `tool_end_without_start` for tool completion marks. These marks
+must include a nonblank string in `data.tool_name`. Relay rejects malformed marks
+before sending them to subscribers. Tool sanitizers also apply when the mark
+has no `start_observed` metadata.
+
+Each worker keeps a completion cache to handle duplicate or delayed hooks.
+The cache follows these rules:
+
+- Store up to 4,096 completed operations for five minutes.
+- Skip duplicate endings and late starts only when a stable source identifier
+  matches a completed operation.
+- Keep separate records for different lifecycle identifiers, agent kinds,
+  sessions, and owners.
+- Keep events without stable identifiers, even if their contents are similar.
+
+Ending a turn does not release the enclosing agent's ownership.
+
+ATOF, full OpenTelemetry, and OpenInference handle these marks as they handle
+other marks. ATIF and the GenAI projection leave them out. Those formats do not
+export these partial observations as execution spans or trajectory steps.
