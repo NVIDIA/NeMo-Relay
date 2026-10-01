@@ -35,6 +35,7 @@ use crate::agents::shared::alignment::{
 };
 use crate::configuration::{GatewayConfig, SessionConfig};
 use crate::error::CliError;
+mod completion;
 mod correlation;
 mod idle;
 mod routing;
@@ -174,6 +175,7 @@ pub(crate) struct SessionManager {
     // Applying a hook temporarily takes its session out of the directory while middleware runs.
     // Track those operations so an idle shutdown or teardown cannot mistake them for no work.
     session_activity: SessionActivity,
+    completions: Arc<Mutex<completion::CompletionCache>>,
     authenticated_owners: AuthenticatedOwners,
     // Ownership is committed only after the hook batch succeeds. Reservations
     // prevent another client from claiming the same session while that batch is
@@ -602,6 +604,7 @@ impl SessionManager {
             inner: Arc::new(Mutex::new(HashMap::new())),
             session_gates: Arc::new(Mutex::new(HashMap::new())),
             session_activity: SessionActivity::new(),
+            completions: Arc::new(Mutex::new(completion::CompletionCache::default())),
             authenticated_owners: Arc::new(Mutex::new(HashMap::new())),
             authenticated_reservations: Arc::new(Mutex::new(HashMap::new())),
             alignment: Arc::new(Mutex::new(SessionAlignmentState::default())),
@@ -664,13 +667,8 @@ impl SessionManager {
 
         match result {
             Ok(_effects) => {
-                let mut owners = self.authenticated_owners.lock().await;
-                for session_id in reservation.session_ids() {
-                    owners
-                        .entry(session_id.clone())
-                        .or_insert_with(|| owner.to_string());
-                }
-                drop(owners);
+                self.bind_retained_session_owners(reservation.session_ids(), owner)
+                    .await;
                 reservation.release().await;
                 Ok(())
             }
@@ -690,11 +688,13 @@ impl SessionManager {
         for session_id in session_ids {
             let gate = session_gate(&self.session_gates, session_id).await;
             let _gate = gate.lock().await;
-            let sessions = self.inner.lock().await;
-            if sessions
+            let retained = self
+                .inner
+                .lock()
+                .await
                 .get(session_id)
-                .is_some_and(|session| !session.is_empty())
-            {
+                .is_some_and(|session| !session.is_empty());
+            if retained {
                 self.authenticated_owners
                     .lock()
                     .await
@@ -987,16 +987,22 @@ impl SessionManager {
             );
         }
         let event_kind = event_agent_kind(&event);
-        let applied = SessionEventApplier::new(&self.inner, &self.session_activity, config.clone())
-            .apply(
-                &session_id,
-                event,
-                event_kind,
-                is_agent_started,
-                session_gate,
-                activity,
-            )
-            .await?;
+        let applied = SessionEventApplier::new(
+            &self.inner,
+            &self.session_activity,
+            &self.completions,
+            authenticated.owner,
+            config.clone(),
+        )
+        .apply(
+            &session_id,
+            event,
+            event_kind,
+            is_agent_started,
+            session_gate,
+            activity,
+        )
+        .await?;
         let AppliedSessionEvent {
             outcome,
             session_gate,
@@ -2192,6 +2198,11 @@ impl Session {
         &mut self,
         event: SessionEvent,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
+        if self.turn_scope.is_none() && alignment::aliased_turn_subagent_id(&event).is_none() {
+            self.close_turn_for_reason("closed_by_turn_end").await?;
+            self.completion_mark("turn_end_without_start", event.payload, event.metadata)?;
+            return Ok(None);
+        }
         if let Some(subagent_id) = alignment::aliased_turn_subagent_id(&event) {
             return self.close_subagent_scope(&subagent_id, event.payload).await;
         }
@@ -2247,6 +2258,7 @@ impl Session {
         event: SessionEvent,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         if !self.session_started && self.agent_scope.is_none() && self.turn_scope.is_none() {
+            self.completion_mark("agent_end_without_start", event.payload, event.metadata)?;
             return Ok(None);
         }
         let (_, turn_delivery) = self.close_turn_for_reason("closed_by_agent_end").await?;
@@ -2485,7 +2497,13 @@ impl Session {
         &mut self,
         event: SubagentEvent,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
-        if self.completed_subagents.contains(&event.subagent_id) {
+        if self.completed_subagents.contains(&event.subagent_id)
+            && event
+                .metadata
+                .get("subagent_id_generated")
+                .and_then(Value::as_bool)
+                != Some(true)
+        {
             return Ok(None);
         }
         if !self.subagents.contains_key(&event.subagent_id) {
@@ -2497,18 +2515,10 @@ impl Session {
                 lifecycle_event = event.event_name.as_str();
                 "Subagent lifecycle event had no matching start"
             );
-            if self.agent_kind == AgentKind::ClaudeCode && self.turn_scope.is_none() {
-                return Ok(None);
-            }
-            self.mark(
+            self.completion_mark(
                 "subagent_end_without_start",
-                SessionEvent {
-                    session_id: event.session_id,
-                    agent_kind: event.agent_kind,
-                    event_name: event.event_name,
-                    payload: event.payload,
-                    metadata: event.metadata,
-                },
+                event.payload,
+                merge_metadata(event.metadata, json!({ "subagent_id": event.subagent_id })),
             )?;
             return Ok(None);
         };
@@ -2684,64 +2694,60 @@ impl Session {
         }
     }
 
-    // Ends a tool call, synthesizing a start if no matching handle exists. This keeps post-only
-    // hooks observable and preserves the final result/status instead of dropping orphaned endings.
+    // A post-only observation is a mark: no invented execution start or duration.
     async fn end_tool(&mut self, event: ToolEvent) -> Result<Option<SubscriberDelivery>, CliError> {
-        self.ensure_tool_scope_started(event.metadata.clone())?;
-        let event_metadata = self.event_identity_metadata(event.metadata.clone());
         let completed_agent_subagent_id = alignment::completed_subagent_from_tool(&event);
-        let explicit_subagent_id = event
-            .subagent_id
-            .clone()
-            .filter(|subagent_id| self.subagents.contains_key(subagent_id));
-        let handle = match self.remove_tool_handle_for_event(&event) {
-            Some(handle) => handle,
-            None => {
-                let owner = self.resolve_tool_owner(&event);
-                let arguments = if event.arguments.is_null() {
-                    owner
-                        .hint
-                        .as_ref()
-                        .map(|hint| hint.arguments.clone())
-                        .unwrap_or(event.arguments)
-                } else {
-                    event.arguments
-                };
-                let mut metadata = tool_correlation_metadata(
-                    event_metadata.clone(),
-                    owner.status,
-                    owner.source.as_deref(),
-                    owner.subagent_id.as_deref(),
-                    owner.hint.as_ref(),
-                );
-                self.apply_tool_execution_metadata(&mut metadata, owner.subagent_id.as_deref());
-                self.set_last_tool_owner(owner.subagent_id.clone());
-                tool_call(
-                    ToolCallParams::builder()
-                        .name(event.tool_name.as_str())
-                        .args(arguments)
-                        .parent_opt(owner.parent.as_ref())
-                        .metadata(metadata)
-                        .tool_call_id(event.tool_call_id.clone())
-                        .build(),
-                )?
-            }
+        let Some(handle) = self.remove_tool_handle_for_event(&event) else {
+            let mut metadata = self.event_identity_metadata(event.metadata.clone());
+            self.apply_tool_execution_metadata(&mut metadata, event.subagent_id.as_deref());
+            self.completion_mark(
+                "tool_end_without_start",
+                json!({
+                    "tool_name": event.tool_name, "tool_call_id": event.tool_call_id,
+                    "subagent_id": event.subagent_id, "arguments": event.arguments,
+                    "result": event.result, "status": event.status,
+                }),
+                metadata,
+            )?;
+            return match completed_agent_subagent_id {
+                Some(id) if self.subagents.contains_key(&id) => {
+                    self.close_subagent_scope(&id, event.payload).await
+                }
+                _ => Ok(None),
+            };
         };
+        let metadata = self.event_identity_metadata(event.metadata.clone());
         tool_call_end(
             ToolCallEndParams::builder()
                 .handle(&handle)
                 .execution_result(event.result.clone().into())
-                .metadata(merge_metadata(
-                    event_metadata,
-                    json!({ "status": event.status }),
-                ))
+                .metadata(merge_metadata(metadata, json!({ "status": event.status })))
                 .build(),
         )?;
-        self.set_last_tool_owner(explicit_subagent_id);
+        self.set_last_tool_owner(
+            event
+                .subagent_id
+                .filter(|id| self.subagents.contains_key(id)),
+        );
         match completed_agent_subagent_id {
-            Some(subagent_id) => self.close_subagent_scope(&subagent_id, event.result).await,
+            Some(id) => self.close_subagent_scope(&id, event.result).await,
             None => Ok(None),
         }
+    }
+
+    fn completion_mark(&self, name: &str, data: Value, metadata: Value) -> Result<(), CliError> {
+        let metadata = merge_metadata(
+            self.scope_metadata(metadata),
+            json!({ "start_observed": false }),
+        );
+        emit_mark_event(
+            EmitMarkEventParams::builder()
+                .name(name)
+                .data(data)
+                .metadata(metadata)
+                .build(),
+        )?;
+        Ok(())
     }
 
     // Pre/post tool hooks can disagree on call IDs: pre hooks may omit the provider id while post

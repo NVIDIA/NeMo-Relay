@@ -2678,6 +2678,33 @@ async fn assert_harness_tool_execution_metadata(kind: AgentKind, post_only: bool
     }
     flush_subscribers().unwrap();
     let events = captured.lock().unwrap();
+    if post_only {
+        assert_harness_tool_completion_mark(kind, &events);
+    } else {
+        assert_harness_tool_execution_pair(kind, &events);
+    }
+    drop(events);
+    assert!(deregister_subscriber(&session_id).unwrap());
+}
+
+fn assert_harness_tool_completion_mark(kind: AgentKind, events: &[Event]) {
+    let mark = events
+        .iter()
+        .find(|event| event.name() == "tool_end_without_start")
+        .unwrap();
+    assert_eq!(mark.data().unwrap()["tool_call_id"], "gen-ai-call-1");
+    assert_eq!(mark.data().unwrap()["result"]["stdout"], "/tmp");
+    assert_eq!(mark.metadata().unwrap()["start_observed"], false);
+    assert_eq!(mark.metadata().unwrap()["gen_ai.agent.name"], kind.as_str());
+    assert!(
+        events
+            .iter()
+            .all(|event| event.tool_call_id() != Some("gen-ai-call-1"))
+    );
+    assert_completion_marks_omitted_from_genai(events);
+}
+
+fn assert_harness_tool_execution_pair(kind: AgentKind, events: &[Event]) {
     let tool_events: Vec<_> = events
         .iter()
         .filter(|event| event.tool_call_id() == Some("gen-ai-call-1"))
@@ -2693,7 +2720,7 @@ async fn assert_harness_tool_execution_metadata(kind: AgentKind, post_only: bool
     assert_eq!(
         tool_events.len(),
         2,
-        "one start/end pair, including post-only hooks"
+        "one start/end pair for a matched completion"
     );
     assert_eq!(start.uuid(), end.uuid());
     assert_eq!(start.parent_uuid(), end.parent_uuid());
@@ -2715,9 +2742,7 @@ async fn assert_harness_tool_execution_metadata(kind: AgentKind, post_only: bool
         kind.as_str()
     );
     assert!(metadata.get("gen_ai.tool.description").is_none());
-    assert_harness_genai_tool_span(kind, &events);
-    drop(events);
-    assert!(deregister_subscriber(&session_id).unwrap());
+    assert_harness_genai_tool_span(kind, events);
 }
 
 fn assert_harness_genai_tool_span(kind: AgentKind, events: &[Event]) {
@@ -5890,12 +5915,12 @@ async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn()
         0,
         "orphan SubagentStop must not create a turn later closed by idle timeout: {events:#?}"
     );
-    assert!(
-        events
-            .iter()
-            .all(|event| event["kind"] != json!("orphan_mark")),
-        "uncorrelatable Claude SubagentStop should not emit a turn-scoped orphan mark: {events:#?}"
-    );
+    let marks: Vec<_> = events
+        .iter()
+        .filter(|event| event["kind"] == "orphan_mark")
+        .collect();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0]["metadata"]["start_observed"], false);
 
     let atif = read_atif_for_session(&atif_dir, "claude-orphan-stop");
     assert_eq!(atif["steps"].as_array().unwrap().len(), 2);
@@ -8902,6 +8927,16 @@ async fn assert_mcp_harness_metadata(kind: AgentKind, ending: &str) {
     flush_subscribers().unwrap();
     deregister_subscriber(&session_id).unwrap();
     let events = captured.lock().unwrap();
+    if ending == "post-only" {
+        let mark = events
+            .iter()
+            .find(|event| event.name() == "tool_end_without_start")
+            .unwrap();
+        assert_eq!(mark.metadata().unwrap()["mcp.method.name"], "tools/call");
+        assert_eq!(mark.data().unwrap()["tool_call_id"], "mcp-call");
+        assert_completion_marks_omitted_from_genai(&events);
+        return;
+    }
     let tool_events: Vec<_> = events
         .iter()
         .filter(|event| event.tool_call_id() == Some("mcp-call"))
@@ -9005,4 +9040,321 @@ async fn apply_mcp_harness_hooks(
             .await
             .unwrap();
     }
+}
+
+fn assert_completion_marks_omitted_from_genai(events: &[Event]) {
+    let exporter = InMemorySpanExporterBuilder::new().build();
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        provider,
+        "partial-hooks",
+        OpenTelemetryType::GenAi,
+    );
+    for event in events {
+        subscriber.subscriber()(event);
+    }
+    subscriber.force_flush().unwrap();
+    assert!(
+        exporter
+            .get_finished_spans()
+            .unwrap()
+            .iter()
+            .all(|span| !span.name.ends_with("_end_without_start")
+                && !span.name.starts_with("execute_tool "))
+    );
+    subscriber.shutdown().unwrap();
+}
+
+fn orphan_tool(session: &str, id: &str) -> ToolEvent {
+    ToolEvent {
+        session_id: session.into(),
+        agent_kind: AgentKind::Codex,
+        event_name: "PostToolUse".into(),
+        tool_call_id: id.into(),
+        tool_name: "partial-test-tool".into(),
+        subagent_id: None,
+        arguments: json!({"secret": "request-secret"}),
+        result: json!({"secret": "result-secret"}),
+        status: Some("success".into()),
+        payload: json!({}),
+        metadata: json!({}),
+    }
+}
+
+#[tokio::test]
+async fn unmatched_completions_deduplicate_stable_ids_suppress_late_starts_and_leave_no_owner() {
+    let session_id = "orphan-completions";
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let capture = captured.clone();
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    let tool = orphan_tool(session_id, "call-1");
+    let mut agent = session_event(session_id, "SessionEnd");
+    agent.payload = json!({"agent_invocation_id": "agent-1", "completion": "done"});
+    let mut turn = session_event(session_id, "Stop");
+    turn.payload = json!({"turn_id": "turn-1", "completion": "done"});
+    let subagent = SubagentEvent {
+        session_id: session_id.into(),
+        agent_kind: AgentKind::Codex,
+        event_name: "SubagentStop".into(),
+        subagent_id: "subagent-1".into(),
+        payload: json!({"completion": "done"}),
+        metadata: json!({}),
+    };
+    let endings = vec![
+        NormalizedEvent::ToolEnded(tool.clone()),
+        NormalizedEvent::AgentEnded(agent.clone()),
+        NormalizedEvent::TurnEnded(turn.clone()),
+        NormalizedEvent::SubagentEnded(subagent.clone()),
+    ];
+    for _ in 0..2 {
+        manager
+            .apply_authenticated_events(&HeaderMap::new(), endings.clone(), "client-a")
+            .await
+            .unwrap();
+    }
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::ToolStarted(tool.clone()),
+                NormalizedEvent::AgentStarted(agent),
+                NormalizedEvent::TurnStarted(turn),
+                NormalizedEvent::SubagentStarted(subagent),
+            ],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    assert!(manager.inner.lock().await.is_empty());
+    assert!(manager.authenticated_owners.lock().await.is_empty());
+    flush_subscribers().unwrap();
+    {
+        let events = captured.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            4,
+            "one point-in-time mark per stable completion"
+        );
+        for event in events.iter() {
+            assert_eq!(event.scope_category(), None);
+            assert!(event.parent_uuid().is_none());
+            assert_eq!(event.metadata().unwrap()["start_observed"], false);
+            assert!(event.input().is_none());
+            assert!(event.output().is_none());
+        }
+        assert_completion_marks_omitted_from_genai(&events);
+    }
+    // Stable identifiers are local to the authenticated owner.
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolEnded(tool)],
+            "client-b",
+        )
+        .await
+        .unwrap();
+    let mut without_id = orphan_tool(session_id, "");
+    without_id.metadata = json!({"tool_call_id_generated": true});
+    let without_subagent_id = SubagentEvent {
+        session_id: session_id.into(),
+        agent_kind: AgentKind::ClaudeCode,
+        event_name: "SubagentStop".into(),
+        subagent_id: "subagent".into(),
+        payload: json!({}),
+        metadata: json!({"subagent_id_generated": true}),
+    };
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::ToolEnded(without_id.clone()),
+                NormalizedEvent::ToolEnded(without_id),
+                NormalizedEvent::SubagentEnded(without_subagent_id.clone()),
+                NormalizedEvent::SubagentEnded(without_subagent_id),
+            ],
+        )
+        .await
+        .unwrap();
+    flush_subscribers().unwrap();
+    assert_eq!(captured.lock().unwrap().len(), 9);
+    deregister_subscriber(session_id).unwrap();
+}
+
+#[tokio::test]
+async fn compound_stop_without_observed_start_emits_one_mark_and_keeps_no_session() {
+    let manager = SessionManager::new(session_test_config());
+    let payload = json!({"session_id": "compound-orphan-stop", "hook_event_name": "Stop", "generation_id": "gen-1"});
+    let outcome = crate::agents::shared::adapters::claude_code::adapt(payload, &HeaderMap::new());
+    assert!(
+        outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, NormalizedEvent::TurnEnded(_)))
+    );
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), outcome.events, "client-a")
+        .await
+        .unwrap();
+    assert!(manager.inner.lock().await.is_empty());
+    assert!(manager.authenticated_owners.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn unmatched_tool_completion_applies_tool_sanitizers_without_executing_tools() {
+    use nemo_relay::api::registry::{
+        deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+        register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
+    };
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let session_id = "orphan-sanitizers";
+    register_tool_sanitize_request_guardrail(
+        session_id,
+        1,
+        Arc::new(|name, args| {
+            Box::pin(async move {
+                Ok(if name == "partial-test-tool" {
+                    json!({"request": "redacted"})
+                } else {
+                    args
+                })
+            })
+        }),
+    )
+    .unwrap();
+    register_tool_sanitize_response_guardrail(
+        session_id,
+        1,
+        Arc::new(|name, result| {
+            Box::pin(async move {
+                Ok(if name == "partial-test-tool" {
+                    json!({"result": "redacted"})
+                } else {
+                    result
+                })
+            })
+        }),
+    )
+    .unwrap();
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let capture = captured.clone();
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolEnded(orphan_tool(
+                session_id, "call-1",
+            ))],
+        )
+        .await
+        .unwrap();
+    flush_subscribers().unwrap();
+    deregister_tool_sanitize_request_guardrail(session_id).unwrap();
+    deregister_tool_sanitize_response_guardrail(session_id).unwrap();
+    let events = captured.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].data().unwrap()["arguments"],
+        json!({"request": "redacted"})
+    );
+    assert_eq!(
+        events[0].data().unwrap()["result"],
+        json!({"result": "redacted"})
+    );
+    assert!(
+        !serde_json::to_string(&*events)
+            .unwrap()
+            .contains("request-secret")
+    );
+    deregister_subscriber(session_id).unwrap();
+}
+
+#[tokio::test]
+async fn unmatched_turn_end_closes_tools_outside_a_turn_and_allows_idle_shutdown() {
+    let session_id = "pi-unmatched-turn-cleanup";
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let capture = captured.clone();
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    for payload in [
+        json!({"hook_event_name": "session_start", "reason": "startup"}),
+        json!({"hook_event_name": "user_bash", "tool_call_id": "shell-1",
+            "tool_name": "user_bash", "input": {"command": "git status"}}),
+    ] {
+        let mut payload = payload;
+        payload["session_id"] = json!(session_id);
+        apply_pi_hook(&manager, payload).await;
+    }
+    assert!(manager.has_open_sessions().await);
+    assert!(manager.inner.lock().await[session_id].turn_scope.is_none());
+    apply_pi_hook(
+        &manager,
+        json!({"session_id": session_id, "hook_event_name": "turn_end"}),
+    )
+    .await;
+    assert!(!manager.has_open_sessions().await);
+    assert!(manager.test_contains_session(session_id).await);
+    flush_subscribers().unwrap();
+    {
+        let events = captured.lock().unwrap();
+        let tool_end = events
+            .iter()
+            .position(|event| {
+                event.name() == "user_bash" && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .unwrap();
+        let mark = events
+            .iter()
+            .position(|event| event.name() == "turn_end_without_start")
+            .unwrap();
+        assert!(tool_end < mark);
+        assert_eq!(events[mark].metadata().unwrap()["start_observed"], false);
+    }
+    manager.close_all("test_complete").await.unwrap();
+    deregister_subscriber(session_id).unwrap();
+}
+
+#[tokio::test]
+async fn identical_completion_ids_from_different_harnesses_remain_independent() {
+    let session_id = "cross-harness-completions";
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let capture = captured.clone();
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    for kind in [AgentKind::Codex, AgentKind::ClaudeCode] {
+        let mut event = session_event(session_id, "SessionEnd");
+        event.agent_kind = kind;
+        event.payload = json!({"agent_invocation_id": "same-invocation"});
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::AgentEnded(event)],
+                "owner",
+            )
+            .await
+            .unwrap();
+    }
+    flush_subscribers().unwrap();
+    assert_eq!(captured.lock().unwrap().len(), 2);
+    assert!(manager.authenticated_owners.lock().await.is_empty());
+    deregister_subscriber(session_id).unwrap();
 }

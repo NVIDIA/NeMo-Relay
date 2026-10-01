@@ -223,6 +223,82 @@ pub struct ToolCallEndParams<'a> {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
+/// Preserve tool payload sanitization when a completion has no execution-start handle.
+/// The reserved completion mark carries observation data and runs no execution middleware.
+pub(crate) fn completion_mark_transform(
+    event: &Event,
+    scope_stack: &ScopeStackHandle,
+) -> Result<Option<crate::api::runtime::subscriber_dispatcher::EventTransformFn>> {
+    if event.name() != "tool_end_without_start" {
+        return Ok(None);
+    }
+    let data = event.data().ok_or_else(|| {
+        FlowError::InvalidArgument("tool completion marks require data.tool_name".into())
+    })?;
+    let tool_name = data
+        .get("tool_name")
+        .and_then(Json::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            FlowError::InvalidArgument(
+                "tool completion marks require a nonblank string data.tool_name".into(),
+            )
+        })?;
+    let args = data.get("arguments").cloned().unwrap_or(Json::Null);
+    let result = data.get("result").cloned().unwrap_or(Json::Null);
+    let (request_locals, response_locals) = {
+        let scope = scope_stack
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        (
+            scope.snapshot_scope_local_registries(|registries| {
+                &registries.tool_sanitize_request_guardrails
+            }),
+            scope.snapshot_scope_local_registries(|registries| {
+                &registries.tool_sanitize_response_guardrails
+            }),
+        )
+    };
+    let (requests, responses) = {
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[
+                RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+                RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+            ]);
+        (
+            state.tool_sanitize_request_entries(&request_locals.iter().collect::<Vec<_>>()),
+            state.tool_sanitize_response_entries(&response_locals.iter().collect::<Vec<_>>()),
+        )
+    };
+    Ok(Some(Box::new(move |mut event| {
+        Box::pin(async move {
+            let args = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+                &tool_name, args, &requests,
+            )
+            .await;
+            let result = if args.is_some() {
+                NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+                    &tool_name, result, &responses,
+                )
+                .await
+            } else {
+                None
+            };
+            let mut fields = event.sanitize_fields();
+            if let Some(Json::Object(data)) = fields.data.as_mut() {
+                data.insert("arguments".into(), args.unwrap_or(Json::Null));
+                data.insert("result".into(), result.unwrap_or(Json::Null));
+            }
+            event.apply_sanitize_fields(fields);
+            event
+        })
+    })))
+}
+
 /// Start a manual tool lifecycle span.
 ///
 /// This submits a tool-start event for queued sanitize-request guardrails and

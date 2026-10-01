@@ -127,6 +127,8 @@ pub(super) struct SessionEventApplier<'a> {
     sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
     activity: &'a SessionActivity,
     config: SessionConfig,
+    completions: &'a Arc<Mutex<super::completion::CompletionCache>>,
+    owner: Option<&'a str>,
 }
 
 pub(super) struct AppliedSessionEvent {
@@ -143,12 +145,16 @@ impl<'a> SessionEventApplier<'a> {
     pub(super) fn new(
         sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
         activity: &'a SessionActivity,
+        completions: &'a Arc<Mutex<super::completion::CompletionCache>>,
+        owner: Option<&'a str>,
         config: SessionConfig,
     ) -> Self {
         Self {
             sessions,
             activity,
             config,
+            completions,
+            owner,
         }
     }
 
@@ -168,17 +174,25 @@ impl<'a> SessionEventApplier<'a> {
                 activity,
             });
         }
+        let completion_key = super::completion::completion_key(&event, self.owner);
+        let is_completion = super::completion::is_completion(&event);
+        {
+            let mut completions = self.completions.lock().await;
+            if completion_key
+                .as_ref()
+                .is_some_and(|key| completions.contains(key))
+            {
+                return Ok(AppliedSessionEvent {
+                    outcome: None,
+                    session_gate,
+                    activity,
+                });
+            }
+        }
         let session = {
             let mut sessions = self.sessions.lock().await;
             sessions.remove(session_id)
         };
-        if session.is_none() && event.is_terminal() {
-            return Ok(AppliedSessionEvent {
-                outcome: None,
-                session_gate,
-                activity,
-            });
-        }
         let session = session.unwrap_or_else(|| {
             Session::new(session_id.to_string(), event_kind, self.config.clone())
         });
@@ -197,6 +211,9 @@ impl<'a> SessionEventApplier<'a> {
         }
         match in_flight.session_mut().apply(event).await {
             Ok(subscriber_delivery) => {
+                if is_completion && let Some(key) = completion_key {
+                    self.completions.lock().await.record(key);
+                }
                 let session = in_flight.session_mut();
                 let is_empty = session.is_empty();
                 let tool_argument_transform = session.take_tool_argument_transform();
