@@ -309,8 +309,8 @@ When you import a context with a root, work continues in the parent's
 OpenTelemetry trace. Without a propagated root, the first local Agent scope
 creates one.
 
-To start a separate trace in the receiver, use the rootless capture API for
-your binding:
+To start a separate trace from a locally created sender scope, use the rootless
+capture API for your binding:
 
 | Binding | Rootless Capture |
 |---|---|
@@ -321,9 +321,19 @@ your binding:
 | C | `nemo_relay_capture_rootless_propagation_context_json` |
 
 A rootless context still links Relay events to their immediate parent.
-The receiver's first local Agent scope creates a new root. Use explicit root
-capture when your application supplies a stable run UUID. Authenticate the
-source of an incoming context before you trust and import it. For details, refer to
+It does not forward a W3C parent derived from the sender's local scope, so the
+receiver starts a separate OpenTelemetry trace. If the sender previously
+imported a W3C parent, rootless capture still forwards that upstream trace;
+remove `traceparent` and `tracestate` from the context when an unconditional
+trace boundary is required. The receiver's first local Agent scope creates a
+new Relay root. Use explicit root capture when your application supplies a
+stable run UUID. That UUID determines the receiver's trace unless the sender
+imported a W3C parent, which retains precedence over the supplied root.
+An explicit parent handle that is no longer on the stack uses the current
+stack's trace as a fallback. To continue a different trace, capture and import
+its propagation context rather than passing only the old scope handle.
+Authenticate the source of an incoming context before you
+trust and import it. For details, refer to
 [Scope Concepts](/about-nemo-relay/concepts/scopes).
 
 In ATIF, use `trajectory_id` as the unique ID for each exported trajectory.
@@ -365,9 +375,13 @@ The `gen_ai` output format adds the following fields after sanitization:
 
 | Field | Content |
 |---|---|
-| `gen_ai.tool.call.arguments` | Tool arguments that are JSON objects |
-| `gen_ai.tool.call.result` | Successful tool results that are JSON objects |
+| `gen_ai.tool.call.arguments` | Canonical JSON text for non-null sanitized tool arguments |
+| `gen_ai.tool.call.result` | Canonical JSON text for non-null sanitized successful tool results |
 | `gen_ai.tool.definitions` | Tool-definition identities |
+
+Arguments and successful results can be objects, arrays, strings, numbers, or
+booleans. Relay preserves each non-null sanitized value in its canonical JSON
+serialization and omits null values.
 
 Review who can access your collector and how you redact data before upgrading.
 Setting `enable_full_payloads = false` does not disable tool-content export.

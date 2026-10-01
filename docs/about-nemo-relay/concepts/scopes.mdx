@@ -206,8 +206,8 @@ Use this when:
 Fork a scope stack before starting concurrent work when the child should remain
 part of the parent's event tree without sharing its mutable stack. The fork
 preserves the immediate parent but does not transfer scope-local middleware or
-subscribers. The fork also preserves the Relay observability root, so its work
-continues the parent's OpenTelemetry trace.
+subscribers. The fork also preserves the captured OpenTelemetry parent, so its
+work continues the parent's exported trace.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -278,11 +278,14 @@ before importing it. Relay does not send headers, make IPC connections, or
 trust remote identifiers automatically.
 
 The default `capture_propagation_context()` API preserves Relay event parentage
-and, when a root is available, OpenTelemetry trace continuity. Forking an
-explicit rootless context keeps it rootless until a local Agent scope establishes a new root. Use
-`capture_rootless_propagation_context()` only when the receiver must start a
-new trace. `capture_propagation_context_with_root()` still lets an application
-choose a stable run UUID explicitly.
+and includes the exact active OpenTelemetry context when one is available. When
+no valid W3C parent is available, Relay can reconstruct a Relay-derived trace
+from the root UUID. An explicit rootless context stays rootless until a local
+Agent scope establishes a new root. Rootless capture omits W3C context derived
+from the sender's local scope, so importing a locally captured rootless context
+starts a separate OpenTelemetry trace.
+`capture_propagation_context_with_root()` lets an application choose a stable
+run UUID explicitly.
 
 Relay's JSON context can also carry optional W3C `traceparent` and
 `tracestate` fields. When a receiver imports a valid pair, its first local
@@ -290,12 +293,101 @@ OpenTelemetry span is a child of the upstream span and preserves upstream
 sampling and vendor state; Relay UUID lineage remains unchanged. Invalid W3C
 fields are ignored with a runtime warning, without rejecting the Relay context.
 
-For outbound-only W3C propagation, use `capture_traceparent()` to obtain the
-current Relay traceparent directly, or convert a `PropagationContext`
+For outbound-only W3C propagation, use `capture_traceparent()`
+(`captureTraceparent()` in Node.js) to obtain the current Relay traceparent
+directly, or convert a `PropagationContext`
 with `PropagationContext::to_traceparent` (and the equivalent binding methods).
-When valid W3C context is present, Relay emits its W3C headers even for a
-rootless Relay context; rootless only starts a new Relay-derived OpenTelemetry
-trace when no W3C parent is available. Managed LLM execution automatically replaces both
+Capture requires an active Relay scope or a valid imported trace context;
+it does not require an exporter or collector. A managed LLM call closes its
+LLM scope before returning. Its completed span does not remain the current
+context. Without an enclosing active scope or imported context, capture
+returns an error.
+
+In these examples, the managed LLM call has finished when capture runs, but
+the enclosing Agent scope is still active:
+
+<Tabs>
+<Tab title="Python" language="python">
+
+```python
+from nemo_relay import ScopeType, capture_traceparent, llm, scope
+
+
+async def run_agent(request, provider):
+    with scope.scope("agent-run", ScopeType.Agent):
+        result = await llm.execute("provider", request, provider)
+        # The LLM scope has closed; the Agent scope is still active.
+        agent_traceparent = capture_traceparent()
+        return result, agent_traceparent
+```
+
+</Tab>
+<Tab title="Rust" language="rust">
+
+```rust
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::api::runtime::{capture_traceparent, LlmExecutionNextFn};
+use nemo_relay::api::scope::{pop_scope, push_scope, PopScopeParams, PushScopeParams, ScopeType};
+use nemo_relay::{error::Result, json::Json};
+
+async fn run_agent(request: LlmRequest, provider: LlmExecutionNextFn) -> Result<(Json, String)> {
+    let agent = push_scope(
+        PushScopeParams::builder()
+            .name("agent-run")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )?;
+    let outcome = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("provider")
+            .request(request)
+            .func(provider)
+            .build(),
+    )
+    .await
+    .and_then(|result| {
+        // The LLM scope has closed; the Agent scope is still active.
+        let agent_traceparent = capture_traceparent()?;
+        Ok((result, agent_traceparent))
+    });
+    // Close the Agent scope even if execution or capture returned an error.
+    pop_scope(PopScopeParams::builder().handle_uuid(&agent.uuid).build())?;
+    outcome
+}
+```
+
+</Tab>
+<Tab title="Node.js" language="javascript">
+
+```javascript
+const {
+  ScopeType,
+  captureTraceparent,
+  llmCallExecuteAsync,
+  withScope,
+} = require("nemo-relay-node");
+
+async function runAgent(request, provider) {
+  return withScope("agent-run", ScopeType.Agent, async () => {
+    const result = await llmCallExecuteAsync("provider", request, provider);
+    // The LLM scope has closed; the Agent scope is still active.
+    const agentTraceparent = captureTraceparent();
+    return { result, agentTraceparent };
+  });
+}
+```
+
+</Tab>
+</Tabs>
+
+Each example captures the enclosing Agent context. To retain the LLM context instead,
+capture it inside the provider callback while the managed LLM scope is active
+and save that value for later propagation.
+
+When a W3C context was imported upstream, rootless capture preserves that
+context and the receiver continues the upstream trace. To require a new trace
+even then, remove `traceparent` and `tracestate` before importing the context.
+Managed LLM execution automatically replaces both
 runtime-owned `traceparent` and `tracestate` headers on the provider request;
 a standalone request-intercept call adds the same pair only when a real Relay
 trace context exists.

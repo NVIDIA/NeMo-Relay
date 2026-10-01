@@ -7,6 +7,8 @@
 //! and attribute constants that are exposed to JavaScript/TypeScript consumers.
 //! Doc comments on `#[napi]` items are emitted into the generated `index.d.ts`.
 
+mod resource_metrics;
+
 use napi_derive::napi;
 use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};

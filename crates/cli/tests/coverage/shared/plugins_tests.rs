@@ -4,6 +4,7 @@
 use super::*;
 use crate::configuration::{global_plugin_config_path, user_plugin_config_path};
 use crate::plugins::ConfigurationScope;
+use nemo_relay::api::resource_metrics::ResourceMetricsConfig;
 use nemo_relay::config_editor::{
     EditorConfig, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec, EditorVariantSpec,
 };
@@ -555,6 +556,54 @@ fn plugin_menu_builds_ordered_component_actions() {
 }
 
 #[test]
+fn resource_metrics_configuration_editor_exposes_sections_and_saves_plugin_config() {
+    let schema = ResourceMetricsConfig::editor_schema();
+    let polling = schema.field("polling").unwrap().schema().unwrap();
+    assert_eq!(
+        polling.field("enabled").unwrap().kind,
+        EditorFieldKind::Boolean
+    );
+    assert_eq!(
+        polling.field("interval_millis").unwrap().kind,
+        EditorFieldKind::Integer
+    );
+    let disk = schema.field("disk").unwrap().schema().unwrap();
+    assert_eq!(
+        disk.field("filesystem_paths").unwrap().kind,
+        EditorFieldKind::List
+    );
+    let gpu = schema.field("gpu").unwrap().schema().unwrap();
+    assert_eq!(gpu.field("devices").unwrap().kind, EditorFieldKind::List);
+
+    let mut components = editable_components(&PluginConfig::default()).unwrap();
+    let component = components
+        .iter_mut()
+        .find(|component| component.label() == "Resource Metrics")
+        .expect("resource metrics editor entry");
+    component.set_enabled(true);
+    let EditableComponent::ResourceMetrics(state) = component else {
+        unreachable!();
+    };
+    state.config.polling.enabled = true;
+    state.config.disk.filesystem_paths = vec![PathBuf::from("/")];
+    state.mark_config_touched();
+
+    let mut config = PluginConfig::default();
+    store_editable_components(&mut config, &components).unwrap();
+    let component = config
+        .components
+        .iter()
+        .find(|component| component.kind == "resource_metrics")
+        .expect("resource metrics config is stored");
+    assert!(component.enabled);
+    assert_eq!(component.config["polling"]["enabled"], true);
+    assert_eq!(
+        component.config["disk"]["filesystem_paths"],
+        serde_json::json!(["/"])
+    );
+}
+
+#[test]
 fn component_menu_contains_toggle_fields_and_back() {
     let config = PluginConfig::default();
     let components = editable_components(&config).unwrap();
@@ -850,13 +899,14 @@ fn editable_component_dispatch_covers_every_component_variant() {
         component.toggle_enabled();
         component.set_enabled(true);
         component.reset_enabled();
-        let optional = *component
-            .fields()
-            .iter()
-            .find(|field| field.optional)
-            .expect("every editable component exposes an optional field");
-        component.reset_field(optional).unwrap();
-        assert!(component.clear_field(optional).unwrap());
+        if let Some(optional) = component.fields().iter().find(|field| field.optional) {
+            component.reset_field(*optional).unwrap();
+            assert!(component.clear_field(*optional).unwrap());
+        } else {
+            let required = *component.fields().first().expect("component fields");
+            component.reset_field(required).unwrap();
+            assert!(!component.clear_field(required).unwrap());
+        }
     }
 
     let rendered = config_with_editable_components(&config, &components).unwrap();

@@ -300,46 +300,46 @@ fn stale_unhealthy_gateway_owner_is_removed() {
 #[cfg(unix)]
 #[test]
 fn unhealthy_owned_gateway_is_force_killed_after_the_grace_period() {
-    use std::os::unix::process::CommandExt;
+    use std::io::Read;
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+
+    let spawn_group_member = |group| {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "trap \"\" TERM; printf ready; exec sleep 60"])
+            .process_group(group)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        // The readiness message follows the trap, which exec preserves for sleep.
+        let mut ready = [0; 5];
+        child.stdout.take().unwrap().read_exact(&mut ready).unwrap();
+        assert_eq!(&ready, b"ready");
+        child
+    };
 
     let dir = tempfile::tempdir().unwrap();
     let url = "http://127.0.0.1:9";
     let path = owner_path(dir.path(), url);
-    let child_pid_path = dir.path().join("child.pid");
-    let mut command = std::process::Command::new("sh");
-    command.args([
-        "-c",
-        "sh -c 'trap \"\" TERM; while :; do sleep 60; done' & echo $! > \"$1\"; wait",
-        "sh",
-        child_pid_path.to_str().unwrap(),
-    ]);
-    // SAFETY: The child calls only async-signal-safe `setsid` before exec.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        });
-    }
-    let mut child = command.spawn().unwrap();
-    let child_pid = loop {
-        if let Ok(value) = std::fs::read_to_string(&child_pid_path) {
-            break value.trim().parse::<i32>().unwrap();
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    let owner = OwnerRecord::new(child.id(), url, "shutdown-token", Some("fingerprint"));
+    // Own and reap both group members so shutdown does not depend on the OS
+    // reaping orphaned shell descendants before the termination deadline.
+    let mut gateway = spawn_group_member(0);
+    let process_group = i32::try_from(gateway.id()).unwrap();
+    let mut group_member = spawn_group_member(process_group);
+    let owner = OwnerRecord::new(gateway.id(), url, "shutdown-token", Some("fingerprint"));
     write_owner_record(&path, &owner).unwrap();
-    let waiter = std::thread::spawn(move || child.wait());
+    let waiter = std::thread::spawn(move || (gateway.wait(), group_member.wait()));
 
-    assert!(stop_unhealthy_owned_gateway_locked(dir.path(), url).unwrap());
-    assert!(!waiter.join().unwrap().unwrap().success());
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while process_is_running(child_pid) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
+    let started = Instant::now();
+    let stopped = stop_unhealthy_owned_gateway_locked(dir.path(), url);
+    if stopped.is_err() {
+        // SAFETY: This is the private process group created by this test.
+        unsafe { libc::kill(-process_group, libc::SIGKILL) };
     }
-    assert!(!process_is_running(child_pid));
+    let (gateway_status, member_status) = waiter.join().unwrap();
+    assert!(stopped.unwrap());
+    assert!(started.elapsed() >= UNHEALTHY_GATEWAY_TERMINATION_TIMEOUT);
+    assert_eq!(gateway_status.unwrap().signal(), Some(libc::SIGKILL));
+    assert_eq!(member_status.unwrap().signal(), Some(libc::SIGKILL));
+    assert!(!process_is_running(-process_group));
     assert!(!path.exists());
 }

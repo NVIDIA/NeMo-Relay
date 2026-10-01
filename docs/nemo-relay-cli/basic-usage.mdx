@@ -501,6 +501,13 @@ calling NeMo Relay APIs.
   the permission guardrail event metadata and uses the matched tool parent. If
   the permission guardrail rejects an active tool, Relay closes that tool span
   with `error.type = "guardrail_rejected"`.
+- After a matched permission request reaches policy evaluation, Relay emits the
+  custom mark event `nemo_relay.permission.policy_decision`. Its data records
+  the tool identity, `decision_source: nemo_relay`, and `policy_outcome` as
+  `pass`, `reject`, or `error`, plus the harness permission mode and failure
+  reason when available. A `pass` means only that Relay did not block the
+  request; it does not establish the final harness or user decision or prove
+  that the tool executed.
 - Generated `UserPromptSubmit` and `Stop` hooks are retained as private
   correlation hints. The adapters
   do the same when a custom or older integration delivers a response or

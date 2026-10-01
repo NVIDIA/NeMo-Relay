@@ -2491,7 +2491,7 @@ func NewOpenTelemetryConfig(otelType OpenTelemetryType, endpoint string) OpenTel
 		Timeout:                 3 * time.Second,
 		CompletedSpanContextTTL: &completedSpanContextTTL,
 		MarkProjection:          MarkProjectionInherit,
-		MarkExcludeNames:        []string{"llm.chunk"},
+		MarkExcludeNames:        []string{llmChunkEventName},
 		AttributeMappings:       []OtlpAttributeMapping{},
 		PromoteMetadataPrefixes: []string{},
 	}
@@ -2510,7 +2510,11 @@ type OpenTelemetryRuntimeDiagnostic struct {
 	Count   uint64 `json:"count"`
 }
 
-const openTelemetryEndpointRequiredMessage = "endpoint is required"
+const (
+	openTelemetryEndpointRequiredMessage = "endpoint is required"
+	llmChunkEventName                    = "llm.chunk"
+	completedSpanContextTTLField         = "completed span context TTL"
+)
 
 func decodeOpenTelemetryRuntimeDiagnostics(out *C.char) ([]OpenTelemetryRuntimeDiagnostic, error) {
 	defer C.nemo_relay_string_free(out)
@@ -2547,7 +2551,7 @@ func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConf
 	if *config.CompletedSpanContextTTL <= 0 {
 		return config, fmt.Errorf("completed span context TTL must be greater than 0")
 	}
-	if err := requireWholeMillisecondDuration("completed span context TTL", *config.CompletedSpanContextTTL); err != nil {
+	if err := requireWholeMillisecondDuration(completedSpanContextTTLField, *config.CompletedSpanContextTTL); err != nil {
 		return config, err
 	}
 	if config.Headers == nil {
@@ -2563,7 +2567,7 @@ func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConf
 		config.MarkProjection = MarkProjectionInherit
 	}
 	if config.MarkExcludeNames == nil {
-		config.MarkExcludeNames = []string{"llm.chunk"}
+		config.MarkExcludeNames = []string{llmChunkEventName}
 	}
 	if config.AttributeMappings == nil {
 		config.AttributeMappings = []OtlpAttributeMapping{}
@@ -2745,7 +2749,7 @@ func NewOpenTelemetryFileSinkSubscriber(config OpenTelemetryFileSinkConfig) (*Op
 		config.MarkProjection = MarkProjectionInherit
 	}
 	if config.MarkExcludeNames == nil {
-		config.MarkExcludeNames = []string{"llm.chunk"}
+		config.MarkExcludeNames = []string{llmChunkEventName}
 	}
 	if config.AttributeMappings == nil {
 		config.AttributeMappings = []OtlpAttributeMapping{}
@@ -2763,7 +2767,7 @@ func NewOpenTelemetryFileSinkSubscriber(config OpenTelemetryFileSinkConfig) (*Op
 	if *config.CompletedSpanContextTTL <= 0 {
 		return nil, fmt.Errorf("completed span context TTL must be greater than 0")
 	}
-	if err := requireWholeMillisecondDuration("completed span context TTL", *config.CompletedSpanContextTTL); err != nil {
+	if err := requireWholeMillisecondDuration(completedSpanContextTTLField, *config.CompletedSpanContextTTL); err != nil {
 		return nil, err
 	}
 
@@ -3082,7 +3086,7 @@ func normalizeOpenTelemetryLogConfig(config OpenTelemetryLogConfig) (OpenTelemet
 	if err := requireWholeMillisecondDuration("scheduled delay", config.ScheduledDelay); err != nil {
 		return config, err
 	}
-	if err := requireWholeMillisecondDuration("completed span context TTL", config.CompletedSpanContextTTL); err != nil {
+	if err := requireWholeMillisecondDuration(completedSpanContextTTLField, config.CompletedSpanContextTTL); err != nil {
 		return config, err
 	}
 	if config.MinimumSeverity == "" {

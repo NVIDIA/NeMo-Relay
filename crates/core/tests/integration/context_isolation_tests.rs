@@ -210,7 +210,28 @@ fn propagation_context_preserves_valid_w3c_headers_and_discards_invalid_ones() {
 }
 
 #[test]
-fn propagation_context_to_traceparent_advances_an_imported_w3c_parent() {
+fn propagated_w3c_parent_is_not_rewritten_to_a_relay_span_id() {
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    let parent_uuid = Uuid::from_u128(0x018f_13f0_7c1a_7a80_8000_0000_0000_0702);
+    let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    let propagation = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(Uuid::from_u128(0x018f_13f0_7c1a_7a80_8000_0000_0000_0701)),
+        parent_uuid,
+        traceparent: Some(traceparent.to_string()),
+        tracestate: Some("vendor=value".to_string()),
+    };
+    set_thread_scope_stack(create_scope_stack_from_propagation(&propagation).unwrap());
+
+    let captured = nemo_relay::api::runtime::capture_propagation_context().unwrap();
+
+    assert_eq!(captured.parent_uuid, parent_uuid);
+    assert_eq!(captured.traceparent.as_deref(), Some(traceparent));
+    assert_eq!(captured.tracestate.as_deref(), Some("vendor=value"));
+}
+
+#[test]
+fn propagation_context_to_traceparent_preserves_an_imported_w3c_parent() {
     let parent_uuid = Uuid::from_u128(0x00112233445566778899aabbccddeeff);
     let context = PropagationContext {
         version: PropagationContext::VERSION,
@@ -222,7 +243,7 @@ fn propagation_context_to_traceparent_advances_an_imported_w3c_parent() {
 
     assert_eq!(
         context.to_traceparent().unwrap(),
-        "00-4bf92f3577b34da6a3ce929d0e0e4736-8899aabbccddeeff-01"
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     );
 }
 
@@ -262,13 +283,13 @@ fn rootless_w3c_context_still_emits_the_upstream_traceparent() {
 
     assert_eq!(
         capture_traceparent().unwrap(),
-        "00-4bf92f3577b34da6a3ce929d0e0e4736-8899aabbccddeeff-01"
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     );
     let rootless = capture_rootless_propagation_context().unwrap();
     assert_eq!(rootless.root_uuid, None);
     assert_eq!(
         rootless.traceparent.as_deref(),
-        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-8899aabbccddeeff-01")
+        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
     );
     assert_eq!(rootless.tracestate.as_deref(), Some("vendor=value"));
 }

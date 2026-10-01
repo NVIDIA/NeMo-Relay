@@ -85,6 +85,7 @@ opentelemetry-otlp = { version = "0.32", default-features = false, features = ["
 opentelemetry-http = "0.32"
 async-trait = "0.1"
 reqwest = { version = "0.13", default-features = false, features = ["charset", "http2", "rustls", "stream"] }
+sysinfo = { version = "0.38", default-features = false, features = ["system", "network"] }
 tonic = { version = "0.14.1", default-features = false }
 object_store = { version = "0.14.1", default-features = false, features = ["aws"], optional = true }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }
@@ -96,10 +97,10 @@ spdlog-rs = { version = "0.5", features = ["log", "multi-thread"] }
 unicode-general-category = "1.1"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "param"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }

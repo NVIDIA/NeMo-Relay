@@ -450,11 +450,11 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
     const spans = record.resourceSpans.flatMap((rs) =>
       rs.scopeSpans.flatMap((ss) => ss.spans),
     );
-    const spanKeys = spans.flatMap((span) => span.attributes.map((a) => a.key));
+    const spanKeys = new Set(spans.flatMap((span) => span.attributes.map((a) => a.key)));
 
     // Asserted per option: a setting parsed but never applied must fail here.
-    assert.ok(spanKeys.includes('scope.kind'), 'attributeMappings should add the alias');
-    assert.ok(spanKeys.includes('nv.tenant'), 'promoteMetadataPrefixes should copy the metadata');
+    assert.ok(spanKeys.has('scope.kind'), 'attributeMappings should add the alias');
+    assert.ok(spanKeys.has('nv.tenant'), 'promoteMetadataPrefixes should copy the metadata');
     assert.ok(
       resourceKeys.includes('deployment.environment'),
       'promoteResourceMetadataPrefixes should copy onto the resource',

@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v12";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v16";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -18,7 +18,13 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const publicationStates = new Map();
   let nextPublicationContextId = 0;
 
-  function callbackStore(publicationState, publicationContextId, scopeStack, propagationParentUuid) {
+  function callbackStore(
+    publicationState,
+    publicationContextId,
+    scopeStack,
+    propagationParentUuid,
+    propagationContext,
+  ) {
     const lifecycle = { expired: false, stores: new Set() };
     const store = {
       lifecycle,
@@ -26,6 +32,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       publicationContextId,
       scopeStack,
       propagationParentUuid,
+      propagationContext,
     };
     lifecycle.stores.add(store);
     return store;
@@ -37,12 +44,14 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       publicationState: current.publicationState,
       publicationContextId: current.publicationContextId,
       scopeStack,
-      propagationParentUuid: current.propagationParentUuid,
+      propagationParentUuid: undefined,
+      propagationContext: undefined,
     };
     current.lifecycle.stores.add(store);
     if (current.lifecycle.expired) {
       store.scopeStack = null;
       store.propagationParentUuid = undefined;
+      store.propagationContext = undefined;
     }
     return store;
   }
@@ -55,6 +64,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     for (const current of store.lifecycle.stores) {
       current.scopeStack = null;
       current.propagationParentUuid = undefined;
+      current.propagationContext = undefined;
     }
     store.lifecycle.stores.clear();
   }
@@ -111,6 +121,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     publicationContextId,
     scopeStack,
     propagationParentUuid,
+    propagationContext,
     registerAbort,
     streamResult,
     streamPush,
@@ -143,6 +154,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       publicationContextId,
       scopeStack,
       propagationParentUuid,
+      propagationContext,
     );
     const settlePublication = () => {
       if (ownsPublicationState) {
@@ -274,6 +286,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         publicationContextId,
         scopeStack,
         propagationParentUuid,
+        propagationContext,
         registerAbort,
         streamResult,
         streamPush,
@@ -307,6 +320,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           publicationContextId,
           scopeStack,
           propagationParentUuid,
+          propagationContext,
           registerAbort,
           streamResult,
           streamPush,
@@ -316,15 +330,44 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     },
 
     scopedStream(fn) {
-      return function __nemo_relay_scoped_stream_wrapper(arg, scopeStack, propagationParentUuid) {
+      return function __nemo_relay_scoped_stream_wrapper(
+        arg,
+        scopeStack,
+        propagationParentUuid,
+        propagationContext,
+      ) {
         const current = eventSanitizerContext.getStore();
         const token = callbackStore(
           current?.publicationState ?? { active: false },
           current?.publicationContextId,
           scopeStack,
           propagationParentUuid,
+          propagationContext,
         );
         return eventSanitizerContext.run(token, () => fn(arg));
+      };
+    },
+
+    scoped(fn) {
+      return function __nemo_relay_scoped_wrapper(
+        arg,
+        scopeStack,
+        propagationParentUuid,
+        propagationContext,
+      ) {
+        const current = eventSanitizerContext.getStore();
+        const token = callbackStore(
+          current?.publicationState ?? { active: false },
+          current?.publicationContextId,
+          scopeStack,
+          propagationParentUuid,
+          propagationContext,
+        );
+        try {
+          return eventSanitizerContext.run(token, () => fn(arg));
+        } finally {
+          expireCallbackStore(token);
+        }
       };
     },
 
@@ -347,13 +390,18 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       return eventSanitizerContext.getStore()?.propagationParentUuid;
     },
 
+    callbackPropagationContext() {
+      return eventSanitizerContext.getStore()?.propagationContext;
+    },
+
     withCallbackScopeStack(scopeStack, fn) {
       const current = eventSanitizerContext.getStore();
       const token = callbackStore(
         current?.publicationState ?? { active: false },
         current?.publicationContextId,
         scopeStack,
-        current?.propagationParentUuid,
+        undefined,
+        undefined,
       );
       const expire = () => expireCallbackStore(token);
       let value;
@@ -444,6 +492,10 @@ pub(crate) fn wrap_scoped_stream_callback(
     wrap_callback(env, func, "scopedStream")
 }
 
+pub(crate) fn wrap_scoped_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
+    wrap_callback(env, func, "scoped")
+}
+
 pub(crate) fn publication_callback_active(env: &Env) -> napi::Result<bool> {
     let factories = callback_factories(env)?;
     let callback: JsFunction = factories.get_named_property("publicationCallbackActive")?;
@@ -495,6 +547,21 @@ pub(crate) fn callback_propagation_parent_uuid(env: &Env) -> napi::Result<Option
         .into_utf8()?
         .into_owned()
         .map(Some)
+}
+
+pub(crate) fn callback_propagation_context(
+    env: &Env,
+) -> napi::Result<Option<crate::api::PropagationContext>> {
+    let factories = callback_factories(env)?;
+    let callback: JsFunction = factories.get_named_property("callbackPropagationContext")?;
+    let value = callback.call::<JsUnknown>(None, &[])?;
+    if matches!(value.get_type()?, ValueType::Undefined | ValueType::Null) {
+        return Ok(None);
+    }
+    unsafe {
+        <crate::api::PropagationContext as FromNapiValue>::from_napi_value(env.raw(), value.raw())
+            .map(Some)
+    }
 }
 
 pub(crate) fn expire_callback_context(env: &Env) -> napi::Result<()> {

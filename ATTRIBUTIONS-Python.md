@@ -6310,7 +6310,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-## python-discovery (1.2.1)
+## python-discovery (1.6.1)
 
 ### Licenses
 License: `MIT`
@@ -7825,7 +7825,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## urllib3 (2.7.0)
+## urllib3 (2.8.0)
 
 ### Licenses
 License: `MIT`
@@ -8101,7 +8101,7 @@ Apache License
    limitations under the License.
 ```
 
-## virtualenv (21.2.0)
+## virtualenv (21.7.13)
 
 ### Licenses
 License: `MIT`
