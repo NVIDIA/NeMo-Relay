@@ -588,7 +588,7 @@ Tool and turn activity are unaffected by any of these.
 pi runs every `tool_call` handler unless one returns `block`, and all of them
 share the same mutable `input` object with no re-validation before execution.
 Loading with `-e` puts this gate first, which prevents an *earlier* extension
-pre-empting it — but an extension loaded after it can rewrite arguments Relay has
+preempting it — but an extension loaded after it can rewrite arguments Relay has
 already authorized, and those execute unreviewed.
 
 <Warning>
