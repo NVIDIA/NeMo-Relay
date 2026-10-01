@@ -234,3 +234,209 @@ fn collector_maps_source_errors_and_rejects_unowned_or_missing_targets() {
         super::count_measurement(1, false, super::ResourceMeasurementUnit::Processes).is_none()
     );
 }
+
+fn tree_target() -> super::CollectionTarget {
+    super::CollectionTarget {
+        process_id: 1,
+        start_identity: 1,
+        measurement_scope: super::ResourceMeasurementScope::ProcessTree,
+        #[cfg(windows)]
+        job_handle: None,
+    }
+}
+
+fn cpu_sample_config() -> super::ProcessSampleConfig {
+    super::ProcessSampleConfig {
+        cpu: true,
+        memory: false,
+        process: false,
+        disk_io: false,
+    }
+}
+
+#[test]
+fn exited_descendants_are_removed_before_environment_gpu_and_process_aggregation() {
+    use std::io::{Error, ErrorKind};
+    for exit_during_identity in [true, false] {
+        let selected = super::sample_selected_processes(
+            &tree_target(),
+            vec![1, 2, 3],
+            cpu_sample_config(),
+            |pid| {
+                if pid == 2 && exit_during_identity {
+                    Err(Error::from(ErrorKind::NotFound))
+                } else {
+                    Ok(1)
+                }
+            },
+            |pid| {
+                if pid == 2 {
+                    assert!(!exit_during_identity, "do not sample a vanished PID");
+                    Err(Error::from(ErrorKind::NotFound))
+                } else {
+                    let mut sample = sample_with_cpu_time(Some(10));
+                    sample.process_id = pid;
+                    Ok(sample)
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(selected.process_ids, vec![1, 3]);
+        assert!(selected.collection_issue.is_none());
+        assert_eq!(selected.samples.len(), selected.process_ids.len());
+        let included = selected.samples.iter().collect::<Vec<_>>();
+        let mut aggregation = super::ProcessAggregation {
+            samples: &included,
+            complete: true,
+            allow_partial: false,
+            field_sampled_processes: Default::default(),
+        };
+        assert_eq!(
+            aggregation
+                .sum(
+                    "cpu.user_time",
+                    super::ResourceMeasurementUnit::Milliseconds,
+                    |sample| sample.user_cpu_time
+                )
+                .unwrap()
+                .value,
+            super::ResourceMetricValue::Integer(20),
+        );
+    }
+}
+
+#[test]
+fn process_tree_keeps_root_errors_identity_changes_and_other_descendant_errors_strict() {
+    use std::io::{Error, ErrorKind};
+    for kind in [
+        ErrorKind::NotFound,
+        ErrorKind::PermissionDenied,
+        ErrorKind::Other,
+    ] {
+        assert!(
+            super::sample_selected_processes(
+                &tree_target(),
+                vec![1, 2],
+                cpu_sample_config(),
+                |_| Ok(1),
+                |_| Err(Error::from(kind)),
+            )
+            .is_none()
+        );
+    }
+    assert!(
+        super::sample_selected_processes(
+            &tree_target(),
+            vec![1],
+            cpu_sample_config(),
+            |_| Ok(1),
+            |_| {
+                let mut sample = sample_with_cpu_time(Some(10));
+                sample.start_identity = 2;
+                Ok(sample)
+            },
+        )
+        .is_none()
+    );
+    for identity_failure in [true, false] {
+        for kind in [
+            ErrorKind::PermissionDenied,
+            ErrorKind::Other,
+            ErrorKind::InvalidInput,
+        ] {
+            let selected = super::sample_selected_processes(
+                &tree_target(),
+                vec![1, 2],
+                cpu_sample_config(),
+                |pid| {
+                    if pid == 2 && identity_failure {
+                        Err(Error::from(kind))
+                    } else {
+                        Ok(1)
+                    }
+                },
+                |pid| {
+                    if pid == 2 {
+                        Err(Error::from(kind))
+                    } else {
+                        Ok(sample_with_cpu_time(Some(10)))
+                    }
+                },
+            )
+            .unwrap();
+            assert_eq!(selected.process_ids, vec![1, 2]);
+            assert_eq!(
+                selected.collection_issue,
+                Some(super::reason_for_io_error(&Error::from(kind)))
+            );
+            assert_eq!(selected.samples.len(), 1);
+        }
+    }
+    let selected = super::sample_selected_processes(
+        &tree_target(),
+        vec![1, 2],
+        cpu_sample_config(),
+        |_| Ok(1),
+        |pid| {
+            let mut sample = sample_with_cpu_time(Some(10));
+            sample.process_id = pid;
+            if pid == 2 {
+                sample.start_identity = 2;
+            }
+            Ok(sample)
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        selected.collection_issue,
+        Some(super::CollectionIssue::TargetIdentityChanged)
+    );
+    assert_eq!(selected.process_ids, vec![1, 2]);
+}
+
+#[test]
+fn global_process_coverage_still_counts_exited_processes_as_unsampled() {
+    let mut target = tree_target();
+    target.measurement_scope = super::ResourceMeasurementScope::Global;
+    let selected = super::sample_selected_processes(
+        &target,
+        vec![1, 2],
+        cpu_sample_config(),
+        |_| panic!("global queries do not require a separate identity"),
+        |pid| {
+            if pid == 2 {
+                Err(std::io::ErrorKind::NotFound.into())
+            } else {
+                Ok(sample_with_cpu_time(Some(10)))
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(selected.process_ids, vec![1, 2]);
+    assert_eq!(selected.samples.len(), 1);
+    assert_eq!(
+        selected.collection_issue,
+        Some(super::CollectionIssue::TargetTerminated)
+    );
+}
+
+#[test]
+fn exit_errors_do_not_include_generic_invalid_input_or_permission_failures() {
+    use std::io::{Error, ErrorKind};
+    assert!(super::process_has_exited(&Error::from(ErrorKind::NotFound)));
+    for kind in [
+        ErrorKind::PermissionDenied,
+        ErrorKind::InvalidInput,
+        ErrorKind::Other,
+    ] {
+        assert!(!super::process_has_exited(&Error::from(kind)));
+    }
+    #[cfg(target_os = "linux")]
+    assert!(super::process_has_exited(&Error::from_raw_os_error(
+        rustix::io::Errno::SRCH.raw_os_error()
+    )));
+    #[cfg(windows)]
+    assert!(super::process_has_exited(&Error::from_raw_os_error(
+        windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER as i32
+    )));
+}

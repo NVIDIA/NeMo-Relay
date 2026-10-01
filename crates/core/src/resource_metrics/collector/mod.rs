@@ -271,6 +271,89 @@ pub(crate) fn collect(
     collect_with_state(target, config, &mut SamplingState::default())
 }
 
+struct ProcessSelection {
+    samples: Vec<ProcessSample>,
+    collection_issue: Option<CollectionIssue>,
+    process_ids: Vec<u32>,
+}
+
+// A vanished descendant is no longer part of the live tree. Keep all other
+// errors strict, including changed identities and any failure of the root.
+fn sample_selected_processes(
+    target: &CollectionTarget,
+    process_ids: Vec<u32>,
+    config: ProcessSampleConfig,
+    mut identity: impl FnMut(u32) -> io::Result<u64>,
+    mut sample: impl FnMut(u32) -> io::Result<ProcessSample>,
+) -> Option<ProcessSelection> {
+    let mut selection = ProcessSelection {
+        samples: Vec::with_capacity(process_ids.len()),
+        collection_issue: None,
+        process_ids: Vec::with_capacity(process_ids.len()),
+    };
+    for process_id in process_ids {
+        if !config.any() {
+            selection.process_ids.push(process_id);
+            continue;
+        }
+        let global = target.measurement_scope == ResourceMeasurementScope::Global;
+        let root = process_id == target.process_id;
+        let expected = if global {
+            None
+        } else if root {
+            Some(target.start_identity)
+        } else {
+            match identity(process_id) {
+                Ok(value) => Some(value),
+                Err(error) if process_has_exited(&error) => continue,
+                Err(error) => {
+                    selection.process_ids.push(process_id);
+                    record_collection_issue(
+                        &mut selection.collection_issue,
+                        reason_for_io_error(&error),
+                    );
+                    continue;
+                }
+            }
+        };
+        match sample(process_id) {
+            Ok(value) if expected.is_none_or(|expected| value.start_identity == expected) => {
+                selection.samples.push(value);
+            }
+            Ok(_) | Err(_) if !global && root => return None,
+            Ok(_) => record_collection_issue(
+                &mut selection.collection_issue,
+                CollectionIssue::TargetIdentityChanged,
+            ),
+            Err(error) if !global && process_has_exited(&error) => continue,
+            Err(error) => record_collection_issue(
+                &mut selection.collection_issue,
+                reason_for_io_error(&error),
+            ),
+        }
+        selection.process_ids.push(process_id);
+    }
+    Some(selection)
+}
+
+fn process_has_exited(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::NotFound {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    if error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) {
+        return true;
+    }
+    // OpenProcess reports ERROR_INVALID_PARAMETER when an enumerated PID no
+    // longer exists. Other InvalidInput errors remain collection failures.
+    #[cfg(windows)]
+    if error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER as i32)
+    {
+        return true;
+    }
+    false
+}
+
 #[allow(clippy::cognitive_complexity)] // Keep the single collection pass and its coverage checks together.
 pub(crate) fn collect_with_state(
     target: &CollectionTarget,
@@ -328,62 +411,34 @@ pub(crate) fn collect_with_state(
     {
         return unavailable_snapshot(target, config);
     }
-    let mut samples = Vec::with_capacity(process_ids.len());
-    let mut collection_issue = None;
     #[cfg(windows)]
     let thread_counts = if sample_config.process {
         platform::thread_counts().ok()
     } else {
         None
     };
-    for process_id in process_ids.iter().filter(|_| sample_config.any()) {
-        if target.measurement_scope == ResourceMeasurementScope::Global {
-            match platform::process_sample(
-                *process_id,
+    let visible_processes = process_ids.len();
+    let Some(ProcessSelection {
+        samples,
+        collection_issue,
+        process_ids,
+    }) = sample_selected_processes(
+        target,
+        process_ids,
+        sample_config,
+        platform::process_identity,
+        |process_id| {
+            platform::process_sample(
+                process_id,
                 sample_config,
                 #[cfg(windows)]
                 thread_counts.as_ref(),
-            ) {
-                Ok(sample) => samples.push(sample),
-                Err(error) => {
-                    record_collection_issue(&mut collection_issue, reason_for_io_error(&error))
-                }
-            }
-            continue;
-        }
-        let expected_start_identity = if *process_id == target.process_id {
-            target.start_identity
-        } else {
-            match platform::process_identity(*process_id) {
-                Ok(start_identity) => start_identity,
-                Err(error) => {
-                    record_collection_issue(&mut collection_issue, reason_for_io_error(&error));
-                    continue;
-                }
-            }
-        };
-        match platform::process_sample(
-            *process_id,
-            sample_config,
-            #[cfg(windows)]
-            thread_counts.as_ref(),
-        ) {
-            Ok(sample) if sample.start_identity == expected_start_identity => samples.push(sample),
-            Ok(_) if *process_id == target.process_id => {
-                return unavailable_snapshot(target, config);
-            }
-            Ok(_) => record_collection_issue(
-                &mut collection_issue,
-                CollectionIssue::TargetIdentityChanged,
-            ),
-            Err(_) if *process_id == target.process_id => {
-                return unavailable_snapshot(target, config);
-            }
-            Err(error) => {
-                record_collection_issue(&mut collection_issue, reason_for_io_error(&error))
-            }
-        }
-    }
+            )
+        },
+    )
+    else {
+        return unavailable_snapshot(target, config);
+    };
     if sample_config.any()
         && !process_ids_unavailable
         && target.measurement_scope != ResourceMeasurementScope::Global
@@ -410,12 +465,12 @@ pub(crate) fn collect_with_state(
     let included = samples.iter().collect::<Vec<_>>();
     let mut process_sampling =
         (sample_config.any() && !process_ids_unavailable).then_some(ProcessSamplingMetadata {
-            visible_processes: process_ids.len() as u64,
+            visible_processes: visible_processes as u64,
             sampled_processes: samples.len() as u64,
             field_sampled_processes: BTreeMap::new(),
         });
     // A global snapshot may report a partial process sum when coverage is explicit.
-    // Other scopes still require every selected process to be sampled.
+    // Other scopes require every selected process that has not exited to be sampled.
     let aggregation_complete = complete
         || (target.measurement_scope == ResourceMeasurementScope::Global && !samples.is_empty());
     let mut aggregation = ProcessAggregation {

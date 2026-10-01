@@ -220,14 +220,24 @@ Some values are running totals. CPU time and disk I/O fields add the lifetime
 counters of processes visible at collection time. These sums can fall when a
 process exits. Relay can miss a process that starts and exits between polls.
 
-For a process tree, a process total is unavailable if Relay cannot sample every
-process in the tree or any sampled process lacks that counter. In global scope,
+If a process query shows that a child exited after Relay listed the process
+tree, Relay skips that child and reports metrics for the remaining live tree. The
+exited child does not make the process totals unavailable. Relay also excludes
+that child from the process IDs used for environment and GPU readings. This
+behavior is the same for polling and on-demand collection in every language.
+
+A process total is still unavailable if Relay cannot read a remaining process,
+access is denied, a process ID has been reused, or any sampled process lacks
+that counter. If the root exits or its identity changes, Relay returns an
+unavailable snapshot. In global scope,
 each total adds only the processes that supply that counter. A global total is
 `null` if no process supplies the counter or the sum exceeds its numeric range.
 
 Use `process_sampling` to check coverage before treating a global total as complete:
 
-- `visible_processes` counts processes listed when collection began.
+- `visible_processes` counts processes listed when collection began, including
+  children that exit before sampling. In process-tree mode, it can therefore be
+  larger than `sampled_processes` even when the remaining tree is fully sampled.
 - `sampled_processes` counts processes whose base query succeeded.
 - `field_sampled_processes` counts readable values for each process-summed field.
   Keys use canonical paths, such as `cpu.total_time`, in every language. A zero

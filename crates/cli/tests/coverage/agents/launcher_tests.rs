@@ -2488,6 +2488,7 @@ async fn supervised_resource_metrics_selects_the_owned_child_and_restores_target
     use nemo_relay::api::resource_metrics;
     use nemo_relay::plugin::dynamic::PluginHostActivation;
 
+    let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let launch = resource_metrics::prepare_cli_resource_metrics_process_tree().unwrap();
     let mut host = PluginHostActivation::initialize_exact(
         serde_json::from_value(json!({
