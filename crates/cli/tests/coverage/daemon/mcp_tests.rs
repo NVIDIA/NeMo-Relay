@@ -32,7 +32,7 @@ async fn pending_worker_fixture() -> (ActivationChild, SocketAddr) {
         .unwrap();
     let stdout = child.stdout.take().unwrap();
     let child = ActivationChild {
-        child,
+        child: child.into(),
         published: false,
     };
     let address = tokio::time::timeout(Duration::from_secs(10), async {
@@ -70,7 +70,7 @@ async fn published_worker_survives_guard_drop_but_pending_worker_is_killed() {
     for published in [false, true] {
         let (mut child, address) = pending_worker_fixture().await;
         child.published = published;
-        let mut stdin = child.child.stdin.take().unwrap();
+        let mut stdin = child.child.take_stdin().unwrap();
         drop(child);
         if published {
             let _connection = tokio::net::TcpStream::connect(address)
@@ -341,6 +341,8 @@ async fn worker_activation_failure_sends_sequence_one_and_propagates_socket_reje
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
+    let activation_id = crate::daemon::common::control::random_secret(16).unwrap();
+    let expected_activation_id = activation_id.clone();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
@@ -351,7 +353,7 @@ async fn worker_activation_failure_sends_sequence_one_and_propagates_socket_reje
         };
         assert_eq!(payload.sequence, 1);
         assert_eq!(payload.session_id, "mcp-test-session");
-        assert_eq!(payload.payload.activation_id, "failed-activation");
+        assert_eq!(payload.payload.activation_id, expected_activation_id);
         assert_eq!(
             payload.payload.failure_reason,
             WorkerActivationFailureReason::WorkerExitedBeforeReady
@@ -377,7 +379,7 @@ async fn worker_activation_failure_sends_sequence_one_and_propagates_socket_reje
         .unwrap();
     // The unit-test executable rejects the worker CLI arguments and exits before readiness.
     let directive = BrokerDirective::LaunchWorker {
-        activation_id: "failed-activation".into(),
+        activation_id,
         activation_token: SensitiveString::new("secret").unwrap(),
         deadline_unix_ms: u64::MAX,
         bind_ip: Ipv4Addr::LOCALHOST,
@@ -396,4 +398,215 @@ async fn worker_activation_failure_sends_sequence_one_and_propagates_socket_reje
         "{error}"
     );
     server.await.unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn detached_worker_launcher_fixture() {
+    let Some(path) = std::env::var_os("NEMO_RELAY_TEST_DETACHED_WORKER_PID") else {
+        return;
+    };
+    let mut command = std::process::Command::new("sleep");
+    command
+        .arg("30")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    crate::process::detached::configure_detached(&mut command);
+    let mut child = command.spawn().unwrap();
+    std::fs::write(path, child.id().to_string()).unwrap();
+    child.wait().unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn launcher_process_group_cleanup_preserves_detached_worker() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("worker.pid");
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "daemon::mcp::tests::detached_worker_launcher_fixture",
+            "--nocapture",
+        ])
+        .env("NEMO_RELAY_TEST_DETACHED_WORKER_PID", &path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut launcher = crate::process::SupervisedChild::spawn(&mut command)
+        .await
+        .unwrap();
+    let worker = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(&path)
+                && let Ok(pid) = pid.parse::<i32>()
+            {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(unsafe { libc::getsid(worker) }, worker);
+    launcher.terminate().await.unwrap();
+    let alive = unsafe { libc::kill(worker, 0) };
+    unsafe {
+        libc::kill(worker, libc::SIGKILL);
+    }
+    assert_eq!(
+        alive, 0,
+        "launcher group cleanup must not terminate its detached worker"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn detached_windows_worker_process_fixture() {
+    if std::env::var_os("NEMO_RELAY_TEST_WINDOWS_DETACHED_WORKER").is_some() {
+        std::thread::sleep(Duration::from_secs(30));
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn detached_windows_worker_launcher_fixture() {
+    let Some(path) = std::env::var_os("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(path);
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "daemon::mcp::tests::detached_windows_worker_process_fixture",
+        ])
+        .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_WORKER", "1");
+    let stderr = std::fs::File::create(path.with_extension("stderr")).unwrap();
+    if std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED").is_some() {
+        assert!(crate::process::detached::spawn_worker_detached(&command, &stderr).is_err());
+        std::fs::write(path, "rejected").unwrap();
+        return;
+    }
+    let (child, _bootstrap) =
+        crate::process::detached::spawn_worker_detached(&command, &stderr).unwrap();
+    std::fs::write(path, child.id().to_string()).unwrap();
+    std::thread::sleep(Duration::from_secs(30));
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn launcher_job_cleanup_preserves_explicitly_detached_worker() {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("worker.pid");
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    let launcher_stderr = path.with_extension("launcher.stderr");
+    command
+        .args([
+            "--exact",
+            "daemon::mcp::tests::detached_windows_worker_launcher_fixture",
+            "--nocapture",
+        ])
+        .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID", &path)
+        .stdout(Stdio::null())
+        .stderr(std::fs::File::create(&launcher_stderr).unwrap());
+    let mut launcher = crate::process::SupervisedChild::spawn(&mut command)
+        .await
+        .unwrap();
+    let worker = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(&path)
+                && let Ok(pid) = pid.parse::<u32>()
+            {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "worker launcher did not report its child: {error}: {}",
+            std::fs::read_to_string(&launcher_stderr).unwrap_or_default()
+        )
+    });
+    // SAFETY: OpenProcess returns a separately owned handle, closed after cleanup below.
+    let handle = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, worker) };
+    assert!(!handle.is_null());
+    launcher.terminate().await.unwrap();
+    // SAFETY: The live handle has synchronization and termination rights.
+    let alive = unsafe { WaitForSingleObject(handle, 0) };
+    unsafe {
+        TerminateProcess(handle, 1);
+        WaitForSingleObject(handle, 5000);
+        CloseHandle(handle);
+    }
+    assert_eq!(
+        alive, WAIT_TIMEOUT,
+        "Relay Job cleanup killed a worker that requested breakaway"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn restrictive_external_job_fixture() {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let Some(path) = std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXTERNAL_JOB") else {
+        return;
+    };
+    // This fixture runs in a separate process; its default job disallows all breakaway.
+    // SAFETY: Null arguments create a private job. The owned handle closes it once.
+    let raw_job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    assert!(!raw_job.is_null());
+    let _job = unsafe { OwnedHandle::from_raw_handle(raw_job) };
+    assert_ne!(
+        unsafe { AssignProcessToJobObject(raw_job, GetCurrentProcess()) },
+        0
+    );
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "daemon::mcp::tests::detached_windows_worker_launcher_fixture",
+        ])
+        .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID", path)
+        .env("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut launcher = crate::process::SupervisedChild::spawn(&mut command)
+        .await
+        .unwrap();
+    assert!(launcher.wait().await.unwrap().success());
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn worker_cannot_escape_relay_job_into_restrictive_external_parent_job() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("result");
+    let output = tokio::time::timeout(
+        Duration::from_secs(5),
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::mcp::tests::restrictive_external_job_fixture",
+            ])
+            .env("NEMO_RELAY_TEST_WINDOWS_EXTERNAL_JOB", &path)
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "rejected");
 }

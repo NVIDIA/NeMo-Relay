@@ -252,10 +252,54 @@ fn optional_environment(name: &str) -> Result<Option<String>, CliError> {
         .transpose()
 }
 
+enum WorkerChild {
+    Local(Child),
+    #[cfg(windows)]
+    Detached {
+        child: crate::process::detached::DetachedChild,
+        stdin: Option<tokio::fs::File>,
+    },
+}
+impl From<Child> for WorkerChild {
+    fn from(child: Child) -> Self {
+        Self::Local(child)
+    }
+}
+impl WorkerChild {
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        match self {
+            Self::Local(child) => child.try_wait(),
+            #[cfg(windows)]
+            Self::Detached { child, .. } => child.try_wait(),
+        }
+    }
+    fn start_kill(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Local(child) => child.start_kill(),
+            #[cfg(windows)]
+            Self::Detached { child, .. } => child.start_kill(),
+        }
+    }
+    async fn kill(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Local(child) => child.kill().await,
+            #[cfg(windows)]
+            Self::Detached { child, .. } => child.kill().await,
+        }
+    }
+    fn take_stdin(&mut self) -> Option<std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>> {
+        match self {
+            Self::Local(child) => child.stdin.take().map(|stdin| Box::pin(stdin) as _),
+            #[cfg(windows)]
+            Self::Detached { stdin, .. } => stdin.take().map(|stdin| Box::pin(stdin) as _),
+        }
+    }
+}
+
 /// A pending worker must not survive failed activation or cancellation. Readiness transfers
 /// ownership to the broker; only that success path disarms this guard.
 struct ActivationChild {
-    child: Child,
+    child: WorkerChild,
     published: bool,
 }
 
@@ -480,9 +524,22 @@ async fn launch_worker(
                 error,
             )
         })?;
-    let mut command = worker_command(&executable, daemon_origin, bootstrap);
-    let child = command
-        .spawn()
+    let command = worker_command(&executable, daemon_origin, bootstrap);
+    #[cfg(not(windows))]
+    let spawn = {
+        let mut command = command;
+        command.spawn().map(WorkerChild::from)
+    };
+    #[cfg(windows)]
+    let spawn = crate::process::detached::inherited_stderr()
+        .and_then(|stderr| {
+            crate::process::detached::spawn_worker_detached(command.as_std(), &stderr)
+        })
+        .map(|(child, stdin)| WorkerChild::Detached {
+            child,
+            stdin: Some(tokio::fs::File::from_std(stdin)),
+        });
+    let child = spawn
         .map_err(|error| CliError::Launch(format!("failed to launch daemon worker: {error}")))
         .map_err(|error| {
             WorkerActivationError::new(
@@ -497,8 +554,7 @@ async fn launch_worker(
     let transfer = async {
         let mut stdin = child
             .child
-            .stdin
-            .take()
+            .take_stdin()
             .ok_or_else(|| {
                 CliError::Launch("failed to create the protected worker activation pipe".into())
             })
@@ -582,6 +638,8 @@ fn worker_command(
         .stderr(Stdio::inherit())
         .env_remove(ROUTE_TOKEN_ENV)
         .kill_on_drop(false);
+    #[cfg(unix)]
+    crate::process::detached::configure_detached(command.as_std_mut());
     if bootstrap.port != 0 {
         command.arg("--port").arg(bootstrap.port.to_string());
     }
