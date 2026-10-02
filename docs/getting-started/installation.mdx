@@ -12,8 +12,8 @@ For the fastest first run, choose the guide for your runtime or language from
 installation command, configuration, and verification.
 
 Use this page to compare published NeMo Relay installation methods, supported
-platforms, and removal options. These examples follow the current release;
-quick starts pin the versions verified for their specific paths.
+platforms, and removal options. Unversioned commands install the latest stable
+release; versioned examples use the quick starts' pinned 0.9.1 baseline.
 
 If you are working from a source checkout, validating unpublished changes, or
 contributing to the repository, use
@@ -131,7 +131,7 @@ refer to the [Support Matrix](/reference/support-matrix).
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.10.0 sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.1/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
 ```
 
 Install into another directory:
@@ -155,8 +155,8 @@ Set the same environment variable before invoking the installer to install a
 specific version:
 
 ```powershell
-$env:NEMO_RELAY_VERSION = '0.10.0'
-irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+$env:NEMO_RELAY_VERSION = '0.9.1'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.1/install.ps1 | iex
 ```
 
 To choose an installation directory, download the script and pass `-InstallDir`:
@@ -272,7 +272,7 @@ Install the Python package when your application uses NeMo Relay through the
 Python wrapper and owns the tool or LLM call boundary.
 
 ```bash
-uv add nemo-relay==0.10.0
+uv add nemo-relay==0.9.1
 ```
 
 Use `uv add` from an application project that has a `pyproject.toml`; it records
@@ -296,7 +296,7 @@ JavaScript API and owns the tool or LLM call boundary. Node.js 24 or newer is
 required.
 
 ```bash
-npm install nemo-relay-node@0.10.0
+npm install nemo-relay-node@0.9.1
 ```
 
 On supported x64 and ARM64 Linux systems, npm automatically installs the native
@@ -305,11 +305,11 @@ package for the host C library, including the musl package on Alpine Linux.
 ## Rust
 
 Add the Rust crates when your application uses NeMo Relay directly from Rust.
-Building a Rust application requires Rust 1.86 or newer.
+Building a Rust application requires Rust 1.88 or newer.
 
 ```bash
-cargo add nemo-relay@0.10.0
-cargo add nemo-relay-adaptive@0.10.0
+cargo add nemo-relay@0.9.1
+cargo add nemo-relay-adaptive@0.9.1
 ```
 
 - `nemo-relay` provides the core runtime APIs for scopes, middleware, subscribers, plugins, tool calls, and LLM calls.
@@ -326,10 +326,11 @@ Install the OpenClaw plugin through OpenClaw so OpenClaw can register and manage
 the package:
 
 ```bash
-openclaw plugins install npm:nemo-relay-openclaw@0.10.0
+openclaw plugins install npm:nemo-relay-openclaw@0.9.1 --pin --accept-capabilities
 openclaw gateway restart
 ```
 
+Review any package-source confirmation separately from capability consent.
 Use the package name `nemo-relay-openclaw` for installation. Use the plugin ID
 `nemo-relay` in OpenClaw configuration, inspection, and gateway status commands.
 See the [OpenClaw Plugin Guide](/supported-integrations/openclaw-plugin) for
@@ -337,11 +338,12 @@ configuration and verification steps.
 
 ### Hermes Agent
 
-Install Hermes Agent 0.18.2 or newer by following the
+Install a Hermes Agent build with native NeMo Relay support by following the
 [official Hermes Agent installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation).
-NeMo Relay is built into Hermes Agent. No separate NeMo Relay package,
-observability plugin, or Relay CLI setup is required. Hermes Agent understands
-NeMo Relay plugin configurations.
+Check that `hermes setup` offers NeMo Relay and `hermes doctor` reports its
+status. Older Hermes builds may not expose these features. No separate Relay
+CLI or external observability plugin package is required; select the built-in
+observability configuration using the [Hermes Quick Start](/getting-started/quick-start/hermes).
 
 ### Python Framework Integrations
 
@@ -349,7 +351,7 @@ Install the Python package with the supported framework extras when your
 application uses LangChain, LangGraph, or Deep Agents.
 
 ```bash
-uv add "nemo-relay[langchain,langgraph,deepagents]==0.10.0"
+uv add "nemo-relay[langchain,langgraph,deepagents]==0.9.1"
 ```
 
 The extras install the NeMo Relay Python package plus the dependencies needed by
