@@ -28,8 +28,8 @@ computer. In these examples the bundle uses `/opt/nvidia/bin/nemo-relay` directl
 as its dispatcher and `http://127.0.0.1:47632` as its daemon address.
 Administrator-owned binaries and configuration must not be writable by users.
 
-Choose **one** of the following services. A user service stays tied to its user
-manager; a system service serves all local users independently of their logins.
+Choose **one** of the following services. A user service runs under that user's
+systemd manager. A system service serves all local users, even when they log out.
 
 ## User Service
 
@@ -83,7 +83,7 @@ bundles. For a shared endpoint, use the system service below.
 ## System Service
 
 Create a dedicated account with a persistent home. The daemon stores its signing
-identity here; replacing the home can cause clients to reject its new identity.
+identity there. Replacing the home can cause clients to reject the new identity.
 
 ```bash
 sudo useradd --system --user-group --home-dir /var/lib/nemo-relay \
@@ -145,7 +145,9 @@ ss -ltn 'sport = :47632'
 
 The expected listener is `127.0.0.1:47632`. A listening socket proves only that a
 process has opened the port. Use the service journal to confirm that it is Relay.
-Worker messages appear in the harness's MCP stderr log, not the daemon journal.
+Worker logs use the files and stderr settings in the worker's logging configuration.
+By default, the harness captures worker stderr alongside MCP messages. Refer to
+[Operations](/daemon/operations) for configuration and default capture locations.
 
 Use the matching restart command after a unit or binary update:
 
@@ -171,7 +173,7 @@ systemctl --user daemon-reload
 ```
 
 If you enabled lingering only for Relay, disable it with
-`sudo loginctl disable-linger "$USER"`. Other user services may still need it.
+`sudo loginctl disable-linger "$USER"`. Other user services can still need it.
 
 For a system service:
 
@@ -183,5 +185,5 @@ sudo systemctl daemon-reload
 
 Retain identity state for rollback. Remove the service account, binary, and
 managed artifacts only after confirming that no other deployment uses them.
-See [systemd service documentation](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)
+Refer to [systemd service documentation](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)
 for unit behavior.

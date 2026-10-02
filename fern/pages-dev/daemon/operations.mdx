@@ -7,9 +7,10 @@ position: 9
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use the service manager for daemon lifecycle operations. MCP and workers belong
-to harness sessions. `nemo-relay gateway stop` controls a personal gateway; it is
-not the stop command for a managed daemon service.
+Use the service manager to start and stop the daemon. The harness starts MCP,
+and the daemon broker controls worker startup and shutdown. The
+`nemo-relay gateway stop` command stops a personal gateway. Stop a managed daemon
+through its service manager.
 
 ## Verify Worker-Backed Operation
 
@@ -28,11 +29,12 @@ to succeed. This does not prove live daemon or worker readiness.
 
 <Step title="Confirm Worker Readiness">
 
-Start the managed harness. Check its MCP status and stderr logs. With
-info-level JSONL logging enabled, expect `configuration_resolved` with
-`mode = "managed_worker"`, followed by `worker_ready` (message: `Daemon worker
-is ready`). Confirm the MCP handshake in the harness status view. For a reused
-worker, find its earlier ready event and confirm the worker still exists.
+Start the managed harness. Check its MCP status and the worker's configured log
+destinations, as described in [Find Logs](#find-logs). With info-level JSONL
+logging enabled, expect `configuration_resolved` with `mode = "managed_worker"`.
+Then look for `worker_ready` with the message `Daemon worker is ready`.
+Confirm the MCP handshake in the harness status view. For a reused worker,
+find its earlier ready event and confirm the worker still exists.
 
 Query the daemon's aggregate worker status while the harness remains open:
 
@@ -87,10 +89,10 @@ execution**. Pass-through can also produce both. Do not accept a deployment unti
 the worker and expected plugin behavior have been observed.
 </Warning>
 
-An empty worker list also does not prove a failure. Global pass-through,
-transient fail-open, and activation-in-progress routes have no assigned worker
-UUID and are omitted. Compare `/healthz`, worker status, lifecycle events, and an
-observable plugin result before deciding that traffic used a worker.
+An empty worker list also does not prove a failure. Routes that use passthrough
+or are starting a worker have no assigned worker UUID. They do not appear in
+the list. Compare `/healthz`, worker status, lifecycle events, and a plugin
+result to confirm that traffic used a worker.
 
 For a remote deployment, also test a planned daemon restart and a VPN reconnect.
 Verify recovery or start a fresh harness if the old one cannot recover its control session.
@@ -99,7 +101,27 @@ before selecting middleware that rewrites responses.
 
 ## Find Logs
 
-| Component | Log location |
+Start with the process's logging settings. File sinks send logs to configured
+files. Relay also writes to stderr when `stderr_enabled` is true. Logging flags,
+`--log-config-path`, and logging environment variables can override settings
+from discovered configuration files. The service manager or harness decides
+where to capture stderr.
+
+Use this table to find the settings that control each component's logs:
+
+| Component | Log Settings |
+| --- | --- |
+| Primary daemon | `[daemon.logging]`, logging flags, or logging environment variables |
+| Worker | `[logging]`, logging flags, or logging environment variables |
+| Managed MCP and hooks | Logging flags, `--log-config-path`, or logging environment variables. Defaults to stderr. |
+| Plugins and exporters | Component settings in `plugins.toml` |
+
+By default, worker stderr goes to the launcher's or harness's capture.
+Relay does not create worker log files under daemon state.
+
+The supplied service runbooks use these default locations to capture daemon stderr:
+
+| Service | Default Stderr Capture |
 | --- | --- |
 | Linux daemon | `journalctl --user -u nemo-relay-daemon` or `sudo journalctl -u nemo-relay-daemon` |
 | macOS user daemon | `~/Library/Logs/NeMoRelay/daemon.err.log` |
@@ -107,76 +129,105 @@ before selecting middleware that rewrites responses.
 | Windows user task | `%LOCALAPPDATA%\nemo-relay-daemon\logs\daemon.err.log` |
 | Windows system task | `C:\ProgramData\NVIDIA\NeMoRelayDaemon\logs\daemon.err.log` |
 | WinSW daemon | `NeMoRelayService.err.log` and `.out.log` in the configured log directory |
-| MCP and worker | Harness MCP stderr capture; worker stderr is inherited from MCP |
-| Plugins | Destination configured in the client system `plugins.toml` |
 
-Use `[daemon.logging] level = "info"` and `stderr_format = "jsonl"` from
-[Configuration](/daemon/configuration#system-configuration). Personal logging
-configuration does not affect primary daemon stderr capture. Managed MCP and hook commands do not read
-ambient logging files. To capture their info messages, pass `NEMO_RELAY_LOG=info`
-and `NEMO_RELAY_LOG_STDERR_FORMAT=jsonl` through the harness or dispatcher to
-those processes. Otherwise, use the harness MCP status view; the optional
-`daemon_mcp_ready` log may be absent. Do not change immutable bundle bytes just
-to enable logging, and do not send debug output to MCP stdout.
+Check the installed service or task settings if your deployment changes these
+locations. Stderr output must be enabled for these captures to contain Relay logs.
+
+Set `level = "info"` and `stderr_format = "jsonl"` in `[daemon.logging]` to
+record daemon lifecycle messages. Refer to
+[Configuration](/daemon/configuration#system-configuration) for details.
+The primary daemon does not inherit personal `[logging]` settings.
+
+Managed MCP and hook commands do not look for logging files automatically.
+To record their info messages, supply a log configuration file or pass
+`NEMO_RELAY_LOG=info` and `NEMO_RELAY_LOG_STDERR_FORMAT=jsonl` through the harness
+or dispatcher. Otherwise, use the harness MCP status view. The optional
+`daemon_mcp_ready` log can be absent. Do not edit managed bundle files to enable
+logging. Do not send debug output to MCP stdout.
 
 Record the time, daemon origin, component, event, and error kind when diagnosing
 an incident. Do not include route tokens, provider keys, private identity files,
 or activation grants in support reports.
 
-The daemon emits these lifecycle events at info level unless the event describes
-a degraded or failed state:
+Relay processes emit these lifecycle events. Normal events use info-level
+logging. Failure events use warning or error levels.
 
 | Lifecycle | Events |
 | --- | --- |
 | Daemon | `daemon_listening`, `daemon_pass_through_enabled`, `daemon_stopped`, `daemon_failed` |
 | MCP sessions | `mcp_added`, `mcp_removed`, `mcp_control_connected`, `mcp_control_reconnected`, `mcp_control_disconnected` |
-| Worker startup | `worker_staged`, `worker_added`, `worker_ready`, `worker_recovery_started`, `worker_relaunch_requested` |
+| Worker startup | `worker_staged`, `worker_startup_pending`, `worker_added`, `worker_ready`, `worker_recovery_started`, `worker_relaunch_requested` |
 | Worker control | `worker_control_connected`, `worker_control_reconnected`, `worker_control_disconnected`, `worker_control_lost`, `worker_control_recovery_failed` |
 | Worker shutdown | `worker_drain_started`, `worker_removed`, `worker_stopped`, `worker_activation_cancelled` |
 | Worker degradation | `worker_registration_failed`, `worker_readiness_failed`, `worker_activation_failed`, `worker_activation_expired`, `worker_communication_failed`, `worker_failed`, `worker_recovery_failed`, `worker_recovery_expired`, `worker_relaunch_failed` |
 | Provider forwarding | `upstream_request_failed` |
 
-Use the `fingerprint` to correlate an MCP session with its worker route and
-`worker_id` to follow one worker generation. A `route_mode = "pass_through"`
-field means the route has cut over to bypass mode. Session and worker IDs are
-intended for operational correlation, but do not treat log access as
-authorization to share them outside the deployment's support boundary.
+Use `fingerprint` to match an MCP session to its worker route. Use `worker_id`
+to follow one worker generation. A `route_mode = "pass_through"` field reports
+a route without worker forwarding. With `--require-worker`, that route returns
+`503`. Share session and worker IDs only within your approved support process.
 Both `worker_launch_failed` and `worker_activation_failed` include a
 `failure_reason`. This is a short, fixed code that names the step that failed,
 such as starting the worker, sending its startup permission, or waiting for it to
 be ready. It does not include activation data or the source error text. Read
-the worker stderr output for the full error message.
+the worker's configured logs for the full error message.
 Control disconnect events include a `reason` such as `acknowledgement_timeout`,
 `pong_timeout`, or `peer_closed`. Provider failure events are rate-limited and
 report the number of intervening failures in `suppressed_since_last_emit`.
 
 ## Diagnose Common Failures
 
+Use this table to choose the next check for a failure:
+
 | Symptom | Likely cause | Next action |
 | --- | --- | --- |
-| Service repeatedly exits | Bad path, unreadable state/configuration, or occupied port | Read service stderr; check account permissions and the listening process. |
+| Service repeatedly exits | Bad path, unreadable state or configuration, or occupied port | Read service logs. Check account permissions and the process using the port. |
 | TLS validation fails | Wrong name, expired chain, or untrusted CA | Check the advertised DNS name, certificate dates, and client native trust store. |
 | `401` from a public route | Missing, unknown, or unregistered credential | Load the existing token and start MCP registration before sending requests. |
-| Registered route returns `503` | No live MCP reference or route not ready | Keep the harness MCP process alive; inspect registration and worker logs. |
-| Worker status list is empty | No assigned worker, activation still pending, or route is in pass-through | Check `/healthz` deployment mode and lifecycle events; keep the harness open while verifying. |
-| Worker status returns `404` | The UUID is unknown, drained, replaced, or no longer assigned | Refresh `/_nemo_relay/v1/workers`; correlate the replacement UUID with lifecycle logs. |
-| Worker reports `control_available = false` | Worker control disconnected and may be within recovery grace | Check worker control events and wait up to the documented recovery window before restarting the harness. |
+| Registered route returns `503` | No active MCP reference, or `--require-worker` is waiting for a worker | Keep the harness MCP process alive. Inspect registration and worker logs. |
+| Worker status list is empty | No assigned worker, startup still pending, or route uses passthrough | Check the `/healthz` deployment mode and lifecycle events. Keep the harness open during the check. |
+| Worker status returns `404` | The UUID is unknown, drained, replaced, or no longer assigned | Refresh `/_nemo_relay/v1/workers`. Match the new UUID to its lifecycle logs. |
+| Worker reports `control_available = false` | Worker control disconnected and can still be recovering | Check worker control events. Allow up to 30 seconds for recovery before restarting the harness. |
 | MCP is ready but no plugin result appears | Pass-through, wrong plugin setup, or wrong harness provider | Find `worker_ready`, inspect client system configuration, and check effective harness routing. |
-| `worker_launch_failed` | A worker start or activation step failed | Check `failure_reason` first. Then check assigned ports, executable permissions, worker stderr, and daemon-to-client reachability. |
+| Python plugin environment fails authentication | Changed attestation, missing environment key, or unavailable legacy key | Reprovision the environment from the trusted plugin source. |
+| `worker_launch_failed` | A worker start or activation step failed | Check `failure_reason` first. Then check assigned ports, executable permissions, worker logs, and daemon-to-client reachability. |
 | Remote worker advertises loopback | Wrong address override or network route | Use a concrete client IPv4 address reachable from the server. |
-| First request works but large streams stall | Buffering proxy or blocked provider path | Check the full request path and streaming requirements; compare a direct private-network deployment. |
-| Startup fails after moving service accounts | Signing identity or state directory changed | Restore the original state and ownership; verify any intended identity change out of band. |
+| First request works but large streams stall | Buffering proxy or blocked provider path | Check the full request path and streaming requirements. Compare a direct private-network deployment. |
+| Startup fails after moving service accounts | Signing identity or state directory changed | Restore the original state and ownership. Confirm any planned identity change through a trusted channel. |
 | Control connection fails through a proxy | WebSocket upgrade or idle-session handling | Allow Relay WebSocket connections and check [proxy requirements](/daemon/reference#configure-a-trusted-reverse-proxy). |
-| Session exits after a network outage | The 30-second reconnect grace expired | Restore connectivity and start a fresh harness; failed reconnect attempts do not extend grace. |
-| Many clients fail to enroll together | Challenge admission limits | Stagger client startup; investigate shared transport-peer limits. |
+| Session exits after a network outage | The 30-second reconnect window expired | Restore connectivity and start a fresh harness. Failed attempts do not extend the recovery window. |
+| Many clients fail to enroll together | Limits on new identity challenges | Start clients in smaller groups. Check limits for clients that share a connection address. |
 | Hooks run twice | Personal and managed integrations both loaded | Remove the duplicate Relay integration and restart the harness. |
 
-After authenticated worker activation fails, the route can stay in transient
-pass-through until **all** MCP references for that identity leave. Fixing a
-firewall while leaving every harness open does not necessarily relaunch a worker.
-Close all affected sessions, wait for cleanup, then start a fresh session and
-repeat worker verification. Failure before MCP authentication instead exits the
-MCP process with a nonzero status.
+Older Python plugin environments without `.nemo-relay-environment.key` need the
+original installer's bootstrap key to verify their attestations. If that key
+is missing or unreadable, reprovision the environment from the trusted plugin
+source. Newly provisioned environments store the key with the environment.
+
+Worker startup has no deadline or retry limit. A slow worker keeps its current
+launch grant. Check the worker's configured logs to find out why startup is slow.
+
+Use these daemon events to track startup and retries:
+
+- `worker_startup_pending` reports `elapsed_ms` every 60 seconds during startup.
+- `worker_added` records `startup_elapsed_ms` when the worker joins the route.
+- `worker_activation_failed` reports the retry delay in `retry_after_ms`.
+- `worker_relaunch_requested` records the attempt count.
+
+If startup fails, retry delays increase from one second to two, four, and so on.
+They stop increasing at 60 seconds. Authentication failures and control failures
+that cannot recover still end MCP. Disconnected MCP clients keep their route
+references during recovery, but they cannot receive launch grants.
+
+By default, authenticated requests use passthrough during startup and recovery.
+Use `nemo-relay daemon --require-worker` when every request needs worker
+guardrails, plugins, or observability. This strict mode returns HTTP `503` during
+startup, recovery, and retry delays. Configure the calling application to handle
+those responses. The `--pass-through` flag disables workers and conflicts with
+`--require-worker`.
+
+A request or stream keeps its original destination when traffic switches to
+the worker. Relay never resubmits it to a different destination.
 
 ## Keep Identity State
 
@@ -189,7 +240,7 @@ state below `nemo-relay/daemon` in that base directory.
 Before backup or recovery, check these variables in the environment of the
 account and process that owns the state. An interactive shell can differ from a
 service or managed harness. The runbooks give system services an explicit,
-persistent `XDG_CONFIG_HOME`; client processes can use a different base.
+persistent `XDG_CONFIG_HOME`. Client processes can use a different base.
 </Note>
 
 `daemon-identity.pk8` is the daemon signing key. `machine-identity.pk8` identifies
@@ -212,6 +263,8 @@ access and managed launch access and end their sessions. Do not assume deleting
 a local token file revokes a binding from the running broker.
 
 ## Upgrade and Roll Back
+
+Follow these steps to upgrade the daemon and clients:
 
 <Steps>
 
