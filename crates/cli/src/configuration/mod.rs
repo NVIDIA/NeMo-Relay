@@ -71,6 +71,7 @@ struct FileGatewayConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileUpstreamConfig {
+    response_timeout_secs: Option<u64>,
     openai_base_url: Option<String>,
     openai_auth_header: Option<String>,
     anthropic_base_url: Option<String>,
@@ -320,6 +321,7 @@ fn persistent_bootstrap_fingerprint(
         "openai_auth_header": gateway.openai_auth_header,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
+        "response_timeout_secs": gateway.response_timeout_secs,
         "metadata": gateway.metadata,
         "plugin_config": gateway.plugin_config,
         "max_hook_payload_bytes": gateway.max_hook_payload_bytes,
@@ -1646,11 +1648,15 @@ fn apply_file_upstream_config(
         return Ok(());
     };
     let FileUpstreamConfig {
+        response_timeout_secs,
         openai_base_url,
         openai_auth_header,
         anthropic_base_url,
         anthropic_auth_header,
     } = upstream;
+    if let Some(value) = response_timeout_secs {
+        gateway.response_timeout_secs = value;
+    }
     if let Some(value) = openai_base_url {
         gateway.openai_base_url = value;
         if openai_auth_header.is_none() {

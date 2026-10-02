@@ -43,7 +43,6 @@ use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 
 use super::managed::ManagedRuntime;
 
-const RESPONSE_HEAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(10);
@@ -745,21 +744,24 @@ async fn forward_to_provider(
         Ok(request) => request.map(box_body),
         Err(error) => return message(StatusCode::BAD_REQUEST, &error.to_string()),
     };
-    let response =
-        match tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, state.upstream.request(request)).await {
-            Ok(Ok(response)) => response,
-            Ok(Err(error)) => {
-                log_worker_upstream_request_failed(&state, route, "transport_error");
-                return message(StatusCode::BAD_GATEWAY, &error.to_string());
-            }
-            Err(_) => {
-                log_worker_upstream_request_failed(&state, route, "response_head_timeout");
-                return message(
-                    StatusCode::GATEWAY_TIMEOUT,
-                    "provider response-head timeout",
-                );
-            }
-        };
+    let response = match state
+        .config
+        .wait_for_response(state.upstream.request(request))
+        .await
+    {
+        Ok(Ok(response)) => response,
+        Ok(Err(error)) => {
+            log_worker_upstream_request_failed(&state, route, "transport_error");
+            return message(StatusCode::BAD_GATEWAY, &error.to_string());
+        }
+        Err(_) => {
+            log_worker_upstream_request_failed(&state, route, "response_head_timeout");
+            return message(
+                StatusCode::GATEWAY_TIMEOUT,
+                "provider response-head timeout",
+            );
+        }
+    };
     let response = match prepare_forward_response(response, &strip) {
         Ok(response) => response,
         Err(error) => {

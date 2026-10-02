@@ -48,6 +48,79 @@ fn state_with_config(config: GatewayConfig) -> Arc<WorkerState> {
     })
 }
 
+#[tokio::test]
+async fn unmanaged_provider_wait_releases_admission_on_completion_cancellation_or_timeout() {
+    for (response_timeout_secs, cancel) in [(0, false), (0, true), (90, false)] {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let provider = axum::Router::new().route(
+            "/v1/responses",
+            axum::routing::post({
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                move || {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    async move {
+                        started.notify_one();
+                        release.notified().await;
+                        "compaction complete"
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let state = state_with_config(GatewayConfig {
+            openai_base_url: format!("http://{}", listener.local_addr().unwrap()),
+            response_timeout_secs,
+            ..GatewayConfig::default()
+        });
+        let server = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+        let app = router(Arc::clone(&state));
+        let task = tokio::spawn(async move {
+            app.oneshot(
+                Request::post("/v1/responses")
+                    .header(WORKER_TOKEN_HEADER, "data-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        });
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(61)).await;
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        assert_eq!(state.in_flight.load(Ordering::Acquire), 1);
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        if cancel {
+            assert!(!task.is_finished());
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+        } else if response_timeout_secs == 0 {
+            assert!(!task.is_finished());
+            release.notify_one();
+            let response = task.await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                "compaction complete"
+            );
+        } else {
+            let response = task.await.unwrap();
+            assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+            drop(response);
+        }
+        assert_eq!(state.in_flight.load(Ordering::Acquire), 0);
+        server.abort();
+    }
+}
+
 #[test]
 fn relative_drain_timeout_does_not_depend_on_the_daemon_wall_clock() {
     let request = WorkerDrainRequest {

@@ -3,8 +3,10 @@
 
 //! Resolved runtime configuration model.
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use axum::http::HeaderMap;
 use nemo_relay::logging::LoggingConfig;
@@ -32,6 +34,8 @@ pub(crate) struct GatewayConfig {
     pub(crate) openai_auth_header: Option<String>,
     pub(crate) anthropic_base_url: String,
     pub(crate) anthropic_auth_header: Option<String>,
+    /// Provider response wait in seconds; zero leaves cancellation to the caller.
+    pub(crate) response_timeout_secs: u64,
     pub(crate) metadata: Option<Value>,
     /// Runtime-only identity from the launched executable's version probe.
     pub(crate) launched_agent: Option<LaunchedAgent>,
@@ -50,6 +54,20 @@ pub(crate) struct SessionConfig {
 }
 
 impl GatewayConfig {
+    pub(crate) fn response_timeout(&self) -> Option<Duration> {
+        (self.response_timeout_secs > 0).then(|| Duration::from_secs(self.response_timeout_secs))
+    }
+
+    pub(crate) async fn wait_for_response<F: Future>(
+        &self,
+        response: F,
+    ) -> Result<F::Output, tokio::time::error::Elapsed> {
+        match self.response_timeout() {
+            Some(timeout) => tokio::time::timeout(timeout, response).await,
+            None => Ok(response.await),
+        }
+    }
+
     pub(crate) fn session_config_from_headers(&self, headers: &HeaderMap) -> SessionConfig {
         let metadata =
             header_json(headers, "x-nemo-relay-session-metadata").or_else(|| self.metadata.clone());
@@ -126,6 +144,7 @@ impl Default for GatewayConfig {
             openai_auth_header: None,
             anthropic_base_url: "https://api.anthropic.com".into(),
             anthropic_auth_header: None,
+            response_timeout_secs: 0,
             metadata: None,
             launched_agent: None,
             plugin_config: None,

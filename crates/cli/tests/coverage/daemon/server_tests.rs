@@ -23,6 +23,87 @@ use tower::ServiceExt as _;
 type CapturedProviderRequest = Arc<std::sync::Mutex<Option<(HeaderMap, bytes::Bytes)>>>;
 
 #[tokio::test]
+async fn forwarding_waits_for_cancellation_unless_a_deadline_is_configured() {
+    for response_timeout_secs in [0, 90] {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let app = Router::new().route(
+            "/",
+            post({
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                move || {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    async move {
+                        started.notify_one();
+                        release.notified().await;
+                        "compaction complete"
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let task = tokio::spawn(async move {
+            forward(
+                &pooled_client().unwrap(),
+                Request::post("/").body(Body::empty()).unwrap(),
+                &destination,
+                None,
+                None,
+                &GatewayConfig {
+                    response_timeout_secs,
+                    ..GatewayConfig::default()
+                },
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(61)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            !task.is_finished(),
+            "long compaction must survive the former 60-second deadline"
+        );
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        if response_timeout_secs == 0 {
+            assert!(
+                !task.is_finished(),
+                "default response wait must have no deadline"
+            );
+            release.notify_one();
+            let outcome = task.await.unwrap();
+            assert!(outcome.failure.is_none());
+            assert_eq!(
+                outcome
+                    .response
+                    .into_body()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .to_bytes(),
+                "compaction complete"
+            );
+        } else {
+            let outcome = task.await.unwrap();
+            assert_eq!(outcome.response.status(), StatusCode::GATEWAY_TIMEOUT);
+            assert!(matches!(
+                outcome.failure,
+                Some(ForwardFailure::ResponseHeadTimeout)
+            ));
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
 async fn daemon_health_is_a_public_process_probe() {
     let state = test_daemon_state(false, "", GatewayConfig::default());
     let app = router(Arc::clone(&state));
@@ -625,6 +706,7 @@ async fn forwarding_rejects_invalid_destinations_and_worker_credentials_before_i
         "http://[invalid",
         None,
         None,
+        &GatewayConfig::default(),
     )
     .await;
     assert_eq!(
@@ -645,6 +727,7 @@ async fn forwarding_rejects_invalid_destinations_and_worker_credentials_before_i
             "bad\nvalue".into(),
         )),
         None,
+        &GatewayConfig::default(),
     )
     .await;
     assert_eq!(
@@ -843,10 +926,18 @@ async fn global_pass_through_authenticates_and_forwards_only_provider_headers() 
 
 #[tokio::test]
 async fn worker_response_head_timeout_preserves_the_route_and_next_request() {
+    let response_timeout = Duration::from_secs(60);
     for require_worker in [false, true] {
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x75_u8; 32]);
         let credential = RouteCredential::parse(token.clone()).unwrap();
-        let mut state = test_daemon_state(false, &token, GatewayConfig::default());
+        let mut state = test_daemon_state(
+            false,
+            &token,
+            GatewayConfig {
+                response_timeout_secs: response_timeout.as_secs(),
+                ..GatewayConfig::default()
+            },
+        );
         Arc::get_mut(&mut state).unwrap().registry =
             Registry::new(false).with_require_worker(require_worker);
         let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
@@ -911,7 +1002,7 @@ async fn worker_response_head_timeout_preserves_the_route_and_next_request() {
             .await
             .unwrap();
         tokio::time::pause();
-        tokio::time::advance(RESPONSE_HEAD_TIMEOUT).await;
+        tokio::time::advance(response_timeout).await;
         let response = response.await.unwrap().unwrap();
         tokio::time::resume();
         let route_ready = matches!(

@@ -67,7 +67,6 @@ use crate::daemon::common::transport::{
 use crate::daemon::common::worker_tls::WorkerClientPool;
 use crate::error::CliError;
 
-const RESPONSE_HEAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_PENDING_CHALLENGES: usize = 512;
 const MAX_PENDING_MCP_CHALLENGES: usize = 384;
@@ -1693,7 +1692,15 @@ async fn forward_to_provider(
     if allow_environment_provider_auth {
         inject_provider_auth(request.headers_mut(), route, &state.config);
     }
-    let outcome = forward(&state.upstream, request, &destination, None, None).await;
+    let outcome = forward(
+        &state.upstream,
+        request,
+        &destination,
+        None,
+        None,
+        &state.config,
+    )
+    .await;
     if let Some(failure) = outcome.failure {
         log_upstream_request_failed(route, failure);
     }
@@ -1762,6 +1769,7 @@ async fn forward_to_worker(
         &destination,
         Some((HeaderName::from_static(WORKER_TOKEN_HEADER), token)),
         Some(worker),
+        &state.config,
     )
     .await;
     let route_failure = take_worker_route_failure(&mut outcome.response);
@@ -1907,6 +1915,7 @@ async fn forward(
     destination: &str,
     authentication: Option<(HeaderName, String)>,
     hold: Option<WorkerRequest>,
+    config: &GatewayConfig,
 ) -> ForwardOutcome {
     let destination = match destination.parse::<Uri>() {
         Ok(destination) => destination,
@@ -1936,8 +1945,7 @@ async fn forward(
         };
         request.headers_mut().insert(name, value);
     }
-    let response = match tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, client.request(request)).await
-    {
+    let response = match config.wait_for_response(client.request(request)).await {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
             let response = control_error(StatusCode::BAD_GATEWAY, &error);

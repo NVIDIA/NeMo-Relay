@@ -1632,7 +1632,7 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
     let callback_task = callback.clone();
     let task = tokio::spawn(async move {
         callback_task
-            .invoke_async_with_timeout(request, std::time::Duration::from_millis(10))
+            .invoke_async_with_timeout(request, Some(std::time::Duration::from_millis(10)))
             .await
     });
     tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
@@ -1656,6 +1656,199 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
     );
     assert_eq!(cancellation.invocation_id, invocation_id);
     assert!(cancellation.reason.contains("timed out"));
+}
+
+#[tokio::test]
+async fn execution_callbacks_outlive_short_rpc_deadlines_and_remain_cancellable() {
+    for surface in [
+        RegistrationSurface::ToolExecutionIntercept,
+        RegistrationSurface::LlmExecutionIntercept,
+    ] {
+        for cancel in [false, true] {
+            let started = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+                {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    move |_| {
+                        let started = Arc::clone(&started);
+                        let release = Arc::clone(&release);
+                        Box::pin(async move {
+                            started.notify_one();
+                            release.notified().await;
+                            InvokeResponse {
+                                result: Some(InvokeResult::Empty(EmptyResult {})),
+                            }
+                        })
+                    }
+                },
+                |_| Box::pin(tokio_stream::empty()),
+            )
+            .await;
+            let request = callback
+                .base_request("long_execution", surface, None, None)
+                .unwrap();
+            let invocation_id = request.invocation_id.clone();
+            let running_callback = callback.clone();
+            let task = tokio::spawn(async move { running_callback.invoke_async(request).await });
+            tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+                .await
+                .unwrap();
+            tokio::time::pause();
+            tokio::time::advance(std::time::Duration::from_secs(3600)).await;
+            tokio::task::yield_now().await;
+            tokio::time::resume();
+            assert!(
+                !task.is_finished(),
+                "execution must wait for completion or caller cancellation"
+            );
+            if cancel {
+                task.abort();
+                assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+                let cancellation =
+                    tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(cancellation.invocation_id, invocation_id);
+            } else {
+                release.notify_one();
+                task.await.unwrap().unwrap();
+                assert!(
+                    cancel_rx.try_recv().is_err(),
+                    "successful completion must not cancel the worker"
+                );
+            }
+            assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn short_callbacks_keep_their_rpc_deadline() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started = Arc::clone(&started);
+            move |_| {
+                let started = Arc::clone(&started);
+                Box::pin(async move {
+                    started.notify_one();
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let request = callback
+        .base_request(
+            "short_callback",
+            RegistrationSurface::ToolRequestIntercept,
+            None,
+            None,
+        )
+        .unwrap();
+    let invocation_id = request.invocation_id.clone();
+    let task = tokio::spawn(async move { callback.invoke_async(request).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(WORKER_RPC_TIMEOUT + std::time::Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    tokio::time::resume();
+    assert!(
+        task.await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("worker invocation timed out")
+    );
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cancellation.invocation_id, invocation_id);
+}
+
+#[tokio::test]
+async fn streaming_execution_can_wait_for_slow_response_headers() {
+    for cancel in [false, true] {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let (client, shutdown, mut cancel_rx, _) = fake_worker_client_with_async_handlers(
+            |_| {
+                Box::pin(async {
+                    InvokeResponse {
+                        result: Some(InvokeResult::Empty(EmptyResult {})),
+                    }
+                })
+            },
+            {
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                move |_| {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    Box::pin(async move {
+                        started.notify_one();
+                        release.notified().await;
+                        Box::pin(tokio_stream::empty()) as FakeInvokeStream
+                    })
+                }
+            },
+        )
+        .await;
+        let (callback, _shutdown) = callback_for_client(client, shutdown);
+        let running_callback = callback.clone();
+        let task = tokio::spawn(async move {
+            running_callback
+                .invoke_llm_stream_execution(
+                    "slow_stream",
+                    "model",
+                    valid_llm_request(),
+                    openai_stream_execution_codec_context(),
+                    Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+                )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        assert!(
+            !task.is_finished(),
+            "opening a stream must not have a fixed RPC deadline"
+        );
+        if cancel {
+            task.abort();
+            assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+            tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        } else {
+            release.notify_one();
+            let mut stream = task.await.unwrap().unwrap();
+            assert!(stream.next().await.is_none());
+            stream.close().await.unwrap();
+            assert!(cancel_rx.try_recv().is_err());
+        }
+        // The cancellation RPC can arrive before the host forwarding task finishes cleanup.
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !callback.host_state.scope_stacks.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stream invocation must release its scope state");
+        assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -31,6 +31,19 @@ use crate::plugins::policy::{
 };
 
 #[test]
+fn response_deadlines_default_to_disabled_and_can_be_reset_to_zero() {
+    let mut gateway = GatewayConfig::default();
+    assert_eq!(gateway.response_timeout(), None);
+    for (value, expected) in [(90, Some(Duration::from_secs(90))), (0, None)] {
+        let config: FileConfig =
+            toml::from_str(&format!("[upstream]\nresponse_timeout_secs = {value}\n")).unwrap();
+        apply_file_upstream_config(&mut gateway, config.upstream).unwrap();
+        assert_eq!(gateway.response_timeout(), expected);
+    }
+    assert!(toml::from_str::<FileConfig>("[upstream]\nresponse_timeout_secs = -1\n").is_err());
+}
+
+#[test]
 fn transparent_gateway_fingerprints_are_stable_and_url_scoped() {
     let first = transparent_gateway_fingerprint("http://127.0.0.1:47632");
     assert_eq!(
@@ -392,6 +405,7 @@ max_passthrough_body_bytes = 5678
 
 [upstream]
 openai_base_url = "https://admin.example/openai"
+response_timeout_secs = 180
 openai_auth_header = "Bearer admin-file-openai"
 anthropic_base_url = "https://admin.example/anthropic"
 anthropic_auth_header = "Basic admin-file-anthropic"
@@ -459,6 +473,10 @@ anthropic_auth_header = "Basic admin-file-anthropic"
     );
     assert_eq!(managed.resolved.gateway.max_hook_payload_bytes, 1234);
     assert_eq!(managed.resolved.gateway.max_passthrough_body_bytes, 5678);
+    assert_eq!(
+        managed.resolved.gateway.response_timeout(),
+        Some(Duration::from_secs(180))
+    );
     assert_eq!(
         managed.resolved.gateway.plugin_config,
         Some(json!({ "components": [], "version": 1 }))
@@ -589,6 +607,7 @@ manifest = "plugins/acme/relay-plugin.toml"
 
 fn config() -> GatewayConfig {
     GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -913,6 +932,7 @@ fn explicit_toml_config_maps_supported_sections() {
         r#"
 [upstream]
 openai_base_url = "http://openai"
+response_timeout_secs = 120
 openai_auth_header = "Bearer openai-file"
 anthropic_base_url = "http://anthropic"
 anthropic_auth_header = "Basic anthropic-file"
@@ -946,6 +966,10 @@ command = "codex --approval-mode never"
 
     assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
     assert_eq!(resolved.gateway.openai_base_url, "http://openai");
+    assert_eq!(
+        resolved.gateway.response_timeout(),
+        Some(Duration::from_secs(120))
+    );
     assert_eq!(
         resolved.gateway.openai_auth_header.as_deref(),
         Some("Bearer openai-file")
@@ -3107,7 +3131,7 @@ fn persistent_server_resolution_excludes_project_config_and_fingerprints_credent
 }
 
 #[test]
-fn persistent_fingerprint_tracks_provider_auth_headers() {
+fn persistent_fingerprint_tracks_provider_auth_headers_and_response_timeout() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let xdg = temp.path().join("xdg");
@@ -3147,6 +3171,16 @@ fn persistent_fingerprint_tracks_provider_auth_headers() {
 
     assert_ne!(first, openai_changed);
     assert_ne!(openai_changed, anthropic_changed);
+    std::fs::write(
+        &config_path,
+        "[upstream]\nopenai_auth_header = \"Bearer two\"\nanthropic_auth_header = \"Basic two\"\nresponse_timeout_secs = 90\n",
+    )
+    .unwrap();
+    let timeout_changed = resolve_persistent_server_config(&GatewayOverrides::default())
+        .unwrap()
+        .bootstrap_fingerprint
+        .unwrap();
+    assert_ne!(anthropic_changed, timeout_changed);
 }
 
 #[test]
