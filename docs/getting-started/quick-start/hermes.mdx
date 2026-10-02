@@ -17,10 +17,10 @@ SPDX-License-Identifier: Apache-2.0 */}
   ],
   "cwd": ".",
   "requires": {
-    "hermes": ">=0.18.2",
     "jq": ">=1.6"
   },
   "setup": [
+    "Hermes with native Relay integration and NeMo Relay Plugins diagnostics in hermes doctor",
     "Authenticated model provider with tool-use permissions"
   ],
   "inputs": {},
@@ -59,9 +59,12 @@ SPDX-License-Identifier: Apache-2.0 */}
 Run one Hermes Agent turn and write its session, model, and tool lifecycle to a
 local ATOF event file.
 
-Hermes Agent 0.18.2 or newer includes NeMo Relay natively. Do not install the
-former Hermes Relay observability plugin or launch Hermes through the
-`nemo-relay` CLI.
+Use a Hermes installation with native NeMo Relay integration on a platform
+with a supported Relay native wheel. Do not install the former Hermes Relay
+observability plugin or launch Hermes through the `nemo-relay` CLI.
+
+This quickstart configures local Relay event export, not Hermes shared-metrics
+collection or sending to Nous; those have separate consent controls.
 
 ## Prerequisites
 
@@ -123,10 +126,22 @@ Select that file in the shell that will start Hermes:
 {/* quickstart-block {"id":"environment","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
 export HERMES_NEMO_RELAY_PLUGINS_TOML="$PWD/plugins.toml"
+hermes doctor
 ```
 
+In the **NeMo Relay Plugins** section, confirm that the selected file is listed,
+plugins are enabled, and no Relay configuration problems are reported. This
+diagnostic checks configuration without loading plugin code. If the section is
+missing, update Hermes before continuing.
+
+Hermes does not discover repository-local configuration automatically. The
+explicit path replaces the user configuration file; system configuration still
+applies. Relay plugins affect every profile hosted in the same Hermes process.
+Use separate processes when profiles require different plugin policies.
+
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
-results. Protect `logs/events.jsonl` even when full payload export is disabled.
+results. Working-directory paths can reveal usernames and repository names.
+Protect `logs/events.jsonl` even when full payload export is disabled.
 
 ## 3. Run
 
@@ -177,5 +192,5 @@ prompt alone does not pass verification.
 
 For more details, refer to:
 
-- [Hermes installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation)
+- [Hermes Relay integration and shared metrics](https://hermes-agent.nousresearch.com/docs/developer-guide/relay-shared-metrics)
 - [ATOF exporter](/configure-plugins/observability/atof)
