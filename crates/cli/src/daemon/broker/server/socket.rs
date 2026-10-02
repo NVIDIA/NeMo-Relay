@@ -786,45 +786,55 @@ async fn disconnected(
     log_control_disconnected(role, &id, reason);
     state.sockets.changed.notify_waiters();
     drop(_transaction);
-    tokio::spawn(async move {
-        tokio::time::sleep_until(deadline).await;
-        let _transaction = state.sockets.transaction(role, &id).await;
-        let current = lock(&state.sockets.peers)
-            .get(&key(role, &id))
-            .is_some_and(|p| p.generation == generation && p.sender.is_none());
-        if !current {
-            return;
-        }
-        if role == ComponentRole::Mcp {
-            let session = lock(&state.mcp_sessions).remove(&id);
-            if let Some(session) = session
-                && let Ok(session_id) = McpSessionId::new(id.clone())
-                && let Ok(action) = state.registry.release_mcp(
+    tokio::spawn(expire_disconnected_peer(
+        state, role, id, generation, deadline,
+    ));
+}
+
+async fn expire_disconnected_peer(
+    state: Arc<DaemonState>,
+    role: ComponentRole,
+    id: String,
+    generation: String,
+    deadline: tokio::time::Instant,
+) {
+    tokio::time::sleep_until(deadline).await;
+    let _transaction = state.sockets.transaction(role, &id).await;
+    let current = lock(&state.sockets.peers)
+        .get(&key(role, &id))
+        .is_some_and(|p| p.generation == generation && p.sender.is_none());
+    if !current {
+        return;
+    }
+    if role == ComponentRole::Mcp {
+        let session = lock(&state.mcp_sessions).remove(&id);
+        if let Some(session) = session
+            && let Ok(session_id) = McpSessionId::new(id.clone())
+            && let Ok(action) = state.registry.release_mcp(
+                session.fingerprint,
+                &session_id,
+                now_unix_ms().saturating_add(DRAIN_LIFETIME_MS),
+            )
+        {
+            if !session.released {
+                log_mcp_removed(
                     session.fingerprint,
                     &session_id,
-                    now_unix_ms().saturating_add(DRAIN_LIFETIME_MS),
-                )
-            {
-                if !session.released {
-                    log_mcp_removed(
-                        session.fingerprint,
-                        &session_id,
-                        "control_disconnect_timeout",
-                        &action,
-                    );
-                }
-                handle_release_action(state.clone(), session.fingerprint, action);
+                    "control_disconnect_timeout",
+                    &action,
+                );
             }
-            lock(&state.pending_directives).remove(&id);
-        } else {
-            let session = lock(&state.worker_sessions).remove(&id);
-            if let Some(session) = session {
-                cleanup_worker_session(Arc::clone(&state), id.clone(), session).await;
-            }
+            handle_release_action(state.clone(), session.fingerprint, action);
         }
-        lock(&state.sockets.peers).remove(&key(role, &id));
-        state.sockets.changed.notify_waiters();
-    });
+        lock(&state.pending_directives).remove(&id);
+    } else {
+        let session = lock(&state.worker_sessions).remove(&id);
+        if let Some(session) = session {
+            cleanup_worker_session(Arc::clone(&state), id.clone(), session).await;
+        }
+    }
+    lock(&state.sockets.peers).remove(&key(role, &id));
+    state.sockets.changed.notify_waiters();
 }
 
 /// Complete worker cleanup after its session has been removed from admission state.

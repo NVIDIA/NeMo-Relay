@@ -434,64 +434,10 @@ async fn supervise_route(
                 BrokerDirective::LaunchWorker { .. } => {
                     let bootstrap = WorkerBootstrap::from_directive(directive.clone())
                         .expect("launch directive was matched");
-                    let already_launched = launched
-                        .as_ref()
-                        .is_some_and(|(id, _, _)| id == &bootstrap.activation_id);
-                    if !already_launched {
-                        cleanup_pending_launch(lease, &mut launched).await?;
-                        match launch_worker(&lease.daemon_origin, &bootstrap).await {
-                            Ok(child) => {
-                                launched = Some((
-                                    bootstrap.activation_id.clone(),
-                                    child,
-                                    tokio::time::Instant::now(),
-                                ));
-                            }
-                            Err(error) => {
-                                report_activation_failed(
-                                    lease,
-                                    &bootstrap.activation_id,
-                                    error.failure_reason,
-                                    &error.source,
-                                )
-                                .await?;
-                                directive = refresh_registration(lease).await?.directive;
-                                continue;
-                            }
-                        }
-                    }
-                    if let Some((activation_id, child, _)) = launched.as_mut()
-                        && activation_id == &bootstrap.activation_id
-                        && let Some(status) = child.child.try_wait().map_err(CliError::Io)?
+                    if let Some(next_directive) =
+                        supervise_worker_launch(lease, &bootstrap, &mut launched).await?
                     {
-                        let error = CliError::Launch(format!(
-                            "activated worker exited before readiness with {status}"
-                        ));
-                        report_activation_failed(
-                            lease,
-                            &bootstrap.activation_id,
-                            WorkerActivationFailureReason::WorkerExitedBeforeReady,
-                            &error,
-                        )
-                        .await?;
-                        directive = refresh_registration(lease).await?.directive;
-                        continue;
-                    }
-                    if launched.as_ref().is_some_and(|(id, _, _)| id == &bootstrap.activation_id)
-                        && super::common::control::now_unix_ms() >= bootstrap.deadline_unix_ms
-                    {
-                        let error = CliError::Launch(
-                            "activated worker exceeded its startup deadline".into(),
-                        );
-                        cleanup_pending_launch(lease, &mut launched).await?;
-                        report_activation_failed(
-                            lease,
-                            &bootstrap.activation_id,
-                            WorkerActivationFailureReason::WorkerReadinessTimeout,
-                            &error,
-                        )
-                        .await?;
-                        directive = refresh_registration(lease).await?.directive;
+                        directive = next_directive;
                         continue;
                     }
                 }
@@ -512,6 +458,71 @@ async fn supervise_route(
     .await;
     let cleanup = cleanup_pending_launch(lease, &mut launched).await;
     result.and(cleanup)
+}
+
+async fn supervise_worker_launch(
+    lease: &mut McpSession,
+    bootstrap: &WorkerBootstrap,
+    launched: &mut PendingLaunch,
+) -> Result<Option<BrokerDirective>, CliError> {
+    let already_launched = launched
+        .as_ref()
+        .is_some_and(|(id, _, _)| id == &bootstrap.activation_id);
+    if !already_launched {
+        cleanup_pending_launch(lease, launched).await?;
+        match launch_worker(&lease.daemon_origin, bootstrap).await {
+            Ok(child) => {
+                *launched = Some((
+                    bootstrap.activation_id.clone(),
+                    child,
+                    tokio::time::Instant::now(),
+                ));
+            }
+            Err(error) => {
+                report_activation_failed(
+                    lease,
+                    &bootstrap.activation_id,
+                    error.failure_reason,
+                    &error.source,
+                )
+                .await?;
+                return Ok(Some(refresh_registration(lease).await?.directive));
+            }
+        }
+    }
+    if let Some((activation_id, child, _)) = launched.as_mut()
+        && activation_id == &bootstrap.activation_id
+        && let Some(status) = child.child.try_wait().map_err(CliError::Io)?
+    {
+        let error = CliError::Launch(format!(
+            "activated worker exited before readiness with {status}"
+        ));
+        report_activation_failed(
+            lease,
+            &bootstrap.activation_id,
+            WorkerActivationFailureReason::WorkerExitedBeforeReady,
+            &error,
+        )
+        .await?;
+        return Ok(Some(refresh_registration(lease).await?.directive));
+    }
+    if launched
+        .as_ref()
+        .is_some_and(|(id, _, _)| id == &bootstrap.activation_id)
+        && super::common::control::now_unix_ms() >= bootstrap.deadline_unix_ms
+    {
+        let error = CliError::Launch("activated worker exceeded its startup deadline".into());
+        cleanup_pending_launch(lease, launched).await?;
+        report_activation_failed(
+            lease,
+            &bootstrap.activation_id,
+            WorkerActivationFailureReason::WorkerReadinessTimeout,
+            &error,
+        )
+        .await?;
+        return Ok(Some(refresh_registration(lease).await?.directive));
+    }
+    Ok(None)
 }
 
 async fn next_directive(lease: &mut McpSession) -> Result<BrokerDirective, CliError> {

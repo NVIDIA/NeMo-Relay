@@ -774,6 +774,24 @@ func TestLlmExecutionInterceptRegisterDeregister(t *testing.T) {
 	}
 }
 
+func resolveDirectionalExecutionTestCodecs(context LLMExecutionContext) (*LLMRequestSanitizeCodec, *LLMResponseSanitizeCodec, error) {
+	if context.RequestCodec.Codec.CodecKind != LLMCodecOpaque {
+		return nil, nil, fmt.Errorf("unexpected request codec identity: %#v", context.RequestCodec.Codec)
+	}
+	if context.ResponseCodec == nil ||
+		context.ResponseCodec.Codec.CodecKind != LLMCodecBuiltin ||
+		context.ResponseCodec.Codec.CodecID == nil ||
+		*context.ResponseCodec.Codec.CodecID != "openai_chat" {
+		return nil, nil, fmt.Errorf("unexpected response codec context: %#v", context.ResponseCodec)
+	}
+	requestCodec := context.RequestCodec.ResolveCodec()
+	responseCodec := context.ResponseCodec.ResolveCodec()
+	if requestCodec == nil || responseCodec == nil {
+		return nil, nil, errors.New("execution codec capability did not resolve")
+	}
+	return requestCodec, responseCodec, nil
+}
+
 func TestLlmExecutionInterceptResolvesDirectionalCodecs(t *testing.T) {
 	const interceptName = "go_llm_execution_codec_context"
 	_ = DeregisterLlmExecutionIntercept(interceptName)
@@ -788,19 +806,9 @@ func TestLlmExecutionInterceptResolvesDirectionalCodecs(t *testing.T) {
 		interceptName,
 		1,
 		func(nativeJSON json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			if context.RequestCodec.Codec.CodecKind != LLMCodecOpaque {
-				return nil, fmt.Errorf("unexpected request codec identity: %#v", context.RequestCodec.Codec)
-			}
-			if context.ResponseCodec == nil ||
-				context.ResponseCodec.Codec.CodecKind != LLMCodecBuiltin ||
-				context.ResponseCodec.Codec.CodecID == nil ||
-				*context.ResponseCodec.Codec.CodecID != "openai_chat" {
-				return nil, fmt.Errorf("unexpected response codec context: %#v", context.ResponseCodec)
-			}
-			requestCodec := context.RequestCodec.ResolveCodec()
-			responseCodec := context.ResponseCodec.ResolveCodec()
-			if requestCodec == nil || responseCodec == nil {
-				return nil, errors.New("execution codec capability did not resolve")
+			requestCodec, responseCodec, err := resolveDirectionalExecutionTestCodecs(context)
+			if err != nil {
+				return nil, err
 			}
 			var request LLMRequestDTO
 			if err := json.Unmarshal(nativeJSON, &request); err != nil {
