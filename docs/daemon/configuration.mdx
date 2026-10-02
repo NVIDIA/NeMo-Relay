@@ -106,8 +106,76 @@ identity. Keep the same token across that identity's harness sessions. Do not
 regenerate it on every login. A token is not a model-provider key and does not
 replace the user's normal provider login.
 
-Your enterprise secret service can provision the token directly. For a small
-deployment, choose the commands for your platform.
+### Create the Per-User Token File
+
+The simplest provisioning path is the per-user token file. Run this command as
+the user who runs the coding agent, not as root or an administrator:
+
+```bash
+nemo-relay daemon token ensure --json
+```
+
+The command creates `<user config dir>/.client-token` if it does not already
+exist. On Linux and macOS this is `~/.config/nemo-relay/.client-token`, or
+`$XDG_CONFIG_HOME/nemo-relay/.client-token` when `XDG_CONFIG_HOME` is set. On
+Windows it is `%USERPROFILE%\.config\nemo-relay\.client-token`. The command:
+
+- Generates 32 bytes from the operating-system random source and writes them as
+  one unpadded base64url line.
+- Creates the parent directory with mode `0700` when it does not exist and
+  writes the file with mode `0600` (owner-only access on Windows).
+- Publishes the file atomically. Concurrent runs converge on one token.
+- Leaves an existing valid file unchanged and reports `existing`.
+- Never overwrites an existing invalid or unsafe file. It exits with an error
+  naming the path and the problem; review and remove the file, then run the
+  command again.
+- Never prints the token. `--json` prints only
+  `{"status":"created"|"existing","path":"..."}`.
+- Refuses to run as root on Linux and macOS.
+
+Fleet tooling can run the command at every login because it is idempotent. Do
+not copy one token file between users or machines.
+
+### Credential Resolution
+
+Managed hooks (`nemo-relay daemon hook`), the managed MCP server
+(`nemo-relay daemon mcp`), and `nemo-relay doctor --managed-bundle` resolve the
+route credential in this order:
+
+1. `NEMO_RELAY_CLIENT_TOKEN`, when it is set, nonempty, and valid.
+2. The per-user token file, when it exists, is valid, and is safe: a regular
+   file, not a symbolic link, owned by the current user, with no group or other
+   permission bits (on Windows, the protected owner-only access list), and at
+   most 128 bytes. One trailing newline is allowed.
+3. Otherwise, no credential.
+
+An invalid environment value or an unsafe or invalid file is skipped with one
+redacted warning; it is not a hard error. The token value is never logged.
+
+The token file exists because environment changes made after login, such as
+`launchctl setenv` on macOS, never reach processes that were already running,
+such as a terminal opened before the change. Every process of the same user can
+read the file.
+
+Harness model requests do not read the token file. Codex, Claude Code, and Pi
+send `x-nemo-relay-client-token` only from their own environment. When that
+environment is missing, model requests use daemon pass-through (see
+[Requests Without a Bound Credential](#requests-without-a-bound-credential)).
+To attribute model traffic, the login environment must still export the token,
+for example by reading the file:
+
+```bash
+export NEMO_RELAY_CLIENT_TOKEN="$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay/.client-token")"
+export ANTHROPIC_CUSTOM_HEADERS="x-nemo-relay-client-token: ${NEMO_RELAY_CLIENT_TOKEN}"
+```
+
+The managed Pi extension reads only `NEMO_RELAY_CLIENT_TOKEN`; it does not read
+the token file.
+
+### Provision Through Enterprise Tooling
+
+Your enterprise secret service can also provision the token directly. For a
+small deployment without the token file, choose the commands for your platform.
 
 <Tabs>
 <Tab title="Linux and macOS">
@@ -227,7 +295,10 @@ export ANTHROPIC_CUSTOM_HEADERS="x-nemo-relay-client-token: ${NEMO_RELAY_CLIENT_
 
 Do not append another `x-nemo-relay-client-token` entry to an existing custom
 header value. Managed diagnostics reject a missing, duplicate, or mismatched
-credential header.
+credential header when the credential comes from `NEMO_RELAY_CLIENT_TOKEN`.
+When the credential comes from the token file, diagnostics accept a missing
+`ANTHROPIC_CUSTOM_HEADERS` (Claude Code model requests then use pass-through)
+but still reject a present header that does not match the file.
 
 The same credential identifies MCP registration, Codex and Claude LLM
 requests, Pi provider requests, and managed hook requests. The daemon does
@@ -236,6 +307,36 @@ registration, it binds the credential digest to the user-machine fingerprint.
 An existing binding cannot be reassigned to another fingerprint. The daemon
 stores only credential digests, removes the public header before forwarding
 a request, and preserves the caller's provider authentication.
+
+### Requests Without a Bound Credential
+
+A missing credential means telemetry and guardrails are skipped for that
+request; the coding agent keeps working:
+
+- A public request with no `x-nemo-relay-client-token` header, or with a
+  well-formed credential that no MCP session has bound (for example, after a
+  daemon restart and before MCP registers again), uses pass-through. Hook
+  requests receive the agent's no-op pass-through response. Provider requests
+  are forwarded directly to the configured provider with the caller's own
+  provider authentication.
+- A malformed credential or a repeated header still returns `401`.
+- A daemon started with `--require-worker` keeps rejecting missing and unbound
+  credentials with `401`.
+- A request without a bound credential never receives daemon-held provider
+  credentials (configured provider auth headers or the daemon's own
+  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) and cannot name its own upstream,
+  except that a daemon explicitly started with `--pass-through` applies its
+  provider credentials to every request.
+- The daemon logs each decision as `public_request_pass_through` with
+  `route_mode = "pass_through"` and `reason = "missing_credential"` or
+  `reason = "unbound_credential"`, rate-limited, without the credential.
+
+On the client side, `nemo-relay daemon hook` with no resolvable credential does
+not contact the daemon. It writes the same pass-through response and exits `0`,
+regardless of `--fail-open` or `--fail-closed`, and logs a warning.
+`nemo-relay daemon mcp` with no resolvable credential keeps serving the MCP
+protocol without registering a route, so hosts that require the server keep
+running.
 
 Enrollment is open to anyone who can reach the daemon and prove possession
 of their machine identity. This proof establishes identity, not organizational
@@ -269,8 +370,10 @@ The bundle follows these rules:
   than replacing v1 bytes.
 
 Enterprise bootstrap owns credential provisioning and login-environment
-injection. Relay validates `NEMO_RELAY_CLIENT_TOKEN` but does not install an
-operating-system-specific login agent.
+injection. Relay validates the resolved route credential from
+`NEMO_RELAY_CLIENT_TOKEN` or the per-user token file, and
+`nemo-relay daemon token ensure` creates that file, but Relay does not install
+an operating-system-specific login agent.
 
 Create a bundle once from fixed deployment values. Repeat `--agent` to select
 the artifacts that the administrator distributes:

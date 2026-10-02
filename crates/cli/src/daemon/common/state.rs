@@ -45,15 +45,6 @@ impl fmt::Debug for RouteCredential {
 }
 
 impl RouteCredential {
-    pub(crate) fn from_environment() -> Result<Self, CliError> {
-        let value = std::env::var(ROUTE_TOKEN_ENV).map_err(|_| {
-            CliError::Config(format!(
-                "managed daemon integration requires {ROUTE_TOKEN_ENV}; contact the managed environment administrator"
-            ))
-        })?;
-        Self::parse(value)
-    }
-
     pub(crate) fn parse(value: String) -> Result<Self, CliError> {
         if value.trim() != value || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
             return Err(CliError::Config(format!(

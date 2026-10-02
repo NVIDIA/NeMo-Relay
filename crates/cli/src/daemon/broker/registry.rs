@@ -141,6 +141,11 @@ impl Registry {
         self
     }
 
+    /// Whether every public request must be served by an authenticated worker.
+    pub(crate) const fn requires_worker(&self) -> bool {
+        self.require_worker
+    }
+
     pub(crate) fn activation_progress(&self, now: tokio::time::Instant) -> Vec<(Fingerprint, u64)> {
         let mut inner = self.write();
         inner

@@ -61,6 +61,9 @@ pub(crate) struct ManagedBundleDoctorInfo {
     pub daemon_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
+    /// Route credential source (`env` or `file`); never the credential value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_source: Option<String>,
     pub details: String,
 }
 

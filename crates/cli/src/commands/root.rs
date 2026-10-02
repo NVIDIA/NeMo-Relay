@@ -178,7 +178,10 @@ impl Command {
             || matches!(self, Self::Doctor(command) if command.managed_bundle.is_some())
             || matches!(self, Self::Daemon(command) if matches!(
                 command.command.as_ref(),
-                Some(super::daemon::DaemonSubcommand::ManagedBundle(_))
+                Some(
+                    super::daemon::DaemonSubcommand::ManagedBundle(_)
+                        | super::daemon::DaemonSubcommand::Token(_)
+                )
             ))
             || matches!(self, Self::HookForward(command) if transparent_hook_is_inert(command))
     }

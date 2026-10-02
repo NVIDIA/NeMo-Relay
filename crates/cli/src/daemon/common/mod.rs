@@ -5,6 +5,7 @@
 
 pub(crate) mod address;
 pub(crate) mod client;
+pub(crate) mod client_token;
 pub(crate) mod control;
 pub(crate) mod identity;
 pub(crate) mod logging;

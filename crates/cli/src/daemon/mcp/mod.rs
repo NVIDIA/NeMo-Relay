@@ -14,6 +14,7 @@ use tokio::process::{Child, Command};
 
 use super::common::address::{daemon_url, explicit_daemon_origin};
 use super::common::client::{begin_handshake, control_client};
+use super::common::client_token::resolve_route_credential;
 use super::common::control::{
     ActivationFailedPayload, EmptyPayload, McpRegisterRequest, McpRegisterResponse, SessionRequest,
     WorkerActivationFailureReason, WorkerBootstrap, WorkerNetworkHint, WorkerNetworkHintProof,
@@ -53,8 +54,17 @@ struct Registration {
 
 pub(crate) async fn run(options: Options) -> Result<(), CliError> {
     let daemon_origin = explicit_daemon_origin(&options.daemon_address)?;
+    let Some(resolved) = resolve_route_credential() else {
+        return serve_without_route().await;
+    };
+    log::debug!(
+        target: "nemo_relay.daemon.mcp",
+        event = "route_credential_resolved",
+        source = resolved.source.as_str();
+        "Resolved the managed route credential"
+    );
+    let route_credential = resolved.credential;
     let client = control_client()?;
-    let route_credential = RouteCredential::from_environment()?;
     let identity = load_or_create_machine_identity()?;
     let session_id = uuid::Uuid::now_v7().to_string();
     let registration = register(
@@ -103,6 +113,22 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
         }
         result = &mut control => result.map_err(|error| CliError::Launch(format!("MCP control task failed: {error}")))?,
     }
+}
+
+/// Serves the MCP protocol without registering a route when no credential is available.
+///
+/// Hosts can mark this server as required, so it must stay up. With no registered route the
+/// daemon treats this user's requests as pass-through, matching `BrokerDirective::UsePassThrough`
+/// where no worker is ever launched.
+async fn serve_without_route() -> Result<(), CliError> {
+    log::warn!(
+        target: "nemo_relay.daemon.mcp",
+        event = "daemon_mcp_pass_through",
+        route_mode = "pass_through",
+        reason = "missing_credential";
+        "No NeMo Relay client credential is available; serving MCP without a daemon route"
+    );
+    crate::mcp::serve_daemon_stdio().await
 }
 
 async fn register(

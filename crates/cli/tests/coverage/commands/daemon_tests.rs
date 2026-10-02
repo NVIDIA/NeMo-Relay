@@ -116,3 +116,27 @@ fn daemon_value_parsers_cover_valid_and_invalid_address_shapes() {
     assert!(parse_daemon_address("https://0.0.0.0:443").is_err());
     assert!(parse_daemon_address("http://relay.example:80").is_err());
 }
+
+#[test]
+fn token_ensure_output_names_status_and_path_only() {
+    let path = std::path::Path::new("/home/user/.config/nemo-relay/.client-token");
+    for (status, expected) in [
+        (
+            daemon::common::client_token::EnsureStatus::Created,
+            "created",
+        ),
+        (
+            daemon::common::client_token::EnsureStatus::Existing,
+            "existing",
+        ),
+    ] {
+        let json: serde_json::Value =
+            serde_json::from_str(&render_token_ensure(status, path, true).unwrap()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"status": expected, "path": path.display().to_string()})
+        );
+        let human = render_token_ensure(status, path, false).unwrap();
+        assert!(human.contains(&path.display().to_string()), "{human}");
+    }
+}

@@ -2085,10 +2085,19 @@ pub(crate) fn collect_managed_bundle_report(
             artifact_count: Some(validation.artifact_count),
             daemon_address: Some(validation.daemon_address),
             platform: Some(validation.platform.as_str().into()),
-            details: format!(
-                "{} immutable artifacts match the trusted bundle digest {}",
-                validation.artifact_count, validation.sha256
-            ),
+            credential_source: validation
+                .credential_source
+                .map(|source| source.as_str().into()),
+            details: match validation.credential_source {
+                Some(source) => format!(
+                    "{} immutable artifacts match the trusted bundle digest {}; route credential from {source}",
+                    validation.artifact_count, validation.sha256
+                ),
+                None => format!(
+                    "{} immutable artifacts match the trusted bundle digest {}",
+                    validation.artifact_count, validation.sha256
+                ),
+            },
         },
         Err(error) => ManagedBundleDoctorInfo {
             status: Status::Fail,
@@ -2097,6 +2106,7 @@ pub(crate) fn collect_managed_bundle_report(
             artifact_count: None,
             daemon_address: None,
             platform: None,
+            credential_source: None,
             details: error.to_string(),
         },
     };

@@ -14,25 +14,6 @@ fn route_credential_is_exactly_256_bits() {
     assert!(RouteCredential::parse(format!("{value}\n")).is_err());
 }
 
-#[test]
-fn route_credential_loads_from_the_environment_and_reports_absence() {
-    let value = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([8_u8; 32]);
-    let environment = crate::test_support::EnvScope::set(&[(
-        ROUTE_TOKEN_ENV,
-        Some(std::ffi::OsStr::new(&value)),
-    )]);
-    let credential = RouteCredential::from_environment().expect("environment credential");
-    assert_eq!(credential.expose(), value);
-    assert_eq!(
-        credential.digest(),
-        TokenDigest::from_token(value.as_bytes())
-    );
-    drop(environment);
-
-    let _environment = crate::test_support::EnvScope::set(&[(ROUTE_TOKEN_ENV, None)]);
-    assert!(RouteCredential::from_environment().is_err());
-}
-
 #[cfg(unix)]
 #[test]
 fn identity_and_lock_files_reject_symlinks_and_repair_owner_private_modes() {

@@ -53,6 +53,30 @@ pub(crate) enum DaemonSubcommand {
     Worker(DaemonWorkerCommand),
     /// Create an immutable administrator-managed integration bundle.
     ManagedBundle(DaemonManagedBundleCommand),
+    /// Manage this user's daemon client route token file.
+    Token(DaemonTokenCommand),
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct DaemonTokenCommand {
+    #[command(subcommand)]
+    pub(crate) command: DaemonTokenSubcommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum DaemonTokenSubcommand {
+    /// Create this user's client token file if it does not already exist.
+    #[command(
+        long_about = "Create this user's owner-private daemon client token file if it does not already exist. Run as the user who runs the coding agent, not as root. The file is <user config dir>/.client-token (normally ~/.config/nemo-relay/.client-token; XDG_CONFIG_HOME is honored). Managed hooks, the managed MCP server, and doctor use it when NEMO_RELAY_CLIENT_TOKEN is not set. An existing valid file is left unchanged; an invalid or unsafe file is never overwritten. The token value is never printed."
+    )]
+    Ensure(DaemonTokenEnsureCommand),
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct DaemonTokenEnsureCommand {
+    /// Print `{"status":"created"|"existing","path":"..."}` instead of a human-readable line.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -211,9 +235,44 @@ pub(crate) async fn execute(
             let sha256 = daemon::managed::write_new_bundle(&command.output, &spec)?;
             println!("{sha256}");
         }
+        Some(DaemonSubcommand::Token(DaemonTokenCommand {
+            command: DaemonTokenSubcommand::Ensure(command),
+        })) => {
+            let path = daemon::common::client_token::client_token_path().ok_or_else(|| {
+                CliError::Config(
+                    "cannot determine the per-user NeMo Relay config directory; set HOME or XDG_CONFIG_HOME"
+                        .into(),
+                )
+            })?;
+            let status = daemon::common::client_token::ensure_client_token(&path)?;
+            println!("{}", render_token_ensure(status, &path, command.json)?);
+        }
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn render_token_ensure(
+    status: daemon::common::client_token::EnsureStatus,
+    path: &std::path::Path,
+    json: bool,
+) -> Result<String, CliError> {
+    if json {
+        return serde_json::to_string(&serde_json::json!({
+            "status": status.as_str(),
+            "path": path.display().to_string(),
+        }))
+        .map_err(|error| CliError::Config(format!("failed to encode token status: {error}")));
+    }
+    Ok(match status {
+        daemon::common::client_token::EnsureStatus::Created => {
+            format!("Created NeMo Relay client token file {}", path.display())
+        }
+        daemon::common::client_token::EnsureStatus::Existing => format!(
+            "NeMo Relay client token file {} already exists",
+            path.display()
+        ),
+    })
 }
 
 fn parse_bind_address(value: &str) -> Result<Ipv4Addr, String> {

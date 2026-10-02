@@ -536,7 +536,13 @@ fn register_mcp_blocking(
     Json(request): Json<McpRegisterRequest>,
 ) -> Response<Body> {
     let credential = match public_credential(&headers) {
-        Ok(credential) => credential,
+        Ok(Some(credential)) => credential,
+        Ok(None) => {
+            return control_message(
+                StatusCode::UNAUTHORIZED,
+                "exactly one route credential is required",
+            );
+        }
         Err(response) => return response,
     };
     let transcript = &request.proof.transcript;
@@ -1578,6 +1584,14 @@ async fn public_proxy_inner(
         Ok(credential) => credential,
         Err(response) => return response,
     };
+    // `--require-worker` promises that no request bypasses a worker, so it keeps rejecting
+    // requests that cannot be attributed to a route.
+    if credential.is_none() && state.registry.requires_worker() {
+        return control_message(
+            StatusCode::UNAUTHORIZED,
+            "exactly one route credential is required",
+        );
+    }
     strip_public_relay_headers(request.headers_mut(), route);
     if responses_websocket_probe(&request) {
         return StatusCode::UPGRADE_REQUIRED.into_response();
@@ -1585,12 +1599,22 @@ async fn public_proxy_inner(
     if !public_method_allowed(request.method(), request.uri().path()) {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
-    let target = match state.registry.resolve_target(&credential.digest()) {
-        Ok(target) => target,
-        Err(ResolveError::UnknownToken) => {
-            return control_message(StatusCode::UNAUTHORIZED, "invalid route credential");
+    let (target, access) = match credential {
+        None => {
+            log_anonymous_pass_through(route, AnonymousReason::MissingCredential);
+            (ResolvedTarget::PassThrough, ProviderAccess::Anonymous)
         }
-        Err(ResolveError::Unavailable(_)) => return unavailable_response(),
+        Some(credential) => match state.registry.resolve_target(&credential.digest()) {
+            Ok(target) => (target, ProviderAccess::BoundRoute),
+            Err(ResolveError::UnknownToken) if !state.registry.requires_worker() => {
+                log_anonymous_pass_through(route, AnonymousReason::UnboundCredential);
+                (ResolvedTarget::PassThrough, ProviderAccess::Anonymous)
+            }
+            Err(ResolveError::UnknownToken) => {
+                return control_message(StatusCode::UNAUTHORIZED, "invalid route credential");
+            }
+            Err(ResolveError::Unavailable(_)) => return unavailable_response(),
+        },
     };
     match (target, route) {
         (ResolvedTarget::PassThrough, PublicRoute::Hook(hook)) => {
@@ -1601,7 +1625,7 @@ async fn public_proxy_inner(
             response
         }
         (ResolvedTarget::PassThrough, PublicRoute::Provider(provider)) => {
-            forward_to_provider(&state, request, provider).await
+            forward_to_provider(&state, request, provider, access).await
         }
         (ResolvedTarget::Worker(worker), _) => {
             if !worker.target().control_available() {
@@ -1635,9 +1659,10 @@ fn public_method_allowed(method: &Method, path: &str) -> bool {
 
 fn strip_public_relay_headers(headers: &mut HeaderMap, route: PublicRoute) {
     let keep_named_upstream = matches!(route, PublicRoute::Provider(_));
-    // This runs only after the public client credential has been authenticated. Preserve a valid
-    // forwarder-generated operation ID for hook requests so the worker shares that boundary's
-    // record. Provider requests always drop it before dispatch.
+    // This runs after the public credential header was validated or found absent. Preserve a
+    // valid forwarder-generated operation ID for hook requests so the worker shares that
+    // boundary's record; anonymous hooks never reach a worker. Provider requests always drop it
+    // before dispatch.
     let keep_hook_operation_id = matches!(route, PublicRoute::Hook(_))
         && headers
             .get(crate::operational::OPERATION_ID_HEADER)
@@ -1660,30 +1685,88 @@ fn strip_public_relay_headers(headers: &mut HeaderMap, route: PublicRoute) {
     }
 }
 
+/// Whether a pass-through provider request was attributed to a bound route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderAccess {
+    /// The request presented a credential bound to a registered route.
+    BoundRoute,
+    /// The request had no credential, or one no MCP session has bound.
+    Anonymous,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AnonymousReason {
+    MissingCredential,
+    UnboundCredential,
+}
+
+impl AnonymousReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingCredential => "missing_credential",
+            Self::UnboundCredential => "unbound_credential",
+        }
+    }
+}
+
+fn log_anonymous_pass_through(route: PublicRoute, reason: AnonymousReason) {
+    static MISSING: OnceLock<LogRateLimiter> = OnceLock::new();
+    static UNBOUND: OnceLock<LogRateLimiter> = OnceLock::new();
+    let limiter = match reason {
+        AnonymousReason::MissingCredential => &MISSING,
+        AnonymousReason::UnboundCredential => &UNBOUND,
+    }
+    .get_or_init(|| LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL));
+    let Some(suppressed_since_last_emit) = limiter.record() else {
+        return;
+    };
+    let route_kind = match route {
+        PublicRoute::Hook(_) => "hook",
+        PublicRoute::Provider(provider) => provider.as_str(),
+    };
+    log::info!(
+        target: "nemo_relay.daemon",
+        event = "public_request_pass_through",
+        route = route_kind,
+        route_mode = "pass_through",
+        reason = reason.as_str(),
+        suppressed_since_last_emit = suppressed_since_last_emit;
+        "Public request has no bound route credential; using pass-through"
+    );
+}
+
 async fn forward_to_provider(
     state: &DaemonState,
     mut request: Request<Body>,
     route: ProviderRoute,
+    access: ProviderAccess,
 ) -> Response<Body> {
-    let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    let invocation_authenticated = access == ProviderAccess::BoundRoute;
+    // Daemon-held provider credentials (configured auth headers or the daemon's own API key
+    // environment) are only lent to requests attributed to a bound route, or to every request
+    // when the operator explicitly deployed the daemon in global pass-through mode.
+    let allow_environment_provider_auth = (invocation_authenticated || state.pass_through)
+        && crate::gateway::daemon_allows_environment_provider_auth(request.headers());
     let path_and_query = request
         .uri()
         .path_and_query()
         .map_or("/", |value| value.as_str());
-    let destination = match crate::gateway::daemon_provider_upstream_url(
+    let destination = match crate::gateway::daemon_provider_upstream_url_with_access(
         request.headers(),
         path_and_query,
         &state.config,
+        invocation_authenticated,
+        allow_environment_provider_auth,
     ) {
         Ok(Some(destination)) => destination,
         Ok(None) => route.upstream_url(&state.config, path_and_query),
         Err(error) => return error.into_response(),
     };
-    if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
+    if let Some(aligned) = crate::gateway::daemon_provider_forward_headers_with_access(
         request.headers(),
         request.uri().path(),
         &state.config,
+        allow_environment_provider_auth,
     ) {
         *request.headers_mut() = aligned;
     }
@@ -2559,14 +2642,20 @@ fn prune_expired_mcp_control_state(
     }
 }
 
+/// Returns the single public route credential, `None` when the header is absent, or a 401 for a
+/// malformed or repeated header.
 #[allow(clippy::result_large_err)]
-fn public_credential(headers: &HeaderMap) -> Result<RouteCredential, Response<Body>> {
+fn public_credential(headers: &HeaderMap) -> Result<Option<RouteCredential>, Response<Body>> {
     let values = headers.get_all(CLIENT_TOKEN_HEADER);
-    if values.iter().count() != 1 {
-        return Err(control_message(
-            StatusCode::UNAUTHORIZED,
-            "exactly one route credential is required",
-        ));
+    match values.iter().count() {
+        0 => return Ok(None),
+        1 => {}
+        _ => {
+            return Err(control_message(
+                StatusCode::UNAUTHORIZED,
+                "exactly one route credential is required",
+            ));
+        }
     }
     let value = values
         .iter()
@@ -2574,6 +2663,7 @@ fn public_credential(headers: &HeaderMap) -> Result<RouteCredential, Response<Bo
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| control_message(StatusCode::UNAUTHORIZED, "invalid route credential"))?;
     RouteCredential::parse(value.to_owned())
+        .map(Some)
         .map_err(|_| control_message(StatusCode::UNAUTHORIZED, "invalid route credential"))
 }
 

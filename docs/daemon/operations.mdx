@@ -23,7 +23,8 @@ non-sensitive prompt. Keep the harness open throughout the request checks.
 
 Run `nemo-relay doctor --managed-bundle <installed-bundle-path> --managed-bundle-sha256 <trusted-digest>`
 in the user's prepared environment. Expect bundle and environment validation
-to succeed. This does not prove live daemon or worker readiness.
+to succeed. The details report the route credential source, `env` or `file`.
+This does not prove live daemon or worker readiness.
 
 </Step>
 
@@ -190,7 +191,8 @@ Use this table to choose the next check for a failure:
 | --- | --- | --- |
 | Service repeatedly exits | Bad path, unreadable state or configuration, or occupied port | Read service logs. Check account permissions and the process using the port. |
 | TLS validation fails | Wrong name, expired chain, or untrusted CA | Check the advertised DNS name, certificate dates, and client native trust store. |
-| `401` from a public route | Missing, unknown, or unregistered credential | Load the existing token and start MCP registration before sending requests. |
+| `401` from a public route | Malformed or repeated credential header, or `--require-worker` with a missing or unbound credential | Check the token value with `nemo-relay doctor --managed-bundle`, then start MCP registration before sending requests. |
+| Hooks or model requests produce no telemetry, with `reason = "missing_credential"` or `"unbound_credential"` | No credential resolved, or MCP has not registered since a daemon restart | Run `nemo-relay daemon token ensure` as the user or export `NEMO_RELAY_CLIENT_TOKEN`, then restart the harness so MCP registers. |
 | Registered route returns `503` | No active MCP reference, or `--require-worker` is waiting for a worker | Keep the harness MCP process alive. Inspect registration and worker logs. |
 | Worker status list is empty | No assigned worker, startup still pending, or route uses passthrough | Check the `/healthz` deployment mode and lifecycle events. Keep the harness open during the check. |
 | Worker status returns `404` | The UUID is unknown, drained, replaced, or no longer assigned | Refresh `/_nemo_relay/v1/workers`. Match the new UUID to its lifecycle logs. |
@@ -267,7 +269,8 @@ Route credential bindings are in memory. A daemon restart requires MCP
 re-registration, even when signing identity is preserved. There is no documented
 per-user credential-revocation CLI. For offboarding, remove the user's network
 access and managed launch access and end their sessions. Do not assume deleting
-a local token file revokes a binding from the running broker.
+a local token file revokes a binding from the running broker. Until MCP
+re-registers after a restart, that user's requests use pass-through.
 
 ## Upgrade and Roll Back
 

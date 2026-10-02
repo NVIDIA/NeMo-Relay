@@ -390,7 +390,10 @@ fn doctor_requires_the_separately_provisioned_bundle_digest() {
         "0000000000000000000000000000000000000000000000000000000000000000"
             .parse()
             .unwrap();
-    let _environment = EnvScope::set(&[(ROUTE_TOKEN_ENV, None)]);
+    let _environment = EnvScope::set(&[
+        (ROUTE_TOKEN_ENV, None),
+        ("XDG_CONFIG_HOME", Some(directory.path().as_os_str())),
+    ]);
 
     let error = refresh_bundle(&root, &wrong).unwrap_err().to_string();
     assert!(error.contains("SHA-256 mismatch"), "{error}");
@@ -431,14 +434,54 @@ fn managed_environment_requires_the_enterprise_provisioned_credential() {
     let directory = tempdir().unwrap();
     let root = directory.path().join("bundle");
     let digest = write_new_bundle(&root, &spec([ManagedAgent::Codex])).unwrap();
-    let _environment = EnvScope::set(&[(ROUTE_TOKEN_ENV, None)]);
+    let _environment = EnvScope::set(&[
+        (ROUTE_TOKEN_ENV, None),
+        ("XDG_CONFIG_HOME", Some(directory.path().as_os_str())),
+    ]);
 
     let error = refresh_bundle(&root, &digest).unwrap_err().to_string();
     assert!(error.contains(ROUTE_TOKEN_ENV), "{error}");
+    assert!(error.contains(".client-token"), "{error}");
+    assert!(error.contains("daemon token ensure"), "{error}");
     assert!(
         error.contains("enterprise") || error.contains("managed"),
         "{error}"
     );
+}
+
+#[test]
+fn managed_environment_accepts_a_file_sourced_credential_and_reports_its_source() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("bundle");
+    let digest = write_new_bundle(
+        &root,
+        &spec([ManagedAgent::Codex, ManagedAgent::ClaudeCode]),
+    )
+    .unwrap();
+    let config = directory.path().join("xdg");
+    let environment = EnvScope::set(&[
+        (ROUTE_TOKEN_ENV, None),
+        (CLAUDE_CUSTOM_HEADERS_ENV, None),
+        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
+    ]);
+    let token_path = crate::daemon::common::client_token::client_token_path().unwrap();
+    assert!(token_path.starts_with(&config));
+    crate::filesystem::atomic_write_private(&token_path, format!("{}\n", credential()).as_bytes())
+        .unwrap();
+
+    let validation = refresh_bundle(&root, &digest).unwrap();
+    assert_eq!(validation.credential_source, Some(CredentialSource::File));
+
+    // An environment credential still takes precedence and keeps the strict Claude header check.
+    drop(environment);
+    let token = credential();
+    let _environment = EnvScope::set(&[
+        (ROUTE_TOKEN_ENV, Some(OsStr::new(&token))),
+        (CLAUDE_CUSTOM_HEADERS_ENV, None),
+        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
+    ]);
+    let error = refresh_bundle(&root, &digest).unwrap_err().to_string();
+    assert!(error.contains(CLAUDE_CUSTOM_HEADERS_ENV), "{error}");
 }
 
 #[test]

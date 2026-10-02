@@ -6229,3 +6229,63 @@ fn cli_daemon_mcp_initializes_while_activation_fails_and_honors_strict_routing()
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn daemon_token_ensure_creates_once_and_never_prints_the_token() {
+    // SAFETY: geteuid has no preconditions. The command intentionally refuses root.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let token_path = xdg.join("nemo-relay").join(".client-token");
+    let ensure = |json: bool| {
+        let mut command = Command::new(gateway_bin());
+        command
+            .env("XDG_CONFIG_HOME", &xdg)
+            .env("HOME", temp.path())
+            .env_remove("NEMO_RELAY_CLIENT_TOKEN")
+            .args(["daemon", "token", "ensure"]);
+        if json {
+            command.arg("--json");
+        }
+        command.output().unwrap()
+    };
+
+    let created = ensure(true);
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let token = std::fs::read_to_string(&token_path).unwrap();
+    let token = token.trim_end();
+    assert_eq!(token.len(), 43);
+    let json: serde_json::Value = serde_json::from_slice(&created.stdout).unwrap();
+    assert_eq!(json["status"], "created");
+    assert_eq!(json["path"], token_path.display().to_string());
+
+    let existing = ensure(false);
+    assert!(existing.status.success());
+    assert!(String::from_utf8_lossy(&existing.stdout).contains("already exists"));
+    let again = ensure(true);
+    let json: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(json["status"], "existing");
+    for output in [&created, &existing, &again] {
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(token));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(token));
+    }
+    assert_eq!(
+        std::fs::read_to_string(&token_path).unwrap().trim_end(),
+        token
+    );
+
+    std::fs::write(&token_path, "corrupt").unwrap();
+    let refused = ensure(true);
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains(".client-token"), "{stderr}");
+    assert!(!stderr.contains("corrupt"), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&token_path).unwrap(), "corrupt");
+}

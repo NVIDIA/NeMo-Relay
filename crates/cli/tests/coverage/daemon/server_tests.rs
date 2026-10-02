@@ -230,16 +230,26 @@ async fn shared_model_catalogs_disable_cache_reuse_between_credentials() {
             provider_auth
         );
     }
+    // Requests without a route credential pass through with the caller's own provider auth.
     for path in ["/models", "/v1/models"] {
         let response = app
             .clone()
-            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get(path)
+                    .header(AUTHORIZATION, "Bearer anonymous-user")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers()[axum::http::header::CACHE_CONTROL],
             "no-store"
+        );
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "Bearer anonymous-user"
         );
     }
     daemon_task.abort();
@@ -423,7 +433,8 @@ async fn open_enrollment_binds_new_tokens_without_allowlist_and_prevents_route_t
             (&first, &identity, "first"),
             (&second, &other_identity, "second"),
         ] {
-            // Rejection must happen from the request head, before reading even one body frame.
+            // An unbound credential passes through from the request head, before reading even
+            // one body frame.
             let body = Body::from_stream(futures_util::stream::poll_fn(
                 |_| -> std::task::Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
                     panic!("unregistered request body polled")
@@ -439,7 +450,11 @@ async fn open_enrollment_binds_new_tokens_without_allowlist_and_prevents_route_t
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                HookRoute::Pi.pass_through_body()
+            );
             let response = enroll_test_mcp(&state, &origin, machine, token, session).await;
             assert_eq!(response.status(), StatusCode::OK);
             let response: McpRegisterResponse =
@@ -517,12 +532,15 @@ fn worker_endpoint_rejects_bind_only_and_non_origin_values() {
 fn public_credential_requires_exactly_one_valid_value() {
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7_u8; 32]);
     let mut headers = HeaderMap::new();
-    assert!(public_credential(&headers).is_err());
+    assert!(public_credential(&headers).expect("absent").is_none());
     headers.insert(
         CLIENT_TOKEN_HEADER,
         HeaderValue::from_str(&token).expect("header"),
     );
-    assert!(public_credential(&headers).is_ok());
+    assert!(public_credential(&headers).expect("present").is_some());
+    let mut malformed = HeaderMap::new();
+    malformed.insert(CLIENT_TOKEN_HEADER, HeaderValue::from_static("short"));
+    assert!(public_credential(&malformed).is_err());
     headers.append(
         CLIENT_TOKEN_HEADER,
         HeaderValue::from_str(&token).expect("header"),
@@ -3060,4 +3078,180 @@ fn router(state: Arc<DaemonState>) -> Router {
         .layer(axum::Extension(socket::LocalAddress(
             "127.0.0.1:2".parse().unwrap(),
         )))
+}
+
+async fn capturing_provider() -> (String, CapturedProviderRequest, tokio::task::JoinHandle<()>) {
+    let captured: CapturedProviderRequest = Arc::new(std::sync::Mutex::new(None));
+    let provider = Router::new()
+        .route(
+            "/v1/responses",
+            post(
+                |State(captured): State<CapturedProviderRequest>,
+                 request: Request<Body>| async move {
+                    let (parts, body) = request.into_parts();
+                    let body = axum::body::to_bytes(body, usize::MAX)
+                        .await
+                        .expect("provider request body");
+                    *captured.lock().expect("capture provider request") =
+                        Some((parts.headers, body));
+                    Response::new(Body::from("provider response"))
+                },
+            ),
+        )
+        .with_state(Arc::clone(&captured));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind provider");
+    let origin = format!(
+        "http://{}",
+        listener.local_addr().expect("provider address")
+    );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, provider)
+            .await
+            .expect("serve provider");
+    });
+    (origin, captured, task)
+}
+
+fn take_provider_request(captured: &CapturedProviderRequest) -> (HeaderMap, bytes::Bytes) {
+    captured
+        .lock()
+        .expect("captured provider request")
+        .take()
+        .expect("provider received request")
+}
+
+#[tokio::test]
+async fn requests_without_a_bound_credential_pass_through_without_daemon_provider_auth() {
+    let (provider_origin, captured, provider_task) = capturing_provider().await;
+    let unbound = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x31_u8; 32]);
+    let state = test_daemon_state(
+        false,
+        &unbound,
+        GatewayConfig {
+            openai_base_url: provider_origin,
+            openai_auth_header: Some("Bearer daemon-held-secret".into()),
+            ..GatewayConfig::default()
+        },
+    );
+    let app = router(Arc::clone(&state));
+
+    for credential in [None, Some(unbound.as_str())] {
+        let mut hook = Request::post("/hooks/claude-code");
+        let mut provider = Request::post("/v1/responses")
+            .header(AUTHORIZATION, "Bearer caller-owned")
+            .header(
+                crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+                "https://attacker.example.com",
+            );
+        let mut unauthenticated_provider = Request::post("/v1/responses");
+        if let Some(credential) = credential {
+            hook = hook.header(CLIENT_TOKEN_HEADER, credential);
+            provider = provider.header(CLIENT_TOKEN_HEADER, credential);
+            unauthenticated_provider =
+                unauthenticated_provider.header(CLIENT_TOKEN_HEADER, credential);
+        }
+
+        let response = app
+            .clone()
+            .oneshot(hook.body(Body::from("{}")).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            HookRoute::Claude.pass_through_body()
+        );
+
+        // The caller's own credential is preserved and a client-named upstream is ignored.
+        let response = app
+            .clone()
+            .oneshot(provider.body(Body::from("anonymous request")).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let (headers, body) = take_provider_request(&captured);
+        assert_eq!(headers[AUTHORIZATION], "Bearer caller-owned");
+        assert!(!headers.contains_key(CLIENT_TOKEN_HEADER));
+        assert!(!headers.contains_key(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER));
+        assert_eq!(body, "anonymous request");
+
+        // Daemon-held provider credentials are never lent to an unattributed request.
+        let response = app
+            .clone()
+            .oneshot(unauthenticated_provider.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let (headers, _) = take_provider_request(&captured);
+        assert!(!headers.contains_key(AUTHORIZATION), "{headers:?}");
+        assert!(!headers.contains_key("x-api-key"), "{headers:?}");
+    }
+
+    let malformed = Request::post("/v1/responses")
+        .header(CLIENT_TOKEN_HEADER, "not-a-route-credential")
+        .body(Body::empty())
+        .unwrap();
+    let duplicate = Request::post("/hooks/codex")
+        .header(CLIENT_TOKEN_HEADER, &unbound)
+        .header(CLIENT_TOKEN_HEADER, &unbound)
+        .body(Body::empty())
+        .unwrap();
+    for request in [malformed, duplicate] {
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert!(captured.lock().unwrap().is_none());
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn global_pass_through_lends_daemon_provider_auth_to_anonymous_requests() {
+    let (provider_origin, captured, provider_task) = capturing_provider().await;
+    let state = test_daemon_state(
+        true,
+        "",
+        GatewayConfig {
+            openai_base_url: provider_origin,
+            openai_auth_header: Some("Bearer configured-provider".into()),
+            ..GatewayConfig::default()
+        },
+    );
+    let response = router(state)
+        .oneshot(
+            Request::post("/v1/responses")
+                .body(Body::from("anonymous request"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let (headers, _) = take_provider_request(&captured);
+    assert_eq!(headers[AUTHORIZATION], "Bearer configured-provider");
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn require_worker_rejects_missing_and_unbound_credentials() {
+    let unbound = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x32_u8; 32]);
+    let mut state = test_daemon_state(false, &unbound, GatewayConfig::default());
+    Arc::get_mut(&mut state).unwrap().registry = Registry::new(false).with_require_worker(true);
+    let app = router(state);
+    for credential in [None, Some(unbound.as_str())] {
+        let mut request = Request::post("/hooks/codex");
+        if let Some(credential) = credential {
+            request = request.header(CLIENT_TOKEN_HEADER, credential);
+        }
+        assert_eq!(
+            app.clone()
+                .oneshot(request.body(Body::from("{}")).unwrap())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
 }
