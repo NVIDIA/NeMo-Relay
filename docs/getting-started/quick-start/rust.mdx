@@ -245,7 +245,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Run it from the project directory so the relative output path resolves there:
+Run it from `relay-rust-quickstart`, the directory containing `Cargo.toml` and
+`plugins.toml`, not from `src`. If you are in `relay-rust-quickstart/src`, run
+`cd ..` first. The event file is written to `relay-rust-quickstart/logs/events.jsonl`.
 
 {/* quickstart-block {"id":"run","role":"run","cwd":"relay-rust-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
 ```bash
