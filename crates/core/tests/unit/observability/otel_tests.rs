@@ -7478,3 +7478,150 @@ fn promoted_root_resources_share_one_file_sink_stream() {
         "both promoted resources should survive in {contents}"
     );
 }
+
+#[test]
+fn gen_ai_projection_preserves_named_messages_and_portable_tool_correlations() {
+    let request = serde_json::from_value::<AnnotatedLlmRequest>(json!({
+        "messages": [
+            {"role": "system", "name": "policy", "content": "safe"},
+            {"role": "developer", "name": "application", "content": "brief"},
+            {"role": "function", "name": "legacy_lookup", "content": null},
+            {"role": "tool_call", "id": "item-1", "call_id": "call-1",
+             "name": "lookup", "arguments": {"city": "Paris"}},
+            {"role": "tool_result", "id": "item-2", "call_id": "call-1",
+             "output": {"temperature": 21}},
+            {"role": "provider_native", "provider": "example", "kind": "reasoning",
+             "value": {"role": "critic", "content": "check"}},
+            {"role": "provider_native", "provider": "example", "kind": "opaque", "value": 42},
+            {"role": "tool", "tool_call_id": "call-2", "content": [{"type": "text", "text": "done"}]}
+        ]
+    })).unwrap();
+    let event = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(request))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&event));
+    assert_eq!(
+        serde_json::from_str::<Json>(&attributes["gen_ai.input.messages"]).unwrap(),
+        json!([
+            {"role": "system", "name": "policy", "parts": [{"type": "text", "content": "safe"}]},
+            {"role": "developer", "name": "application", "parts": [{"type": "text", "content": "brief"}]},
+            {"role": "tool", "name": "legacy_lookup", "parts": [{"type": "tool_call_response", "response": null}]},
+            {"role": "assistant", "parts": [{"type": "tool_call", "id": "call-1", "name": "lookup", "arguments": {"city": "Paris"}}]},
+            {"role": "tool", "parts": [{"type": "tool_call_response", "id": "call-1", "response": {"temperature": 21}}]},
+            {"role": "critic", "parts": [{"type": "reasoning", "role": "critic", "content": "check"}]},
+            {"role": "provider_native", "parts": [{"type": "opaque", "content": 42}]},
+            {"role": "tool", "parts": [{"type": "tool_call_response", "id": "call-2", "response": [{"type": "text", "text": "done"}]}]}
+        ])
+    );
+}
+
+#[test]
+fn gen_ai_projection_preserves_multimodal_inputs_and_anthropic_tool_arguments() {
+    let request = serde_json::from_value::<AnnotatedLlmRequest>(json!({
+        "messages": [{"role": "assistant", "name": "helper", "content": [
+            {"type": "refusal", "refusal": "cannot comply"},
+            {"type": "tool_use", "id": "use-1", "name": "lookup", "input": {"city": "Paris"}},
+            {"type": "image", "image": {"url": "https://example.com/image"}, "detail": "high"},
+            {"type": "audio", "audio": {"data": "encoded", "format": "wav"}},
+            {"type": "file", "file": {"id": "file-1"}}
+        ]}]
+    }))
+    .unwrap();
+    let event = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(request))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&event));
+    assert_eq!(
+        serde_json::from_str::<Json>(&attributes["gen_ai.input.messages"]).unwrap(),
+        json!([{
+            "role": "assistant", "name": "helper", "parts": [
+                {"type": "text", "content": "cannot comply"},
+                {"type": "tool_call", "id": "use-1", "name": "lookup", "arguments": {"city": "Paris"}},
+                {"type": "image", "image": {"url": "https://example.com/image"}, "detail": "high"},
+                {"type": "audio", "audio": {"data": "encoded", "format": "wav"}},
+                {"type": "file", "file": {"id": "file-1"}}
+            ]
+        }])
+    );
+}
+
+#[test]
+fn gen_ai_embedding_encoding_formats_filter_blanks_and_reject_mixed_arrays() {
+    for (value, expected) in [
+        (json!("float"), Some("[\"float\"]")),
+        (
+            json!(["float", " ", "base64"]),
+            Some("[\"float\",\"base64\"]"),
+        ),
+        (json!(["", " "]), None),
+        (json!(["float", 3]), None),
+        (json!(null), None),
+    ] {
+        let event = make_scope_event_with_profile(
+            ScopeCategory::Start,
+            Uuid::now_v7(),
+            None,
+            "embed",
+            ScopeType::Embedder,
+            Some(json!({"encoding_formats": value})),
+            None,
+        );
+        let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&event));
+        assert_eq!(
+            attributes
+                .get("gen_ai.request.encoding_formats")
+                .map(String::as_str),
+            expected
+        );
+    }
+}
+
+#[test]
+fn gen_ai_client_metrics_include_response_model_and_server_dimensions() {
+    let event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(
+            json!({"provider": "openai", "model": "requested", "server_address": "api.example.com", "server_port": 443}),
+        ),
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    model: Some("served".into()),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    );
+    assert_eq!(
+        crate::observability::otel_genai::client_metric_attributes(&event),
+        Some(json!({
+            "gen_ai.operation.name": "chat", "gen_ai.provider.name": "openai",
+            "gen_ai.request.model": "requested", "gen_ai.response.model": "served",
+            "server.address": "api.example.com", "server.port": 443
+        }))
+    );
+}

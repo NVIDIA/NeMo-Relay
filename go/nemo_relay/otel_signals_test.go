@@ -385,3 +385,92 @@ func TestOpenTelemetryMetricSubscriberLifecycleAndDerivation(t *testing.T) {
 	requireNoError(t, subscriber.Deregister(name), "metric Deregister failed")
 	requireNoError(t, subscriber.Shutdown(), "metric Shutdown failed")
 }
+
+func TestOpenTelemetryConstructorsRejectInvalidSettings(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		create func() error
+	}{
+		{"trace type", func() error {
+			_, err := NewOpenTelemetrySubscriber(OpenTelemetryConfig{Endpoint: otelEndpoint})
+			return err
+		}},
+		{"trace endpoint", func() error {
+			_, err := NewOpenTelemetrySubscriber(OpenTelemetryConfig{Type: OpenTelemetryTypeFull})
+			return err
+		}},
+		{"log endpoint", func() error { _, err := NewOpenTelemetryLogSubscriber(OpenTelemetryLogConfig{}); return err }},
+		{"metric endpoint", func() error { _, err := NewOpenTelemetryMetricSubscriber(OpenTelemetryMetricConfig{}); return err }},
+		{"trace context TTL", func() error {
+			ttl := time.Duration(0)
+			_, err := NewOpenTelemetrySubscriber(OpenTelemetryConfig{Type: OpenTelemetryTypeFull, Endpoint: otelEndpoint, CompletedSpanContextTTL: &ttl})
+			return err
+		}},
+		{"file context TTL", func() error {
+			ttl := time.Duration(0)
+			_, err := NewOpenTelemetryFileSinkSubscriber(OpenTelemetryFileSinkConfig{CompletedSpanContextTTL: &ttl})
+			return err
+		}},
+		{"fractional file context TTL", func() error {
+			ttl := time.Nanosecond
+			_, err := NewOpenTelemetryFileSinkSubscriber(OpenTelemetryFileSinkConfig{CompletedSpanContextTTL: &ttl})
+			return err
+		}},
+		{"negative log duration", func() error {
+			_, err := NewOpenTelemetryLogSubscriber(OpenTelemetryLogConfig{Endpoint: otelEndpoint, Timeout: -time.Second})
+			return err
+		}},
+		{"invalid log severity", func() error {
+			_, err := NewOpenTelemetryLogSubscriber(OpenTelemetryLogConfig{Endpoint: otelEndpoint, MinimumSeverity: "invalid"})
+			return err
+		}},
+		{"invalid trace transport", func() error {
+			config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, otelEndpoint)
+			config.Transport = "invalid"
+			_, err := NewOpenTelemetrySubscriber(config)
+			return err
+		}},
+		{"invalid metric transport", func() error {
+			config := NewOpenTelemetryMetricConfig(otelEndpoint)
+			config.Transport = "invalid"
+			_, err := NewOpenTelemetryMetricSubscriber(config)
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.create(); err == nil {
+				t.Fatal("invalid subscriber settings were accepted")
+			}
+		})
+	}
+}
+
+func TestClosedOpenTelemetrySubscribersRejectRuntimeDiagnostics(t *testing.T) {
+	trace, err := NewOpenTelemetrySubscriber(NewOpenTelemetryConfig(OpenTelemetryTypeFull, otelEndpoint))
+	requireNoError(t, err, "create trace subscriber")
+	trace.Close()
+	trace.Close()
+	logs, err := NewOpenTelemetryLogSubscriber(NewOpenTelemetryLogConfig(otelEndpoint))
+	requireNoError(t, err, "create log subscriber")
+	logs.Close()
+	logs.Close()
+	metrics, err := NewOpenTelemetryMetricSubscriber(NewOpenTelemetryMetricConfig(otelEndpoint))
+	requireNoError(t, err, "create metric subscriber")
+	metrics.Close()
+	metrics.Close()
+	for _, test := range []struct {
+		name        string
+		diagnostics func() ([]OpenTelemetryRuntimeDiagnostic, error)
+	}{
+		{"trace", trace.RuntimeDiagnostics},
+		{"logs", logs.RuntimeDiagnostics},
+		{"metrics", metrics.RuntimeDiagnostics},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			diagnostics, err := test.diagnostics()
+			if err == nil || diagnostics != nil {
+				t.Fatalf("closed subscriber diagnostics = %v, error = %v; want nil and an error", diagnostics, err)
+			}
+		})
+	}
+}

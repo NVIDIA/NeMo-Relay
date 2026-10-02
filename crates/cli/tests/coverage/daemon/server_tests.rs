@@ -3152,3 +3152,367 @@ fn router(state: Arc<DaemonState>) -> Router {
             "127.0.0.1:2".parse().unwrap(),
         )))
 }
+
+#[tokio::test]
+async fn registration_rejects_changed_transcripts_and_invalid_signatures_and_consumes_challenges() {
+    use crate::daemon::common::control::RegistrationProof;
+    use crate::daemon::common::protocol::HandshakeTranscript;
+    for mutation in 0..7 {
+        let state = test_daemon_state(false, "", GatewayConfig::default());
+        let identity = MachineIdentity::generate().unwrap().identity;
+        let request = ChallengeRequest {
+            initiator: crate::daemon::common::control::descriptor(ComponentRole::Mcp),
+            initiator_instance_id: "proof-instance".into(),
+            initiator_public_identity: identity.public_identity(),
+            initiator_fingerprint: identity.fingerprint(),
+            initiator_nonce: crate::daemon::common::control::fresh_nonce().unwrap(),
+        };
+        let response = issue_challenge(State(Arc::clone(&state)), Json(request.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let challenge: ChallengeResponse =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let transcript = HandshakeTranscript {
+            daemon_target: state.public_origin.clone(),
+            initiator: request.initiator,
+            responder: challenge.daemon,
+            initiator_instance_id: request.initiator_instance_id,
+            responder_instance_id: challenge.daemon_instance_id,
+            selected_protocol: crate::daemon::common::protocol::PROTOCOL_V1,
+            initiator_public_identity: identity.public_identity(),
+            responder_public_identity: challenge.daemon_public_identity,
+            initiator_fingerprint: identity.fingerprint(),
+            responder_fingerprint: challenge.daemon_fingerprint,
+            challenge_id: challenge.challenge.id,
+            initiator_nonce: request.initiator_nonce,
+            responder_nonce: challenge.challenge.nonce,
+            route_token_digest: Some(TokenDigest::from_token(b"registration-proof-token")),
+        };
+        let mut proof = RegistrationProof {
+            initiator_proof: transcript.sign(ComponentRole::Mcp, &identity).unwrap(),
+            transcript,
+        };
+        match mutation {
+            0 => proof.transcript.daemon_target.push_str("/changed"),
+            1 => proof.transcript.initiator_instance_id.push_str("-changed"),
+            2 => proof.transcript.responder_instance_id.push_str("-changed"),
+            3 => {
+                proof.transcript.responder_fingerprint =
+                    MachineIdentity::generate().unwrap().identity.fingerprint()
+            }
+            4 => proof.initiator_proof.signer = ComponentRole::Worker,
+            5 => proof.initiator_proof.signature = identity.sign(b"not the transcript"),
+            6 => {
+                lock(&state.challenges)
+                    .get_mut(&proof.transcript.challenge_id)
+                    .unwrap()
+                    .record =
+                    ChallengeRecord::from_challenge(crate::daemon::common::identity::Challenge {
+                        issued_at_unix_ms: 0,
+                        expires_at_unix_ms: 1,
+                        ..challenge.challenge
+                    })
+            }
+            _ => unreachable!(),
+        }
+        let response = validate_registration(&state, &proof).unwrap_err();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(!lock(&state.challenges).contains_key(&proof.transcript.challenge_id));
+        assert_eq!(
+            validate_registration(&state, &proof).unwrap_err().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+}
+
+#[tokio::test]
+async fn published_worker_probe_failure_retains_the_session_and_reports_recovery() {
+    use nemo_relay::logging::{
+        FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let log_path = directory.path().join("readiness.jsonl");
+    let logging = init_logging(&LoggingConfig {
+        level: LogLevel::Info,
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: log_path.clone(),
+            level: LogLevel::Info,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..LoggingConfig::default()
+    })
+    .unwrap();
+    let state = test_daemon_state(false, "", GatewayConfig::default());
+    let mut session = staged_worker_session("published-worker", u64::MAX);
+    session.published = true;
+    let candidate = ReadyWorker {
+        fingerprint: session.fingerprint,
+        target: Arc::clone(&session.pending_target),
+        publication: session.publication.clone(),
+        generation_id: session.generation_grant.generation_id.clone(),
+        published: true,
+    };
+    lock(&state.worker_sessions).insert(session.worker_id.clone(), session);
+    assert_eq!(
+        finish_ready_worker(
+            Arc::clone(&state),
+            candidate,
+            Err(CliError::Launch("temporary probe failure".into()))
+        )
+        .await
+        .status(),
+        StatusCode::BAD_GATEWAY
+    );
+    assert!(
+        lock(&state.worker_sessions)
+            .get("published-worker")
+            .unwrap()
+            .published
+    );
+    logging.shutdown();
+    let records: Vec<serde_json::Value> = std::fs::read_to_string(log_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let record = records
+        .iter()
+        .find(|record| record["event"] == "worker_readiness_failed")
+        .unwrap();
+    assert_eq!(record["fields"]["worker_id"], "published-worker");
+    assert_eq!(record["fields"]["route_mode"], "recovering");
+    assert!(
+        record["message"]
+            .as_str()
+            .unwrap()
+            .contains("temporary probe failure")
+    );
+}
+
+async fn recovering_worker_fixture(
+    worker_endpoint: Option<&str>,
+) -> (
+    Arc<DaemonState>,
+    RouteCredential,
+    WorkerRecoverRequest,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x75_u8; 32]);
+    let credential = RouteCredential::parse(token.clone()).unwrap();
+    let state = test_daemon_state_at(false, &token, GatewayConfig::default(), origin.clone());
+    let server = tokio::spawn({
+        let app = router(Arc::clone(&state)).route(
+            WORKER_PROBE_PATH,
+            axum::routing::get(|| async { StatusCode::NO_CONTENT }),
+        );
+        async move { axum::serve(listener, app).await.unwrap() }
+    });
+    let worker = MachineIdentity::generate().unwrap().identity;
+    let fingerprint = worker.fingerprint();
+    let directive = state
+        .registry
+        .register_mcp(
+            McpRegistration {
+                fingerprint,
+                token_digest: credential.digest(),
+                session_id: McpSessionId::new("recovery-owner").unwrap(),
+                lease_expires_at_unix_ms: u64::MAX,
+            },
+            fresh_launch(worker_network()).unwrap(),
+        )
+        .unwrap();
+    remember_activation(&state, fingerprint, &directive);
+    let proof = begin_handshake(
+        &control_client().unwrap(),
+        &origin,
+        ComponentRole::Worker,
+        &worker,
+        "recovered-worker",
+        None,
+    )
+    .await
+    .unwrap()
+    .proof;
+    let endpoint = worker_endpoint.unwrap_or(&origin).to_owned();
+    let generation_grant = WorkerGenerationGrant::issue(
+        "recovered-worker",
+        fingerprint,
+        &endpoint,
+        None,
+        &state.identity,
+    )
+    .unwrap();
+    state
+        .active_worker_generations
+        .publish(fingerprint, &generation_grant.generation_id, None)
+        .unwrap();
+    (
+        state,
+        credential,
+        WorkerRecoverRequest {
+            proof,
+            worker_id: "recovered-worker".into(),
+            endpoint,
+            tls_root_certificate: None,
+            generation_grant,
+        },
+        server,
+    )
+}
+
+#[tokio::test]
+async fn worker_recovery_replays_staging_and_publishes_only_after_readiness() {
+    let (state, credential, request, server) = recovering_worker_fixture(None).await;
+    let fingerprint = request.proof.transcript.initiator_fingerprint;
+    let generation_id = request.generation_grant.generation_id.clone();
+    let response = recover_worker(State(Arc::clone(&state)), Json(request.clone())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let registration: WorkerRegisterResponse =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let proof = HandshakeProof {
+        signer: ComponentRole::Daemon,
+        signature: state.identity.sign(b"recovery-replay"),
+    };
+    let replay = recover_worker_after_validation(Arc::clone(&state), request, proof, fingerprint);
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay: WorkerRegisterResponse =
+        serde_json::from_slice(&replay.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        replay.session_token.expose(),
+        registration.session_token.expose()
+    );
+    assert_eq!(replay.data_token.expose(), registration.data_token.expose());
+    assert!(!lock(&state.worker_sessions)["recovered-worker"].published);
+
+    for sequence in [1, 2] {
+        let ready = SessionRequest::new(
+            "recovered-worker".into(),
+            registration.session_token.clone(),
+            sequence,
+            WorkerReadyPayload {
+                worker_id: "recovered-worker".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            ready_worker(State(Arc::clone(&state)), Json(ready))
+                .await
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+    let Ok(ResolvedTarget::Worker(target)) = state.registry.resolve_target(&credential.digest())
+    else {
+        panic!("recovered worker was not published");
+    };
+    assert_eq!(target.target().worker_id(), "recovered-worker");
+    assert_eq!(target.session_token(), registration.data_token.expose());
+    assert!(lock(&state.worker_sessions)["recovered-worker"].published);
+    assert!(lock(&state.activations).is_empty());
+    assert!(
+        state
+            .active_worker_generations
+            .matches(fingerprint, &generation_id)
+            .unwrap()
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn invalid_recovery_endpoint_revokes_the_generation_and_falls_back_to_pass_through() {
+    let (state, credential, request, server) =
+        recovering_worker_fixture(Some("http://0.0.0.0:41000")).await;
+    let fingerprint = request.proof.transcript.initiator_fingerprint;
+    let generation_id = request.generation_grant.generation_id.clone();
+    assert_eq!(
+        recover_worker(State(Arc::clone(&state)), Json(request))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert!(
+        !state
+            .active_worker_generations
+            .matches(fingerprint, &generation_id)
+            .unwrap()
+    );
+    assert!(lock(&state.worker_sessions).is_empty());
+    assert!(lock(&state.activations).is_empty());
+    assert!(matches!(
+        state.registry.resolve_target(&credential.digest()),
+        Ok(ResolvedTarget::PassThrough)
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn recovery_probe_failure_preserves_a_newer_generation_and_cleans_up_its_own_session() {
+    for superseded in [false, true] {
+        let (state, credential, request, server) = recovering_worker_fixture(None).await;
+        let fingerprint = request.proof.transcript.initiator_fingerprint;
+        let generation_id = request.generation_grant.generation_id.clone();
+        let response = recover_worker(State(Arc::clone(&state)), Json(request)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let registration: WorkerRegisterResponse =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let ready = SessionRequest::new(
+            "recovered-worker".into(),
+            registration.session_token,
+            1,
+            WorkerReadyPayload {
+                worker_id: "recovered-worker".into(),
+            },
+        )
+        .unwrap();
+        let candidate = prepare_ready_worker(&state, &ready).unwrap();
+        if superseded {
+            state
+                .active_worker_generations
+                .publish(fingerprint, "replacement-generation", None)
+                .unwrap();
+        }
+        assert_eq!(
+            finish_ready_worker(
+                Arc::clone(&state),
+                candidate,
+                Err(CliError::Launch("probe failed".into()))
+            )
+            .await
+            .status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert!(lock(&state.worker_sessions).is_empty());
+        assert!(
+            !state
+                .active_worker_generations
+                .matches(fingerprint, &generation_id)
+                .unwrap()
+        );
+        assert_eq!(
+            state
+                .active_worker_generations
+                .matches(fingerprint, "replacement-generation")
+                .unwrap(),
+            superseded
+        );
+        assert_eq!(lock(&state.activations).is_empty(), !superseded);
+        assert_eq!(
+            state.registry.snapshot(fingerprint).unwrap().state.as_str(),
+            if superseded {
+                "activating"
+            } else {
+                "pass_through"
+            }
+        );
+        assert!(matches!(
+            state.registry.resolve_target(&credential.digest()),
+            Ok(ResolvedTarget::PassThrough)
+        ));
+        server.abort();
+    }
+}

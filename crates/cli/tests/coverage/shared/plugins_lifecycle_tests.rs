@@ -5308,3 +5308,54 @@ fn validate_rejects_a_missing_path_target() {
     .unwrap_err();
     assert!(error.to_string().contains("does not exist"));
 }
+
+#[cfg(unix)]
+#[test]
+fn python_environment_snapshot_preserves_launchers_and_lib_alias_without_copying_caches() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("venv");
+    let destination = temp.path().join("snapshot");
+    let external_python = temp.path().join("external-python");
+    std::fs::write(&external_python, "external interpreter").unwrap();
+    std::fs::create_dir_all(source.join("bin")).unwrap();
+    std::fs::create_dir_all(source.join("lib/package/__pycache__")).unwrap();
+    std::fs::write(source.join("pyvenv.cfg"), "home = external").unwrap();
+    std::fs::write(source.join("lib/package/__init__.py"), "value = 1").unwrap();
+    std::fs::write(source.join("lib/package/compiled.pyc"), "cache").unwrap();
+    std::fs::write(source.join("lib/package/__pycache__/module.pyc"), "cache").unwrap();
+    symlink(&external_python, source.join("bin/python")).unwrap();
+    symlink("python", source.join("bin/python3")).unwrap();
+    symlink("lib", source.join("lib64")).unwrap();
+    copy_snapshot_directory(
+        &source,
+        &destination,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        true,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_link(destination.join("lib64")).unwrap(),
+        Path::new("lib")
+    );
+    assert_eq!(
+        std::fs::read_link(destination.join("bin/python")).unwrap(),
+        external_python
+    );
+    assert_eq!(
+        std::fs::read_link(destination.join("bin/python3")).unwrap(),
+        Path::new("python")
+    );
+    assert_eq!(
+        std::fs::read_to_string(destination.join("lib/package/__init__.py")).unwrap(),
+        "value = 1"
+    );
+    assert!(!destination.join("lib/package/compiled.pyc").exists());
+    assert!(!destination.join("lib/package/__pycache__").exists());
+    assert_eq!(
+        std::fs::read_to_string(external_python).unwrap(),
+        "external interpreter"
+    );
+}

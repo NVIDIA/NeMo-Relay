@@ -35,6 +35,494 @@ use crate::api::runtime::{
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::response::AnnotatedLlmResponse;
 
+#[test]
+fn native_logging_preserves_levels_targets_and_structured_fields() {
+    use crate::logging::{
+        FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
+    };
+
+    let _logging = crate::logging::lock_test_logging();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("native.jsonl");
+    let runtime = init_logging(&LoggingConfig {
+        level: LogLevel::Trace,
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            level: LogLevel::Trace,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..LoggingConfig::default()
+    })
+    .unwrap();
+    let target = native_string("fixture.logging");
+    let default_target = native_string("");
+    let message = native_string("native message");
+    let fields = native_string(r#"{"nested":{"ok":true},"ordinal":9007199254740993}"#);
+    for level in [
+        NemoRelayNativeLogLevel::Trace,
+        NemoRelayNativeLogLevel::Debug,
+        NemoRelayNativeLogLevel::Info,
+        NemoRelayNativeLogLevel::Warn,
+        NemoRelayNativeLogLevel::Error,
+    ] {
+        assert_eq!(
+            unsafe { native_log(level, target, message, fields) },
+            NemoRelayStatus::Ok
+        );
+    }
+    assert_eq!(
+        unsafe {
+            native_log(
+                NemoRelayNativeLogLevel::Info,
+                default_target,
+                message,
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    unsafe {
+        native_string_free(target);
+        native_string_free(default_target);
+        native_string_free(message);
+        native_string_free(fields);
+    }
+    runtime.shutdown();
+    let records: Vec<Json> = std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|record: &Json| {
+            record["target"]
+                .as_str()
+                .is_some_and(|target| target.starts_with("nemo_relay.plugin.native"))
+        })
+        .collect();
+    assert_eq!(records.len(), 6);
+    for (record, level) in records
+        .iter()
+        .zip(["trace", "debug", "info", "warn", "error"])
+    {
+        assert_eq!(record["level"], level);
+        assert_eq!(record["target"], "nemo_relay.plugin.native.fixture.logging");
+        assert_eq!(record["message"], "native message");
+        assert_eq!(record["fields"]["nested"], json!({"ok": true}));
+        assert_eq!(record["fields"]["ordinal"], json!(9007199254740993_u64));
+    }
+    assert_eq!(records[5]["target"], "nemo_relay.plugin.native");
+}
+
+#[test]
+fn native_logging_rejects_invalid_targets_and_fields_without_leaking_strings() {
+    let message = native_string("message");
+    let target = native_string("valid");
+    let live = native_string_live_allocations();
+    for invalid_target in ["x".repeat(257), "bad\ntarget".into(), "bad\0target".into()] {
+        let invalid = native_string(&invalid_target);
+        assert_eq!(
+            unsafe { native_log(NemoRelayNativeLogLevel::Info, invalid, message, ptr::null()) },
+            NemoRelayStatus::InvalidArg
+        );
+        assert_last_error_contains("invalid plugin log target");
+        unsafe { native_string_free(invalid) };
+    }
+    for invalid_fields in ["[]", "true", "null", "not-json"] {
+        let fields = native_string(invalid_fields);
+        assert_eq!(
+            unsafe { native_log(NemoRelayNativeLogLevel::Info, target, message, fields) },
+            NemoRelayStatus::InvalidJson
+        );
+        unsafe { native_string_free(fields) };
+    }
+    assert_eq!(
+        unsafe {
+            native_log(
+                NemoRelayNativeLogLevel::Info,
+                ptr::null(),
+                message,
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe {
+            native_log(
+                NemoRelayNativeLogLevel::Info,
+                target,
+                ptr::null(),
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(native_string_live_allocations(), live);
+    unsafe {
+        native_string_free(target);
+        native_string_free(message);
+    }
+}
+
+#[test]
+fn native_owned_gate_handles_are_activation_scoped_and_cleanup_disables_the_capability() {
+    let _context = GlobalContextRestore::replace_with_empty();
+    let runtime = Arc::new(NativeHostPluginRuntime {
+        namespace: "fixture:".into(),
+        encode_local_names: true,
+        instance: Weak::new(),
+        active: AtomicBool::new(true),
+        gates: Mutex::new(HashMap::new()),
+    });
+    let raw: *const NemoRelayNativePluginRuntime = Arc::into_raw(runtime.clone()).cast();
+    let name = native_string("gate:with/separators");
+    let kinds = native_string(r#"["subscriber"]"#);
+    let registration_name = native_string("fixture-subscriber");
+    let reason = native_string("disabled by native plugin");
+    let live = native_string_live_allocations();
+    let mut handle = ptr::null_mut();
+    let register = |out| unsafe {
+        native_plugin_runtime_register_conditional_middleware_guardrail(
+            raw,
+            name,
+            kinds,
+            registration_name,
+            reason,
+            out,
+        )
+    };
+    assert_eq!(register(&mut handle), NemoRelayStatus::Ok);
+    assert!(!handle.is_null());
+    let owned_name = runtime
+        .gates
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .qualified_name
+        .clone();
+    assert_eq!(
+        owned_name,
+        format!(
+            "fixture:{}",
+            crate::plugin::encode_plugin_component_field("gate:with/separators")
+        )
+    );
+    assert!(!crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "fixture-subscriber"
+    ));
+    let mut duplicate = ptr::null_mut();
+    assert_eq!(register(&mut duplicate), NemoRelayStatus::AlreadyExists);
+    assert!(duplicate.is_null());
+    let mut removed = false;
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_deregister_conditional_middleware_guardrail(
+                raw,
+                handle,
+                &mut removed,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    assert!(removed);
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_deregister_conditional_middleware_guardrail(
+                raw,
+                handle,
+                &mut removed,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    assert!(!removed);
+    unsafe { native_string_free(handle) };
+    assert_eq!(register(&mut handle), NemoRelayStatus::Ok);
+    runtime.cleanup().unwrap();
+    assert!(runtime.gates.lock().unwrap().is_empty());
+    assert!(crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "fixture-subscriber"
+    ));
+    let mut output = ptr::null_mut();
+    assert_eq!(register(&mut output), NemoRelayStatus::NotFound);
+    assert!(output.is_null());
+    assert_eq!(
+        unsafe { native_plugin_runtime_list_registrations(raw, ptr::null(), &mut output) },
+        NemoRelayStatus::NotFound
+    );
+    unsafe { native_string_free(handle) };
+    assert_eq!(native_string_live_allocations(), live);
+    unsafe {
+        native_plugin_runtime_release(raw);
+        native_string_free(name);
+        native_string_free(kinds);
+        native_string_free(registration_name);
+        native_string_free(reason);
+    }
+}
+
+#[test]
+fn native_runtime_discovery_validates_filters_and_returns_matching_registrations() {
+    let runtime = NativeHostPluginRuntime {
+        namespace: "fixture:".into(),
+        encode_local_names: false,
+        instance: Weak::new(),
+        active: AtomicBool::new(true),
+        gates: Mutex::new(HashMap::new()),
+    };
+    let raw = ptr::from_ref(&runtime).cast();
+    let kinds = native_string(r#"["subscriber"]"#);
+    let invalid_kinds = native_string(r#"["unknown_kind"]"#);
+    let mut out = ptr::null_mut();
+    assert_eq!(
+        unsafe { native_plugin_runtime_list_registrations(raw, invalid_kinds, &mut out) },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(
+        unsafe { native_plugin_runtime_list_registrations(raw, kinds, ptr::null_mut()) },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe { native_plugin_runtime_list_registrations(ptr::null(), kinds, &mut out) },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe { native_plugin_runtime_list_registrations(raw, kinds, &mut out) },
+        NemoRelayStatus::Ok
+    );
+    let registrations: Json = serde_json::from_str(&take_native_string(out).unwrap()).unwrap();
+    assert!(
+        registrations
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["kind"] == "subscriber")
+    );
+    unsafe {
+        native_string_free(kinds);
+        native_string_free(invalid_kinds);
+    }
+}
+
+#[test]
+fn native_runtime_control_rejects_missing_arguments_and_invalid_registration_kinds() {
+    let runtime = NativeHostPluginRuntime {
+        namespace: "fixture:".into(),
+        encode_local_names: false,
+        instance: Weak::new(),
+        active: AtomicBool::new(true),
+        gates: Mutex::new(HashMap::new()),
+    };
+    let raw = ptr::from_ref(&runtime).cast();
+    let name = native_string("gate");
+    let kinds = native_string(r#"["subscriber"]"#);
+    let invalid_kinds = native_string(r#"["unknown_kind"]"#);
+    let reason = native_string("disabled");
+    let mut out = ptr::null_mut();
+    let register = |runtime, name, kinds, target, reason, out| unsafe {
+        native_plugin_runtime_register_conditional_middleware_guardrail(
+            runtime, name, kinds, target, reason, out,
+        )
+    };
+    assert_eq!(
+        register(raw, name, kinds, name, reason, ptr::null_mut()),
+        NemoRelayStatus::NullPointer
+    );
+    for arguments in [
+        (
+            ptr::null(),
+            name.cast_const(),
+            kinds.cast_const(),
+            name.cast_const(),
+            reason.cast_const(),
+        ),
+        (raw, ptr::null(), kinds, name, reason),
+        (raw, name, ptr::null(), name, reason),
+        (raw, name, kinds, ptr::null(), reason),
+        (raw, name, kinds, name, ptr::null()),
+    ] {
+        assert_eq!(
+            register(
+                arguments.0,
+                arguments.1,
+                arguments.2,
+                arguments.3,
+                arguments.4,
+                &mut out
+            ),
+            if arguments.2.is_null() {
+                NemoRelayStatus::InvalidArg
+            } else {
+                NemoRelayStatus::NullPointer
+            }
+        );
+        assert!(out.is_null());
+    }
+    assert_eq!(
+        register(raw, name, invalid_kinds, name, reason, &mut out),
+        NemoRelayStatus::InvalidArg
+    );
+    let mut removed = true;
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_deregister_conditional_middleware_guardrail(
+                raw,
+                name,
+                ptr::null_mut(),
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_deregister_conditional_middleware_guardrail(
+                ptr::null(),
+                name,
+                &mut removed,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert!(!removed);
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_deregister_conditional_middleware_guardrail(
+                raw,
+                ptr::null(),
+                &mut removed,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    let empty_kinds = native_string("[]");
+    assert_eq!(
+        register(raw, name, empty_kinds, name, reason, &mut out),
+        NemoRelayStatus::InvalidArg
+    );
+    assert!(runtime.gates.lock().unwrap().is_empty());
+    fail_native_string_allocation_after(0);
+    assert_eq!(
+        register(raw, name, kinds, name, reason, &mut out),
+        NemoRelayStatus::Internal
+    );
+    assert!(out.is_null());
+    assert!(runtime.gates.lock().unwrap().is_empty());
+    assert!(crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "gate"
+    ));
+    unsafe {
+        native_string_free(name);
+        native_string_free(kinds);
+        native_string_free(invalid_kinds);
+        native_string_free(reason);
+        native_string_free(empty_kinds);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_context_gate_registration_validates_inputs_and_rolls_back_the_gate() {
+    let instance = Arc::new(NativePluginInstance {
+        plugin_kind: "test.native".into(),
+        relay_compat: "^0.8".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(NemoRelayNativePluginV1::default()),
+        _library: libloading::os::unix::Library::this().into(),
+    });
+    let mut registration = PluginRegistrationContext::with_namespace("fixture:");
+    let mut host = NativeHostPluginContext {
+        ctx: ptr::from_mut(&mut registration),
+        instance,
+    };
+    let ctx = ptr::from_mut(&mut host).cast();
+    let name = native_string("context-gate");
+    let kinds = native_string(r#"["subscriber"]"#);
+    let invalid_kinds = native_string("not-json");
+    let reason = native_string("disabled");
+    for arguments in [
+        (
+            ptr::null_mut(),
+            name.cast_const(),
+            kinds.cast_const(),
+            name.cast_const(),
+            reason.cast_const(),
+        ),
+        (ctx, ptr::null(), kinds, name, reason),
+        (ctx, name, ptr::null(), name, reason),
+        (ctx, name, kinds, ptr::null(), reason),
+        (ctx, name, kinds, name, ptr::null()),
+    ] {
+        assert_eq!(
+            unsafe {
+                native_plugin_context_register_conditional_middleware_guardrail(
+                    arguments.0,
+                    arguments.1,
+                    arguments.2,
+                    arguments.3,
+                    arguments.4,
+                )
+            },
+            if arguments.2.is_null() {
+                NemoRelayStatus::InvalidArg
+            } else {
+                NemoRelayStatus::NullPointer
+            }
+        );
+    }
+    assert_eq!(
+        unsafe {
+            native_plugin_context_register_conditional_middleware_guardrail(
+                ctx,
+                name,
+                invalid_kinds,
+                name,
+                reason,
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(
+        unsafe {
+            native_plugin_context_register_conditional_middleware_guardrail(
+                ctx, name, kinds, name, reason,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    assert!(!crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "context-gate"
+    ));
+    assert_eq!(
+        unsafe {
+            native_plugin_context_register_conditional_middleware_guardrail(
+                ctx, name, kinds, name, reason,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert_last_error_contains("already exists");
+    let cleanup = crate::plugin::rollback_registrations(&mut registration.into_registrations());
+    assert!(cleanup.callbacks_cleared());
+    assert!(cleanup.errors().is_empty());
+    assert!(crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "context-gate"
+    ));
+    unsafe {
+        native_string_free(name);
+        native_string_free(kinds);
+        native_string_free(invalid_kinds);
+        native_string_free(reason);
+    }
+}
+
 type RawToolExecutionNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
 
@@ -2266,6 +2754,96 @@ fn native_v4_pull_stream_orders_chunks_ends_and_cancels_pending_pulls() {
         native_async_next_release(next_ref);
         native_async_next_release(pending_next_ref);
     }
+}
+
+#[test]
+fn native_pull_stream_errors_and_panics_are_terminal_and_release_callback_strings() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let live_before = native_string_live_allocations();
+    assert_eq!(
+        unsafe {
+            native_async_llm_stream_pull(ptr::null(), complete_pull_stream_item, ptr::null_mut())
+        },
+        NemoRelayStatus::NullPointer
+    );
+    for panic_in_stream in [false, true] {
+        let stream = if panic_in_stream {
+            LlmJsonStream::new(futures_util::stream::poll_fn(
+                |_| -> std::task::Poll<Option<FlowResult<Json>>> {
+                    panic!("pull stream panic");
+                },
+            ))
+        } else {
+            LlmJsonStream::new(tokio_stream::iter([Err(FlowError::Internal(
+                "pull stream error".into(),
+            ))]))
+        };
+        let stream = Arc::new(NativePullLlmStream {
+            stream: tokio::sync::Mutex::new(Some(stream)),
+            runtime: runtime.handle().clone(),
+            context: MiddlewareContinuationContext::capture(),
+            state: Mutex::new(NativePullStreamState::Idle),
+            _library_guard: None,
+        });
+        let stream_ref = Arc::into_raw(stream) as *const NemoRelayNativeLlmAsyncStream;
+        let (sender, receiver) = tokio::sync::oneshot::channel::<PullItemResult>();
+        assert_eq!(
+            unsafe {
+                native_async_llm_stream_pull(
+                    stream_ref,
+                    complete_pull_stream_item,
+                    Box::into_raw(Box::new(sender)).cast(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        let error = runtime.block_on(receiver).unwrap().unwrap_err();
+        assert!(
+            error.contains(if panic_in_stream {
+                "pull stream panic"
+            } else {
+                "pull stream error"
+            }),
+            "{error}"
+        );
+        assert_eq!(
+            unsafe {
+                native_async_llm_stream_pull(stream_ref, complete_pull_stream_item, ptr::null_mut())
+            },
+            NemoRelayStatus::InvalidArg
+        );
+        unsafe { native_async_llm_stream_release(stream_ref) };
+    }
+    assert_eq!(native_string_live_allocations(), live_before);
+}
+
+#[test]
+fn native_pull_delivery_handles_chunk_and_error_allocation_failures_without_leaks() {
+    let live_before = native_string_live_allocations();
+    let (sender, receiver) = tokio::sync::oneshot::channel::<PullItemResult>();
+    fail_native_string_allocation_after(0);
+    deliver_native_pull_result(
+        complete_pull_stream_item,
+        Box::into_raw(Box::new(sender)) as usize,
+        Ok(Some(json!({"chunk": 1}))),
+    );
+    let error = futures::executor::block_on(receiver).unwrap().unwrap_err();
+    assert!(error.contains("failed to allocate stream chunk"));
+    let (sender, receiver) = tokio::sync::oneshot::channel::<PullItemResult>();
+    fail_native_string_allocation_after(0);
+    deliver_native_pull_result(
+        complete_pull_stream_item,
+        Box::into_raw(Box::new(sender)) as usize,
+        Err(FlowError::Internal("unallocatable error".into())),
+    );
+    assert_eq!(
+        futures::executor::block_on(receiver).unwrap().unwrap(),
+        None
+    );
+    assert_eq!(native_string_live_allocations(), live_before);
 }
 
 #[test]
@@ -8105,4 +8683,94 @@ fn native_stream_continuation_covers_success_and_error() {
         unsafe { native_llm_stream_next(ptr::null(), ptr::null_mut(), ptr::null_mut()) },
         NemoRelayStatus::NullPointer
     );
+}
+
+#[cfg(unix)]
+unsafe extern "C" fn echo_native_llm_intercept(
+    _user_data: *mut c_void,
+    name: *const NemoRelayNativeString,
+    request: *const NemoRelayNativeString,
+    annotated: *const NemoRelayNativeString,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let Ok(name) = read_native_string(name) else {
+        return NemoRelayStatus::InvalidUtf8;
+    };
+    match name.as_str() {
+        "missing" => unsafe {
+            *out = ptr::null_mut();
+        },
+        "malformed" => unsafe {
+            *out = native_string("not-json");
+        },
+        "shape" => unsafe {
+            *out = native_string("{}");
+        },
+        _ => {
+            let Ok(request) = read_native_string(request).and_then(|text| {
+                serde_json::from_str::<Json>(&text)
+                    .map_err(|error| PluginError::InvalidConfig(error.to_string()))
+            }) else {
+                return NemoRelayStatus::InvalidJson;
+            };
+            let annotated = if annotated.is_null() {
+                Json::Null
+            } else {
+                let Ok(value) = read_native_string(annotated).and_then(|text| {
+                    serde_json::from_str::<Json>(&text)
+                        .map_err(|error| PluginError::InvalidConfig(error.to_string()))
+                }) else {
+                    return NemoRelayStatus::InvalidJson;
+                };
+                value
+            };
+            unsafe {
+                *out = native_string_from_json(
+                    &json!({"request": request, "annotated_request": annotated}),
+                )
+                .unwrap();
+            }
+        }
+    }
+    NemoRelayStatus::Ok
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_llm_intercept_preserves_annotations_and_releases_invalid_output_strings() {
+    let instance = Arc::new(NativePluginInstance {
+        plugin_kind: "test.native.intercept".into(),
+        relay_compat: "^0.10".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(NemoRelayNativePluginV1::default()),
+        _library: libloading::os::unix::Library::this().into(),
+    });
+    let callback =
+        wrap_llm_request_intercept_fn(instance, echo_native_llm_intercept, ptr::null_mut(), None);
+    let request = LlmRequest {
+        headers: Map::from_iter([("authorization".into(), json!("token"))]),
+        content: json!({"model": "fixture", "messages": [{"role": "user", "content": "hello"}]}),
+    };
+    let annotated = OpenAIChatCodec.decode(&request).unwrap();
+    let before = native_string_live_allocations();
+    for annotation in [None, Some(annotated)] {
+        let outcome = callback("echo".into(), request.clone(), annotation.clone())
+            .await
+            .unwrap();
+        assert_eq!(outcome.request, request);
+        assert_eq!(outcome.annotated_request, annotation);
+        assert!(outcome.pending_marks.is_empty());
+        assert_eq!(native_string_live_allocations(), before);
+    }
+    for (name, reason) in [
+        ("missing", "null outcome"),
+        ("malformed", "invalid JSON"),
+        ("shape", "invalid LLM request intercept outcome JSON"),
+    ] {
+        let error = callback(name.into(), request.clone(), None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(reason), "{error}");
+        assert_eq!(native_string_live_allocations(), before);
+    }
 }

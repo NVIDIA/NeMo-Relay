@@ -6980,3 +6980,177 @@ fn plugin_validate_and_register_panics_replace_last_error() {
         drop_exported_plugin(&host, register_plugin);
     }
 }
+
+static FAULTED_SCOPE_CAPTURE_INDEX: AtomicUsize = AtomicUsize::new(0);
+static FAULTED_SCOPE_CAPTURE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C" fn fail_selected_scope_capture(
+    out: *mut *mut NemoRelayNativeScopeStackBinding,
+) -> NemoRelayStatus {
+    let call = FAULTED_SCOPE_CAPTURE_CALLS.fetch_add(1, Ordering::SeqCst);
+    if call == FAULTED_SCOPE_CAPTURE_INDEX.load(Ordering::SeqCst) {
+        NemoRelayStatus::NotFound
+    } else {
+        unsafe { capture_scope_stack_capture_thread(out) }
+    }
+}
+
+#[test]
+fn typed_async_scope_failures_reject_completion_and_release_bindings() {
+    for failed_capture in 0..3 {
+        let _guard = begin_test();
+        FAULTED_SCOPE_CAPTURE_CALLS.store(0, Ordering::SeqCst);
+        FAULTED_SCOPE_CAPTURE_INDEX.store(failed_capture, Ordering::SeqCst);
+        let mut host = test_host_v4();
+        host.v3.v1.scope_stack_capture_thread = fail_selected_scope_capture;
+        let mut ctx = test_context(&host.v3.v1);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed_calls = Arc::clone(&calls);
+        ctx.register_tool_request_intercept("scope-failure", 0, false, move |_, value| {
+            let calls = Arc::clone(&observed_calls);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(value)
+            }
+        })
+        .unwrap();
+        let registration =
+            take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept);
+        let error = invoke_async_registration(
+            &host,
+            &registration,
+            json!({"name": "tool", "value": {}}),
+            None,
+        )
+        .unwrap_err();
+        if failed_capture == 0 {
+            assert_eq!(
+                error,
+                "failed to capture native callback scope stack: NotFound"
+            );
+        } else {
+            assert_eq!(error, "typed native middleware future panicked");
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            usize::from(failed_capture == 2)
+        );
+        unsafe { registration.free() };
+        drop(ctx);
+        assert_eq!(live_host_strings(), 0);
+        if failed_capture > 0 {
+            assert!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst) > 0);
+        }
+    }
+}
+
+#[test]
+fn typed_async_scope_install_failure_reclaims_unpolled_future() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_tool_request_intercept("scope-install-failure", 0, false, |_, value| async move {
+        panic!("callback must not run after its scope installation fails: {value}")
+    })
+    .unwrap();
+    *SCOPE_STACK_RESTORE_THREAD_STATUS.lock().unwrap() = NemoRelayStatus::Internal;
+    let registration =
+        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept);
+    assert_eq!(
+        invoke_async_registration(
+            &host,
+            &registration,
+            json!({"name": "tool", "value": {}}),
+            None
+        )
+        .unwrap_err(),
+        "typed native middleware future panicked"
+    );
+    unsafe { registration.free() };
+    drop(ctx);
+    assert_eq!(live_host_strings(), 0);
+    assert!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst) > 0);
+}
+
+unsafe extern "C" fn pending_async_llm_execution_cb(
+    _user_data: *mut c_void,
+    _invocation_json: *const NemoRelayNativeString,
+    _context: *const NemoRelayNativeLlmExecutionContext,
+    _next: *const NemoRelayNativeAsyncNext,
+    _completion: *const NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    NemoRelayNativeAsyncCallbackState::Pending as u32
+}
+
+#[test]
+fn raw_llm_registration_rejections_release_callback_ownership() {
+    let _guard = begin_test();
+    let legacy_host = test_host();
+    let mut ctx = test_context(&legacy_host);
+    RAW_ASYNC_REJECTIONS.store(0, Ordering::SeqCst);
+    unsafe {
+        assert_eq!(
+            ctx.register_llm_execution_intercept_raw(
+                "legacy",
+                0,
+                passthrough_llm_execution_cb,
+                ptr::null_mut(),
+                Some(count_raw_async_rejection)
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            ctx.register_llm_stream_execution_intercept_raw(
+                "legacy-stream",
+                0,
+                passthrough_llm_stream_execution_cb,
+                ptr::null_mut(),
+                Some(count_raw_async_rejection)
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            ctx.register_async_llm_execution_intercept_raw(
+                "legacy-async",
+                0,
+                pending_async_llm_execution_cb,
+                ptr::null_mut(),
+                Some(count_raw_async_rejection)
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+    }
+    assert_eq!(RAW_ASYNC_REJECTIONS.load(Ordering::SeqCst), 3);
+    assert!(
+        LAST_ERROR
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .contains("ABI v7")
+    );
+    let host = test_host_v7();
+    let mut ctx = test_context(&host.v6.v5.v4.v3.v1);
+    for kind in [
+        NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept,
+        NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept,
+    ] {
+        assert_eq!(
+            unsafe {
+                ctx.register_async_middleware_raw(
+                    kind,
+                    "wrong-surface",
+                    0,
+                    false,
+                    pending_async_middleware_cb,
+                    ptr::null_mut(),
+                    Some(count_raw_async_rejection),
+                )
+            },
+            NemoRelayStatus::InvalidArg
+        );
+    }
+    assert_eq!(RAW_ASYNC_REJECTIONS.load(Ordering::SeqCst), 5);
+    assert!(ASYNC_REGISTRATIONS.lock().unwrap().is_empty());
+    assert_eq!(live_host_strings(), 0);
+}

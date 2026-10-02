@@ -4,6 +4,73 @@
 use super::*;
 
 #[test]
+fn builtin_compilation_rejects_invalid_selectors_and_incompatible_preset_options() {
+    use serde_json::json;
+
+    for (config, expected) in [
+        (
+            json!({"target_paths": ["not-a-pointer"]}),
+            "target_paths[0]",
+        ),
+        (
+            json!({"target_path_globs": ["/invalid~escape"]}),
+            "target_path_globs[0]",
+        ),
+        (json!({"preset": "unknown"}), "unsupported builtin preset"),
+        (
+            json!({"preset": "trajectory_context", "pattern": "secret"}),
+            "cannot be combined",
+        ),
+        (
+            json!({"preset": "trajectory_context", "custom_mark_payload_policy": "unknown"}),
+            "unsupported custom-mark payload policy",
+        ),
+        (
+            json!({"metric_string_attribute_allowlist": {"region": ["safe"]}}),
+            "requires builtin.preset",
+        ),
+        (
+            json!({"custom_mark_payload_policy": "drop"}),
+            "requires builtin.preset",
+        ),
+        (
+            json!({"detector": "unknown"}),
+            "unsupported builtin.detector",
+        ),
+        (json!({"action": "unknown"}), "unsupported builtin.action"),
+        (
+            json!({"action": "redact"}),
+            "builtin.pattern or builtin.detector is required",
+        ),
+        (
+            json!({"action": "regex_replace", "pattern": "["}),
+            "invalid builtin matcher regex",
+        ),
+        (
+            json!({"pattern": "secret", "detector": "email"}),
+            "cannot both be set",
+        ),
+    ] {
+        let config: BuiltinBackendConfig = serde_json::from_value(config).unwrap();
+        let error = CompiledBuiltinBackend::new(config, None)
+            .err()
+            .expect("invalid configuration must not compile");
+        assert!(matches!(error, PluginError::InvalidConfig(_)));
+        assert!(
+            error.to_string().contains(expected),
+            "expected {expected:?} in {error}"
+        );
+    }
+    let error = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig::default(),
+        Some("unknown-codec".into()),
+    )
+    .err()
+    .unwrap();
+    assert!(error.to_string().contains("unsupported codec"));
+}
+
+#[test]
 fn target_path_matcher_deduplicates_equivalent_selectors() {
     let matcher = TargetPathMatcher::new(
         &["/prompt".to_string(), "/prompt".to_string()],

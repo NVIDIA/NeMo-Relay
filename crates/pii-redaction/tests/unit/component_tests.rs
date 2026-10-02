@@ -144,7 +144,7 @@ fn capture_otlp_requests(
                 .expect("request path")
                 .to_string();
             stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 .expect("collector should respond");
             sender
                 .send(CapturedOtlpRequest {

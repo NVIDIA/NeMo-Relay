@@ -7,6 +7,97 @@ use super::*;
 use crate::api::event::{BaseEvent, MarkEvent, ScopeEvent};
 use crate::api::scope::ScopeType;
 
+#[test]
+fn signal_headers_reject_invalid_http_names_values_and_case_collisions() {
+    for (key, value) in [("x invalid", "valid"), ("x-valid", "line\nbreak")] {
+        let error =
+            validate_signal_headers(&HashMap::from([(key.into(), value.into())])).unwrap_err();
+        assert!(matches!(error, OpenTelemetryError::InvalidHeader { .. }));
+        assert!(error.to_string().contains(key));
+    }
+    assert!(
+        validate_signal_headers(&HashMap::from([
+            ("X-Token".into(), "one".into()),
+            ("x-token".into(), "two".into()),
+        ]))
+        .unwrap_err()
+        .to_string()
+        .contains("unique ignoring ASCII case")
+    );
+}
+
+#[test]
+fn signal_header_environment_rejects_collisions_and_invalid_variable_references() {
+    let headers = HashMap::from([("Authorization".into(), "inline-token".into())]);
+    let header_env = HashMap::from([("authorization".into(), "IGNORED_VARIABLE".into())]);
+    assert!(
+        resolve_header_env(&headers, &header_env)
+            .unwrap_err()
+            .to_string()
+            .contains("unique across headers and header_env")
+    );
+    for variable in ["", " PADDED ", "WITH=EQUALS", "WITH\0NUL"] {
+        let header_env = HashMap::from([("x-token".into(), variable.into())]);
+        assert!(
+            resolve_header_env(&HashMap::new(), &header_env)
+                .unwrap_err()
+                .to_string()
+                .contains("header_env must name")
+        );
+    }
+    let header_env = HashMap::from([("x invalid".into(), "IGNORED_VARIABLE".into())]);
+    assert!(matches!(
+        resolve_header_env(&HashMap::new(), &header_env).unwrap_err(),
+        OpenTelemetryError::InvalidHeader { .. }
+    ));
+}
+
+#[test]
+fn grpc_metadata_rejects_invalid_names_and_control_characters() {
+    for (key, value) in [("invalid key", "token"), ("authorization", "line\nbreak")] {
+        assert!(matches!(
+            build_grpc_metadata(&HashMap::from([(key.into(), value.into())])).unwrap_err(),
+            OpenTelemetryError::InvalidGrpcHeader { .. }
+        ));
+    }
+    let metadata = build_grpc_metadata(&HashMap::from([(
+        "authorization".into(),
+        "Bearer token".into(),
+    )]))
+    .unwrap();
+    assert_eq!(metadata.get("authorization").unwrap(), "Bearer token");
+}
+
+#[test]
+fn runtime_diagnostics_truncate_unicode_without_losing_occurrence_counts() {
+    let diagnostics = SignalRuntimeDiagnostics::new(None);
+    let message = "é".repeat(MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS + 1);
+    assert_eq!(diagnostics.record("bounded", message.clone(), 2), 2);
+    assert_eq!(diagnostics.record("bounded", message, 3), 5);
+    let snapshot = diagnostics.snapshot();
+    let entry = snapshot.get("bounded").unwrap();
+    assert_eq!(entry.count, 5);
+    assert_eq!(
+        entry.message.chars().count(),
+        MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS
+    );
+    assert!(entry.message.ends_with('…'));
+}
+
+#[test]
+fn exporter_runtime_reports_a_panicking_constructor_without_hanging() {
+    let error = build_in_owned_runtime::<(), _>("coverage-panicking-exporter", || {
+        panic!("constructor failed");
+    })
+    .err()
+    .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("exporter runtime stopped unexpectedly")
+    );
+}
+
 fn scope(
     id: Uuid,
     parent: Option<Uuid>,

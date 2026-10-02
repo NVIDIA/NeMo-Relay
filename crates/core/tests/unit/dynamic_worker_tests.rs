@@ -46,6 +46,405 @@ use super::*;
 const ACTIVATION_ID: &str = "activation-test";
 const AUTH_TOKEN: &str = "auth-test";
 
+#[tokio::test]
+async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let valid = RegisterConditionalMiddlewareGuardrailRequest {
+        activation_id: ACTIVATION_ID.into(),
+        auth_token: AUTH_TOKEN.into(),
+        name: "owned-gate".into(),
+        kinds: vec![RegistrationSurface::Subscriber as i32],
+        registration_name: "fixture-subscriber".into(),
+        reason: "disabled".into(),
+        callback: false,
+    };
+    for (request, expected) in [
+        (
+            RegisterConditionalMiddlewareGuardrailRequest {
+                auth_token: "wrong".into(),
+                ..valid.clone()
+            },
+            tonic::Code::PermissionDenied,
+        ),
+        (
+            RegisterConditionalMiddlewareGuardrailRequest {
+                kinds: vec![i32::MAX],
+                ..valid.clone()
+            },
+            tonic::Code::InvalidArgument,
+        ),
+        (
+            RegisterConditionalMiddlewareGuardrailRequest {
+                kinds: vec![],
+                ..valid.clone()
+            },
+            tonic::Code::Internal,
+        ),
+    ] {
+        assert_eq!(
+            service
+                .register_conditional_middleware_guardrail(Request::new(request))
+                .await
+                .unwrap_err()
+                .code(),
+            expected
+        );
+    }
+    let handle = service
+        .register_conditional_middleware_guardrail(Request::new(valid.clone()))
+        .await
+        .unwrap()
+        .into_inner()
+        .handle;
+    assert!(!crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "fixture-subscriber"
+    ));
+    assert_eq!(
+        service
+            .register_conditional_middleware_guardrail(Request::new(valid.clone()))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Internal
+    );
+    let foreign_service = WorkerHostRuntimeService {
+        state: Arc::new(WorkerHostRuntimeState::new(
+            "other-activation".into(),
+            AUTH_TOKEN.into(),
+        )),
+    };
+    let removal = DeregisterConditionalMiddlewareGuardrailRequest {
+        activation_id: ACTIVATION_ID.into(),
+        auth_token: AUTH_TOKEN.into(),
+        handle: handle.clone(),
+    };
+    let foreign = foreign_service
+        .deregister_conditional_middleware_guardrail(Request::new(
+            DeregisterConditionalMiddlewareGuardrailRequest {
+                activation_id: "other-activation".into(),
+                ..removal.clone()
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!foreign.removed);
+    assert_eq!(
+        service
+            .deregister_conditional_middleware_guardrail(Request::new(
+                DeregisterConditionalMiddlewareGuardrailRequest {
+                    auth_token: "wrong".into(),
+                    ..removal.clone()
+                }
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    assert!(
+        service
+            .deregister_conditional_middleware_guardrail(Request::new(removal.clone()))
+            .await
+            .unwrap()
+            .into_inner()
+            .removed
+    );
+    assert!(
+        !service
+            .deregister_conditional_middleware_guardrail(Request::new(removal))
+            .await
+            .unwrap()
+            .into_inner()
+            .removed
+    );
+    assert!(crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "fixture-subscriber"
+    ));
+    service
+        .register_conditional_middleware_guardrail(Request::new(valid.clone()))
+        .await
+        .unwrap();
+    state.cleanup_conditional_middleware_guardrails();
+    assert!(
+        state
+            .conditional_middleware_guardrails
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "fixture-subscriber"
+    ));
+    assert_eq!(
+        service
+            .register_conditional_middleware_guardrail(Request::new(valid))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Internal
+    );
+}
+
+#[test]
+fn worker_logging_authenticates_and_preserves_structured_records() {
+    use crate::logging::{
+        FileLogSinkConfig, LogFormat, LogLevel as RelayLogLevel, LogSinkConfig, LoggingConfig,
+        init_logging,
+    };
+
+    let _logging = crate::logging::lock_test_logging();
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    executor.block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("worker.jsonl");
+        let runtime = init_logging(&LoggingConfig {
+            level: RelayLogLevel::Trace,
+            stderr_enabled: false,
+            sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+                path: path.clone(),
+                level: RelayLogLevel::Trace,
+                format: LogFormat::Jsonl,
+                ..FileLogSinkConfig::default()
+            })],
+            ..LoggingConfig::default()
+        })
+        .unwrap();
+        let service = WorkerHostRuntimeService {
+            state: Arc::new(WorkerHostRuntimeState::new(
+                ACTIVATION_ID.into(),
+                AUTH_TOKEN.into(),
+            )),
+        };
+        let fields = json!({"nested": {"ok": true}, "ordinal": 9007199254740993_u64});
+        for level in [
+            LogLevel::Trace,
+            LogLevel::Debug,
+            LogLevel::Info,
+            LogLevel::Warn,
+            LogLevel::Error,
+        ] {
+            let ack = service
+                .log(Request::new(LogRequest {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: AUTH_TOKEN.into(),
+                    level: level as i32,
+                    target: "fixture.logging".into(),
+                    message: "worker message".into(),
+                    fields: Some(json_value(&fields).unwrap()),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            assert!(ack.ok);
+            assert!(ack.error.is_none());
+        }
+        service
+            .log(Request::new(LogRequest {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                level: LogLevel::Info as i32,
+                message: "default target".into(),
+                ..LogRequest::default()
+            }))
+            .await
+            .unwrap();
+        runtime.shutdown();
+        let records: Vec<Json> = std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|record: &Json| {
+                record["target"]
+                    .as_str()
+                    .is_some_and(|target| target.starts_with("nemo_relay.plugin.worker"))
+            })
+            .collect();
+        assert_eq!(records.len(), 6);
+        for (record, level) in records
+            .iter()
+            .zip(["trace", "debug", "info", "warn", "error"])
+        {
+            assert_eq!(record["level"], level);
+            assert_eq!(record["target"], "nemo_relay.plugin.worker.fixture.logging");
+            assert_eq!(record["message"], "worker message");
+            assert_eq!(record["fields"], fields);
+        }
+        assert_eq!(records[5]["target"], "nemo_relay.plugin.worker");
+    });
+}
+
+#[tokio::test]
+async fn worker_logging_rejects_unauthorized_and_malformed_requests() {
+    let service = WorkerHostRuntimeService {
+        state: Arc::new(WorkerHostRuntimeState::new(
+            ACTIVATION_ID.into(),
+            AUTH_TOKEN.into(),
+        )),
+    };
+    let valid = LogRequest {
+        activation_id: ACTIVATION_ID.into(),
+        auth_token: AUTH_TOKEN.into(),
+        level: LogLevel::Info as i32,
+        target: "fixture".into(),
+        message: "message".into(),
+        fields: None,
+    };
+    for request in [
+        LogRequest {
+            activation_id: "wrong".into(),
+            ..valid.clone()
+        },
+        LogRequest {
+            auth_token: "wrong".into(),
+            ..valid.clone()
+        },
+    ] {
+        assert_eq!(
+            service.log(Request::new(request)).await.unwrap_err().code(),
+            tonic::Code::PermissionDenied
+        );
+    }
+    let mut invalid = vec![
+        LogRequest {
+            level: 0,
+            ..valid.clone()
+        },
+        LogRequest {
+            level: i32::MAX,
+            ..valid.clone()
+        },
+        LogRequest {
+            fields: Some(JsonValue {
+                json: b"not-json".to_vec(),
+            }),
+            ..valid.clone()
+        },
+    ];
+    for target in ["x".repeat(257), "bad\ntarget".into(), "bad\0target".into()] {
+        invalid.push(LogRequest {
+            target,
+            ..valid.clone()
+        });
+    }
+    for fields in [json!([]), json!(true), Json::Null] {
+        invalid.push(LogRequest {
+            fields: Some(json_value(&fields).unwrap()),
+            ..valid.clone()
+        });
+    }
+    for request in invalid {
+        assert_eq!(
+            service.log(Request::new(request)).await.unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+    let longest = "x".repeat(256);
+    assert_eq!(
+        worker_log_target(&longest).unwrap(),
+        format!("nemo_relay.plugin.worker.{longest}")
+    );
+}
+
+#[test]
+fn worker_registration_kinds_round_trip_and_reject_non_registration_surfaces() {
+    for (kind, surface) in [
+        (
+            RuntimeRegistrationKind::Subscriber,
+            RegistrationSurface::Subscriber,
+        ),
+        (
+            RuntimeRegistrationKind::EventMetadataInjector,
+            RegistrationSurface::EventMetadataInjector,
+        ),
+        (
+            RuntimeRegistrationKind::MarkSanitizeGuardrail,
+            RegistrationSurface::MarkSanitizeGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
+            RegistrationSurface::ScopeSanitizeStartGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
+            RegistrationSurface::ScopeSanitizeEndGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+            RegistrationSurface::ToolSanitizeRequestGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+            RegistrationSurface::ToolSanitizeResponseGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+            RegistrationSurface::ToolConditionalExecutionGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::ToolRequestIntercept,
+            RegistrationSurface::ToolRequestIntercept,
+        ),
+        (
+            RuntimeRegistrationKind::ToolExecutionIntercept,
+            RegistrationSurface::ToolExecutionIntercept,
+        ),
+        (
+            RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
+            RegistrationSurface::LlmSanitizeRequestGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+            RegistrationSurface::LlmSanitizeResponseGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+            RegistrationSurface::LlmConditionalExecutionGuardrail,
+        ),
+        (
+            RuntimeRegistrationKind::LlmRequestIntercept,
+            RegistrationSurface::LlmRequestIntercept,
+        ),
+        (
+            RuntimeRegistrationKind::LlmExecutionIntercept,
+            RegistrationSurface::LlmExecutionIntercept,
+        ),
+        (
+            RuntimeRegistrationKind::LlmStreamExecutionIntercept,
+            RegistrationSurface::LlmStreamExecutionIntercept,
+        ),
+    ] {
+        assert_eq!(registration_surface_from_kind(kind), surface);
+        assert_eq!(
+            runtime_registration_kind_from_surface(surface).unwrap(),
+            kind
+        );
+    }
+    for surface in [
+        RegistrationSurface::Unspecified,
+        RegistrationSurface::ConditionalMiddlewareGuardrail,
+    ] {
+        assert_eq!(
+            runtime_registration_kind_from_surface(surface)
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+}
+
 #[test]
 fn worker_runtime_rejects_gate_registration_after_cleanup() {
     let state = WorkerHostRuntimeState::new(ACTIVATION_ID.into(), AUTH_TOKEN.into());
@@ -4380,4 +4779,67 @@ impl PluginWorker for FakePluginWorker {
             message: "not implemented".into(),
         }))
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worker_shutdown_reports_closed_host_channel_and_failed_directory_cleanup_once() {
+    let (instance, _worker_shutdown) = fake_worker_instance(Vec::new()).await;
+    let (host_shutdown, receiver) = oneshot::channel();
+    drop(receiver);
+    *instance.shutdown.lock().unwrap() = Some(host_shutdown);
+    std::fs::remove_dir_all(&instance.activation_dir).unwrap();
+    std::fs::write(&instance.activation_dir, b"occupied").unwrap();
+
+    let outcome = instance.shutdown_checked();
+    assert!(outcome.safe_to_unload);
+    assert_eq!(outcome.errors.len(), 2, "{:?}", outcome.errors);
+    assert!(
+        outcome
+            .errors
+            .iter()
+            .any(|error| error.contains("shutdown channel was closed"))
+    );
+    assert!(
+        outcome
+            .errors
+            .iter()
+            .any(|error| error.contains("activation directory cleanup failed"))
+    );
+    assert!(
+        instance.shutdown_checked().errors.is_empty(),
+        "shutdown must remain idempotent after safe cleanup failures"
+    );
+    std::fs::remove_file(&instance.activation_dir).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worker_shutdown_reports_rpc_failure_and_reaps_an_exited_process() {
+    let (mut instance, _worker_shutdown) = fake_worker_instance(Vec::new()).await;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    instance.client = PluginWorkerClient::new(
+        tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+            .unwrap()
+            .connect_lazy(),
+    );
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--help")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    child.wait().unwrap();
+    *instance.process.lock().unwrap() = Some(child);
+    let directory = instance.activation_dir.clone();
+
+    let outcome = instance.shutdown_checked();
+    assert!(outcome.safe_to_unload);
+    assert_eq!(outcome.errors.len(), 1, "{:?}", outcome.errors);
+    assert!(outcome.errors[0].contains("shutdown RPC failed"));
+    assert!(instance.process.lock().unwrap().is_none());
+    assert!(
+        !directory.exists(),
+        "a disconnected worker must still release its activation directory"
+    );
 }

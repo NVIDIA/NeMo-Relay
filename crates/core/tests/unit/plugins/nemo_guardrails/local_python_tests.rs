@@ -1381,3 +1381,96 @@ async fn registered_local_backend_rejects_blocked_llm_and_tool_inputs() {
     );
     assert!(!tool_callback_called.load(Ordering::SeqCst));
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn registered_local_backend_guards_streams_and_rewrites_provider_requests() {
+    use crate::api::llm::{LlmStreamCallExecuteParams, llm_stream_call_execute};
+    if !python3_available() {
+        return;
+    }
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    let _runtime_guard = reset_plugin_runtime();
+    let fixture = FakeGuardrails::new("0.22.0");
+    let mut config = fixture.config();
+    config.input = true;
+    config.output = true;
+    install_local_plugin(&config).await;
+
+    for (text, blocked) in [("safe answer", false), ("stream-block", true)] {
+        let chunk = json!({"choices": [{"delta": {"content": text}}]});
+        let provider_chunk = chunk.clone();
+        let mut stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("openai")
+                .request(LlmRequest {
+                    headers: Default::default(),
+                    content: json!({"messages": [{"role": "user", "content": "modify this request"}]}),
+                })
+                .func(Arc::new(move |request| {
+                    assert_eq!(request.content["messages"][0]["content"], "rewritten");
+                    let chunk = provider_chunk.clone();
+                    Box::pin(async move { Ok(LlmJsonStream::new(tokio_stream::iter([Ok(chunk)]))) })
+                }))
+                .collector(Box::new(|_| Ok(())))
+                .finalizer(Box::new(|| Json::Null))
+                .build(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stream.next().await.unwrap().unwrap(), chunk);
+        if blocked {
+            let error = stream.next().await.unwrap().unwrap_err();
+            assert!(error.to_string().contains("blocked stream"), "{error}");
+        }
+        assert!(stream.next().await.is_none());
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn local_stream_runtime_respects_disabled_rails_and_rejects_unsupported_streaming() {
+    if !python3_available() {
+        return;
+    }
+    let fixture = FakeGuardrails::new("0.22.0");
+    for (yaml, enable_output, rejected) in [
+        ("models: []", false, false),
+        ("no_stream", true, false),
+        ("stream_first_false", true, true),
+    ] {
+        let mut config = fixture.config();
+        config.config_yaml = Some(yaml.into());
+        let runtime = LocalGuardrailsRuntime::new(&config).unwrap();
+        let request = LlmRequest {
+            headers: Default::default(),
+            content: json!({"messages": [{"role": "user", "content": "hello"}]}),
+        };
+        let next = Arc::new(|_: LlmRequest| {
+            Box::pin(async {
+                Ok(LlmJsonStream::new(tokio_stream::iter([Ok(json!({
+                    "choices": [{"delta": {"content": "stream-block"}}]
+                }))])))
+            }) as Pin<Box<dyn Future<Output = FlowResult<LlmJsonStream>> + Send>>
+        });
+        let result = runtime
+            .execute_llm_stream(request, next, false, enable_output)
+            .await;
+        if rejected {
+            let error = match result {
+                Ok(_) => panic!("unsupported streaming was accepted"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("stream_first = true"), "{error}");
+        } else {
+            let mut stream = result.unwrap();
+            assert_eq!(
+                stream.next().await.unwrap().unwrap()["choices"][0]["delta"]["content"],
+                "stream-block"
+            );
+            assert!(stream.next().await.is_none());
+        }
+    }
+}

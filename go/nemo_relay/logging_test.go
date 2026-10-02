@@ -211,3 +211,27 @@ queue_capacity = 16
 		t.Fatalf("logging shutdown event missing from file:\n%s", contents)
 	}
 }
+
+func TestBindingLoggingRejectsInvalidRecords(t *testing.T) {
+	for _, test := range []struct {
+		name, level, target string
+		fields              map[string]any
+	}{
+		{"unknown severity", "unknown", "binding", nil},
+		{"non-JSON fields", "info", "binding", map[string]any{"unsupported": make(chan int)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := Log(test.level, test.target, "invalid record", test.fields); err == nil {
+				t.Fatal("invalid log record was accepted")
+			}
+		})
+	}
+	for index, emit := range []func(string, string, map[string]any) error{Trace, Debug, Info, Warn, Error} {
+		if err := emit("coverage.binding", "record without fields", nil); err != nil {
+			t.Fatalf("level helper %d rejected a record without fields: %v", index, err)
+		}
+	}
+	if err := Info("coverage.binding", "structured record", map[string]any{"nested": map[string]any{"retained": true}, "ordinal": uint64(9007199254740993)}); err != nil {
+		t.Fatalf("structured record: %v", err)
+	}
+}

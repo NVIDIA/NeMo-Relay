@@ -1388,6 +1388,9 @@ test-rust:
     xdg_config_home="$test_config_root/xdg"
     mkdir -p "$xdg_config_home"
     export XDG_CONFIG_HOME="$(native_test_config_path "$xdg_config_home")"
+    system_config_home="$test_config_root/system"
+    mkdir -p "$system_config_home"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$(native_test_config_path "$system_config_home")"
     export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     if [[ "$is_windows" == true ]]; then
         appdata_home="$test_config_root/AppData/Roaming"
@@ -1409,7 +1412,23 @@ test-rust:
         "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
-            cargo llvm-cov report \
+            # LLVM deduplicates unmangled FFI symbols using the first object's
+            # coverage mapping. Prefer the tested binary over the shared library.
+            ffi_test_binary=""
+            for binary in target/debug/deps/nemo_relay_ffi-*; do
+                if [[ -f "$binary" && "$binary" =~ -[[:xdigit:]]{16}(\.exe)?$ ]]; then
+                    if [[ -n "$ffi_test_binary" ]]; then
+                        echo "ERROR: multiple FFI test binaries found after the clean coverage build" >&2
+                        exit 1
+                    fi
+                    ffi_test_binary="$binary"
+                fi
+            done
+            if [[ -z "$ffi_test_binary" ]]; then
+                echo "ERROR: FFI test binary missing from the coverage build" >&2
+                exit 1
+            fi
+            LLVM_COV_FLAGS="$ffi_test_binary${LLVM_COV_FLAGS:+ $LLVM_COV_FLAGS}" cargo llvm-cov report \
                 --ignore-filename-regex '.*/tests/.*\.rs$' \
                 --cobertura \
                 --output-path "$coverage_out"
