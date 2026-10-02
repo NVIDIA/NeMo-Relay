@@ -11,6 +11,9 @@ use crate::daemon::common::identity::{Fingerprint, TokenDigest};
 use crate::daemon::common::protocol::{BrokerDirective, WorkerLaunch};
 
 const DEFAULT_RETRY_AFTER_MS: u64 = 100;
+const PUBLISHED_ACTIVATION_CAPACITY: usize = 32;
+const PUBLISHED_ACTIVATION_RETENTION_MS: u64 = 300_000;
+
 fn activation_retry_delay(attempts: u32) -> u64 {
     (1_000_u64 << attempts.saturating_sub(1).min(6)).min(60_000)
 }
@@ -90,18 +93,18 @@ impl Registry {
         if route.refs.is_empty() {
             return Err(RegistryError::NoLiveMcpReferences);
         }
-        let authorized = match (&route.state, permit) {
+        let published_activation = match (&route.state, permit) {
             (
                 RouteState::Activating { launch, .. },
                 RecoveryPermit::Activating { activation_id },
-            ) => launch.activation_id == *activation_id,
+            ) if launch.activation_id == *activation_id => Some(activation_id.clone()),
             (
                 RouteState::Ready { target },
                 RecoveryPermit::ExistingWorker {
                     worker_id,
                     recovering: false,
                 },
-            ) => target.worker_id() == worker_id,
+            ) if target.worker_id() == worker_id => None,
             (
                 RouteState::Recovering {
                     target: Some(target),
@@ -111,18 +114,14 @@ impl Registry {
                     worker_id,
                     recovering: true,
                 },
-            ) => target.worker_id() == worker_id,
-            _ => false,
+            ) if target.worker_id() == worker_id => None,
+            _ => return Err(RegistryError::RecoveryGenerationChanged),
         };
-        if !authorized {
-            return Err(RegistryError::RecoveryGenerationChanged);
+        if let Some(activation_id) = published_activation.as_deref() {
+            route.record_published_activation(activation_id);
         }
-        let canceled_activation = match &route.state {
-            RouteState::Activating { launch, .. } => Some(launch.activation_id.clone()),
-            _ => None,
-        };
         route.state = RouteState::Ready { target };
-        Ok(canceled_activation)
+        Ok(published_activation)
     }
 
     /// Creates an empty registry.
@@ -492,19 +491,7 @@ impl Registry {
         }
         match &route.state {
             RouteState::Activating { launch, .. } if launch.activation_id == activation_id => {
-                route.published_activations.retain(|(_, expires)| {
-                    *expires > crate::daemon::common::control::now_unix_ms()
-                });
-                if route.published_activations.len() >= 32 {
-                    route.published_activations.pop_front();
-                }
-                route.published_activations.push_back((
-                    activation_id.to_owned(),
-                    crate::daemon::common::control::now_unix_ms().saturating_add(300_000),
-                ));
-                route.published_activation = Some(activation_id.to_owned());
-                route.attempts = 0;
-                route.retry_at_unix_ms = 0;
+                route.record_published_activation(activation_id);
                 route.state = RouteState::Ready { target };
                 Ok(())
             }
@@ -1083,6 +1070,22 @@ struct RouteEntry {
 }
 
 impl RouteEntry {
+    fn record_published_activation(&mut self, activation_id: &str) {
+        let now_unix_ms = crate::daemon::common::control::now_unix_ms();
+        self.published_activations
+            .retain(|(_, expires)| *expires > now_unix_ms);
+        if self.published_activations.len() >= PUBLISHED_ACTIVATION_CAPACITY {
+            self.published_activations.pop_front();
+        }
+        self.published_activations.push_back((
+            activation_id.to_owned(),
+            now_unix_ms.saturating_add(PUBLISHED_ACTIVATION_RETENTION_MS),
+        ));
+        self.published_activation = Some(activation_id.to_owned());
+        self.attempts = 0;
+        self.retry_at_unix_ms = 0;
+    }
+
     fn new(token_digest: TokenDigest, global_pass_through: bool) -> Self {
         Self {
             token_digest,

@@ -625,6 +625,38 @@ fn recovered_worker_becomes_ready_when_an_mcp_reconnects() {
 }
 
 #[test]
+fn activation_recovery_reports_publication_to_launch_owner() {
+    let registry = Registry::new(false);
+    let fingerprint = fingerprint(120);
+    let token = TokenDigest::from_token(b"token-120");
+    registry
+        .restore_binding(fingerprint, token)
+        .expect("persisted binding");
+    registry
+        .register_connected_mcp(
+            registration(fingerprint, token, "mcp-a"),
+            launch("recovered-activation"),
+        )
+        .expect("activation");
+    let permit = registry
+        .authorize_worker_recovery(fingerprint, "worker-recovered")
+        .expect("recovery authorization");
+    assert_eq!(
+        registry
+            .publish_recovered_worker(fingerprint, &permit, worker("worker-recovered"))
+            .expect("worker publication"),
+        Some("recovered-activation".to_owned())
+    );
+
+    assert_eq!(
+        registry
+            .cancel_activation(fingerprint, &session("mcp-a"), "recovered-activation")
+            .expect("activation cancellation status"),
+        crate::daemon::common::control::ActivationCancellation::Published
+    );
+}
+
+#[test]
 fn recovered_worker_without_references_is_not_authorized() {
     let registry = Registry::new(false);
     let fingerprint = fingerprint(18);
