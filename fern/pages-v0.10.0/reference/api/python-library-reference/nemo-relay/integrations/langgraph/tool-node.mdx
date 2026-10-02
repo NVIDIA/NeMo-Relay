@@ -1,0 +1,41 @@
+---
+title: "nemo_relay.integrations.langgraph.tool_node"
+sidebar-title: "tool_node"
+description: "Managed NeMo Relay wrappers for standalone LangGraph `ToolNode` objects."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/integrations/langgraph/tool_node.py`.
+
+Module `nemo_relay.integrations.langgraph.tool_node`.
+
+Managed NeMo Relay wrappers for standalone LangGraph `ToolNode` objects.
+
+## Functions
+
+### `wrap_tool_call`
+
+```python
+def wrap_tool_call(request: ToolCallRequest, execute: Callable[[ToolCallRequest], ToolMessage | Command[Any]]) -> ToolMessage | Command[Any]
+```
+
+Run one synchronous LangGraph tool call through NeMo Relay.
+
+### `awrap_tool_call`
+
+```python
+async def awrap_tool_call(request: ToolCallRequest, execute: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]]) -> ToolMessage | Command[Any]
+```
+
+Run one asynchronous LangGraph tool call through NeMo Relay.
+
+### `create_tool_node`
+
+```python
+def create_tool_node(tools: Sequence[BaseTool | Callable[..., Any]], **tool_node_kwargs: Any) -> ToolNode
+```
+
+Create a LangGraph `ToolNode` whose tool calls use managed Relay execution.
+

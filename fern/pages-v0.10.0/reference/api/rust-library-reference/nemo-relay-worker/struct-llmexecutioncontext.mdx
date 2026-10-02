@@ -1,0 +1,60 @@
+---
+title: "Struct LlmExecution Context"
+sidebar-title: "LlmExecutionContext"
+description: "Invocation-scoped codec identities and operations for an LLM execution interceptor."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct LlmExecutionContext { /* private fields */ }
+```
+
+Invocation-scoped codec identities and operations for an LLM execution interceptor.
+
+This context identifies the codecs selected when Relay created the managed invocation. Rewriting a request into another provider's wire format does not change these identities; codec operations reject incompatible payloads.
+
+## Implementations
+
+### `impl LlmExecutionContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmexecutioncontext\">LlmExecutionContext</a>"}} /></pre>
+
+#### `request_codec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn request_codec(&amp;self) -&gt; &amp;<a href=\"type-llmrequestcontext\">LlmRequestContext</a>"}} /></pre>
+
+Request codec identity and invocation-scoped operations.
+
+#### `response_codec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn response_codec(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-llmresponsecontext\">LlmResponseContext</a>&gt;"}} /></pre>
+
+Unary response codec identity and invocation-scoped decode operation.
+
+Streaming execution returns `None` because Relay response codecs decode completed provider responses, not individual stream chunks.
+
+## Trait Implementations
+
+### `impl Clone for LlmExecutionContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-llmexecutioncontext\">LlmExecutionContext</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-llmexecutioncontext\">LlmExecutionContext</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for LlmExecutionContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-llmexecutioncontext\">LlmExecutionContext</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, formatter: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>

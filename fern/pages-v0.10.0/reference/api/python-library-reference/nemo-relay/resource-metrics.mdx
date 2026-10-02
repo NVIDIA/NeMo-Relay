@@ -1,0 +1,125 @@
+---
+title: "nemo_relay.resource_metrics"
+sidebar-title: "resource_metrics"
+description: "Typed access to Relay system resource metric snapshots."
+position: 13
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/resource_metrics.py`.
+
+Module `nemo_relay.resource_metrics`.
+
+Typed access to Relay system resource metric snapshots.
+
+## Classes
+
+### `DurationUnit(StrEnum)`
+
+Units for duration measurements.
+
+### `CapacityUnit(StrEnum)`
+
+Units for capacity measurements.
+
+### `DataUnit(StrEnum)`
+
+Units for data measurements.
+
+### `BandwidthUnit(StrEnum)`
+
+Units for bandwidth measurements.
+
+### `CpuUnit(StrEnum)`
+
+Units for CPU measurements.
+
+### `UtilizationUnit(StrEnum)`
+
+Units for utilization measurements.
+
+### `CountUnit(StrEnum)`
+
+Units for count measurements.
+
+### `ResourceMeasurement(Generic[MeasurementValue, UnitType])`
+
+One available value and its selected unit.
+
+### `ResourceLimitEventCount`
+
+One typed cumulative resource-limit event counter.
+
+### `AcceleratorDeviceMetrics`
+
+Device-wide accelerator measurements.
+
+### `AcceleratorProcessMetrics`
+
+Accelerator measurements attributed to one process in the selected scope.
+
+### `FilesystemCapacityMetrics`
+
+Capacity for one configured filesystem path.
+
+### `CpuMetrics`
+
+CPU measurements and CPU limit events.
+
+### `MemoryMetrics`
+
+System and process memory measurements and memory limit events.
+
+### `ProcessMetrics`
+
+Process counts, limits, handles, and descriptors.
+
+### `DiskMetrics`
+
+Disk I/O for the measured process scope and filesystem capacity.
+
+### `GpuMetrics`
+
+Accelerator device-wide and process-attributed measurements.
+
+### `NetworkTrafficMetrics`
+
+System interface traffic counters and transfer rates.
+
+### `NetworkInterfaceMetrics`
+
+Traffic measured on one system network interface.
+
+### `NetworkMetrics`
+
+System-wide traffic, independent of the process measurement scope.
+
+### `ProcessSamplingMetadata`
+
+Coverage of process queries used for process-summed measurements.
+
+### `ResourceMetricsSnapshot`
+
+One point-in-time observation, its metadata, and enabled categories.
+
+## Functions
+
+### `collect`
+
+```python
+async def collect() -> ResourceMetricsSnapshot
+```
+
+Acquire a fresh sample using the active resource_metrics plugin configuration.
+
+## Type Aliases And Constants
+
+- `AcceleratorVendor`
+- `MeasurementScope`
+- `MeasurementValue`
+- `OperatingSystem`
+- `ResourceLimitEventKind`
+- `ResourceLimitResource`
+- `UnitType`
+

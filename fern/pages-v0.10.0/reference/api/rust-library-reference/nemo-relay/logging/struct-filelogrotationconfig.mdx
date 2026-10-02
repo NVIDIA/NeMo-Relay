@@ -1,0 +1,88 @@
+---
+title: "Struct File LogRotation Config"
+sidebar-title: "FileLogRotationConfig"
+description: "Size-based rotation settings for a file log sink."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct FileLogRotationConfig { /* private fields */ }
+```
+
+Size-based rotation settings for a file log sink.
+
+`retained_files` counts previous log files and excludes the active file.
+
+## Implementations
+
+### `impl FileLogRotationConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(max_file_size_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>, retained_files: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>) -&gt; <a href=\"../error/type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Creates validated size-based rotation settings.
+
+#### `max_file_size_bytes`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn max_file_size_bytes(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>"}} /></pre>
+
+Maximum active file size before the next record triggers rotation.
+
+#### `retained_files`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn retained_files(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>"}} /></pre>
+
+Number of previous log files retained in addition to the active file.
+
+## Trait Implementations
+
+### `impl Clone for FileLogRotationConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for FileLogRotationConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl PartialEq for FileLogRotationConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Copy for FileLogRotationConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>"}} /></pre>
+
+### `impl Eq for FileLogRotationConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>"}} /></pre>
+
+### `impl StructuralPartialEq for FileLogRotationConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-filelogrotationconfig\">FileLogRotationConfig</a>"}} /></pre>

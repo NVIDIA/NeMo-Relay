@@ -1,0 +1,36 @@
+---
+title: "Struct LlmExecution Context"
+sidebar-title: "LlmExecutionContext"
+description: "Per-call codec context delivered to an LLM execution intercept."
+position: 16
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct LlmExecutionContext { /* private fields */ }
+```
+
+Per-call codec context delivered to an LLM execution intercept.
+
+Request codec context is always available. Non-streaming execution also supplies a response codec context, while streaming execution leaves it unavailable until Relay has a completed-response streaming codec contract.
+
+## Implementations
+
+### `impl LlmExecutionContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmexecutioncontext\">LlmExecutionContext</a>"}} /></pre>
+
+#### `request_codec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn request_codec(&amp;self) -&gt; &amp;<a href=\"struct-llmrequestcontext\">LlmRequestContext</a>"}} /></pre>
+
+Return the active request codec context.
+
+#### `response_codec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn response_codec(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-llmresponsecontext\">LlmResponseContext</a>&gt;"}} /></pre>
+
+Return the completed-response codec context, or `None` for streaming execution.

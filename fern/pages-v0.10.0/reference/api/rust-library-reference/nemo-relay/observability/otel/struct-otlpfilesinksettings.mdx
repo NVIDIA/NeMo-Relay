@@ -1,0 +1,98 @@
+---
+title: "Struct Otlp File Sink Settings"
+sidebar-title: "OtlpFileSinkSettings"
+description: "A local file destination for exported spans."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct OtlpFileSinkSettings &#123;\n    pub output_directory: <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>,\n    pub filename: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub format: <a href=\"../otel_file/enum-otlpfileformat\">OtlpFileFormat</a>,\n    pub mode: <a href=\"enum-otlpfilesinkmode\">OtlpFileSinkMode</a>,\n&#125;"}} /></pre>
+
+A local file destination for exported spans.
+
+## Fields
+
+### `output_directory: PathBuf`
+
+Directory the output is confined to.
+
+### `filename: String`
+
+Output filename, resolved under `output_directory`.
+
+### `format: OtlpFileFormat`
+
+On-disk encoding.
+
+### `mode: OtlpFileSinkMode`
+
+Open mode used when the file is created.
+
+## Implementations
+
+### `impl OtlpFileSinkSettings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>"}} /></pre>
+
+#### `path`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn path(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>"}} /></pre>
+
+Returns the path this sink writes to.
+
+### `impl OtlpFileSinkSettings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>"}} /></pre>
+
+#### `from_parts`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_parts(\n    output_directory: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    filename: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n    format: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n    mode: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Builds sink settings from the string forms every binding receives.
+
+The normalization policy lives here so the FFI, Node.js and Python surfaces cannot drift: `output_directory` is trimmed, an omitted `format` is `json_lines`, an omitted `mode` is `overwrite`, and an omitted filename is derived from the format. Errors are returned as messages for each binding to map onto its own error type.
+
+## Trait Implementations
+
+### `impl Clone for OtlpFileSinkSettings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for OtlpFileSinkSettings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl PartialEq for OtlpFileSinkSettings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Eq for OtlpFileSinkSettings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>"}} /></pre>
+
+### `impl StructuralPartialEq for OtlpFileSinkSettings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>"}} /></pre>

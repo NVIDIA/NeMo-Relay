@@ -1,0 +1,141 @@
+---
+title: "Struct Open Telemetry File Sink Config"
+sidebar-title: "OpenTelemetryFileSinkConfig"
+slug: "/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-opentelemetryfilesinkconfig"
+description: "One local file destination for projected OTLP spans."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct OpenTelemetryFileSinkConfig &#123;Show 19 fields\n    pub otel_type: <a href=\"../enum-opentelemetrytype\">OpenTelemetryType</a>,\n    pub output_directory: <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>,\n    pub filename: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub format: <a href=\"../otel_file/enum-otlpfileformat\">OtlpFileFormat</a>,\n    pub mode: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>,\n    pub mark_exclude_names: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub attribute_mappings: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../struct-otlpattributemapping\">OtlpAttributeMapping</a>&gt;,\n    pub promote_metadata_prefixes: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub promote_resource_metadata_prefixes: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub resource_attributes: <a href=\"https://doc.rust-lang.org/1.96.1/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub service_name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub service_namespace: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub service_version: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub instrumentation_scope: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub max_queue_size: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>&gt;,\n    pub max_export_batch_size: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>&gt;,\n    pub scheduled_delay_millis: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub completed_span_context_ttl_millis: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n&#125;"}} /></pre>
+
+One local file destination for projected OTLP spans.
+
+A file sink writes the same `ExportTraceServiceRequest` an OTLP endpoint would receive, so a consumer that reads trajectories as artifacts needs no collector. It shares the projection and batching settings with [`OpenTelemetryEndpointConfig`](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-opentelemetryendpointconfig) and drops the fields that only a network destination has: endpoint, transport, headers, and timeout.
+
+## Fields
+
+### `otel_type: OpenTelemetryType`
+
+Semantic projection written to this file.
+
+### `output_directory: PathBuf`
+
+Directory containing the output file.
+
+### `filename: Option<String>`
+
+Output filename. Defaults to a timestamped name for the chosen format.
+
+### `format: OtlpFileFormat`
+
+On-disk encoding: `json_lines` or `proto`.
+
+### `mode: String`
+
+File open mode: `append` or `overwrite`.
+
+### `mark_projection: MarkProjection`
+
+Representation used for point-in-time marks.
+
+### `mark_exclude_names: Vec<String>`
+
+Mark names excluded from tool projection.
+
+### `attribute_mappings: Vec<OtlpAttributeMapping>`
+
+Projected attributes copied to aliases.
+
+### `promote_metadata_prefixes: Vec<String>`
+
+Literal Event metadata prefixes copied to top-level OTLP attributes.
+
+### `promote_resource_metadata_prefixes: Vec<String>`
+
+Literal root-scope Event metadata prefixes copied to OTLP resource attributes.
+
+### `resource_attributes: HashMap<String, String>`
+
+Extra resource attributes.
+
+### `service_name: String`
+
+`service.name` resource attribute.
+
+### `service_namespace: Option<String>`
+
+Optional `service.namespace` resource attribute.
+
+### `service_version: Option<String>`
+
+Optional `service.version` resource attribute.
+
+### `instrumentation_scope: String`
+
+Instrumentation scope name.
+
+### `max_queue_size: Option<usize>`
+
+Maximum completed spans buffered before the sink drops new spans.
+
+### `max_export_batch_size: Option<usize>`
+
+Maximum spans written in one batch.
+
+### `scheduled_delay_millis: Option<u64>`
+
+Maximum delay before writing a non-full batch, in milliseconds.
+
+### `completed_span_context_ttl_millis: Option<u64>`
+
+How long completed scopes retain trace context for late marks, in milliseconds.
+
+## Trait Implementations
+
+### `impl Clone for OpenTelemetryFileSinkConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for OpenTelemetryFileSinkConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for OpenTelemetryFileSinkConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl EditorConfig for OpenTelemetryFileSinkConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../config_editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `editor_schema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../config_editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../config_editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
+
+### `impl Serialize for OpenTelemetryFileSinkConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>

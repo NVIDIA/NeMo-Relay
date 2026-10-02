@@ -1,0 +1,165 @@
+---
+title: "Remote Linux: Deploy Clients"
+description: "Connect Linux coding harnesses and workers to a remote daemon."
+position: 8
+---
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use this runbook after [deploying the server](/daemon/remote-server). It targets
+Debian or Ubuntu clients on the same routed private network or VPN. Users run
+the harness, MCP, and worker locally. They do not start a local daemon service.
+
+## Install Client Files
+
+Install `/opt/nvidia/bin/nemo-relay` using the binary-copy steps in
+[Linux Deployment](/daemon/linux#prepare-the-host). Install the administrator's
+`config.toml` and `plugins.toml` in `/etc/nemo-relay` on each client. Workers do
+not download these files from the daemon and ignore personal Relay configuration.
+
+Use `/opt/nvidia/bin/nemo-relay-dispatch` as the dispatcher for this remote bundle.
+The wrapper below supplies assigned worker network settings even when a harness
+filters the environment of its MCP subprocess. Install it once as root, mode 0755:
+
+```bash
+#!/bin/sh
+set -eu
+if [ "${1-}" = daemon ] && [ "${2-}" = mcp ]; then
+    relay_network_dir="${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay-network"
+    if [ -f "$relay_network_dir/worker-address" ]; then
+        NEMO_RELAY_WORKER_ADVERTISE_ADDRESS=$(cat "$relay_network_dir/worker-address")
+        export NEMO_RELAY_WORKER_ADVERTISE_ADDRESS
+    fi
+    if [ -f "$relay_network_dir/worker-port" ]; then
+        NEMO_RELAY_WORKER_PORT=$(cat "$relay_network_dir/worker-port")
+        export NEMO_RELAY_WORKER_PORT
+    fi
+fi
+exec /opt/nvidia/bin/nemo-relay "$@"
+```
+
+The wrapper preserves arguments and does not print to stdout, which carries MCP
+messages or hook responses. It does not load executable shell code from users.
+If you use a custom `XDG_CONFIG_HOME`, make sure the harness passes it to MCP;
+otherwise use the default `$HOME/.config` consistently.
+
+Generate and distribute the remote bundle following
+[Managed Settings](/daemon/configuration#distribute-immutable-managed-settings).
+Use `https://relay.example.com:8443` and the dispatcher path above. Install the
+bundle at `/opt/nvidia/share/nemo-relay-managed-v1`, writable only by administrators.
+
+## Trust the Daemon Certificate
+
+For a private CA, obtain the approved root certificate through a trusted channel.
+On Debian or Ubuntu, install the PEM root as a `.crt` file:
+
+```bash
+sudo install -m 0644 organization-relay-root.crt /usr/local/share/ca-certificates/organization-relay-root.crt
+sudo update-ca-certificates
+getent ahostsv4 relay.example.com
+curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' \
+  https://relay.example.com:8443/v1/models
+```
+
+Without a route credential, the expected HTTP status is `401`. This checks DNS,
+TLS trust, and access to the daemon; it is not worker verification. A public-CA
+certificate normally needs no additional trust-store entry. Restart running
+harnesses after changing trust. Relay uses native trust roots for daemon HTTPS.
+
+## Assign Worker Addresses and Ports
+
+The default remote worker address is selected from the client's IPv4 route to
+the daemon, and its port is automatically allocated. For predictable firewall
+rules, write the administrator-assigned values as the target user:
+
+```bash
+relay_network_dir="${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay-network"
+mkdir -p "$relay_network_dir"
+chmod 700 "$relay_network_dir"
+printf '%s\n' '10.30.0.21' > "$relay_network_dir/worker-address"
+printf '%s\n' '9443' > "$relay_network_dir/worker-port"
+chmod 600 "$relay_network_dir/worker-address" "$relay_network_dir/worker-port"
+```
+
+The address is a concrete hostname or IPv4 address reachable **from the daemon**,
+not a URL and not `0.0.0.0`. A remote worker listens on `0.0.0.0`; restrict access
+with the firewall. Assigned ports must be between 1 and 65535. Use ports above
+1023 for ordinary users and check that another process does not own the port.
+
+On a shared client, give each machine-user identity a different port, such as
+9443 and 9444. Sessions for one identity share its worker and port. Never assign
+one fixed port to every user on the same client. Multiple separate daemon
+origins may also require separate port assignments and launch environments.
+
+For an existing UFW firewall with default-deny incoming policy, an administrator
+can permit only the daemon to contact this worker:
+
+```bash
+sudo ufw allow from 10.20.0.10 to 10.30.0.21 port 9443 proto tcp
+sudo ufw status verbose
+```
+
+Add one rule per assigned port. For VPNs or NAT, verify that the advertised address
+and port actually reach this listener. Relay does not create port forwarding or
+an outbound-only tunnel. Check that broader firewall rules do not expose workers
+to unrelated hosts.
+
+## Provision Credentials and Launch a Harness
+
+Follow [Client Credentials](/daemon/configuration#provision-client-credentials)
+to provision a unique token and load it into the launch environment. Then follow
+the Codex, Claude Code, or Pi steps in
+[Load a Managed Harness](/daemon/configuration#load-a-managed-harness).
+Keep provider authentication in its normal supported environment or credential
+store. The route token does not replace the provider's API key or login.
+
+Launch from the prepared terminal or an administrator-provided desktop launcher.
+An already-running desktop app will not acquire a new shell environment. Restart
+it through the managed launch path. Do not run `daemon worker` manually; only
+MCP receives the protected activation grant needed to start it.
+
+## Verify the Return Path
+
+Keep the harness running. On the client:
+
+```bash
+ss -ltn 'sport = :9443'
+```
+
+On the daemon server, test the network path without sending any credential:
+
+```bash
+nc -vz 10.30.0.21 9443
+```
+
+A successful TCP connection proves only reachability. Complete
+[worker-backed verification](/daemon/operations#verify-worker-backed-operation),
+including the `worker_ready` log and an observable plugin result. Do not test the
+worker with a fabricated activation grant or try to extract its session token.
+
+Close all harnesses for this identity, allow the worker to drain, and confirm its
+listener closes. Open a new harness and confirm a fresh worker becomes ready.
+Repeat after a planned daemon restart and after reconnecting the VPN. A control
+connection has 30 seconds to recover; if that window expires, restore network
+access and start a fresh harness. A successful HTTPS probe alone does not verify
+that the proxy permits the persistent WSS control sessions.
+
+## Update and Remove the Client
+
+For upgrades, close all harnesses, wait for workers to exit, replace the binary at
+the stable path, and validate the existing bundle digest. Keep the user's identity
+and daemon trust pins. Reopen the harness and verify worker behavior again.
+
+For removal, close sessions and remove the harness's managed plugin registration
+and provider settings through the same deployment mechanism that installed them.
+Do not delete unrelated harness settings or provider credentials. Remove this
+client's firewall rule when retiring its worker:
+
+```bash
+sudo ufw delete allow from 10.20.0.10 to 10.30.0.21 port 9443 proto tcp
+```
+
+Retain private identity state for rollback. Remove managed artifacts and the
+dispatcher only when no remaining user depends on them. Removing local files does
+not revoke a credential from a running daemon; see [Operations](/daemon/operations).

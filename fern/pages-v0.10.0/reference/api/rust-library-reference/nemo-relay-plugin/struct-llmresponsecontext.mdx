@@ -1,0 +1,32 @@
+---
+title: "Struct LlmResponse Context"
+sidebar-title: "LlmResponseContext"
+description: "Response codec context for one non-streaming LLM execution intercept invocation."
+position: 30
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LlmResponseContext &#123;\n    pub codec: <a href=\"enum-llmcodecidentity\">LlmCodecIdentity</a>,\n    /* private fields */\n&#125;"}} /></pre>
+
+Response codec context for one non-streaming LLM execution intercept invocation.
+
+## Fields
+
+### `codec: LlmCodecIdentity`
+
+Identity of the active response codec.
+
+## Implementations
+
+### `impl LlmResponseContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmresponsecontext\">LlmResponseContext</a>"}} /></pre>
+
+#### `resolve_codec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn resolve_codec(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-llmexecutionresponsecodec\">LlmExecutionResponseCodec</a>&gt;"}} /></pre>
+
+Resolve the active response codec capability.
