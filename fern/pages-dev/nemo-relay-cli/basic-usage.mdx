@@ -261,6 +261,13 @@ openai_base_url = "https://api.openai.com/v1"
 anthropic_base_url = "https://api.anthropic.com"
 ```
 
+Provider waits have no deadline by default so long compaction can finish. Caller
+cancellation ends the request. Set `[upstream] response_timeout_secs` to a
+positive number of seconds to limit response-header waits. In the standalone
+gateway, this also limits each idle response-body read; successful reads restart
+the timer. Set the value to `0` to disable these limits. Connection establishment
+and short plugin callbacks retain separate deadlines.
+
 Relay normally chooses the upstream from the request path, regardless of which
 compatible client sends the request. The gateway routes map to settings as
 follows:
