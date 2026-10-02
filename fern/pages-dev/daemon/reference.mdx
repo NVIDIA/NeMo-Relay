@@ -439,6 +439,12 @@ disconnects, Relay cancels the corresponding provider request. Relay has separat
 deadlines for connections and response headers. It does not set a total time
 limit after streaming starts.
 
+A request that exceeds the daemon's 60-second response-header deadline returns
+`504`. This timeout does not disconnect the worker or change its route. The
+worker can still be waiting for middleware or a provider. A worker transport
+failure, response-body failure, or explicit route rejection triggers control
+recovery before worker forwarding resumes.
+
 The worker also sends request bodies directly through the pooled Hyper client
 when no LLM request guardrail, request interceptor, or request-sanitization
 guardrail is registered. If middleware needs the complete JSON request, the
