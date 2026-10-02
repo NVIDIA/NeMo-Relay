@@ -1366,6 +1366,17 @@ test-rust:
             is_windows=true
             ;;
     esac
+    nextest_command=(cargo nextest run)
+    if [[ "$is_windows" == true ]]; then
+        # Cargo's Windows job forbids breakaway. Run nextest directly so the lifecycle
+        # tests can detach workers from their own jobs while testing cleanup normally.
+        nextest_command=(cargo-nextest nextest run)
+        # Keep temporary child builds on the same toolchain as the workspace.
+        if [[ -z "${RUSTUP_TOOLCHAIN:-}" ]]; then
+            active_toolchain="$(rustup show active-toolchain)"
+            export RUSTUP_TOOLCHAIN="${active_toolchain%% *}"
+        fi
+    fi
     native_test_config_path() {
         if [[ "$is_windows" == true ]] && command -v cygpath >/dev/null 2>&1; then
             cygpath -w "$1"
@@ -1395,7 +1406,7 @@ test-rust:
             prepare_llvm_cov_workspace
         fi
         prepare_test_plugin_fixtures
-        cargo nextest run --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
+        "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
             cargo llvm-cov report \
@@ -1405,11 +1416,11 @@ test-rust:
         fi
     else
         prepare_test_plugin_fixtures
-        cargo nextest run --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
+        "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
     fi
-    cargo nextest run --manifest-path examples/rust-native-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
-    cargo nextest run --manifest-path examples/rust-grpc-worker-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
-    cargo nextest run --manifest-path examples/language-binding-plugin/rust/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
+    "${nextest_command[@]}" --manifest-path examples/rust-native-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
+    "${nextest_command[@]}" --manifest-path examples/rust-grpc-worker-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
+    "${nextest_command[@]}" --manifest-path examples/language-binding-plugin/rust/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
 
 # --set [output_dir=<path>] [ci=true|false]
 test-python:
