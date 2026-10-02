@@ -833,7 +833,7 @@ async fn restart_defers_replacement_until_the_generation_recovery_deadline() {
     );
     state
         .active_worker_generations
-        .publish(identity.fingerprint(), "prior-worker-generation")
+        .publish(identity.fingerprint(), "prior-worker-generation", None)
         .unwrap();
     Arc::get_mut(&mut state).unwrap().sockets = Hub::restarting(HashMap::from([(
         identity.fingerprint(),
@@ -1427,7 +1427,7 @@ async fn worker_setup_failure_releases_staged_sessions_before_disconnect_grace()
     let generation = staged.generation_grant.generation_id;
     state
         .active_worker_generations
-        .publish(identity.fingerprint(), &generation)
+        .publish(identity.fingerprint(), &generation, None)
         .unwrap();
     // The MCP reports terminal exits from configuration or plugin discovery before readiness.
     drop(worker);

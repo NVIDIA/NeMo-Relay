@@ -7,8 +7,8 @@ use std::sync::Arc;
 use super::*;
 use crate::daemon::common::client::{begin_handshake, control_client};
 use crate::daemon::common::control::{
-    WorkerActivationFailureReason, WorkerNetworkHintProof, WorkerReadyPayload,
-    WorkerRegisterResponse,
+    ActivationCancellation, WorkerActivationFailureReason, WorkerNetworkHintProof,
+    WorkerReadyPayload, WorkerRegisterResponse,
 };
 use crate::daemon::common::routes::HookRoute;
 use crate::daemon::common::state::ROUTE_TOKEN_ENV;
@@ -2583,7 +2583,7 @@ fn communication_failure_invalidates_route_without_waiting_for_durable_revocatio
         .unwrap();
     state
         .active_worker_generations
-        .publish(fingerprint, &generation)
+        .publish(fingerprint, &generation, None)
         .unwrap();
     lock(&state.worker_sessions).insert("failed-worker".into(), session);
 
@@ -2790,7 +2790,89 @@ fn publication_failures_revoke_activation_and_fail_recovery_closed() {
                 worker_id: "missing-worker".into(),
                 recovering: true,
             },
+            launch_activation_id: None,
         },
+    );
+}
+
+#[test]
+fn recovered_generation_preserves_pre_restart_activation_ownership() {
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x69_u8; 32]);
+    let credential = RouteCredential::parse(token.clone()).expect("route credential");
+    let state = test_daemon_state(false, &token, GatewayConfig::default());
+    let worker = MachineIdentity::generate()
+        .expect("worker identity")
+        .identity;
+    let fingerprint = worker.fingerprint();
+    let session_id = McpSessionId::new("reconnected-mcp").expect("MCP session ID");
+    state
+        .registry
+        .restore_binding(fingerprint, credential.digest())
+        .expect("restore route binding");
+    state
+        .registry
+        .register_connected_mcp(
+            McpRegistration {
+                fingerprint,
+                token_digest: credential.digest(),
+                session_id: session_id.clone(),
+                lease_expires_at_unix_ms: u64::MAX,
+            },
+            WorkerLaunch {
+                activation_id: "post-restart-activation".into(),
+                activation_token: SensitiveString::new("post-restart-secret")
+                    .expect("activation token"),
+                deadline_unix_ms: u64::MAX,
+                bind_ip: Ipv4Addr::LOCALHOST,
+                port: 0,
+                advertise_address: None,
+            },
+        )
+        .expect("register reconnected MCP");
+
+    let generation_id = "recovered-generation";
+    state
+        .active_worker_generations
+        .publish(fingerprint, generation_id, Some("pre-restart-activation"))
+        .expect("persist pre-restart publication");
+    let permit = state
+        .registry
+        .authorize_worker_recovery(fingerprint, "recovered-worker")
+        .expect("authorize worker recovery");
+    let launch_activation_id = state
+        .active_worker_generations
+        .launch_activation_id(fingerprint, generation_id)
+        .expect("load launch activation");
+    let target = Arc::new(
+        WorkerTarget::with_client(
+            "recovered-worker",
+            "http://127.0.0.1:41000",
+            SensitiveString::new("worker-token").expect("worker token"),
+            pooled_client().expect("worker client"),
+        )
+        .expect("worker target"),
+    );
+
+    assert_eq!(
+        publish_ready_worker(
+            Arc::clone(&state),
+            fingerprint,
+            target,
+            WorkerPublication::Recovery {
+                permit,
+                launch_activation_id,
+            },
+            generation_id.into(),
+        )
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        state
+            .registry
+            .cancel_activation(fingerprint, &session_id, "pre-restart-activation")
+            .expect("cancel original activation"),
+        ActivationCancellation::Published
     );
 }
 
@@ -2855,6 +2937,7 @@ async fn readiness_rechecks_activation_and_recovery_authority_after_the_probe() 
             worker_id: "stale-recovery".into(),
             recovering: true,
         },
+        launch_activation_id: None,
     };
     lock(&state.worker_sessions).insert("stale-recovery".into(), recovery);
     let ready = SessionRequest::new(

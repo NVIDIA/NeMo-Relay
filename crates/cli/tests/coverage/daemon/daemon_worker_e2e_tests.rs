@@ -1970,7 +1970,7 @@ fn lifecycle_daemon_router_with_activation(
     )
     .expect("active generation state");
     active_worker_generations
-        .publish(fingerprint, &generation_id)
+        .publish(fingerprint, &generation_id, None)
         .expect("publish active generation");
 
     let mcp_secret = SensitiveString::new("lifecycle-mcp-control-token").expect("MCP token");

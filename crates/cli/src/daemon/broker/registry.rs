@@ -83,6 +83,7 @@ impl Registry {
         &self,
         fingerprint: Fingerprint,
         permit: &RecoveryPermit,
+        launch_activation_id: Option<&str>,
         target: Arc<WorkerTarget>,
     ) -> Result<Option<String>, RegistryError> {
         let mut inner = self.write();
@@ -93,7 +94,7 @@ impl Registry {
         if route.refs.is_empty() {
             return Err(RegistryError::NoLiveMcpReferences);
         }
-        let published_activation = match (&route.state, permit) {
+        let canceled_activation = match (&route.state, permit) {
             (
                 RouteState::Activating { launch, .. },
                 RecoveryPermit::Activating { activation_id },
@@ -117,11 +118,11 @@ impl Registry {
             ) if target.worker_id() == worker_id => None,
             _ => return Err(RegistryError::RecoveryGenerationChanged),
         };
-        if let Some(activation_id) = published_activation.as_deref() {
+        if let Some(activation_id) = launch_activation_id {
             route.record_published_activation(activation_id);
         }
         route.state = RouteState::Ready { target };
-        Ok(published_activation)
+        Ok(canceled_activation)
     }
 
     /// Creates an empty registry.

@@ -125,8 +125,13 @@ struct WorkerControlSession {
 
 #[derive(Clone)]
 enum WorkerPublication {
-    Activation { activation_id: String },
-    Recovery { permit: RecoveryPermit },
+    Activation {
+        activation_id: String,
+    },
+    Recovery {
+        permit: RecoveryPermit,
+        launch_activation_id: Option<String>,
+    },
 }
 
 mod socket;
@@ -1031,8 +1036,18 @@ fn recover_worker_after_validation(
         Ok(permit) => permit,
         Err(error) => return registry_error(error),
     };
-    let publication = WorkerPublication::Recovery { permit };
     let generation_id = request.generation_grant.generation_id.clone();
+    let launch_activation_id = match state
+        .active_worker_generations
+        .launch_activation_id(fingerprint, &generation_id)
+    {
+        Ok(activation_id) => activation_id,
+        Err(error) => return control_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    let publication = WorkerPublication::Recovery {
+        permit,
+        launch_activation_id,
+    };
     let worker_id = request.worker_id;
     let response = stage_worker(
         &state,
@@ -1391,10 +1406,11 @@ fn publish_ready_worker(
                     "worker activation is no longer current",
                 );
             }
-            match state
-                .active_worker_generations
-                .publish(fingerprint, &generation_id)
-            {
+            match state.active_worker_generations.publish(
+                fingerprint,
+                &generation_id,
+                Some(activation_id),
+            ) {
                 Ok(previous) => previous,
                 Err(error) => {
                     fail_worker_publication(&state, fingerprint, &publication);
@@ -1430,11 +1446,15 @@ fn publish_ready_worker(
             .registry
             .mark_worker_ready(fingerprint, activation_id, Arc::clone(&target))
             .map(|()| Some(activation_id.clone())),
-        WorkerPublication::Recovery { permit } => {
-            state
-                .registry
-                .publish_recovered_worker(fingerprint, permit, Arc::clone(&target))
-        }
+        WorkerPublication::Recovery {
+            permit,
+            launch_activation_id,
+        } => state.registry.publish_recovered_worker(
+            fingerprint,
+            permit,
+            launch_activation_id.as_deref(),
+            Arc::clone(&target),
+        ),
     };
     let canceled_activation = match publication_result {
         Ok(canceled_activation) => canceled_activation,
@@ -1443,7 +1463,7 @@ fn publish_ready_worker(
                 && let Err(restore_error) = state.active_worker_generations.restore_if_matches(
                     fingerprint,
                     &generation_id,
-                    previous_generation.as_deref(),
+                    previous_generation.as_ref(),
                 )
             {
                 log::error!(
@@ -1493,7 +1513,7 @@ fn fail_worker_publication(
             .mark_activation_failed(fingerprint, activation_id)
             .ok()
             .map(|()| activation_id.clone()),
-        WorkerPublication::Recovery { permit } => state
+        WorkerPublication::Recovery { permit, .. } => state
             .registry
             .mark_recovery_failed(fingerprint, permit)
             .ok()
