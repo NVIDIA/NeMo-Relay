@@ -4017,6 +4017,20 @@ async fn assert_worker_stream_dropped_and_cleaned(fixture: &mut WorkerStreamLife
     .await
     .expect("worker stream must be dropped")
     .expect("worker stream drop signal must be delivered");
+    // Remote stream teardown can finish before the host task drops its codec guard.
+    // Wait for local cleanup before checking all released host resources.
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while fixture
+            .callback
+            .host_state
+            .request_codec(&fixture.request_id, &fixture.invocation_id)
+            .is_ok()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("host stream must release its request codec");
     assert_request_codec_expired(
         &fixture.callback.host_state,
         &fixture.request_id,
