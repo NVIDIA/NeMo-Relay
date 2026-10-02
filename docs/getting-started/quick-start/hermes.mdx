@@ -69,6 +69,7 @@ collection or sending to Nous; those have separate consent controls.
 ## Prerequisites
 
 - Linux, macOS, or Windows Subsystem for Linux 2 (WSL2)
+- Hermes with native Relay support, plugin diagnostics in `hermes doctor`, and `chat --oneshot`
 - A configured Hermes model provider
 - `jq` for the JSON event check
 - Permission to install Hermes in your user environment
@@ -83,13 +84,12 @@ curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```
 
 Complete the setup prompts and confirm that `hermes` can use your model
-provider before continuing.
+provider before continuing. Check that `hermes chat --help` lists `--oneshot`;
+older builds may not support this recipe.
 
 ## 2. Configure
 
-Use a disposable working directory with no existing `logs/events.jsonl` or
-`relay-check.txt`. Permit the agent to write files there. For a repeat test,
-use another fresh directory so previous output cannot pass the checks.
+Start in a new working directory and permit the agent to write files there.
 
 Save the following configuration as `plugins.toml` in the directory where you
 will start Hermes:
@@ -157,9 +157,14 @@ observability records to finish writing.
 
 ## 4. Verify
 
+Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+
+<details>
+<summary>Run the verification checks</summary>
+
 {/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-test "$(cat relay-check.txt)" = 'RELAY_QUICKSTART_TOOL_OK' &&
+jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt > /dev/null &&
 jq -se '
   . as $events |
   def closed($category):
@@ -185,8 +190,9 @@ RELAY_QUICKSTART_EVENTS_OK
 
 These markers confirm the tool-created file and matching start/end records for
 agent, tool, and LLM work. The agent's final reply should include
-`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary. An echoed
-prompt alone does not pass verification.
+`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
+
+</details>
 
 ## For More Details
 

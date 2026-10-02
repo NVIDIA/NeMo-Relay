@@ -18,7 +18,7 @@ SPDX-License-Identifier: Apache-2.0 */}
   ],
   "cwd": "relay-rust-quickstart",
   "requires": {
-    "rust": ">=1.86",
+    "rust": ">=1.88",
     "cargo": "available"
   },
   "setup": [],
@@ -56,12 +56,12 @@ result in a local ATOF event file.
 
 ## Prerequisites
 
-- Rust 1.86 or newer
+- Rust 1.88 or newer
 - Cargo
 
 ## 1. Install
 
-Create a project and add the verified published crate:
+Create a project and add the pinned published crate:
 
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
 ```bash
@@ -108,7 +108,7 @@ results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
 ## 3. Run
 
-Save this file as `src/main.rs` beside the project's `Cargo.toml`:
+Replace the generated `src/main.rs` in `relay-rust-quickstart` with this code:
 
 {/* quickstart-block {"id":"program","role":"file","cwd":"relay-rust-quickstart","path":"src/main.rs"} */}
 ```rust

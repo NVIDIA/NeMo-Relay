@@ -23,9 +23,11 @@ SPDX-License-Identifier: Apache-2.0 */}
     "jq (bash only)": ">=1.6"
   },
   "setup": [
-    "Authenticated model provider with tool-use permissions"
+    "An OpenAI API key with access to gpt-4o"
   ],
-  "inputs": {},
+  "inputs": {
+    "OPENAI_API_KEY": {"kind": "env", "secret": true}
+  },
   "fresh": [
     "logs/events.jsonl",
     "relay-check.txt"
@@ -62,29 +64,30 @@ Run one local pi task through NeMo Relay and write its agent, model, and tool
 lifecycle to a local ATOF event file.
 
 <Warning>
-The pi integration is a proof of concept verified against pi 0.84.0. pi can
+The pi integration is a proof of concept. This guide pins pi 0.84.0. pi can
 introduce breaking hook changes in minor releases, so this quick start installs
 that exact version.
 </Warning>
 
 ## Prerequisites
 
-- Node.js 24 or newer
-- npm and a configured model provider
+- Node.js 24 or newer and npm (the selected runtime for this guide)
+- An [OpenAI API key](https://platform.openai.com/api-keys) with access to `gpt-4o`
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+pi itself supports Node.js 22.19 or newer; this guide uses Node.js 24.
 
 ## 1. Install
 
-Install the verified pi and NeMo Relay releases:
+Install the pinned pi and NeMo Relay releases:
 
 <Tabs>
 <Tab title="Unix shell">
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
 ```bash
 npm install --global @earendil-works/pi-coding-agent@0.84.0
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.1/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 </Tab>
@@ -94,7 +97,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ```powershell
 npm install --global @earendil-works/pi-coding-agent@0.84.0
 $env:NEMO_RELAY_VERSION = '0.9.1'
-irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.1/install.ps1 | iex
 ```
 </Tab>
 </Tabs>
@@ -110,11 +113,32 @@ nemo-relay install pi
 nemo-relay doctor pi
 ```
 
+A local gateway reachability warning can occur before step 3 starts the temporary
+gateway. Resolve any other installation or extension-loading problems before continuing.
+
 ## 2. Configure
 
-Use a disposable working directory with no existing `logs/events.jsonl` or
-`relay-check.txt`. Permit the agent to write files there. For a repeat test,
-use another fresh directory so previous output cannot pass the checks.
+Start in a new working directory and permit the agent to write files there.
+
+Set your provider key in the same terminal used to run pi:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":".","shells":["bash"],"session":"main","env":"OPENAI_API_KEY"} */}
+```bash
+export OPENAI_API_KEY="your-api-key"
+```
+</Tab>
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":".","shells":["powershell"],"session":"main","env":"OPENAI_API_KEY"} */}
+```powershell
+$env:OPENAI_API_KEY = 'your-api-key'
+```
+</Tab>
+</Tabs>
+
+This path selects OpenAI explicitly. Gemini and Vertex APIs are not supported
+by this Relay gateway and do not satisfy the LLM verification below.
 
 Save this file as `config.toml` in the directory where you will run the agent:
 
@@ -164,14 +188,14 @@ From the directory containing both files, run the common validation prompt:
 <Tab title="Unix shell">
 {/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-nemo-relay --config "$PWD/config.toml" pi -- -p "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
+nemo-relay --config "$PWD/config.toml" pi -- --provider openai --model gpt-4o -p "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 </Tab>
 
 <Tab title="Windows PowerShell">
 {/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
 ```powershell
-nemo-relay --config (Join-Path $PWD "config.toml") pi -- -p "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
+nemo-relay --config (Join-Path $PWD "config.toml") pi -- --provider openai --model gpt-4o -p "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 </Tab>
 </Tabs>
@@ -181,13 +205,18 @@ this run.
 
 ## 4. Verify
 
+Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+
+<details>
+<summary>Run the verification checks</summary>
+
 After the task exits, confirm that Relay wrote the local event stream:
 
 <Tabs>
 <Tab title="Unix shell">
 {/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-test "$(cat relay-check.txt)" = 'RELAY_QUICKSTART_TOOL_OK' &&
+jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt > /dev/null &&
 jq -se '
   . as $events |
   def closed($category):
@@ -242,8 +271,9 @@ RELAY_QUICKSTART_EVENTS_OK
 
 These markers confirm the tool-created file and matching start/end records for
 agent, tool, and LLM work. The agent's final reply should include
-`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary. An echoed
-prompt alone does not pass verification.
+`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
+
+</details>
 
 ## For More Details
 

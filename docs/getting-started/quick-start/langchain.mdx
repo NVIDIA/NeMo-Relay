@@ -66,7 +66,7 @@ event file.
 
 ## 1. Install
 
-Create a project and install the verified NeMo Relay release with the LangChain
+Create a project and install the pinned NeMo Relay release with the LangChain
 and NVIDIA model provider extras. In an existing `uv` project, skip `uv init`.
 
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
@@ -100,6 +100,10 @@ This example uses
 through the NVIDIA model provider. The provider reads `NVIDIA_API_KEY` and
 selects an explicit NVIDIA model. In the LangChain string, the first `nvidia:`
 selects the provider; the remaining `nvidia/...` value is the model ID.
+
+The provider may warn that this model is "not known to support tools" when its
+capability catalog lags the endpoint. This warning is advisory; the run must
+still produce the actual tool result and all three success lines below.
 
 ## 2. Configure
 

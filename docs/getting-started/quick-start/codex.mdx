@@ -16,7 +16,7 @@ SPDX-License-Identifier: Apache-2.0 */}
     "bash",
     "powershell"
   ],
-  "cwd": ".",
+  "cwd": "relay-codex-quickstart",
   "requires": {
     "codex": ">=0.143.0",
     "jq (bash only)": ">=1.6",
@@ -44,7 +44,8 @@ SPDX-License-Identifier: Apache-2.0 */}
       "version": "0.1",
       "paired_scopes": [
         {
-          "category": "agent"
+          "category": "custom",
+          "name": "codex-turn"
         },
         {
           "category": "tool"
@@ -59,7 +60,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
-Run one local Codex CLI task through NeMo Relay and write its agent, model, and
+Run one local Codex CLI task through NeMo Relay and write its turn, model, and
 tool lifecycle to a local ATOF event file.
 
 This path observes local Codex processes. Cloud or remote Codex tasks are only
@@ -77,13 +78,13 @@ On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON
 
 ## 1. Install
 
-Install the verified NeMo Relay CLI release:
+Install the pinned NeMo Relay CLI release:
 
 <Tabs>
 <Tab title="Unix shell">
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.1/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 </Tab>
@@ -92,20 +93,27 @@ export PATH="$HOME/.local/bin:$PATH"
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":600} */}
 ```powershell
 $env:NEMO_RELAY_VERSION = '0.9.1'
-irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.1/install.ps1 | iex
 ```
 </Tab>
 </Tabs>
 
 ## 2. Configure
 
-Use a disposable working directory with no existing `logs/events.jsonl` or
-`relay-check.txt`. Permit the agent to write files there. For a repeat test,
-use another fresh directory so previous output cannot pass the checks.
+Create a disposable Git repository and permit Codex to write files there:
+
+{/* quickstart-block {"id":"workspace","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+mkdir relay-codex-quickstart
+cd relay-codex-quickstart
+git init
+```
+
+Save and run the remaining files from this directory.
 
 Save this file as `config.toml` in the directory where you will run the agent:
 
-{/* quickstart-block {"id":"config","role":"file","cwd":".","path":"config.toml"} */}
+{/* quickstart-block {"id":"config","role":"file","cwd":"relay-codex-quickstart","path":"config.toml"} */}
 ```toml
 [agents.codex]
 command = "codex"
@@ -113,7 +121,7 @@ command = "codex"
 
 Save this sibling file as `plugins.toml`:
 
-{/* quickstart-block {"id":"plugins","role":"file","cwd":".","path":"plugins.toml"} */}
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-codex-quickstart","path":"plugins.toml"} */}
 ```toml
 version = 1
 
@@ -149,14 +157,14 @@ From the directory containing both files, run the common validation prompt:
 
 <Tabs>
 <Tab title="Unix shell">
-{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-codex-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
 nemo-relay --config "$PWD/config.toml" codex -- exec --sandbox workspace-write "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 </Tab>
 
 <Tab title="Windows PowerShell">
-{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-codex-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
 ```powershell
 nemo-relay --config (Join-Path $PWD "config.toml") codex -- exec --sandbox workspace-write "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
@@ -171,31 +179,37 @@ does not modify your persistent Codex plugin configuration.
 
 ## 4. Verify
 
+Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+
+<details>
+<summary>Run the verification checks</summary>
+
 After the task exits, confirm that Relay wrote the local event stream:
 
 <Tabs>
 <Tab title="Unix shell">
-{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-codex-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-test "$(cat relay-check.txt)" = 'RELAY_QUICKSTART_TOOL_OK' &&
+jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt > /dev/null &&
 jq -se '
   . as $events |
   def closed($category):
     any($events[]; .kind == "scope" and .scope_category == "end" and
-      .category == $category and . as $end |
+      .category == $category and
+      ($category != "custom" or .name == "codex-turn") and . as $end |
       any($events[]; .kind == "scope" and .scope_category == "start" and
         .uuid == $end.uuid and .name == $end.name and
         .category == $end.category and .parent_uuid == $end.parent_uuid));
   length > 0 and
   all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
-  closed("agent") and closed("tool") and closed("llm")
+  closed("custom") and closed("tool") and closed("llm")
 ' logs/events.jsonl > /dev/null &&
 printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
 ```
 </Tab>
 
 <Tab title="Windows PowerShell">
-{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-codex-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
 ```powershell
 if ((Get-Content .\relay-check.txt -Raw -ErrorAction Stop).Trim() -ne 'RELAY_QUICKSTART_TOOL_OK') {
   throw 'Expected tool-created marker file is missing'
@@ -204,11 +218,12 @@ $events = @(Get-Content .\logs\events.jsonl -ErrorAction Stop | ForEach-Object {
 if (-not $events.Count -or @($events | Where-Object {
   $_.atof_version -ne '0.1' -or $_.kind -notin @('scope', 'mark')
 }).Count) { throw 'Expected nonempty ATOF 0.1 records' }
-foreach ($category in @('agent', 'tool', 'llm')) {
+foreach ($category in @('custom', 'tool', 'llm')) {
   $paired = @($events | Where-Object {
     $end = $_
     $end.kind -eq 'scope' -and $end.scope_category -eq 'end' -and
-    $end.category -eq $category -and @($events | Where-Object {
+    $end.category -eq $category -and
+    ($category -ne 'custom' -or $end.name -eq 'codex-turn') -and @($events | Where-Object {
       $_.kind -eq 'scope' -and $_.scope_category -eq 'start' -and
       $_.uuid -eq $end.uuid -and $_.name -eq $end.name -and
       $_.category -eq $end.category -and $_.parent_uuid -eq $end.parent_uuid
@@ -224,16 +239,17 @@ Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
 
 Expected output from the verification command:
 
-{/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-codex-quickstart","from":"verify","match":"exact-lines"} */}
 ```text
 RELAY_QUICKSTART_TOOL_OK
 RELAY_QUICKSTART_EVENTS_OK
 ```
 
 These markers confirm the tool-created file and matching start/end records for
-agent, tool, and LLM work. The agent's final reply should include
-`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary. An echoed
-prompt alone does not pass verification.
+custom turn, tool, and LLM work. The agent's final reply should include
+`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
+
+</details>
 
 ## For More Details
 

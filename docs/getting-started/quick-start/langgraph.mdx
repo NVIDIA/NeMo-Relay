@@ -57,7 +57,7 @@ ATOF event file.
 
 ## 1. Install
 
-Create a project and install the verified NeMo Relay release with the LangGraph
+Create a project and install the pinned NeMo Relay release with the LangGraph
 extra. In an existing `uv` project, skip `uv init`.
 
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
@@ -119,13 +119,13 @@ from nemo_relay.integrations.langgraph import NemoRelayCallbackHandler
 
 
 class State(TypedDict):
-    tool_marker: str
+    graph_marker: str
     response_marker: str
 
 
 def emit_marker(_: State) -> State:
     return {
-        "tool_marker": "RELAY_QUICKSTART_TOOL_OK",
+        "graph_marker": "RELAY_QUICKSTART_GRAPH_OK",
         "response_marker": "RELAY_QUICKSTART_RESPONSE_OK",
     }
 
@@ -142,11 +142,11 @@ async def main() -> None:
         try:
             with nemo_relay.scope.scope("langgraph-request", nemo_relay.ScopeType.Agent):
                 result = await graph.ainvoke(
-                    {"tool_marker": "", "response_marker": ""},
+                    {"graph_marker": "", "response_marker": ""},
                     config={"callbacks": [NemoRelayCallbackHandler()]},
                 )
 
-            print(result["tool_marker"])
+            print(result["graph_marker"])
             print(result["response_marker"])
         finally:
             await nemo_relay.subscribers.flush_async()
@@ -191,7 +191,7 @@ node has matching start and end records before printing, in order:
 
 {/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-langgraph-quickstart","from":"run","match":"exact-lines"} */}
 ```text
-RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_GRAPH_OK
 RELAY_QUICKSTART_RESPONSE_OK
 RELAY_QUICKSTART_EVENTS_OK
 ```

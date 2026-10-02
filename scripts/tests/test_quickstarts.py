@@ -34,8 +34,10 @@ def lifecycle(category="agent", name="demo-agent", parent=None):
     return [dict(identity, scope_category=phase) for phase in ("start", "end")]
 
 
-def events():
-    agent = lifecycle()
+def events(host=None):
+    # CLI 0.9.1 closes custom turn scopes for Claude/Codex, not agent roots.
+    turn_names = {"claude-code": "claude-turn", "codex": "codex-turn"}
+    agent = lifecycle("custom", turn_names[host]) if host in turn_names else lifecycle()
     return (
         agent + lifecycle("tool", "emit_marker", agent[0]["uuid"]) + lifecycle("llm", "demo-provider", agent[0]["uuid"])
     )
@@ -132,7 +134,7 @@ class QuickstartTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             (workspace / "logs").mkdir()
-            (workspace / "logs/events.jsonl").write_text(jsonl(events()))
+            (workspace / "logs/events.jsonl").write_text(jsonl(events("claude-code")))
             with self.assertRaises(FileNotFoundError):
                 QS.verify(scenario, workspace, expected, {})
             (workspace / "relay-check.txt").write_text("RELAY_QUICKSTART_TOOL_OK\n")
@@ -166,7 +168,7 @@ class QuickstartTests(unittest.TestCase):
                         }
                     )
                 )
-                records = events()
+                records = events(name)
                 if name == "switchyard":
                     records.append(
                         {
@@ -182,10 +184,66 @@ class QuickstartTests(unittest.TestCase):
                 result = subprocess.run(["bash", "-c", command], cwd=workspace, text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, expected)
+                # All reader shells and the contract accept ordinary CRLF files.
+                (workspace / "relay-check.txt").write_bytes(b"  RELAY_QUICKSTART_TOOL_OK\r\n")
+                result = subprocess.run(["bash", "-c", command], cwd=workspace, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected)
+                (workspace / "relay-check.txt").write_text("RELAY_QUICKSTART_TOOL_OK")
+                if name in {"claude-code", "codex"}:
+                    # A paired but unrelated custom scope must not stand in for a turn.
+                    unrelated = [
+                        dict(record, name="unrelated") if record["category"] == "custom" else record
+                        for record in records
+                    ]
+                    (workspace / "logs/events.jsonl").write_text(jsonl(unrelated))
+                    result = subprocess.run(["bash", "-c", command], cwd=workspace, text=True, capture_output=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn("RELAY_QUICKSTART_EVENTS_OK", result.stdout)
                 (workspace / "logs/events.jsonl").write_text('{"payload":"switchyard.routing.decision"}\n')
                 result = subprocess.run(["bash", "-c", command], cwd=workspace, text=True, capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("RELAY_QUICKSTART_EVENTS_OK", result.stdout)
+
+    def test_openclaw_requires_session_shutdown(self):
+        check = next(check for check in QS.extract(QS.PAGES / "openclaw.mdx")["checks"] if check["kind"] == "atof")
+        records = events()
+        open_session = [
+            record for record in records if not (record["category"] == "agent" and record["scope_category"] == "end")
+        ]
+        with self.assertRaises(ValueError):
+            QS.verify_atof(jsonl(open_session), check)
+        QS.verify_atof(jsonl(records), check)
+
+    def test_switchyard_credentials_belong_to_gateway_session(self):
+        for shell in ("bash", "powershell"):
+            with self.subTest(shell=shell):
+                blocks = {block["id"]: block for block in QS.extract(QS.PAGES / "switchyard.mdx", shell)["blocks"]}
+                self.assertEqual(blocks["credentials"]["env"], "NVIDIA_API_KEY")
+                self.assertEqual(blocks["credentials"]["session"], blocks["gateway"]["session"])
+                self.assertNotEqual(blocks["credentials"]["session"], blocks["request"]["session"])
+                self.assertIn("PATH" if shell == "bash" else "$env:Path", blocks["gateway"]["content"])
+
+    def test_switchyard_unsupported_platform_preserves_parent_shell(self):
+        blocks = QS.extract(QS.PAGES / "switchyard.mdx", "bash")["blocks"]
+        install = next(block["content"] for block in blocks if block["id"] == "install")
+        # Execute the documented platform/download subshell without installing Relay.
+        child = install[install.index("\n(\n") + 1 :]
+        command = 'uname() { printf "Unsupported"; }\n' + child + '\nstatus=$?\nprintf "PARENT_OK:%s\\n" "$status"\n'
+        result = subprocess.run(["bash", "-c", command], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "PARENT_OK:1\n")
+        self.assertIn("No Switchyard 0.3.0 bundle", result.stderr)
+
+    def test_codex_creates_workspace_before_using_it(self):
+        for shell in ("bash", "powershell"):
+            with self.subTest(shell=shell):
+                blocks = {block["id"]: block for block in QS.extract(QS.PAGES / "codex.mdx", shell)["blocks"]}
+                self.assertEqual(blocks["install"]["cwd"], ".")
+                self.assertEqual(blocks["workspace"]["cwd"], ".")
+                self.assertIn("git init", blocks["workspace"]["content"])
+                for name in ("config", "plugins", "run", "verify", "expected"):
+                    self.assertEqual(blocks[name]["cwd"], "relay-codex-quickstart")
 
     def test_openclaw_requires_explicit_paths(self):
         scenario = QS.extract(QS.PAGES / "openclaw.mdx")

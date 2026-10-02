@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0 */}
   "cwd": ".",
   "requires": {
     "openclaw": ">=2026.9.3",
-    "node": ">=24",
+    "node": ">=24.16,<25",
     "npm": "available",
     "jq (bash only)": ">=1.6"
   },
@@ -79,24 +79,26 @@ tool lifecycle to a local ATOF event file.
 ## Prerequisites
 
 - OpenClaw 2026.9.3 or newer
-- Node.js 24 or newer and npm
+- Node.js 24.16 or newer within the 24.x release line, and npm
 - A configured OpenClaw agent and model provider with a writable agent workspace
-- Permission to install plugins and restart the OpenClaw gateway
+- Permission to install plugins, restart, and stop your disposable OpenClaw gateway
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 
 ## 1. Install
 
-Install and pin the verified NeMo Relay plugin. OpenClaw registers the plugin ID
+Install the pinned NeMo Relay plugin. OpenClaw registers the plugin ID
 and adds it to an existing `plugins.allow` list automatically:
 
-{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
+{/* quickstart-block {"id":"install","role":"manual","cwd":".","shells":["bash","powershell"],"session":"main","reason":"Review OpenClaw package-source confirmation separately from capability consent"} */}
 ```bash
 openclaw plugins install npm:nemo-relay-openclaw@0.9.1 --pin --accept-capabilities
 ```
 
 The plugin requires OpenClaw capability consent. The explicit flag grants and
-records that consent for the install.
+records that consent for the install. If OpenClaw asks you to confirm the package
+source, review and accept it separately; capability consent does not suppress
+that confirmation.
 
 The npm package is named `nemo-relay-openclaw`; its OpenClaw plugin ID is
 `nemo-relay`.
@@ -106,7 +108,7 @@ The npm package is named `nemo-relay-openclaw`; its OpenClaw plugin ID is
 Use a disposable test agent and gateway configuration; this guide changes plugin
 configuration and restarts the gateway. Do not run automated tests against your
 normal shared gateway. Use a fresh log directory and an agent workspace without
-`relay-check.txt` so previous output cannot pass verification.
+`relay-check.txt`.
 
 First, run `openclaw config file` to confirm which configuration file OpenClaw
 will update. Then save the following partial configuration as
@@ -201,18 +203,34 @@ workspace, not necessarily the terminal's current directory:
 openclaw agent --agent YOUR_AGENT_ID --message "Use a file-writing tool to create relay-check.txt in the agent workspace containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 
+After the reply, stop your disposable test gateway to close its Relay session
+and flush the event file. Do not run this against a shared gateway:
+
+{/* quickstart-block {"id":"shutdown","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+openclaw gateway stop
+```
+
+Wait for the stop command to finish successfully before verifying. The gateway
+remains stopped after this test; start it again when you want to resume use.
+
 ## 4. Verify
+
+Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+
+<details>
+<summary>Run the verification checks</summary>
 
 Use the same log directory as the plugin configuration. Replace
 `/absolute/path/to/agent-workspace` with your test agent's workspace path
 (on Windows, use forward slashes, such as `C:/Users/alice/test-agent`).
-Wait for the gateway to finish writing the completed turn before checking:
+Check after the gateway has stopped:
 
 <Tabs>
 <Tab title="Unix shell">
 {/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-test "$(cat "/absolute/path/to/agent-workspace/relay-check.txt")" = 'RELAY_QUICKSTART_TOOL_OK' &&
+jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' "/absolute/path/to/agent-workspace/relay-check.txt" > /dev/null &&
 jq -se '
   . as $events |
   def closed($category):
@@ -267,8 +285,9 @@ RELAY_QUICKSTART_EVENTS_OK
 
 These markers confirm the tool-created file and matching start/end records for
 agent, tool, and LLM work. The agent's final reply should include
-`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary. An echoed
-prompt alone does not pass verification.
+`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
+
+</details>
 
 ## For More Details
 
