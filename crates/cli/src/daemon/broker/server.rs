@@ -772,7 +772,11 @@ fn cancel_activation_blocking(
         Ok(outcome) => {
             if outcome == crate::daemon::common::control::ActivationCancellation::Cancelled {
                 revoke_activation(&state, &request.payload.activation_id);
-                cancel_staged_activation(&state, &request.payload.activation_id);
+                cancel_staged_activation(
+                    &state,
+                    &request.payload.activation_id,
+                    "activation_cancelled",
+                );
             }
             state.sockets.changed.notify_waiters();
             Json(outcome).into_response()
@@ -815,7 +819,7 @@ fn activation_failed_blocking(
     {
         Ok(()) => {
             revoke_activation(&state, &request.payload.activation_id);
-            cancel_staged_activation(&state, &request.payload.activation_id);
+            cancel_staged_activation(&state, &request.payload.activation_id, "activation_failed");
             let fingerprint = authenticated.fingerprint.to_string();
             log::error!(
                 target: "nemo_relay.daemon",
@@ -1761,15 +1765,38 @@ async fn forward_to_worker(
     )
     .await;
     let route_failure = take_worker_route_failure(&mut outcome.response);
+    if matches!(outcome.failure, Some(ForwardFailure::ResponseHeadTimeout)) && !route_failure {
+        // Middleware and provider work can delay headers while worker control stays healthy.
+        // A request deadline alone does not establish loss of the assigned worker.
+        let fingerprint = fingerprint.to_string();
+        log::warn!(
+            target: "nemo_relay.daemon",
+            event = "worker_request_failed",
+            fingerprint = fingerprint.as_str(),
+            worker_id = worker_id.as_str(),
+            reason = "response_head_timeout",
+            route_mode = "worker";
+            "Worker request timed out waiting for response headers"
+        );
+        return outcome.response;
+    }
     if outcome.failure.is_some() || route_failure {
-        handle_worker_communication_failure(&state, fingerprint, &worker_id);
+        let reason = outcome
+            .failure
+            .map_or("worker_route_rejected", ForwardFailure::as_str);
+        handle_worker_communication_failure(&state, fingerprint, &worker_id, reason);
         return outcome.response;
     }
     let (parts, body) = outcome.response.into_parts();
     let observed = ErrorObservedBody {
         body,
         on_error: Some(move || {
-            handle_worker_communication_failure(&state, fingerprint, &worker_id);
+            handle_worker_communication_failure(
+                &state,
+                fingerprint,
+                &worker_id,
+                "response_body_error",
+            );
         }),
     };
     Response::from_parts(parts, Body::new(observed))
@@ -1962,6 +1989,7 @@ fn handle_worker_communication_failure(
     state: &Arc<DaemonState>,
     fingerprint: Fingerprint,
     worker_id: &str,
+    reason: &'static str,
 ) {
     if state
         .registry
@@ -1971,7 +1999,9 @@ fn handle_worker_communication_failure(
         return;
     }
     // Force control reconnect, retaining the assigned generation during its 30-second grace.
-    state.sockets.cancel_worker(worker_id);
+    state
+        .sockets
+        .cancel_worker(worker_id, "worker_communication_failed");
     state.sockets.changed.notify_waiters();
     let fingerprint = fingerprint.to_string();
     log::error!(
@@ -1979,6 +2009,7 @@ fn handle_worker_communication_failure(
         event = "worker_communication_failed",
         fingerprint = fingerprint.as_str(),
         worker_id = worker_id,
+        reason = reason,
         route_mode = "pass_through";
         "Worker communication failed; route changed to pass-through"
     );
@@ -2180,7 +2211,7 @@ fn revoke_activation(state: &DaemonState, activation_id: &str) {
 }
 
 /// Release terminal activations immediately instead of retaining staged admission slots.
-fn cancel_staged_activation(state: &Arc<DaemonState>, activation_id: &str) {
+fn cancel_staged_activation(state: &Arc<DaemonState>, activation_id: &str, reason: &'static str) {
     let workers = {
         let mut sessions = lock(&state.worker_sessions);
         let ids: Vec<_> = sessions
@@ -2196,7 +2227,7 @@ fn cancel_staged_activation(state: &Arc<DaemonState>, activation_id: &str) {
             .collect::<Vec<_>>()
     };
     for (id, session) in workers {
-        state.sockets.cancel_worker(&id);
+        state.sockets.cancel_worker(&id, reason);
         tokio::spawn(socket::cleanup_worker_session(
             Arc::clone(state),
             id,
@@ -2213,7 +2244,7 @@ fn expire_activation_routes(state: &Arc<DaemonState>, now_unix_ms: u64) {
     } in state.registry.expire_activations(now_unix_ms)
     {
         revoke_activation(state, &activation_id);
-        cancel_staged_activation(state, &activation_id);
+        cancel_staged_activation(state, &activation_id, "activation_expired");
         state.sockets.changed.notify_waiters();
         let fingerprint = fingerprint.to_string();
         log::error!(
@@ -2231,7 +2262,7 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
         ReleaseAction::NoChange => {}
         ReleaseAction::CancelActivation { activation_id } => {
             revoke_activation(&state, &activation_id);
-            cancel_staged_activation(&state, &activation_id);
+            cancel_staged_activation(&state, &activation_id, "activation_cancelled");
             let fingerprint = fingerprint.to_string();
             log::info!(
                 target: "nemo_relay.daemon",

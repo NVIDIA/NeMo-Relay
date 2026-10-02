@@ -842,6 +842,95 @@ async fn global_pass_through_authenticates_and_forwards_only_provider_headers() 
 }
 
 #[tokio::test]
+async fn worker_response_head_timeout_preserves_the_route_and_next_request() {
+    for require_worker in [false, true] {
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x75_u8; 32]);
+        let credential = RouteCredential::parse(token.clone()).unwrap();
+        let mut state = test_daemon_state(false, &token, GatewayConfig::default());
+        Arc::get_mut(&mut state).unwrap().registry =
+            Registry::new(false).with_require_worker(require_worker);
+        let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
+        let launch = fresh_launch(WorkerNetworkHint::new("127.0.0.1", None).unwrap()).unwrap();
+        let activation_id = launch.activation_id.clone();
+        state
+            .registry
+            .register_mcp(
+                McpRegistration {
+                    fingerprint,
+                    token_digest: credential.digest(),
+                    session_id: McpSessionId::new("slow-worker-mcp").unwrap(),
+                    lease_expires_at_unix_ms: u64::MAX,
+                },
+                launch,
+            )
+            .unwrap();
+
+        let started = Arc::new(tokio::sync::Notify::new());
+        let first_request = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let worker_started = Arc::clone(&started);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let worker_task = tokio::spawn(async move {
+            let app = Router::new().fallback(move || {
+                let first_request = Arc::clone(&first_request);
+                let started = Arc::clone(&worker_started);
+                async move {
+                    if first_request.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        started.notify_one();
+                        std::future::pending::<()>().await;
+                    }
+                    StatusCode::NO_CONTENT
+                }
+            });
+            axum::serve(listener, app).await.unwrap();
+        });
+        state
+            .registry
+            .mark_worker_ready(
+                fingerprint,
+                &activation_id,
+                Arc::new(
+                    WorkerTarget::new(
+                        "slow-worker",
+                        endpoint,
+                        SensitiveString::new("worker-token").unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap();
+        let app = router(Arc::clone(&state));
+        let request = || {
+            Request::post("/v1/responses")
+                .header(CLIENT_TOKEN_HEADER, &token)
+                .body(Body::empty())
+                .unwrap()
+        };
+        let response = tokio::spawn(app.clone().oneshot(request()));
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(RESPONSE_HEAD_TIMEOUT).await;
+        let response = response.await.unwrap().unwrap();
+        tokio::time::resume();
+        let route_ready = matches!(
+            state.registry.resolve_target(&credential.digest()),
+            Ok(ResolvedTarget::Worker(_))
+        );
+        let next_status = if route_ready {
+            Some(app.oneshot(request()).await.unwrap().status())
+        } else {
+            None
+        };
+        worker_task.abort();
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert!(route_ready);
+        assert_eq!(next_status, Some(StatusCode::NO_CONTENT));
+    }
+}
+
+#[tokio::test]
 async fn unreachable_worker_marks_its_authenticated_route_pass_through() {
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x22_u8; 32]);
     let credential = RouteCredential::parse(token.clone()).expect("route credential");
@@ -2593,7 +2682,12 @@ fn communication_failure_invalidates_route_without_waiting_for_durable_revocatio
     let (sent, received) = std::sync::mpsc::channel();
     let failure_state = Arc::clone(&state);
     let task = runtime.spawn_blocking(move || {
-        handle_worker_communication_failure(&failure_state, fingerprint, "failed-worker");
+        handle_worker_communication_failure(
+            &failure_state,
+            fingerprint,
+            "failed-worker",
+            "transport_error",
+        );
         sent.send(()).unwrap();
     });
     let completed = received.recv_timeout(Duration::from_secs(5));

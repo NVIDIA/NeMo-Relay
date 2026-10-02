@@ -160,7 +160,7 @@ logging. Failure events use warning or error levels.
 | Worker control | `worker_control_connected`, `worker_control_reconnected`, `worker_control_disconnected`, `worker_control_lost`, `worker_control_recovery_failed` |
 | Worker shutdown | `worker_drain_started`, `worker_removed`, `worker_stopped`, `worker_activation_cancelled` |
 | Worker degradation | `worker_registration_failed`, `worker_readiness_failed`, `worker_activation_failed`, `worker_activation_expired`, `worker_communication_failed`, `worker_failed`, `worker_recovery_failed`, `worker_recovery_expired`, `worker_relaunch_failed` |
-| Provider forwarding | `upstream_request_failed` |
+| Request forwarding | `upstream_request_failed`, `worker_request_failed` |
 
 Use `fingerprint` to match an MCP session to its worker route. Use `worker_id`
 to follow one worker generation. A `route_mode = "pass_through"` field reports
@@ -171,8 +171,15 @@ Both `worker_launch_failed` and `worker_activation_failed` include a
 such as starting the worker, sending its startup permission, or waiting for it to
 be ready. It does not include activation data or the source error text. Read
 the worker's configured logs for the full error message.
+`worker_communication_failed` includes a `reason` that identifies a transport
+error, invalid destination or response, response-body error, or explicit worker
+route rejection. `worker_request_failed` with `reason = "response_head_timeout"`
+reports a timed-out request without disconnecting the worker or changing its
+route. Check worker and provider logs to identify the delay.
 Control disconnect events include a `reason` such as `acknowledgement_timeout`,
-`pong_timeout`, or `peer_closed`. Provider failure events are rate-limited and
+`pong_timeout`, `peer_closed`, or `worker_communication_failed`. A staged worker
+cancelled when its launcher exits reports `activation_cancelled`; this does not
+mean that the startup deadline expired. Provider failure events are rate-limited and
 report the number of intervening failures in `suppressed_since_last_emit`.
 
 ## Diagnose Common Failures

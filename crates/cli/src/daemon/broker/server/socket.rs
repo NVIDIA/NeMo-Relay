@@ -157,9 +157,9 @@ impl Hub {
             peer.cancel.cancel("outbound_queue_full");
         }
     }
-    pub(super) fn cancel_worker(&self, worker_id: &str) {
+    pub(super) fn cancel_worker(&self, worker_id: &str, reason: &'static str) {
         if let Some(peer) = lock(&self.peers).get(&key(ComponentRole::Worker, worker_id)) {
-            peer.cancel.cancel("activation_expired");
+            peer.cancel.cancel(reason);
         }
     }
     pub(super) fn draining(&self, worker_id: &str) -> bool {
@@ -765,7 +765,7 @@ async fn disconnected(
                     work.registry.mcp_disconnected(fingerprint, &session_id)
                 {
                     revoke_activation(&work, &activation_id);
-                    cancel_staged_activation(&work, &activation_id);
+                    cancel_staged_activation(&work, &activation_id, "activation_cancelled");
                     lock(&work.pending_directives).remove(&disconnected_id);
                 }
             })
