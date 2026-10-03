@@ -25,7 +25,7 @@ SPDX-License-Identifier: Apache-2.0 */}
   },
   "setup": [
     "Authenticated model provider with tool-use permissions",
-    "Disposable test agent and gateway; do not change a shared gateway"
+    "Disposable test agent and managed gateway service; do not change a shared gateway"
   ],
   "inputs": {
     "RELAY_LOG_DIR": {
@@ -76,14 +76,29 @@ SPDX-License-Identifier: Apache-2.0 */}
 Observe one gateway-backed OpenClaw agent turn and write its session, model, and
 tool lifecycle to a local ATOF event file.
 
+<Warning>
+Full validation of the pinned `0.9.1` plugin is still pending. On Ubuntu 22.04
+with OpenClaw `2026.9.3`, the agent completed the task but exported only session
+events. A successful reply or marker file alone is not a passing integration:
+step 4 also requires paired tool and LLM events.
+</Warning>
+
 ## Prerequisites
 
 - OpenClaw 2026.9.3 or newer
 - Node.js 24.16 or newer within the 24.x release line, and npm
-- A configured OpenClaw agent and model provider with a writable agent workspace
+- A configured OpenClaw agent with a writable workspace and a selected model
+- Inference access through that provider's API key or a supported authenticated session
 - Permission to install plugins, restart, and stop your disposable OpenClaw gateway
+- A managed gateway service for the `gateway restart` and `gateway stop` commands below
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+
+Keep the agent's working model configuration; Relay does not require a
+particular model. For an NVIDIA example, configure an available
+[build.nvidia.com model](https://build.nvidia.com/explore/discover) and its
+[NVIDIA API key](https://build.nvidia.com/settings/api-keys) in OpenClaw before
+installing the Relay plugin.
 
 ## 1. Install
 
@@ -192,6 +207,12 @@ restart automatically; the explicit command is safe when you want to ensure
 the new package is loaded. Ordinary plugin configuration changes use OpenClaw's
 normal configuration reload behavior.
 
+For a foreground gateway (for example, on a headless test instance without a
+gateway service), run `openclaw gateway run` in a second terminal instead of
+`openclaw gateway restart`. Keep it running while you inspect the plugin and
+run the agent. Use the same OpenClaw profile and provider credentials in both
+terminals.
+
 ## 3. Run
 
 Run `openclaw agents list` to find your test agent ID and workspace. Replace
@@ -213,6 +234,8 @@ openclaw gateway stop
 
 Wait for the stop command to finish successfully before verifying. The gateway
 remains stopped after this test; start it again when you want to resume use.
+For a foreground gateway, press **Ctrl+C** in its terminal instead of running
+`gateway stop`, and wait for that process to exit before verifying.
 
 ## 4. Verify
 
@@ -235,10 +258,10 @@ jq -se '
   . as $events |
   def closed($category):
     any($events[]; .kind == "scope" and .scope_category == "end" and
-      .category == $category and . as $end |
+      .category == $category and . as $end_event |
       any($events[]; .kind == "scope" and .scope_category == "start" and
-        .uuid == $end.uuid and .name == $end.name and
-        .category == $end.category and .parent_uuid == $end.parent_uuid));
+        .uuid == $end_event.uuid and .name == $end_event.name and
+        .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));
   length > 0 and
   all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
   closed("agent") and closed("tool") and closed("llm")

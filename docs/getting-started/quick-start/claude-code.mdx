@@ -43,7 +43,7 @@ SPDX-License-Identifier: Apache-2.0 */}
       "paired_scopes": [
         {
           "category": "custom",
-          "name": "claude-turn"
+          "name": "claude-code-turn"
         },
         {
           "category": "tool"
@@ -63,11 +63,18 @@ and tool lifecycle to a local ATOF event file.
 
 ## Prerequisites
 
-- Claude Code 2.1.121 or newer, already authenticated
+- Claude Code 2.1.121 or newer
+- Inference access: an Anthropic API key, a supported Claude login, or credentials for an Anthropic Messages-compatible gateway
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 - Permission to download the NeMo Relay 0.9.1 release
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+
+Use Claude Code's configured model; Relay does not select or require one.
+For example, authenticate with `claude auth login`, or set `ANTHROPIC_API_KEY`
+for API-key access. A custom gateway must provide the Anthropic Messages API;
+configure its credentials, base URL, and model in Claude Code before wrapping
+the run. Refer to [Claude Code authentication](https://code.claude.com/docs/en/authentication).
 
 ## 1. Install
 
@@ -159,6 +166,9 @@ The [allowed-tools option](https://code.claude.com/docs/en/headless#auto-approve
 approves the Write tool for this invocation, so it can create the marker without
 a permission prompt. Run this only in your disposable trusted directory.
 
+To choose a model for this invocation, add Claude Code's `--model` option after
+`--`, for example `--model sonnet`. Use a model or alias your provider supports.
+
 Relay starts a temporary local gateway and injects Claude Code hooks for this
 run. It does not modify your persistent Claude Code plugin configuration.
 
@@ -181,10 +191,10 @@ jq -se '
   def closed($category):
     any($events[]; .kind == "scope" and .scope_category == "end" and
       .category == $category and
-      ($category != "custom" or .name == "claude-turn") and . as $end |
+      ($category != "custom" or .name == "claude-code-turn") and . as $end_event |
       any($events[]; .kind == "scope" and .scope_category == "start" and
-        .uuid == $end.uuid and .name == $end.name and
-        .category == $end.category and .parent_uuid == $end.parent_uuid));
+        .uuid == $end_event.uuid and .name == $end_event.name and
+        .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));
   length > 0 and
   all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
   closed("custom") and closed("tool") and closed("llm")
@@ -208,7 +218,7 @@ foreach ($category in @('custom', 'tool', 'llm')) {
     $end = $_
     $end.kind -eq 'scope' -and $end.scope_category -eq 'end' -and
     $end.category -eq $category -and
-    ($category -ne 'custom' -or $end.name -eq 'claude-turn') -and @($events | Where-Object {
+    ($category -ne 'custom' -or $end.name -eq 'claude-code-turn') -and @($events | Where-Object {
       $_.kind -eq 'scope' -and $_.scope_category -eq 'start' -and
       $_.uuid -eq $end.uuid -and $_.name -eq $end.name -and
       $_.category -eq $end.category -and $_.parent_uuid -eq $end.parent_uuid

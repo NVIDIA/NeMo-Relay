@@ -69,12 +69,19 @@ Relay gateway.
 
 ## Prerequisites
 
-- `codex-cli` 0.143.0 or newer, already authenticated
+- `codex-cli` 0.143.0 or newer
+- Inference access: an OpenAI API key, a supported Codex login, or credentials for an OpenAI Responses-compatible gateway
 - A trusted Git working directory where Codex is permitted to create a file
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 - Permission to download the NeMo Relay 0.9.1 release
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+
+Use Codex's configured model; Relay does not select or require one. For example,
+authenticate with `codex login`, or set `CODEX_API_KEY` for an API-key-backed
+non-interactive `exec` run. A custom gateway must provide the OpenAI Responses
+API; configure its credentials, base URL, and model in Codex before wrapping
+the run. Refer to [Codex authentication](https://developers.openai.com/codex/auth).
 
 ## 1. Install
 
@@ -174,6 +181,11 @@ nemo-relay --config (Join-Path $PWD "config.toml") codex -- exec --sandbox works
 The [workspace-write sandbox](https://learn.chatgpt.com/docs/non-interactive-mode#permissions-and-safety)
 permits the marker file in your working directory; it does not disable sandboxing.
 
+To choose a model for this invocation, use
+`nemo-relay --config "$PWD/config.toml" codex -- --model MODEL_ID exec --sandbox workspace-write "YOUR_PROMPT"`.
+Replace `MODEL_ID` with an ID your provider supports. Put this Codex option
+before `exec`, preserving the prompt and sandbox from the command above.
+
 Relay starts a temporary local gateway and injects Codex hooks for this run. It
 does not modify your persistent Codex plugin configuration.
 
@@ -196,10 +208,10 @@ jq -se '
   def closed($category):
     any($events[]; .kind == "scope" and .scope_category == "end" and
       .category == $category and
-      ($category != "custom" or .name == "codex-turn") and . as $end |
+      ($category != "custom" or .name == "codex-turn") and . as $end_event |
       any($events[]; .kind == "scope" and .scope_category == "start" and
-        .uuid == $end.uuid and .name == $end.name and
-        .category == $end.category and .parent_uuid == $end.parent_uuid));
+        .uuid == $end_event.uuid and .name == $end_event.name and
+        .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));
   length > 0 and
   all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
   closed("custom") and closed("tool") and closed("llm")

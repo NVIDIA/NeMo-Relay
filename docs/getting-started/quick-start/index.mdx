@@ -12,6 +12,23 @@ actions—install, configure, run, and verify—and enables the built-in
 observability plugin. Versions are pinned per path; Hermes uses its native
 Relay integration.
 
+## Inference Access
+
+Relay does not require or select a particular model. Agent-runtime guides use
+the model configured in your agent. Framework and routing examples name a
+model so you can copy and run them; those selections are examples, not Relay
+requirements.
+
+Live guides require an inference-provider API key or a supported authenticated
+session with access to the model you choose. Public
+[NVIDIA API Catalog models](https://build.nvidia.com/explore/discover) use an
+[NVIDIA API key](https://build.nvidia.com/settings/api-keys). Claude Code uses
+an Anthropic-compatible provider; Codex uses an OpenAI Responses-compatible
+provider. Each guide states its inference-access prerequisite.
+
+Python, Node.js, Rust, and the LangGraph example are credential-free and do not
+make remote inference requests.
+
 ## Agent Runtimes
 
 Use these paths when an agent runtime owns the model and tool lifecycle.

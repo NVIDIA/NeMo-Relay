@@ -36,7 +36,7 @@ def lifecycle(category="agent", name="demo-agent", parent=None):
 
 def events(host=None):
     # CLI 0.9.1 closes custom turn scopes for Claude/Codex, not agent roots.
-    turn_names = {"claude-code": "claude-turn", "codex": "codex-turn"}
+    turn_names = {"claude-code": "claude-code-turn", "codex": "codex-turn"}
     agent = lifecycle("custom", turn_names[host]) if host in turn_names else lifecycle()
     return (
         agent + lifecycle("tool", "emit_marker", agent[0]["uuid"]) + lifecycle("llm", "demo-provider", agent[0]["uuid"])

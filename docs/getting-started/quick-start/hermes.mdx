@@ -70,7 +70,7 @@ collection or sending to Nous; those have separate consent controls.
 
 - Linux, macOS, or Windows Subsystem for Linux 2 (WSL2)
 - Hermes with native Relay support, plugin diagnostics in `hermes doctor`, and `chat --oneshot`
-- A configured Hermes model provider
+- A configured Hermes model with inference access: a provider API key or a supported authenticated session
 - `jq` for the JSON event check
 - Permission to install Hermes in your user environment
 
@@ -86,6 +86,12 @@ curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 Complete the setup prompts and confirm that `hermes` can use your model
 provider before continuing. Check that `hermes chat --help` lists `--oneshot`;
 older builds may not support this recipe.
+
+Relay does not choose the model. For an NVIDIA example, select the NVIDIA
+provider in `hermes model`, supply an
+[NVIDIA API key](https://build.nvidia.com/settings/api-keys), and choose an
+available [build.nvidia.com model](https://build.nvidia.com/explore/discover).
+If Hermes already has a working provider and model, keep that configuration.
 
 ## 2. Configure
 
@@ -169,10 +175,10 @@ jq -se '
   . as $events |
   def closed($category):
     any($events[]; .kind == "scope" and .scope_category == "end" and
-      .category == $category and . as $end |
+      .category == $category and . as $end_event |
       any($events[]; .kind == "scope" and .scope_category == "start" and
-        .uuid == $end.uuid and .name == $end.name and
-        .category == $end.category and .parent_uuid == $end.parent_uuid));
+        .uuid == $end_event.uuid and .name == $end_event.name and
+        .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));
   length > 0 and
   all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
   closed("agent") and closed("tool") and closed("llm")

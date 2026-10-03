@@ -62,7 +62,7 @@ a local ATOF event file.
 
 - Python 3.11 or newer
 - `uv`
-- An [NVIDIA API key](https://build.nvidia.com/settings/api-keys)
+- Inference access: an [NVIDIA API key](https://build.nvidia.com/settings/api-keys) for this example, or credentials for your own provider
 
 ## 1. Install
 
@@ -96,10 +96,11 @@ $env:NVIDIA_API_KEY = "your-api-key"
 </Tab>
 </Tabs>
 
-This example uses
+Relay does not impose a model choice. This copyable example selects the public
 [`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground)
-through the NVIDIA model provider. The provider reads `NVIDIA_API_KEY` and
-selects an explicit NVIDIA model. In the LangChain string, the first `nvidia:`
+model through the NVIDIA provider. To use another model or provider, replace
+the example's `model` argument and configure that provider's credentials.
+The NVIDIA provider reads `NVIDIA_API_KEY`. In the LangChain string, the first `nvidia:`
 selects the provider; the remaining `nvidia/...` value is the model ID.
 
 The provider may warn that this model is "not known to support tools" when its

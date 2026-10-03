@@ -23,10 +23,10 @@ SPDX-License-Identifier: Apache-2.0 */}
     "jq (bash only)": ">=1.6"
   },
   "setup": [
-    "An OpenAI API key with access to gpt-4o"
+    "A configured pi model and authenticated provider using OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages"
   ],
   "inputs": {
-    "OPENAI_API_KEY": {"kind": "env", "secret": true}
+    "NVIDIA_API_KEY": {"kind": "env", "secret": true}
   },
   "fresh": [
     "logs/events.jsonl",
@@ -72,11 +72,18 @@ that exact version.
 ## Prerequisites
 
 - Node.js 24 or newer and npm (the selected runtime for this guide)
-- An [OpenAI API key](https://platform.openai.com/api-keys) with access to `gpt-4o`
+- A configured pi model with inference access: a provider API key or a supported authenticated session
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 pi itself supports Node.js 22.19 or newer; this guide uses Node.js 24.
+
+Relay does not require a particular model or an OpenAI account. The pinned pi
+release supports NVIDIA NIM through `NVIDIA_API_KEY`, as well as other providers.
+For an NVIDIA example, choose an available model from
+[build.nvidia.com](https://build.nvidia.com/explore/discover) in pi's model selector.
+Use a provider speaking OpenAI Chat Completions, OpenAI Responses, or Anthropic
+Messages; Gemini and Vertex APIs are not supported by this Relay gateway.
 
 ## 1. Install
 
@@ -120,25 +127,28 @@ gateway. Resolve any other installation or extension-loading problems before con
 
 Start in a new working directory and permit the agent to write files there.
 
-Set your provider key in the same terminal used to run pi:
+Keep your existing pi model and provider configuration. If you have not
+configured a provider, use pi's `/login` and `/model` selectors first. For an
+NVIDIA provider, set its inference key in the same terminal used to run pi:
 
 <Tabs>
 <Tab title="Unix shell">
-{/* quickstart-block {"id":"credentials","role":"input","cwd":".","shells":["bash"],"session":"main","env":"OPENAI_API_KEY"} */}
+{/* quickstart-block {"id":"credentials","role":"input","cwd":".","shells":["bash"],"session":"main","env":"NVIDIA_API_KEY"} */}
 ```bash
-export OPENAI_API_KEY="your-api-key"
+export NVIDIA_API_KEY="your-nvidia-api-key"
 ```
 </Tab>
 <Tab title="Windows PowerShell">
-{/* quickstart-block {"id":"credentials","role":"input","cwd":".","shells":["powershell"],"session":"main","env":"OPENAI_API_KEY"} */}
+{/* quickstart-block {"id":"credentials","role":"input","cwd":".","shells":["powershell"],"session":"main","env":"NVIDIA_API_KEY"} */}
 ```powershell
-$env:OPENAI_API_KEY = 'your-api-key'
+$env:NVIDIA_API_KEY = 'your-nvidia-api-key'
 ```
 </Tab>
 </Tabs>
 
-This path selects OpenAI explicitly. Gemini and Vertex APIs are not supported
-by this Relay gateway and do not satisfy the LLM verification below.
+If your provider is already authenticated, skip the key example. For another
+provider, use its own credential rather than `NVIDIA_API_KEY`. Use the key issued
+for your endpoint; keys are not interchangeable between inference services.
 
 Save this file as `config.toml` in the directory where you will run the agent:
 
@@ -188,20 +198,29 @@ From the directory containing both files, run the common validation prompt:
 <Tab title="Unix shell">
 {/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
-nemo-relay --config "$PWD/config.toml" pi -- --provider openai --model gpt-4o -p "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
+nemo-relay --config "$PWD/config.toml" pi -- -p "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 </Tab>
 
 <Tab title="Windows PowerShell">
 {/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
 ```powershell
-nemo-relay --config (Join-Path $PWD "config.toml") pi -- --provider openai --model gpt-4o -p "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
+nemo-relay --config (Join-Path $PWD "config.toml") pi -- -p "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 </Tab>
 </Tabs>
 
-Relay starts a temporary local gateway and loads the installed extension for
-this run.
+pi uses its configured model. To select another model for this invocation,
+add `--model PROVIDER/MODEL_ID` after `--`, using the full reference shown by
+`pi --list-models`; these are pi options, not
+Relay requirements. Relay starts a temporary local gateway and loads the
+installed extension for this run.
+
+For a custom endpoint, use a distinct provider name in pi's
+[custom model configuration](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md).
+This avoids ambiguity when a model ID itself begins with a built-in provider
+name. A 403 can indicate that the selected model is not allowed by your key;
+confirm the endpoint and exact model ID before changing credentials.
 
 ## 4. Verify
 
@@ -221,10 +240,10 @@ jq -se '
   . as $events |
   def closed($category):
     any($events[]; .kind == "scope" and .scope_category == "end" and
-      .category == $category and . as $end |
+      .category == $category and . as $end_event |
       any($events[]; .kind == "scope" and .scope_category == "start" and
-        .uuid == $end.uuid and .name == $end.name and
-        .category == $end.category and .parent_uuid == $end.parent_uuid));
+        .uuid == $end_event.uuid and .name == $end_event.name and
+        .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));
   length > 0 and
   all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
   closed("agent") and closed("tool") and closed("llm")
