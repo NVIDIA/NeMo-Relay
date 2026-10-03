@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+from: gfm
+to: pdf
+standalone: true
+table-of-contents: true
+toc-depth: 2
+number-sections: true
+pdf-engine: xelatex
+resource-path:
+  - .
+include-in-header:
+  - report-header.tex
+variables:
+  geometry: margin=0.7in
+  papersize: letter
+  fontsize: 10pt
+  colorlinks: true
+  linkcolor: blue
+  urlcolor: blue
+  mainfont: DejaVu Sans
+  monofont: DejaVu Sans Mono

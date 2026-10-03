@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version = 1
+
+[[components]]
+kind = "pricing"
+enabled = true
+
+[[components.config.sources]]
+type = "file"
+path = "/opt/relay-plugins/nvidia.switchyard/pricing.json"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 3
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+mode = "append"
+output_directory = "/logs/agent/direct-hermes/relay"
+filename = "trajectory.atof.jsonl"
+
+[components.config.atif]
+enabled = true
+agent_name = "Hermes"
+agent_version = "@HERMES_COMMIT@"
+model_name = "ollama-route-stub"
+output_directory = "/logs/agent/direct-hermes/relay/atif"
+filename_template = "trajectory-{session_id}.atif.json"
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+transport = "http_binary"
+endpoint = "@OPENINFERENCE_ENDPOINT@"
+service_name = "harbor-hermes-switchyard"
+service_namespace = "nemo-relay-examples"
+instrumentation_scope = "harbor-hermes-switchyard"
+timeout_millis = 5000
+
+[components.config.opentelemetry.endpoints.resource_attributes]
+"openinference.project.name" = "@PHOENIX_PROJECT@"
+"evaluation.cohort" = "@EVAL_COHORT@"
+
+# The official switchyard-plugin release is verified by this example via its
+# published SHA-256 checksum (see build_switchyard_plugin.sh), not a Relay
+# trusted-signature chain, so accept it on integrity hash alone.
+[plugins.policy.defaults]
+attestation = "integrity_only"
+
+[[plugins.dynamic]]
+manifest = "/opt/relay-plugins/nvidia.switchyard/relay-plugin.toml"
+
+[plugins.dynamic.config]
+priority = 0
+switchyard_config_path = "/opt/relay-plugins/nvidia.switchyard/switchyard-routes.toml"

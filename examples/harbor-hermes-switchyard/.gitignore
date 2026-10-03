@@ -1,0 +1,6 @@
+.env
+.env.tb21-*
+.env.router-cmp-*
+.venv/
+reports/
+__pycache__/

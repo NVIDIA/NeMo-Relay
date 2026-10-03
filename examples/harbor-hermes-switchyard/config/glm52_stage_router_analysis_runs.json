@@ -1,0 +1,49 @@
+{
+  "schema_version": "harbor-hermes-switchyard.final-analysis-inputs.v1",
+  "spdx_copyright": "Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.",
+  "spdx_license": "Apache-2.0",
+  "title": "Terminal-Bench 2.1: signal-only versus classifier-enabled staged routing",
+  "analysis_request": "Compare complete Terminal-Bench 2.1 runs that differ only in whether GLM 5.2 is consulted for ambiguous staged-router requests. Use the signal-only arm as the observed control. Emphasize final pass@1, observed completion-target cost, the same-workload all-Sol counterfactual, routing-only token/cost coverage, request-level decision source and confidence, model choice, cache efficiency, latency, and task-aligned effects. Do not claim provider-invoice savings from the catalog-derived cost model.",
+  "dataset": "terminal-bench/terminal-bench-2-1",
+  "baseline_group": "signal-only",
+  "sample_size_per_group": 1,
+  "groups": [
+    {
+      "id": "signal-only",
+      "label": "Signal-only staged router (efficient-first, threshold 0.5)",
+      "role": "observed_control",
+      "run_roots": [
+        "/localhome/local-bbednarski/terminal-bench-artifacts/runs/tb21-sol56-glm52-stage-ef05-signal-c24-r1"
+      ]
+    },
+    {
+      "id": "classifier-enabled",
+      "label": "Classifier-enabled staged router (efficient-first, threshold 0.5)",
+      "role": "trial",
+      "run_roots": [
+        "/localhome/local-bbednarski/terminal-bench-artifacts/runs/tb21-sol56-glm52-stage-ef05-classifier-c24-r1"
+      ]
+    }
+  ],
+  "excluded_groups": [],
+  "analysis_contract": {
+    "performance_metric": "pass@1",
+    "primary_variation": "one independent completed run per configuration; compare paired task outcomes and do not imply replicate-level variance",
+    "cost_baseline": "signal-only staged-router run as observed control, plus each run's same-workload all-Sol counterfactual",
+    "routing_overhead": "dedicated switchyard.routing.llm_call ATOF usage marks, priced by the run-bound catalog only when complete usage coverage is present",
+    "paired_comparison": "task-aligned paired binary comparison over complete task outcomes",
+    "primary_plots": [
+      "final pass@1 comparison",
+      "observed completion-target cost comparison",
+      "observed cost versus same-workload all-Sol counterfactual"
+    ],
+    "secondary_sections": [
+      "exact router, classifier, model, transport, and pricing settings",
+      "routing decision-source and confidence evidence",
+      "routing-only token and cost accounting",
+      "task-level outcomes and paired effect",
+      "model-choice, latency, and cache-efficiency distributions",
+      "cost coverage, telemetry reconciliation, and limitations"
+    ]
+  }
+}

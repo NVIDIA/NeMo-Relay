@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "provider": "openai",
+      "model_id": "openai/openai/gpt-5.6-sol",
+      "currency": "USD",
+      "unit": "per_token",
+      "pricing_as_of": "2026-08-26",
+      "pricing_source": "OpenRouter model catalog API (https://openrouter.ai/api/v1/models)",
+      "rates": {
+        "input_per_million": 2.0,
+        "output_per_million": 10.0,
+        "cache_read_per_million": 0.2,
+        "cache_write_per_million": 2.5
+      },
+      "prompt_cache": {
+        "read_accounting": "included_in_prompt_tokens"
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "nvidia/zai-org/glm-5.2",
+      "currency": "USD",
+      "unit": "per_token",
+      "pricing_as_of": "2026-08-14",
+      "pricing_source": "OpenRouter model catalog API (https://openrouter.ai/api/v1/models); cache-write rate not advertised",
+      "rates": {
+        "input_per_million": 0.5,
+        "output_per_million": 3.15,
+        "cache_read_per_million": 0.1
+      },
+      "prompt_cache": {
+        "read_accounting": "included_in_prompt_tokens"
+      }
+    }
+  ]
+}

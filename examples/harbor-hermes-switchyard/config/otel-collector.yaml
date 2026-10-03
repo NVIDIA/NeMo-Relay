@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  file/openinference:
+    path: /artifacts/trajectory.openinference.json
+
+service:
+  pipelines:
+    traces/openinference:
+      receivers: [otlp]
+      exporters: [file/openinference]

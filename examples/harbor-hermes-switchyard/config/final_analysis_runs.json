@@ -1,0 +1,87 @@
+{
+  "schema_version": "harbor-hermes-switchyard.final-analysis-inputs.v1",
+  "spdx_copyright": "Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.",
+  "spdx_license": "Apache-2.0",
+  "dataset": "terminal-bench/terminal-bench-2-1",
+  "baseline_group": "opus48-direct",
+  "sample_size_per_group": 3,
+  "groups": [
+    {
+      "id": "opus48-direct",
+      "label": "Opus 4.8 direct baseline",
+      "role": "observed_control",
+      "run_roots": [
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-opus48-baseline-r1",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-opus48-baseline-r2",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-opus48-baseline-r3"
+      ]
+    },
+    {
+      "id": "capability",
+      "label": "LLM capability classifier",
+      "role": "trial",
+      "compatibility_exception": {
+        "allowed_scientific_difference_fields": [
+          "runner_sha256",
+          "runtime_sources_sha256"
+        ],
+        "rationale": "R6 used a later harness snapshot whose archived diff adds direct-baseline routing support and conditional validation/finalization branches. The Switchyard execution branch, dataset, task policy, model/router/pricing configuration, Relay wheel, Switchyard binary, concurrency, and timeouts remain the same as R4/R5; the grouped estimate therefore remains useful but is not an exact-signature replicate set."
+      },
+      "run_roots": [
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-nemotron-ultra-nvfp4-opus48-r4",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-nemotron-ultra-nvfp4-opus48-r5",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-nemotron-ultra-nvfp4-opus48-r6"
+      ]
+    },
+    {
+      "id": "random50",
+      "label": "Random router 50/50",
+      "role": "trial",
+      "run_roots": [
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-random50-pr270-nemotron-ultra-opus48-r1",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-random50-pr270-nemotron-ultra-opus48-r2",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-random50-pr270-nemotron-ultra-opus48-r3"
+      ]
+    },
+    {
+      "id": "staged05",
+      "label": "Staged router, confidence 0.5",
+      "role": "trial",
+      "completion_gate": true,
+      "run_roots": [
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-stage05-baaf678-nemotron-ultra-opus48-r1",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-stage05-baaf678-nemotron-ultra-opus48-r2",
+        "/localhome/local-bbednarski/terminal-bench-artifacts-tb21-c24-stage05-baaf678-nemotron-ultra-opus48-r3"
+      ]
+    }
+  ],
+  "excluded_groups": [
+    {
+      "id": "escalation",
+      "reason": "The three preserved escalation cohorts do not currently have complete 89-task observations and therefore do not satisfy the requested N=3 final-analysis admission gate."
+    },
+    {
+      "id": "staged-pr270-and-f78fb0c",
+      "reason": "Superseded staged cohorts contain the diagnosed classifier tool-history integration blocker and are not valid scientific trials."
+    }
+  ],
+  "analysis_contract": {
+    "performance_metric": "pass@1",
+    "primary_variation": "sample standard deviation across three run-level observations",
+    "cost_baseline": "mean observable covered execution-model cost across the three Opus 4.8 direct baseline runs",
+    "paired_comparison": "task-aligned per-configuration pass frequencies with a bootstrap interval over tasks; replicate indices are not treated as natural pairs",
+    "primary_plots": [
+      "configuration mean pass@1 bars with individual runs and sample-standard-deviation error bars",
+      "configuration mean cost bars with individual runs and sample-standard-deviation error bars",
+      "aligned two-panel cost and performance comparison sharing the configuration axis"
+    ],
+    "secondary_sections": [
+      "configuration and judge settings",
+      "task repeatability and paired deltas",
+      "effective-model and routing-source distributions",
+      "cache efficiency and token usage",
+      "cost coverage and telemetry reconciliation",
+      "limitations and intermediate conclusions"
+    ]
+  }
+}

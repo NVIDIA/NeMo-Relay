@@ -1,0 +1,868 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Temporary Harbor Hermes agent for a fork-hosted, commit-pinned Hermes build.
+
+The class deliberately inherits Harbor's built-in Hermes lifecycle.  It only
+changes installation, copies an immutable Relay configuration/plugin bundle
+into the task environment, and frames the additional Phase 1 artifacts around
+``super().run``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import shlex
+import time
+import tomllib
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+import yaml
+from harbor.agents.installed.hermes import Hermes
+from harbor.environments.base import BaseEnvironment
+from harbor.models.agent.context import AgentContext
+from typing_extensions import override
+
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_DEFAULT_HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
+_DEFAULT_HERMES_REF = "main"
+_DEFAULT_HERMES_COMMIT = "067fa1a25732935d1d2b3c0f2c4c1f078a3bb05f"
+_DEFAULT_SWITCHYARD_COMMIT = "336196f6fbfc97ddc71c1700f6092e564e9f23c2"
+_ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}")
+_PROVIDER_AUTHORIZATION_FILE = "/run/secrets/switchyard-provider-authorization"
+_HERMETIC_RUNTIME_ROOT = "/opt/hermes-runtime"
+_HERMETIC_RUNTIME_SCHEMA = "harbor-hermes-switchyard.hermetic-runtime.v1"
+_HERMETIC_RUNTIME_READY_ATTEMPTS = 6
+_HERMETIC_RUNTIME_READY_DELAY_SECONDS = 2
+
+
+def _require_full_sha(value: str, name: str) -> str:
+    normalized = value.strip().lower()
+    if not _FULL_SHA.fullmatch(normalized):
+        raise ValueError(f"{name} must be a full 40-character hexadecimal commit")
+    return normalized
+
+
+def _require_sha256(value: str, name: str) -> str:
+    normalized = value.strip().lower()
+    if not _SHA256.fullmatch(normalized):
+        raise ValueError(f"{name} must be a 64-character hexadecimal SHA-256")
+    return normalized
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _hermetic_ca_bundle_relative(python_version: str) -> Path:
+    # The hermetic venv's site-packages directory is named after Hermes's own
+    # pinned interpreter (build_hermetic_runtime.py resolves this dynamically
+    # from Hermes's .python-version rather than hardcoding it), so this must
+    # track payload.json's recorded python_version rather than a fixed value.
+    major_minor = ".".join(python_version.split(".")[:2])
+    return Path(f"hermes-agent-src/venv/lib/python{major_minor}/site-packages/certifi/cacert.pem")
+
+
+def _load_hermetic_runtime(
+    path: Path,
+    *,
+    expected_digest: str,
+    hermes_commit: str,
+    relay_wheel_sha256: str,
+    relay_architecture: str,
+) -> dict[str, Any]:
+    marker = path / "payload.json"
+    if not marker.is_file():
+        raise FileNotFoundError(marker)
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    expected = {
+        "schema_version": _HERMETIC_RUNTIME_SCHEMA,
+        "status": "passed",
+        "content_sha256": expected_digest,
+        "hermes_commit": hermes_commit,
+        "relay_wheel_sha256": relay_wheel_sha256,
+        "relay_architecture": relay_architecture,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": payload.get(key)}
+        for key, value in expected.items()
+        if payload.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"hermetic runtime metadata mismatch: {mismatches}")
+    python_version = payload.get("python_version")
+    if not isinstance(python_version, str) or not python_version:
+        raise ValueError("hermetic runtime payload is missing python_version")
+    required = (
+        path / "bin" / "hermes",
+        path / "bin" / "python",
+        path / "bin" / "uv",
+        path / "hermes-agent-src" / "venv",
+        path / _hermetic_ca_bundle_relative(python_version),
+    )
+    missing = [str(candidate) for candidate in required if not candidate.exists()]
+    if missing:
+        raise FileNotFoundError(f"hermetic runtime is incomplete: {missing}")
+    return payload
+
+
+def _hermetic_runtime_readiness_command(
+    runtime_root: str = _HERMETIC_RUNTIME_ROOT,
+    *,
+    attempts: int = _HERMETIC_RUNTIME_READY_ATTEMPTS,
+    delay_seconds: int = _HERMETIC_RUNTIME_READY_DELAY_SECONDS,
+) -> str:
+    """Return a bounded probe that executes both nested runtime entrypoints."""
+    if attempts < 1:
+        raise ValueError("attempts must be positive")
+    if delay_seconds < 0:
+        raise ValueError("delay_seconds cannot be negative")
+    runtime = shlex.quote(runtime_root)
+    attempt_numbers = " ".join(str(attempt) for attempt in range(1, attempts + 1))
+    return (
+        "runtime_ready=1; "
+        f"for attempt in {attempt_numbers}; do "
+        f'if {runtime}/bin/python -c "import importlib.metadata as m; '
+        "assert tuple(map(int, m.version('nemo-relay').split('.'))) >= (0, 7, 0)\" "
+        f"&& {runtime}/bin/hermes --version; then "
+        "runtime_ready=0; break; "
+        "else runtime_ready=$?; fi; "
+        f'if [ "$attempt" -lt {attempts} ]; then sleep {delay_seconds}; fi; '
+        "done; "
+        '[ "$runtime_ready" -eq 0 ] || exit "$runtime_ready"; '
+    )
+
+
+def _verify_elf_architecture(path: Path, architecture: str) -> None:
+    with path.open("rb") as stream:
+        header = stream.read(20)
+    if header[:4] != b"\x7fELF" or len(header) < 20 or header[5] != 1:
+        raise ValueError("Switchyard native library must be a little-endian ELF artifact")
+    expected_machine = {"x86_64": 62, "aarch64": 183}[architecture]
+    machine = int.from_bytes(header[18:20], "little")
+    if machine != expected_machine:
+        raise ValueError(f"Switchyard native library does not target {architecture}: ELF e_machine={machine}")
+
+
+def _require_public_https_git_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "github.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or not parsed.path.endswith(".git")
+    ):
+        raise ValueError("repository_url must be a credential-free https://github.com/...git URL")
+    return value
+
+
+def _find_named_component(config: dict[str, Any], kind: str) -> dict[str, Any]:
+    matches = [
+        component
+        for component in config.get("components", [])
+        if isinstance(component, dict) and component.get("kind") == kind and component.get("enabled", True)
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"Relay config must contain exactly one enabled {kind!r} component")
+    return matches[0]
+
+
+def _validate_direct_baseline_config(config: dict[str, Any]) -> str:
+    components = config.get("components")
+    if not isinstance(components, list):
+        raise ValueError("Relay components are missing")
+    pricing = _find_named_component(config, "pricing")
+    pricing_config = pricing.get("config")
+    sources = pricing_config.get("sources") if isinstance(pricing_config, dict) else None
+    if not isinstance(sources, list) or len(sources) != 1 or sources[0].get("type") != "inline":
+        raise ValueError("pricing must use exactly one inline catalog")
+    catalog = sources[0].get("catalog")
+    entries = catalog.get("entries") if isinstance(catalog, dict) and catalog.get("version") == 1 else None
+    if not isinstance(entries, list) or len(entries) != 1:
+        raise ValueError("direct baseline pricing must contain exactly one model")
+    model = entries[0].get("model_id")
+    if not isinstance(model, str) or not _MODEL_ID.fullmatch(model):
+        raise ValueError("direct baseline must define one valid provider model")
+    rates = entries[0].get("rates")
+    if not isinstance(rates, dict) or any(
+        not isinstance(rates.get(key), (int, float)) or rates[key] < 0
+        for key in ("input_per_million", "output_per_million", "cache_read_per_million")
+    ):
+        raise ValueError("direct baseline pricing must contain non-negative input, output, and cache-read rates")
+
+    observability = _find_named_component(config, "observability")
+    observability_config = observability.get("config")
+    if not isinstance(observability_config, dict) or observability_config.get("version") != 3:
+        raise ValueError("the observability component must use schema version = 3")
+    atif = observability_config.get("atif")
+    if not isinstance(atif, dict) or atif.get("model_name") != model:
+        raise ValueError("direct baseline ATIF model must match its only priced model")
+    opentelemetry = observability_config.get("opentelemetry")
+    endpoints = opentelemetry.get("endpoints") if isinstance(opentelemetry, dict) else None
+    if not isinstance(opentelemetry, dict) or opentelemetry.get("enabled") is not True:
+        raise ValueError("OpenTelemetry export must be enabled")
+    if not isinstance(endpoints, list) or len(endpoints) != 1:
+        raise ValueError("observability must define exactly one OpenInference endpoint")
+    endpoint = endpoints[0]
+    if endpoint.get("type") != "openinference" or endpoint.get("transport") != "http_binary":
+        raise ValueError("the only telemetry endpoint must be OpenInference over OTLP/HTTP protobuf")
+    resource_attributes = endpoint.get("resource_attributes")
+    if not isinstance(resource_attributes, dict) or not all(
+        isinstance(resource_attributes.get(key), str) and resource_attributes[key]
+        for key in ("openinference.project.name", "evaluation.cohort")
+    ):
+        raise ValueError("OpenInference must carry project and evaluation cohort resource attributes")
+    return "direct"
+
+
+def _validate_relay_config(path: Path, switchyard_bundle_dir: Path) -> str:
+    with path.open("rb") as stream:
+        config = tomllib.load(stream)
+
+    if config.get("version") != 1:
+        raise ValueError("Relay config must use top-level version = 1")
+    if config.get("dynamic_plugins"):
+        raise ValueError("Hermes [[dynamic_plugins]] worker records are not allowed in this example")
+
+    plugins = config.get("plugins")
+    dynamic = plugins.get("dynamic") if isinstance(plugins, dict) else None
+    if dynamic is None:
+        return _validate_direct_baseline_config(config)
+    if not isinstance(dynamic, list) or len(dynamic) != 1:
+        raise ValueError("Relay config must contain exactly one [[plugins.dynamic]] record")
+    plugin = dynamic[0]
+    manifest = plugin.get("manifest") if isinstance(plugin, dict) else None
+    if manifest != "/opt/relay-plugins/nvidia.switchyard/relay-plugin.toml":
+        raise ValueError("the dynamic plugin must reference the staged Switchyard manifest")
+
+    plugin_config = plugin.get("config")
+    if not isinstance(plugin_config, dict):
+        raise ValueError("the Switchyard plugin configuration must be a table")
+    if plugin_config.get("switchyard_config_path") != "/opt/relay-plugins/nvidia.switchyard/switchyard-routes.toml":
+        raise ValueError("the Switchyard plugin must reference the staged switchyard-routes.toml")
+    switchyard_routes_path = switchyard_bundle_dir / "switchyard-routes.toml"
+    if not switchyard_routes_path.is_file():
+        raise FileNotFoundError(switchyard_routes_path)
+    with switchyard_routes_path.open("rb") as stream:
+        switchyard_config = tomllib.load(stream)
+    if not isinstance(switchyard_config, dict) or switchyard_config.get("schema_version") != 1:
+        raise ValueError("switchyard-routes.toml must declare schema_version = 1")
+
+    llm_clients = switchyard_config.get("llm_clients")
+    if not isinstance(llm_clients, dict) or set(llm_clients) != {"nvidia"}:
+        raise ValueError("the Switchyard deployment must define exactly one llm_clients.nvidia client")
+    client = llm_clients["nvidia"]
+    if not isinstance(client, dict) or client.get("format") != "openai_chat":
+        raise ValueError("the nvidia llm_client must use the openai_chat format")
+    if client.get("forward_auth"):
+        raise ValueError("the nvidia llm_client must not forward caller credentials")
+    base_url = client.get("base_url")
+    parsed_base_url = urlsplit(base_url) if isinstance(base_url, str) else None
+    if (
+        parsed_base_url is None
+        or parsed_base_url.scheme not in {"http", "https"}
+        or not parsed_base_url.hostname
+        or parsed_base_url.username is not None
+        or parsed_base_url.password is not None
+    ):
+        raise ValueError("the nvidia llm_client must use a credential-free HTTP(S) base URL")
+    authorization_env = client.get("api_key_env")
+    if not isinstance(authorization_env, str) or not _ENV_NAME.fullmatch(authorization_env):
+        raise ValueError("the nvidia llm_client must source its key from an environment variable")
+
+    routes = switchyard_config.get("routes")
+    if not isinstance(routes, dict) or set(routes) != {"default"}:
+        raise ValueError("the Switchyard deployment must define exactly one routes.default route")
+    route = routes["default"]
+    if not isinstance(route, dict):
+        raise ValueError("routes.default must be a table")
+    route_id = route.get("id")
+    if not isinstance(route_id, str) or not route_id:
+        raise ValueError("routes.default must define a public model id")
+    algorithm_kind = route.get("type")
+    if algorithm_kind == "random":
+        expected_route = {"id": route_id, "type": "random", "targets": ["strong", "weak"]}
+        if route != expected_route:
+            raise ValueError("the Switchyard random-router contract must use entropy-backed selection")
+    elif algorithm_kind == "llm_classifier":
+        mode = route.get("mode", "capability")
+        if mode == "escalation":
+            expected_route = {
+                "id": route_id,
+                "type": "llm_classifier",
+                "mode": "escalation",
+                "classifier_target": "judge",
+                "weak_target": "weak",
+                "strong_target": "strong",
+                "max_output_tokens": 4096,
+                "escalation": {
+                    "confirmations": 1,
+                    "recent_turn_window": 28,
+                    "window_message_chars": 500,
+                },
+            }
+            if route != expected_route:
+                raise ValueError("the Switchyard escalation-router contract does not match the Phase 2 design")
+        elif mode != "capability":
+            raise ValueError("the Switchyard LLM-classifier mode is unsupported")
+    elif algorithm_kind == "stage_router":
+        picker = route.get("picker")
+        confidence_threshold = route.get("confidence_threshold")
+        expected_route = {
+            "id": route_id,
+            "type": "stage_router",
+            "capable_target": "strong",
+            "efficient_target": "weak",
+            "picker": picker,
+            "confidence_threshold": confidence_threshold,
+            "recent_turn_window": 3,
+        }
+        classifier = route.get("classifier")
+        if classifier is not None:
+            expected_route["classifier"] = {
+                "target": "judge",
+                "base_threshold": 0.5,
+                "threshold_step": 0.0,
+                "recent_turn_window": 3,
+            }
+        if (
+            picker not in {"capable_first", "efficient_first"}
+            or isinstance(confidence_threshold, bool)
+            or not isinstance(confidence_threshold, (int, float))
+            or not 0 <= confidence_threshold <= 1
+            or route != expected_route
+        ):
+            raise ValueError("the Switchyard stage-router contract does not match the Phase 2 design")
+    else:
+        raise ValueError(f"unsupported Switchyard algorithm: {algorithm_kind!r}")
+
+    targets = switchyard_config.get("targets")
+    expected_targets = {"strong", "weak", "judge"}
+    if algorithm_kind == "stage_router" and route.get("classifier") is None:
+        expected_targets = {"strong", "weak"}
+    if not isinstance(targets, dict) or set(targets) != expected_targets:
+        raise ValueError(f"Switchyard targets must be exactly {sorted(expected_targets)} for this routing mode")
+    provider_models: set[str] = set()
+    for name, target in targets.items():
+        if not isinstance(target, dict):
+            raise ValueError(f"Switchyard target {name!r} must be a table")
+        if target.get("llm_client") != "nvidia":
+            raise ValueError(f"Switchyard target {name!r} must use the nvidia llm_client")
+        model = target.get("id")
+        if not isinstance(model, str) or not model:
+            raise ValueError(f"Switchyard target {name!r} must define a model")
+        provider_models.add(model)
+    if targets["strong"]["id"] == targets["weak"]["id"]:
+        raise ValueError("Switchyard strong and weak targets must use distinct models")
+
+    pricing = _find_named_component(config, "pricing")
+    pricing_config = pricing.get("config")
+    sources = pricing_config.get("sources") if isinstance(pricing_config, dict) else None
+    if (
+        not isinstance(sources, list)
+        or len(sources) != 1
+        or sources[0].get("type") != "file"
+        or sources[0].get("path") != "/opt/relay-plugins/nvidia.switchyard/pricing.json"
+    ):
+        raise ValueError("pricing must reference the staged pricing.json")
+    pricing_path = switchyard_bundle_dir / "pricing.json"
+    if not pricing_path.is_file():
+        raise FileNotFoundError(pricing_path)
+    catalog = json.loads(pricing_path.read_text(encoding="utf-8"))
+    entries = catalog.get("entries") if isinstance(catalog, dict) and catalog.get("version") == 1 else None
+    if not isinstance(entries, list) or {entry.get("model_id") for entry in entries} != provider_models:
+        raise ValueError("pricing entries must match the Switchyard provider models")
+    for entry in entries:
+        rates = entry.get("rates") if isinstance(entry, dict) else None
+        if not isinstance(rates, dict) or any(
+            not isinstance(rates.get(key), (int, float)) or rates[key] < 0
+            for key in ("input_per_million", "output_per_million", "cache_read_per_million")
+        ):
+            raise ValueError("pricing entries must contain non-negative input, output, and cache-read rates")
+
+    observability = _find_named_component(config, "observability")
+    observability_config = observability.get("config")
+    if not isinstance(observability_config, dict) or observability_config.get("version") != 3:
+        raise ValueError("the observability component must use schema version = 3")
+    atif = observability_config.get("atif")
+    caller_model = atif.get("model_name") if isinstance(atif, dict) else None
+    if not isinstance(caller_model, str) or not caller_model or caller_model in provider_models:
+        raise ValueError("the fail-closed Hermes caller model must not be a Switchyard provider model")
+    if caller_model != route_id:
+        raise ValueError("the Switchyard route id must match the Hermes caller model")
+    opentelemetry = observability_config.get("opentelemetry")
+    endpoints = opentelemetry.get("endpoints") if isinstance(opentelemetry, dict) else None
+    if not isinstance(opentelemetry, dict) or opentelemetry.get("enabled") is not True:
+        raise ValueError("OpenTelemetry export must be enabled")
+    if not isinstance(endpoints, list) or len(endpoints) != 1:
+        raise ValueError("observability must define exactly one OpenInference endpoint")
+    endpoint = endpoints[0]
+    if endpoint.get("type") != "openinference" or endpoint.get("transport") != "http_binary":
+        raise ValueError("the only telemetry endpoint must be OpenInference over OTLP/HTTP protobuf")
+    resource_attributes = endpoint.get("resource_attributes")
+    if not isinstance(resource_attributes, dict) or not all(
+        isinstance(resource_attributes.get(key), str) and resource_attributes[key]
+        for key in ("openinference.project.name", "evaluation.cohort")
+    ):
+        raise ValueError("OpenInference must carry project and evaluation cohort resource attributes")
+
+    def reject_literal_headers(value: Any, location: str = "config") -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if key == "headers":
+                    raise ValueError(f"literal headers are forbidden; use api_key_env ({location}.headers)")
+                reject_literal_headers(nested, f"{location}.{key}")
+        elif isinstance(value, list):
+            for index, nested in enumerate(value):
+                reject_literal_headers(nested, f"{location}[{index}]")
+
+    reject_literal_headers(config)
+    return "switchyard"
+
+
+class HarborHermesAgent(Hermes):
+    """Hermes #77915 bridge retaining Harbor's built-in Hermes behavior."""
+
+    @staticmethod
+    @override
+    def _build_config_yaml(model: str) -> str:
+        """Disable persistence maintenance that is outside benchmark execution."""
+
+        config = yaml.safe_load(Hermes._build_config_yaml(model))
+        if not isinstance(config, dict):
+            raise ValueError("Harbor Hermes generated a non-object configuration")
+        skills = config.setdefault("skills", {})
+        curator = config.setdefault("curator", {})
+        if not isinstance(skills, dict) or not isinstance(curator, dict):
+            raise ValueError("Harbor Hermes generated invalid skills or curator configuration")
+        skills["creation_nudge_interval"] = 0
+        curator["enabled"] = False
+        # Harbor prefixes its OpenAI-native model namespace to the provider's
+        # slash-qualified model ID. Direct InferenceHub models therefore arrive
+        # here with at least two slashes and must use Hermes' custom provider so
+        # OPENAI_BASE_URL is honored. Routed callers use the one-slash Relay stub.
+        if model.count("/") >= 2:
+            config["provider"] = "custom"
+        return yaml.safe_dump(config, default_flow_style=False, sort_keys=True)
+
+    def __init__(
+        self,
+        *args: Any,
+        repository_url: str = _DEFAULT_HERMES_REPOSITORY,
+        repository_ref: str = _DEFAULT_HERMES_REF,
+        commit: str = _DEFAULT_HERMES_COMMIT,
+        relay_config_path: str,
+        switchyard_bundle_dir: str,
+        relay_wheel_path: str,
+        relay_wheel_sha256: str,
+        relay_architecture: str = "x86_64",
+        switchyard_commit: str = _DEFAULT_SWITCHYARD_COMMIT,
+        artifact_root: str = "/logs/agent/direct-hermes",
+        inject_post_response_failure: bool = False,
+        hermetic_runtime_dir: str | None = None,
+        hermetic_runtime_sha256: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.repository_url = _require_public_https_git_url(repository_url)
+        self.repository_ref = repository_ref.strip()
+        if not self.repository_ref or self.repository_ref.startswith("-"):
+            raise ValueError("repository_ref must be a non-option branch or tag name")
+        self.commit = _require_full_sha(commit, "commit")
+        self.switchyard_commit = _require_full_sha(switchyard_commit, "switchyard_commit")
+        self.relay_wheel_sha256 = _require_sha256(relay_wheel_sha256, "relay_wheel_sha256")
+        if relay_architecture not in {"x86_64", "aarch64"}:
+            raise ValueError("relay_architecture must be x86_64 or aarch64")
+        self.relay_architecture = relay_architecture
+
+        self.relay_config_path = Path(relay_config_path).expanduser().resolve()
+        self.switchyard_bundle_dir = Path(switchyard_bundle_dir).expanduser().resolve()
+        self.relay_wheel_path = Path(relay_wheel_path).expanduser().resolve()
+        self.artifact_root = artifact_root.rstrip("/")
+        self.inject_post_response_failure = inject_post_response_failure
+        self.hermetic_runtime_dir: Path | None = None
+        self.hermetic_runtime_sha256: str | None = None
+        self.hermetic_ca_bundle: str | None = None
+        self._load_provider_authorization = False
+        if not self.artifact_root.startswith("/logs/agent/"):
+            raise ValueError("artifact_root must be an absolute child of /logs/agent")
+        if not self.relay_config_path.is_file():
+            raise FileNotFoundError(self.relay_config_path)
+        if not self.relay_wheel_path.is_file():
+            raise FileNotFoundError(self.relay_wheel_path)
+        if _sha256(self.relay_wheel_path) != self.relay_wheel_sha256:
+            raise ValueError("Relay wheel digest does not match relay_wheel_sha256")
+        if "manylinux" not in self.relay_wheel_path.name or relay_architecture not in self.relay_wheel_path.name:
+            raise ValueError(f"Relay wheel must target Linux {relay_architecture}")
+        self.routing_mode = _validate_relay_config(self.relay_config_path, self.switchyard_bundle_dir)
+        self.direct_model: str | None = None
+        if self.routing_mode == "direct":
+            with self.relay_config_path.open("rb") as stream:
+                direct_config = tomllib.load(stream)
+            pricing = _find_named_component(direct_config, "pricing")
+            self.direct_model = pricing["config"]["sources"][0]["catalog"]["entries"][0]["model_id"]
+
+        self.switchyard_manifest: Path | None = None
+        self.switchyard_library: Path | None = None
+        if self.routing_mode == "switchyard":
+            self.switchyard_manifest = self.switchyard_bundle_dir / "relay-plugin.toml"
+            if not self.switchyard_manifest.is_file():
+                raise FileNotFoundError(self.switchyard_manifest)
+            libraries = sorted(
+                path
+                for path in self.switchyard_bundle_dir.iterdir()
+                if path.is_file() and path.suffix in {".so", ".dylib", ".dll"}
+            )
+            if len(libraries) != 1:
+                raise ValueError("Switchyard bundle must contain exactly one native library")
+            self.switchyard_library = libraries[0]
+            _verify_elf_architecture(self.switchyard_library, relay_architecture)
+
+        if (hermetic_runtime_dir is None) != (hermetic_runtime_sha256 is None):
+            raise ValueError("hermetic_runtime_dir and hermetic_runtime_sha256 must be supplied together")
+        if hermetic_runtime_dir is not None and hermetic_runtime_sha256 is not None:
+            runtime_dir = Path(hermetic_runtime_dir).expanduser().resolve()
+            runtime_digest = _require_sha256(hermetic_runtime_sha256, "hermetic_runtime_sha256")
+            runtime_payload = _load_hermetic_runtime(
+                runtime_dir,
+                expected_digest=runtime_digest,
+                hermes_commit=self.commit,
+                relay_wheel_sha256=self.relay_wheel_sha256,
+                relay_architecture=self.relay_architecture,
+            )
+            self.hermetic_runtime_dir = runtime_dir
+            self.hermetic_runtime_sha256 = runtime_digest
+            self.hermetic_ca_bundle = (
+                f"{_HERMETIC_RUNTIME_ROOT}/"
+                f"{_hermetic_ca_bundle_relative(runtime_payload['python_version']).as_posix()}"
+            )
+
+        self._example_root = Path(__file__).resolve().parents[1]
+        self._finalizer_path = self._example_root / "scripts" / "finalize_artifacts.py"
+        if not self._finalizer_path.is_file():
+            raise FileNotFoundError(self._finalizer_path)
+        self._relay_version_path = self._example_root / "scripts" / "relay_version.py"
+        if not self._relay_version_path.is_file():
+            raise FileNotFoundError(self._relay_version_path)
+
+        extra_env = dict(kwargs.pop("extra_env", None) or {})
+        extra_env["HERMES_NEMO_RELAY_PLUGINS_TOML"] = "/tmp/hermes/relay/plugins.toml"
+        super().__init__(*args, version=self.commit, extra_env=extra_env, **kwargs)
+
+    @override
+    async def exec_as_agent(
+        self,
+        environment: BaseEnvironment,
+        command: str,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+        timeout_sec: int | None = None,
+    ) -> Any:
+        if self.routing_mode == "direct" and "hermes --yolo chat" in command:
+            assert self.direct_model is not None
+            harbor_model = f"--model openai/{self.direct_model}"
+            provider_model = f"--model {self.direct_model} --provider custom"
+            if harbor_model not in command:
+                raise ValueError("direct baseline received an unexpected Hermes model command")
+            command = command.replace(harbor_model, provider_model, 1)
+        if self.routing_mode == "switchyard" and "hermes --yolo chat" in command:
+            # Without --provider custom, Hermes resolves --model against its
+            # own default provider catalog (observed hitting real OpenRouter)
+            # instead of the Relay/Switchyard execution intercept, so the
+            # caller-model stub name (never a real catalog entry) fails with
+            # a raw connection error before Switchyard ever sees the call.
+            # Direct mode needs the identical override for the same reason;
+            # apply it here too rather than only for direct.
+            match = re.search(r"--model openai/(\S+)", command)
+            if match is None:
+                raise ValueError("switchyard routing received an unexpected Hermes model command")
+            caller_model = match.group(1)
+            harbor_model = f"--model openai/{caller_model}"
+            provider_model = f"--model {caller_model} --provider custom"
+            command = command.replace(harbor_model, provider_model, 1)
+        if self.hermetic_runtime_dir is not None:
+            assert self.hermetic_ca_bundle is not None
+            ca_bundle = shlex.quote(self.hermetic_ca_bundle)
+            command = (
+                f"test -r {ca_bundle}; "
+                f"export SSL_CERT_FILE={ca_bundle}; "
+                f"export REQUESTS_CA_BUNDLE={ca_bundle}; "
+                f"export CURL_CA_BUNDLE={ca_bundle}; "
+                f"{command}"
+            )
+        if self._load_provider_authorization:
+            secret_file = shlex.quote(_PROVIDER_AUTHORIZATION_FILE)
+            if self.routing_mode == "switchyard":
+                command = (
+                    f"test -r {secret_file}; "
+                    f'export SWITCHYARD_PROVIDER_AUTHORIZATION="$(cat -- {secret_file})"; '
+                    'test -n "$SWITCHYARD_PROVIDER_AUTHORIZATION"; '
+                    f"{command}"
+                )
+            else:
+                command = (
+                    f"test -r {secret_file}; "
+                    # The mounted secret is the bare provider token (the same
+                    # convention run_terminal_bench.sh writes and the
+                    # switchyard branch above reads); it does not carry a
+                    # "Bearer " prefix.
+                    f'export OPENAI_API_KEY="$(cat -- {secret_file})"; '
+                    'export OPENROUTER_API_KEY="$OPENAI_API_KEY"; '
+                    'export NVIDIA_API_KEY="$OPENAI_API_KEY"; '
+                    'test -n "$OPENAI_API_KEY"; '
+                    f"{command}"
+                )
+        return await super().exec_as_agent(
+            environment,
+            command,
+            env=env,
+            cwd=cwd,
+            timeout_sec=timeout_sec,
+        )
+
+    @override
+    async def install(self, environment: BaseEnvironment) -> None:
+        if self.hermetic_runtime_dir is not None:
+            assert self.hermetic_ca_bundle is not None
+            runtime = shlex.quote(_HERMETIC_RUNTIME_ROOT)
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    "set -euo pipefail; "
+                    f"test -r {runtime}/payload.json; "
+                    f"test -x {runtime}/bin/hermes; "
+                    f"test -x {runtime}/bin/python; "
+                    f"test -x {runtime}/bin/uv; "
+                    f"test -r {shlex.quote(self.hermetic_ca_bundle)}; "
+                    f"{_hermetic_runtime_readiness_command()}"
+                    "rm -rf /tmp/hermes-agent-src; "
+                    f"ln -s {runtime}/hermes-agent-src /tmp/hermes-agent-src; "
+                    'mkdir -p /tmp/hermes/bin "$HOME/.local/bin"; '
+                    f'ln -sf {runtime}/bin/hermes "$HOME/.local/bin/hermes"; '
+                    f"ln -sf {runtime}/bin/uv /tmp/hermes/bin/uv; "
+                    f"if test -x {runtime}/bin/rg; then "
+                    f'ln -sf {runtime}/bin/rg "$HOME/.local/bin/rg"; fi; '
+                    'export PATH="$HOME/.local/bin:$PATH"'
+                ),
+                timeout_sec=90,
+            )
+            return
+
+        await self.exec_as_root(
+            environment,
+            command=(
+                "set -euo pipefail; last_status=1; "
+                "for attempt in 1 2 3; do "
+                "if apt-get update && apt-get install -y --no-install-recommends "
+                "ca-certificates build-essential curl git ripgrep xz-utils; then exit 0; "
+                "else last_status=$?; fi; "
+                'if [ "$attempt" -eq 3 ]; then break; fi; '
+                "rm -rf /var/lib/apt/lists/partial; sleep $((attempt * 5)); "
+                'done; exit "$last_status"'
+            ),
+            env={"DEBIAN_FRONTEND": "noninteractive"},
+        )
+
+        repository = shlex.quote(self.repository_url)
+        repository_ref = shlex.quote(self.repository_ref)
+        commit = shlex.quote(self.commit)
+        install_dir = "/tmp/hermes-agent-src"
+        await self.exec_as_agent(
+            environment,
+            command=(
+                "set -euo pipefail; "
+                f"git clone --no-tags --branch {repository_ref} {repository} {install_dir}; "
+                f"git -C {install_dir} fetch --depth 1 origin {commit}; "
+                f"git -C {install_dir} checkout --detach {commit}; "
+                f'test "$(git -C {install_dir} rev-parse HEAD)" = {commit}; '
+                "mkdir -p /tmp/hermes-install-path; "
+                "ln -sf /bin/true /tmp/hermes-install-path/ffmpeg; "
+                f"HERMES_HOME=/tmp/hermes HERMES_INSTALL_DIR={install_dir} "
+                "PATH=/tmp/hermes-install-path:$PATH "
+                f"bash {install_dir}/scripts/install.sh --skip-setup --skip-browser "
+                f"--dir {install_dir} --branch {repository_ref} "
+                f"--commit {commit}; "
+                f'test "$(git -C {install_dir} rev-parse HEAD)" = {commit}; '
+                f"cd {install_dir}; "
+                # install.sh stages a version-and-platform-qualified uv under
+                # $HERMES_HOME/tools rather than a fixed bin/uv path.
+                'hermes_uv="$(find /tmp/hermes/tools -mindepth 2 -maxdepth 2 '
+                '-type f -name uv -print -quit)"; '
+                'test -n "$hermes_uv"; '
+                f"UV_PROJECT_ENVIRONMENT={install_dir}/venv "
+                '"$hermes_uv" sync --frozen --extra all; '
+                'export PATH="$HOME/.local/bin:$PATH"; '
+                "hermes --version; "
+                f'{install_dir}/venv/bin/python -c "import importlib.metadata as m; '
+                "assert tuple(map(int, m.version('nemo-relay').split('.'))) >= (0, 7, 0)\""
+            ),
+        )
+
+    @override
+    async def setup(self, environment: BaseEnvironment) -> None:
+        await super().setup(environment)
+        await self.exec_as_root(
+            environment,
+            command=(
+                "mkdir -p /tmp/hermes/relay /opt/relay-wheels /opt/relay-plugins/nvidia.switchyard /installed-agent"
+            ),
+        )
+        await environment.upload_file(self.relay_config_path, "/tmp/hermes/relay/plugins.toml")
+        relay_wheel = f"/opt/relay-wheels/{self.relay_wheel_path.name}"
+        await environment.upload_file(self.relay_wheel_path, relay_wheel)
+        if self.hermetic_runtime_dir is None:
+            relay_install = (
+                'hermes_uv="$(find /tmp/hermes/tools -mindepth 2 -maxdepth 2 '
+                '-type f -name uv -print -quit)"; '
+                'test -n "$hermes_uv"; '
+                '"$hermes_uv" pip install '
+                "--python /tmp/hermes-agent-src/venv/bin/python "
+                f"--force-reinstall --no-deps {shlex.quote(relay_wheel)}; "
+                "/tmp/hermes-agent-src/venv/bin/python"
+            )
+        else:
+            relay_install = f"{_HERMETIC_RUNTIME_ROOT}/bin/python"
+        await self.exec_as_agent(
+            environment,
+            command=(
+                "set -euo pipefail; "
+                f"test \"$(sha256sum {shlex.quote(relay_wheel)} | cut -d' ' -f1)\" = "
+                f"{shlex.quote(self.relay_wheel_sha256)}; "
+                f'{relay_install} -c "import importlib.metadata as m; '
+                "assert tuple(map(int, m.version('nemo-relay').split('.'))) >= (0, 7, 0)\""
+            ),
+            timeout_sec=120,
+        )
+        if self.routing_mode == "switchyard":
+            await environment.upload_dir(self.switchyard_bundle_dir, "/opt/relay-plugins/nvidia.switchyard")
+        await environment.upload_file(self._finalizer_path, "/installed-agent/finalize_artifacts.py")
+        await environment.upload_file(self._relay_version_path, "/installed-agent/relay_version.py")
+        probe_python = (
+            f"{_HERMETIC_RUNTIME_ROOT}/bin/python"
+            if self.hermetic_runtime_dir is not None
+            else "/tmp/hermes-agent-src/venv/bin/python"
+        )
+        if self.routing_mode == "switchyard":
+            assert self.switchyard_library is not None
+            switchyard_library = f"/opt/relay-plugins/nvidia.switchyard/{self.switchyard_library.name}"
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    f"{probe_python} -c "
+                    + shlex.quote(
+                        "import ctypes, importlib.metadata as m; "
+                        "assert tuple(map(int, m.version('nemo-relay').split('.'))) >= (0, 7, 0); "
+                        f"library = ctypes.CDLL({switchyard_library!r}); "
+                        "assert getattr(library, 'nemo_relay_register_plugin')"
+                    )
+                ),
+                timeout_sec=30,
+            )
+        await self.exec_as_agent(
+            environment,
+            command=self._finalizer_command("initialize"),
+            env={"HERMES_HOME": "/tmp/hermes"},
+            timeout_sec=30,
+        )
+
+    def _finalizer_command(
+        self,
+        mode: str,
+        *,
+        started_at: float | None = None,
+        error_type: str = "",
+    ) -> str:
+        arguments = [
+            (
+                f"{_HERMETIC_RUNTIME_ROOT}/bin/python"
+                if self.hermetic_runtime_dir is not None
+                else "/tmp/hermes-agent-src/venv/bin/python"
+            ),
+            "/installed-agent/finalize_artifacts.py",
+            mode,
+            "--artifact-root",
+            self.artifact_root,
+            "--hermes-repository",
+            self.repository_url,
+            "--hermes-commit",
+            self.commit,
+            "--switchyard-commit",
+            self.switchyard_commit,
+            "--relay-wheel-sha256",
+            self.relay_wheel_sha256,
+            "--relay-config",
+            "/tmp/hermes/relay/plugins.toml",
+            "--routing-mode",
+            self.routing_mode,
+            "--session-handle",
+            self.session_id or "",
+        ]
+        if self.routing_mode == "switchyard":
+            assert self.switchyard_library is not None
+            arguments.extend(
+                [
+                    "--switchyard-manifest",
+                    "/opt/relay-plugins/nvidia.switchyard/relay-plugin.toml",
+                    "--switchyard-library",
+                    f"/opt/relay-plugins/nvidia.switchyard/{self.switchyard_library.name}",
+                ]
+            )
+        if started_at is not None:
+            arguments.extend(["--started-at", str(started_at)])
+        if error_type:
+            arguments.extend(["--error-type", error_type])
+        return " ".join(shlex.quote(value) for value in arguments)
+
+    @override
+    async def run(
+        self,
+        instruction: str,
+        environment: BaseEnvironment,
+        context: AgentContext,
+    ) -> None:
+        started_at = time.time()
+        error: BaseException | None = None
+        try:
+            self._load_provider_authorization = True
+            try:
+                await super().run(instruction, environment, context)
+            finally:
+                self._load_provider_authorization = False
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            try:
+                await self.exec_as_agent(
+                    environment,
+                    command=self._finalizer_command(
+                        "complete",
+                        started_at=started_at,
+                        error_type=(
+                            type(error).__name__
+                            if error is not None
+                            else ("InjectedPostResponseFailure" if self.inject_post_response_failure else "")
+                        ),
+                    ),
+                    env={"HERMES_HOME": "/tmp/hermes"},
+                    timeout_sec=30,
+                )
+            except Exception:
+                if error is None:
+                    raise
+                self.logger.exception("Could not frame direct Hermes artifacts after agent failure")
+
+
+__all__ = ["HarborHermesAgent"]
