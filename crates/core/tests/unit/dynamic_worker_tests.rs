@@ -46,12 +46,21 @@ use super::*;
 const ACTIVATION_ID: &str = "activation-test";
 const AUTH_TOKEN: &str = "auth-test";
 
+/// Uses a worker-specific registry target so native gate tests can run concurrently.
 #[tokio::test]
 async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup() {
     let state = Arc::new(WorkerHostRuntimeState::new(
         ACTIVATION_ID.into(),
         AUTH_TOKEN.into(),
     ));
+    struct GateCleanup(Arc<WorkerHostRuntimeState>);
+    impl Drop for GateCleanup {
+        /// Remove global gates even when a test assertion unwinds.
+        fn drop(&mut self) {
+            self.0.cleanup_conditional_middleware_guardrails();
+        }
+    }
+    let _cleanup = GateCleanup(Arc::clone(&state));
     let service = WorkerHostRuntimeService {
         state: state.clone(),
     };
@@ -60,7 +69,7 @@ async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup(
         auth_token: AUTH_TOKEN.into(),
         name: "owned-gate".into(),
         kinds: vec![RegistrationSurface::Subscriber as i32],
-        registration_name: "fixture-subscriber".into(),
+        registration_name: "worker-fixture-subscriber".into(),
         reason: "disabled".into(),
         callback: false,
     };
@@ -104,7 +113,7 @@ async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup(
         .handle;
     assert!(!crate::api::registry::runtime_registration_is_enabled(
         RuntimeRegistrationKind::Subscriber,
-        "fixture-subscriber"
+        "worker-fixture-subscriber"
     ));
     assert_eq!(
         service
@@ -167,7 +176,7 @@ async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup(
     );
     assert!(crate::api::registry::runtime_registration_is_enabled(
         RuntimeRegistrationKind::Subscriber,
-        "fixture-subscriber"
+        "worker-fixture-subscriber"
     ));
     service
         .register_conditional_middleware_guardrail(Request::new(valid.clone()))
@@ -183,7 +192,7 @@ async fn worker_gate_control_enforces_activation_ownership_and_shutdown_cleanup(
     );
     assert!(crate::api::registry::runtime_registration_is_enabled(
         RuntimeRegistrationKind::Subscriber,
-        "fixture-subscriber"
+        "worker-fixture-subscriber"
     ));
     assert_eq!(
         service

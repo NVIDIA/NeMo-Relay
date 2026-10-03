@@ -3225,8 +3225,34 @@ async fn registration_rejects_changed_transcripts_and_invalid_signatures_and_con
     }
 }
 
+/// Captures readiness records in a child process with its own logger and file sink.
 #[tokio::test]
 async fn published_worker_probe_failure_retains_the_session_and_reports_recovery() {
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_READINESS_LOG_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = tokio::time::timeout(
+            Duration::from_secs(20),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "daemon::broker::server::tests::published_worker_probe_failure_retains_the_session_and_reports_recovery",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("readiness logging child timed out")
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "readiness logging child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     use nemo_relay::logging::{
         FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
     };
@@ -3291,6 +3317,7 @@ async fn published_worker_probe_failure_retains_the_session_and_reports_recovery
     );
 }
 
+/// Stages a signed worker generation and serves its control channel for recovery requests.
 async fn recovering_worker_fixture(
     worker_endpoint: Option<&str>,
 ) -> (

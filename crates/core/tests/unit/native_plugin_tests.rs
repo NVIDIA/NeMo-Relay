@@ -165,6 +165,7 @@ fn native_logging_rejects_invalid_targets_and_fields_without_leaking_strings() {
     }
 }
 
+/// Uses a native-specific registry target so worker gate tests can run concurrently.
 #[test]
 fn native_owned_gate_handles_are_activation_scoped_and_cleanup_disables_the_capability() {
     let _context = GlobalContextRestore::replace_with_empty();
@@ -175,10 +176,18 @@ fn native_owned_gate_handles_are_activation_scoped_and_cleanup_disables_the_capa
         active: AtomicBool::new(true),
         gates: Mutex::new(HashMap::new()),
     });
+    struct GateCleanup(Arc<NativeHostPluginRuntime>);
+    impl Drop for GateCleanup {
+        /// Remove global gates even when a test assertion unwinds.
+        fn drop(&mut self) {
+            let _ = self.0.cleanup();
+        }
+    }
+    let _cleanup = GateCleanup(Arc::clone(&runtime));
     let raw: *const NemoRelayNativePluginRuntime = Arc::into_raw(runtime.clone()).cast();
     let name = native_string("gate:with/separators");
     let kinds = native_string(r#"["subscriber"]"#);
-    let registration_name = native_string("fixture-subscriber");
+    let registration_name = native_string("native-fixture-subscriber");
     let reason = native_string("disabled by native plugin");
     let live = native_string_live_allocations();
     let mut handle = ptr::null_mut();
@@ -212,7 +221,7 @@ fn native_owned_gate_handles_are_activation_scoped_and_cleanup_disables_the_capa
     );
     assert!(!crate::api::registry::runtime_registration_is_enabled(
         RuntimeRegistrationKind::Subscriber,
-        "fixture-subscriber"
+        "native-fixture-subscriber"
     ));
     let mut duplicate = ptr::null_mut();
     assert_eq!(register(&mut duplicate), NemoRelayStatus::AlreadyExists);
@@ -246,7 +255,7 @@ fn native_owned_gate_handles_are_activation_scoped_and_cleanup_disables_the_capa
     assert!(runtime.gates.lock().unwrap().is_empty());
     assert!(crate::api::registry::runtime_registration_is_enabled(
         RuntimeRegistrationKind::Subscriber,
-        "fixture-subscriber"
+        "native-fixture-subscriber"
     ));
     let mut output = ptr::null_mut();
     assert_eq!(register(&mut output), NemoRelayStatus::NotFound);
@@ -8686,6 +8695,7 @@ fn native_stream_continuation_covers_success_and_error() {
 }
 
 #[cfg(unix)]
+/// Returns owned intercept outcomes, including invalid variants for string cleanup checks.
 unsafe extern "C" fn echo_native_llm_intercept(
     _user_data: *mut c_void,
     name: *const NemoRelayNativeString,

@@ -3266,8 +3266,11 @@ fn replacement_teardown_failure_preserves_diagnostics_and_records_unremoved_call
     reset_global();
 }
 
+/// Holds the runtime-owner lock because the spawned mutation updates process-global ownership.
 #[test]
 fn owned_plugin_mutation_contains_panics_and_accepts_the_next_operation() {
+    let _guard = lock_runtime_owner();
+    reset_global();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -3290,6 +3293,7 @@ fn owned_plugin_mutation_contains_panics_and_accepts_the_next_operation() {
             .unwrap(),
         42
     );
+    reset_global();
 }
 
 #[test]

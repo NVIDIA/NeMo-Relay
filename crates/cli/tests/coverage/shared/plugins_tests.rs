@@ -146,11 +146,12 @@ fn dynamic_manifest_discovery_resolves_valid_references_and_rejects_bad_containe
     }
 }
 
+/// Failed removals, nested updates, and array edits must leave the raw TOML intact.
 #[test]
 fn dynamic_config_rejects_json_null_without_changing_the_document() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("plugins.toml");
-    std::fs::write(&path, "[[plugins.dynamic]]\nmanifest = \"plugin/relay-plugin.toml\"\nconfig = { retained = true }\n").unwrap();
+    std::fs::write(&path, "[[plugins.dynamic]]\nmanifest = \"plugin/relay-plugin.toml\"\nconfig = { retained = true, nested = { a = 1 }, array = [1, 2] }\n").unwrap();
     let mut document = PluginConfigDocument::read(&path).unwrap();
     let before = document.render().unwrap();
     let invalid = serde_json::Map::from_iter([("unsupported".into(), Value::Null)]);
@@ -163,13 +164,24 @@ fn dynamic_config_rejects_json_null_without_changing_the_document() {
     );
     assert_eq!(document.render().unwrap(), before);
     let original = document.dynamic_entries().unwrap()[0].config.clone();
-    assert!(
-        document
-            .patch_dynamic_config(0, original.as_ref(), Some(invalid))
-            .unwrap_err()
-            .to_string()
-            .contains("could not convert dynamic plugin config value to TOML")
-    );
+    for updated in [
+        Value::Object(invalid),
+        serde_json::json!({"retained": true, "nested": {"a": 2, "z": null}, "array": [1, 2]}),
+        serde_json::json!({"retained": true, "nested": {"a": 1}, "array": [3, null]}),
+    ] {
+        assert!(
+            document
+                .patch_dynamic_config(
+                    0,
+                    original.as_ref(),
+                    Some(updated.as_object().unwrap().clone())
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("could not convert dynamic plugin config value to TOML")
+        );
+        assert_eq!(document.render().unwrap(), before);
+    }
 }
 
 fn write_editor_dynamic_manifest(
