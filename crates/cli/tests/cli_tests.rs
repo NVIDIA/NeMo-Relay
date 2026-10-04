@@ -6286,6 +6286,8 @@ fn daemon_token_ensure_creates_once_and_never_prints_the_token() {
     assert!(!refused.status.success());
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert!(stderr.contains(".client-token"), "{stderr}");
+    // Refused for its contents (the rewrite keeps owner-only permissions), not another reason.
+    assert!(stderr.contains("does not contain"), "{stderr}");
     assert!(!stderr.contains("corrupt"), "{stderr}");
     assert_eq!(std::fs::read_to_string(&token_path).unwrap(), "corrupt");
 }
