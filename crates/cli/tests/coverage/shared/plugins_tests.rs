@@ -37,6 +37,153 @@ use guardrails_compat::{
     PLUGIN_KIND as NEMO_GUARDRAILS_PLUGIN_KIND, RemoteConfig as RemoteBackendConfig,
 };
 
+#[test]
+fn plugin_document_policy_edits_preserve_host_extensions_and_prune_default_fields() {
+    use nemo_relay::plugin::UnsupportedBehavior;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("plugins.toml");
+    std::fs::write(
+        &path,
+        r#"
+version = 1
+[policy]
+unknown_component = "ignore"
+unknown_field = "ignore"
+unsupported_value = "ignore"
+host_extension = "preserve"
+"#,
+    )
+    .unwrap();
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    document.config_mut().policy = ConfigPolicy::default();
+    let rendered: toml::Table = document.render().unwrap().parse().unwrap();
+    assert_eq!(rendered["policy"].as_table().unwrap().len(), 1);
+    assert_eq!(
+        rendered["policy"]["host_extension"].as_str(),
+        Some("preserve")
+    );
+    document.config_mut().policy.unknown_component = UnsupportedBehavior::Error;
+    let rendered: toml::Table = document.render().unwrap().parse().unwrap();
+    assert_eq!(
+        rendered["policy"]["unknown_component"].as_str(),
+        Some("error")
+    );
+    assert_eq!(
+        rendered["policy"]["host_extension"].as_str(),
+        Some("preserve")
+    );
+    document.write().unwrap();
+    assert_eq!(
+        PluginConfigDocument::read(&path)
+            .unwrap()
+            .config()
+            .policy
+            .unknown_component,
+        UnsupportedBehavior::Error
+    );
+
+    std::fs::write(&path, "[policy]\nunknown_component = \"ignore\"\n").unwrap();
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    document.config_mut().policy = ConfigPolicy::default();
+    let rendered: toml::Table = document.render().unwrap().parse().unwrap();
+    assert!(!rendered.contains_key("policy"));
+}
+
+#[test]
+fn dynamic_manifest_discovery_resolves_valid_references_and_rejects_bad_container_shapes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("plugins.toml");
+    assert!(config_io::dynamic_manifest_refs(&path).unwrap().is_empty());
+    for source in ["version = 1", "[plugins]"] {
+        std::fs::write(&path, source).unwrap();
+        assert!(config_io::dynamic_manifest_refs(&path).unwrap().is_empty());
+    }
+    let absolute = directory.path().join("absolute/relay-plugin.toml");
+    let dynamic = toml::Table::from_iter([(
+        "plugins".into(),
+        toml::Value::Table(toml::Table::from_iter([(
+            "dynamic".into(),
+            toml::Value::Array(vec![
+                toml::Value::Table(toml::Table::from_iter([(
+                    "manifest".into(),
+                    toml::Value::String("relative/relay-plugin.toml".into()),
+                )])),
+                toml::Value::Table(toml::Table::from_iter([(
+                    "manifest".into(),
+                    toml::Value::String(absolute.to_string_lossy().into_owned()),
+                )])),
+                toml::Value::Table(toml::Table::new()),
+                toml::Value::Table(toml::Table::from_iter([(
+                    "manifest".into(),
+                    toml::Value::Integer(42),
+                )])),
+            ]),
+        )])),
+    )]);
+    std::fs::write(&path, toml::to_string(&dynamic).unwrap()).unwrap();
+    assert_eq!(
+        config_io::dynamic_manifest_refs(&path).unwrap(),
+        vec![
+            directory.path().join("relative/relay-plugin.toml"),
+            absolute
+        ]
+    );
+    for (source, expected) in [
+        ("plugins = 42", "[plugins] must be a table"),
+        (
+            "[plugins]\ndynamic = 42",
+            "plugins.dynamic must be an array",
+        ),
+    ] {
+        std::fs::write(&path, source).unwrap();
+        assert!(
+            config_io::dynamic_manifest_refs(&path)
+                .unwrap_err()
+                .to_string()
+                .contains(expected)
+        );
+    }
+}
+
+/// Failed removals, nested updates, and array edits must leave the raw TOML intact.
+#[test]
+fn dynamic_config_rejects_json_null_without_changing_the_document() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("plugins.toml");
+    std::fs::write(&path, "[[plugins.dynamic]]\nmanifest = \"plugin/relay-plugin.toml\"\nconfig = { retained = true, nested = { a = 1 }, array = [1, 2] }\n").unwrap();
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    let before = document.render().unwrap();
+    let invalid = serde_json::Map::from_iter([("unsupported".into(), Value::Null)]);
+    assert!(
+        document
+            .set_dynamic_config(0, invalid.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("could not convert dynamic plugin config to TOML")
+    );
+    assert_eq!(document.render().unwrap(), before);
+    let original = document.dynamic_entries().unwrap()[0].config.clone();
+    for updated in [
+        Value::Object(invalid),
+        serde_json::json!({"retained": true, "nested": {"a": 2, "z": null}, "array": [1, 2]}),
+        serde_json::json!({"retained": true, "nested": {"a": 1}, "array": [3, null]}),
+    ] {
+        assert!(
+            document
+                .patch_dynamic_config(
+                    0,
+                    original.as_ref(),
+                    Some(updated.as_object().unwrap().clone())
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("could not convert dynamic plugin config value to TOML")
+        );
+        assert_eq!(document.render().unwrap(), before);
+    }
+}
+
 fn write_editor_dynamic_manifest(
     dir: &Path,
     plugin_id: &str,

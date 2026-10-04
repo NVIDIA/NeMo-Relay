@@ -461,11 +461,13 @@ original TCP packets or HTTP frame boundaries.
 
 The shared connection pools reuse HTTP/1.1 connections and support concurrent
 HTTP/2 streams. A slow client slows delivery from the provider. If the client
-disconnects, Relay cancels the corresponding provider request. Relay has separate
-deadlines for connections and response headers. It does not set a total time
-limit after streaming starts.
+disconnects, Relay cancels the corresponding provider request. Relay limits
+connection establishment but waits for response headers without a deadline by
+default. Set `[upstream] response_timeout_secs` to a positive number to limit
+the response-header wait; `0` disables the limit. Relay does not set a total
+time limit after streaming starts.
 
-A request that exceeds the daemon's 60-second response-header deadline returns
+A request that exceeds the daemon's configured response-header deadline returns
 `504`. This timeout does not disconnect the worker or change its route. The
 worker can still be waiting for middleware or a provider. A worker transport
 failure, response-body failure, or explicit route rejection triggers control
@@ -491,7 +493,7 @@ the observation copy. It does not limit, buffer, or cut off the stream delivered
 to the caller.
 
 Semantic observation has a separate 15-minute completion deadline, independent
-of the provider's 60-second response-head deadline. Exceeding the observation
+of the configured provider response-header wait. Exceeding the observation
 deadline marks only the observation copy as incomplete. It does not stop
 the stream delivered to the caller.
 

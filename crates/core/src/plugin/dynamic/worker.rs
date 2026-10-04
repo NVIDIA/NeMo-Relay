@@ -2131,7 +2131,7 @@ impl WorkerPluginCallback {
             let _completion = WorkerStreamCompletionSignal(completion_tx);
             let _codec_capabilities = codec_capabilities;
             let result = tokio::select! {
-                result = worker_rpc(client.invoke_stream(worker_rpc_request(invoke))) => result,
+                result = client.invoke_stream(worker_rpc_request(invoke)) => result,
                 _ = tx.closed() => {
                     guard.cancel_and_wait("host stopped consuming the worker stream").await;
                     guard.finish();
@@ -2313,9 +2313,16 @@ impl WorkerPluginCallback {
     async fn invoke_async(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
         let callback_name = request.registration_name.clone();
         let surface = request.surface;
-        let result = self
-            .invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
-            .await;
+        // Execution intercepts may await long-running tools or model calls through
+        // next(). Their caller owns cancellation; short callbacks retain an RPC deadline.
+        let timeout = match RegistrationSurface::try_from(surface) {
+            Ok(
+                RegistrationSurface::ToolExecutionIntercept
+                | RegistrationSurface::LlmExecutionIntercept,
+            ) => None,
+            _ => Some(WORKER_RPC_TIMEOUT),
+        };
+        let result = self.invoke_async_with_timeout(request, timeout).await;
         if let Err(error) = &result {
             let surface_name = RegistrationSurface::try_from(surface)
                 .map(|surface| surface.as_str_name())
@@ -2335,12 +2342,15 @@ impl WorkerPluginCallback {
     async fn invoke_async_with_timeout(
         &self,
         request: InvokeRequest,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> FlowResult<InvokeResponse> {
         let mut guard = WorkerInvocationGuard::new(self, &request);
         let mut client = self.client.clone();
-        let result =
-            worker_rpc_with_timeout(timeout, client.invoke(worker_rpc_request(request))).await;
+        let response = client.invoke(worker_rpc_request(request));
+        let result = match timeout {
+            Some(timeout) => worker_rpc_with_timeout(timeout, response).await,
+            None => response.await,
+        };
         if result
             .as_ref()
             .is_err_and(|err| err.code() == tonic::Code::DeadlineExceeded)

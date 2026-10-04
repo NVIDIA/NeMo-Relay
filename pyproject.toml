@@ -56,7 +56,11 @@ dev = [
     # Transitive dependency of beautifulsoup4; keep it at a patched release.
     "soupsieve>=2.9.0",
     "ty>=0.0.1a7",
+    # Transitive dependency of optional integrations; keep it at a patched release.
+    "urllib3>=2.8.0",
     "uv~=0.11.0",
+    # Transitive dependency of pre-commit; keep it at a patched release.
+    "virtualenv>=21.7.13",
 ]
 
 test = [

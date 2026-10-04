@@ -5,6 +5,9 @@
 
 import asyncio
 import contextvars
+import subprocess
+import sys
+import textwrap
 import threading
 from collections.abc import AsyncIterator, Awaitable
 from typing import Never, NoReturn, cast
@@ -1453,6 +1456,143 @@ class TestLLMInterceptsAsync:
 
 
 class TestLLMStreaming:
+    def test_execute_on_small_thread_stack(self) -> None:
+        """Check small-stack LLM calls and isolation between synchronous callers."""
+        # musl defaults to 128 KiB thread stacks. Isolate a native stack
+        # overflow so a regression reports a failed test instead of killing pytest.
+        script = textwrap.dedent(
+            """
+            import asyncio
+            import contextvars
+            import threading
+            from concurrent.futures import Future, ThreadPoolExecutor
+
+            from nemo_relay import (
+                LLMRequest, LLMRequestInterceptOutcome, PendingMarkSpec,
+                intercepts, llm, subscribers,
+            )
+
+            request_id = contextvars.ContextVar("small-stack-request-id")
+            concurrent_intercept_barrier = threading.Barrier(2)
+
+            def intercept(name, request, annotated):
+                "Check each callback's context before and after overlapping calls."
+                expected_context = request.content.get("expected_context", "small-stack")
+                assert request_id.get() == expected_context
+                if name.startswith("concurrent-"):
+                    concurrent_intercept_barrier.wait(timeout=5)
+                    assert request_id.get() == expected_context
+                content = request.content
+                content["intercepted"] = True
+                return LLMRequestInterceptOutcome(
+                    LLMRequest(request.headers, content), annotated,
+                    [PendingMarkSpec("small-stack-intercept")],
+                )
+
+            def check_request_outcome(outcome):
+                "Check that request rewriting and pending marks survive the bridge."
+                assert outcome.request.content["intercepted"] is True
+                assert [mark.name for mark in outcome.pending_marks] == ["small-stack-intercept"]
+
+            async def main():
+                "Exercise asynchronous LLM APIs on the constrained caller stack."
+                outcome = await llm.request_intercepts(
+                    "small-stack-request", LLMRequest({}, {"messages": []}),
+                )
+                check_request_outcome(outcome)
+                collected = []
+                events = []
+                finalized = []
+                subscribers.register("small-stack", events.append)
+
+                async def provider(request):
+                    "Produce a deterministic stream for lifecycle checks."
+                    yield {"token": "hello"}
+                    yield {"token": "world"}
+
+                def finalize():
+                    "Record finalization and return the collected stream payload."
+                    finalized.append(True)
+                    return {"chunks": collected}
+
+                try:
+                    stream = await llm.stream_execute(
+                        "small-stack",
+                        LLMRequest({}, {"messages": [], "model": "test-model"}),
+                        provider,
+                        collected.append,
+                        finalize,
+                    )
+                    chunks = [chunk async for chunk in stream]
+                    assert chunks == [{"token": "hello"}, {"token": "world"}]
+                    assert collected == chunks
+                    assert finalized == [True]
+                    await subscribers.flush_async()
+                    lifecycle = [e for e in events if e.name == "small-stack"]
+                    assert [e.scope_category for e in lifecycle] == ["start", "end"]
+                    assert lifecycle[-1].data == {"chunks": chunks}
+                    response = await llm.execute(
+                        "small-stack-single",
+                        LLMRequest({}, {"messages": [], "model": "test-model"}),
+                        lambda request: {"ok": True},
+                    )
+                    assert response == {"ok": True}
+                finally:
+                    subscribers.deregister("small-stack")
+
+            result = Future()
+
+            def run():
+                "Run synchronous, concurrent, and asynchronous caller scenarios."
+                try:
+                    request_id.set("small-stack")
+                    intercepts.register_llm_request("small-stack-intercept", 1, False, intercept)
+                    try:
+                        outcome = llm.request_intercepts(
+                            "small-stack-request", LLMRequest({}, {"messages": []}),
+                        )
+                        check_request_outcome(outcome)
+
+                        def check_concurrent_context(value):
+                            "Invoke synchronous middleware with a distinct caller context."
+                            request_id.set(value)
+                            outcome = llm.request_intercepts(
+                                f"concurrent-{value}",
+                                LLMRequest({}, {"messages": [], "expected_context": value}),
+                            )
+                            check_request_outcome(outcome)
+
+                        with ThreadPoolExecutor(max_workers=2) as pool:
+                            futures = [
+                                pool.submit(check_concurrent_context, value)
+                                for value in ("request-a", "request-b")
+                            ]
+                            for future in futures:
+                                future.result(timeout=10)
+                        asyncio.run(main())
+                    finally:
+                        intercepts.deregister_llm_request("small-stack-intercept")
+                except BaseException as error:
+                    result.set_exception(error)
+                else:
+                    result.set_result(None)
+
+            threading.stack_size(128 * 1024)
+            worker = threading.Thread(target=run)
+            worker.start()
+            worker.join()
+            result.result()
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-X", "faulthandler", "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert completed.returncode == 0, completed.stderr
+
     async def test_stream_execute(self) -> None:
         # Stream functions now take LLMRequest and return async iterator of Json
         def stream_func(request):

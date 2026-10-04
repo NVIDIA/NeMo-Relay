@@ -1861,3 +1861,34 @@ fn resource_log_providers_drain_without_false_delivery_failures() {
         assert_eq!(received.get(&Some("beta".to_string())), Some(&2));
     }
 }
+
+#[test]
+fn metric_attribute_fingerprints_distinguish_array_types_order_and_boundaries() {
+    let values = [
+        json!({}),
+        json!({"value": true}),
+        json!({"value": 1.25}),
+        json!({"value": ["ab", "c"]}),
+        json!({"value": ["a", "bc"]}),
+        json!({"value": ["c", "ab"]}),
+        json!({"value": [true, false]}),
+        json!({"value": [false, true]}),
+        json!({"value": [1, 2]}),
+        json!({"value": [2, 1]}),
+        json!({"value": [1.0, 2.0]}),
+        json!({"value": [2.0, 1.0]}),
+    ];
+    let fingerprints = values
+        .iter()
+        .map(|value| {
+            let attributes = MetricAttributes::try_from(Some(value)).unwrap();
+            metric_attribute_set_fingerprint(&attributes)
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        fingerprints.len(),
+        values.len(),
+        "different attribute sets must not share cardinality slots"
+    );
+    assert!(fingerprints.contains(&None));
+}

@@ -407,6 +407,8 @@ def request_intercepts(
     Notes:
         This runs only the request-intercept chain. It does not execute
         guardrails, codecs, provider callbacks, or stream handling.
+        Outside an event loop, middleware runs on a Relay helper thread while
+        the caller waits for the result.
     """
     ensure_scope_stack()
     return _native_llm_request_intercepts(name, request)
@@ -426,6 +428,8 @@ def conditional_execution(request: LLMRequest) -> Awaitable[None] | None:
     Notes:
         This helper evaluates only conditional-execution guardrails and does
         not invoke request intercepts, codecs, or provider execution.
+        Outside an event loop, middleware runs on a Relay helper thread while
+        the caller waits for the result.
 
     Raises:
         RuntimeError: If a guardrail rejects the call or an asynchronous

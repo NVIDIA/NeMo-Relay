@@ -14,6 +14,90 @@ fn tool_call(id: &str, name: &str, arguments: Json) -> ResponseToolCall {
 }
 
 #[test]
+fn anthropic_overlay_replaces_sanitized_tool_calls_and_removes_unsanitized_extras() {
+    let mut blocks = vec![
+        json!({"type": "text", "text": "safe"}),
+        json!({"type": "tool_use", "id": "raw-id", "name": "raw-name", "input": {"secret": "raw"}, "extension": true}),
+        json!({"type": "tool_use", "id": "extra", "name": "extra", "input": {"secret": "raw"}}),
+        json!({"provider_extension": true}),
+    ];
+    overlay_anthropic_tool_calls(
+        &mut blocks,
+        Some(&[tool_call(
+            "safe-id",
+            "safe-name",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+    );
+    assert_eq!(
+        blocks,
+        vec![
+            json!({"type": "text", "text": "safe"}),
+            json!({"type": "tool_use", "id": "safe-id", "name": "safe-name", "input": {"secret": "[REDACTED]"}, "extension": true}),
+            json!({"provider_extension": true}),
+        ]
+    );
+    overlay_anthropic_tool_calls(&mut blocks, Some(&[]));
+    assert!(blocks.iter().all(|block| block["type"] != "tool_use"));
+}
+
+#[test]
+fn anthropic_overlay_does_not_retain_raw_text_after_sanitized_blocks_are_removed() {
+    let original = vec![
+        json!({"type": "text", "text": "raw-one", "citations": []}),
+        json!({"type": "thinking", "thinking": "provider extension"}),
+        json!({"type": "text", "text": "raw-two"}),
+        json!({"type": "text", "text": "raw-three"}),
+    ];
+    let mut blocks = original.clone();
+    overlay_anthropic_text_blocks(&mut blocks, Some("safe-one\nsafe-two".into()));
+    assert_eq!(blocks[0]["text"], "safe-one");
+    assert_eq!(blocks[2]["text"], "safe-two");
+    assert!(blocks[3].get("text").is_none());
+    assert_eq!(blocks[1], original[1]);
+    overlay_anthropic_text_blocks(&mut blocks, None);
+    assert!(
+        blocks
+            .iter()
+            .filter(|block| block["type"] == "text")
+            .all(|block| block.get("text").is_none())
+    );
+    assert_eq!(blocks[0]["citations"], json!([]));
+}
+
+#[test]
+fn responses_overlay_distributes_sanitized_lines_and_removes_omitted_text() {
+    let mut items = vec![
+        json!({"type": "message", "content": [
+            {"type": "output_text", "text": "raw-one", "annotations": []},
+            {"type": "refusal", "refusal": "safe refusal"},
+            {"type": "output_text", "text": "raw-two"},
+            {"type": "output_text", "text": "raw-three"}
+        ]}),
+        json!({"type": "message", "content": [{"type": "output_text", "text": "raw-four"}]}),
+        json!({"type": "reasoning", "summary": []}),
+    ];
+    overlay_output_text_blocks(&mut items, Some("safe-one\nsafe-two".into()));
+    assert_eq!(items[0]["content"][0]["text"], "safe-one");
+    assert_eq!(items[0]["content"][2]["text"], "safe-two");
+    assert!(items[0]["content"][3].get("text").is_none());
+    assert_eq!(items[1]["content"][0]["text"], "safe-one\nsafe-two");
+    overlay_output_text_blocks(&mut items, None);
+    for item in &items[..2] {
+        assert!(
+            item["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|block| block["type"] == "output_text")
+                .all(|block| block.get("text").is_none())
+        );
+    }
+    assert_eq!(items[0]["content"][1]["refusal"], "safe refusal");
+    assert_eq!(items[2], json!({"type": "reasoning", "summary": []}));
+}
+
+#[test]
 fn openai_chat_overlay_truncates_extra_raw_tool_calls() {
     let mut message = json!({
         "tool_calls": [

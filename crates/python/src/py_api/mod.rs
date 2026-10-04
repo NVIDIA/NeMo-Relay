@@ -306,22 +306,22 @@ fn with_python_publication_context<T>(f: impl FnOnce() -> T) -> T {
     with_publication_context(py_callable::capture_python_publication_context(), f)
 }
 
+/// Poll synchronous middleware on a helper thread and propagate its result or panic.
 fn block_on_sync_middleware<F, T>(future: F) -> FlowResult<T>
 where
     F: Future<Output = FlowResult<T>> + Send,
     T: Send,
 {
     let runtime = pyo3_async_runtimes::tokio::get_runtime();
-    if tokio::runtime::Handle::try_current().is_ok() {
-        std::thread::scope(|scope| {
-            scope
-                .spawn(move || runtime.block_on(future))
-                .join()
-                .unwrap_or_else(|panic| resume_unwind(panic))
-        })
-    } else {
-        runtime.block_on(future)
-    }
+    // Poll on a Rust helper thread even outside Tokio: constructing boxed
+    // child futures while polling can still exceed Python's small thread stack.
+    // The caller waits synchronously, and reentrant Tokio calls stay supported.
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || runtime.block_on(future))
+            .join()
+            .unwrap_or_else(|panic| resume_unwind(panic))
+    })
 }
 
 fn run_standalone_middleware<'py, F, T, C>(
@@ -1292,7 +1292,9 @@ fn llm_call_execute<'py>(
                         .codec_opt(codec_arc)
                         .response_codec_opt(response_codec_arc)
                         .build();
-                    let result = core_llm_api::llm_call_execute(params)
+                    // Box the core future on Tokio's thread so the Python entry
+                    // point does not construct its large state on the caller's stack.
+                    let result = Box::pin(core_llm_api::llm_call_execute(params))
                         .await
                         .map_err(to_py_err)?;
                     Python::attach(|py| json_to_py(py, &result))
@@ -1404,7 +1406,10 @@ fn llm_stream_call_execute<'py>(
                         .codec_opt(codec_arc)
                         .response_codec_opt(response_codec_arc)
                         .build();
-                    let rust_stream = core_llm_api::llm_stream_call_execute(params)
+                    // Keep the large core future out of the bridge future constructed
+                    // on Python's thread (musl thread stacks can be only 128 KiB).
+                    // Construct and box it here when Tokio polls the bridge instead.
+                    let rust_stream = Box::pin(core_llm_api::llm_stream_call_execute(params))
                         .await
                         .map_err(to_py_err)?;
 
@@ -1844,7 +1849,8 @@ fn llm_request_intercepts<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     run_standalone_middleware(
         py,
-        async move { core_llm_api::llm_request_intercepts(&name, request.inner).await },
+        // Keep the core future out of the bridge constructed on Python's thread.
+        async move { Box::pin(core_llm_api::llm_request_intercepts(&name, request.inner)).await },
         |py, result| {
             Py::new(
                 py,

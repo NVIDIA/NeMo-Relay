@@ -134,6 +134,7 @@ impl PluginConfigDocument {
     ///
     /// Unchanged TOML values remain in the raw document. This matters for host extensions that
     /// use TOML-native values, such as datetimes, which do not have an equivalent JSON type.
+    /// Conversion failures leave the document unchanged.
     pub(crate) fn patch_dynamic_config(
         &mut self,
         index: usize,
@@ -145,16 +146,19 @@ impl PluginConfigDocument {
             (None, Some(updated)) => self.set_dynamic_config(index, updated),
             (Some(original), Some(updated)) => {
                 let entry = self.dynamic_entry_mut(index)?;
-                let Some(raw) = entry.get_mut("config") else {
+                let Some(raw) = entry.get("config") else {
                     let updated = json_to_toml(Value::Object(updated))?;
                     entry.insert("config".to_owned(), updated);
                     return Ok(());
                 };
+                let mut patched = raw.clone();
                 patch_json_value(
-                    raw,
+                    &mut patched,
                     &Value::Object(original.clone()),
                     &Value::Object(updated),
-                )
+                )?;
+                entry.insert("config".to_owned(), patched);
+                Ok(())
             }
         }
     }

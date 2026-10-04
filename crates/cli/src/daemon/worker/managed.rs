@@ -89,7 +89,6 @@ impl Drop for GatewayCallCleanup {
     }
 }
 
-const RESPONSE_HEAD_TIMEOUT: Duration = Duration::from_secs(60);
 /// Observation is off-path and has its own budget for long-running completions.
 const OBSERVATION_COMPLETION_TIMEOUT: Duration = Duration::from_secs(900);
 const OBSERVATION_QUEUE_FRAMES: usize = 32;
@@ -728,7 +727,8 @@ async fn dispatch_unmanaged(
     let request = prepare_forward_request(request, destination, &strip)
         .map_err(|error| CliError::InvalidPayload(error.to_string()))?
         .map(box_body);
-    let response = tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, upstream.request(request))
+    let response = config
+        .wait_for_response(upstream.request(request))
         .await
         .map_err(|_| CliError::Launch("provider response-head timeout".into()))?
         .map_err(|error| CliError::Launch(error.to_string()))?;
@@ -779,7 +779,8 @@ async fn dispatch_unbuffered_observed(
     let request = prepare_forward_request(request, destination, &strip)
         .map_err(|error| CliError::InvalidPayload(error.to_string()))?
         .map(box_body);
-    let response = request_worker_upstream(upstream, request, &operational, streaming).await?;
+    let response =
+        request_worker_upstream(upstream, request, &operational, streaming, config).await?;
     let response = prepare_forward_response(response, &strip).map_err(|error| {
         operational::upstream_failed(&operational, "invalid_response");
         CliError::Launch(error.to_string())
@@ -886,7 +887,8 @@ async fn dispatch_observed(
         .map_err(|error| CliError::InvalidPayload(error.to_string()))?
         .map(box_body);
     let response =
-        request_worker_upstream(upstream, request, &operational, prepared.streaming).await?;
+        request_worker_upstream(upstream, request, &operational, prepared.streaming, config)
+            .await?;
     let response = prepare_forward_response(response, &strip).map_err(|error| {
         operational::upstream_failed(&operational, "invalid_response");
         CliError::Launch(error.to_string())
@@ -897,16 +899,17 @@ async fn dispatch_observed(
     Ok((Response::from_parts(parts, body), observation))
 }
 
-/// Sends one managed-worker provider request while preserving the existing response-head timeout.
+/// Sends one managed-worker provider request using the configured response wait.
 /// The ten-second observation timer reports slow headers but never cancels the request.
 async fn request_worker_upstream(
     upstream: PooledClient,
     request: Request<RelayBody>,
     operational: &OperationalContext,
     streaming: bool,
+    config: &GatewayConfig,
 ) -> Result<Response<Incoming>, CliError> {
     operational::upstream_started(operational, streaming);
-    let request = tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, upstream.request(request));
+    let request = config.wait_for_response(upstream.request(request));
     tokio::pin!(request);
     let response = tokio::select! {
         response = &mut request => response,

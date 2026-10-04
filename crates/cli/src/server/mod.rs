@@ -44,8 +44,6 @@ use crate::plugins::lifecycle::{ActiveDynamicPluginComponent, DynamicPluginActiv
 use crate::sessions::SessionManager;
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-// A successful read resets this limit, allowing healthy streaming responses to continue.
-const HTTP_IDLE_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -513,7 +511,7 @@ impl AppState {
     ) -> Self {
         let sessions = SessionManager::new(config.clone());
         sessions.start_idle_sweeper();
-        let http = gateway_http_client(HTTP_IDLE_READ_TIMEOUT, false);
+        let http = gateway_http_client(config.response_timeout(), false);
         // A second client for destinations the caller named, which must not follow redirects.
         //
         // Validation applies to the URL that was named; a redirect names a different one, and
@@ -521,7 +519,7 @@ impl AppState {
         // here either -- it covers `Authorization` across origins, and provider keys travel in
         // `x-api-key` and friends, which are ordinary headers to it. So a validated `https`
         // endpoint could 307 a caller's provider key to any host, including over plain http.
-        let http_no_redirect = gateway_http_client(HTTP_IDLE_READ_TIMEOUT, true);
+        let http_no_redirect = gateway_http_client(config.response_timeout(), true);
         Self {
             config,
             bootstrap_fingerprint,
@@ -681,10 +679,12 @@ impl AppState {
     }
 }
 
-fn gateway_http_client(idle_read_timeout: Duration, no_redirect: bool) -> Client {
-    let builder = Client::builder()
-        .connect_timeout(HTTP_CONNECT_TIMEOUT)
-        .read_timeout(idle_read_timeout);
+fn gateway_http_client(idle_read_timeout: Option<Duration>, no_redirect: bool) -> Client {
+    let builder = Client::builder().connect_timeout(HTTP_CONNECT_TIMEOUT);
+    let builder = match idle_read_timeout {
+        Some(timeout) => builder.read_timeout(timeout),
+        None => builder,
+    };
     let builder = if no_redirect {
         builder.redirect(reqwest::redirect::Policy::none())
     } else {

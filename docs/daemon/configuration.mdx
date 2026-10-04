@@ -41,6 +41,7 @@ For a new deployment, create `config.toml` with these contents:
 [upstream]
 openai_base_url = "https://api.openai.com/v1"
 anthropic_base_url = "https://api.anthropic.com"
+response_timeout_secs = 0
 
 [daemon.logging]
 level = "info"
@@ -55,6 +56,12 @@ primary `nemo-relay daemon` process reads only `[daemon.logging]`; `[logging]`
 continues to configure user-space Relay processes such as agent launches. Do not
 store users' provider credentials in this shared file. Info-level logs expose
 readiness events used by the runbooks; Relay's default log level is `error`.
+
+Relay waits for provider responses without a deadline by default, allowing long
+compaction and model execution to finish. Caller cancellation ends the request.
+Set `[upstream] response_timeout_secs` to a positive number of seconds to limit
+the response-header wait on daemon and worker hops. Set it to `0` to disable
+that limit. Connection, startup, and health checks retain their separate deadlines.
 
 Create `plugins.toml` with the approved configuration from
 [Configure Plugins](/configure-plugins/about). A minimal file with no plugins is:

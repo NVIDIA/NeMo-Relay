@@ -57,8 +57,9 @@ Warnings show slow or failed external work. They do not change request behavior:
 - `hook_failed` for a hook that is allowed to fail open.
 
 These timing records only report what happened. They do not cancel a request or a
-stream. Local gateway calls still use their 30-second connect limit and 300-second
-idle-read limit. `error` records cover rejected payload and hook-response limits, hooks that
+stream. Local gateway calls retain their 30-second connect limit. Provider waits
+have no deadline by default; `[upstream] response_timeout_secs` can set a limit.
+`error` records cover rejected payload and hook-response limits, hooks that
 must fail closed, upstream transport failures, and Relay adapter, session, or
 runtime failures. These records use safe fields such as `error_kind`, `status_code`,
 `threshold_millis`, and `elapsed_millis`. A `limit_exceeded` record also includes

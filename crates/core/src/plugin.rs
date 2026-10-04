@@ -2278,6 +2278,14 @@ fn skip_implicit_plugin_config() -> bool {
 /// Resolves the platform system configuration directory.
 #[doc(hidden)]
 pub fn system_config_dir() -> PathBuf {
+    #[cfg(feature = "__skip-implicit-config")]
+    if let Some(path) = std::env::var_os("NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR") {
+        return PathBuf::from(path);
+    }
+    platform_system_config_dir()
+}
+
+fn platform_system_config_dir() -> PathBuf {
     #[cfg(windows)]
     {
         std::env::var_os("ProgramData")

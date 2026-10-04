@@ -483,20 +483,21 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
         resolve_parent_uuid(params.parent)
     };
     let (event, subscribers, emission_scope_stack) = {
-        let subscribers = if params.name == COMPACTION_EVENT_NAME {
-            let mut scope_guard = scope_stack
-                .write()
-                .map_err(|error| scope_stack_lock_error(error, "mark"))?;
-            let subscribers =
-                snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
-            scope_guard.mark_agent_fresh(parent_uuid);
-            subscribers
-        } else {
+        let scope_subscribers = {
             let scope_guard = scope_stack
                 .read()
                 .map_err(|error| scope_stack_lock_error(error, "mark"))?;
-            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+            scope_guard.collect_scope_local_subscribers()
         };
+        // Subscriber selection can invoke plugin gates that snapshot this stack.
+        // Release the scope lock first, and preserve selection before freshness.
+        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
+        if params.name == COMPACTION_EVENT_NAME {
+            scope_stack
+                .write()
+                .map_err(|error| scope_stack_lock_error(error, "mark"))?
+                .mark_agent_fresh(parent_uuid);
+        }
         let context = global_context();
         let state = context
             .read()

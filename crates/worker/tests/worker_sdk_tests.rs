@@ -792,7 +792,7 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_json_field(tool_exec.clone(), "next", "tool");
     assert_json_field(tool_exec, "phase", "tool_exec");
     let logs = host.logs();
-    assert_eq!(logs.len(), 6);
+    assert_eq!(logs.len(), 11);
     for (request, level) in logs.iter().take(5).zip([
         LogLevel::Trace,
         LogLevel::Debug,
@@ -813,6 +813,21 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_eq!(logs[5].level, LogLevel::Info as i32);
     assert_eq!(logs[5].target, "");
     assert_eq!(logs[5].message, "direct message");
+    for (request, level) in logs[6..].iter().zip([
+        LogLevel::Trace,
+        LogLevel::Debug,
+        LogLevel::Info,
+        LogLevel::Warn,
+        LogLevel::Error,
+    ]) {
+        assert_eq!(request.level, level as i32);
+        assert_eq!(request.message, "method message");
+        assert_eq!(request.target, "plugin.methods");
+        assert_eq!(
+            decode_json_value::<Json>(request.fields.as_ref().unwrap()).unwrap(),
+            json!({"method": true})
+        );
+    }
     let conditional_middleware = client
         .invoke(Request::new(InvokeRequest {
             activation_id: ACTIVATION_ID.into(),
@@ -2203,6 +2218,156 @@ struct SurfacePlugin {
     events: Arc<Mutex<Vec<String>>>,
 }
 
+struct DiscoveryPlugin;
+
+impl WorkerPlugin for DiscoveryPlugin {
+    fn plugin_id(&self) -> &str {
+        PLUGIN_ID
+    }
+
+    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+        let runtime = ctx.runtime().unwrap();
+        ctx.register_tool_request_intercept("discover", 1, false, move |_, _| {
+            let runtime = runtime.clone();
+            async move {
+                Ok(serde_json::to_value(
+                    runtime.list_runtime_registrations(None).await?,
+                )?)
+            }
+        });
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_runtime_discovery_validates_host_identities_and_preserves_owner_kinds() {
+    use nemo_relay_worker_proto::v1::{
+        RuntimeRegistrationIdentity as Identity, RuntimeRegistrationOwner as Owner,
+        RuntimeRegistrationOwnerKind as OwnerKind,
+    };
+
+    let host = MockHost::default();
+    let (host_handle, host_endpoint) = spawn_host(host.clone()).await;
+    let (worker_handle, mut client) =
+        spawn_worker(Arc::new(DiscoveryPlugin), tcp_endpoint(&host_endpoint)).await;
+    register_plugin(&mut client).await;
+    let valid = Identity {
+        kind: RegistrationSurface::Subscriber as i32,
+        local_name: "local".into(),
+        effective_name: "effective".into(),
+        owner: Some(Owner {
+            kind: OwnerKind::Plugin as i32,
+            plugin_kind: Some("acme.owner".into()),
+            component_ordinal: Some(3),
+        }),
+    };
+    for (kind, expected) in [
+        (OwnerKind::Core, "core"),
+        (OwnerKind::GlobalApi, "global_api"),
+        (OwnerKind::Plugin, "plugin"),
+    ] {
+        let mut identity = valid.clone();
+        identity.owner.as_mut().unwrap().kind = kind as i32;
+        *host.registration_response.lock().unwrap() = Some(ListRuntimeRegistrationsResponse {
+            registrations: vec![identity],
+            error: None,
+        });
+        let result = invoke_json(
+            &mut client,
+            tool_invoke(
+                "discover",
+                RegistrationSurface::ToolRequestIntercept,
+                json!({}),
+            ),
+        )
+        .await;
+        assert_eq!(result[0]["kind"], "subscriber");
+        assert_eq!(result[0]["local_name"], "local");
+        assert_eq!(result[0]["effective_name"], "effective");
+        assert_eq!(result[0]["owner"]["kind"], expected);
+        assert_eq!(result[0]["owner"]["plugin_kind"], "acme.owner");
+        assert_eq!(result[0]["owner"]["component_ordinal"], 3);
+    }
+    let owner = |kind| {
+        Some(Owner {
+            kind,
+            ..valid.owner.clone().unwrap()
+        })
+    };
+    for (identity, expected) in [
+        (
+            Identity {
+                kind: i32::MAX,
+                ..valid.clone()
+            },
+            "unknown registration kind",
+        ),
+        (
+            Identity {
+                kind: RegistrationSurface::Unspecified as i32,
+                ..valid.clone()
+            },
+            "surface is not a runtime registration kind",
+        ),
+        (
+            Identity {
+                owner: None,
+                ..valid.clone()
+            },
+            "runtime registration owner is missing",
+        ),
+        (
+            Identity {
+                owner: owner(i32::MAX),
+                ..valid.clone()
+            },
+            "unknown registration owner kind",
+        ),
+        (
+            Identity {
+                owner: owner(OwnerKind::Unspecified as i32),
+                ..valid.clone()
+            },
+            "registration owner kind is unspecified",
+        ),
+    ] {
+        *host.registration_response.lock().unwrap() = Some(ListRuntimeRegistrationsResponse {
+            registrations: vec![identity],
+            error: None,
+        });
+        assert_worker_error(
+            client
+                .invoke(Request::new(tool_invoke(
+                    "discover",
+                    RegistrationSurface::ToolRequestIntercept,
+                    json!({}),
+                )))
+                .await
+                .unwrap()
+                .into_inner(),
+            expected,
+        );
+    }
+    *host.registration_response.lock().unwrap() = Some(ListRuntimeRegistrationsResponse {
+        registrations: vec![],
+        error: Some(worker_error("host discovery failed")),
+    });
+    assert_worker_error(
+        client
+            .invoke(Request::new(tool_invoke(
+                "discover",
+                RegistrationSurface::ToolRequestIntercept,
+                json!({}),
+            )))
+            .await
+            .unwrap()
+            .into_inner(),
+        "host discovery failed",
+    );
+    worker_handle.abort();
+    host_handle.abort();
+}
+
 impl WorkerPlugin for SurfacePlugin {
     fn plugin_id(&self) -> &str {
         PLUGIN_ID
@@ -2361,6 +2526,12 @@ impl WorkerPlugin for SurfacePlugin {
                 nemo_relay_worker::relay_warn!(runtime, target: "plugin.logging", "warn message").await?;
                 nemo_relay_worker::relay_error!(runtime, target: "plugin.logging", "error message").await?;
                 runtime.log(PluginLogLevel::Info, "", "direct message", None).await?;
+                let method_fields = serde_json::Map::from_iter([("method".into(), json!(true))]);
+                runtime.trace("plugin.methods", "method message", Some(&method_fields)).await?;
+                runtime.debug("plugin.methods", "method message", Some(&method_fields)).await?;
+                runtime.info("plugin.methods", "method message", Some(&method_fields)).await?;
+                runtime.warn("plugin.methods", "method message", Some(&method_fields)).await?;
+                runtime.error("plugin.methods", "method message", Some(&method_fields)).await?;
                 runtime.emit_mark("tool-exec", None, None).await?;
                 runtime
                     .emit_mark_with_options_and_category(
@@ -2666,6 +2837,7 @@ struct MockHost {
     failures: Arc<Mutex<MockHostFailures>>,
     runtime_registration_requests: Arc<Mutex<RuntimeRegistrationRequests>>,
     scope_requests: Arc<Mutex<ScopeRequests>>,
+    registration_response: Arc<Mutex<Option<ListRuntimeRegistrationsResponse>>>,
 }
 
 impl MockHost {
@@ -2732,6 +2904,9 @@ impl RelayHostRuntime for MockHost {
             .expect("runtime registration requests lock")
             .list
             .push(request);
+        if let Some(response) = self.registration_response.lock().unwrap().clone() {
+            return Ok(Response::new(response));
+        }
         Ok(Response::new(ListRuntimeRegistrationsResponse {
             registrations: REGISTRATION_KIND_SURFACES
                 .iter()

@@ -59,3 +59,25 @@ fn bounded_reader_rejects_symlinks_without_following_them() {
     let error = read_bounded_regular_file(&link, "fixture").unwrap_err();
     assert!(error.contains("must be a regular file"), "{error}");
 }
+
+#[test]
+fn bounded_reader_rejects_a_file_that_grows_during_streaming() {
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("growing.bin");
+    let chunk = vec![0x5a; 64 * 1024];
+    fs::write(&path, &chunk).unwrap();
+    let mut delivered = Vec::new();
+    let error =
+        stream_regular_file_with_limit(&path, "growing artifact", chunk.len() as u64, |bytes| {
+            delivered.extend_from_slice(bytes);
+            let mut writer = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            writer.write_all(b"beyond the budget").unwrap();
+        })
+        .unwrap_err();
+    assert!(error.contains("exceeds the 65536-byte limit"), "{error}");
+    assert_eq!(
+        delivered, chunk,
+        "bytes beyond the limit must not reach the consumer"
+    );
+}
