@@ -308,8 +308,12 @@ Pi provider registrations also preserve Pi's runtime-selected endpoint in
 routing header and removes it before contacting the provider. It is runtime
 model metadata, not part of the managed settings artifact.
 
-Enterprise bootstrap must provide the credential through this environment
-variable:
+Enterprise bootstrap can provide the credential through this environment
+variable. Managed hooks and MCP also read the
+[per-user token file](#create-the-per-user-token-file). The environment variable
+is still required for the managed Pi extension, and for model requests whose
+provider header is sourced from the environment: Codex `env_http_headers`, and
+`ANTHROPIC_CUSTOM_HEADERS` derived from it.
 
 ```bash
 export NEMO_RELAY_CLIENT_TOKEN='<credential>'

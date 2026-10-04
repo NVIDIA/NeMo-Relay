@@ -242,6 +242,16 @@ fn ensure_rejects_an_existing_directory_other_users_can_write_or_own() {
         .to_string();
     assert!(error.contains("writable by other users"), "{error}");
     assert!(!path.exists());
+
+    // A valid existing token is not reported as usable while others can replace it.
+    write_token_file(&path, &token(7));
+    let error = ensure_client_token_unprivileged(&path)
+        .expect_err("existing token in a group-writable directory")
+        .to_string();
+    assert!(error.contains("writable by other users"), "{error}");
+    assert!(!error.contains(&token(7)), "{error}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), token(7));
+    std::fs::remove_file(&path).unwrap();
     assert_eq!(
         std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777,
         0o775

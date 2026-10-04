@@ -336,15 +336,17 @@ pub(crate) fn ensure_client_token(path: &Path) -> Result<EnsureStatus, CliError>
 }
 
 fn ensure_client_token_unprivileged(path: &Path) -> Result<EnsureStatus, CliError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| CliError::Config("client token path has no parent directory".into()))?;
+    // Check the directory before reporting an existing token: another user who can write it
+    // could remove or replace even a valid token file.
+    ensure_parent_directory(parent)?;
     match read_client_token_file(path) {
         Ok(Some(_)) => return Ok(EnsureStatus::Existing),
         Ok(None) => {}
         Err(error) => return Err(unusable_existing_file(error)),
     }
-    let parent = path
-        .parent()
-        .ok_or_else(|| CliError::Config("client token path has no parent directory".into()))?;
-    ensure_parent_directory(parent)?;
 
     let mut token = [0_u8; 32];
     SystemRandom::new().fill(&mut token).map_err(|_| {
