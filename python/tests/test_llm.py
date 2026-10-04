@@ -1194,12 +1194,35 @@ class TestLLMStreaming:
         script = textwrap.dedent(
             """
             import asyncio
+            import contextvars
             import threading
             from concurrent.futures import Future
 
-            from nemo_relay import LLMRequest, llm, subscribers
+            from nemo_relay import (
+                LLMRequest, LLMRequestInterceptOutcome, PendingMarkSpec,
+                intercepts, llm, subscribers,
+            )
+
+            request_id = contextvars.ContextVar("small-stack-request-id")
+
+            def intercept(name, request, annotated):
+                assert request_id.get() == "small-stack"
+                content = request.content
+                content["intercepted"] = True
+                return LLMRequestInterceptOutcome(
+                    LLMRequest(request.headers, content), annotated,
+                    [PendingMarkSpec("small-stack-intercept")],
+                )
+
+            def check_request_outcome(outcome):
+                assert outcome.request.content["intercepted"] is True
+                assert [mark.name for mark in outcome.pending_marks] == ["small-stack-intercept"]
 
             async def main():
+                outcome = await llm.request_intercepts(
+                    "small-stack-request", LLMRequest({}, {"messages": []}),
+                )
+                check_request_outcome(outcome)
                 collected = []
                 events = []
                 finalized = []
@@ -1242,7 +1265,16 @@ class TestLLMStreaming:
 
             def run():
                 try:
-                    asyncio.run(main())
+                    request_id.set("small-stack")
+                    intercepts.register_llm_request("small-stack-intercept", 1, False, intercept)
+                    try:
+                        outcome = llm.request_intercepts(
+                            "small-stack-request", LLMRequest({}, {"messages": []}),
+                        )
+                        check_request_outcome(outcome)
+                        asyncio.run(main())
+                    finally:
+                        intercepts.deregister_llm_request("small-stack-intercept")
                 except BaseException as error:
                     result.set_exception(error)
                 else:

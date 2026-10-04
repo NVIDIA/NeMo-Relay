@@ -272,16 +272,15 @@ where
     T: Send,
 {
     let runtime = pyo3_async_runtimes::tokio::get_runtime();
-    if tokio::runtime::Handle::try_current().is_ok() {
-        std::thread::scope(|scope| {
-            scope
-                .spawn(move || runtime.block_on(future))
-                .join()
-                .unwrap_or_else(|panic| resume_unwind(panic))
-        })
-    } else {
-        runtime.block_on(future)
-    }
+    // Poll on a Rust helper thread even outside Tokio: constructing boxed
+    // child futures while polling can still exceed Python's small thread stack.
+    // The caller waits synchronously, and reentrant Tokio calls stay supported.
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || runtime.block_on(future))
+            .join()
+            .unwrap_or_else(|panic| resume_unwind(panic))
+    })
 }
 
 fn run_standalone_middleware<'py, F, T, C>(
@@ -1809,7 +1808,8 @@ fn llm_request_intercepts<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     run_standalone_middleware(
         py,
-        async move { core_llm_api::llm_request_intercepts(&name, request.inner).await },
+        // Keep the core future out of the bridge constructed on Python's thread.
+        async move { Box::pin(core_llm_api::llm_request_intercepts(&name, request.inner)).await },
         |py, result| {
             Py::new(
                 py,
