@@ -403,10 +403,18 @@ fn validate_managed_environment(spec: &ManagedBundleSpec) -> Result<CredentialSo
     }
     let custom_headers = match std::env::var(CLAUDE_CUSTOM_HEADERS_ENV) {
         Ok(value) => value,
+        // A present header must be checked even when it cannot be decoded.
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(CliError::Config(format!(
+                "{CLAUDE_CUSTOM_HEADERS_ENV} is set but is not valid Unicode"
+            )));
+        }
         // A file-sourced credential cannot reach Claude Code model requests through the
         // environment; those requests use daemon pass-through while hooks and MCP use the file.
-        Err(_) if resolved.source == CredentialSource::File => return Ok(resolved.source),
-        Err(_) => {
+        Err(std::env::VarError::NotPresent) if resolved.source == CredentialSource::File => {
+            return Ok(resolved.source);
+        }
+        Err(std::env::VarError::NotPresent) => {
             return Err(CliError::Config(format!(
                 "managed Claude Code integration requires {CLAUDE_CUSTOM_HEADERS_ENV}; enterprise bootstrap must derive it from {ROUTE_TOKEN_ENV}"
             )));

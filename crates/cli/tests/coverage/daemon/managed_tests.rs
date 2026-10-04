@@ -484,6 +484,32 @@ fn managed_environment_accepts_a_file_sourced_credential_and_reports_its_source(
     assert!(error.contains(CLAUDE_CUSTOM_HEADERS_ENV), "{error}");
 }
 
+#[cfg(unix)]
+#[test]
+fn file_credential_rejects_a_present_non_unicode_claude_header() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("bundle");
+    let digest = write_new_bundle(&root, &spec([ManagedAgent::ClaudeCode])).unwrap();
+    let config = directory.path().join("xdg");
+    let _environment = EnvScope::set(&[
+        (ROUTE_TOKEN_ENV, None),
+        (
+            CLAUDE_CUSTOM_HEADERS_ENV,
+            Some(OsStr::from_bytes(b"x-nemo-relay-client-token: \xff")),
+        ),
+        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
+    ]);
+    let token_path = crate::daemon::common::client_token::client_token_path().unwrap();
+    crate::filesystem::atomic_write_private(&token_path, format!("{}\n", credential()).as_bytes())
+        .unwrap();
+
+    // Only an absent header is accepted for a file credential; a present one is still checked.
+    let error = refresh_bundle(&root, &digest).unwrap_err().to_string();
+    assert!(error.contains("not valid Unicode"), "{error}");
+}
+
 #[test]
 fn managed_pi_requires_an_environment_credential_even_with_a_token_file() {
     let directory = tempdir().unwrap();

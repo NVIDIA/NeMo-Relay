@@ -185,7 +185,8 @@ configuration, which is read when the harness starts:
 
 Without that header, model requests use daemon pass-through (see
 [Requests Without a Bound Credential](#requests-without-a-bound-credential)):
-they still work but produce no Relay telemetry. To attribute model traffic,
+they still work but produce no Relay telemetry. A daemon started with
+`--require-worker` rejects them with `401` instead. To attribute model traffic,
 provide the header and restart the harness. For example, export it from the
 token file in the login environment:
 
@@ -579,7 +580,8 @@ Hooks and MCP can use the per-user token file when the launch environment has
 no `NEMO_RELAY_CLIENT_TOKEN`. Gateway model routing still needs
 `ANTHROPIC_CUSTOM_HEADERS` with the matching token, set in the launch environment
 or in Claude Code settings `env`. Without it, Claude model requests pass through
-the daemon without Relay telemetry. When both variables are set, their tokens
+the daemon without Relay telemetry, or receive `401` from a daemon started with
+`--require-worker`. When both variables are set, their tokens
 must match. Check `/mcp` after startup and verify that Relay hooks are
 enabled. Managed Claude model routing requires an Anthropic API key or an
 administrator-configured Anthropic-compatible gateway credential. Claude.ai OAuth

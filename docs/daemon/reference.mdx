@@ -206,8 +206,10 @@ accepted only for a loopback target.
 When a route credential resolves from `NEMO_RELAY_CLIENT_TOKEN` or the
 per-user token file, the MCP client authenticates and registers its route
 reference before it starts the MCP protocol. Without a credential, it serves the
-MCP protocol without registering a route and never launches a worker. Its
-requests then use pass-through. If the daemon supports safe worker cancellation, MCP
+MCP protocol without registering a route and never launches a worker. The
+daemon then has no route for that session. Public requests without a credential
+use pass-through, or receive `401` when the daemon runs with `--require-worker`.
+Managed hooks without a credential answer locally and never contact the daemon. If the daemon supports safe worker cancellation, MCP
 initialization can finish while the worker starts. Worker startup failures leave
 MCP connected. With an older daemon, MCP waits for a usable route before it
 handles initialization.
