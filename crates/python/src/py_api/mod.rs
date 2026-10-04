@@ -1252,7 +1252,9 @@ fn llm_call_execute<'py>(
                         .codec_opt(codec_arc)
                         .response_codec_opt(response_codec_arc)
                         .build();
-                    let result = core_llm_api::llm_call_execute(params)
+                    // Box the core future on Tokio's thread so the Python entry
+                    // point does not construct its large state on the caller's stack.
+                    let result = Box::pin(core_llm_api::llm_call_execute(params))
                         .await
                         .map_err(to_py_err)?;
                     Python::attach(|py| json_to_py(py, &result))
@@ -1364,7 +1366,10 @@ fn llm_stream_call_execute<'py>(
                         .codec_opt(codec_arc)
                         .response_codec_opt(response_codec_arc)
                         .build();
-                    let rust_stream = core_llm_api::llm_stream_call_execute(params)
+                    // Keep the large core future out of the bridge future constructed
+                    // on Python's thread (musl thread stacks can be only 128 KiB).
+                    // Construct and box it here when Tokio polls the bridge instead.
+                    let rust_stream = Box::pin(core_llm_api::llm_stream_call_execute(params))
                         .await
                         .map_err(to_py_err)?;
 

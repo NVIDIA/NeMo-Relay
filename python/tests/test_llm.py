@@ -5,6 +5,9 @@
 
 import asyncio
 import contextvars
+import subprocess
+import sys
+import textwrap
 import threading
 from collections.abc import AsyncIterator, Awaitable
 from typing import Never, NoReturn, cast
@@ -1185,6 +1188,82 @@ class TestLLMInterceptsAsync:
 
 
 class TestLLMStreaming:
+    def test_execute_on_small_thread_stack(self) -> None:
+        # musl defaults to 128 KiB thread stacks. Isolate a native stack
+        # overflow so a regression reports a failed test instead of killing pytest.
+        script = textwrap.dedent(
+            """
+            import asyncio
+            import threading
+            from concurrent.futures import Future
+
+            from nemo_relay import LLMRequest, llm, subscribers
+
+            async def main():
+                collected = []
+                events = []
+                finalized = []
+                subscribers.register("small-stack", events.append)
+
+                async def provider(request):
+                    yield {"token": "hello"}
+                    yield {"token": "world"}
+
+                def finalize():
+                    finalized.append(True)
+                    return {"chunks": collected}
+
+                try:
+                    stream = await llm.stream_execute(
+                        "small-stack",
+                        LLMRequest({}, {"messages": [], "model": "test-model"}),
+                        provider,
+                        collected.append,
+                        finalize,
+                    )
+                    chunks = [chunk async for chunk in stream]
+                    assert chunks == [{"token": "hello"}, {"token": "world"}]
+                    assert collected == chunks
+                    assert finalized == [True]
+                    await subscribers.flush_async()
+                    lifecycle = [e for e in events if e.name == "small-stack"]
+                    assert [e.scope_category for e in lifecycle] == ["start", "end"]
+                    assert lifecycle[-1].data == {"chunks": chunks}
+                    response = await llm.execute(
+                        "small-stack-single",
+                        LLMRequest({}, {"messages": [], "model": "test-model"}),
+                        lambda request: {"ok": True},
+                    )
+                    assert response == {"ok": True}
+                finally:
+                    subscribers.deregister("small-stack")
+
+            result = Future()
+
+            def run():
+                try:
+                    asyncio.run(main())
+                except BaseException as error:
+                    result.set_exception(error)
+                else:
+                    result.set_result(None)
+
+            threading.stack_size(128 * 1024)
+            worker = threading.Thread(target=run)
+            worker.start()
+            worker.join()
+            result.result()
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-X", "faulthandler", "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert completed.returncode == 0, completed.stderr
+
     async def test_stream_execute(self) -> None:
         # Stream functions now take LLMRequest and return async iterator of Json
         def stream_func(request):
