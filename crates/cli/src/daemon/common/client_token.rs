@@ -402,8 +402,11 @@ fn refuse_privileged_user() -> Result<(), CliError> {
 }
 
 fn ensure_parent_directory(parent: &Path) -> Result<(), CliError> {
+    // Follows a symlinked config directory (common with dotfile managers) and checks the target,
+    // which is what decides who can replace the token. An existing directory is the user's
+    // general Relay config directory, so it is rejected rather than repaired.
     match fs::metadata(parent) {
-        Ok(metadata) if metadata.is_dir() => return Ok(()),
+        Ok(metadata) if metadata.is_dir() => return validate_existing_parent(parent, &metadata),
         Ok(_) => {
             return Err(CliError::Config(format!(
                 "client token directory {} is not a directory",
@@ -421,6 +424,31 @@ fn ensure_parent_directory(parent: &Path) -> Result<(), CliError> {
     }
     #[cfg(windows)]
     crate::filesystem::protect_private_windows_path(parent)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_existing_parent(parent: &Path, metadata: &fs::Metadata) -> Result<(), CliError> {
+    use std::os::unix::fs::MetadataExt;
+
+    if metadata.uid() != current_euid() {
+        return Err(CliError::Config(format!(
+            "client token directory {} is not owned by the current user; it was left unchanged",
+            parent.display()
+        )));
+    }
+    if metadata.mode() & 0o022 != 0 {
+        return Err(CliError::Config(format!(
+            "client token directory {} is writable by other users; remove group and other write permission (for example `chmod go-w`) and run `nemo-relay daemon token ensure` again",
+            parent.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_existing_parent(_parent: &Path, _metadata: &fs::Metadata) -> Result<(), CliError> {
+    // The token file itself is still required to carry the protected owner-only DACL.
     Ok(())
 }
 

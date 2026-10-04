@@ -226,6 +226,38 @@ fn ensure_never_repairs_an_unsafe_existing_file() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), token(6));
 }
 
+#[cfg(unix)]
+#[test]
+fn ensure_rejects_an_existing_directory_other_users_can_write_or_own() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let shared = directory.path().join("shared");
+    std::fs::create_dir(&shared).expect("create directory");
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o775)).expect("chmod");
+    let path = shared.join(CLIENT_TOKEN_FILENAME);
+
+    let error = ensure_client_token_unprivileged(&path)
+        .expect_err("group-writable directory")
+        .to_string();
+    assert!(error.contains("writable by other users"), "{error}");
+    assert!(!path.exists());
+    assert_eq!(
+        std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777,
+        0o775
+    );
+
+    // Ownership cannot be changed without privileges; a root-owned system directory stands in.
+    if current_euid() != 0 {
+        let foreign = Path::new("/usr").join(format!("{CLIENT_TOKEN_FILENAME}.test"));
+        let error = ensure_client_token_unprivileged(&foreign)
+            .expect_err("directory owned by another user")
+            .to_string();
+        assert!(error.contains("not owned by the current user"), "{error}");
+        assert!(!foreign.exists());
+    }
+}
+
 #[test]
 fn concurrent_ensure_calls_converge_on_one_token() {
     let directory = tempfile::tempdir().expect("tempdir");
