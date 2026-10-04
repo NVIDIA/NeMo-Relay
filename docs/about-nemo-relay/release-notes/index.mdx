@@ -123,6 +123,37 @@ known status. A healthy daemon can still have no assigned workers. Refer to
 [Probe Daemon Health](/daemon/reference#probe-daemon-health) for access and
 response fields.
 
+### Managed Daemon Client Credentials
+
+Managed hooks, the managed MCP server, and `nemo-relay doctor --managed-bundle`
+can now read the route credential from a per-user token file. These clients
+use `NEMO_RELAY_CLIENT_TOKEN` first and fall back to
+`<user config dir>/.client-token`. Environment changes made after login, such
+as `launchctl setenv`, never reach processes that were already running. The
+file covers those processes, for example a terminal opened before login setup
+finished.
+
+`nemo-relay daemon token ensure` creates that file once from the operating
+system's random source and publishes it atomically. It rejects unsafe files and
+directories rather than repairing them, refuses to run as root, and never
+prints the token. Refer to
+[Create the Per-User Token File](/daemon/configuration#create-the-per-user-token-file)
+and [Credential Resolution](/daemon/configuration#credential-resolution).
+
+A missing credential now skips telemetry and guardrails instead of breaking the
+coding agent:
+
+- A hook without a credential returns its pass-through response locally.
+- The MCP server without a credential keeps running without registering a
+  route.
+- The daemon sends public requests that have no credential header, or an
+  unbound credential, through pass-through.
+
+Such requests never receive daemon-held provider credentials and cannot choose
+their upstream. The exception is a daemon started with `--pass-through`.
+Malformed or repeated credential headers still return `401`. Refer to
+[Requests Without a Bound Credential](/daemon/configuration#requests-without-a-bound-credential).
+
 ### LLM Execution Codec Context
 
 Relay now passes a codec context to every large language model (LLM) execution
@@ -161,6 +192,15 @@ The primary `nemo-relay daemon` process reads TOML logging settings only from
 `[daemon.logging]`. It no longer falls back to `[logging]`. Move daemon service
 settings to `[daemon.logging]`. Other Relay processes still use `[logging]`.
 CLI options and environment variables still override TOML settings.
+
+Managed daemon requests without a credential header, or with an unbound
+credential, now use pass-through instead of returning `401`. A daemon started
+with `--require-worker` still returns `401`. Managed hooks without any
+resolvable credential now pass through and exit `0`, including hooks marked
+`--fail-closed`. Guardrail hooks therefore enforce only when a credential
+resolves. Run `nemo-relay daemon token ensure` for each user, and monitor
+`public_request_pass_through` daemon events with `reason = "missing_credential"`
+or `reason = "unbound_credential"`.
 
 </Warning>
 
@@ -278,6 +318,15 @@ The following list covers unresolved issues from 0.9 and new limitations in
   activity. Verify worker status and an observable plugin result, or require a
   worker and handle HTTP `503` during unavailability. Refer to
   [Daemon Operations](/daemon/operations).
+- Harness model requests do not read the per-user token file. Codex and
+  Claude Code send the route credential header only from their own provider
+  configuration, which they read at startup. Without that header, model requests
+  pass through without Relay telemetry. The managed v1 Pi extension reads only
+  `NEMO_RELAY_CLIENT_TOKEN` and fails to start without it, so
+  `nemo-relay doctor --managed-bundle` rejects a file-only credential for Pi
+  bundles. On Windows, `nemo-relay daemon token ensure` does not check the
+  access list of an existing token directory. Refer to
+  [Credential Resolution](/daemon/configuration#credential-resolution).
 - Remote daemons and client workers must be able to reach each other.
   Proxies must support WebSockets. Loopback control connections do not send
   periodic pings. An idle hung process can go undetected until an operation
