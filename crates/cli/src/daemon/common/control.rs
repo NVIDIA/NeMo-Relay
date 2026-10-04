@@ -28,6 +28,8 @@ pub(crate) const WORKER_TOKEN_HEADER: &str = "x-nemo-relay-worker-token";
 /// Private worker-to-daemon signal that a route-wide invariant failed after authentication.
 /// The daemon consumes this field and never exposes it on the public response.
 pub(crate) const WORKER_ROUTE_FAILURE_HEADER: &str = "x-nemo-relay-worker-route-failure";
+/// Control error code for a definitive route-credential rejection. Clients must not retry it.
+pub(crate) const ROUTE_CREDENTIAL_REJECTED_CODE: &str = "route_credential_rejected";
 pub(crate) const MAX_CONTROL_BODY_BYTES: usize = 256 * 1024;
 pub(crate) const CHALLENGE_LIFETIME_MS: u64 = 15_000;
 pub(crate) const ACTIVATION_LIFETIME_MS: u64 = 15_000;

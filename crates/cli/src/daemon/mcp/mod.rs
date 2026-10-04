@@ -55,7 +55,7 @@ struct Registration {
 pub(crate) async fn run(options: Options) -> Result<(), CliError> {
     let daemon_origin = explicit_daemon_origin(&options.daemon_address)?;
     let Some(resolved) = resolve_route_credential() else {
-        return serve_without_route().await;
+        return serve_without_route(PassThroughReason::MissingCredential).await;
     };
     log::debug!(
         target: "nemo_relay.daemon.mcp",
@@ -67,14 +67,22 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
     let client = control_client()?;
     let identity = load_or_create_machine_identity()?;
     let session_id = uuid::Uuid::now_v7().to_string();
-    let registration = register(
+    let registration = match register(
         &client,
         &daemon_origin,
         &route_credential,
         &identity,
         &session_id,
     )
-    .await?;
+    .await
+    {
+        Ok(registration) => registration,
+        Err(CliError::RouteCredentialRejected(_)) => {
+            drop(client);
+            return serve_without_route(PassThroughReason::CredentialRejected).await;
+        }
+        Err(error) => return Err(error),
+    };
     let mut lease = McpSession {
         client,
         daemon_origin,
@@ -115,19 +123,37 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
     }
 }
 
-/// Serves the MCP protocol without registering a route when no credential is available.
+/// Why `daemon mcp` serves without a daemon route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PassThroughReason {
+    /// No credential resolved from the environment or the token file.
+    MissingCredential,
+    /// The daemon definitively rejected the credential at registration.
+    CredentialRejected,
+}
+
+/// Serves the MCP protocol without registering a route when no usable credential is available.
 ///
 /// Hosts can mark this server as required, so it must stay up. With no registered route the
 /// daemon treats this user's requests as pass-through, matching `BrokerDirective::UsePassThrough`
 /// where no worker is ever launched.
-async fn serve_without_route() -> Result<(), CliError> {
-    log::warn!(
-        target: "nemo_relay.daemon.mcp",
-        event = "daemon_mcp_pass_through",
-        route_mode = "pass_through",
-        reason = "missing_credential";
-        "No NeMo Relay client credential is available; serving MCP without a daemon route"
-    );
+async fn serve_without_route(reason: PassThroughReason) -> Result<(), CliError> {
+    match reason {
+        PassThroughReason::MissingCredential => log::warn!(
+            target: "nemo_relay.daemon.mcp",
+            event = "daemon_mcp_pass_through",
+            route_mode = "pass_through",
+            reason = "missing_credential";
+            "No NeMo Relay client credential is available; serving MCP without a daemon route"
+        ),
+        PassThroughReason::CredentialRejected => log::warn!(
+            target: "nemo_relay.daemon.mcp",
+            event = "daemon_mcp_pass_through",
+            route_mode = "pass_through",
+            reason = "credential_rejected";
+            "The daemon rejected the NeMo Relay client credential; serving MCP without a daemon route"
+        ),
+    }
     crate::mcp::serve_daemon_stdio().await
 }
 

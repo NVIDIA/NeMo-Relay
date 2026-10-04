@@ -95,6 +95,70 @@ async fn reconnect_attempts_are_bounded_by_one_monotonic_grace_window() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn credential_rejection_is_not_retried() {
+    assert!(!is_retryable(&CliError::RouteCredentialRejected(
+        "rejected".into()
+    )));
+    for transient in [
+        failure("daemon WebSocket connection failed"),
+        failure("control operation timed out"),
+        CliError::Unauthorized("unknown, expired, or replayed challenge".into()),
+    ] {
+        assert!(is_retryable(&transient));
+    }
+    let started = tokio::time::Instant::now();
+    let attempts = std::sync::atomic::AtomicUsize::new(0);
+    let result: Result<(), CliError> = retry(|| {
+        attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        async { Err(CliError::RouteCredentialRejected("rejected".into())) }
+    })
+    .await;
+    assert!(matches!(result, Err(CliError::RouteCredentialRejected(_))));
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(started.elapsed(), Duration::ZERO);
+}
+
+#[tokio::test]
+async fn only_coded_unauthorized_replies_are_credential_rejections() {
+    let (client, mut socket) = connected_control_pair().await;
+    for (status, error, coded) in [
+        (
+            401,
+            serde_json::json!({ "message": "bound elsewhere", "code": ROUTE_CREDENTIAL_REJECTED_CODE }),
+            true,
+        ),
+        (
+            401,
+            serde_json::json!({ "message": "expired challenge" }),
+            false,
+        ),
+        (
+            503,
+            serde_json::json!({ "message": "restarting", "code": ROUTE_CREDENTIAL_REJECTED_CODE }),
+            false,
+        ),
+    ] {
+        let request = client.acknowledge("reply".into());
+        let server = async {
+            let request = receive_control_request(&mut socket).await;
+            send_control_event(
+                &mut socket,
+                Event::Reply {
+                    request_id: request.request_id,
+                    status,
+                    payload: serde_json::json!({ "error": error }),
+                },
+            )
+            .await;
+        };
+        let (result, ()) = tokio::join!(request, server);
+        let error = result.unwrap_err();
+        assert_eq!(matches!(error, CliError::RouteCredentialRejected(_)), coded);
+        assert_eq!(is_retryable(&error), !coded);
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_hung_reconnect_attempt_does_not_extend_grace() {
     let started = tokio::time::Instant::now();
     let result: Result<(), CliError> = retry(std::future::pending).await;

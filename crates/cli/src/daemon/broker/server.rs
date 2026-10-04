@@ -43,10 +43,11 @@ use crate::daemon::common::address::{daemon_url, validate_bind_ip};
 use crate::daemon::common::control::{
     ACTIVATION_LIFETIME_MS, ActivationFailedPayload, CHALLENGE_LIFETIME_MS, CLIENT_TOKEN_HEADER,
     ChallengeRequest, ChallengeResponse, DRAIN_LIFETIME_MS, EmptyPayload, MAX_CONTROL_BODY_BYTES,
-    McpRegisterRequest, McpRegisterResponse, RECOVERY_LIFETIME_MS, SessionRequest,
-    WORKER_PROBE_PATH, WORKER_ROUTE_FAILURE_HEADER, WORKER_TOKEN_HEADER, WorkerDrainRequest,
-    WorkerGenerationGrant, WorkerNetworkHint, WorkerReadyPayload, WorkerRecoverRequest,
-    WorkerRegisterRequest, WorkerRegisterResponse, now_unix_ms, random_secret,
+    McpRegisterRequest, McpRegisterResponse, RECOVERY_LIFETIME_MS, ROUTE_CREDENTIAL_REJECTED_CODE,
+    SessionRequest, WORKER_PROBE_PATH, WORKER_ROUTE_FAILURE_HEADER, WORKER_TOKEN_HEADER,
+    WorkerDrainRequest, WorkerGenerationGrant, WorkerNetworkHint, WorkerReadyPayload,
+    WorkerRecoverRequest, WorkerRegisterRequest, WorkerRegisterResponse, now_unix_ms,
+    random_secret,
 };
 use crate::daemon::common::identity::{
     ChallengeId, ChallengeRecord, Fingerprint, MachineIdentity, TokenDigest,
@@ -608,8 +609,9 @@ fn register_mcp_blocking(
         Err(response) => return response,
     };
     // Enrollment is open to reachable clients with a valid identity proof. The registry binds
-    // this credential digest to that fingerprint and rejects attempts to rebind either side.
-    let directive = match state.registry.register_mcp(
+    // this credential digest to that fingerprint, rejects a digest bound to another fingerprint,
+    // and lets the proven fingerprint rotate to a new, unbound digest.
+    let (directive, credential_rotated) = match state.registry.register_mcp_rotating(
         McpRegistration {
             fingerprint: transcript.initiator_fingerprint,
             token_digest: credential.digest(),
@@ -618,9 +620,19 @@ fn register_mcp_blocking(
         },
         launch,
     ) {
-        Ok(directive) => directive,
+        Ok(registered) => registered,
         Err(error) => return registry_error(error),
     };
+    if credential_rotated {
+        let fingerprint = transcript.initiator_fingerprint.to_string();
+        log::info!(
+            target: "nemo_relay.daemon",
+            event = "route_credential_rotated",
+            fingerprint = fingerprint.as_str(),
+            mcp_session_id = session_id.as_str();
+            "Route credential replaced for the same machine identity; the previous credential is now unbound"
+        );
+    }
     if reuse_session {
         let session = sessions
             .get_mut(session_id.as_str())
@@ -2933,7 +2945,15 @@ fn unavailable_response() -> Response<Body> {
 fn registry_error(error: RegistryError) -> Response<Body> {
     let status = match error {
         RegistryError::TokenAlreadyBound | RegistryError::FingerprintTokenMismatch => {
-            StatusCode::UNAUTHORIZED
+            // A definitive rejection: the client must serve without a route rather than retry.
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": {
+                    "message": error.to_string(),
+                    "code": ROUTE_CREDENTIAL_REJECTED_CODE,
+                } })),
+            )
+                .into_response();
         }
         RegistryError::UnknownRoute | RegistryError::UnknownMcpSession => StatusCode::NOT_FOUND,
         RegistryError::RouteCapacityReached | RegistryError::McpReferenceCapacityReached => {

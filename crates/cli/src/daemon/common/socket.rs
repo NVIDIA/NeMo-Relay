@@ -220,11 +220,16 @@ impl Client {
                     .pointer("/error/message")
                     .and_then(Value::as_str)
                     .unwrap_or("control command rejected");
-                return Err(if status == 401 {
-                    CliError::Unauthorized(message.into())
-                } else {
-                    failure(message)
-                });
+                let code = payload.pointer("/error/code").and_then(Value::as_str);
+                return Err(
+                    if status == 401 && code == Some(ROUTE_CREDENTIAL_REJECTED_CODE) {
+                        CliError::RouteCredentialRejected(message.into())
+                    } else if status == 401 {
+                        CliError::Unauthorized(message.into())
+                    } else {
+                        failure(message)
+                    },
+                );
             }
             serde_json::from_value(payload)
                 .map_err(|error| failure(format!("invalid control reply: {error}")))
@@ -261,6 +266,12 @@ pub(crate) fn failure(message: impl Into<String>) -> CliError {
     CliError::Launch(message.into())
 }
 
+/// Returns whether a failed control attempt may succeed on retry. A definitive credential
+/// rejection cannot, so callers fall back immediately instead of spending the reconnect grace.
+pub(crate) fn is_retryable(error: &CliError) -> bool {
+    !matches!(error, CliError::RouteCredentialRejected(_))
+}
+
 pub(crate) async fn retry<T, F, Fut>(operation: F) -> Result<T, CliError>
 where
     F: FnMut() -> Fut,
@@ -289,6 +300,7 @@ where
         .await;
         let error = match result {
             Ok(Ok(value)) => return Ok(value),
+            Ok(Err(error)) if !is_retryable(&error) => return Err(error),
             Ok(Err(error)) => error,
             Err(_) => failure("control connection/authentication attempt timed out"),
         };

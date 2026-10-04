@@ -341,6 +341,28 @@ An existing binding cannot be reassigned to another fingerprint. The daemon
 stores only credential digests, removes the public header before forwarding
 a request, and preserves the caller's provider authentication.
 
+### Rotate a Client Token
+
+To replace a token, for example after the token file is lost and
+`nemo-relay daemon token ensure` creates a new one, provision the new token for
+the same machine-user identity. No daemon restart is needed:
+
+- The next MCP registration that presents the new token, signed by the same
+  machine identity, replaces that identity's binding. The route, its worker,
+  and its existing MCP sessions are kept, and the daemon logs
+  `route_credential_rotated` without the token.
+- The old token becomes unbound. Harness sessions that still send it use
+  pass-through (or receive `401` from a daemon started with `--require-worker`)
+  until they are restarted with the new token.
+- A token already bound to another machine identity, such as a token copied
+  from another user or machine, is rejected. `nemo-relay daemon mcp` does not
+  retry the rejection; it logs `daemon_mcp_pass_through` with
+  `reason = "credential_rejected"` and keeps serving MCP without a route.
+
+Bindings are in memory. If sessions holding the old and new tokens are both
+running when the daemon restarts, the most recent MCP registration decides the
+binding. Restart the remaining old sessions so every session uses the new token.
+
 ### Requests Without a Bound Credential
 
 A missing credential means telemetry and guardrails are skipped for that
@@ -369,7 +391,8 @@ not contact the daemon. It writes the same pass-through response and exits `0`,
 regardless of `--fail-open` or `--fail-closed`, and logs a warning.
 `nemo-relay daemon mcp` with no resolvable credential keeps serving the MCP
 protocol without registering a route, so hosts that require the server keep
-running.
+running. It does the same, without retrying, when the daemon rejects its
+credential at registration; see [Rotate a Client Token](#rotate-a-client-token).
 
 Enrollment is open to anyone who can reach the daemon and prove possession
 of their machine identity. This proof establishes identity, not organizational

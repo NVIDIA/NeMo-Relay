@@ -156,7 +156,7 @@ logging. Failure events use warning or error levels.
 | Lifecycle | Events |
 | --- | --- |
 | Daemon | `daemon_listening`, `daemon_pass_through_enabled`, `daemon_stopped`, `daemon_failed` |
-| MCP sessions | `mcp_added`, `mcp_removed`, `mcp_control_connected`, `mcp_control_reconnected`, `mcp_control_disconnected` |
+| MCP sessions | `mcp_added`, `route_credential_rotated`, `mcp_removed`, `mcp_control_connected`, `mcp_control_reconnected`, `mcp_control_disconnected` |
 | Worker startup | `worker_staged`, `worker_startup_pending`, `worker_added`, `worker_ready`, `worker_recovery_started`, `worker_relaunch_requested` |
 | Worker control | `worker_control_connected`, `worker_control_reconnected`, `worker_control_disconnected`, `worker_control_lost`, `worker_control_recovery_failed` |
 | Worker shutdown | `worker_drain_started`, `worker_removed`, `worker_stopped`, `worker_activation_cancelled` |
@@ -193,6 +193,8 @@ Use this table to choose the next check for a failure:
 | TLS validation fails | Wrong name, expired chain, or untrusted CA | Check the advertised DNS name, certificate dates, and client native trust store. |
 | `401` from a public route | Malformed or repeated credential header, or `--require-worker` with a missing or unbound credential | Check the token value with `nemo-relay doctor --managed-bundle`, then start MCP registration before sending requests. |
 | Hooks or MCP produce no telemetry, with `reason = "missing_credential"` or `"unbound_credential"` | No credential resolved, or MCP has not registered since a daemon restart | Run `nemo-relay daemon token ensure` as the user, or export `NEMO_RELAY_CLIENT_TOKEN`. Then restart the harness so MCP registers. |
+| A session produces no telemetry after `route_credential_rotated` | The session started before the token was replaced and still sends the old, now unbound token | Restart that harness session so it uses the new token. |
+| MCP logs `daemon_mcp_pass_through` with `reason = "credential_rejected"` | The token is bound to another machine identity, usually because a token file was copied between users or machines | Remove the copied token file, run `nemo-relay daemon token ensure` as the user, and restart the harness. |
 | Model requests produce no telemetry, with `reason = "missing_credential"` | The harness sent no `x-nemo-relay-client-token` header. The token file does not cover model requests. | Configure the header for the harness and restart it. Codex: export `NEMO_RELAY_CLIENT_TOKEN` (or set a static `http_headers` entry). Claude Code gateway mode: set `ANTHROPIC_CUSTOM_HEADERS` to `x-nemo-relay-client-token: <token>` with the same token. |
 | Managed Pi fails to start | The v1 Pi extension requires `NEMO_RELAY_CLIENT_TOKEN` and ignores the token file | Export `NEMO_RELAY_CLIENT_TOKEN` in the Pi launch environment. |
 | Registered route returns `503` | No active MCP reference, or `--require-worker` is waiting for a worker | Keep the harness MCP process alive. Inspect registration and worker logs. |
@@ -271,7 +273,8 @@ Route credential bindings are in memory. A daemon restart requires MCP
 re-registration, even when signing identity is preserved. There is no documented
 per-user credential-revocation CLI. For offboarding, remove the user's network
 access and managed launch access and end their sessions. Do not assume deleting
-a local token file revokes a binding from the running broker. Until MCP
+a local token file revokes a binding from the running broker. A new token for
+the same machine identity replaces the binding at its next MCP registration. Until MCP
 re-registers after a restart, that user's requests use pass-through.
 
 ## Upgrade and Roll Back
