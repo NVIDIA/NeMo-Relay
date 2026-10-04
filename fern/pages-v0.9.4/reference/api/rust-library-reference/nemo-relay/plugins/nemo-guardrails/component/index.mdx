@@ -1,0 +1,35 @@
+---
+title: "Module component"
+sidebar-title: "component"
+slug: "/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component"
+description: "NeMo Guardrails plugin component contract."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+NeMo Guardrails plugin component contract.
+
+## Structs
+
+- [ComponentSpec](/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component/struct-componentspec)Deprecated: Top-level NeMo Guardrails component wrapper.
+- [LocalBackendConfig](/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component/struct-localbackendconfig)Deprecated: Local-backend settings for the Python `nemoguardrails` runtime.
+- [NeMoGuardrailsConfig](/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component/struct-nemoguardrailsconfig)Deprecated: Canonical config document for the deprecated built-in NeMo Guardrails component.
+- [RemoteBackendConfig](/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component/struct-remotebackendconfig)Deprecated: Remote-backend settings for a hosted NeMo Guardrails service.
+- [RequestDefaultsConfig](/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component/struct-requestdefaultsconfig)Deprecated: Default request semantics applied by the selected Guardrails backend.
+- [RequestRailsConfig](/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component/struct-requestrailsconfig)Deprecated: Request-time rail selection for Guardrails generation.
+
+## Enums
+
+- [RailSelector](/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component/enum-railselector)Deprecated: Rail-selection shape used by Guardrails generation options.
+
+## Constants
+
+- [NEMO_GUARDRAILS_PLUGIN_KIND](/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component/constant-nemo-guardrails-plugin-kind)Deprecated: The built-in NeMo Guardrails plugin kind.
+
+## Functions
+
+- [deregister_nemo_guardrails_component](/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component/fn-deregister-nemo-guardrails-component)Deprecated: Deregisters the `nemo_guardrails` component kind from the plugin registry.
+- [register_nemo_guardrails_component](/reference/api/rust-library-reference/nemo-relay/plugins/nemo_guardrails/component/fn-register-nemo-guardrails-component)Deprecated: Registers the `nemo_guardrails` component kind in the plugin registry.

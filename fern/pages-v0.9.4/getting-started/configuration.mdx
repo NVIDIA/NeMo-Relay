@@ -1,0 +1,73 @@
+---
+title: "Configuration"
+sidebar-title: "Configuration / Setup"
+description: "Configure NeMo Relay runtime behavior, plugins, observability, and adaptive features."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Most NeMo Relay runtime behavior is configured through API objects and
+registration calls rather than a global configuration file. Process-wide
+operational logging also supports environment variables and TOML configuration.
+
+## Core Runtime Setup
+
+Most applications configure NeMo Relay by:
+
+1. Creating or reusing a scope stack.
+2. Registering guardrails, intercepts, or subscribers.
+3. Calling the managed tool or LLM helpers from the active scope.
+4. Deregistering global middleware that should not remain active for the lifetime of the process.
+
+Use scope-local registration when behavior must be tied to one request, session, or agent run.
+
+For process-wide stderr and file logging, refer to
+[Operational Logging](/reference/operational-logging).
+
+## Plugin Setup
+
+Plugins use a structured plugin configuration with:
+
+- A version
+- One or more component definitions
+- Optional component policy
+
+Start with [Language Binding Plugins](/build-plugins/language-binding/about) when you need reusable middleware, subscribers, or adaptive behavior.
+
+Use [NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration)
+only to maintain or remove an existing NeMo Relay 0.8 `nemo_guardrails`
+component. The built-in plugin is deprecated and scheduled for removal in NeMo
+Relay 0.9; do not use it for a new deployment.
+
+The `nemo-relay` CLI gateway reads plugin files named `plugins.toml`. Refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+for file locations, precedence, merge behavior, editor controls, and validation
+rules.
+
+## Observability Setup
+
+Agent Trajectory Observability Format (ATOF) exporters, Agent Trajectory
+Interchange Format (ATIF) exporters, and typed OpenTelemetry subscribers can
+be configured directly through binding-native config objects. Select the
+`full`, `gen_ai`, or `openinference` projection when constructing each
+OpenTelemetry subscriber. Use the built-in `observability` plugin when you
+want one plugin component to own standard exporter setup and teardown. Refer to
+[Observability Configuration](/configure-plugins/observability/configuration)
+and [Observability](/configure-plugins/observability/about)
+for the supported export paths.
+
+Outside operational logging, NeMo Relay does not require application-level
+environment variables for normal runtime use. Configure most behavior through
+API objects, registration calls, or plugin configuration.
+
+Every OpenTelemetry config requires an explicit nonblank endpoint. For plugin
+configuration, use an endpoint's `header_env` map when a header value must come
+from an environment variable. Keep endpoint addresses and other export settings
+explicit so the active configuration remains visible in docs, tests, and
+deployment manifests.
+
+## Adaptive Setup
+
+Adaptive tuning is enabled through the adaptive plugin component and binding helper APIs. Refer to [Adaptive Configuration](/configure-plugins/adaptive/configuration).

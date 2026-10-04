@@ -1,0 +1,102 @@
+---
+title: "Struct Evaluated Dynamic Plugin Host Policy"
+sidebar-title: "EvaluatedDynamicPluginHostPolicy"
+description: "The result of applying the effective host policy to one manifest."
+position: 28
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EvaluatedDynamicPluginHostPolicy &#123;\n    pub policy_satisfied: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub startup_class: <a href=\"enum-dynamicpluginstartupclass\">DynamicPluginStartupClass</a>,\n    pub attestation_mode: <a href=\"enum-dynamicpluginattestationmode\">DynamicPluginAttestationMode</a>,\n    pub trusted_public_keys: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub failure: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-dynamicpluginhostpolicyfailure\">DynamicPluginHostPolicyFailure</a>&gt;,\n&#125;"}} /></pre>
+
+The result of applying the effective host policy to one manifest.
+
+## Fields
+
+### `policy_satisfied: bool`
+
+Whether policy allows this plugin.
+
+### `startup_class: DynamicPluginStartupClass`
+
+Effective startup class.
+
+### `attestation_mode: DynamicPluginAttestationMode`
+
+Effective artifact-attestation mode.
+
+### `trusted_public_keys: Vec<String>`
+
+Effective trusted signing keys.
+
+### `failure: Option<DynamicPluginHostPolicyFailure>`
+
+Policy failure, if denied.
+
+## Implementations
+
+### `impl EvaluatedDynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-evaluateddynamicpluginhostpolicy\">EvaluatedDynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `check_state`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn check_state(&amp;self) -&gt; <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+Converts policy evaluation into the persisted check state.
+
+#### `last_error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn last_error(&amp;self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginfailure\">DynamicPluginFailure</a>&gt;"}} /></pre>
+
+Returns the corresponding structured failure when denied.
+
+#### `failure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn failure(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"enum-dynamicpluginhostpolicyfailure\">DynamicPluginHostPolicyFailure</a>&gt;"}} /></pre>
+
+Returns the policy refusal, if any.
+
+## Trait Implementations
+
+### `impl Clone for EvaluatedDynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-evaluateddynamicpluginhostpolicy\">EvaluatedDynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-evaluateddynamicpluginhostpolicy\">EvaluatedDynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for EvaluatedDynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-evaluateddynamicpluginhostpolicy\">EvaluatedDynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl PartialEq for EvaluatedDynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-evaluateddynamicpluginhostpolicy\">EvaluatedDynamicPluginHostPolicy</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-evaluateddynamicpluginhostpolicy\">EvaluatedDynamicPluginHostPolicy</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Eq for EvaluatedDynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-evaluateddynamicpluginhostpolicy\">EvaluatedDynamicPluginHostPolicy</a>"}} /></pre>
+
+### `impl StructuralPartialEq for EvaluatedDynamicPluginHostPolicy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-evaluateddynamicpluginhostpolicy\">EvaluatedDynamicPluginHostPolicy</a>"}} /></pre>

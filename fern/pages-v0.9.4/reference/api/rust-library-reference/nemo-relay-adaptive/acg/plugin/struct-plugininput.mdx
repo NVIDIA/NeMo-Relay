@@ -1,0 +1,48 @@
+---
+title: "Struct Plugin Input"
+sidebar-title: "PluginInput"
+description: "Input data provided to a plugin for translation."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PluginInput&lt;'a&gt; &#123;\n    pub original_request: &amp;'a <a href=\"../../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>,\n    pub rewritten_request: &amp;'a <a href=\"../../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>,\n    pub prompt_ir: &amp;'a <a href=\"../prompt_ir/struct-promptir\">PromptIR</a>,\n    pub intent_bundle: &amp;'a <a href=\"../types/struct-optimizationintentbundle\">OptimizationIntentBundle</a>,\n    pub agent_identity: &amp;'a <a href=\"../types/struct-agentidentity\">AgentIdentity</a>,\n&#125;"}} /></pre>
+
+Input data provided to a plugin for translation.
+
+All fields are borrowed references to avoid unnecessary cloning. The lifetime `'a` ties the input to the caller's data.
+
+## Fields
+
+### `original_request: &'a LlmRequest`
+
+The original (pre-rewrite) request.
+
+### `rewritten_request: &'a LlmRequest`
+
+The rewritten request (may be identical to original in early phases).
+
+### `prompt_ir: &'a PromptIR`
+
+The Prompt IR decomposition of the request.
+
+### `intent_bundle: &'a OptimizationIntentBundle`
+
+The optimization intent bundle from the policy engine.
+
+### `agent_identity: &'a AgentIdentity`
+
+The agent identity for context.
+
+## Trait Implementations
+
+### `impl<'a> Debug for PluginInput<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-plugininput\">PluginInput</a>&lt;'a&gt;"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
