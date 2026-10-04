@@ -63,6 +63,8 @@ pub(crate) struct ResolvedCredential {
 pub(crate) enum TokenFileProblem {
     Symlink,
     NotRegularFile,
+    /// Only detectable from Unix metadata; Windows checks ownership through the DACL.
+    #[cfg(unix)]
     NotOwnedByCurrentUser,
     InsecurePermissions,
     TooLarge,
@@ -75,6 +77,7 @@ impl TokenFileProblem {
         match self {
             Self::Symlink => "symlink",
             Self::NotRegularFile => "not_regular_file",
+            #[cfg(unix)]
             Self::NotOwnedByCurrentUser => "not_owned_by_current_user",
             Self::InsecurePermissions => "insecure_permissions",
             Self::TooLarge => "too_large",
@@ -89,6 +92,7 @@ impl fmt::Display for TokenFileProblem {
         match self {
             Self::Symlink => formatter.write_str("is a symbolic link"),
             Self::NotRegularFile => formatter.write_str("is not a regular file"),
+            #[cfg(unix)]
             Self::NotOwnedByCurrentUser => formatter.write_str("is not owned by the current user"),
             Self::InsecurePermissions => formatter.write_str(
                 "is accessible by other users; it must be readable and writable only by its owner (mode 0600)",
