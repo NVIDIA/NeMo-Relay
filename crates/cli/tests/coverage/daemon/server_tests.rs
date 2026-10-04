@@ -3258,16 +3258,19 @@ async fn requests_without_a_bound_credential_pass_through_without_daemon_provide
 
     for credential in [None, Some(unbound.as_str())] {
         let mut hook = Request::post("/hooks/claude-code");
-        let mut provider = Request::post("/v1/responses")
-            .header(AUTHORIZATION, "Bearer caller-owned")
+        let mut provider =
+            Request::post("/v1/responses").header(AUTHORIZATION, "Bearer caller-owned");
+        let mut named_upstream = Request::post("/v1/responses")
+            .header(AUTHORIZATION, "Bearer named-upstream-key")
             .header(
                 crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
-                "https://attacker.example.com",
+                "https://named.example.com",
             );
         let mut unauthenticated_provider = Request::post("/v1/responses");
         if let Some(credential) = credential {
             hook = hook.header(CLIENT_TOKEN_HEADER, credential);
             provider = provider.header(CLIENT_TOKEN_HEADER, credential);
+            named_upstream = named_upstream.header(CLIENT_TOKEN_HEADER, credential);
             unauthenticated_provider =
                 unauthenticated_provider.header(CLIENT_TOKEN_HEADER, credential);
         }
@@ -3283,7 +3286,21 @@ async fn requests_without_a_bound_credential_pass_through_without_daemon_provide
             HookRoute::Claude.pass_through_body()
         );
 
-        // The caller's own credential is preserved and a client-named upstream is ignored.
+        // A client-named upstream needs a bound route. Without one, the request fails closed so
+        // the credential meant for that upstream never reaches the configured provider.
+        let response = app
+            .clone()
+            .oneshot(named_upstream.body(Body::from("named request")).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[RETRY_AFTER], "1");
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "provider must receive nothing"
+        );
+
+        // Otherwise the caller's own credential is preserved.
         let response = app
             .clone()
             .oneshot(provider.body(Body::from("anonymous request")).unwrap())

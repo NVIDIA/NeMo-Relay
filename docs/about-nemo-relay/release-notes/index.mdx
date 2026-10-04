@@ -153,8 +153,10 @@ coding agent:
   A token bound to another identity is rejected, and the MCP server serves
   without a route instead of retrying until the harness times out.
 
-Such requests never receive daemon-held provider credentials and cannot choose
-their upstream. The exception is a daemon started with `--pass-through`.
+Such requests never receive daemon-held provider credentials. The exception is
+a daemon started with `--pass-through`. A request that names its own upstream,
+as the managed Pi extension does, receives `503` without a bound credential
+instead of being forwarded.
 Malformed or repeated credential headers still return `401`. Refer to
 [Requests Without a Bound Credential](/daemon/configuration#requests-without-a-bound-credential).
 

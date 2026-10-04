@@ -1636,6 +1636,17 @@ async fn public_proxy_inner(
             response
         }
         (ResolvedTarget::PassThrough, PublicRoute::Provider(provider)) => {
+            // A client-named upstream is honored only for a bound route. Anonymous pass-through
+            // would ignore it and send the caller's credential, meant for that upstream, to the
+            // configured provider instead, so fail closed until the route is bound again.
+            if access == ProviderAccess::Anonymous
+                && request
+                    .headers()
+                    .contains_key(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER)
+            {
+                log_named_upstream_without_route(provider);
+                return unavailable_response();
+            }
             forward_to_provider(&state, request, provider, access).await
         }
         (ResolvedTarget::Worker(worker), _) => {
@@ -1718,6 +1729,24 @@ impl AnonymousReason {
             Self::UnboundCredential => "unbound_credential",
         }
     }
+}
+
+fn log_named_upstream_without_route(provider: ProviderRoute) {
+    static LIMITER: OnceLock<LogRateLimiter> = OnceLock::new();
+    let Some(suppressed_since_last_emit) = LIMITER
+        .get_or_init(|| LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL))
+        .record()
+    else {
+        return;
+    };
+    log::warn!(
+        target: "nemo_relay.daemon",
+        event = "public_request_named_upstream_rejected",
+        route = provider.as_str(),
+        reason = "no_bound_route",
+        suppressed_since_last_emit = suppressed_since_last_emit;
+        "Rejected a client-named upstream without a bound route credential"
+    );
 }
 
 fn log_anonymous_pass_through(route: PublicRoute, reason: AnonymousReason) {

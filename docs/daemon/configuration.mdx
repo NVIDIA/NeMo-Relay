@@ -379,9 +379,15 @@ request; the coding agent keeps working:
   credentials with `401`.
 - A request without a bound credential never receives daemon-held provider
   credentials (configured provider auth headers or the daemon's own
-  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) and cannot name its own upstream,
-  except that a daemon explicitly started with `--pass-through` applies its
-  provider credentials to every request.
+  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`), except that a daemon explicitly
+  started with `--pass-through` applies its provider credentials to every
+  request.
+- A provider request that names its own upstream with
+  `x-nemo-relay-upstream-base-url`, as the managed Pi extension does, is
+  honored only with a bound credential. Without one it receives `503` with
+  `Retry-After` and is never forwarded, so a credential meant for the named
+  upstream cannot reach the configured provider. After a daemon restart, retry
+  once MCP registers again. The daemon logs `public_request_named_upstream_rejected`.
 - The daemon logs each decision as `public_request_pass_through` with
   `route_mode = "pass_through"` and `reason = "missing_credential"` or
   `reason = "unbound_credential"`, rate-limited, without the credential.
