@@ -123,9 +123,19 @@ nemo-relay daemon token ensure --json
 ```
 
 The command creates `<user config dir>/.client-token` if it does not already
-exist. On Linux and macOS this is `~/.config/nemo-relay/.client-token`, or
-`$XDG_CONFIG_HOME/nemo-relay/.client-token` when `XDG_CONFIG_HOME` is set. On
-Windows it is `%USERPROFILE%\.config\nemo-relay\.client-token`. The command:
+exist. Relay resolves the user config directory the same way on every platform,
+including Windows. It uses the first of these that is set:
+
+1. `$XDG_CONFIG_HOME/nemo-relay`
+2. `$HOME/.config/nemo-relay`
+3. `%USERPROFILE%\.config\nemo-relay`
+
+For example, on Linux and macOS the file is usually
+`~/.config/nemo-relay/.client-token`. On Windows it is
+`%USERPROFILE%\.config\nemo-relay\.client-token` unless `XDG_CONFIG_HOME` or
+`HOME` is set, as it often is in Git Bash or MSYS shells. The file Relay uses is
+the `path` value printed by `nemo-relay daemon token ensure --json`. The
+command:
 
 - Generates 32 bytes from the operating-system random source and writes them as
   one unpadded base64url line.
@@ -164,20 +174,31 @@ The token file exists because environment changes made after login, such as
 such as a terminal opened before the change. Every process of the same user can
 read the file.
 
-Harness model requests do not read the token file. Codex, Claude Code, and Pi
-send `x-nemo-relay-client-token` only from their own environment. When that
-environment is missing, model requests use daemon pass-through (see
-[Requests Without a Bound Credential](#requests-without-a-bound-credential)).
-To attribute model traffic, the login environment must still export the token,
-for example by reading the file:
+The token file restores hooks and MCP only. Harness model requests do not read
+it. Each harness sends `x-nemo-relay-client-token` from its own provider
+configuration, which is read when the harness starts:
+
+- Codex reads `env_http_headers`, sourced from `NEMO_RELAY_CLIENT_TOKEN`, or a
+  static `http_headers` entry for the managed provider.
+- Claude Code reads the header from `ANTHROPIC_CUSTOM_HEADERS`, in its launch
+  environment or its settings `env`.
+
+Without that header, model requests use daemon pass-through (see
+[Requests Without a Bound Credential](#requests-without-a-bound-credential)):
+they still work but produce no Relay telemetry. To attribute model traffic,
+provide the header and restart the harness. For example, export it from the
+token file in the login environment:
 
 ```bash
 export NEMO_RELAY_CLIENT_TOKEN="$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay/.client-token")"
 export ANTHROPIC_CUSTOM_HEADERS="x-nemo-relay-client-token: ${NEMO_RELAY_CLIENT_TOKEN}"
 ```
 
-The managed Pi extension reads only `NEMO_RELAY_CLIENT_TOKEN`; it does not read
-the token file.
+The managed v1 Pi extension reads only `NEMO_RELAY_CLIENT_TOKEN` and does not
+read the token file. **Pi fails to start without that environment variable**:
+its hooks, MCP, and model routing all stop, not just telemetry.
+`nemo-relay doctor --managed-bundle` therefore rejects a file-only credential
+for bundles that include Pi.
 
 ### Provision Through Enterprise Tooling
 
@@ -554,9 +575,13 @@ settings mechanism. Preserve any existing organization policy when merging its
 See Claude Code's [plugin loading guide](https://code.claude.com/docs/en/plugins)
 and [settings reference](https://code.claude.com/docs/en/settings).
 
-The launch environment must contain both `NEMO_RELAY_CLIENT_TOKEN` and the matching
-`ANTHROPIC_CUSTOM_HEADERS`. Check `/mcp` after startup and verify that Relay hooks
-are enabled. Managed Claude model routing requires an Anthropic API key or an
+Hooks and MCP can use the per-user token file when the launch environment has
+no `NEMO_RELAY_CLIENT_TOKEN`. Gateway model routing still needs
+`ANTHROPIC_CUSTOM_HEADERS` with the matching token, set in the launch environment
+or in Claude Code settings `env`. Without it, Claude model requests pass through
+the daemon without Relay telemetry. When both variables are set, their tokens
+must match. Check `/mcp` after startup and verify that Relay hooks are
+enabled. Managed Claude model routing requires an Anthropic API key or an
 administrator-configured Anthropic-compatible gateway credential. Claude.ai OAuth
 is not supported with `ANTHROPIC_BASE_URL`: Claude Code refreshes that session
 against its native service rather than an Anthropic-compatible gateway. Do not set

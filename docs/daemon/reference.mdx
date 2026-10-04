@@ -203,8 +203,11 @@ The address must be an HTTP or HTTPS origin with an explicit port. It cannot
 contain credentials, a non-root path, a query, or a fragment. Plain HTTP is
 accepted only for a loopback target.
 
-The MCP client authenticates and registers its route reference before it starts
-the MCP protocol. If the daemon supports safe worker cancellation, MCP
+When a route credential resolves from `NEMO_RELAY_CLIENT_TOKEN` or the
+per-user token file, the MCP client authenticates and registers its route
+reference before it starts the MCP protocol. Without a credential, it serves the
+MCP protocol without registering a route and never launches a worker. Its
+requests then use pass-through. If the daemon supports safe worker cancellation, MCP
 initialization can finish while the worker starts. Worker startup failures leave
 MCP connected. With an older daemon, MCP waits for a usable route before it
 handles initialization.

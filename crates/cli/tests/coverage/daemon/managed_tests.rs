@@ -485,6 +485,38 @@ fn managed_environment_accepts_a_file_sourced_credential_and_reports_its_source(
 }
 
 #[test]
+fn managed_pi_requires_an_environment_credential_even_with_a_token_file() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("bundle");
+    let digest = write_new_bundle(&root, &spec([ManagedAgent::Pi])).unwrap();
+    let config = directory.path().join("xdg");
+    let token = credential();
+    let environment = EnvScope::set(&[
+        (ROUTE_TOKEN_ENV, None),
+        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
+    ]);
+    let token_path = crate::daemon::common::client_token::client_token_path().unwrap();
+    crate::filesystem::atomic_write_private(&token_path, format!("{token}\n").as_bytes()).unwrap();
+
+    // The v1 Pi extension reads only its environment, so a file-only credential cannot start it.
+    let error = refresh_bundle(&root, &digest).unwrap_err().to_string();
+    assert!(error.contains("managed Pi"), "{error}");
+    assert!(error.contains(ROUTE_TOKEN_ENV), "{error}");
+    assert!(!error.contains(&token));
+
+    drop(environment);
+    let _environment = EnvScope::set(&[
+        (ROUTE_TOKEN_ENV, Some(OsStr::new(&token))),
+        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
+    ]);
+    let validation = refresh_bundle(&root, &digest).unwrap();
+    assert_eq!(
+        validation.credential_source,
+        Some(CredentialSource::Environment)
+    );
+}
+
+#[test]
 fn doctor_rejects_extra_files_and_noncanonical_manifest_bytes() {
     let directory = tempdir().unwrap();
     let root = directory.path().join("bundle");

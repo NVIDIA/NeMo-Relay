@@ -392,6 +392,12 @@ fn validate_managed_environment(spec: &ManagedBundleSpec) -> Result<CredentialSo
             "managed daemon integration requires a route credential from {ROUTE_TOKEN_ENV} or {file}; run `nemo-relay daemon token ensure` as this user or contact the managed environment administrator"
         )));
     };
+    // The immutable v1 Pi extension reads only the environment and refuses to start without it.
+    if spec.agents.contains(&ManagedAgent::Pi) && resolved.source == CredentialSource::File {
+        return Err(CliError::Config(format!(
+            "managed Pi integration requires {ROUTE_TOKEN_ENV} in the Pi launch environment; the v1 Pi extension does not read the per-user client token file"
+        )));
+    }
     if !spec.agents.contains(&ManagedAgent::ClaudeCode) {
         return Ok(resolved.source);
     }
