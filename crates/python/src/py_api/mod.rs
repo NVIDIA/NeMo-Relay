@@ -266,6 +266,7 @@ fn with_python_publication_context<T>(f: impl FnOnce() -> T) -> T {
     with_publication_context(py_callable::capture_python_publication_context(), f)
 }
 
+/// Poll synchronous middleware on a helper thread and propagate its result or panic.
 fn block_on_sync_middleware<F, T>(future: F) -> FlowResult<T>
 where
     F: Future<Output = FlowResult<T>> + Send,

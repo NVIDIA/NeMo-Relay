@@ -95,6 +95,9 @@ use crate::types::{
     ScopeStack, ScopeType, ToolExecutionResult, ToolHandle,
 };
 
+#[cfg(test)]
+mod llm_stack_tests;
+
 static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static NODE_ENVIRONMENT_LIFECYCLE_LOCK: StdMutex<()> = StdMutex::new(());
 

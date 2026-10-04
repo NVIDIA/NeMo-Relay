@@ -194,7 +194,9 @@ describe('LLM lifecycle', () => {
 describe('LLM execute', () => {
   it('runs LLM entry points on a small worker stack', () => {
     // Isolate native stack overflows from the test runner. V8 needs more
-    // startup stack than Python, so use a 512 KiB worker stack here.
+    // startup stack than Python, so use a 512 KiB worker stack here. This limits
+    // bridge construction on the JavaScript thread; native polling runs on Tokio
+    // threads and has separate coverage in api/llm_stack_tests.rs.
     const workerSource = `
       const assert = require('node:assert/strict');
       const { parentPort } = require('node:worker_threads');
