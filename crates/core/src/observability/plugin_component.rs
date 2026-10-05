@@ -1420,11 +1420,12 @@ fn register_observability(
     let automatic_signals = automatic_otlp_signals();
     match config.opentelemetry {
         Some(otel) if otel.enabled => {
+            let automatic_active = match automatic_signals {
+                Some(signals) => register_automatic_opentelemetry(signals, ctx)?,
+                None => false,
+            };
             if !opentelemetry_section_is_empty(&otel) || automatic_signals.is_none() {
-                register_opentelemetry(otel, ctx)?;
-            }
-            if let Some(signals) = automatic_signals {
-                register_automatic_opentelemetry(signals, ctx)?;
+                register_opentelemetry(otel, ctx, automatic_active)?;
             }
         }
         Some(_) => {}
@@ -1744,6 +1745,7 @@ struct ResolvedSignalEndpoints {
 fn register_opentelemetry(
     section: OpenTelemetrySectionConfig,
     ctx: &mut PluginRegistrationContext,
+    automatic_active: bool,
 ) -> PluginResult<()> {
     let OpenTelemetrySectionConfig {
         endpoints,
@@ -1795,7 +1797,8 @@ fn register_opentelemetry(
     let trace_subscribers = trace_subscribers;
     let log_subscribers = signal_subscribers.logs;
     let metric_subscribers = signal_subscribers.metrics;
-    if !has_active_opentelemetry_resource(&trace_subscribers)
+    if !automatic_active
+        && !has_active_opentelemetry_resource(&trace_subscribers)
         && !has_active_opentelemetry_resource(&log_subscribers)
         && !has_active_opentelemetry_resource(&metric_subscribers)
     {
@@ -1982,7 +1985,7 @@ fn environment_signal_enabled(variable: &'static str) -> bool {
 fn register_automatic_opentelemetry(
     signals: AutomaticOtlpSignals,
     ctx: &mut PluginRegistrationContext,
-) -> PluginResult<()> {
+) -> PluginResult<bool> {
     let trace_subscribers = automatic_subscriber(
         signals.traces && environment_signal_enabled("OTEL_TRACES_EXPORTER"),
         "traces",
@@ -1999,7 +2002,7 @@ fn register_automatic_opentelemetry(
         OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin,
     );
     if trace_subscribers.is_empty() && log_subscribers.is_empty() && metric_subscribers.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     register_opentelemetry_resources(
         "opentelemetry.automatic",
@@ -2007,7 +2010,8 @@ fn register_automatic_opentelemetry(
         log_subscribers,
         metric_subscribers,
         ctx,
-    )
+    )?;
+    Ok(true)
 }
 
 /// Build one automatic subscriber without preventing healthy signals from activating.

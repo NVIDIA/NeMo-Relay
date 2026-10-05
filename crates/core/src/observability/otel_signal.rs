@@ -497,6 +497,31 @@ pub(super) fn automatic_signal_endpoint(signal_variable: &str) -> Option<String>
         })
 }
 
+/// Reject malformed percent escapes before the SDK can attach any credentials.
+/// Validate only the header list selected by the SDK's signal-first precedence.
+pub(super) fn validate_automatic_header_environment(signal_variable: &'static str) -> Result<()> {
+    let (variable, value) = match std::env::var(signal_variable) {
+        Ok(value) => (signal_variable, value),
+        Err(_) => match std::env::var("OTEL_EXPORTER_OTLP_HEADERS") {
+            Ok(value) => ("OTEL_EXPORTER_OTLP_HEADERS", value),
+            Err(_) => return Ok(()),
+        },
+    };
+    let bytes = value.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'%'
+            && !bytes
+                .get(index + 1..index + 3)
+                .is_some_and(|escape| escape.iter().all(u8::is_ascii_hexdigit))
+        {
+            return Err(OpenTelemetryError::ExporterBuild(format!(
+                "{variable} contains a malformed percent escape"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Return whether an automatic OTLP exporter will attach environment headers.
 pub(super) fn automatic_signal_headers_configured(signal_variable: &str) -> bool {
     [signal_variable, "OTEL_EXPORTER_OTLP_HEADERS"]
