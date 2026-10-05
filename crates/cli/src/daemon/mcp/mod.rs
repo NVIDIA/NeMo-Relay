@@ -119,7 +119,34 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
             control.await.map_err(|error| CliError::Launch(format!("MCP control task failed: {error}")))??;
             result
         }
-        result = &mut control => result.map_err(|error| CliError::Launch(format!("MCP control task failed: {error}")))?,
+        result = &mut control => {
+            let result = result.map_err(|error| CliError::Launch(format!("MCP control task failed: {error}")))?;
+            match control_end(result) {
+                ControlEnd::ServeWithoutRoute => {
+                    // A rejected re-registration (for example after a daemon restart) must not take
+                    // down an MCP server the host requires; keep serving it without a route.
+                    log_pass_through(PassThroughReason::CredentialRejectedOnReregistration);
+                    protocol.await
+                }
+                ControlEnd::Finish(result) => result,
+            }
+        }
+    }
+}
+
+/// What `run` does when the control task ends before the MCP protocol does.
+#[derive(Debug)]
+enum ControlEnd {
+    /// The daemon definitively rejected the credential; keep serving MCP without a route.
+    ServeWithoutRoute,
+    /// Return the control task's result, as before.
+    Finish(Result<(), CliError>),
+}
+
+fn control_end(result: Result<(), CliError>) -> ControlEnd {
+    match result {
+        Err(CliError::RouteCredentialRejected(_)) => ControlEnd::ServeWithoutRoute,
+        other => ControlEnd::Finish(other),
     }
 }
 
@@ -130,6 +157,8 @@ enum PassThroughReason {
     MissingCredential,
     /// The daemon definitively rejected the credential at registration.
     CredentialRejected,
+    /// The daemon definitively rejected the credential when a running MCP registered again.
+    CredentialRejectedOnReregistration,
 }
 
 /// Serves the MCP protocol without registering a route when no usable credential is available.
@@ -138,6 +167,11 @@ enum PassThroughReason {
 /// daemon treats this user's requests as pass-through, matching `BrokerDirective::UsePassThrough`
 /// where no worker is ever launched.
 async fn serve_without_route(reason: PassThroughReason) -> Result<(), CliError> {
+    log_pass_through(reason);
+    crate::mcp::serve_daemon_stdio().await
+}
+
+fn log_pass_through(reason: PassThroughReason) {
     match reason {
         PassThroughReason::MissingCredential => log::warn!(
             target: "nemo_relay.daemon.mcp",
@@ -153,8 +187,15 @@ async fn serve_without_route(reason: PassThroughReason) -> Result<(), CliError> 
             reason = "credential_rejected";
             "The daemon rejected the NeMo Relay client credential; serving MCP without a daemon route"
         ),
+        PassThroughReason::CredentialRejectedOnReregistration => log::warn!(
+            target: "nemo_relay.daemon.mcp",
+            event = "daemon_mcp_pass_through",
+            route_mode = "pass_through",
+            reason = "credential_rejected",
+            phase = "reregistration";
+            "The daemon rejected the NeMo Relay client credential when MCP registered again; continuing to serve MCP without a daemon route"
+        ),
     }
-    crate::mcp::serve_daemon_stdio().await
 }
 
 async fn register(

@@ -658,3 +658,21 @@ async fn worker_cannot_escape_relay_job_into_restrictive_external_parent_job() {
     );
     assert_eq!(std::fs::read_to_string(path).unwrap(), "rejected");
 }
+
+#[test]
+fn a_credential_rejection_after_reconnect_keeps_serving_without_a_route() {
+    assert!(matches!(
+        control_end(Err(CliError::RouteCredentialRejected(
+            "route token limit reached".into()
+        ))),
+        ControlEnd::ServeWithoutRoute
+    ));
+    // Every other ending keeps its previous behavior.
+    assert!(matches!(control_end(Ok(())), ControlEnd::Finish(Ok(()))));
+    assert!(matches!(
+        control_end(Err(CliError::Launch(
+            "control reconnect grace period expired".into()
+        ))),
+        ControlEnd::Finish(Err(CliError::Launch(_)))
+    ));
+}

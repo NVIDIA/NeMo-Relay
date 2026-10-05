@@ -344,18 +344,24 @@ a request, and preserves the caller's provider authentication.
 ### Replace a Client Token
 
 The daemon binds each token to the machine-user identity that first registers
-it, in memory, until the daemon restarts. It does not release bindings when
-sessions end. If the token changes while the daemon is running, for example
-because the token file is removed and `nemo-relay daemon token ensure` creates a
-new one:
+it. Bindings are kept in memory and are not released just because sessions end.
+A binding is cleared only when:
+
+- the daemon restarts;
+- the identity reaches its token limit and the token is its least recently
+  registered one without a live MCP session (described below); or
+- the daemon's route table is full and the identity's whole route is evicted
+  because it has no MCP references.
+
+If the token changes while the daemon is running, for example because the token
+file is removed and `nemo-relay daemon token ensure` creates a new one:
 
 - MCP registration with the new token joins the identity's existing route and
   worker. No second worker is launched.
-- The old and new tokens both stay valid for that route until the daemon
-  restarts, so sessions that still hold the old token keep working alongside new
-  ones.
+- The old token stays bound to that route alongside the new one, so sessions
+  that still hold it keep working, until one of the events above clears it.
 - Removing or purging a token file does not revoke a token the daemon has
-  already bound. Only a daemon restart clears bindings.
+  already bound. Use a daemon restart to clear every binding at once.
 
 One identity can hold a limited number of distinct tokens at once: 4 by
 default. The limit bounds the daemon's in-memory token table; it is not a
@@ -369,8 +375,11 @@ security control. When a new token arrives at the limit:
    `mcp_registration_rejected` with `reason = "route_token_limit_reached"`.
    `nemo-relay daemon mcp` does not retry the rejection; it logs
    `daemon_mcp_pass_through` with `reason = "credential_rejected"` and keeps
-   serving MCP without a route, so the harness keeps working. Requests with
-   that token use pass-through until a slot frees up or the daemon restarts.
+   serving MCP without a route, so the harness keeps working. The same applies
+   when an already running MCP registers again after a reconnect or daemon
+   restart: it logs the fallback with `phase = "reregistration"` and keeps
+   serving instead of exiting. Requests with that token use pass-through until
+   a slot frees up or the daemon restarts.
 
 Change the limit with `nemo-relay daemon --max-tokens-per-identity <N>` or the
 `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY` environment variable on the daemon

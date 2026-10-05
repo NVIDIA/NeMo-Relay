@@ -274,8 +274,9 @@ per-user credential-revocation CLI. For offboarding, remove the user's network
 access and managed launch access and end their sessions. Do not assume deleting
 a local token file revokes a binding from the running broker. A new token for
 the same machine identity joins its existing route, up to the per-identity token
-limit (4 by default). Earlier tokens stay valid until the daemon restarts or until
-an idle one is released at that limit. Until MCP
+limit (4 by default). Earlier tokens stay bound until the daemon restarts, an
+idle one is released at that limit, or the identity's whole route is evicted
+from a full route table. Until MCP
 re-registers after a restart, that user's requests use pass-through.
 
 ## Upgrade and Roll Back
