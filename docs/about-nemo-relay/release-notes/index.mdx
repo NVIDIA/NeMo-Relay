@@ -148,10 +148,10 @@ coding agent:
   route.
 - The daemon sends public requests that have no credential header, or an
   unbound credential, through pass-through.
-- A new token for the same machine identity replaces its binding at the next
-  MCP registration without a daemon restart; the old token then passes through.
-  A token bound to another identity is rejected, and the MCP server serves
-  without a route instead of retrying until the harness times out.
+- If the daemon rejects a token at MCP registration, for example because the
+  user's token changed while the daemon kept the old binding, the MCP server
+  serves without a route instead of retrying until the harness times out.
+  Requests with that token pass through until the daemon restarts.
 
 Such requests never receive daemon-held provider credentials. The exception is
 a daemon started with `--pass-through`. A request that names its own upstream,

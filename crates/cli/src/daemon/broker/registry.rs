@@ -306,12 +306,7 @@ impl Registry {
     ) -> Result<(), RegistryError> {
         let mut inner = self.write();
         evict_inactive_routes_at_capacity(&mut inner, fingerprint, self.route_capacity);
-        if !matches!(
-            validate_binding(&inner, fingerprint, token_digest, None)?,
-            Binding::Current
-        ) {
-            return Err(RegistryError::FingerprintTokenMismatch);
-        }
+        validate_binding(&inner, fingerprint, token_digest)?;
         validate_capacity(&inner, fingerprint, self.route_capacity)?;
         inner.tokens.insert(token_digest, fingerprint);
         inner
@@ -321,79 +316,41 @@ impl Registry {
         Ok(())
     }
 
-    /// Registers or renews an MCP and returns only the daemon's authoritative directive.
-    #[cfg(test)]
+    /// Registers or renews an MCP and returns the daemon's authoritative directive.
+    ///
+    /// The launch plan is used only when this call wins the empty-route singleflight.
     pub(crate) fn register_mcp(
         &self,
         registration: McpRegistration,
         launch: WorkerLaunch,
     ) -> Result<BrokerDirective, RegistryError> {
-        self.register_mcp_rotating(registration, launch)
-            .map(|(directive, _)| directive)
-    }
-
-    /// Registers or renews an MCP and returns the daemon's authoritative directive, plus whether
-    /// its credential replaced the route's.
-    ///
-    /// The launch plan is used only when this call wins the empty-route singleflight.
-    /// The caller must have verified the registration's signed identity proof. A new, unbound
-    /// digest for an already bound fingerprint replaces the old binding in place: the route, its
-    /// worker, and existing MCP references are kept, and the old digest becomes unknown. A digest
-    /// bound to another fingerprint is still rejected. An existing reference that renews with the
-    /// replaced digest keeps its reference without reclaiming the binding.
-    pub(crate) fn register_mcp_rotating(
-        &self,
-        registration: McpRegistration,
-        launch: WorkerLaunch,
-    ) -> Result<(BrokerDirective, bool), RegistryError> {
         let mut inner = self.write();
         evict_inactive_routes_at_capacity(
             &mut inner,
             registration.fingerprint,
             self.route_capacity,
         );
-        let binding = validate_binding(
-            &inner,
-            registration.fingerprint,
-            registration.token_digest,
-            Some(&registration.session_id),
-        )?;
+        validate_binding(&inner, registration.fingerprint, registration.token_digest)?;
         validate_capacity(&inner, registration.fingerprint, self.route_capacity)?;
-        if let Some(route) = inner.routes.get(&registration.fingerprint)
-            && !route.refs.contains_key(&registration.session_id)
-            && route.refs.len() >= MAX_MCP_REFERENCES_PER_ROUTE
-        {
-            return Err(RegistryError::McpReferenceCapacityReached);
-        }
-        match binding {
-            Binding::Current => {
-                inner
-                    .tokens
-                    .insert(registration.token_digest, registration.fingerprint);
-            }
-            Binding::Rotate { previous } => {
-                inner.tokens.remove(&previous);
-                inner
-                    .tokens
-                    .insert(registration.token_digest, registration.fingerprint);
-                if let Some(route) = inner.routes.get_mut(&registration.fingerprint) {
-                    route.token_digest = registration.token_digest;
-                }
-            }
-            Binding::ReplacedReference => {}
-        }
+        inner
+            .tokens
+            .insert(registration.token_digest, registration.fingerprint);
         let route = inner
             .routes
             .entry(registration.fingerprint)
             .or_insert_with(|| {
                 RouteEntry::new(registration.token_digest, self.global_pass_through)
             });
+        if !route.refs.contains_key(&registration.session_id)
+            && route.refs.len() >= MAX_MCP_REFERENCES_PER_ROUTE
+        {
+            return Err(RegistryError::McpReferenceCapacityReached);
+        }
         route.refs.insert(
             registration.session_id.clone(),
             registration.lease_expires_at_unix_ms,
         );
-        let directive = route.directive_for(&registration.session_id, launch, self.retry_after_ms);
-        Ok((directive, matches!(binding, Binding::Rotate { .. })))
+        Ok(route.directive_for(&registration.session_id, launch, self.retry_after_ms))
     }
 
     #[cfg(test)]
@@ -1342,23 +1299,11 @@ impl RouteEntry {
     }
 }
 
-/// How a well-formed credential relates to the registry's one-to-one token/fingerprint map.
-#[derive(Clone, Copy)]
-enum Binding {
-    /// The digest is unbound with no route, or already bound to this fingerprint.
-    Current,
-    /// The fingerprint is bound to `previous`; the new, unbound digest replaces it.
-    Rotate { previous: TokenDigest },
-    /// An existing reference renews with a digest its route has since replaced.
-    ReplacedReference,
-}
-
 fn validate_binding(
     inner: &RegistryInner,
     fingerprint: Fingerprint,
     token_digest: TokenDigest,
-    session_id: Option<&McpSessionId>,
-) -> Result<Binding, RegistryError> {
+) -> Result<(), RegistryError> {
     if inner
         .tokens
         .get(&token_digest)
@@ -1366,21 +1311,14 @@ fn validate_binding(
     {
         return Err(RegistryError::TokenAlreadyBound);
     }
-    let Some(route) = inner
+    if inner
         .routes
         .get(&fingerprint)
-        .filter(|route| !route.token_digest.matches(&token_digest))
-    else {
-        return Ok(Binding::Current);
-    };
-    // The digest is unbound here: it is not bound elsewhere and differs from this route's.
-    match session_id {
-        Some(session_id) if route.refs.contains_key(session_id) => Ok(Binding::ReplacedReference),
-        Some(_) => Ok(Binding::Rotate {
-            previous: route.token_digest,
-        }),
-        None => Err(RegistryError::FingerprintTokenMismatch),
+        .is_some_and(|existing| !existing.token_digest.matches(&token_digest))
+    {
+        return Err(RegistryError::FingerprintTokenMismatch);
     }
+    Ok(())
 }
 
 fn validate_capacity(

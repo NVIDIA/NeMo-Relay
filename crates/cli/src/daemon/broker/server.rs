@@ -609,9 +609,8 @@ fn register_mcp_blocking(
         Err(response) => return response,
     };
     // Enrollment is open to reachable clients with a valid identity proof. The registry binds
-    // this credential digest to that fingerprint, rejects a digest bound to another fingerprint,
-    // and lets the proven fingerprint rotate to a new, unbound digest.
-    let (directive, credential_rotated) = match state.registry.register_mcp_rotating(
+    // this credential digest to that fingerprint and rejects attempts to rebind either side.
+    let directive = match state.registry.register_mcp(
         McpRegistration {
             fingerprint: transcript.initiator_fingerprint,
             token_digest: credential.digest(),
@@ -620,19 +619,9 @@ fn register_mcp_blocking(
         },
         launch,
     ) {
-        Ok(registered) => registered,
+        Ok(directive) => directive,
         Err(error) => return registry_error(error),
     };
-    if credential_rotated {
-        let fingerprint = transcript.initiator_fingerprint.to_string();
-        log::info!(
-            target: "nemo_relay.daemon",
-            event = "route_credential_rotated",
-            fingerprint = fingerprint.as_str(),
-            mcp_session_id = session_id.as_str();
-            "Route credential replaced for the same machine identity; the previous credential is now unbound"
-        );
-    }
     if reuse_session {
         let session = sessions
             .get_mut(session_id.as_str())

@@ -491,7 +491,7 @@ async fn enroll_test_mcp(
 }
 
 #[tokio::test]
-async fn open_enrollment_binds_new_tokens_rotates_same_identity_and_prevents_route_takeover() {
+async fn open_enrollment_binds_new_tokens_without_allowlist_and_prevents_route_takeover() {
     for pass_through in [false, true] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -561,51 +561,28 @@ async fn open_enrollment_binds_new_tokens_rotates_same_identity_and_prevents_rou
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
         }
-        // A copied token is a definitive rejection that clients must not retry.
-        let response = enroll_test_mcp(&state, &origin, &other_identity, &first, "takeover").await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            enroll_test_mcp(&state, &origin, &other_identity, &first, "takeover")
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED,
+        );
+        let third = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0xa3; 32]);
+        let rebind = enroll_test_mcp(&state, &origin, &identity, &third, "rebind").await;
+        assert_eq!(rebind.status(), StatusCode::UNAUTHORIZED);
+        // The coded rejection tells the MCP client to serve without a route instead of retrying.
         let body: serde_json::Value =
-            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+            serde_json::from_slice(&rebind.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
         assert_eq!(body["error"]["code"], ROUTE_CREDENTIAL_REJECTED_CODE);
-        // The same proven identity rotates to a new token without losing its route.
-        let third = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0xa3; 32]);
-        assert_eq!(
-            enroll_test_mcp(&state, &origin, &identity, &third, "rotated")
-                .await
-                .status(),
-            StatusCode::OK,
-        );
-        // The pre-rotation MCP renews its reference without reclaiming the binding.
-        assert_eq!(
-            enroll_test_mcp(&state, &origin, &identity, &first, "first")
-                .await
-                .status(),
-            StatusCode::OK,
-        );
-        for session in ["first", "rotated"] {
-            state
-                .registry
-                .release_mcp(
-                    identity.fingerprint(),
-                    &McpSessionId::new(session).unwrap(),
-                    u64::MAX,
-                )
-                .unwrap();
-        }
-        // The new token resolves to the bound route, which now has no live reference.
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post("/hooks/pi")
-                    .header(CLIENT_TOKEN_HEADER, &third)
-                    .body(Body::empty())
-                    .unwrap(),
+        state
+            .registry
+            .release_mcp(
+                identity.fingerprint(),
+                &McpSessionId::new("first").unwrap(),
+                u64::MAX,
             )
-            .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        // The replaced token is unbound and passes through.
         let response = app
             .oneshot(
                 Request::post("/hooks/pi")
@@ -615,11 +592,7 @@ async fn open_enrollment_binds_new_tokens_rotates_same_identity_and_prevents_rou
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.into_body().collect().await.unwrap().to_bytes(),
-            HookRoute::Pi.pass_through_body()
-        );
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         if pass_through {
             assert!(lock(&state.activations).is_empty());
         }
