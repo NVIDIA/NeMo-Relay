@@ -6,13 +6,15 @@
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use spdlog::sink::{AsyncPoolSink, FileSink, OverflowPolicy, StdStreamSink, WriteSink};
+use spdlog::sink::{
+    AsyncPoolSink, FileSink, OverflowPolicy, Sink, SinkPropAccess, StdStreamSink, WriteSink,
+};
 use spdlog::terminal_style::StyleMode;
-use spdlog::{Level, LevelFilter, Logger, ThreadPool};
+use spdlog::{ErrorHandler, Level, LevelFilter, Logger, Record, ThreadPool};
 
 use super::config::{LogLevel, LogSinkConfig, LoggingConfig, MAX_FILE_SINK_QUEUE_ENTRIES};
 use super::format::RelayFormatter;
@@ -66,6 +68,7 @@ pub(crate) fn build_logger(
         }
         active_paths.push(resolved_path.clone());
         reserved_paths.extend(candidate_paths);
+        let sink_label = resolved_path.display().to_string();
 
         let file: Arc<dyn spdlog::sink::Sink> = match file_sink.rotation {
             None => FileSink::builder()
@@ -76,7 +79,7 @@ pub(crate) fn build_logger(
                     root_relay_id: root_relay_id.clone(),
                 })
                 .level_filter(spdlog_level_filter(file_sink.level))
-                .error_handler(stderr_error_handler(&resolved_path.display().to_string()))
+                .error_handler(stderr_error_handler(&sink_label))
                 .build_arc()
                 .map_err(|error| {
                     FlowError::InvalidArgument(format!(
@@ -103,7 +106,7 @@ pub(crate) fn build_logger(
                     root_relay_id: root_relay_id.clone(),
                 })
                 .level_filter(spdlog_level_filter(file_sink.level))
-                .error_handler(stderr_error_handler(&resolved_path.display().to_string()))
+                .error_handler(stderr_error_handler(&sink_label))
                 .build_arc()
                 .map_err(|error| {
                     FlowError::InvalidArgument(format!(
@@ -134,21 +137,21 @@ pub(crate) fn build_logger(
                 ))
             })?;
 
+        let async_error_handler: ErrorHandler = async_sink_error_handler(&sink_label).into();
         let async_sink = AsyncPoolSink::builder()
             .sink(file)
             .thread_pool(Arc::clone(&pool))
             .overflow_policy(OverflowPolicy::DropIncoming)
             .level_filter(spdlog_level_filter(file_sink.level))
-            .error_handler(dropped_record_error_handler(
-                &resolved_path.display().to_string(),
-            ))
-            .build_arc()
+            .error_handler(async_error_handler.clone())
+            .build()
             .map_err(|error| {
                 FlowError::InvalidArgument(format!(
                     "failed to create async logging sink for {}: {error}",
                     resolved_path.display()
                 ))
             })?;
+        let async_sink = Arc::new(AsyncSinkErrorBoundary::new(async_sink, async_error_handler));
 
         thread_pools.push(pool);
         sinks.push(async_sink);
@@ -168,6 +171,70 @@ pub(crate) fn build_logger(
     }
 
     Ok((logger, thread_pools))
+}
+
+/// Routes synchronous `AsyncPoolSink` errors through its per-sink handler.
+struct AsyncSinkErrorBoundary {
+    inner: AsyncPoolSink,
+    error_handler: RwLock<ErrorHandler>,
+}
+
+impl AsyncSinkErrorBoundary {
+    fn new(inner: AsyncPoolSink, error_handler: ErrorHandler) -> Self {
+        Self {
+            inner,
+            error_handler: RwLock::new(error_handler),
+        }
+    }
+
+    fn report_immediate_error(&self, result: spdlog::Result<()>) -> spdlog::Result<()> {
+        if let Err(error) = result {
+            let error_handler = self
+                .error_handler
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            error_handler.call(error);
+        }
+        Ok(())
+    }
+}
+
+impl SinkPropAccess for AsyncSinkErrorBoundary {
+    fn level_filter(&self) -> LevelFilter {
+        self.inner.level_filter()
+    }
+
+    fn set_level_filter(&self, level_filter: LevelFilter) {
+        self.inner.set_level_filter(level_filter);
+    }
+
+    fn set_formatter(&self, formatter: Box<dyn spdlog::formatter::Formatter>) {
+        self.inner.set_formatter(formatter);
+    }
+
+    fn set_error_handler(&self, error_handler: ErrorHandler) {
+        self.inner.set_error_handler(error_handler.clone());
+        *self
+            .error_handler
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = error_handler;
+    }
+}
+
+impl Sink for AsyncSinkErrorBoundary {
+    fn log(&self, record: &Record) -> spdlog::Result<()> {
+        self.report_immediate_error(self.inner.log(record))
+    }
+
+    fn flush(&self) -> spdlog::Result<()> {
+        self.report_immediate_error(self.inner.flush())
+    }
+
+    fn flush_on_exit(&self) -> spdlog::Result<()> {
+        // Preserve final-drain errors for `LoggingRuntime`.
+        self.inner.flush_on_exit()
+    }
 }
 
 fn reserved_sink_paths(
@@ -274,7 +341,6 @@ impl DropNoticeRateLimiter {
         }
     }
 
-    /// Returns `true` when a notice may be emitted at `now_millis`.
     fn should_report(&self, now_millis: u64) -> bool {
         loop {
             let last = self.last_report_millis.load(Ordering::Relaxed);
@@ -299,26 +365,38 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-fn dropped_record_error_handler(
-    sink_label: &str,
-) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
+fn async_sink_error_handler(sink_label: &str) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
     let sink_label = sink_label.to_owned();
-    let rate_limiter = DropNoticeRateLimiter::new();
+    let dropped_record_rate_limiter = DropNoticeRateLimiter::new();
+    let dropped_flush_rate_limiter = DropNoticeRateLimiter::new();
     move |error| {
-        // Only a full queue dropping a record is the high-volume "records lost" case that needs
-        // rate-limiting. Other errors (disconnected channel, dropped flush, write failures) are
-        // rare and reported immediately and accurately.
+        // A full queue can reject records and periodic flush requests at producer speed. Rate-limit
+        // them separately so neither failure class can flood stderr or hide the other. Other errors
+        // (disconnected channel and worker-side write failures) are rare and reported immediately.
         match &error {
             spdlog::Error::SendToChannel(
                 spdlog::error::SendToChannelError::Full,
                 spdlog::error::SendToChannelErrorDropped::Record(_),
             ) => {
-                if rate_limiter.should_report(now_millis()) {
+                if dropped_record_rate_limiter.should_report(now_millis()) {
                     let _ = writeln!(
                         io::stderr(),
                         "nemo-relay: logging sink ({sink_label}): records are being dropped \
                          because the queue is full; repeated notices are limited to once per \
                          {DROP_REPORT_INTERVAL_MILLIS}ms"
+                    );
+                }
+            }
+            spdlog::Error::SendToChannel(
+                spdlog::error::SendToChannelError::Full,
+                spdlog::error::SendToChannelErrorDropped::Flush,
+            ) => {
+                if dropped_flush_rate_limiter.should_report(now_millis()) {
+                    let _ = writeln!(
+                        io::stderr(),
+                        "nemo-relay: logging sink ({sink_label}): flush requests are being \
+                         dropped because the queue is full; repeated notices are limited to once \
+                         per {DROP_REPORT_INTERVAL_MILLIS}ms"
                     );
                 }
             }
