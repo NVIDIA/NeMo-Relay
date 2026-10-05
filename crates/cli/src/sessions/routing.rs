@@ -159,6 +159,7 @@ impl<'a> SessionEventApplier<'a> {
         }
     }
 
+    /// Apply one routed hook while preserving cancellation guards and reporting closed child aliases.
     pub(super) async fn apply(
         &self,
         session_id: &str,

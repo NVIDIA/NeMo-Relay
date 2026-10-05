@@ -16,6 +16,9 @@ use crate::error::CliError;
 use super::{Session, SessionGates, session_gate};
 
 pub(super) const AGENT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+// Hook-driven tools do not send heartbeats while running. Allow long builds and tests to
+// finish, while retaining a finite fail-safe for children whose completion hooks never arrive.
+pub(super) const CODEX_TOOL_IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 pub(super) const AGENT_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(super) async fn close_sessions_for_shutdown(
@@ -80,6 +83,7 @@ pub(super) async fn release_closed_owner_ids(
     }
 }
 
+/// Select sessions needing whole-session or stale-child idle cleanup.
 async fn idle_session_ids(
     inner: &Arc<Mutex<HashMap<String, Session>>>,
     now: Instant,
@@ -104,6 +108,7 @@ type ClosedIdleTurns = (
     Option<CliError>,
 );
 
+/// Close expired children independently, then close sessions whose remaining work is idle.
 async fn close_idle_turns(
     inner: &Arc<Mutex<HashMap<String, Session>>>,
     session_gates: &SessionGates,
