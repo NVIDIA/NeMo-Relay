@@ -715,28 +715,55 @@ fn automatic_otel_malformed_percent_headers_skip_exporters_without_disclosing_cr
     assert!(
         matches!(collector.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
     );
+}
 
-    for variable in signal_headers {
+#[test]
+fn automatic_otel_signal_headers_override_generic_headers() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let generic = "OTEL_EXPORTER_OTLP_HEADERS";
+    let signal_headers = [
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+    ];
+    let _environment =
+        EnvironmentGuard::capture([endpoint, generic].into_iter().chain(signal_headers));
+    for (generic_value, signal_value, accepted) in [
+        // Explicitly empty signal lists override malformed generic headers.
+        ("authorization=Bearer%20generic-token,x-bad=%ZZ", "", true),
+        // Malformed signal lists override valid generic headers and skip exporters.
+        (
+            "authorization=Bearer%20generic-token",
+            "authorization=Bearer%20signal-token,x-bad=%ZZ",
+            false,
+        ),
+    ] {
         // SAFETY: the observability mutex serializes test-only environment changes.
         unsafe {
-            std::env::set_var(variable, "authorization=Bearer%20secret-token,x-bad=%ZZ");
+            std::env::set_var(endpoint, "http://127.0.0.1:4318");
+            std::env::set_var(generic, generic_value);
+            for variable in signal_headers {
+                std::env::set_var(variable, signal_value);
+            }
         }
-        let error =
-            crate::observability::otel_signal::validate_automatic_header_environment(variable)
-                .unwrap_err();
-        assert!(error.to_string().contains(variable));
-        // An explicitly empty signal list overrides the malformed generic list.
-        // SAFETY: the observability mutex serializes test-only environment changes.
-        unsafe {
-            std::env::set_var(variable, "");
+        let results = [
+            OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin().map(drop),
+            OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin().map(drop),
+            OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin().map(drop),
+        ];
+        for (variable, result) in signal_headers.into_iter().zip(results) {
+            if accepted {
+                result.expect("empty signal headers must override malformed generic headers");
+            } else {
+                let message = result.unwrap_err().to_string();
+                assert!(message.contains(variable));
+                assert!(message.contains("malformed percent escape"));
+                assert!(!message.contains("generic-token"));
+                assert!(!message.contains("signal-token"));
+            }
         }
-        crate::observability::otel_signal::validate_automatic_header_environment(variable).unwrap();
     }
-    let traces = OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin().unwrap();
-    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin().unwrap();
-    let metrics =
-        OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin().unwrap();
-    drop((traces, logs, metrics));
 }
 
 #[test]
