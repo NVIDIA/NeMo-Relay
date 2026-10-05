@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Protocol, TypeVar
 
+from langchain_core.callbacks import BaseCallbackManager
+from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.config import merge_configs
 from langgraph.callbacks import GraphCallbackHandler, GraphInterruptEvent, GraphResumeEvent
 
 import nemo_relay
@@ -15,6 +18,13 @@ from nemo_relay.integrations.langchain._serialization import _prepare_lc_payload
 from nemo_relay.integrations.langchain.callbacks import NemoRelayCallbackHandler as LangChainNemoRelayCallbackHandler
 
 _logger = logging.getLogger(__name__)
+
+
+class _GraphWithConfig(Protocol):
+    config: RunnableConfig | None
+
+
+_GraphT = TypeVar("_GraphT", bound=_GraphWithConfig)
 
 
 def _interrupt_to_payload(interrupt: Any) -> dict[str, nemo_relay.Json]:
@@ -72,4 +82,30 @@ class NemoRelayCallbackHandler(LangChainNemoRelayCallbackHandler, GraphCallbackH
             _logger.debug("NeMo Relay: LangGraph mark emission failed", exc_info=True)
 
 
-__all__ = ["NemoRelayCallbackHandler"]
+def configure_graph(graph: _GraphT) -> _GraphT:
+    """Install Relay lifecycle callbacks in a compiled graph's base config.
+
+    Keeping the callback in the graph config preserves it when a LangGraph
+    server does not accept callback objects from an invocation request. The
+    graph is updated in place so it remains a compiled graph that the server
+    can load.
+
+    Args:
+        graph: Compiled LangGraph graph to configure.
+
+    Returns:
+        The same graph with a ``NemoRelayCallbackHandler`` in its base config.
+    """
+    config = graph.config if graph.config is not None else RunnableConfig()
+    callbacks = config.get("callbacks")
+    handlers = (
+        [*callbacks.handlers, *callbacks.inheritable_handlers]
+        if isinstance(callbacks, BaseCallbackManager)
+        else callbacks or []
+    )
+    if not any(isinstance(handler, NemoRelayCallbackHandler) for handler in handlers):
+        graph.config = merge_configs(config, {"callbacks": [NemoRelayCallbackHandler()]})
+    return graph
+
+
+__all__ = ["NemoRelayCallbackHandler", "configure_graph"]
