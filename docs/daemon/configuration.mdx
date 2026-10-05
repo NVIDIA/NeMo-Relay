@@ -343,23 +343,29 @@ a request, and preserves the caller's provider authentication.
 
 ### Replace a Client Token
 
-The daemon binds each machine-user identity to one token, in memory, until the
-daemon restarts. It does not release the binding when sessions end. If the token
-changes while the daemon is running, for example because the token file is
-removed and `nemo-relay daemon token ensure` creates a new one:
+The daemon binds each token to the machine-user identity that first registers
+it, in memory, until the daemon restarts. It does not release bindings when
+sessions end. If the token changes while the daemon is running, for example
+because the token file is removed and `nemo-relay daemon token ensure` creates a
+new one:
 
-- MCP registration with the new token is rejected with
-  `route_credential_rejected`. `nemo-relay daemon mcp` does not retry the
-  rejection; it logs `daemon_mcp_pass_through` with
-  `reason = "credential_rejected"` and keeps serving MCP without a route, so the
-  harness keeps working.
-- Requests with the new token use pass-through until the daemon restarts, so
-  they produce no Relay telemetry or guardrail results.
-- Sessions that still hold the old token keep their route.
+- MCP registration with the new token joins the identity's existing route and
+  worker. No second worker is launched.
+- The old and new tokens both stay valid for that route until the daemon
+  restarts, so sessions that still hold the old token keep working alongside new
+  ones.
+- Removing or purging a token file does not revoke a token the daemon has
+  already bound. Only a daemon restart clears bindings.
 
-To restore telemetry after replacing a token, restart the daemon and then the
-harness sessions. A token bound to another machine identity, such as a token
-copied from another user or machine, is rejected the same way.
+One identity can hold up to 4 tokens. Registration with a fifth distinct token
+is rejected with `route_credential_rejected`, and the daemon logs
+`mcp_registration_rejected` with `reason = "route_token_limit_reached"`.
+`nemo-relay daemon mcp` does not retry the rejection; it logs
+`daemon_mcp_pass_through` with `reason = "credential_rejected"` and keeps
+serving MCP without a route, so the harness keeps working. Requests with that
+token use pass-through until the daemon restarts, so they produce no Relay
+telemetry or guardrail results. A token bound to another machine identity, such
+as a token copied from another user or machine, is rejected the same way.
 
 ### Requests Without a Bound Credential
 

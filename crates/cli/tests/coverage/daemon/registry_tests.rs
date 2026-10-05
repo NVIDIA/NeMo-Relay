@@ -276,25 +276,122 @@ fn worker_status_snapshots_omit_routes_without_assigned_workers() {
 }
 
 #[test]
-fn token_and_fingerprint_bindings_cannot_be_reassigned() {
+fn token_bindings_cannot_be_reassigned_to_another_fingerprint() {
     let registry = Registry::new(false);
     let first_fingerprint = fingerprint(3);
     let other_fingerprint = fingerprint(4);
     let token = TokenDigest::from_token(b"stable-token");
+    let joined = TokenDigest::from_token(b"different-token");
     registry
         .restore_binding(first_fingerprint, token)
         .expect("binding");
+    registry
+        .restore_binding(first_fingerprint, joined)
+        .expect("a second token joins the same route");
+    for copied in [token, joined] {
+        assert_eq!(
+            registry.restore_binding(other_fingerprint, copied),
+            Err(RegistryError::TokenAlreadyBound)
+        );
+        assert_eq!(
+            registry.register_connected_mcp(
+                registration(other_fingerprint, copied, "copied"),
+                launch("copied"),
+            ),
+            Err(RegistryError::TokenAlreadyBound)
+        );
+    }
+}
+
+#[test]
+fn tokens_for_one_identity_share_its_route_and_worker() {
+    let registry = Registry::new(false);
+    let fingerprint = fingerprint(40);
+    let old = TokenDigest::from_token(b"old-token");
+    let new = TokenDigest::from_token(b"new-token");
+    assert!(matches!(
+        registry
+            .register_connected_mcp(registration(fingerprint, old, "mcp-old"), launch("first"))
+            .unwrap(),
+        BrokerDirective::LaunchWorker { .. }
+    ));
+    assert!(matches!(
+        registry
+            .register_connected_mcp(registration(fingerprint, new, "mcp-new"), launch("second"))
+            .unwrap(),
+        BrokerDirective::WaitForWorker { .. }
+    ));
+    assert_eq!(registry.snapshot(fingerprint).unwrap().reference_count, 2);
+    registry
+        .mark_worker_ready(fingerprint, "first", worker("worker-shared"))
+        .unwrap();
+    for token in [old, new] {
+        let ResolvedTarget::Worker(request) = registry.resolve_target(&token).unwrap() else {
+            panic!("expected the shared worker");
+        };
+        assert_eq!(request.fingerprint(), fingerprint);
+        assert_eq!(request.target().worker_id(), "worker-shared");
+    }
+
+    // Old and new sessions interleave across rounds without rebinding or blocking each other.
+    for round in 0..4 {
+        for (token, name) in [(old, "old"), (new, "new")] {
+            let id = format!("{name}-{round}");
+            assert!(matches!(
+                registry
+                    .register_connected_mcp(registration(fingerprint, token, &id), launch(&id))
+                    .unwrap(),
+                BrokerDirective::ReuseWorker { .. }
+            ));
+            assert!(matches!(
+                registry.resolve_target(&old).unwrap(),
+                ResolvedTarget::Worker(_)
+            ));
+            assert!(matches!(
+                registry.resolve_target(&new).unwrap(),
+                ResolvedTarget::Worker(_)
+            ));
+            registry
+                .release_mcp(fingerprint, &session(&id), 1_000)
+                .unwrap();
+        }
+    }
+    assert_eq!(registry.worker_status_snapshots().len(), 1);
+}
+
+#[test]
+fn identity_token_limit_rejects_only_new_tokens() {
+    let registry = Registry::new(false);
+    let fingerprint = fingerprint(41);
+    let tokens: Vec<_> = (0..=MAX_TOKENS_PER_IDENTITY)
+        .map(|index| TokenDigest::from_token(format!("token-{index}").as_bytes()))
+        .collect();
+    for (index, token) in tokens[..MAX_TOKENS_PER_IDENTITY].iter().enumerate() {
+        registry
+            .register_connected_mcp(
+                registration(fingerprint, *token, &format!("mcp-{index}")),
+                launch(&format!("launch-{index}")),
+            )
+            .unwrap();
+    }
+    let over_limit = tokens[MAX_TOKENS_PER_IDENTITY];
     assert_eq!(
-        registry.restore_binding(other_fingerprint, token),
-        Err(RegistryError::TokenAlreadyBound)
-    );
-    assert_eq!(
-        registry.restore_binding(
-            first_fingerprint,
-            TokenDigest::from_token(b"different-token")
+        registry.register_connected_mcp(
+            registration(fingerprint, over_limit, "mcp-over"),
+            launch("over"),
         ),
-        Err(RegistryError::FingerprintTokenMismatch)
+        Err(RegistryError::RouteTokenLimitReached)
     );
+    assert!(matches!(
+        registry.resolve_target(&over_limit),
+        Err(ResolveError::UnknownToken)
+    ));
+    // Every bound token keeps registering at the limit.
+    for token in &tokens[..MAX_TOKENS_PER_IDENTITY] {
+        registry
+            .register_connected_mcp(registration(fingerprint, *token, "mcp-again"), launch("x"))
+            .unwrap();
+    }
 }
 
 #[test]
@@ -912,6 +1009,38 @@ fn capacity_pressure_evicts_only_a_zero_reference_empty_route() {
         registry.resolve_target(&first_token),
         Err(ResolveError::UnknownToken)
     ));
+}
+
+#[test]
+fn evicting_a_route_unbinds_every_token() {
+    let registry = Registry::new(false).with_route_capacity(1);
+    let first = fingerprint(42);
+    let tokens = [
+        TokenDigest::from_token(b"evicted-a"),
+        TokenDigest::from_token(b"evicted-b"),
+    ];
+    for (index, token) in tokens.iter().enumerate() {
+        let id = format!("mcp-{index}");
+        registry
+            .register_connected_mcp(registration(first, *token, &id), launch(&id))
+            .unwrap();
+        registry.release_mcp(first, &session(&id), 1_000).unwrap();
+    }
+    let second = fingerprint(43);
+    registry
+        .register_connected_mcp(
+            registration(second, TokenDigest::from_token(b"evictor"), "mcp-b"),
+            launch("second"),
+        )
+        .expect("inactive route should be evicted");
+    for token in tokens {
+        assert!(matches!(
+            registry.resolve_target(&token),
+            Err(ResolveError::UnknownToken)
+        ));
+        // A freed token may bind to another identity once its route is gone.
+        assert_eq!(registry.restore_binding(second, token), Ok(()));
+    }
 }
 
 #[test]

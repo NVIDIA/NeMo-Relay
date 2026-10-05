@@ -609,7 +609,8 @@ fn register_mcp_blocking(
         Err(response) => return response,
     };
     // Enrollment is open to reachable clients with a valid identity proof. The registry binds
-    // this credential digest to that fingerprint and rejects attempts to rebind either side.
+    // this credential digest to that fingerprint's route, never rebinding a bound digest, and
+    // admits a bounded number of distinct tokens per fingerprint.
     let directive = match state.registry.register_mcp(
         McpRegistration {
             fingerprint: transcript.initiator_fingerprint,
@@ -620,7 +621,19 @@ fn register_mcp_blocking(
         launch,
     ) {
         Ok(directive) => directive,
-        Err(error) => return registry_error(error),
+        Err(error) => {
+            if error == RegistryError::RouteTokenLimitReached {
+                let fingerprint = transcript.initiator_fingerprint.to_string();
+                log::warn!(
+                    target: "nemo_relay.daemon",
+                    event = "mcp_registration_rejected",
+                    fingerprint = fingerprint.as_str(),
+                    reason = "route_token_limit_reached";
+                    "Rejected a new client token for an identity that holds the maximum number of route tokens"
+                );
+            }
+            return registry_error(error);
+        }
     };
     if reuse_session {
         let session = sessions
@@ -2962,8 +2975,9 @@ fn unavailable_response() -> Response<Body> {
 
 fn registry_error(error: RegistryError) -> Response<Body> {
     let status = match error {
-        RegistryError::TokenAlreadyBound | RegistryError::FingerprintTokenMismatch => {
+        RegistryError::TokenAlreadyBound | RegistryError::RouteTokenLimitReached => {
             // A definitive rejection: the client must serve without a route rather than retry.
+            // The token limit reuses this code so every client version treats it as final.
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "error": {

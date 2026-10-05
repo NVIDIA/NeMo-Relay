@@ -561,28 +561,64 @@ async fn open_enrollment_binds_new_tokens_without_allowlist_and_prevents_route_t
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
         }
-        assert_eq!(
-            enroll_test_mcp(&state, &origin, &other_identity, &first, "takeover")
-                .await
-                .status(),
-            StatusCode::UNAUTHORIZED,
-        );
-        let third = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0xa3; 32]);
-        let rebind = enroll_test_mcp(&state, &origin, &identity, &third, "rebind").await;
-        assert_eq!(rebind.status(), StatusCode::UNAUTHORIZED);
         // The coded rejection tells the MCP client to serve without a route instead of retrying.
-        let body: serde_json::Value =
-            serde_json::from_slice(&rebind.into_body().collect().await.unwrap().to_bytes())
+        async fn assert_rejected(response: Response<Body>) {
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let body: serde_json::Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(body["error"]["code"], ROUTE_CREDENTIAL_REJECTED_CODE);
+        }
+        assert_rejected(
+            enroll_test_mcp(&state, &origin, &other_identity, &first, "takeover").await,
+        )
+        .await;
+        // Replacement tokens for the same identity join its route without another launch.
+        let activations = lock(&state.activations).len();
+        let mut sessions = vec!["first".to_owned()];
+        for byte in [0xa3, 0xa4, 0xa5] {
+            let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([byte; 32]);
+            let session = format!("joined-{byte:x}");
+            let response = enroll_test_mcp(&state, &origin, &identity, &token, &session).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let response: McpRegisterResponse =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(
+                matches!(response.directive, BrokerDirective::UsePassThrough),
+                pass_through
+            );
+            assert!(!matches!(
+                response.directive,
+                BrokerDirective::LaunchWorker { .. }
+            ));
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/hooks/pi")
+                        .header(CLIENT_TOKEN_HEADER, &token)
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
                 .unwrap();
-        assert_eq!(body["error"]["code"], ROUTE_CREDENTIAL_REJECTED_CODE);
-        state
-            .registry
-            .release_mcp(
-                identity.fingerprint(),
-                &McpSessionId::new("first").unwrap(),
-                u64::MAX,
-            )
-            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            sessions.push(session);
+        }
+        assert_eq!(lock(&state.activations).len(), activations);
+        let over_limit = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0xa6; 32]);
+        assert_rejected(enroll_test_mcp(&state, &origin, &identity, &over_limit, "over").await)
+            .await;
+        for session in sessions {
+            state
+                .registry
+                .release_mcp(
+                    identity.fingerprint(),
+                    &McpSessionId::new(session).unwrap(),
+                    u64::MAX,
+                )
+                .unwrap();
+        }
         let response = app
             .oneshot(
                 Request::post("/hooks/pi")
@@ -1600,7 +1636,7 @@ fn registry_errors_map_to_stable_control_statuses() {
         RegistryError::UnknownRoute,
         RegistryError::UnknownMcpSession,
         RegistryError::TokenAlreadyBound,
-        RegistryError::FingerprintTokenMismatch,
+        RegistryError::RouteTokenLimitReached,
         RegistryError::ActivationMismatch,
         RegistryError::WorkerMismatch,
         RegistryError::RecoveryNotAuthorized,
