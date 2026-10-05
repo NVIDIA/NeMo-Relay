@@ -91,7 +91,7 @@ async fn idle_session_ids(
         .iter()
         .filter_map(|(session_id, session)| {
             session
-                .is_idle_for(now, timeout)
+                .needs_idle_cleanup(now, timeout)
                 .then_some(session_id.clone())
         })
         .collect()
@@ -123,7 +123,7 @@ async fn close_idle_turns(
             let mut sessions = inner.lock().await;
             sessions
                 .get(&session_id)
-                .is_some_and(|session| session.is_idle_for(now, timeout))
+                .is_some_and(|session| session.needs_idle_cleanup(now, timeout))
                 .then(|| sessions.remove(&session_id))
                 .flatten()
         }) else {
@@ -132,7 +132,14 @@ async fn close_idle_turns(
         let stack = session.scope_stack.clone();
         match TASK_SCOPE_STACK
             .scope(stack, async {
-                session.close_idle_scopes_for_reason(reason).await
+                let (mut closed, mut delivery) =
+                    session.close_stale_subagents(now, timeout).await?;
+                if session.is_idle_for(now, timeout) {
+                    let (ids, idle_delivery) = session.close_idle_scopes_for_reason(reason).await?;
+                    closed.extend(ids);
+                    delivery = idle_delivery.or(delivery);
+                }
+                Ok::<_, CliError>((closed, delivery))
             })
             .await
         {

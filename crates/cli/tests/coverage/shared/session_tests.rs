@@ -721,6 +721,7 @@ async fn shutdown_waits_for_cancelled_alignment_cleanup() {
         AppliedRouteCleanup::new(
             &manager,
             cleanup,
+            Vec::new(),
             session_gate,
             manager.session_activity.begin(),
         )
@@ -9851,4 +9852,345 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
     );
     let sessions = manager.inner.lock().await;
     assert!(sessions.get("parent-thread").unwrap().task_scope.is_none());
+}
+
+#[tokio::test]
+async fn codex_synthesis_prompt_after_children_finish_preserves_task_trace() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let name = "cli-codex-post-child-synthesis";
+    let _ = deregister_subscriber(name);
+    let (subscriber, exporter) = make_openinference_test_subscriber("codex-synthesis");
+    subscriber.register(name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    for event in ["SessionStart", "UserPromptSubmit"] {
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "synthesis-root", "hook_event_name": event
+            }),
+        )
+        .await;
+    }
+    for child in ["first", "second"] {
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": "synthesis-root", "hook_event_name": "SubagentStart", "agent_id": child
+        })).await;
+    }
+    let task = manager.inner.lock().await["synthesis-root"]
+        .task_scope
+        .as_ref()
+        .unwrap()
+        .uuid;
+    apply_owned_codex_hook(
+        &manager,
+        json!({
+            "session_id": "synthesis-root", "hook_event_name": "Stop"
+        }),
+    )
+    .await;
+    for child in ["second", "first"] {
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "synthesis-root", "hook_event_name": "SubagentStop", "agent_id": child
+            }),
+        )
+        .await;
+    }
+    apply_owned_codex_hook(&manager, json!({
+        "session_id": "synthesis-root", "hook_event_name": "UserPromptSubmit", "prompt": "synthesize findings"
+    })).await;
+    {
+        let sessions = manager.inner.lock().await;
+        let root = &sessions["synthesis-root"];
+        assert_eq!(root.task_scope.as_ref().unwrap().uuid, task);
+        assert_eq!(active_turn_scope(root).parent_uuid, Some(task));
+        assert!(!root.task_awaiting_synthesis);
+    }
+    apply_owned_codex_hook(
+        &manager,
+        json!({
+            "session_id": "synthesis-root", "hook_event_name": "Stop"
+        }),
+    )
+    .await;
+    assert!(
+        manager.inner.lock().await["synthesis-root"]
+            .task_scope
+            .is_none()
+    );
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span.name == "codex-task")
+            .count(),
+        1
+    );
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| span.span_context.trace_id())
+            .collect::<HashSet<_>>()
+            .len(),
+        1
+    );
+    assert!(subscriber.deregister(name).unwrap());
+}
+
+#[tokio::test]
+async fn codex_abandoned_child_tools_expire_without_parent_idle() {
+    for boundary in [
+        "UserPromptSubmit",
+        "Stop",
+        "Stop_without_turn",
+        "idle_sweep",
+        "idle_sweep_without_turn",
+    ] {
+        let manager = SessionManager::new(session_test_config());
+        start_authenticated_codex_alias(&manager).await;
+        let task = manager.inner.lock().await["parent-thread"]
+            .task_scope
+            .as_ref()
+            .unwrap()
+            .uuid;
+        let tool = ToolEvent {
+            session_id: "parent-thread".into(),
+            agent_kind: AgentKind::Codex,
+            event_name: "PreToolUse".into(),
+            tool_call_id: "abandoned".into(),
+            tool_name: "Bash".into(),
+            subagent_id: Some("child-thread".into()),
+            arguments: json!({"command": "read files"}),
+            result: Value::Null,
+            status: None,
+            payload: json!({}),
+            metadata: json!({}),
+        };
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(tool)],
+                "client-a",
+            )
+            .await
+            .unwrap();
+        if boundary.ends_with("without_turn") {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![NormalizedEvent::TurnEnded(codex_session_event(
+                        "parent-thread",
+                        "Stop",
+                        json!({}),
+                    ))],
+                    "client-a",
+                )
+                .await
+                .unwrap();
+        }
+        // No PostToolUse, Stop, or SubagentStop ever arrives for this child. Parent activity is
+        // recent, so only the child's clock can bound the leaked scope and its tool.
+        {
+            let mut sessions = manager.inner.lock().await;
+            let root = sessions.get_mut("parent-thread").unwrap();
+            root.subagent_activity.insert(
+                "child-thread".into(),
+                Instant::now() - AGENT_IDLE_TIMEOUT - Duration::from_secs(1),
+            );
+            root.touch_activity();
+        }
+        if boundary.starts_with("idle_sweep") {
+            assert_eq!(
+                manager
+                    .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+                    .await
+                    .unwrap(),
+                1
+            );
+        } else {
+            let event = codex_session_event(
+                "parent-thread",
+                if boundary == "Stop_without_turn" {
+                    "Stop"
+                } else {
+                    boundary
+                },
+                json!({}),
+            );
+            let event = if boundary.starts_with("Stop") {
+                NormalizedEvent::TurnEnded(event)
+            } else {
+                NormalizedEvent::PromptSubmitted(event)
+            };
+            manager
+                .apply_authenticated_events(&HeaderMap::new(), vec![event], "client-a")
+                .await
+                .unwrap();
+        }
+        assert!(!has_alignment_alias(&manager, "child-thread").await);
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions["parent-thread"];
+            assert!(root.subagents.is_empty());
+            assert!(root.subagent_activity.is_empty());
+            assert!(root.tools.is_empty());
+            assert!(root.subagent_stacks.is_empty());
+            assert!(!root.task_awaiting_synthesis);
+            if boundary == "UserPromptSubmit" {
+                assert_ne!(root.task_scope.as_ref().unwrap().uuid, task);
+            }
+        }
+        if boundary != "UserPromptSubmit" {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![NormalizedEvent::PromptSubmitted(codex_session_event(
+                        "parent-thread",
+                        "UserPromptSubmit",
+                        json!({}),
+                    ))],
+                    "client-a",
+                )
+                .await
+                .unwrap();
+            assert_ne!(
+                manager.inner.lock().await["parent-thread"]
+                    .task_scope
+                    .as_ref()
+                    .unwrap()
+                    .uuid,
+                task
+            );
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn codex_idle_sweeper_closes_abandoned_tools_after_parent_stop() {
+    let manager = SessionManager::new(session_test_config());
+    for event in ["UserPromptSubmit", "SubagentStart", "PreToolUse", "Stop"] {
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": "idle-root", "hook_event_name": event,
+            "agent_id": if event == "SubagentStart" || event == "PreToolUse" { "idle-child" } else { "idle-root" },
+            "tool_call_id": "abandoned", "tool_name": "Bash", "tool_input": {"command": "sleep 60"}
+        })).await;
+    }
+    assert_eq!(
+        manager
+            .close_idle_sessions_at(
+                Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+                AGENT_IDLE_TIMEOUT,
+                "idle_timeout"
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(!manager.has_open_sessions().await);
+    if let Some(root) = manager.inner.lock().await.get("idle-root") {
+        assert!(root.task_scope.is_none());
+        assert!(root.tools.is_empty());
+        assert!(root.subagents.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
+    for boundary in ["Stop", "idle_sweep"] {
+        let manager = SessionManager::new(session_test_config());
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "activity-root", "hook_event_name": "UserPromptSubmit"
+            }),
+        )
+        .await;
+        for child in ["stale", "live"] {
+            for event in ["SubagentStart", "UserPromptSubmit", "PreToolUse"] {
+                apply_owned_codex_hook(&manager, json!({
+                "session_id": "activity-root", "hook_event_name": event, "agent_id": child,
+                "tool_call_id": child, "tool_name": "Bash", "tool_input": {"command": "read files"}
+            })).await;
+            }
+        }
+        let task = manager.inner.lock().await["activity-root"]
+            .task_scope
+            .as_ref()
+            .unwrap()
+            .uuid;
+        {
+            let mut sessions = manager.inner.lock().await;
+            let root = sessions.get_mut("activity-root").unwrap();
+            for child in ["stale", "live"] {
+                root.subagent_activity.insert(
+                    child.into(),
+                    Instant::now() - AGENT_IDLE_TIMEOUT - Duration::from_secs(1),
+                );
+            }
+        }
+        // A child-owned gateway request refreshes only that child, and in-flight requests cannot
+        // lose their containing scopes to the sweeper even after a long upstream stall.
+        let prep = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some("activity-root".into()),
+                    subagent_id: Some("live".into()),
+                    ..llm_start()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(
+                    Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+                    AGENT_IDLE_TIMEOUT,
+                    "idle_timeout"
+                )
+                .await
+                .unwrap(),
+            0
+        );
+        manager
+            .record_gateway_response_hints("activity-root", Some("live".into()), json!({}))
+            .await;
+        manager
+            .finish_gateway_call(&prep.session_id, prep.session_finish)
+            .await;
+        // Recent child activity survives parent closure or idle sweeping; the stale sibling does not.
+        if boundary == "Stop" {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "activity-root", "hook_event_name": "Stop"
+                }),
+            )
+            .await;
+        } else {
+            assert_eq!(
+                manager
+                    .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+                    .await
+                    .unwrap(),
+                1
+            );
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions["activity-root"];
+            assert_eq!(root.task_scope.as_ref().unwrap().uuid, task);
+            assert!(!root.subagents.contains_key("stale"));
+            assert!(!root.tools.contains_key("stale"));
+            assert!(root.subagents.contains_key("live"));
+            assert!(root.tools.contains_key("live"));
+            assert!(root.child_turns.contains_key("live"));
+            assert_eq!(root.task_awaiting_synthesis, boundary == "Stop");
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
 }

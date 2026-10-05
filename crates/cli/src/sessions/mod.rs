@@ -105,6 +105,7 @@ struct AppliedRouteCleanup {
     alignment: Arc<Mutex<SessionAlignmentState>>,
     alignment_routing: Arc<Mutex<()>>,
     cleanup: Option<alignment::SessionRouteCleanup>,
+    closed_subagents: Vec<(String, String)>,
     session_gate: Option<OwnedMutexGuard<()>>,
     activity: Option<SessionActivityGuard>,
 }
@@ -113,6 +114,7 @@ impl AppliedRouteCleanup {
     fn new(
         manager: &SessionManager,
         cleanup: alignment::SessionRouteCleanup,
+        closed_subagents: Vec<(String, String)>,
         session_gate: OwnedMutexGuard<()>,
         activity: SessionActivityGuard,
     ) -> Self {
@@ -120,6 +122,7 @@ impl AppliedRouteCleanup {
             alignment: Arc::clone(&manager.alignment),
             alignment_routing: Arc::clone(&manager.alignment_routing),
             cleanup: Some(cleanup),
+            closed_subagents,
             session_gate: Some(session_gate),
             activity: Some(activity),
         }
@@ -127,11 +130,15 @@ impl AppliedRouteCleanup {
 
     async fn commit(mut self) {
         let _routing = self.alignment_routing.lock().await;
-        self.alignment.lock().await.commit_route(
+        let mut alignment = self.alignment.lock().await;
+        alignment.commit_route(
             self.cleanup
                 .as_ref()
                 .expect("applied route cleanup should be armed"),
         );
+        for (session_id, id) in &self.closed_subagents {
+            alignment.clear_for_ended_subagent(session_id, id);
+        }
         self.cleanup.take();
         self.session_gate.take();
         self.activity.take();
@@ -145,11 +152,16 @@ impl Drop for AppliedRouteCleanup {
         };
         let alignment = Arc::clone(&self.alignment);
         let alignment_routing = Arc::clone(&self.alignment_routing);
+        let closed_subagents = std::mem::take(&mut self.closed_subagents);
         let session_gate = self.session_gate.take();
         let activity = self.activity.take();
         drop(tokio::spawn(async move {
             let _routing = alignment_routing.lock().await;
-            alignment.lock().await.commit_route(&cleanup);
+            let mut alignment = alignment.lock().await;
+            alignment.commit_route(&cleanup);
+            for (session_id, id) in closed_subagents {
+                alignment.clear_for_ended_subagent(&session_id, &id);
+            }
             drop(session_gate);
             drop(activity);
         }));
@@ -479,12 +491,15 @@ pub(super) struct Session {
     // Codex session IDs are durable. A task ancestor exists only while bounded work is active,
     // including delegation that outlives a parent turn; Stop, idle timeout, and shutdown close it.
     task_scope: Option<ScopeHandle>,
+    // Consume on the next root prompt, even if every child has already ended.
+    task_awaiting_synthesis: bool,
     child_turns: HashMap<String, ScopeHandle>,
     turn_scope: Option<ScopeHandle>,
     gateway_request_turn_open: bool,
     turn_index: u64,
     last_turn_llm_output: Option<Value>,
     subagents: HashMap<String, ScopeHandle>,
+    subagent_activity: HashMap<String, Instant>,
     // Each active subagent gets its own scope stack seeded with the parent agent handle. This lets
     // sibling workers close out of order without corrupting the task-local stack.
     subagent_stacks: HashMap<String, ScopeStackHandle>,
@@ -840,7 +855,9 @@ impl SessionManager {
     /// Some coding agents, notably Codex child threads, do not always emit native agent-end hooks.
     /// The sweeper is provider-neutral: it closes any open turn that has had no hook or gateway
     /// activity for a short interval, while leaving turns with active tools or managed LLM calls
-    /// alone. Weak references keep the task from extending the manager lifetime in tests or
+    /// alone. Codex children have their own activity timeout, so abandoned hook tools cannot
+    /// keep a task alive through unrelated parent activity. Managed gateway calls are protected.
+    /// Weak references keep the task from extending the manager lifetime in tests or
     /// shutdown paths.
     pub(crate) fn start_idle_sweeper(&self) {
         let inner = Arc::downgrade(&self.inner);
@@ -1010,6 +1027,7 @@ impl SessionManager {
         .await?;
         let AppliedSessionEvent {
             outcome,
+            closed_subagents,
             session_gate,
             activity,
         } = applied;
@@ -1022,7 +1040,7 @@ impl SessionManager {
             }
             _ => {}
         }
-        AppliedRouteCleanup::new(self, cleanup, session_gate, activity)
+        AppliedRouteCleanup::new(self, cleanup, closed_subagents, session_gate, activity)
             .commit()
             .await;
         let Some((_, subscriber_delivery, tool_argument_transform)) = outcome else {
@@ -1608,12 +1626,14 @@ impl Session {
             session_metadata: Value::Null,
             agent_scope: None,
             task_scope: None,
+            task_awaiting_synthesis: false,
             child_turns: HashMap::new(),
             turn_scope: None,
             gateway_request_turn_open: false,
             turn_index: 0,
             last_turn_llm_output: None,
             subagents: HashMap::new(),
+            subagent_activity: HashMap::new(),
             subagent_stacks: HashMap::new(),
             subagent_stack: Vec::new(),
             completed_subagents: HashSet::new(),
@@ -1719,6 +1739,62 @@ impl Session {
         self.last_activity = Instant::now();
     }
 
+    /// Refresh only the child that produced activity; parent traffic cannot renew a dead child.
+    fn touch_subagent_activity(&mut self, id: Option<&str>) {
+        if let Some(activity) = id.and_then(|id| self.subagent_activity.get_mut(id)) {
+            *activity = Instant::now();
+        }
+    }
+
+    /// Find Codex children that have stopped reporting activity, including abandoned tools.
+    /// Managed requests and manually tracked LLM calls protect their containing scopes.
+    fn stale_subagent_ids(&self, now: Instant, timeout: Duration) -> Vec<String> {
+        if self.agent_kind != AgentKind::Codex || self.active_gateway_calls > 0 {
+            return Vec::new();
+        }
+        self.subagent_activity
+            .iter()
+            .filter(|(id, activity)| {
+                now.checked_duration_since(**activity)
+                    .is_some_and(|elapsed| elapsed >= timeout)
+                    && !self.llms.values().any(|handle| {
+                        handle
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.get("llm_correlation_subagent_id"))
+                            .and_then(Value::as_str)
+                            == Some(id.as_str())
+                    })
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Close stale children independently of root activity and clear their synthesis reservation.
+    async fn close_stale_subagents(
+        &mut self,
+        now: Instant,
+        timeout: Duration,
+    ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
+        let ids = self.stale_subagent_ids(now, timeout);
+        let mut delivery = None;
+        for id in &ids {
+            delivery = self
+                .close_subagent_scope(id, json!({ "status": "idle_timeout" }))
+                .await?
+                .or(delivery);
+        }
+        if !ids.is_empty() && self.subagents.is_empty() {
+            self.task_awaiting_synthesis = false;
+            if self.turn_scope.is_none() {
+                delivery = self
+                    .close_task_scope(json!({ "status": "idle_timeout" }))?
+                    .or(delivery);
+            }
+        }
+        Ok((ids, delivery))
+    }
+
     fn begin_gateway_call(&mut self) {
         self.touch_activity();
         self.active_gateway_calls += 1;
@@ -1727,6 +1803,10 @@ impl Session {
     fn finish_gateway_call(&mut self) {
         self.touch_activity();
         self.active_gateway_calls = self.active_gateway_calls.saturating_sub(1);
+    }
+
+    fn needs_idle_cleanup(&self, now: Instant, timeout: Duration) -> bool {
+        self.is_idle_for(now, timeout) || !self.stale_subagent_ids(now, timeout).is_empty()
     }
 
     fn is_idle_for(&self, now: Instant, timeout: Duration) -> bool {
@@ -1753,6 +1833,25 @@ impl Session {
         event: NormalizedEvent,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         self.touch_activity();
+        let child = match &event {
+            NormalizedEvent::PromptSubmitted(event)
+            | NormalizedEvent::TurnEnded(event)
+            | NormalizedEvent::TurnStarted(event)
+            | NormalizedEvent::Compaction(event)
+            | NormalizedEvent::Notification(event)
+            | NormalizedEvent::HookMark(event) => self.child_turn_owner(event),
+            NormalizedEvent::SubagentStarted(event) | NormalizedEvent::SubagentEnded(event) => {
+                Some(event.subagent_id.clone())
+            }
+            NormalizedEvent::LlmHint(event) => {
+                event.subagent_id.clone().or_else(|| event.agent_id.clone())
+            }
+            NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => {
+                event.subagent_id.clone()
+            }
+            _ => None,
+        };
+        self.touch_subagent_activity(child.as_deref());
         let stack = self.scope_stack.clone();
         TASK_SCOPE_STACK
             .scope(stack, async move {
@@ -1809,6 +1908,7 @@ impl Session {
                     attributes |= LlmAttributes::STREAMING;
                 }
                 let owner = self.resolve_llm_owner(&start);
+                self.touch_subagent_activity(owner.subagent_id.as_deref());
                 self.record_llm_request_affinity(
                     &start.provider,
                     &start.request,
@@ -1876,6 +1976,7 @@ impl Session {
                 } else {
                     self.resolve_llm_owner(&start)
                 };
+                self.touch_subagent_activity(owner.subagent_id.as_deref());
                 self.record_llm_request_affinity(
                     &start.provider,
                     &start.request,
@@ -1998,20 +2099,25 @@ impl Session {
             }
             return Ok(None);
         }
-        let mut subscriber_delivery = None;
+        let (_, mut subscriber_delivery) = self
+            .close_stale_subagents(Instant::now(), AGENT_IDLE_TIMEOUT)
+            .await?;
         if self.turn_scope.is_some() {
             if self.gateway_request_turn_open {
                 self.gateway_request_turn_open = false;
                 self.mark("prompt_submitted", event)?;
-                return Ok(None);
+                return Ok(subscriber_delivery);
             }
             let (_, delivery) = self
                 .close_turn_for_reason("superseded_by_next_turn")
                 .await?;
             subscriber_delivery = delivery;
         }
-        if self.subagents.is_empty() {
-            self.close_task_scope(json!({ "status": "superseded_by_next_task" }))?;
+        let awaiting_synthesis = std::mem::take(&mut self.task_awaiting_synthesis);
+        if self.subagents.is_empty() && !awaiting_synthesis {
+            subscriber_delivery = self
+                .close_task_scope(json!({ "status": "superseded_by_next_task" }))?
+                .or(subscriber_delivery);
         }
         self.open_turn(event.metadata, event.payload, "user_prompt")?;
         Ok(subscriber_delivery)
@@ -2124,6 +2230,7 @@ impl Session {
                 .build(),
         )?;
         self.turn_scope = Some(scope);
+        self.task_awaiting_synthesis = false;
         self.gateway_request_turn_open = false;
         self.last_turn_llm_output = None;
         Ok(())
@@ -2157,6 +2264,7 @@ impl Session {
     }
 
     fn close_task_scope(&mut self, output: Value) -> Result<Option<SubscriberDelivery>, CliError> {
+        self.task_awaiting_synthesis = false;
         let Some(scope) = self.task_scope.take() else {
             return Ok(None);
         };
@@ -2419,7 +2527,9 @@ impl Session {
         }
         if self.turn_scope.is_none() {
             let (_, turn_delivery) = self.close_turn_for_reason("closed_by_turn_end").await?;
-            self.completion_mark("turn_end_without_start", event.payload, event.metadata)?;
+            if self.agent_kind != AgentKind::Codex || self.task_scope.is_some() {
+                self.completion_mark("turn_end_without_start", event.payload, event.metadata)?;
+            }
             let task_delivery = if self.subagents.is_empty() {
                 self.close_task_scope(json!({ "status": "completed" }))?
             } else {
@@ -2472,14 +2582,20 @@ impl Session {
             self.close_active_llms(reason).await?;
             self.close_active_tools(reason).await?;
         }
-        let closed_subagents = if retain_children {
-            Vec::new()
+        let (closed_subagents, child_delivery) = if retain_children {
+            let (closed, delivery) = self
+                .close_stale_subagents(Instant::now(), AGENT_IDLE_TIMEOUT)
+                .await?;
+            if !self.subagents.is_empty() {
+                self.task_awaiting_synthesis = true;
+            }
+            (closed, delivery)
         } else {
-            self.close_active_subagents(reason).await?
+            (self.close_active_subagents(reason).await?, None)
         };
         if self.turn_scope.is_none() {
             self.clear_correlation_state();
-            return Ok((closed_subagents, None));
+            return Ok((closed_subagents, child_delivery));
         }
         let output = self.last_turn_llm_output.take().unwrap_or(output);
         self.clear_correlation_state();
@@ -2752,6 +2868,8 @@ impl Session {
         self.subagent_stack.push(subagent_id.clone());
         self.subagent_stacks
             .insert(subagent_id.clone(), subagent_stack);
+        self.subagent_activity
+            .insert(subagent_id.clone(), Instant::now());
         self.subagents.insert(subagent_id, scope);
         Ok(())
     }
@@ -2823,7 +2941,17 @@ impl Session {
             })
             .await?;
         self.subagent_stack.retain(|id| id != subagent_id);
+        self.subagent_activity.remove(subagent_id);
         self.completed_subagents.insert(subagent_id.to_string());
+        self.pending_llm_hints.retain(|pending| {
+            pending
+                .hint
+                .subagent_id
+                .as_ref()
+                .or(pending.hint.agent_id.as_ref())
+                .map(String::as_str)
+                != Some(subagent_id)
+        });
         self.pending_tool_hints
             .retain(|pending| pending.hint.subagent_id.as_deref() != Some(subagent_id));
         self.llm_request_affinity
@@ -2834,6 +2962,15 @@ impl Session {
             .is_some_and(|owner| owner.subagent_id == subagent_id)
         {
             self.last_llm_owner = None;
+        }
+        if self.agent_kind == AgentKind::Codex
+            && self.subagents.is_empty()
+            && self.turn_scope.is_none()
+            && !self.task_awaiting_synthesis
+        {
+            return Ok(self
+                .close_task_scope(json!({ "status": "completed" }))?
+                .or(Some(subscriber_delivery)));
         }
         Ok(Some(subscriber_delivery))
     }
@@ -2874,6 +3011,7 @@ impl Session {
             return Ok(());
         }
         let owner = self.resolve_tool_owner(&event);
+        self.touch_subagent_activity(owner.subagent_id.as_deref());
         let arguments = if event.arguments.is_null() {
             owner
                 .hint
@@ -3038,11 +3176,14 @@ impl Session {
     // that start instead of synthesizing a second zero-duration span.
     fn remove_tool_handle_for_event(&mut self, event: &ToolEvent) -> Option<ToolHandle> {
         if let Some(active) = self.tools.remove(&event.tool_call_id) {
+            self.touch_subagent_activity(active.owner_subagent_id.as_deref());
             return Some(active.handle);
         }
         let owner_subagent_id = self.tool_event_owner_subagent_id(event);
         let key = self.matching_active_tool_key(event, owner_subagent_id.as_deref())?;
-        self.tools.remove(&key).map(|active| active.handle)
+        let active = self.tools.remove(&key)?;
+        self.touch_subagent_activity(active.owner_subagent_id.as_deref());
+        Some(active.handle)
     }
 
     fn matching_active_tool_key(
@@ -3463,6 +3604,7 @@ impl Session {
         response: Value,
         owner_subagent_id: Option<String>,
     ) {
+        self.touch_subagent_activity(owner_subagent_id.as_deref());
         if owner_subagent_id.is_none() {
             self.record_turn_llm_output(response.clone());
         }

@@ -422,7 +422,10 @@ session aliases preserve ownership when a parent turn ends first. Native parent
 thread identity keeps waiting and synthesis calls attributed to the parent.
 
 A parent `Stop` closes the task when no delegated agents remain. Outstanding
-children keep the task open for later parent synthesis. An idle timeout or gateway
+children keep the task open for the next parent synthesis prompt, even if they
+finish before that prompt arrives. Children with no activity for 30 seconds are
+closed with their abandoned tools; unrelated parent activity does not renew this
+timeout. In-flight gateway requests remain protected. An idle timeout or gateway
 shutdown closes unfinished work. After completion, a new prompt in the same
 Codex session opens a separate task and trace.
 
