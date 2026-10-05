@@ -686,7 +686,16 @@ isolated between endpoints. Put non-secret values in each endpoint's `headers`
 map and secret variable references in `header_env`.
 
 Those variables are accepted by [automatic OpenTelemetry configuration](#automatic-opentelemetry-configuration),
-where the OTLP Rust exporter parses the header values itself.
+where the OTLP Rust exporter parses the header values itself. Relay validates
+percent escapes before building each automatic exporter. If the selected header
+list contains an invalid escape, such as `%ZZ` or a trailing `%`, Relay skips
+that signal's automatic exporter without logging header values. Signal-specific
+header lists take precedence over the generic list, including empty lists.
+
+A configured endpoint skipped because of process-global headers does not prevent
+activation when at least one automatic exporter is active. The automatic
+exporters retain their environment headers; skipped configured endpoints receive
+no requests.
 
 `full` and `openinference` endpoints retain the legacy mark and attribute-alias
 controls shown above. `gen_ai` is standards-only: it ignores those controls and
