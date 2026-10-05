@@ -31,11 +31,16 @@ nemo-relay daemon \
   [--tls-key <PKCS8-PEM>]
 ```
 
-Set `NEMO_RELAY_CLIENT_TOKEN` in client environments only. Keep an MCP connection
-active before sending LLM or hook requests, including in `--pass-through` mode.
-Unknown credentials return `401`. Registered routes without an active MCP
-reference return `503`. After a daemon restart, MCP must register again to
-restore the route bindings stored in memory.
+Set `NEMO_RELAY_CLIENT_TOKEN` or create the per-user token file in client
+environments only. Keep an MCP connection active before sending LLM or hook
+requests, including in `--pass-through` mode. Requests without a credential
+header, or with a well-formed credential that is not bound, use pass-through
+without daemon-held provider credentials (unless the daemon runs with
+`--pass-through`). Malformed or repeated credential headers return `401`, and
+`--require-worker` rejects missing and unbound credentials with `401`.
+Registered routes without an active MCP reference return `503`. After a daemon
+restart, MCP must register again to restore the route bindings stored in
+memory; until then that user's requests pass through.
 
 By default, an authenticated route with an active MCP reference forwards directly
 while its worker starts or recovers. Worker startup has no time limit.
@@ -171,8 +176,10 @@ Start a daemon that never creates workers with:
 nemo-relay daemon --pass-through
 ```
 
-The daemon still authenticates the route credential. MCP registration can only
-receive `UsePassThrough`, and the daemon cannot issue an activation grant or
+The daemon still validates a presented route credential, and requests without a
+bound credential also pass through. In this mode only, configured provider
+credentials apply to those requests too. MCP registration can only receive
+`UsePassThrough`, and the daemon cannot issue an activation grant or
 accept worker registration. LLM requests use the same streaming transport
 directly to the configured provider. Hook requests return the existing no-op
 responses:
@@ -196,8 +203,13 @@ The address must be an HTTP or HTTPS origin with an explicit port. It cannot
 contain credentials, a non-root path, a query, or a fragment. Plain HTTP is
 accepted only for a loopback target.
 
-The MCP client authenticates and registers its route reference before it starts
-the MCP protocol. If the daemon supports safe worker cancellation, MCP
+When a route credential resolves from `NEMO_RELAY_CLIENT_TOKEN` or the
+per-user token file, the MCP client authenticates and registers its route
+reference before it starts the MCP protocol. Without a credential, it serves the
+MCP protocol without registering a route and never launches a worker. The
+daemon then has no route for that session. Public requests without a credential
+use pass-through, or receive `401` when the daemon runs with `--require-worker`.
+Managed hooks without a credential answer locally and never contact the daemon. If the daemon supports safe worker cancellation, MCP
 initialization can finish while the worker starts. Worker startup failures leave
 MCP connected. With an older daemon, MCP waits for a usable route before it
 handles initialization.
@@ -249,7 +261,10 @@ nemo-relay daemon hook pi --daemon-address https://relay.example.com:8443 --fail
 The hook process performs the following actions:
 
 1. Reads the agent's native hook payload from standard input.
-2. Reads `NEMO_RELAY_CLIENT_TOKEN` from the environment.
+2. Resolves the route credential from `NEMO_RELAY_CLIENT_TOKEN`, then from the
+   per-user token file. Without a usable credential it does not contact the
+   daemon: it writes the agent's pass-through response and exits `0`,
+   regardless of the failure policy.
 3. Posts to the existing agent-specific hook path at the daemon root.
 4. Adds `x-nemo-relay-client-token` exactly once.
 5. Writes a successful, nonempty hook response to standard output without
@@ -261,6 +276,22 @@ daemon is unavailable. Use `--fail-closed` for policy events that must reject
 the operation when delivery or evaluation fails. If neither option is present,
 the existing event-specific failure policy applies.
 
+
+## Manage the Client Token File
+
+Create the current user's route credential file when it does not exist:
+
+```text
+nemo-relay daemon token ensure [--json]
+```
+
+Run it as the user who runs the coding agent. It writes
+`<user config dir>/.client-token` (normally `~/.config/nemo-relay/.client-token`)
+with owner-only permissions, leaves an existing valid file unchanged, and never
+overwrites an invalid or unsafe file. It never prints the token. With `--json`,
+standard output is `{"status":"created"|"existing","path":"..."}`. See
+[Credential Resolution](/daemon/configuration#credential-resolution) for the
+resolution order and file safety checks.
 
 ## Run a Daemon-Attached Worker
 
@@ -435,9 +466,17 @@ original TCP packets or HTTP frame boundaries.
 
 The shared connection pools reuse HTTP/1.1 connections and support concurrent
 HTTP/2 streams. A slow client slows delivery from the provider. If the client
-disconnects, Relay cancels the corresponding provider request. Relay has separate
-deadlines for connections and response headers. It does not set a total time
-limit after streaming starts.
+disconnects, Relay cancels the corresponding provider request. Relay limits
+connection establishment but waits for response headers without a deadline by
+default. Set `[upstream] response_timeout_secs` to a positive number to limit
+the response-header wait; `0` disables the limit. Relay does not set a total
+time limit after streaming starts.
+
+A request that exceeds the daemon's configured response-header deadline returns
+`504`. This timeout does not disconnect the worker or change its route. The
+worker can still be waiting for middleware or a provider. A worker transport
+failure, response-body failure, or explicit route rejection triggers control
+recovery before worker forwarding resumes.
 
 The worker also sends request bodies directly through the pooled Hyper client
 when no LLM request guardrail, request interceptor, or request-sanitization
@@ -459,7 +498,7 @@ the observation copy. It does not limit, buffer, or cut off the stream delivered
 to the caller.
 
 Semantic observation has a separate 15-minute completion deadline, independent
-of the provider's 60-second response-head deadline. Exceeding the observation
+of the configured provider response-header wait. Exceeding the observation
 deadline marks only the observation copy as incomplete. It does not stop
 the stream delivered to the caller.
 
@@ -551,7 +590,7 @@ Relay and the harness use the following environment variables:
 
 | Variable | Read By | Purpose |
 | --- | --- | --- |
-| `NEMO_RELAY_CLIENT_TOKEN` | Managed MCP, hook forwarder, and harness | Required client credential for one machine-user route. |
+| `NEMO_RELAY_CLIENT_TOKEN` | Managed MCP, hook forwarder, managed doctor, and harness | Client credential for one machine-user route. Takes precedence over the per-user `.client-token` file. |
 | `ANTHROPIC_CUSTOM_HEADERS` | Claude Code | Includes exactly one matching `x-nemo-relay-client-token` header. |
 | `NEMO_RELAY_WORKER_ADVERTISE_ADDRESS` | Managed MCP | Optional concrete worker hostname or IPv4 address reachable by the daemon. |
 | `NEMO_RELAY_WORKER_PORT` | Managed MCP | Optional fixed port from 1 through 65535. Omit it to choose a port automatically. |

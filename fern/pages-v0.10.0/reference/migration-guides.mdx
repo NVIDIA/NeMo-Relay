@@ -1,87 +1,44 @@
 ---
 title: "Migration Guides"
-description: "Plan an upgrade to NeMo Relay 0.10."
+description: "Upgrade from NeMo Relay 0.9.0 to 0.10.0."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this page to plan an upgrade to NeMo Relay 0.10. It will collect required
-upgrade actions as they are identified during the 0.10 development cycle.
+Use this page to upgrade from NeMo Relay 0.9.0 to 0.10.0.
 
-## Upgrade to NeMo Relay 0.10
+These steps also cover configuration and telemetry changes from the 0.9 patch
+releases. Apply them when upgrading directly from 0.9.0.
 
-### Update LLM Execution Intercepts
+## Upgrade to NeMo Relay 0.10.0
 
-Relay 0.10 changes every non-streaming and streaming LLM execution-intercept callback.
-Update callbacks as follows:
+### Update Packages and Plugin SDKs
 
-| Surface | Relay 0.9 | Relay 0.10 |
-|---|---|---|
-| Rust, Python non-streaming, typed native plugin, Rust worker, Python worker | `(name, request, next)` | `(name, request, context, next)` |
-| Python language-binding streaming | `(request, next)` | `(name, request, context, next)` |
-| Node.js, Go | `(request, next)` | `(request, context, next)` |
-| C | `(user_data, request, next, next_ctx)` | `(user_data, name, request, context, next, next_ctx)` |
-| Raw native callback | `(..., name, request, next, ...)` | `(..., name, request, context, next, ...)` |
+Update the Relay CLI, application bindings, and plugin SDK dependencies to
+0.10.0. Rebuild Rust applications and native or worker plugins against the
+updated dependencies. If you use the OpenClaw plugin, update its package too.
+It requires the matching Node.js binding version.
 
-The request direction reports the selected codec and exposes decode and encode
-operations when Relay resolved one. Non-streaming execution also exposes response
-identity and decode. Streaming execution has no response codec because chunks
-are not complete provider responses.
+The optional Python LangChain NVIDIA integration now requires
+`langchain-nvidia-ai-endpoints>=1.4.2,<2.0.0`. Update older version requirements
+and regenerate the environment's lockfile before installing the integration.
+For package names and installation commands, refer to
+[Installation](/getting-started/installation).
 
-Codec access is limited to the current call. Do not cache the context or a
-resolved codec: non-streaming access expires when the callback finishes, and
-streaming request access expires when the returned stream closes.
-
-This is a source and binary compatibility break for execution-intercept users:
-
-- Recompile language-binding consumers that register an LLM execution
-  intercept and update their callback argument order.
-- Rebuild every native plugin against the 0.10 SDK. Native plugins continue to
-  declare `compat.native_api = "1"`, but must set `compat.relay` to
-  `">=0.10.0,<1.0"` or another range that excludes Relay 0.9. Relay 0.10 uses
-  internal native ABI v7 and rejects v2-v6 compiled layouts.
-- Regenerate and rebuild gRPC workers that register an LLM execution intercept.
-  The protocol remains `grpc-v1`, but those workers must also exclude Relay 0.9
-  in `compat.relay`.
-
-LLM request intercepts and conditional middleware do not change. For the full
-context and lifetime contract, refer to [Build Plugins](/build-plugins/about),
-[Native ABI Reference](/build-plugins/native/native-abi-reference), and
-[gRPC-v1 Worker Protocol](/build-plugins/workers/grpc-v1-protocol).
-
-### Refresh Codex Provider Routing
-
-After upgrading the CLI, refresh personal Relay-managed Codex installations:
-
-```bash
-nemo-relay integrations refresh
-```
-
-To refresh only Codex, use `nemo-relay install codex --force`. Refreshing Codex
-switches persistent routing to the built-in OpenAI provider, preserving session
-identity and routing image generation through Relay. It replaces credential-bearing
-URLs with a plain gateway URL and a managed authentication assignment in
-`$CODEX_HOME/.env`. Quit and restart Codex after refreshing so the header is loaded.
-The gateway continues accepting legacy capability URLs for older clients.
-
-## Upgrade to NeMo Relay 0.9
-
-### Update from NeMo Relay 0.9.0 to 0.9.1
-
-#### Move Primary Daemon Logging Settings
+### Move Primary Daemon Logging Settings
 
 <Warning title="Breaking Change">
 
 The primary `nemo-relay daemon` process no longer reads `[logging]` from its
-resolved `config.toml`.
+selected `config.toml`.
 
 </Warning>
 
 Move the daemon service's logging settings to `[daemon.logging]`. Keep
-`[logging]` for user-space Relay processes, such as agent launches. CLI options
-and `NEMO_RELAY_LOG*` environment variables continue to take precedence for
-both.
+`[logging]` for other Relay processes, such as agent launches. CLI options
+and `NEMO_RELAY_LOG*` environment variables still override TOML settings for
+both. The following example enables JSON Lines logging to standard error:
 
 ```toml
 [daemon.logging]
@@ -90,60 +47,270 @@ stderr_enabled = true
 stderr_format = "jsonl"
 ```
 
-For source precedence and complete settings, refer to
+For the order in which Relay applies logging settings, refer to
 [Operational Logging](/reference/operational-logging#choose-a-configuration-source).
 
-#### Update OpenTelemetry Signal-Endpoint Struct Literals
+### Require Observability Configuration Version 4
 
-<Warning title="Rust and Go Source Compatibility">
+<Warning title="Breaking Change">
 
-`OpenTelemetrySignalEndpointConfig` now includes
-`promote_resource_metadata_prefixes`. Rust callers that construct this public
-type with exhaustive struct literals must add the field. Go callers that use
-unkeyed configuration struct literals must switch to keyed literals.
+Observability configuration version 3 is no longer accepted, including for
+trace-only configurations.
 
 </Warning>
 
+Change `version = 3` to `version = 4` inside the observability component's
+configuration, including programmatic configuration objects. Keep the existing
+typed trace endpoints. Adding log or metric sections is optional. The outer
+plugin configuration remains `version = 1`. The following example uses
+observability version 4 with a trace endpoint:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "http://localhost:4318/v1/traces"
+```
+
+For the complete schema, refer to
+[Observability Configuration](/configure-plugins/observability/configuration).
+
+### Review Automatic OTLP Export and Collector URLs
+
+OpenTelemetry Protocol (OTLP) endpoint environment variables now enable
+automatic export when their values are not empty or whitespace. The generic
+`OTEL_EXPORTER_OTLP_ENDPOINT` enables traces, logs, and metrics. Each endpoint
+variable for a specific signal enables only that signal. Automatic traces use
+the `gen_ai` projection, which maps Relay events to GenAI attributes. Relay can
+also export to its configured destinations, so existing settings can produce
+extra exports after the upgrade.
+
+Review the launch environment and choose the exports you need. Remove
+unintended endpoint variables. To disable automatic and configured OTLP export,
+set `opentelemetry.enabled = false` in the observability component. To disable
+every Relay OTLP exporter, use `OTEL_SDK_DISABLED=true`. Resource and batch
+settings alone do not enable export.
+
+If you configure Relay endpoints, move the process's global OTLP header
+variables to each endpoint's `headers`, `header_env`, or `header_file` settings.
+Relay skips a configured endpoint if global OTLP headers are set when it starts.
+The underlying exporter cannot keep those credentials separate. Automatic
+exporters can still use the global header variables.
+
+Use the collector's final URL. All OTLP/HTTP exporters now reject redirects,
+including log and metric exporters without headers. Remote automatic trace
+endpoints require HTTPS. Automatic log and metric endpoints with headers also
+require HTTPS. Plain HTTP remains available for localhost and loopback IPs.
+For supported variables and the order in which Relay applies them, refer to
+[Automatic OpenTelemetry Configuration](/configure-plugins/observability/opentelemetry#automatic-opentelemetry-configuration).
+
+### Update LLM Execution Intercepts
+
+Relay 0.10.0 changes every large language model (LLM) execution-intercept
+callback, including streaming callbacks. Update their arguments as follows:
+
+| Surface | Relay 0.9.0 | Relay 0.10.0 |
+|---|---|---|
+| Rust, Python non-streaming, typed native plugin, Rust worker, Python worker | `(name, request, next)` | `(name, request, context, next)` |
+| Python streaming binding | `(request, next)` | `(name, request, context, next)` |
+| Node.js, Go | `(request, next)` | `(request, context, next)` |
+| C | `(user_data, request, next, next_ctx)` | `(user_data, name, request, context, next, next_ctx)` |
+| Raw native callback | `(..., name, request, next, ...)` | `(..., name, request, context, next, ...)` |
+
+The new context identifies the selected request codec. A codec converts data
+between a provider's format and Relay's common format. When a request codec is
+available, the context provides decode and encode operations. Non-streaming
+execution also identifies the response codec and provides decoding. Streaming
+execution has no response codec because chunks are not complete provider
+responses.
+
+Codec access lasts only for the current call. Do not store the context or
+selected codec for later calls. Non-streaming access ends when the callback
+finishes. Streaming request access ends when the returned stream closes.
+
+Existing execution-intercept code and compiled plugins need updates. Make the
+following changes:
+
+- Update callback argument order in the bindings you use. Recompile affected
+  applications that use compiled bindings.
+- Rebuild every native plugin against the 0.10 SDK. Native plugins continue to
+  declare `compat.native_api = "1"`, but must set `compat.relay` to
+  `">=0.10.0,<1.0"` or another range that excludes Relay 0.9. Relay 0.10 uses
+  version 7 of the internal application binary interface (ABI). This interface
+  defines how compiled plugins call the host. Relay rejects compiled layouts
+  from versions 2 through 6.
+- Regenerate and rebuild gRPC workers that register an LLM execution intercept.
+  The protocol remains `grpc-v1`, but those workers must also exclude Relay 0.9
+  in `compat.relay`.
+
+Raw native asynchronous intercepts also need the registration APIs for LLM
+execution. Replace non-streaming LLM execution uses of
+`PluginContext::register_async_middleware_raw` with
+`register_async_llm_execution_intercept_raw`, backed by the ABI v7
+`plugin_context_register_async_llm_execution_intercept` host function. Use
+`register_async_stream_middleware_raw` for streaming execution. Its callback
+now receives codec context. The generic asynchronous middleware registration
+rejects both LLM execution kinds.
+
+Raw asynchronous streaming code must keep a reference to the output stream
+while it uses the request codec. Use the stream's decode and encode operations.
+Release the reference after its last use. The typed SDK manages these
+references for its codec wrappers.
+
+LLM request intercepts and conditional middleware do not change. For the full
+context and lifetime contract, refer to [Build Plugins](/build-plugins/about),
+[Native ABI Reference](/build-plugins/native/native-abi-reference), and
+[gRPC-v1 Worker Protocol](/build-plugins/workers/grpc-v1-protocol).
+
+### Update Custom Worker Protocol Bindings
+
+The worker protocol remains `grpc-v1`. Regenerate custom bindings. Rust code
+that lists every field in a protobuf message literal must add the following
+fields. Use generated defaults if you do not need the new values. The following
+table lists each field and its value when unused:
+
+| Message | Added Field | Value When Unused |
+|---|---|---|
+| `LlmInvocation` | `execution_codec_context` | `None` |
+| `PushScopeRequest`, `PopScopeRequest` | `timestamp_unix_micros` | `None` |
+
+Custom implementations of the `RelayHostRuntime` service must also implement
+the new `Log` remote procedure call (RPC). The `PluginWorker` service does not
+gain a method. Workers that need logging through the host or earlier scope
+timestamps must declare a `compat.relay` range beginning at `0.10.0`. Older
+hosts can lack `Log` or ignore the optional timestamps. Ordinary SDK scope
+calls still use the host's current time. Refer to
+[gRPC-v1 Worker Protocol](/build-plugins/workers/grpc-v1-protocol).
+
+### Update Rust and Go Struct Literals
+
+The following public Rust types gained fields after 0.9.0. If your code lists
+every field in a struct literal, add these fields. Use builders or defaults
+where the type provides them. The following table lists the added fields:
+
+| Type | Added Fields | Value When Unused |
+|---|---|---|
+| `OpenTelemetrySectionConfig` | `file_sinks` | Empty list |
+| `OpenTelemetrySignalEndpointConfig` | `promote_resource_metadata_prefixes` | Empty list |
+| `PropagationContext` | `traceparent`, `tracestate` | `None` |
+| `BaseEvent` | `propagation_traceparent`, `propagation_tracestate` | `None` |
+| `CategoryProfile` | `time_to_first_chunk` | `None` |
+| `EndLlmHandleParams` | `time_to_first_chunk` | `None` |
+| Codec `Usage` | `uncached_input_tokens` | `None` |
+
+In Go observability or propagation struct literals, use field names if your
+code currently lists values without names. Saved configuration and propagation
+payloads remain valid when they omit the new optional fields. The propagation
+wire version remains `1`.
+
 Set `promote_resource_metadata_prefixes` to an empty list when you do not want
-log or metric resource promotion. TOML and JSON configuration remain backward
-compatible because an omitted field defaults to an empty list. Derived log and
-metric endpoints inherit the trace endpoint setting. For configuration,
-precedence, safety limits, and low-cardinality guidance, refer to
+log or metric endpoints to copy root-scope metadata into resource attributes.
+An omitted field defaults to an empty list in TOML and JSON. Log and metric
+endpoints derived from a trace endpoint inherit its setting. Choose metadata
+values from a small, controlled set to limit the number of resources. For
+setting priorities and resource limits, refer to
 [OpenTelemetry](/configure-plugins/observability/opentelemetry).
 
-#### Update the GenAI Cache-Write Attribute
+### Preserve Trace Context Across Boundaries
 
-The GenAI projection replaces the obsolete development attribute
+Send the complete captured propagation context when continuing work in
+another scope stack or process. This context links work across boundaries.
+Its optional W3C fields now preserve an imported upstream trace, sampling
+flags, and vendor state. Sampling flags show whether the upstream trace was
+sampled. A valid imported W3C parent overrides trace IDs that Relay derives,
+including a supplied explicit root. Relay ignores malformed W3C values and
+continues with valid Relay propagation data.
+
+Capture without a root removes the trace derived from a local Relay sender.
+It keeps a previously imported W3C parent. If you always need a new
+OpenTelemetry trace, remove `traceparent` and `tracestate` from that context.
+`PropagationContext.to_traceparent()` now forwards a valid imported parent
+unchanged. Capture and import context before leaving a trace if later calls
+must continue it. A scope handle outside the current stack does not keep its
+earlier W3C context. Refer to
+[Scope Concepts](/about-nemo-relay/concepts/scopes).
+
+Managed LLM execution replaces Relay's `traceparent` and
+`tracestate` headers on provider requests. Import the upstream propagation
+context to preserve that parent instead of setting those headers manually.
+Capture the managed LLM context inside its provider callback if you need that
+span as a later parent. After the call returns, capture uses the enclosing
+active scope or imported context. The completed LLM span is no longer current.
+
+### Review Token Usage and Cost Reports
+
+The optional `Usage.uncached_input_tokens` count is present only when the
+provider reports how many input tokens were not cached. Do not treat an absent
+value as zero. Anthropic compaction usage that combines multiple models no
+longer receives a model-based cost estimate. Review cost reports that assumed every response
+could be priced from its response model. Refer to
+[Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs).
+
+### Update GenAI Attributes and Metric Dimensions
+
+The GenAI projection replaces the old attribute
 `gen_ai.usage.cache_creation.input_tokens` with
 `gen_ai.usage.cache_write.input_tokens`. Update collector queries, dashboards,
 and alerts that use the old attribute name.
 
 The projection also no longer adds `nemo_relay.session.instance_id` to metric
-attributes. Update dashboards that group or filter on that per-session
-dimension; otherwise, identical measurements now aggregate into the same time
-series.
+attributes. Update dashboards that group or filter on this session attribute.
+Matching measurements now combine into the same time series across sessions.
 
-#### Review Anthropic Response-Cache Expectations
+### Review GenAI Tool Content and Completion Marks
 
-Anthropic Messages requests that use server-side compaction, include an earlier
-compaction block, or send a compaction beta header now bypass the response
-cache. No configuration change is required, but cache-hit rates can fall for
-those workloads. Monitor response-cache marks for the
-`anthropic_compaction` bypass reason. For details, refer to
-[LLM Eligibility and Limits](/configure-plugins/adaptive/response-cache#llm-eligibility-and-limits).
+GenAI tool spans now preserve every JSON argument and successful result except
+`null`, after sanitizers process the content. They use a consistent JSON text
+format, including for arrays, strings, numbers, and booleans. Update consumers
+that assumed all values were objects. Review collector access and sanitizers
+for the newly kept content.
+`enable_full_payloads = false` does not disable tool-content export. For the
+projection contract, refer to
+[GenAI Projection](/configure-plugins/observability/opentelemetry#genai-projection).
+
+Managed streaming telemetry adds `gen_ai.response.time_to_first_chunk` and the
+`gen_ai.client.operation.time_to_first_chunk` histogram in seconds. These
+measure the first provider protocol chunk, not the first text token. Keep those
+measurements separate in latency dashboards.
+
+Coding-agent end hooks without a matching start now produce
+`agent_end_without_start`, `turn_end_without_start`,
+`subagent_end_without_start`, or `tool_end_without_start` marks. Consumers must
+allow `start_observed = false`, absent start times and durations, and an absent
+parent when no existing parent can be verified. ATIF and the GenAI projection
+omit these partial observations. Use ATOF, the `full` OpenTelemetry projection,
+or OpenInference when you need them.
+
+Relay reserves `tool_end_without_start`. Any application or plugin that emits
+that mark must provide a string in `data.tool_name` that is not empty or
+whitespace. Otherwise, emission fails. Its arguments and result now pass
+through tool sanitizers before event sanitizers. Rename any unrelated custom
+mark that used that name. Refer to
+[Completion Hooks Without a Start](/configure-plugins/observability/about#completion-hooks-without-a-start).
 
 ### Refresh Relay-Managed Coding-Agent Integrations
 
-After upgrading the CLI, refresh personal Relay-managed integrations before
-starting new sessions:
+After upgrading the CLI, run the following command to refresh personal
+Relay-managed coding-agent integrations before starting new sessions:
 
 ```bash
 nemo-relay integrations refresh
 ```
 
-To repair only Codex, use `nemo-relay install codex --force`. It can repair
-Relay-owned marketplace entries that point to missing files. These commands
-apply to personal integrations.
+To refresh only Codex, use `nemo-relay install codex --force`. Refreshing Codex
+switches persistent routing to the built-in OpenAI provider. This preserves
+session identity and routes image generation through Relay. It replaces URLs
+that contain credentials with a plain gateway URL. It stores managed authentication
+in `$CODEX_HOME/.env`. Quit and restart Codex after refreshing to load the
+header. The gateway still accepts older capability URLs for older clients.
 
 For daemon bundles managed by an administrator, follow the
 [daemon upgrade workflow](/daemon/operations#upgrade-and-roll-back). Close
@@ -151,397 +318,84 @@ sessions and let workers finish pending requests. Then stop the service and
 replace the binary at the same path. Keep the saved identity state and
 existing bundle files.
 
-### Pass Tool Execution Context to Intercepts
-
-<Warning title="Breaking Change">
-Tool callbacks use a context object because Relay now provides the optional
-provider tool-call ID with the tool name and arguments. Existing callbacks no
-longer match the public API and must be updated.
-</Warning>
-
-Tool execution intercepts now receive `ToolExecutionContext` and a
-continuation. The context holds the tool name, arguments, and optional
-provider-issued tool-call ID. The continuation calls the next intercept or
-the tool itself.
-
-Change Rust, Python, and Go callbacks from `(tool_name, args, next)` to
-`(context, next)`. For Node.js and public C callbacks, replace the argument
-payload with the context. Pass the context's arguments to the continuation.
-
-Read the name and call ID from the context. Node.js uses `toolName`, `args`,
-and `toolCallId`. Public C callbacks receive `tool_name`, `args`, and
-`tool_call_id` in `context_json`.
-
-Native and worker plugins that register this callback must exclude Relay 0.8
-from their supported version range. Set `compat.relay = ">=0.9,<1.0"` or
-another range that meets this rule. Native plugins use version 5 of the
-application binary interface (ABI) for this callback. For binding details and examples, refer to
-[Tool Execution Context](/reference/tool-execution-intercept-outcomes#tool-execution-context).
-
-### Retain the Plugin Host Activation
-
-<Warning title="Breaking Change">
-NeMo Relay 0.9 uses one plugin host to control when plugins start and stop. Global clear and report functions and
-explicit dynamic activation-spec APIs are removed. Update startup, report
-handling, and shutdown together in each application that hosts plugins.
-</Warning>
-
-`initialize` now returns a `PluginHostActivation` handle for static and dynamic
-plugins. This handle keeps the plugins active. Keep it for as long as your
-application needs them.
-
-A process can have only one active handle. Close it before starting another.
-If close fails, keep the handle and try closing it again.
-
-Use the following APIs to manage the handle in each binding:
-
-| Binding | Initialize | Read the Report | Close |
-|---|---|---|---|
-| Rust | `nemo_relay::plugin::dynamic::initialize(config, path).await?` | `activation.report()` | `activation.close()?` |
-| Python | `await plugin.initialize(config, path)` | `activation.report` | `await activation.close()` |
-| Node.js | `await plugin.initialize(config, path)` | `activation.report` | `await activation.close()` |
-| Go | `Initialize(config, path)` | `activation.Report()` | `activation.Close()` |
-| C | `nemo_relay_plugin_initialize` | `nemo_relay_plugin_host_activation_report_json` | `nemo_relay_plugin_host_activation_close` |
-
-Replace global clear calls with the handle's close operation. This includes
-Python `clear()` and `clear_async()`, Node.js `clear()`, Rust
-`clear_plugin_configuration()`, and the matching Go and C calls. Read reports
-from the handle instead of a global report function.
-
-Apply the following cleanup rules for your binding:
-
-- In Python, use `async with plugin.activate(config, path)` to close the handle
-  when the block ends.
-- In Node.js, call `await relay.flushSubscribers()` before closing the handle.
-  This lets queued subscribers finish. For existing dynamic-plugin handles,
-  replace the `active` property with `isActive`.
-- In C, inspect the report after closing the handle. Then release the handle
-  with `nemo_relay_plugin_host_activation_free`.
-
-Replace explicit dynamic-plugin setup with file-based setup:
-
-1. Move `DynamicPluginActivationSpec` entries to `[[plugins.dynamic]]` records
-   in `plugins.toml`.
-2. Replace `initialize_with_dynamic_plugins` or `initializeWithDynamicPlugins`
-   with `initialize`, and pass the file as its optional path.
-3. Remove calls to Python `load_dynamic_plugin_activation_specs`. The host now
-   reads those records from the file.
-
-In Rust, replace `initialize_plugins` with
-`nemo_relay::plugin::dynamic::initialize`.
-
-For complete examples, refer to
-[Configure and Initialize Plugins](/configure-plugins/initialize-plugins).
-For dynamic-plugin records, refer to
-[Configure Discoverable Plugins](/configure-plugins/discoverable-plugins).
-
-### Validate the Effective Plugin Configuration
-
-`validate` now checks the same settings, dynamic manifests, version rules, and
-trust policy as `initialize`. It does not load plugin code.
-
-If you pass a `plugins.toml` path, Relay uses it instead of searching for a
-user file. Relay then merges the system file and applies settings from your
-application code. Check `config_paths` and the redacted `resolved_config` in
-the report to confirm which settings Relay used.
-
-Use exact validation to check only a complete static document in memory.
-It does not read files. Choose the API for your binding:
-
-| Binding | Exact Validation |
-|---|---|
-| Rust | `nemo_relay::plugin::dynamic::validate_exact(config)` |
-| Python | `plugin.validate_exact(config)` |
-| Node.js | `plugin.validateExact(config)` |
-| Go | `ValidateExact(config)` |
-| C | `nemo_relay_plugin_validate_exact` |
-
-Both forms return `PluginHostReport`. Read `diagnostics` and
-`runtime_diagnostics` under `config` instead of at the top level.
-Check `dynamic_plugins` separately for errors in manifests, version rules,
-file integrity, environments, signatures, and policy. Exact validation does
-not check dynamic plugins.
-
-### Review Layered Dynamic Plugin Declarations
-
-<Warning title="Breaking Change">
-When the explicit-or-user and system `plugins.toml` files declare dynamic
-records with the same manifest plugin ID, the higher-precedence record now
-replaces the lower-precedence record. Relay no longer fails with a duplicate-ID
-error, and it does not merge the lower record's `config` into the effective
-plugin. This allows layered configuration, but a needed lower-precedence
-setting can no longer take effect by itself.
-</Warning>
-
-If a system deployment repeats a user's dynamic-plugin ID, copy every setting
-needed at runtime into the system record. The system manifest reference and its
-lifecycle state also become authoritative. This applies to CLI gateway,
-wrapper, persistent gateway, daemon broker, and every binding that uses the
-normal `initialize(config, path)` API.
-
-#### Python-Specific Errors
-
-<Warning title="Breaking Change">
-Python plugin APIs use more specific error types so applications can tell an
-invalid setting from a missing file. Code that only catches `RuntimeError` can
-miss these failures after the upgrade.
-</Warning>
-
-`nemo_relay.plugin.initialize()` and `nemo_relay.plugin.activate()` now raise
-`ValueError` for invalid static settings. They raise `FileNotFoundError` when
-a referenced configuration or resource is unavailable. Earlier releases
-reported these failures as `RuntimeError`.
-
-Update your exception handlers for these errors. Keep `RuntimeError` handling
-for failures to acquire the plugin host or register a plugin. To inspect
-static settings without starting plugins, use `validate` or `validate_exact`.
-
-### Verify Dynamic-Plugin Trust
-
-<Warning title="Breaking Change">
-Dynamic plugins now go through trust checks in every embedding API. By default,
-Relay requires a signature, so an unsigned plugin that started on 0.8 can fail
-to start on 0.9. Choose and validate a trust policy before deployment.
-</Warning>
-
-The core host now checks dynamic-plugin attestation through every embedding
-API. Attestation checks the plugin artifact against the configured trust
-policy. In 0.8, only CLI lifecycle commands enforced this policy.
-
-If `[plugins.policy.defaults]` omits the policy fields, Relay uses
-`startup = "required"` and `attestation = "signature_required"`.
-An unsigned plugin that started on 0.8 can therefore fail to start on 0.9.
-
-Choose a trust policy before you deploy:
-
-- Sign the artifact and configure `trusted_public_keys` to use the default
-  signature requirement.
-- If your trust policy permits it, explicitly set `attestation` to
-  `"integrity_only"` or `"signature_if_present"` under
-  `[plugins.policy.defaults]`.
-
-Use `nemo-relay plugins validate <plugin-id>` and your embedding's `validate`
-API to check the chosen policy and artifact before deployment.
-
-Embedding `validate` calls return a report for every lifecycle-selected plugin,
-including a plugin with a trust failure. They do not raise for that failure.
-Check the matching `dynamic_plugins` entry's `status.integrity`,
-`status.authenticity`, and `failure` before deployment. A failed trust report
-has `selected = false` because Relay does not activate that plugin. With
-`startup = "required"`, `initialize` rejects the same failure before it loads
-plugin code.
-
-`integrity_only` skips signature checks. It still requires a valid
-`source.artifact` and a matching `integrity.sha256` digest.
-
-### Choose Trace Boundaries Explicitly
-
-<Warning title="Breaking Change">
-Propagation now keeps the Relay root by default so related work stays in one
-trace. This changes which events share a trace and changes the meaning of the
-exported ATIF `session_id`.
-</Warning>
-
-Default propagation capture and scope-stack forks now keep the Relay root
-when one is available. This root identifies the trace shared by related work.
-When you import a context with a root, work continues in the parent's
-OpenTelemetry trace. Without a propagated root, the first local Agent scope
-creates one.
-
-To start a separate trace from a locally created sender scope, use the rootless
-capture API for your binding:
-
-| Binding | Rootless Capture |
-|---|---|
-| Rust | `capture_rootless_propagation_context()` |
-| Python | `nemo_relay.capture_rootless_propagation_context()` |
-| Node.js | `captureRootlessPropagationContext()` |
-| Go | `CaptureRootlessPropagationContext()` |
-| C | `nemo_relay_capture_rootless_propagation_context_json` |
-
-A rootless context still links Relay events to their immediate parent.
-It does not forward a W3C parent derived from the sender's local scope, so the
-receiver starts a separate OpenTelemetry trace. If the sender previously
-imported a W3C parent, rootless capture still forwards that upstream trace;
-remove `traceparent` and `tracestate` from the context when an unconditional
-trace boundary is required. The receiver's first local Agent scope creates a
-new Relay root. Use explicit root capture when your application supplies a
-stable run UUID. That UUID determines the receiver's trace unless the sender
-imported a W3C parent, which retains precedence over the supplied root.
-An explicit parent handle that is no longer on the stack uses the current
-stack's trace as a fallback. To continue a different trace, capture and import
-its propagation context rather than passing only the old scope handle.
-Authenticate the source of an incoming context before you
-trust and import it. For details, refer to
-[Scope Concepts](/about-nemo-relay/concepts/scopes).
-
-In ATIF, use `trajectory_id` as the unique ID for each exported trajectory.
-The exported `session_id` now uses the propagated root when one is present.
-Several trajectories can share this ID. Update data joins or rules that
-assume `session_id` and `trajectory_id` are the same.
-
-Filenames, remote storage keys, and remote session headers still use the
-trajectory scope UUID. The historical `{session_id}` filename placeholder
-also uses that UUID. For details, refer to
-[Run-Scoped Session IDs](/configure-plugins/observability/atif#run-scoped-session-ids).
-
-### Secure Trace Export and Review Tool Content
-
-<Warning title="Breaking Change">
-All `full`, `gen_ai`, and `openinference` trace endpoints require HTTPS for
-remote collectors, with either HTTP or gRPC transport. Plain HTTP works only
-with localhost and loopback IP addresses. OTLP/HTTP trace exporters no longer
-follow redirects, even between HTTPS endpoints. This keeps trace data from
-being sent to an insecure or unexpected destination.
-</Warning>
-
-Replace remote `http://` trace endpoints with the collector's final `https://`
-URL, or use a loopback collector. Do not use an endpoint that requires a
-redirect. These rules apply to plugin-managed endpoints and direct
-subscribers, even when you redact the data.
-
-Log and metric exporters keep their existing transport rules. The redirect
-change does not apply to gRPC.
-
-<Warning title="Breaking Change">
-The `gen_ai` output now includes sanitized tool arguments, successful tool
-results, and tool definitions. This gives collectors more useful trace data,
-but it can also send tool content that they did not receive before. Review
-collector access and redaction settings before you upgrade.
-</Warning>
-
-The `gen_ai` output format adds the following fields after sanitization:
-
-| Field | Content |
-|---|---|
-| `gen_ai.tool.call.arguments` | Canonical JSON text for non-null sanitized tool arguments |
-| `gen_ai.tool.call.result` | Canonical JSON text for non-null sanitized successful tool results |
-| `gen_ai.tool.definitions` | Tool-definition identities |
-
-Arguments and successful results can be objects, arrays, strings, numbers, or
-booleans. Relay preserves each non-null sanitized value in its canonical JSON
-serialization and omits null values.
-
-Review who can access your collector and how you redact data before upgrading.
-Setting `enable_full_payloads = false` does not disable tool-content export.
-It controls how much LLM request history is kept. Use event sanitizers or
-the PII `trajectory_context` preset to remove opaque tool payloads. These are
-payloads whose structure Relay cannot safely interpret. For details, refer to
-[GenAI Projection](/configure-plugins/observability/opentelemetry#genai-projection).
-
-Direct subscribers can now read header values from environment variables
-through `header_env`, or `headerEnv` in Node.js. Set each variable before
-creating the subscriber. Creation fails if a referenced variable is unset,
-empty, or contains only whitespace. Values with leading or trailing whitespace
-also cause failure. Create a new subscriber to use a changed value.
-Do not define the same header in both `headers` and `header_env`. Relay ignores
-ASCII case when it compares header names. For details, refer to
-[Direct Subscribers](/configure-plugins/observability/opentelemetry#direct-subscribers).
-
-### Configure Rotating Exporter Headers
-
-<Warning title="Breaking Change">
-Rust observability configuration structs now include `header_file`. Rust code
-that uses a struct literal must set this field, usually to an empty map. Go code
-that uses an unkeyed composite literal must use keyed fields instead. Also,
-remote exporters with any header source must use HTTPS or WSS, except on
-localhost or a loopback IP address. These changes keep rotated credentials from
-being sent to an insecure or redirected destination.
-</Warning>
-
-Use `header_file` when a separate process writes a complete credential to a
-file, such as a projected token file. Relay reads it for every HTTP delivery.
-For ATOF, HTTP POST reads it for each event, WebSocket reads it when it connects
-or reconnects, and NDJSON reads it when the sink starts. Use it for ATOF
-streams, ATIF HTTP storage, and OpenTelemetry trace, log, and metric exporters.
-
-For Rust struct literals, add an empty `HashMap` when you do not use file-based
-headers. For Go, change an unkeyed literal to a keyed literal and omit
-`HeaderFile` unless you need it. Keep each header name in only one of
-`headers`, `header_env`, and `header_file`.
-
-For a remote endpoint with configured headers, replace `http://` with the
-collector's final `https://` URL. Use `wss://` for a remote ATOF WebSocket
-destination. Relay does not follow redirects when headers are set. For details,
-refer to [OpenTelemetry Exporter Headers](/configure-plugins/observability/opentelemetry#trace-endpoint-fields),
-[ATIF HTTP Storage](/configure-plugins/observability/atif#http-endpoint-storage), and
-[ATOF Streaming](/configure-plugins/observability/atof#stream-sinks).
-
-### Review Trajectory Redaction and Metric Dimensions
-
-<Warning title="Breaking Change">
-The `trajectory_context` preset now removes more opaque data and metric
-attributes to limit data exposure. Dashboards or data jobs that use those
-fields need to change.
-</Warning>
-
-The PII `trajectory_context` preset now removes opaque payloads and unknown
-fields. It builds minimal provider payloads from recognized, sanitized
-annotations in Relay's standard format. Runtime and opaque codecs produce
-empty objects.
-
-Application IDs are replaced with the same redaction marker. Use Relay
-lifecycle IDs to link related events.
-
-Typed metrics keep their required measurements. Their attributes are dropped
-unless an exact string name and value match `metric_string_attribute_allowlist`.
-The preset also drops numeric and boolean attributes. Add only fixed values
-or values from a limited list that your dashboards need. A string array is
-kept only if every value is allowed.
-
-Set `builtin.preset = "trajectory_context"` before using
-`metric_string_attribute_allowlist` or `custom_mark_payload_policy`.
-Do not combine `builtin.preset` with `action`, `detector`, `pattern`,
-`target_paths`, `target_path_globs`, `mask_char`, `unmasked_prefix`, or
-`unmasked_suffix` in the same `builtin` settings.
-
-Review code that reads opaque custom-mark payloads, routing metadata, or
-detailed records of how prices were determined. The stricter preset removes
-these fields by default. For details,
-refer to [Trajectory Context Preset](/configure-plugins/pii-redaction/configuration#trajectory-context-preset).
-
-### Update Rust Cache Configuration
-
-<Warning title="Breaking Change">
-The Rust response-cache API now uses an enum instead of a string so cache key
-choices are checked at compile time. Existing Rust source that assigns a string
-or uses the removed constant no longer builds.
-</Warning>
-
-`ResponseCacheConfig.key_strategy` is now a `ResponseCacheKeyStrategy` enum.
-Replace string assignments and the removed `KEY_STRATEGY_EXACT_REQUEST`
-constant with `ResponseCacheKeyStrategy::ExactRequest` or
-`ResponseCacheKeyStrategy::Logical`. Import the enum from `nemo_relay_adaptive`.
-
-Existing TOML and JSON `"exact_request"` values remain valid. The `"logical"`
-strategy uses a separate set of cache keys. It ignores tool descriptions and
-tool order. Use it only if you want requests with those differences to share
-cached results.
-
-### Align Coding-Agent Versions and Deployment Modes
-
-Upgrade OpenClaw to 2026.9.3 before installing the 0.9 Relay OpenClaw plugin.
-The plugin's minimum gateway version is now 2026.9.3.
-
-For new Pi integrations, use Pi 0.84.x and install one Relay extension copy.
-Relay accepts later minor versions but marks them as unverified. Check that
-hooks still work after an upgrade.
-
-Personal extension installs and daemon bundles managed by an administrator
-use different setup steps. Follow [Pi](/nemo-relay-cli/pi) or
-[Daemon](/daemon/about) for your deployment mode.
-
-Managed daemons require system-owned settings and a route credential for each
-user on each computer. They also need persistent WebSocket control connections.
-For remote deployments, use HTTPS and ensure that the daemon can reach client
-workers. Set reverse proxies to pass WebSocket upgrades and ping/pong traffic
-under `/_nemo-relay/control/`.
-
-Confirm that worker plugins enforce policy or produce exporter output.
-If a worker fails to start, an authenticated route can enter pass-through
-mode and forward requests without those plugins. For details, refer to
-[Daemon Operations](/daemon/operations) and
-[Reverse Proxy Configuration](/daemon/reference#configure-a-trusted-reverse-proxy).
+### Review Managed Provider Credentials
+
+Managed Codex routes now forward ChatGPT OAuth to the native ChatGPT Codex
+backend when no administrator OpenAI credential is configured. If the daemon
+has `openai_auth_header` or `OPENAI_API_KEY`, Relay replaces the incoming OAuth
+credential and uses the administrator's configured OpenAI-compatible upstream.
+Review those settings to choose the intended provider and credential source.
+Refer to [Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
+
+Managed Claude model routing requires an Anthropic API key or an
+administrator's Anthropic-compatible gateway credential. Claude.ai OAuth is
+not supported with `ANTHROPIC_BASE_URL`. If your deployment uses only OAuth,
+keep native routing instead of setting the managed base URL. Refer to
+[Daemon Configuration](/daemon/configuration#claude-code).
+
+### Choose Managed Daemon Startup Policy
+
+Model Context Protocol (MCP) initialization can now finish after the client
+authenticates and registers. A worker starts in the background. By default,
+authenticated requests use passthrough during startup and recovery. Passthrough
+forwards requests without worker plugins. New requests switch to the worker
+after runtime, plugin, control, and HTTP readiness checks pass.
+
+If every request must use worker guardrails, plugins, or observability, add
+`--require-worker` to the daemon service command. Configure clients to handle
+HTTP `503` while a worker is unavailable. This flag conflicts with
+`--pass-through`, which disables workers. Neither `/healthz` nor an MCP
+handshake proves that worker policies are active. Verify worker status and an
+observable plugin result.
+
+Worker startup has no deadline or retry limit. Update monitoring that assumed
+a fixed startup timeout. Check `worker_startup_pending`, `worker_added`, and
+`worker_activation_failed` for progress, elapsed time, and retry delays.
+Retry delays increase up to 60 seconds. Active requests and streams keep
+their original destination during route changes. Refer to
+[Daemon Operations](/daemon/operations).
+
+On Windows, make sure the enclosing host Job Object lets managed workers
+leave. Startup now rejects a worker that cannot leave that job. It also rejects
+a worker still held by an outer job when jobs are nested. Adjust the host's job
+policy or launch the managed client outside the restrictive job. For process
+ownership and log destinations, refer to
+[Register the MCP Lifecycle Client](/daemon/reference#register-the-mcp-lifecycle-client).
+
+### Revalidate Shared Python Worker Environments
+
+Older managed Python environments without `.nemo-relay-environment.key` now
+require the original installer's bootstrap key to verify their signed
+installation records. An environment that previously validated without that
+key can fail validation or startup after upgrading. If the original key is
+missing or unreadable, recreate the environment from the trusted plugin source. Newly
+provisioned environments keep their verification key with the environment.
+
+For system-installed workers, make sure each daemon user can read the
+configuration, manifest, lifecycle state, and environment. Users must also be
+able to access their directories. Only administrators should have write access.
+Lifecycle state records the plugin's installation and validation status.
+Startup and inspection validate shared state without rewriting it. Run
+`nemo-relay plugins validate <plugin-id>` to check the installation. This
+command saves its validation result. Refer to
+[Discoverable Plugins](/configure-plugins/discoverable-plugins).
+
+### Review Anthropic Compaction Cache Support
+
+Compaction summarizes older conversation content to reduce its size.
+Relay 0.9.1 bypassed the response cache for all Anthropic compaction traffic.
+Relay 0.10.0 can cache validated paused-threshold and on-demand
+compaction responses and their supported continuations with
+`anthropic-version: 2023-06-01` and the matching compaction beta headers.
+Default non-paused threshold compaction and unsupported or malformed traffic
+still run live.
+
+No new cache setting is required. The existing rules for requests that can
+produce different results still apply. Requests without explicit
+`temperature = 0` need `cache_nondeterministic = true` to be eligible. Review
+expected cache hits and `anthropic_compaction` bypass marks. Compare them with
+the supported cases in
+[LLM Eligibility and Limits](/configure-plugins/adaptive/response-cache#llm-eligibility-and-limits).
 
 ## Related Release Information
 
