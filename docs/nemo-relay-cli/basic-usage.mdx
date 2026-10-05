@@ -496,9 +496,12 @@ where provider traffic was expected to pass through the gateway.
 The gateway normalizes vendor hook payloads into private internal events before
 calling NeMo Relay APIs.
 
-- Agent start emits a `session.start` mark on a dedicated `ScopeStackHandle`.
+- Agent start records session metadata on a dedicated `ScopeStackHandle`.
   Harnesses with a reliable session boundary also open a top-level
-  `ScopeType::Agent` scope; Claude Code and Codex use bounded turn scopes.
+  `ScopeType::Agent` scope. Claude Code uses bounded turn scopes. Codex opens a
+  bounded `codex-task` agent scope for active work, with separate parent and child
+  turns. Its `session.start` mark waits for that exported task ancestor; other
+  harnesses emit the mark at agent start.
 - Subagent start opens a child `ScopeType::Agent` scope. Subagent stop closes
   that scope when it is still active.
 - Tool pre-use starts a NeMo Relay tool span. Tool post-use, denial, or failure
