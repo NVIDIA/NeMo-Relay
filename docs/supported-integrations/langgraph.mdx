@@ -111,6 +111,30 @@ standalone LangGraph instrumentation. For custom ToolNode wrapper composition,
 construct `ToolNode` directly and pass `wrap_tool_call` and `awrap_tool_call`
 from this integration.
 
+## Served LangChain Agents
+
+When you export a LangChain agent for `langgraph dev` or `langgraph up`, add
+the Relay callback handler to the compiled graph before exporting it. Request
+callbacks are not part of the serialized LangGraph API request.
+
+```python
+from langchain.agents import create_agent
+from nemo_relay.integrations.langgraph import NemoRelayMiddleware, configure_graph
+
+agent = configure_graph(
+    create_agent(
+        model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        tools=[],
+        middleware=[NemoRelayMiddleware()],
+    )
+)
+```
+
+`configure_graph` stores a `NemoRelayCallbackHandler` in the graph's base
+configuration and returns the same compiled graph, so the LangGraph server can
+load it. The callback handler creates the graph and node scopes. The middleware
+routes model and tool calls through Relay under those scopes.
+
 For LangChain agents inside a LangGraph workflow, use `NemoRelayMiddleware` from
 this package the same way as the LangChain integration and pass the LangGraph
 `config` into the nested agent call:

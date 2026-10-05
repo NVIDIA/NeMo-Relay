@@ -91,6 +91,72 @@ def test_handler_type(callback_handler: NemoRelayCallbackHandler) -> None:
     assert isinstance(callback_handler, GraphCallbackHandler)
 
 
+def test_configure_graph_records_lifecycle_without_invocation_callbacks(
+    sync_graph: CompiledStateGraph,
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from nemo_relay.integrations.langgraph import configure_graph
+
+    configured_graph = configure_graph(sync_graph)
+    configured_graph_again = configure_graph(configured_graph)
+
+    result = configured_graph.invoke({"value": 1})
+    nemo_relay.subscribers.flush()
+
+    assert configured_graph is sync_graph
+    assert configured_graph_again is sync_graph
+    assert result == {"value": 2}
+    graph_start = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.name == "LangGraph" and event.scope_category == "start"
+    )
+    node_events = [
+        event for event in subscribed_events if isinstance(event, nemo_relay.ScopeEvent) and event.name == "increment"
+    ]
+    assert len(node_events) == 2
+    assert all(event.parent_uuid == graph_start.uuid for event in node_events)
+    assert (
+        sum(
+            isinstance(event, nemo_relay.ScopeEvent) and event.name == "LangGraph" and event.scope_category == "start"
+            for event in subscribed_events
+        )
+        == 1
+    )
+
+
+async def test_configured_agent_parents_managed_model_call_without_invocation_callbacks(
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    from nemo_relay.integrations.langgraph import NemoRelayMiddleware, configure_graph
+
+    class NamedFakeChatModel(FakeListChatModel):
+        model: str = "mock-model"
+
+    agent = configure_graph(
+        create_agent(
+            model=NamedFakeChatModel(responses=["done"]),
+            tools=[],
+            middleware=[NemoRelayMiddleware()],
+        )
+    )
+
+    result = await agent.ainvoke({"messages": [{"role": "user", "content": "Hello"}]})
+    await nemo_relay.subscribers.flush_async()
+
+    assert result["messages"][-1].content == "done"
+    starts = {
+        event.name: event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "start"
+    }
+    assert starts["model"].parent_uuid == starts["LangGraph"].uuid
+    assert starts["mock-model"].parent_uuid == starts["model"].uuid
+
+
 @pytest.mark.parametrize("use_async", [False, True])
 def test_create_tool_node_routes_standalone_tool_calls_through_relay(
     use_async: bool,
