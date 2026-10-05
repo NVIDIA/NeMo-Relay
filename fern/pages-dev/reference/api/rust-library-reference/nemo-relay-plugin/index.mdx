@@ -28,7 +28,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay-plugin/struct-annotatedllmresponse): Structured view of an LLM response, produced by a response codec from raw JSON API output.
 - [CategoryProfile](/reference/api/rust-library-reference/nemo-relay-plugin/struct-categoryprofile): Category-specific profile data.
 - [ConditionalMiddlewareGuardrailHandle](/reference/api/rust-library-reference/nemo-relay-plugin/struct-conditionalmiddlewareguardrailhandle): Opaque activation-owned handle for a native plugin's dynamic gate.
-- [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-plugin/struct-configdiagnostic): Structured validation diagnostic for plugin validation.
+- [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-plugin/struct-configdiagnostic): Structured diagnostic reported while validating or activating plugin configuration.
 - [DataSchema](/reference/api/rust-library-reference/nemo-relay-plugin/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
 - [EventCategory](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventcategory): Semantic category carried by ATOF `category`.
 - [EventSanitizeFields](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventsanitizefields): Observability fields that event sanitizers may rewrite.
@@ -103,7 +103,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 ## Enums
 
 - [BuiltinLlmCodec](/reference/api/rust-library-reference/nemo-relay-plugin/enum-builtinllmcodec): Relay's built-in LLM codec identities.
-- [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay-plugin/enum-diagnosticlevel): Diagnostic severity returned by plugin validation.
+- [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay-plugin/enum-diagnosticlevel): Severity of a plugin configuration or activation diagnostic.
 - [Event](/reference/api/rust-library-reference/nemo-relay-plugin/enum-event): Tagged union covering the two ATOF event kinds emitted by the runtime.
 - [HandleAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/enum-handleattributes): Attribute bitflags attached to a concrete handle kind.
 - [LlmCodecIdentity](/reference/api/rust-library-reference/nemo-relay-plugin/enum-llmcodecidentity): Per-call LLM codec identity supplied to sanitizer and SDK callbacks.
