@@ -428,8 +428,10 @@ finish before that prompt arrives. Children with no open work are closed after
 allowance so long-running commands can finish without progress hooks. After that
 allowance, missing completion hooks are treated as abandoned work and the child
 and its tools close. Unrelated parent activity does not renew either timeout.
-In-flight gateway requests remain protected. An idle timeout or gateway shutdown
-closes unfinished work. After completion, a new prompt in the same
+In-flight gateway requests protect their owning child without preventing cleanup
+of unrelated stale children. A task awaiting parent synthesis also keeps the sidecar
+active until the task completes or its idle timeout expires. An idle timeout or gateway
+shutdown closes unfinished work. After completion, a new prompt in the same
 Codex session opens a separate task and trace.
 
 Relay maps delivered events to agent, turn, subagent, tool, and mark lifecycle

@@ -521,6 +521,7 @@ pub(super) struct Session {
     last_llm_owner: Option<LastLlmOwner>,
     last_activity: Instant,
     active_gateway_calls: usize,
+    active_subagent_gateway_calls: HashMap<String, usize>,
     config: SessionConfig,
 }
 
@@ -1348,7 +1349,7 @@ impl SessionManager {
     ///
     /// Host sessions can remain durable after their current turn ends because Codex may omit
     /// `SessionEnd`. A dormant agent scope must therefore not keep the MCP-managed sidecar alive
-    /// forever. Active turns, subagents, tools, LLMs, and
+    /// forever. Active tasks, turns, subagents, tools, LLMs, and
     /// gateway calls still block idle shutdown; [`Self::close_all`] balances the dormant agent scope
     /// when the gateway exits.
     pub(crate) async fn has_open_sessions(&self) -> bool {
@@ -1656,6 +1657,7 @@ impl Session {
             last_llm_owner: None,
             last_activity: Instant::now(),
             active_gateway_calls: 0,
+            active_subagent_gateway_calls: HashMap::new(),
             config,
         }
     }
@@ -1738,7 +1740,8 @@ impl Session {
     }
 
     fn blocks_plugin_idle_shutdown(&self) -> bool {
-        self.turn_scope.is_some()
+        self.task_scope.is_some()
+            || self.turn_scope.is_some()
             || !self.subagents.is_empty()
             || !self.subagent_stacks.is_empty()
             || !self.subagent_stack.is_empty()
@@ -1762,7 +1765,7 @@ impl Session {
     /// Open tools get a longer inactivity allowance because they have no progress hooks.
     /// Managed requests and manually tracked LLM calls protect their containing scopes.
     fn stale_subagent_ids(&self, now: Instant, timeout: Duration) -> Vec<String> {
-        if self.agent_kind != AgentKind::Codex || self.active_gateway_calls > 0 {
+        if self.agent_kind != AgentKind::Codex {
             return Vec::new();
         }
         self.subagent_activity
@@ -1779,6 +1782,7 @@ impl Session {
                 };
                 now.checked_duration_since(**activity)
                     .is_some_and(|elapsed| elapsed >= child_timeout)
+                    && !self.active_subagent_gateway_calls.contains_key(id.as_str())
                     && !self.llms.values().any(|handle| {
                         handle
                             .metadata
@@ -1825,6 +1829,14 @@ impl Session {
     fn finish_gateway_call(&mut self, owner_subagent_id: Option<&str>) {
         self.touch_activity();
         self.touch_subagent_activity(owner_subagent_id);
+        if let Some(id) = owner_subagent_id
+            && let Some(count) = self.active_subagent_gateway_calls.get_mut(id)
+        {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.active_subagent_gateway_calls.remove(id);
+            }
+        }
         self.active_gateway_calls = self.active_gateway_calls.saturating_sub(1);
     }
 
@@ -2039,6 +2051,12 @@ impl Session {
                         metadata: &metadata,
                     },
                 );
+                if let Some(id) = &owner.subagent_id {
+                    *self
+                        .active_subagent_gateway_calls
+                        .entry(id.clone())
+                        .or_default() += 1;
+                }
                 Ok(GatewayCallPrep {
                     scope_stack: stack.clone(),
                     session_id: self.session_id.clone(),
@@ -3275,16 +3293,23 @@ impl Session {
     // events such as `agent_end` and `agent_settled` trail the last `turn_end`, and opening a turn
     // for them produced an empty turn scope at the end of every run.
     fn mark(&mut self, name: &str, event_payload: SessionEvent) -> Result<(), CliError> {
-        if self.agent_kind.has_explicit_turn_start() {
-            self.ensure_agent_started(event_payload.metadata.clone())?;
-        } else {
-            self.ensure_turn_started(event_payload.metadata.clone())?;
+        let child_parent = self
+            .child_turn_owner(&event_payload)
+            .filter(|id| self.subagents.contains_key(id))
+            .and_then(|id| self.child_work_scope(&id));
+        if child_parent.is_none() {
+            if self.agent_kind.has_explicit_turn_start() {
+                self.ensure_agent_started(event_payload.metadata.clone())?;
+            } else {
+                self.ensure_turn_started(event_payload.metadata.clone())?;
+            }
         }
         let mut metadata = event_payload.metadata;
         self.insert_agent_version(&mut metadata);
         emit_mark_event(
             EmitMarkEventParams::builder()
                 .name(name)
+                .parent_opt(child_parent.as_ref())
                 .data(event_payload.payload)
                 .metadata(metadata)
                 .build(),

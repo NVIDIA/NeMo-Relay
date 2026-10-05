@@ -9869,6 +9869,10 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
         assert!(parent.subagents.is_empty());
         assert_eq!(parent.task_scope.as_ref().unwrap().uuid, task_uuid);
     }
+    assert!(
+        manager.has_open_sessions().await,
+        "awaiting synthesis must keep the sidecar active"
+    );
     // A task awaiting parent synthesis is still bounded by the idle sweeper.
     assert_eq!(
         manager
@@ -9881,6 +9885,7 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
             .unwrap(),
         1
     );
+    assert!(!manager.has_open_sessions().await);
     let sessions = manager.inner.lock().await;
     assert!(sessions.get("parent-thread").unwrap().task_scope.is_none());
 }
@@ -9920,6 +9925,19 @@ async fn codex_synthesis_prompt_after_children_finish_preserves_task_trace() {
         }),
     )
     .await;
+    apply_owned_codex_hook(
+        &manager,
+        json!({
+            "session_id": "synthesis-root", "hook_event_name": "PreCompact", "agent_id": "first"
+        }),
+    )
+    .await;
+    {
+        let sessions = manager.inner.lock().await;
+        let root = &sessions["synthesis-root"];
+        assert!(root.turn_scope.is_none());
+        assert!(root.task_awaiting_synthesis);
+    }
     for child in ["second", "first"] {
         apply_owned_codex_hook(
             &manager,
@@ -9929,6 +9947,7 @@ async fn codex_synthesis_prompt_after_children_finish_preserves_task_trace() {
         )
         .await;
     }
+    assert!(manager.has_open_sessions().await);
     apply_owned_codex_hook(&manager, json!({
         "session_id": "synthesis-root", "hook_event_name": "UserPromptSubmit", "prompt": "synthesize findings"
     })).await;
@@ -9951,6 +9970,7 @@ async fn codex_synthesis_prompt_after_children_finish_preserves_task_trace() {
             .task_scope
             .is_none()
     );
+    assert!(!manager.has_open_sessions().await);
     flush_subscribers().unwrap();
     subscriber.force_flush().unwrap();
     let spans = exporter.get_finished_spans().unwrap();
@@ -10170,13 +10190,31 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
             )
             .await
             .unwrap();
+        let second = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some("activity-root".into()),
+                    subagent_id: Some("live".into()),
+                    ..llm_start()
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(
             manager
                 .close_idle_sessions_at(cleanup_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
                 .await
                 .unwrap(),
-            0
+            1
         );
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions["activity-root"];
+            assert!(!root.subagents.contains_key("stale"));
+            assert!(root.subagents.contains_key("live"));
+            assert_eq!(root.active_subagent_gateway_calls["live"], 2);
+        }
         manager
             .record_gateway_response_hints("activity-root", Some("live".into()), json!({}))
             .await;
@@ -10187,6 +10225,29 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
                 prep.session_finish,
             )
             .await;
+        assert_eq!(
+            manager.inner.lock().await["activity-root"].active_subagent_gateway_calls["live"],
+            1
+        );
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(cleanup_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
+                .await
+                .unwrap(),
+            0
+        );
+        manager
+            .finish_gateway_call(
+                &second.session_id,
+                second.owner_subagent_id.as_deref(),
+                second.session_finish,
+            )
+            .await;
+        assert!(
+            manager.inner.lock().await["activity-root"]
+                .active_subagent_gateway_calls
+                .is_empty()
+        );
         // Model recent parent and live-child activity at the future cleanup time. The stale
         // sibling retains its original timestamp and expires even though the parent is active.
         {
@@ -10200,7 +10261,7 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
                 .close_idle_sessions_at(cleanup_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
                 .await
                 .unwrap(),
-            1
+            0
         );
         // The live child also survives subsequent parent closure.
         if boundary == "Stop" {
@@ -10225,6 +10286,163 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
         }
         manager.close_all("test_shutdown").await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn codex_child_marks_after_parent_stop_keep_child_parentage() {
+    for aliased in [false, true] {
+        for child_turn in [false, true] {
+            let root_id = format!("child-marks-{aliased}-{child_turn}");
+            let child_id = format!("{root_id}-child");
+            let events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+            let captured = events.clone();
+            register_filtered_session_subscriber(
+                &root_id,
+                tracked_sessions(&[&root_id, &child_id]),
+                Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+            );
+            let manager = SessionManager::new(session_test_config());
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "UserPromptSubmit"
+                }),
+            )
+            .await;
+            if aliased {
+                manager.apply_authenticated_events(&HeaderMap::new(), vec![
+                    NormalizedEvent::AgentStarted(SessionEvent {
+                        session_id: child_id.clone(),
+                        agent_kind: AgentKind::Codex,
+                        event_name: "SessionStart".into(),
+                        payload: json!({"source": {"subagent": {"thread_spawn": {"parent_thread_id": root_id}}}}),
+                        metadata: json!({}),
+                    })
+                ], "lineage-owner").await.unwrap();
+            } else {
+                apply_owned_codex_hook(&manager, json!({
+                    "session_id": root_id, "hook_event_name": "SubagentStart", "agent_id": child_id
+                })).await;
+            }
+            if child_turn {
+                apply_owned_codex_hook(
+                    &manager,
+                    json!({
+                        "session_id": if aliased { &child_id } else { &root_id },
+                        "hook_event_name": "UserPromptSubmit", "agent_id": child_id
+                    }),
+                )
+                .await;
+            }
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "Stop"
+                }),
+            )
+            .await;
+            let child_scope = manager.inner.lock().await[&root_id]
+                .child_work_scope(&child_id)
+                .unwrap()
+                .uuid;
+            for (index, name) in ["PreCompact", "Notification", "CustomHook"]
+                .into_iter()
+                .enumerate()
+            {
+                let event = SessionEvent {
+                    session_id: if aliased {
+                        child_id.clone()
+                    } else {
+                        root_id.clone()
+                    },
+                    agent_kind: AgentKind::Codex,
+                    event_name: name.into(),
+                    payload: json!({"session_id": if aliased { &child_id } else { &root_id }, "child_mark_index": index}),
+                    metadata: json!({"agent_id": child_id}),
+                };
+                let event = match index {
+                    0 => NormalizedEvent::Compaction(event),
+                    1 => NormalizedEvent::Notification(event),
+                    _ => NormalizedEvent::HookMark(event),
+                };
+                manager
+                    .apply_authenticated_events(&HeaderMap::new(), vec![event], "lineage-owner")
+                    .await
+                    .unwrap();
+                let sessions = manager.inner.lock().await;
+                let root = &sessions[&root_id];
+                assert!(root.turn_scope.is_none());
+                assert!(root.task_awaiting_synthesis);
+            }
+            flush_subscribers().unwrap();
+            {
+                let events = events.lock().unwrap();
+                let marks: Vec<_> = events
+                    .iter()
+                    .filter(|event| {
+                        event
+                            .data()
+                            .is_some_and(|data| data.get("child_mark_index").is_some())
+                    })
+                    .collect();
+                assert_eq!(marks.len(), 3);
+                for event in marks {
+                    assert_eq!(event.parent_uuid(), Some(child_scope));
+                }
+            }
+            manager.close_all("test_shutdown").await.unwrap();
+            deregister_subscriber(&root_id).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn codex_root_gateway_call_does_not_protect_stale_children() {
+    let manager = SessionManager::new(session_test_config());
+    for event in ["UserPromptSubmit", "SubagentStart", "PreToolUse"] {
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": "root-call-cleanup", "hook_event_name": event,
+            "agent_id": if event == "UserPromptSubmit" { "root-call-cleanup" } else { "stale-child" },
+            "tool_name": "Bash", "tool_call_id": "abandoned", "tool_input": {}
+        })).await;
+    }
+    let mut request = llm_start();
+    request.session_id = Some("root-call-cleanup".into());
+    request.request.content = json!({"client_metadata": {"thread_id": "root-call-cleanup"}});
+    let prep = manager
+        .prepare_gateway_call(&HeaderMap::new(), request)
+        .await
+        .unwrap();
+    assert!(prep.owner_subagent_id.is_none());
+    let parent = prep.parent.as_ref().unwrap().uuid;
+    assert_eq!(
+        manager
+            .close_idle_sessions_at(
+                Instant::now() + CODEX_TOOL_IDLE_TIMEOUT + Duration::from_secs(1),
+                AGENT_IDLE_TIMEOUT,
+                "idle_timeout"
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    {
+        let sessions = manager.inner.lock().await;
+        let root = &sessions["root-call-cleanup"];
+        assert_eq!(root.active_gateway_calls, 1);
+        assert!(root.active_subagent_gateway_calls.is_empty());
+        assert!(root.subagents.is_empty());
+        assert!(root.tools.is_empty());
+        assert_eq!(root.turn_scope.as_ref().unwrap().uuid, parent);
+    }
+    manager
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            prep.session_finish,
+        )
+        .await;
+    manager.close_all("test_shutdown").await.unwrap();
 }
 
 // A failed or cancelled model call has no response hints to refresh its child owner.
@@ -10276,7 +10494,7 @@ async fn codex_gateway_completion_without_response_refreshes_only_owning_child()
                 .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
                 .await
                 .unwrap(),
-            0,
+            1,
         );
         manager
             .finish_gateway_call(
@@ -10291,7 +10509,7 @@ async fn codex_gateway_completion_without_response_refreshes_only_owning_child()
                     .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
                     .await
                     .unwrap(),
-                1,
+                0,
             );
         } else {
             apply_owned_codex_hook(
