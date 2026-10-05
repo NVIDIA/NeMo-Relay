@@ -285,6 +285,7 @@ pub(super) fn validate_dynamic_plugin_relay_compatibility(
 }
 
 /// Returns whether a Relay version satisfies a `compat.relay` requirement.
+#[doc(hidden)]
 pub fn relay_version_matches(requirement: &VersionReq, version: &Version) -> bool {
     let release = Version::new(version.major, version.minor, version.patch);
     let targets_prerelease = requirement.comparators.iter().any(|comparator| {
