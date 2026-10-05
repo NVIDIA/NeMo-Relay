@@ -1790,7 +1790,7 @@ fn register_opentelemetry(
     // File sinks join the trace fan-out: they receive the same projected spans
     // an endpoint would, so logs and metrics derive from endpoints only.
     let file_sink_subscribers =
-        build_opentelemetry_file_sink_subscribers(file_sinks, trace_subscribers.len())?;
+        build_opentelemetry_file_sink_subscribers(file_sinks, trace_subscribers.len(), ctx)?;
     trace_subscribers.extend(file_sink_subscribers);
     let trace_subscribers = trace_subscribers;
     let log_subscribers = signal_subscribers.logs;
@@ -1799,10 +1799,7 @@ fn register_opentelemetry(
         && !has_active_opentelemetry_resource(&log_subscribers)
         && !has_active_opentelemetry_resource(&metric_subscribers)
     {
-        return Err(PluginError::InvalidConfig(
-            "enabled OpenTelemetry section requires at least one valid trace, log, or metric endpoint"
-                .to_string(),
-        ));
+        return Err(no_active_opentelemetry_destination_error(ctx));
     }
     register_opentelemetry_resources(
         "opentelemetry",
@@ -2280,6 +2277,7 @@ fn build_opentelemetry_subscribers(
 fn build_opentelemetry_file_sink_subscribers(
     file_sinks: Vec<OpenTelemetryFileSinkConfig>,
     index_offset: usize,
+    ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>>> {
     let mut subscribers = Vec::with_capacity(file_sinks.len());
     for (index, file_sink) in file_sinks.into_iter().enumerate() {
@@ -2303,8 +2301,15 @@ fn build_opentelemetry_file_sink_subscribers(
                     plugin_kind = OBSERVABILITY_PLUGIN_KIND,
                     resource_kind = "otlp_file_sink",
                     resource_index = index;
-                    "OpenTelemetry file sink was skipped during activation; delivery continues to valid destinations: {error}"
+                    "OpenTelemetry file sink was skipped during activation: {error}"
                 );
+                ctx.record_activation_diagnostic(ConfigDiagnostic {
+                    level: DiagnosticLevel::Warning,
+                    code: "observability.invalid_otel_file_sink".to_string(),
+                    component: Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
+                    field: Some(format!("file_sinks[{index}].output_directory")),
+                    message: error.to_string(),
+                });
                 subscribers.push(IndexedOpenTelemetryResource {
                     index: fanout_index,
                     value: OpenTelemetryResource::Skipped(error.to_string()),
@@ -2313,6 +2318,32 @@ fn build_opentelemetry_file_sink_subscribers(
         }
     }
     Ok(subscribers)
+}
+
+fn no_active_opentelemetry_destination_error(ctx: &PluginRegistrationContext) -> PluginError {
+    let file_sink_failures = ctx
+        .activation_diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "observability.invalid_otel_file_sink")
+        .map(|diagnostic| {
+            format!(
+                "{}: {}",
+                diagnostic.field.as_deref().unwrap_or("file sink"),
+                diagnostic.message
+            )
+        })
+        .collect::<Vec<_>>();
+    if file_sink_failures.is_empty() {
+        PluginError::InvalidConfig(
+            "enabled OpenTelemetry section requires at least one valid trace, log, or metric endpoint"
+                .to_string(),
+        )
+    } else {
+        PluginError::InvalidConfig(format!(
+            "enabled OpenTelemetry section has no active destination: {}",
+            file_sink_failures.join("; ")
+        ))
+    }
 }
 
 fn resolve_signal_endpoints(
