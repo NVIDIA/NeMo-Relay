@@ -77,11 +77,15 @@ Observe one gateway-backed OpenClaw agent turn and write its session, model, and
 tool lifecycle to a local ATOF event file.
 
 <Warning>
-Full validation of the pinned `0.9.1` plugin is still pending. On Ubuntu 22.04
-with OpenClaw `2026.9.3`, the agent completed the task but exported only session
-events. A successful reply or marker file alone is not a passing integration:
-step 4 also requires paired tool and LLM events.
+Late shutdown hooks can restart Relay and truncate ATOF files in `overwrite`
+mode. This guide uses the supported default, `append`, to preserve exported
+spans. Extra session-only records can still appear during shutdown; append
+mode does not fix the lifecycle issue. Keep the paired tool and LLM checks in
+step 4.
 </Warning>
+
+The append-mode path was verified with Relay `0.9.1` and OpenClaw `2026.9.8`
+on Ubuntu 22.04. The PowerShell commands have not been live-tested.
 
 ## Prerequisites
 
@@ -122,8 +126,8 @@ The npm package is named `nemo-relay-openclaw`; its OpenClaw plugin ID is
 
 Use a disposable test agent and gateway configuration; this guide changes plugin
 configuration and restarts the gateway. Do not run automated tests against your
-normal shared gateway. Use a fresh log directory and an agent workspace without
-`relay-check.txt`.
+normal shared gateway. Use a new, empty log directory for each run and an agent
+workspace without `relay-check.txt`, so previous results cannot satisfy step 4.
 
 First, run `openclaw config file` to confirm which configuration file OpenClaw
 will update. Then save the following partial configuration as
@@ -165,7 +169,7 @@ writable absolute directory. On Windows, use forward slashes, for example
                         type: "file",
                         output_directory: "/absolute/path/to/relay-logs",
                         filename: "events.jsonl",
-                        mode: "overwrite",
+                        mode: "append",
                       },
                     ],
                   },
