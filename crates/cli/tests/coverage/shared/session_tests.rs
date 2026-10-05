@@ -10024,26 +10024,25 @@ async fn codex_abandoned_child_tools_expire_without_parent_idle() {
                 .await
                 .unwrap();
         }
-        // No PostToolUse, Stop, or SubagentStop ever arrives for this child. Parent activity is
-        // recent, so only the child's clock can bound the leaked scope and its tool.
-        {
-            let mut sessions = manager.inner.lock().await;
-            let root = sessions.get_mut("parent-thread").unwrap();
-            root.subagent_activity.insert(
-                "child-thread".into(),
-                Instant::now() - CODEX_TOOL_IDLE_TIMEOUT - Duration::from_secs(1),
-            );
-            root.touch_activity();
-        }
-        if boundary.starts_with("idle_sweep") {
-            assert_eq!(
-                manager
-                    .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
-                    .await
-                    .unwrap(),
-                1
-            );
-        } else {
+        // No PostToolUse, Stop, or SubagentStop ever arrives for this child. Advance the
+        // cleanup clock instead of subtracting an hour from a freshly booted Windows clock.
+        // Parent activity stays recent, so only the child's clock can expire its scope and tool.
+        let cleanup_at = Instant::now() + CODEX_TOOL_IDLE_TIMEOUT + Duration::from_secs(1);
+        manager
+            .inner
+            .lock()
+            .await
+            .get_mut("parent-thread")
+            .unwrap()
+            .last_activity = cleanup_at;
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(cleanup_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
+                .await
+                .unwrap(),
+            1
+        );
+        if !boundary.starts_with("idle_sweep") {
             let event = codex_session_event(
                 "parent-thread",
                 if boundary == "Stop_without_turn" {
@@ -10157,16 +10156,7 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
             .as_ref()
             .unwrap()
             .uuid;
-        {
-            let mut sessions = manager.inner.lock().await;
-            let root = sessions.get_mut("activity-root").unwrap();
-            for child in ["stale", "live"] {
-                root.subagent_activity.insert(
-                    child.into(),
-                    Instant::now() - CODEX_TOOL_IDLE_TIMEOUT - Duration::from_secs(1),
-                );
-            }
-        }
+        let cleanup_at = Instant::now() + CODEX_TOOL_IDLE_TIMEOUT + Duration::from_secs(1);
         // A child-owned gateway request refreshes only that child, and in-flight requests cannot
         // lose their containing scopes to the sweeper even after a long upstream stall.
         let prep = manager
@@ -10182,11 +10172,7 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
             .unwrap();
         assert_eq!(
             manager
-                .close_idle_sessions_at(
-                    Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
-                    AGENT_IDLE_TIMEOUT,
-                    "idle_timeout"
-                )
+                .close_idle_sessions_at(cleanup_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
                 .await
                 .unwrap(),
             0
@@ -10201,7 +10187,22 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
                 prep.session_finish,
             )
             .await;
-        // Recent child activity survives parent closure or idle sweeping; the stale sibling does not.
+        // Model recent parent and live-child activity at the future cleanup time. The stale
+        // sibling retains its original timestamp and expires even though the parent is active.
+        {
+            let mut sessions = manager.inner.lock().await;
+            let root = sessions.get_mut("activity-root").unwrap();
+            root.last_activity = cleanup_at;
+            root.subagent_activity.insert("live".into(), cleanup_at);
+        }
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(cleanup_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
+                .await
+                .unwrap(),
+            1
+        );
+        // The live child also survives subsequent parent closure.
         if boundary == "Stop" {
             apply_owned_codex_hook(
                 &manager,
@@ -10210,14 +10211,6 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
                 }),
             )
             .await;
-        } else {
-            assert_eq!(
-                manager
-                    .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
-                    .await
-                    .unwrap(),
-                1
-            );
         }
         {
             let sessions = manager.inner.lock().await;
