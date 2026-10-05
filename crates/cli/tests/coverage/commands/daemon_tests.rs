@@ -27,6 +27,7 @@ fn command(subcommand: Option<DaemonSubcommand>) -> DaemonCommand {
         tls_key: None,
         pass_through: false,
         require_worker: false,
+        max_tokens_per_identity: None,
         command: subcommand,
     }
 }
@@ -139,4 +140,29 @@ fn token_ensure_output_names_status_and_path_only() {
         let human = render_token_ensure(status, path, false).unwrap();
         assert!(human.contains(&path.display().to_string()), "{human}");
     }
+}
+
+#[test]
+fn max_tokens_per_identity_prefers_the_flag_then_the_environment() {
+    assert_eq!(resolve_max_tokens_per_identity(None, None).unwrap(), 4);
+    assert_eq!(
+        resolve_max_tokens_per_identity(None, Some(" 8 ")).unwrap(),
+        8
+    );
+    assert_eq!(
+        resolve_max_tokens_per_identity(Some(2), Some("8")).unwrap(),
+        2
+    );
+    for invalid in ["0", "65", "four", ""] {
+        let error = resolve_max_tokens_per_identity(None, Some(invalid))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY"),
+            "{error}"
+        );
+        assert!(error.contains("1 through 64"), "{error}");
+    }
+    assert!(parse_max_tokens_per_identity("64").is_ok());
+    assert!(parse_max_tokens_per_identity("65").is_err());
 }

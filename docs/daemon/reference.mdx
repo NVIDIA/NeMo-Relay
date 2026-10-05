@@ -27,6 +27,7 @@ nemo-relay daemon \
   [--port <PORT>] \
   [--advertise-address <URL>] \
   [--pass-through | --require-worker] \
+  [--max-tokens-per-identity <1-64>] \
   [--tls-cert <PEM>] \
   [--tls-key <PKCS8-PEM>]
 ```
@@ -38,7 +39,8 @@ header, or with a well-formed credential that is not bound, use pass-through
 without daemon-held provider credentials (unless the daemon runs with
 `--pass-through`). Malformed or repeated credential headers return `401`, and
 `--require-worker` rejects missing and unbound credentials with `401`.
-Registered routes without an active MCP reference return `503`. After a daemon
+Registered routes without an active MCP reference also use pass-through, or
+return `503` with `--require-worker`. After a daemon
 restart, MCP must register again to restore the route bindings stored in
 memory; until then that user's requests pass through.
 
@@ -354,7 +356,8 @@ The daemon authenticates MCP clients and workers using signed Relay identities.
 Each machine-user identity has an Ed25519 key that only its owner can read.
 The public key's hash, or digest, is the route fingerprint. MCP registration
 binds the digest of the route credential to that fingerprint. One fingerprint
-can hold up to four credential digests, for example after its token file is
+can hold several credential digests (4 by default; see
+`--max-tokens-per-identity`), for example after its token file is
 replaced, and all of them select its one route and worker. A digest already
 bound to another fingerprint is rejected. The daemon uses the credential
 digest to find the route. It does not save or log the raw
@@ -597,6 +600,7 @@ Relay and the harness use the following environment variables:
 | `ANTHROPIC_CUSTOM_HEADERS` | Claude Code | Includes exactly one matching `x-nemo-relay-client-token` header. |
 | `NEMO_RELAY_WORKER_ADVERTISE_ADDRESS` | Managed MCP | Optional concrete worker hostname or IPv4 address reachable by the daemon. |
 | `NEMO_RELAY_WORKER_PORT` | Managed MCP | Optional fixed port from 1 through 65535. Omit it to choose a port automatically. |
+| `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY` | Daemon | Distinct route tokens one machine-user identity may hold, from 1 through 64. Defaults to 4. Used when `--max-tokens-per-identity` is not given; an invalid value stops daemon startup. See [Replace a Client Token](/daemon/configuration#replace-a-client-token). |
 | `NEMO_RELAY_DAEMON_OBSERVATION_CAPTURE_BYTES` | Worker observation | Positive capture limit in bytes. Defaults to 4 MiB and does not limit delivered streams. |
 | `NEMO_RELAY_LOG` | Operational logger | Explicit log level, such as `info`. Managed MCP and hooks do not discover logging files automatically. |
 | `NEMO_RELAY_LOG_STDERR_FORMAT` | Operational logger | Explicit stderr format, such as `jsonl`. |

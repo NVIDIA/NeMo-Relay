@@ -152,7 +152,10 @@ coding agent:
   a daemon reinstall, keeps working instead of retrying `503` indefinitely.
 - A new token for the same machine identity, for example after the token file
   is replaced, joins that identity's existing route and worker. Old and new
-  tokens stay valid until the daemon restarts, up to 4 tokens per identity.
+  tokens stay valid until the daemon restarts. An identity holds up to 4 tokens
+  by default (`--max-tokens-per-identity` or
+  `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY`); at the limit, the least recently
+  registered token without a live session is released first.
 - If the daemon rejects a token at MCP registration, for example because it is
   bound to another identity or exceeds the per-identity limit, the MCP server
   serves without a route instead of retrying until the harness times out.

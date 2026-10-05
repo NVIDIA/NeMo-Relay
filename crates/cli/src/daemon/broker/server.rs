@@ -171,7 +171,9 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
     let sockets = socket::Hub::restarting(restarting_workers);
     let state = Arc::new(DaemonState {
         sockets,
-        registry: Registry::new(options.pass_through).with_require_worker(options.require_worker),
+        registry: Registry::new(options.pass_through)
+            .with_require_worker(options.require_worker)
+            .with_max_tokens_per_identity(options.max_tokens_per_identity),
         identity: load_or_create_daemon_identity()?,
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: uuid::Uuid::now_v7().to_string(),

@@ -193,7 +193,7 @@ Use this table to choose the next check for a failure:
 | TLS validation fails | Wrong name, expired chain, or untrusted CA | Check the advertised DNS name, certificate dates, and client native trust store. |
 | `401` from a public route | Malformed or repeated credential header, or `--require-worker` with a missing or unbound credential | Check the token value with `nemo-relay doctor --managed-bundle`, then start MCP registration before sending requests. |
 | Hooks or MCP produce no telemetry, with `reason = "missing_credential"`, `"unbound_credential"`, or `"no_live_session"` | No credential resolved, MCP has not registered since a daemon restart, or the harness's MCP exited (`no_live_session`) | Run `nemo-relay daemon token ensure` as the user, or export `NEMO_RELAY_CLIENT_TOKEN`. Then restart the harness so MCP registers. |
-| MCP logs `daemon_mcp_pass_through` with `reason = "credential_rejected"` | The user's identity already holds 4 tokens after repeated token changes, or the token file was copied from another user or machine | For a token limit, restart the daemon and then the harness. For a copied file, remove it, run `nemo-relay daemon token ensure` as the user, then restart the daemon and the harness. |
+| MCP logs `daemon_mcp_pass_through` with `reason = "credential_rejected"` | Every token the user's identity holds (4 by default) still has a live MCP session, so no idle token could be released; or the token file was copied from another user or machine | For a token limit, end the old sessions (the next registration then releases an idle token), raise `--max-tokens-per-identity`, or restart the daemon. For a copied file, remove it, run `nemo-relay daemon token ensure` as the user, then restart the daemon and the harness. |
 | Model requests produce no telemetry, with `reason = "missing_credential"` | The harness sent no `x-nemo-relay-client-token` header. The token file does not cover model requests. | Configure the header for the harness and restart it. Codex: export `NEMO_RELAY_CLIENT_TOKEN` (or set a static `http_headers` entry). Claude Code gateway mode: set `ANTHROPIC_CUSTOM_HEADERS` to `x-nemo-relay-client-token: <token>` with the same token. |
 | Managed Pi fails to start | The v1 Pi extension requires `NEMO_RELAY_CLIENT_TOKEN` and ignores the token file | Export `NEMO_RELAY_CLIENT_TOKEN` in the Pi launch environment. |
 | Registered route returns `503` | No active MCP reference, or `--require-worker` is waiting for a worker | Keep the harness MCP process alive. Inspect registration and worker logs. |
@@ -273,8 +273,9 @@ re-registration, even when signing identity is preserved. There is no documented
 per-user credential-revocation CLI. For offboarding, remove the user's network
 access and managed launch access and end their sessions. Do not assume deleting
 a local token file revokes a binding from the running broker. A new token for
-the same machine identity joins its existing route, up to 4 tokens per identity,
-and earlier tokens stay valid until the daemon restarts. Until MCP
+the same machine identity joins its existing route, up to the per-identity token
+limit (4 by default). Earlier tokens stay valid until the daemon restarts or until
+an idle one is released at that limit. Until MCP
 re-registers after a restart, that user's requests use pass-through.
 
 ## Upgrade and Roll Back

@@ -357,15 +357,29 @@ new one:
 - Removing or purging a token file does not revoke a token the daemon has
   already bound. Only a daemon restart clears bindings.
 
-One identity can hold up to 4 tokens. Registration with a fifth distinct token
-is rejected with `route_credential_rejected`, and the daemon logs
-`mcp_registration_rejected` with `reason = "route_token_limit_reached"`.
-`nemo-relay daemon mcp` does not retry the rejection; it logs
-`daemon_mcp_pass_through` with `reason = "credential_rejected"` and keeps
-serving MCP without a route, so the harness keeps working. Requests with that
-token use pass-through until the daemon restarts, so they produce no Relay
-telemetry or guardrail results. A token bound to another machine identity, such
-as a token copied from another user or machine, is rejected the same way.
+One identity can hold a limited number of distinct tokens at once: 4 by
+default. The limit bounds the daemon's in-memory token table; it is not a
+security control. When a new token arrives at the limit:
+
+1. The daemon releases the identity's least recently registered token that has
+   no live MCP session and logs `route_token_released`. A released token
+   resolves like any unbound token and can bind again later.
+2. If every bound token still has a live MCP session, the new token is rejected
+   with `route_credential_rejected`, and the daemon logs
+   `mcp_registration_rejected` with `reason = "route_token_limit_reached"`.
+   `nemo-relay daemon mcp` does not retry the rejection; it logs
+   `daemon_mcp_pass_through` with `reason = "credential_rejected"` and keeps
+   serving MCP without a route, so the harness keeps working. Requests with
+   that token use pass-through until a slot frees up or the daemon restarts.
+
+Change the limit with `nemo-relay daemon --max-tokens-per-identity <N>` or the
+`NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY` environment variable on the daemon
+service, from 1 through 64. The flag takes precedence. An invalid environment
+value stops daemon startup with a configuration error. Set the variable in the
+service definition, for example `EnvironmentVariables` in the macOS launchd
+plist, `Environment=` in a systemd unit, or the WinSW service environment, then
+restart the daemon. Raise it only if users legitimately run sessions on more
+than four tokens at the same time; idle tokens are released automatically.
 
 ### Requests Without a Bound Credential
 

@@ -39,6 +39,11 @@ pub(crate) struct DaemonCommand {
     /// Reject requests until an authenticated worker is ready.
     #[arg(long, conflicts_with = "pass_through")]
     pub(crate) require_worker: bool,
+    /// Distinct route tokens one machine-user identity may hold at once (1 through 64,
+    /// default 4). At the limit, a new token releases the identity's least recently registered
+    /// idle token. Falls back to NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY.
+    #[arg(long, value_parser = parse_max_tokens_per_identity)]
+    pub(crate) max_tokens_per_identity: Option<usize>,
     #[command(subcommand)]
     pub(crate) command: Option<DaemonSubcommand>,
 }
@@ -180,6 +185,10 @@ pub(crate) async fn execute(
                 advertise_address: command.advertise_address,
                 pass_through: command.pass_through,
                 require_worker: command.require_worker,
+                max_tokens_per_identity: resolve_max_tokens_per_identity(
+                    command.max_tokens_per_identity,
+                    std::env::var(MAX_TOKENS_PER_IDENTITY_ENV).ok().as_deref(),
+                )?,
                 gateway: server.to_runtime(),
                 tls_cert: command.tls_cert,
                 tls_key: command.tls_key,
@@ -283,6 +292,32 @@ fn parse_bind_address(value: &str) -> Result<Ipv4Addr, String> {
         Ok(address)
     } else {
         Err("bind address must be 127.0.0.1 or 0.0.0.0".into())
+    }
+}
+
+/// Environment fallback for `--max-tokens-per-identity`, read only when serving the daemon so a
+/// malformed value cannot break the `mcp`, `hook`, or `worker` subcommands.
+const MAX_TOKENS_PER_IDENTITY_ENV: &str = "NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY";
+
+fn parse_max_tokens_per_identity(value: &str) -> Result<usize, String> {
+    let limit = daemon::broker::registry::MAX_TOKENS_PER_IDENTITY_LIMIT;
+    match value.trim().parse::<usize>() {
+        Ok(tokens) if (1..=limit).contains(&tokens) => Ok(tokens),
+        _ => Err(format!(
+            "the per-identity token limit must be an integer from 1 through {limit}"
+        )),
+    }
+}
+
+fn resolve_max_tokens_per_identity(
+    flag: Option<usize>,
+    environment: Option<&str>,
+) -> Result<usize, CliError> {
+    match (flag, environment) {
+        (Some(tokens), _) => Ok(tokens),
+        (None, Some(value)) => parse_max_tokens_per_identity(value)
+            .map_err(|error| CliError::Config(format!("{MAX_TOKENS_PER_IDENTITY_ENV}: {error}"))),
+        (None, None) => Ok(daemon::broker::registry::DEFAULT_MAX_TOKENS_PER_IDENTITY),
     }
 }
 
