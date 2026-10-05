@@ -1714,9 +1714,15 @@ async fn activate_initial_plugin_configuration(
 ) -> Result<ConfigReport> {
     let initialized =
         initialize_plugin_components_catching_panics(config.clone(), rollback_failures).await?;
+    let configuration_diagnostics = report.diagnostics.clone();
     let mut report = report;
-    extend_activation_diagnostics(&mut report, initialized.diagnostics);
-    store_active_plugin_configuration(config, report.clone(), initialized.registrations)?;
+    extend_activation_diagnostics(&mut report, &initialized.diagnostics);
+    store_active_plugin_configuration_with_configuration_diagnostics(
+        config,
+        report.clone(),
+        configuration_diagnostics,
+        initialized.registrations,
+    )?;
     log::info!(
         target: "nemo_relay.plugin",
         event = "plugin_configuration_activated",
@@ -1762,6 +1768,7 @@ fn install_previous_configuration_for_teardown(
     *guard = Some(ActivePluginConfiguration {
         config: previous_state.config.clone(),
         report: previous_state.report.clone(),
+        configuration_diagnostics: previous_state.configuration_diagnostics.clone(),
         runtime_diagnostics: previous_state.runtime_diagnostics.clone(),
         registrations: Vec::new(),
     });
@@ -1804,9 +1811,15 @@ async fn activate_replacement_or_restore(
         .await
     {
         Ok(initialized) => {
+            let configuration_diagnostics = report.diagnostics.clone();
             let mut report = report;
-            extend_activation_diagnostics(&mut report, initialized.diagnostics);
-            store_active_plugin_configuration(config, report.clone(), initialized.registrations)?;
+            extend_activation_diagnostics(&mut report, &initialized.diagnostics);
+            store_active_plugin_configuration_with_configuration_diagnostics(
+                config,
+                report.clone(),
+                configuration_diagnostics,
+                initialized.registrations,
+            )?;
             log::info!(
                 target: "nemo_relay.plugin",
                 event = "plugin_configuration_replaced",
@@ -1834,10 +1847,12 @@ async fn restore_previous_plugin_configuration(
     {
         Ok(initialized) => {
             let mut report = previous_state.report;
-            extend_activation_diagnostics(&mut report, initialized.diagnostics);
-            store_active_plugin_configuration_with_runtime_diagnostics(
+            report.diagnostics = previous_state.configuration_diagnostics.clone();
+            extend_activation_diagnostics(&mut report, &initialized.diagnostics);
+            store_active_plugin_configuration_with_diagnostics(
                 previous_state.config,
                 report,
+                previous_state.configuration_diagnostics,
                 previous_state.runtime_diagnostics,
                 initialized.registrations,
             )?;
@@ -2710,6 +2725,7 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
 struct ActivePluginConfiguration {
     config: PluginConfig,
     report: ConfigReport,
+    configuration_diagnostics: Vec<ConfigDiagnostic>,
     runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
     registrations: Vec<PluginRegistration>,
 }
@@ -2719,10 +2735,10 @@ struct InitializedPluginComponents {
     diagnostics: Vec<ConfigDiagnostic>,
 }
 
-fn extend_activation_diagnostics(report: &mut ConfigReport, diagnostics: Vec<ConfigDiagnostic>) {
+fn extend_activation_diagnostics(report: &mut ConfigReport, diagnostics: &[ConfigDiagnostic]) {
     for diagnostic in diagnostics {
-        if !report.diagnostics.contains(&diagnostic) {
-            report.diagnostics.push(diagnostic);
+        if !report.diagnostics.contains(diagnostic) {
+            report.diagnostics.push(diagnostic.clone());
         }
     }
 }
@@ -2850,22 +2866,41 @@ fn record_rollback_failures(
     }
 }
 
+#[cfg(test)]
 fn store_active_plugin_configuration(
     config: PluginConfig,
     report: ConfigReport,
     registrations: Vec<PluginRegistration>,
 ) -> Result<()> {
-    store_active_plugin_configuration_with_runtime_diagnostics(
+    let configuration_diagnostics = report.diagnostics.clone();
+    store_active_plugin_configuration_with_diagnostics(
         config,
         report,
+        configuration_diagnostics,
         BTreeMap::new(),
         registrations,
     )
 }
 
-fn store_active_plugin_configuration_with_runtime_diagnostics(
+fn store_active_plugin_configuration_with_configuration_diagnostics(
     config: PluginConfig,
     report: ConfigReport,
+    configuration_diagnostics: Vec<ConfigDiagnostic>,
+    registrations: Vec<PluginRegistration>,
+) -> Result<()> {
+    store_active_plugin_configuration_with_diagnostics(
+        config,
+        report,
+        configuration_diagnostics,
+        BTreeMap::new(),
+        registrations,
+    )
+}
+
+fn store_active_plugin_configuration_with_diagnostics(
+    config: PluginConfig,
+    report: ConfigReport,
+    configuration_diagnostics: Vec<ConfigDiagnostic>,
     runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
     registrations: Vec<PluginRegistration>,
 ) -> Result<()> {
@@ -2875,6 +2910,7 @@ fn store_active_plugin_configuration_with_runtime_diagnostics(
     *guard = Some(ActivePluginConfiguration {
         config,
         report,
+        configuration_diagnostics,
         runtime_diagnostics,
         registrations,
     });

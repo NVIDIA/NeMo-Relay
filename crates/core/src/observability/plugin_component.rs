@@ -2307,7 +2307,7 @@ fn build_opentelemetry_file_sink_subscribers(
                     level: DiagnosticLevel::Warning,
                     code: "observability.invalid_otel_file_sink".to_string(),
                     component: Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
-                    field: Some(format!("file_sinks[{index}].output_directory")),
+                    field: Some(format!("file_sinks[{index}]")),
                     message: error.to_string(),
                 });
                 subscribers.push(IndexedOpenTelemetryResource {

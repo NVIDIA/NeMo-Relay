@@ -3137,16 +3137,44 @@ fn failed_plugin_replacement_restores_callbacks_and_runtime_diagnostics() {
         .enable_all()
         .build()
         .unwrap();
-    runtime
-        .block_on(initialize_plugins_exact_inner(
-            PluginConfig {
-                components: vec![PluginComponentSpec::new("test.plugin")],
-                ..PluginConfig::default()
-            },
-            None,
-            vec![],
-        ))
+    let directory = tempfile::tempdir().unwrap();
+    let invalid_output_directory = directory.path().join("not-a-directory");
+    std::fs::write(&invalid_output_directory, b"file").unwrap();
+    let mut original = programmatic_observability_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://127.0.0.1:4318/v1/traces"
+            }],
+            "file_sinks": [{
+                "output_directory": invalid_output_directory,
+                "filename": "trace.jsonl"
+            }]
+        }
+    }));
+    original
+        .components
+        .push(PluginComponentSpec::new("test.plugin"));
+    let initial_report = runtime
+        .block_on(initialize_plugins_exact_inner(original, None, vec![]))
         .unwrap();
+    assert!(
+        initial_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "observability.invalid_otel_file_sink" })
+    );
+    assert!(
+        initial_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "test.warning")
+    );
+
+    std::fs::remove_file(&invalid_output_directory).unwrap();
+    std::fs::create_dir(&invalid_output_directory).unwrap();
     record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
         code: "fixture.preserved".into(),
         component: "test.plugin".into(),
@@ -3181,6 +3209,25 @@ fn failed_plugin_replacement_restores_callbacks_and_runtime_diagnostics() {
     assert_eq!(restored[0].code, diagnostics[0].code);
     assert_eq!(restored[0].message, diagnostics[0].message);
     assert_eq!(restored[0].count, diagnostics[0].count);
+    let restored_report = ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .report
+        .clone();
+    assert!(
+        !restored_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "observability.invalid_otel_file_sink" })
+    );
+    assert!(
+        restored_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "test.warning")
+    );
     clear_plugin_configuration_inner().result.unwrap();
     reset_global();
 }
