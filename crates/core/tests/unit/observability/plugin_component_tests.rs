@@ -2235,7 +2235,7 @@ fn mixed_file_sink_directory_failure_is_reported_in_activation_diagnostics() {
 
     assert!(report.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "observability.invalid_otel_file_sink"
-            && diagnostic.field.as_deref() == Some("file_sinks[0].output_directory")
+            && diagnostic.field.as_deref() == Some("file_sinks[0]")
             && diagnostic.message.contains("not-a-directory")
     }));
     test_close_plugin_host().unwrap();
