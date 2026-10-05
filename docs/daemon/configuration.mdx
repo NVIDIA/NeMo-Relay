@@ -378,8 +378,11 @@ security control. When a new token arrives at the limit:
    serving MCP without a route, so the harness keeps working. The same applies
    when an already running MCP registers again after a reconnect or daemon
    restart: it logs the fallback with `phase = "reregistration"` and keeps
-   serving instead of exiting. Requests with that token use pass-through until
-   a slot frees up or the daemon restarts.
+   serving instead of exiting. The fallen-back MCP does not register again, so
+   freeing a slot or restarting the daemon does not bind its token. Requests
+   with that token use pass-through, or receive `401` with `--require-worker`,
+   until a new MCP session with the token registers. Restart the affected
+   harness session to bind it once a slot is free.
 
 Change the limit with `nemo-relay daemon --max-tokens-per-identity <N>` or the
 `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY` environment variable on the daemon
