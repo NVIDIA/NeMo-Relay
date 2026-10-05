@@ -353,8 +353,11 @@ The daemon authenticates MCP clients and workers using signed Relay identities.
 
 Each machine-user identity has an Ed25519 key that only its owner can read.
 The public key's hash, or digest, is the route fingerprint. MCP registration
-binds the digest of `NEMO_RELAY_CLIENT_TOKEN` to that fingerprint. The daemon
-uses the credential digest to find the route. It does not save or log the raw
+binds the digest of the route credential to that fingerprint. One fingerprint
+can hold up to four credential digests, for example after its token file is
+replaced, and all of them select its one route and worker. A digest already
+bound to another fingerprint is rejected. The daemon uses the credential
+digest to find the route. It does not save or log the raw
 credential. The MCP client records the daemon's identity on first use and
 checks it on later connections to the same daemon origin.
 
