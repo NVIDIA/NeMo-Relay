@@ -52,6 +52,7 @@ use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
 struct GatewayCallCleanup {
     sessions: Option<SessionManager>,
     session_id: String,
+    owner_subagent_id: Option<String>,
     finish: GatewaySessionFinish,
     runtime: tokio::runtime::Handle,
 }
@@ -61,6 +62,7 @@ impl GatewayCallCleanup {
         Self {
             sessions: Some(sessions),
             session_id: prep.session_id.clone(),
+            owner_subagent_id: prep.owner_subagent_id.clone(),
             finish: prep.session_finish,
             runtime: tokio::runtime::Handle::current(),
         }
@@ -70,8 +72,11 @@ impl GatewayCallCleanup {
         let sessions = self.sessions.take()?;
         let session_id = self.session_id.clone();
         let finish = self.finish;
+        let owner_subagent_id = self.owner_subagent_id.take();
         Some(self.runtime.spawn(async move {
-            sessions.finish_gateway_call(&session_id, finish).await;
+            sessions
+                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), finish)
+                .await;
         }))
     }
 

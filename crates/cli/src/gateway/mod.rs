@@ -334,7 +334,11 @@ async fn run_managed_gateway(
         );
         state
             .sessions
-            .finish_gateway_call(&session_id, session_finish)
+            .finish_gateway_call(
+                &session_id,
+                prep.owner_subagent_id.as_deref(),
+                session_finish,
+            )
             .await;
         return run_unmanaged_gateway(state, prepared, Some(operational)).await;
     }
@@ -504,18 +508,22 @@ async fn run_managed_buffered(
             let response_body = Body::from(response_json.to_string());
             state
                 .sessions
-                .record_gateway_response_hints(&session_id, owner_subagent_id, response_json)
+                .record_gateway_response_hints(
+                    &session_id,
+                    owner_subagent_id.clone(),
+                    response_json,
+                )
                 .await;
             state
                 .sessions
-                .finish_gateway_call(&session_id, session_finish)
+                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
                 .await;
             build_response(StatusCode::OK, headers, response_body)
         }
         Err(error) => {
             state
                 .sessions
-                .finish_gateway_call(&session_id, session_finish)
+                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
                 .await;
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
@@ -656,7 +664,11 @@ async fn run_managed_streaming(
         let session_finish = prep.session_finish;
         state
             .sessions
-            .finish_gateway_call(&prep.session_id, session_finish)
+            .finish_gateway_call(
+                &prep.session_id,
+                prep.owner_subagent_id.as_deref(),
+                session_finish,
+            )
             .await;
         return passthrough_streaming(state, prepared, Some(operational)).await;
     };
@@ -709,7 +721,7 @@ async fn run_managed_streaming(
         Err(error) => {
             state
                 .sessions
-                .finish_gateway_call(&session_id, session_finish)
+                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
                 .await;
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
@@ -1034,11 +1046,11 @@ async fn complete_gateway_call(
 ) {
     if let Some(response) = response {
         sessions
-            .record_gateway_response_hints(&session_id, owner_subagent_id, response)
+            .record_gateway_response_hints(&session_id, owner_subagent_id.clone(), response)
             .await;
     }
     sessions
-        .finish_gateway_call(&session_id, session_finish)
+        .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
         .await;
 }
 

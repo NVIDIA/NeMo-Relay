@@ -1283,13 +1283,19 @@ impl SessionManager {
     ///
     /// Runtime-managed LLM spans are emitted outside the session lock, so the session keeps a small
     /// in-flight counter to prevent the idle sweeper from closing a turn while an upstream
-    /// provider request or streaming response is still active.
-    pub(crate) async fn finish_gateway_call(&self, session_id: &str, finish: GatewaySessionFinish) {
+    /// provider request or streaming response is still active. Completion also refreshes the
+    /// owning child when errors or cancellation leave no response hints.
+    pub(crate) async fn finish_gateway_call(
+        &self,
+        session_id: &str,
+        owner_subagent_id: Option<&str>,
+        finish: GatewaySessionFinish,
+    ) {
         let gate = session_gate(&self.session_gates, session_id).await;
         let gate_guard = gate.lock().await;
         let mut sessions = self.inner.lock().await;
         if let Some(session) = sessions.get_mut(session_id) {
-            session.finish_gateway_call();
+            session.finish_gateway_call(owner_subagent_id);
         }
         let completed = sessions.get(session_id).is_some_and(|session| {
             session.active_gateway_calls == 0
@@ -1816,8 +1822,9 @@ impl Session {
         self.active_gateway_calls += 1;
     }
 
-    fn finish_gateway_call(&mut self) {
+    fn finish_gateway_call(&mut self, owner_subagent_id: Option<&str>) {
         self.touch_activity();
+        self.touch_subagent_activity(owner_subagent_id);
         self.active_gateway_calls = self.active_gateway_calls.saturating_sub(1);
     }
 
@@ -2048,7 +2055,7 @@ impl Session {
             })
             .await;
         if result.is_err() {
-            self.finish_gateway_call();
+            self.finish_gateway_call(None);
         }
         result
     }

@@ -5011,7 +5011,7 @@ async fn execute_prepared_llm(manager: &SessionManager, prep: GatewayCallPrep, r
         attributes,
         metadata,
         model_name,
-        owner_subagent_id: _,
+        owner_subagent_id,
         bypass_managed_pipeline,
         session_finish,
     } = prep;
@@ -5044,7 +5044,7 @@ async fn execute_prepared_llm(manager: &SessionManager, prep: GatewayCallPrep, r
         .await
         .unwrap();
     manager
-        .finish_gateway_call(&session_id, session_finish)
+        .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
         .await;
 }
 
@@ -5588,7 +5588,11 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
         json!("claude_startup_probe")
     );
     manager
-        .finish_gateway_call(&prep.session_id, prep.session_finish)
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            prep.session_finish,
+        )
         .await;
 
     manager
@@ -5641,7 +5645,11 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
     assert!(manager.inner.lock().await.contains_key("probe-only"));
 
     manager
-        .finish_gateway_call(&prep.session_id, prep.session_finish)
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            prep.session_finish,
+        )
         .await;
     assert!(!manager.inner.lock().await.contains_key("probe-only"));
 
@@ -5729,7 +5737,11 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
         .unwrap();
     assert!(!prep.bypass_managed_pipeline);
     manager
-        .finish_gateway_call(&prep.session_id, prep.session_finish)
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            prep.session_finish,
+        )
         .await;
 
     manager
@@ -6060,7 +6072,11 @@ async fn unidentified_concurrent_gateway_calls_use_isolated_ephemeral_sessions()
     assert!(second.session_id.starts_with("gateway-isolated-"));
 
     manager
-        .finish_gateway_call(&first.session_id, first.session_finish)
+        .finish_gateway_call(
+            &first.session_id,
+            first.owner_subagent_id.as_deref(),
+            first.session_finish,
+        )
         .await;
     {
         let sessions = manager.inner.lock().await;
@@ -6071,7 +6087,11 @@ async fn unidentified_concurrent_gateway_calls_use_isolated_ephemeral_sessions()
     }
 
     manager
-        .finish_gateway_call(&second.session_id, second.session_finish)
+        .finish_gateway_call(
+            &second.session_id,
+            second.owner_subagent_id.as_deref(),
+            second.session_finish,
+        )
         .await;
     assert!(!manager.has_open_sessions().await);
     let sessions = manager.inner.lock().await;
@@ -7546,7 +7566,11 @@ async fn idle_timeout_waits_for_active_gateway_llm_call() {
     );
 
     manager
-        .finish_gateway_call(&prep.session_id, GatewaySessionFinish::Retain)
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            GatewaySessionFinish::Retain,
+        )
         .await;
     let closed = manager
         .close_idle_sessions_at(
@@ -10171,7 +10195,11 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
             .record_gateway_response_hints("activity-root", Some("live".into()), json!({}))
             .await;
         manager
-            .finish_gateway_call(&prep.session_id, prep.session_finish)
+            .finish_gateway_call(
+                &prep.session_id,
+                prep.owner_subagent_id.as_deref(),
+                prep.session_finish,
+            )
             .await;
         // Recent child activity survives parent closure or idle sweeping; the stale sibling does not.
         if boundary == "Stop" {
@@ -10201,6 +10229,109 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
             assert!(root.tools.contains_key("live"));
             assert!(root.child_turns.contains_key("live"));
             assert_eq!(root.task_awaiting_synthesis, boundary == "Stop");
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+}
+
+// A failed or cancelled model call has no response hints to refresh its child owner.
+#[tokio::test]
+async fn codex_gateway_completion_without_response_refreshes_only_owning_child() {
+    for boundary in ["Stop", "UserPromptSubmit", "idle_sweep"] {
+        let manager = SessionManager::new(session_test_config());
+        let session_id = "failed-call-root";
+        apply_owned_codex_hook(
+            &manager,
+            json!({"session_id": session_id, "hook_event_name": "UserPromptSubmit"}),
+        )
+        .await;
+        for child in ["caller", "stale-sibling"] {
+            for event in ["SubagentStart", "UserPromptSubmit"] {
+                apply_owned_codex_hook(
+                    &manager,
+                    json!({"session_id": session_id, "hook_event_name": event, "agent_id": child}),
+                )
+                .await;
+            }
+        }
+        let prep = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some(session_id.into()),
+                    subagent_id: Some("caller".into()),
+                    ..llm_start()
+                },
+            )
+            .await
+            .unwrap();
+        let child_scope;
+        let task_scope;
+        {
+            let mut sessions = manager.inner.lock().await;
+            let root = sessions.get_mut(session_id).unwrap();
+            child_scope = root.child_work_scope("caller").unwrap().uuid;
+            task_scope = root.task_scope.as_ref().unwrap().uuid;
+            // Simulate a silent two-minute request without sleeping or producing response hints.
+            for child in ["caller", "stale-sibling"] {
+                root.subagent_activity
+                    .insert(child.into(), Instant::now() - Duration::from_secs(120));
+            }
+        }
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+                .await
+                .unwrap(),
+            0,
+        );
+        manager
+            .finish_gateway_call(
+                &prep.session_id,
+                prep.owner_subagent_id.as_deref(),
+                prep.session_finish,
+            )
+            .await;
+        if boundary == "idle_sweep" {
+            assert_eq!(
+                manager
+                    .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+                    .await
+                    .unwrap(),
+                1,
+            );
+        } else {
+            apply_owned_codex_hook(
+                &manager,
+                json!({"session_id": session_id, "hook_event_name": boundary}),
+            )
+            .await;
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions[session_id];
+            assert_eq!(root.active_gateway_calls, 0);
+            assert_eq!(root.task_scope.as_ref().unwrap().uuid, task_scope);
+            assert_eq!(root.child_work_scope("caller").unwrap().uuid, child_scope);
+            assert!(!root.subagents.contains_key("stale-sibling"));
+        }
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": session_id, "hook_event_name": "PreToolUse", "agent_id": "caller",
+                "tool_call_id": "retry-tool", "tool_name": "Bash",
+                "tool_input": {"command": "retry after failed model call"}
+            }),
+        )
+        .await;
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions[session_id];
+            assert_eq!(
+                root.tools["retry-tool"].owner_subagent_id.as_deref(),
+                Some("caller")
+            );
+            assert_eq!(root.tools["retry-tool"].parent_uuid, Some(child_scope));
         }
         manager.close_all("test_shutdown").await.unwrap();
     }
