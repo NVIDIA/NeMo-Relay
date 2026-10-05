@@ -338,17 +338,20 @@ impl Registry {
         );
         validate_binding(&inner, registration.fingerprint, registration.token_digest)?;
         validate_capacity(&inner, registration.fingerprint, self.route_capacity)?;
+        // Check reference capacity before binding, so a rejected registration never consumes one
+        // of the identity's limited token slots.
+        if let Some(route) = inner.routes.get(&registration.fingerprint)
+            && !route.refs.contains_key(&registration.session_id)
+            && route.refs.len() >= MAX_MCP_REFERENCES_PER_ROUTE
+        {
+            return Err(RegistryError::McpReferenceCapacityReached);
+        }
         let route = bind_token(
             &mut inner,
             registration.fingerprint,
             registration.token_digest,
             self.global_pass_through,
         );
-        if !route.refs.contains_key(&registration.session_id)
-            && route.refs.len() >= MAX_MCP_REFERENCES_PER_ROUTE
-        {
-            return Err(RegistryError::McpReferenceCapacityReached);
-        }
         route.refs.insert(
             registration.session_id.clone(),
             registration.lease_expires_at_unix_ms,

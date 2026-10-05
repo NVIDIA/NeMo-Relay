@@ -395,6 +395,34 @@ fn identity_token_limit_rejects_only_new_tokens() {
 }
 
 #[test]
+fn reference_capacity_rejection_does_not_consume_a_token_slot() {
+    let registry = Registry::new(false);
+    let fingerprint = fingerprint(42);
+    let first = TokenDigest::from_token(b"first");
+    for index in 0..MAX_MCP_REFERENCES_PER_ROUTE {
+        registry
+            .register_mcp(
+                registration(fingerprint, first, &format!("mcp-{index}")),
+                launch(&format!("launch-{index}")),
+            )
+            .unwrap();
+    }
+    let second = TokenDigest::from_token(b"second");
+    assert_eq!(
+        registry.register_mcp(
+            registration(fingerprint, second, "mcp-full"),
+            launch("full")
+        ),
+        Err(RegistryError::McpReferenceCapacityReached)
+    );
+    // The rejected registration left the new token unbound.
+    assert!(matches!(
+        registry.resolve_target(&second),
+        Err(ResolveError::UnknownToken)
+    ));
+}
+
+#[test]
 fn final_reference_enters_non_revivable_drain() {
     let registry = Registry::new(false);
     let fingerprint = fingerprint(5);
