@@ -2178,6 +2178,70 @@ fn all_invalid_trace_batch_configs_still_block_activation() {
 }
 
 #[test]
+fn file_only_sink_directory_creation_failure_reports_the_file_error() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let directory = tempfile::tempdir().unwrap();
+    let not_a_directory = directory.path().join("not-a-directory");
+    fs::write(&not_a_directory, b"file").unwrap();
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "file_sinks": [{
+                "output_directory": not_a_directory,
+                "filename": "trace.jsonl"
+            }]
+        }
+    }));
+
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("file_sinks[0]"), "{message}");
+    assert!(message.contains("not-a-directory"), "{message}");
+    assert!(
+        message.contains("failed to create OTLP output directory"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("requires at least one valid trace, log, or metric endpoint"),
+        "{message}"
+    );
+}
+
+#[test]
+fn mixed_file_sink_directory_failure_is_reported_in_activation_diagnostics() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let directory = tempfile::tempdir().unwrap();
+    let not_a_directory = directory.path().join("not-a-directory");
+    fs::write(&not_a_directory, b"file").unwrap();
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://127.0.0.1:4318/v1/traces"
+            }],
+            "file_sinks": [{
+                "output_directory": not_a_directory,
+                "filename": "trace.jsonl"
+            }]
+        }
+    }));
+
+    let report = futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.invalid_otel_file_sink"
+            && diagnostic.field.as_deref() == Some("file_sinks[0].output_directory")
+            && diagnostic.message.contains("not-a-directory")
+    }));
+    test_close_plugin_host().unwrap();
+}
+
+#[test]
 fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
     let mut context = PluginRegistrationContext::new();
     let error = register_opentelemetry(

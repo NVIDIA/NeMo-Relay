@@ -591,6 +591,14 @@ Relay also skips and logs any trace endpoint that fails during exporter
 construction. This includes malformed collector destinations that cannot be
 detected during configuration validation.
 
+Relay also skips a file sink that fails during exporter construction and adds
+an `observability.invalid_otel_file_sink` warning to the activation report's
+configuration diagnostics. The diagnostic identifies the sink's
+`output_directory` and includes the filesystem error. If another destination
+activates, Relay continues with that destination. If no trace, log, or metric
+destination can be registered, activation fails and includes the file sink
+failure instead of reporting only a missing collector endpoint.
+
 Relay's thread-based batch processor exports serially, so it does not expose
 the SDK's concurrent-export setting. It also does not expose a separate batch
 processor export timeout; use the endpoint's `timeout_millis` to bound each
