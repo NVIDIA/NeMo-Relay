@@ -321,7 +321,7 @@ The memory category contains these fields:
 | --- | --- |
 | `system_used` | System memory currently in use, in every mode. |
 | `system_total` | Total system memory, in every mode. |
-| `system_available` | System memory available for use, in every mode. |
+| `system_available` | System memory available for use, in every mode. On macOS, this is active, inactive, free, and speculative memory, using the host page size, without subtracting compressor pages. |
 | `resident` | Memory used by the process or tree that is currently in physical RAM. |
 | `private` | Private memory that is not shared with other processes. |
 | `physical_footprint` | Memory footprint as reported by the operating system. |
@@ -340,6 +340,11 @@ depends on the operating system. Refer to the
 The three `system_` fields describe system memory visible to Relay in every
 mode. They do not describe the selected process or tree. In global mode,
 per-process memory fields are `null`.
+
+On macOS, `system_available` follows Apple's available non-compressed memory
+definition. It includes active memory, so it is broader than the `vm_stat` free
+plus inactive pool. `system_used` and `system_available` can overlap; their sum
+does not necessarily equal `system_total`.
 
 ## Process Category
 
