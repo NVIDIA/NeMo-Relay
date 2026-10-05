@@ -371,7 +371,7 @@ One fingerprint moves through these broker states:
 | `Empty`       | The first MCP reference receives `LaunchWorker`.                            |
 | `Activating`  | Concurrent MCP references receive `WaitForWorker`.                          |
 | `Ready`       | Requests reuse the published worker.                                        |
-| `Draining`    | Accepted requests finish. New requests use passthrough if MCP references remain, or return `503` in strict mode. |
+| `Draining`    | Accepted requests finish. New requests use passthrough, or return `503` in strict mode. |
 | `PassThrough` | Requests go directly to providers by default, or return `503` in strict mode. |
 | `Recovering`  | One connected MCP is nominated to replace a failed worker.                  |
 

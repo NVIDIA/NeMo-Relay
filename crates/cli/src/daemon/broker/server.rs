@@ -1626,6 +1626,13 @@ async fn public_proxy_inner(
             Err(ResolveError::UnknownToken) => {
                 return control_message(StatusCode::UNAUTHORIZED, "invalid route credential");
             }
+            // A bound token whose route has no live MCP session (for example, a harness whose MCP
+            // exited during a daemon restart) passes through like an unbound token instead of
+            // returning 503 that harnesses retry indefinitely. Strict mode keeps the 503.
+            Err(ResolveError::Unavailable(_)) if !state.registry.requires_worker() => {
+                log_anonymous_pass_through(route, AnonymousReason::NoLiveSession);
+                (ResolvedTarget::PassThrough, ProviderAccess::Anonymous)
+            }
             Err(ResolveError::Unavailable(_)) => return unavailable_response(),
         },
     };
@@ -1722,6 +1729,7 @@ enum ProviderAccess {
 enum AnonymousReason {
     MissingCredential,
     UnboundCredential,
+    NoLiveSession,
 }
 
 impl AnonymousReason {
@@ -1729,6 +1737,7 @@ impl AnonymousReason {
         match self {
             Self::MissingCredential => "missing_credential",
             Self::UnboundCredential => "unbound_credential",
+            Self::NoLiveSession => "no_live_session",
         }
     }
 }
@@ -1754,9 +1763,11 @@ fn log_named_upstream_without_route(provider: ProviderRoute) {
 fn log_anonymous_pass_through(route: PublicRoute, reason: AnonymousReason) {
     static MISSING: OnceLock<LogRateLimiter> = OnceLock::new();
     static UNBOUND: OnceLock<LogRateLimiter> = OnceLock::new();
+    static NO_LIVE_SESSION: OnceLock<LogRateLimiter> = OnceLock::new();
     let limiter = match reason {
         AnonymousReason::MissingCredential => &MISSING,
         AnonymousReason::UnboundCredential => &UNBOUND,
+        AnonymousReason::NoLiveSession => &NO_LIVE_SESSION,
     }
     .get_or_init(|| LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL));
     let Some(suppressed_since_last_emit) = limiter.record() else {

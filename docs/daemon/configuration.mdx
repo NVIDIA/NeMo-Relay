@@ -374,7 +374,9 @@ request; the coding agent keeps working:
 
 - A public request with no `x-nemo-relay-client-token` header, or with a
   well-formed credential that no MCP session has bound (for example, after a
-  daemon restart and before MCP registers again), uses pass-through. Hook
+  daemon restart and before MCP registers again), uses pass-through. So does a
+  bound credential whose route has no live MCP session, for example from a
+  harness whose MCP exited while the daemon was restarted or reinstalled. Hook
   requests receive the agent's no-op pass-through response. Provider requests
   are forwarded directly to the configured provider with the caller's own
   provider authentication.
@@ -393,8 +395,9 @@ request; the coding agent keeps working:
   upstream cannot reach the configured provider. After a daemon restart, retry
   once MCP registers again. The daemon logs `public_request_named_upstream_rejected`.
 - The daemon logs each decision as `public_request_pass_through` with
-  `route_mode = "pass_through"` and `reason = "missing_credential"` or
-  `reason = "unbound_credential"`, rate-limited, without the credential.
+  `route_mode = "pass_through"` and `reason = "missing_credential"`,
+  `reason = "unbound_credential"`, or `reason = "no_live_session"`,
+  rate-limited, without the credential.
 
 On the client side, `nemo-relay daemon hook` with no resolvable credential does
 not contact the daemon. It writes the same pass-through response and exits `0`,
