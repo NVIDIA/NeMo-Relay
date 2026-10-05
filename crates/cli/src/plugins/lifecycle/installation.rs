@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use flate2::read::GzDecoder;
-use nemo_relay::plugin::dynamic::DynamicPluginCheckState;
+use nemo_relay::plugin::dynamic::{DynamicPluginCheckState, relay_version_matches};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -720,7 +720,7 @@ fn check_relay_version(manifest: &DynamicPluginManifest) -> Result<(), CliError>
         Version::parse(env!("CARGO_PKG_VERSION")).map_err(|err| error(err.to_string()))?;
     let range = manifest.compat.relay.as_deref().unwrap_or_default();
     let requirement = VersionReq::parse(range).map_err(|err| error(err.to_string()))?;
-    if !requirement.matches(&version) {
+    if !relay_version_matches(&requirement, &version) {
         return Err(error(format!(
             "plugin '{}' requires Relay {range}, running version is {version}",
             manifest.plugin.id
