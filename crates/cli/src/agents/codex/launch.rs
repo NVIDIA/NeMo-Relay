@@ -333,6 +333,6 @@ fn transparent_hook_executable() -> PathBuf {
 
 fn temp_dir(prefix: &str) -> Result<PathBuf, CliError> {
     let path = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&path)?;
+    crate::filesystem::create_private_dir(&path)?;
     Ok(path)
 }
