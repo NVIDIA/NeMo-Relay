@@ -1,0 +1,365 @@
+---
+title: "Switchyard Quick Start"
+sidebar-title: "Switchyard"
+description: "Route one model request through the Switchyard plugin and inspect Relay events."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "switchyard",
+  "mode": "live",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-switchyard-quickstart",
+  "requires": {
+    "curl (bash only)": "available",
+    "glibc (Linux only)": ">=2.38",
+    "jq (bash only)": ">=1.6"
+  },
+  "setup": [
+    "Public GitHub release downloads; port 4040 available"
+  ],
+  "inputs": {
+    "NVIDIA_API_KEY": {
+      "kind": "env",
+      "secret": true
+    }
+  },
+  "fresh": [
+    "logs/events.jsonl",
+    "response.json"
+  ],
+  "checks": [
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [],
+      "marks": [
+        "switchyard.routing.decision"
+      ]
+    },
+    {
+      "kind": "json-response",
+      "path": "response.json",
+      "role": "assistant",
+      "contains": "RELAY_QUICKSTART_RESPONSE_OK"
+    }
+  ]
+}
+*/}
+
+Route one OpenAI-compatible request through Switchyard inside NeMo Relay, then
+confirm the response and routing event in a local ATOF file.
+
+## Prerequisites
+
+- A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
+- On Linux, glibc 2.38 or newer (for example, Ubuntu 24.04); the published
+  plugin does not load on Ubuntu 22.04's glibc 2.35
+- Access to the public [NeMo Relay Plugins releases](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases)
+- Inference access: an [NVIDIA API key](https://build.nvidia.com/settings/api-keys) for this example, or credentials for your own endpoint
+
+This guide pins Switchyard plugin `0.3.0` and NeMo Relay `0.9.2`, the host
+version recorded in the published bundle's build metadata. On Linux, use a
+glibc-based distribution and Relay's GNU binary: the static musl binary cannot
+load this native plugin. The plugin is a
+native library loaded into the Relay process; use a bundle from a source you
+trust.
+
+On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+Use a fresh project directory and reserve local port `4040` for this test.
+
+Relay does not require the model used below. The routing example selects a
+public [build.nvidia.com model](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground).
+For another provider, update the target model, both endpoint URLs, and the
+credential environment variable together.
+
+## 1. Install
+
+Install Relay and download the bundle for your platform. The checksum check
+must succeed before you extract it.
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
+```bash
+mkdir relay-switchyard-quickstart
+cd relay-switchyard-quickstart
+export PATH="$PWD/bin:$PATH"
+
+(
+set -e
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) platform=macos-arm64; target=aarch64-apple-darwin ;;
+  Linux-x86_64) platform=linux-x86_64; target=x86_64-unknown-linux-gnu ;;
+  Linux-aarch64) platform=linux-arm64; target=aarch64-unknown-linux-gnu ;;
+  *) echo "No Switchyard 0.3.0 bundle for this platform" >&2; exit 1 ;;
+esac
+binary="nemo-relay-cli-${target}-0.9.2"
+relay_release="https://github.com/NVIDIA/NeMo-Relay/releases/download/0.9.2"
+curl -fLSs -O "$relay_release/$binary" -O "$relay_release/$binary.sha256"
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c "$binary.sha256"
+else
+  shasum -a 256 -c "$binary.sha256"
+fi
+mkdir bin
+mv "$binary" bin/nemo-relay
+chmod +x bin/nemo-relay
+archive="switchyard-plugin-0.3.0-${platform}.tar.gz"
+plugin_release="https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/download/switchyard-plugin-0.3.0"
+curl -fLSs -O "$plugin_release/$archive" -O "$plugin_release/$archive.sha256"
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c "$archive.sha256" && tar -xzf "$archive"
+else
+  shasum -a 256 -c "$archive.sha256" && tar -xzf "$archive"
+fi
+)
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":600} */}
+```powershell
+$ErrorActionPreference = 'Stop'
+$env:NEMO_RELAY_VERSION = '0.9.2'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.2/install.ps1 | iex
+New-Item -ItemType Directory relay-switchyard-quickstart | Out-Null
+Set-Location relay-switchyard-quickstart
+
+$arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+if ($arch -eq [System.Runtime.InteropServices.Architecture]::Arm64) {
+  $platform = 'windows-arm64'
+} elseif ($arch -eq [System.Runtime.InteropServices.Architecture]::X64) {
+  $platform = 'windows-x86_64'
+} else {
+  throw 'No Switchyard 0.3.0 bundle for this platform'
+}
+$archive = "switchyard-plugin-0.3.0-$platform.zip"
+$release = 'https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/download/switchyard-plugin-0.3.0'
+Invoke-WebRequest "$release/$archive" -OutFile $archive
+Invoke-WebRequest "$release/$archive.sha256" -OutFile "$archive.sha256"
+$expected = ((Get-Content "$archive.sha256" -Raw) -split '\s+')[0]
+$actual = (Get-FileHash $archive -Algorithm SHA256).Hash
+if ($actual -ne $expected) { throw 'Switchyard bundle checksum mismatch' }
+Expand-Archive $archive -DestinationPath .
+```
+</Tab>
+</Tabs>
+
+The archive extracts to `switchyard-plugin/`. Keep this directory in place
+while Relay uses the plugin. The Unix commands also keep Relay in the project's
+`bin/` directory, without replacing your existing installation.
+
+## 2. Configure
+
+Save this file as `config.toml` in `relay-switchyard-quickstart`:
+
+{/* quickstart-block {"id":"config","role":"file","cwd":"relay-switchyard-quickstart","path":"config.toml"} */}
+```toml
+[upstream]
+openai_base_url = "https://integrate.api.nvidia.com/v1"
+```
+
+Save this sibling file as `plugins.toml`:
+
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-switchyard-quickstart","path":"plugins.toml"} */}
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+
+[[plugins.dynamic]]
+manifest = "./switchyard-plugin/relay-plugin.toml"
+
+[plugins.dynamic.config]
+priority = 0
+
+[plugins.dynamic.config.switchyard_config]
+schema_version = 1
+
+[plugins.dynamic.config.switchyard_config.llm_clients.nvidia]
+format = "openai_chat"
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key_env = "NVIDIA_API_KEY"
+
+[plugins.dynamic.config.switchyard_config.targets.default]
+id = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+llm_client = "nvidia"
+
+[plugins.dynamic.config.switchyard_config.routes.default]
+id = "switchyard/quickstart"
+type = "passthrough"
+target = "default"
+
+[plugins.policy.overrides."nvidia.switchyard"]
+attestation = "integrity_only"
+```
+
+The checksum and `integrity_only` policy check artifact integrity, not independent
+publisher authenticity: the archive and checksum come from the same source.
+Only load a bundle whose publisher you trust. The example uses a server-owned
+API key: the native plugin does not
+support forwarding each caller's credential to the provider. Protect
+`logs/events.jsonl`; Relay events may contain request or response data even
+with full payload export disabled.
+
+## 3. Run
+
+In a gateway terminal, enter `relay-switchyard-quickstart`, set your API key,
+enable the configured plugin, and validate it:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"gateway","env":"NVIDIA_API_KEY"} */}
+```bash
+export NVIDIA_API_KEY="your-api-key"
+```
+
+{/* quickstart-block {"id":"gateway","role":"run","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"gateway","timeout_seconds":300,"background":{"ready":{"tcp":"127.0.0.1:4040","timeout_seconds":60},"stop_before":"verify","stop":"interrupt","shutdown_timeout_seconds":15}} */}
+```bash
+export PATH="$PWD/bin:$PATH"
+nemo-relay --config "$PWD/config.toml" plugins enable nvidia.switchyard
+nemo-relay --config "$PWD/config.toml" plugins validate nvidia.switchyard
+nemo-relay --config "$PWD/config.toml" --bind 127.0.0.1:4040
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"gateway","env":"NVIDIA_API_KEY"} */}
+```powershell
+$env:NVIDIA_API_KEY = 'your-api-key'
+```
+
+{/* quickstart-block {"id":"gateway","role":"run","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"gateway","timeout_seconds":300,"background":{"ready":{"tcp":"127.0.0.1:4040","timeout_seconds":60},"stop_before":"verify","stop":"interrupt","shutdown_timeout_seconds":15}} */}
+```powershell
+$env:Path = (Join-Path $env:LOCALAPPDATA 'nemo-relay\bin') + [IO.Path]::PathSeparator + $env:Path
+$config = Join-Path $PWD 'config.toml'
+nemo-relay --config $config plugins enable nvidia.switchyard
+if ($LASTEXITCODE -ne 0) { throw 'Failed to enable the Switchyard plugin' }
+nemo-relay --config $config plugins validate nvidia.switchyard
+if ($LASTEXITCODE -ne 0) { throw 'Failed to validate the Switchyard plugin' }
+nemo-relay --config $config --bind 127.0.0.1:4040
+```
+</Tab>
+</Tabs>
+
+Leave Relay running and wait until it reports that it is listening on
+`127.0.0.1:4040`. In a second terminal, from the same directory, send one request
+to the route ID `switchyard/quickstart` and save the response:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"request","role":"run","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"client","timeout_seconds":150} */}
+```bash
+curl -fsS --max-time 120 --output response.json http://127.0.0.1:4040/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"switchyard/quickstart","messages":[{"role":"user","content":"Reply with RELAY_QUICKSTART_RESPONSE_OK."}],"stream":false}'
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"request","role":"run","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"client","timeout_seconds":150} */}
+```powershell
+$body = @{
+  model = 'switchyard/quickstart'
+  messages = @(@{ role = 'user'; content = 'Reply with RELAY_QUICKSTART_RESPONSE_OK.' })
+  stream = $false
+} | ConvertTo-Json -Depth 5
+$response = Invoke-RestMethod http://127.0.0.1:4040/v1/chat/completions -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 120
+$response | ConvertTo-Json -Depth 50 | Set-Content response.json -Encoding utf8
+```
+</Tab>
+</Tabs>
+
+## 4. Verify
+
+Success prints `RELAY_QUICKSTART_RESPONSE_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+
+<details>
+<summary>Run the verification checks</summary>
+
+After the request finishes, stop Relay with **Ctrl+C** in its terminal to flush
+the event file. Then check the assistant response and the routing mark's
+structured fields, rather than searching arbitrary event payload text:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"client","timeout_seconds":180} */}
+```bash
+jq -e '.choices[0].message | .role == "assistant" and
+  (.content | contains("RELAY_QUICKSTART_RESPONSE_OK"))' response.json > /dev/null &&
+jq -se 'length > 0 and
+  all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
+  any(.[]; .kind == "mark" and .name == "switchyard.routing.decision")' \
+  logs/events.jsonl > /dev/null &&
+printf 'RELAY_QUICKSTART_RESPONSE_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"client","timeout_seconds":180} */}
+```powershell
+$message = (Get-Content response.json -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).choices[0].message
+if ($message.role -ne 'assistant' -or $message.content -notlike '*RELAY_QUICKSTART_RESPONSE_OK*') {
+  throw 'Expected assistant response is missing'
+}
+$events = @(Get-Content logs/events.jsonl -ErrorAction Stop | ForEach-Object { ConvertFrom-Json -InputObject $_ -ErrorAction Stop })
+if (-not $events.Count -or @($events | Where-Object {
+  $_.atof_version -ne '0.1' -or $_.kind -notin @('scope', 'mark')
+}).Count) { throw 'Expected nonempty ATOF 0.1 records' }
+if (-not @($events | Where-Object {
+  $_.kind -eq 'mark' -and $_.name -eq 'switchyard.routing.decision'
+}).Count) { throw 'No Switchyard routing decision was recorded' }
+Write-Output 'RELAY_QUICKSTART_RESPONSE_OK'
+Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
+```
+</Tab>
+</Tabs>
+
+Expected verification output:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-switchyard-quickstart","from":"verify","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+This is a live provider test; it does not assert identical model wording,
+timestamps, token counts, or event UUIDs.
+
+</details>
+
+## For More Details
+
+For more details, refer to:
+
+- [Switchyard plugin setup](https://github.com/NVIDIA-NeMo/Switchyard/tree/v0.3.0/crates/switchyard-nemo-relay-plugin#configure-relay)
+- [NeMo Relay discoverable plugins](/configure-plugins/discoverable-plugins)

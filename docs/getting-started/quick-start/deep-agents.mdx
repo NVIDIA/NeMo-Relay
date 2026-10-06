@@ -1,0 +1,270 @@
+---
+title: "Deep Agents Quick Start"
+sidebar-title: "Deep Agents"
+description: "Run one Deep Agents workflow with NeMo Relay observability."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "deep-agents",
+  "mode": "live",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-deep-agents-quickstart",
+  "requires": {
+    "python": ">=3.11",
+    "uv": "available"
+  },
+  "setup": [],
+  "inputs": {
+    "NVIDIA_API_KEY": {
+      "kind": "env",
+      "secret": true
+    }
+  },
+  "fresh": [
+    "logs/events.jsonl"
+  ],
+  "checks": [
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent",
+          "name": "deepagents-request"
+        },
+        {
+          "category": "tool",
+          "name": "emit_marker"
+        },
+        {
+          "category": "llm"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
+Run one Deep Agents workflow and write its agent, model, and tool lifecycle to
+a local ATOF event file.
+
+## Prerequisites
+
+- Python 3.11 or newer
+- `uv`
+- Inference access: an [NVIDIA API key](https://build.nvidia.com/settings/api-keys) for this example, or credentials for your own provider
+
+## 1. Install
+
+Create a project and install the pinned NeMo Relay release with the Deep
+Agents and NVIDIA model provider extras. In an existing `uv` project, skip
+`uv init`.
+
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
+```bash
+mkdir relay-deep-agents-quickstart
+cd relay-deep-agents-quickstart
+uv init
+uv add "nemo-relay[deepagents,langchain-nvidia]==0.10.0"
+```
+
+Set your NVIDIA API key for the current shell:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-deep-agents-quickstart","shells":["bash"],"session":"main","env":"NVIDIA_API_KEY"} */}
+```bash
+export NVIDIA_API_KEY="your-api-key"
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-deep-agents-quickstart","shells":["powershell"],"session":"main","env":"NVIDIA_API_KEY"} */}
+```powershell
+$env:NVIDIA_API_KEY = "your-api-key"
+```
+</Tab>
+</Tabs>
+
+Relay does not impose a model choice. This copyable example selects the public
+[`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground)
+model through the NVIDIA provider. To use another model or provider, replace
+the example's `model` argument and configure that provider's credentials.
+The NVIDIA provider reads `NVIDIA_API_KEY`. In the LangChain string, the first `nvidia:`
+selects the provider; the remaining `nvidia/...` value is the model ID.
+
+The provider may warn that this model is "not known to support tools" when its
+capability catalog lags the endpoint. This warning is advisory; the run must
+still produce the actual tool result and all three success lines below.
+
+## 2. Configure
+
+Save the following configuration as `plugins.toml` in your project directory:
+
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-deep-agents-quickstart","path":"plugins.toml"} */}
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+```
+
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+
+## 3. Run
+
+Save this file as `quickstart.py` beside `plugins.toml`:
+
+{/* quickstart-block {"id":"program","role":"file","cwd":"relay-deep-agents-quickstart","path":"quickstart.py"} */}
+```python
+import asyncio
+import json
+from pathlib import Path
+
+import nemo_relay
+from deepagents import create_deep_agent
+from langchain_core.tools import tool
+from nemo_relay.integrations.deepagents import (
+    NemoRelayDeepAgentsCallbackHandler,
+    add_nemo_relay_integration,
+)
+
+
+@tool
+def emit_marker() -> str:
+    """Return the quick-start validation marker."""
+    return "RELAY_QUICKSTART_TOOL_OK"
+
+
+agent = create_deep_agent(
+    **add_nemo_relay_integration(
+        model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        tools=[emit_marker],
+        name="main-agent",
+        system_prompt="Call emit_marker exactly once. Keep the final answer brief.",
+    )
+)
+
+
+async def main() -> None:
+    async with nemo_relay.plugin.activate({}, "plugins.toml"):
+        try:
+            with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):
+                result = await agent.ainvoke(
+                    {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Use one available tool to produce "
+                                    "RELAY_QUICKSTART_TOOL_OK. Then include "
+                                    "RELAY_QUICKSTART_RESPONSE_OK in your final response."
+                                ),
+                            }
+                        ]
+                    },
+                    config={"callbacks": [NemoRelayDeepAgentsCallbackHandler()]},
+                )
+
+            tool_outputs = [
+                str(message.content)
+                for message in result["messages"]
+                if getattr(message, "type", None) == "tool"
+            ]
+            if "RELAY_QUICKSTART_TOOL_OK" not in tool_outputs:
+                raise RuntimeError("Expected tool result is missing")
+            final_message = result["messages"][-1]
+            if getattr(final_message, "type", None) != "ai":
+                raise RuntimeError("Expected a final assistant message")
+            final_response = str(final_message.content)
+            if "RELAY_QUICKSTART_RESPONSE_OK" not in final_response:
+                raise RuntimeError("Expected final response is missing")
+            print("RELAY_QUICKSTART_TOOL_OK")
+            print("RELAY_QUICKSTART_RESPONSE_OK")
+        finally:
+            await nemo_relay.subscribers.flush_async()
+
+    events = [json.loads(line) for line in Path("logs/events.jsonl").read_text().splitlines()]
+    if not events or any(
+        not isinstance(event, dict) or event.get("atof_version") != "0.1"
+        or event.get("kind") not in {"scope", "mark"}
+        for event in events
+    ):
+        raise RuntimeError("Expected a nonempty ATOF 0.1 event stream")
+    starts = {
+        event["uuid"]: event for event in events
+        if event["kind"] == "scope" and event.get("scope_category") == "start"
+    }
+    closed = [
+        event for event in events
+        if event["kind"] == "scope" and event.get("scope_category") == "end"
+        and event.get("uuid") in starts
+        and all(event.get(key) == starts[event["uuid"]].get(key)
+                for key in ("name", "category", "parent_uuid"))
+    ]
+    if not {"agent", "tool", "llm"} <= {event.get("category") for event in closed}:
+        raise RuntimeError("Expected paired agent, tool, and LLM lifecycle records")
+    print("RELAY_QUICKSTART_EVENTS_OK")
+
+
+asyncio.run(main())
+```
+
+Run it from the project directory:
+
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-deep-agents-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+uv run python quickstart.py
+```
+
+## 4. Verify
+
+The program checks the tool result, final assistant response, and paired ATOF
+agent, tool, and LLM records before printing these success markers:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-deep-agents-quickstart","from":"run","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+The model can use different wording around the response marker. These checks
+validate a live provider call; they do not make the model deterministic.
+
+## For More Details
+
+For more details, refer to:
+
+- [Deep Agents integration guide](/supported-integrations/deepagents)
+- [ATOF exporter](/configure-plugins/observability/atof)

@@ -1,81 +1,132 @@
 ---
 title: "Rust Quick Start"
-description: ""
-position: 3
+sidebar-title: "Rust"
+description: "Instrument one Rust workflow and write its Relay events to a local ATOF file."
+position: 12
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-This quick start shows the smallest Rust workflow that emits scope, tool, and LLM events.
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "rust",
+  "mode": "local",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-rust-quickstart",
+  "requires": {
+    "rust": ">=1.88",
+    "cargo": "available"
+  },
+  "setup": [],
+  "inputs": {},
+  "fresh": [
+    "logs/events.jsonl"
+  ],
+  "checks": [
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent",
+          "name": "demo-agent"
+        },
+        {
+          "category": "tool",
+          "name": "emit_marker"
+        },
+        {
+          "category": "llm",
+          "name": "demo-provider"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
 
-## Choose an Install Path
+Instrument one scope, tool call, and LLM call with NeMo Relay, then verify the
+result in a local ATOF event file.
 
-Pick the installation path that matches whether you are using a published package or a
-local checkout.
+## Prerequisites
 
-### Install from a Package Manager
+- Rust 1.88 or newer
+- Cargo
 
-Use the published crates when you are consuming a release:
+## 1. Install
 
+Create a project and add the pinned published crate:
+
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
 ```bash
-cargo add nemo-relay@0.10.0
+cargo new relay-rust-quickstart
+cd relay-rust-quickstart
+cargo add "nemo-relay@=0.10.0"
 cargo add serde_json
 cargo add tokio --features macros,rt-multi-thread
 ```
 
-Install the published NeMo Relay CLI separately when you need coding-agent hook
-and LLM gateway observability:
+## 2. Configure
 
-```bash
-cargo install nemo-relay-cli@0.10.0
-```
+Save the following configuration as `plugins.toml` in your project directory:
 
-### Install from the Repository
-
-Use a path dependency when your application is consuming a local checkout:
-
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-rust-quickstart","path":"plugins.toml"} */}
 ```toml
-[dependencies]
-nemo-relay = { path = "../NeMo-Relay/crates/core" }
-serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
 ```
 
-- `nemo-relay` is the core Rust runtime surface.
-- `tokio` provides the async runtime used by the managed tool and LLM helpers in
-  this quick start.
-- `nemo-relay-adaptive` is a companion crate for adaptive runtime primitives and
-  Redis-backed learning components when you need adaptive behavior later, but it
-  is not required for this minimal direct-runtime example.
-- `nemo-relay-cli` is a binary crate. Use `cargo install nemo-relay-cli@0.10.0`
-  when you need the NeMo Relay CLI.
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
 
-## Run One Scope, One Tool Call, and One LLM Call
+## 3. Run
 
-The example below creates a scope, records an initialization mark, runs one
-managed tool call, and runs one managed LLM call through the public Rust APIs.
-Place it in `src/main.rs` in the same Cargo project where you added the
-dependencies above, then run `cargo run`.
+Replace the generated `src/main.rs` in `relay-rust-quickstart` with this code:
 
+{/* quickstart-block {"id":"program","role":"file","cwd":"relay-rust-quickstart","path":"src/main.rs"} */}
 ```rust
 use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use nemo_relay::api::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::subscriber::flush_subscribers;
 use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecutionResult};
+use nemo_relay::plugin::dynamic::initialize;
+use nemo_relay::plugin::PluginConfig;
 use serde_json::json;
+use std::fs;
+use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    register_subscriber(
-        "quickstart-printer",
-        Arc::new(|event| {
-            println!("{} {}", event.kind(), event.name());
-        }),
-    )?;
-
+async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let handle = scope::push_scope(
         PushScopeParams::builder()
             .name("demo-agent")
@@ -85,80 +136,141 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build(),
     )?;
 
-    scope::event(
-        EmitMarkEventParams::builder()
-            .name("initialized")
-            .parent(&handle)
-            .data(json!({"ok": true}))
-            .build(),
-    )?;
+    let workflow_result: Result<(), Box<dyn std::error::Error>> = async {
+        scope::event(
+            EmitMarkEventParams::builder()
+                .name("initialized")
+                .parent(&handle)
+                .data(json!({"ok": true}))
+                .build(),
+        )?;
 
-    let tool_result = tool_call_execute(
-        ToolCallExecuteParams::builder()
-            .name("search")
-            .args(json!({"query": "hello"}))
-            .func(Arc::new(|args| Box::pin(async move {
-                Ok(ToolExecutionResult::new(json!({"echo": args["query"]})))
-            })))
-            .parent(handle.clone())
-            .build(),
+        let tool_result = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("emit_marker")
+                .args(json!({"marker": "RELAY_QUICKSTART_TOOL_OK"}))
+                .func(Arc::new(|args| Box::pin(async move {
+                    Ok(ToolExecutionResult::new(json!({"marker": args["marker"]})))
+                })))
+                .parent(handle.clone())
+                .build(),
+        )
+        .await?;
+
+        let llm_result = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("demo-provider")
+                .request(LlmRequest {
+                    headers: Default::default(),
+                    content: json!({
+                        "messages": [{
+                            "role": "user",
+                            "content": "RELAY_QUICKSTART_RESPONSE_OK"
+                        }]
+                    }),
+                })
+                .func(Arc::new(|_| Box::pin(async move {
+                    Ok(json!({"content": "RELAY_QUICKSTART_RESPONSE_OK"}))
+                })))
+                .parent(handle.clone())
+                .model_name("demo-model")
+                .build(),
+        )
+        .await?;
+
+        println!(
+            "{}",
+            tool_result.result["marker"]
+                .as_str()
+                .ok_or_else(|| io::Error::other("tool marker is missing"))?
+        );
+        println!(
+            "{}",
+            llm_result["content"]
+                .as_str()
+                .ok_or_else(|| io::Error::other("response marker is missing"))?
+        );
+        Ok(())
+    }
+    .await;
+
+    let pop_result = scope::pop_scope(
+        PopScopeParams::builder().handle_uuid(&handle.uuid).build(),
+    );
+    workflow_result?;
+    pop_result?;
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut activation = initialize(
+        PluginConfig::default(),
+        Some(PathBuf::from("plugins.toml")),
     )
     .await?;
 
-    let llm_result = llm_call_execute(
-        LlmCallExecuteParams::builder()
-            .name("demo-provider")
-            .request(LlmRequest {
-                headers: Default::default(),
-                content: json!({"messages": [{"role": "user", "content": "hi"}]}),
-            })
-            .func(Arc::new(|request| Box::pin(async move {
-                Ok(json!({
-                    "messages": request.content["messages"],
-                    "ok": true
-                }))
-            })))
-            .parent(handle.clone())
-            .model_name("demo-model")
-            .build(),
-    )
-    .await?;
+    let work_result = run_workflow().await;
+    let flush_result = flush_subscribers();
+    let close_result = activation.close();
+    work_result?;
+    flush_result?;
+    close_result?;
 
-    println!("{}", tool_result.result);
-    println!("{llm_result}");
-
-    scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
-    flush_subscribers()?;
-    let _ = deregister_subscriber("quickstart-printer")?;
+    let event_text = fs::read_to_string("logs/events.jsonl")?;
+    let events: Vec<serde_json::Value> = event_text.lines()
+        .map(serde_json::from_str).collect::<Result<_, _>>()?;
+    if events.is_empty() || events.iter().any(|event|
+        event["atof_version"] != "0.1" ||
+        !matches!(event["kind"].as_str(), Some("scope" | "mark"))
+    ) {
+        return Err(io::Error::other("Expected nonempty ATOF 0.1 records").into());
+    }
+    for category in ["agent", "tool", "llm"] {
+        let paired = events.iter().any(|end|
+            end["kind"] == "scope" && end["scope_category"] == "end" &&
+            end["category"] == category && end["uuid"].is_string() &&
+            events.iter().any(|start|
+                start["kind"] == "scope" && start["scope_category"] == "start" &&
+                ["uuid", "name", "category", "parent_uuid"].iter()
+                    .all(|key| start[key] == end[key])
+            )
+        );
+        if !paired {
+            return Err(io::Error::other(format!("Missing paired {category} records")).into());
+        }
+    }
+    println!("RELAY_QUICKSTART_EVENTS_OK");
     Ok(())
 }
 ```
 
-The managed tool callback returns `ToolExecutionResult`, and application code
-reads its `result` field. The optional `annotation` field carries opaque JSON
-metadata without changing the business result.
+Run it from `relay-rust-quickstart`, the directory containing `Cargo.toml` and
+`plugins.toml`, not from `src`. If you are in `relay-rust-quickstart/src`, run
+`cd ..` first. The event file is written to `relay-rust-quickstart/logs/events.jsonl`.
 
-## What Success Looks Like
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-rust-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+cargo run
+```
 
-You should see:
+## 4. Verify
 
-- Event lines for the root scope, managed tool and LLM lifecycles, plus the
-  `initialized` mark event
-- `{"echo":"hello"}` from the tool call's `result` field
-- A final object containing `ok: true` and the echoed message payload from the
-  LLM callback
+The program parses every JSONL record and checks for paired agent, tool, and
+LLM lifecycle records before printing, in order:
 
-Native subscriber delivery is asynchronous, so flush before checking subscriber
-output. If you only see the returned JSON values and no event lines, the tool
-and LLM callbacks ran but you did not verify instrumentation.
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-rust-quickstart","from":"run","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
 
-That tells you two things:
+The event file contains scope, tool, and LLM records in ATOF JSONL format.
 
-- The direct Rust runtime APIs ran successfully.
-- Emitted events were observable through the subscriber system.
+## For More Details
 
-## What to Learn Next
+For more details, refer to:
 
-Use these links to continue from the quick start into the core runtime concepts.
-
-- Use [Scopes](/about-nemo-relay/concepts/scopes), [Middleware](/about-nemo-relay/concepts/middleware), [Subscribers](/about-nemo-relay/concepts/subscribers), and [Plugins](/about-nemo-relay/concepts/plugins) for the runtime model.
+- [Installation](/getting-started/installation#rust)
+- [Instrument Application Code](/instrument-applications/code-examples)

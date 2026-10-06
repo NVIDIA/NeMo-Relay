@@ -123,6 +123,99 @@ the same validation, so do not run both.
 just docs
 ```
 
+### Quickstart Contracts
+
+Quickstart pages own their executable examples and success criteria. Hidden
+`quickstart-scenario` and `quickstart-block` JSON comments label the existing
+MDX fences; do not maintain a second copy of their commands in CI.
+`just docs` runs the contract checker and its unit tests without installing
+quickstart packages or calling a model.
+
+From the repository root:
+
+```bash
+python3 scripts/check-quickstarts.py check
+python3 -m unittest discover -s scripts/tests -p test_quickstarts.py
+python3 scripts/check-quickstarts.py extract docs/getting-started/quick-start/python.mdx --shell bash
+```
+
+The extractor requires Python 3.11 or newer and has no third-party dependencies.
+The version checker separately keeps copyable Getting Started install pins and
+the OpenClaw/native-plugin examples on the base version in the root
+`Cargo.toml`. `just set-version <version>` updates those pins with the packages;
+version snapshots therefore keep literal, copyable commands without Fern
+build-time substitutions. Switchyard's native plugin bundle is independently
+versioned and remains explicitly pinned until a compatible bundle is published.
+`schema: 1` identifies this checker's annotation format; it is not an external
+JSON Schema or the Relay plugin configuration version. The checker is the
+authoritative validator. Each page's scenario must declare:
+
+| Field | Purpose |
+| --- | --- |
+| `id`, `mode`, `shells`, `cwd` | Page filename, local/live mode, supported shells, and project directory |
+| `requires`, `setup`, `inputs` | Version prerequisites, external setup, and explicitly typed placeholders |
+| `fresh`, `checks` | Artifacts that must not preexist and assertions on output files |
+
+Each page declares its prerequisites, live-provider requirements, fresh output
+paths, and artifact checks. Each fence has a stable ID and one role:
+
+- `file`: write the fence verbatim to its `path`, relative to the block's `cwd`.
+- `run`: execute in the declared shell, directory, and session, with the stated
+  timeout. Require exit code zero before continuing. Retain session environment
+  variables, but set the declared working directory before each block.
+- `input`: show the reader how to set a credential. Automation supplies the
+  declared environment variable from its secret store; never execute the
+  placeholder assignment or put the secret into the extracted JSON.
+- `manual`: an interactive prerequisite, such as Hermes onboarding. An unattended
+  test must provision it explicitly and record the installed host version.
+- `expected`: exact stdout lines from the command named by `from`. Capture
+  stderr separately. Newline conventions may differ; extra output does not pass.
+
+For file and command placeholders, the page declares the literal token and
+whether its replacement is a path or argument. A future executor must encode
+replacements for the target file format or shell, not concatenate untrusted
+values into a command. The current extractor preserves these tokens.
+
+To verify a run, use a fresh disposable workspace and run `preflight` **before**
+executing the extracted recipe. For example, if `/tmp/relay-test` is your workspace
+and `/tmp/python.stdout` contains stdout from its successful `run` block:
+
+```bash
+python3 scripts/check-quickstarts.py preflight docs/getting-started/quick-start/python.mdx --workspace /tmp/relay-test
+python3 scripts/check-quickstarts.py verify docs/getting-started/quick-start/python.mdx --workspace /tmp/relay-test --stdout /tmp/python.stdout
+```
+
+These commands inspect freshness and results; they do **not** execute the recipe.
+The workspace is the parent of the documented project directory. OpenClaw also
+needs explicit `--input RELAY_LOG_DIR=<absolute-directory>` and
+`--input AGENT_WORKSPACE=<absolute-directory>` values for artifact checks.
+
+The verifier parses every JSONL record and requires the page's named lifecycle
+pairs or marks, plus its tool artifact or structured model response where
+applicable. UUIDs and timestamps are validated as fields, not compared to a
+snapshot. Prompt echoes and marker strings buried in unrelated JSON do not count.
+Use fresh output paths and an isolated host profile to prevent stale or unrelated
+traffic from satisfying a check; no post-run verifier can prove freshness alone.
+
+Python, Node.js, Rust, and LangGraph are credential-free local scenarios.
+The other pages are live scenarios: deterministic assertions do not make their
+providers deterministic. No mock-provider substitution is currently declared.
+Hermes authentication and OpenClaw agent/gateway provisioning remain explicit
+setup requirements, not hidden test adapters.
+
+For Switchyard, the process annotation specifies readiness, the shutdown
+boundary before verification, and a bounded interrupt/cleanup timeout. A runner
+must reject an occupied port, ensure its own process stays alive, interrupt it
+after the request, and force-stop only that owned process if cleanup times out.
+PowerShell runners must also fail on nonzero native-process exit codes; setting
+`$ErrorActionPreference` alone does not provide that guarantee in every version.
+
+The full cross-platform executor and CI support matrix are a separate step.
+Select only shell variants and host/package combinations supported by the
+published release; the presence of a PowerShell recipe is not a platform test
+result. Never run these install and gateway commands against a maintainer's
+normal profile as part of an untrusted pull-request job.
+
 ## Fern Publishing
 
 NeMo Relay uses a dual-branch Fern publishing model. Authors edit documentation

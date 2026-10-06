@@ -1,0 +1,258 @@
+---
+title: "Claude Code Quick Start"
+sidebar-title: "Claude Code"
+description: "Run one local Claude Code session through NeMo Relay and write ATOF events."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "claude-code",
+  "mode": "live",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": ".",
+  "requires": {
+    "claude": ">=2.1.121",
+    "jq (bash only)": ">=1.6"
+  },
+  "setup": [
+    "Authenticated model provider with tool-use permissions"
+  ],
+  "inputs": {},
+  "fresh": [
+    "logs/events.jsonl",
+    "relay-check.txt"
+  ],
+  "checks": [
+    {
+      "kind": "file-equals",
+      "path": "relay-check.txt",
+      "value": "RELAY_QUICKSTART_TOOL_OK",
+      "trim": true
+    },
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "custom",
+          "name": "claude-code-turn"
+        },
+        {
+          "category": "tool"
+        },
+        {
+          "category": "llm"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
+Run one local Claude Code session through NeMo Relay and write its turn, model,
+and tool lifecycle to a local ATOF event file.
+
+## Prerequisites
+
+- Claude Code 2.1.121 or newer
+- Inference access: an Anthropic API key, a supported Claude login, or credentials for an Anthropic Messages-compatible gateway
+- A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
+- Permission to download the NeMo Relay version used by this guide
+
+On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+
+Use Claude Code's configured model; Relay does not select or require one.
+For example, authenticate with `claude auth login`, or set `ANTHROPIC_API_KEY`
+for API-key access. A custom gateway must provide the Anthropic Messages API;
+configure its credentials, base URL, and model in Claude Code before wrapping
+the run. Also add an `[upstream]` section with
+`anthropic_base_url = "https://YOUR_GATEWAY"` to the Relay `config.toml` below;
+Relay replaces `ANTHROPIC_BASE_URL` with its local gateway address. Use your
+provider's API root, without the `/v1/messages` route.
+Refer to [Claude Code authentication](https://code.claude.com/docs/en/authentication).
+
+## 1. Install
+
+Install the pinned NeMo Relay CLI release:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.0/install.sh | NEMO_RELAY_VERSION=0.10.0 sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":600} */}
+```powershell
+$env:NEMO_RELAY_VERSION = '0.10.0'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.0/install.ps1 | iex
+```
+</Tab>
+</Tabs>
+
+## 2. Configure
+
+Start in a new working directory and permit the agent to write files there.
+
+Save this file as `config.toml` in the directory where you will run the agent:
+
+{/* quickstart-block {"id":"config","role":"file","cwd":".","path":"config.toml"} */}
+```toml
+[agents.claude]
+command = "claude"
+```
+
+Save this sibling file as `plugins.toml`:
+
+{/* quickstart-block {"id":"plugins","role":"file","cwd":".","path":"plugins.toml"} */}
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+```
+
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+
+## 3. Run
+
+From the directory containing both files, run the common validation prompt:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+nemo-relay --config "$PWD/config.toml" claude -- -p "Use the Write tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK." --allowedTools Write
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+nemo-relay --config (Join-Path $PWD "config.toml") claude -- -p "Use the Write tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK." --allowedTools Write
+```
+</Tab>
+</Tabs>
+
+The [allowed-tools option](https://code.claude.com/docs/en/headless#auto-approve-tools)
+approves the Write tool for this invocation, so it can create the marker without
+a permission prompt. Run this only in your disposable trusted directory.
+
+To choose a model for this invocation, add Claude Code's `--model` option after
+`--`, for example `--model sonnet`. Use a model or alias your provider supports.
+
+Relay starts a temporary local gateway and injects Claude Code hooks for this
+run. It does not modify your persistent Claude Code plugin configuration.
+
+## 4. Verify
+
+Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+
+<details>
+<summary>Run the verification checks</summary>
+
+After the session exits, confirm that Relay wrote the local event stream:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt > /dev/null &&
+jq -se '
+  . as $events |
+  def closed($category):
+    any($events[]; .kind == "scope" and .scope_category == "end" and
+      .category == $category and
+      ($category != "custom" or .name == "claude-code-turn") and . as $end_event |
+      any($events[]; .kind == "scope" and .scope_category == "start" and
+        .uuid == $end_event.uuid and .name == $end_event.name and
+        .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));
+  length > 0 and
+  all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
+  closed("custom") and closed("tool") and closed("llm")
+' logs/events.jsonl > /dev/null &&
+printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+if ((Get-Content .\relay-check.txt -Raw -ErrorAction Stop).Trim() -ne 'RELAY_QUICKSTART_TOOL_OK') {
+  throw 'Expected tool-created marker file is missing'
+}
+$events = @(Get-Content .\logs\events.jsonl -ErrorAction Stop | ForEach-Object { ConvertFrom-Json -InputObject $_ -ErrorAction Stop })
+if (-not $events.Count -or @($events | Where-Object {
+  $_.atof_version -ne '0.1' -or $_.kind -notin @('scope', 'mark')
+}).Count) { throw 'Expected nonempty ATOF 0.1 records' }
+foreach ($category in @('custom', 'tool', 'llm')) {
+  $paired = @($events | Where-Object {
+    $end = $_
+    $end.kind -eq 'scope' -and $end.scope_category -eq 'end' -and
+    $end.category -eq $category -and
+    ($category -ne 'custom' -or $end.name -eq 'claude-code-turn') -and @($events | Where-Object {
+      $_.kind -eq 'scope' -and $_.scope_category -eq 'start' -and
+      $_.uuid -eq $end.uuid -and $_.name -eq $end.name -and
+      $_.category -eq $end.category -and $_.parent_uuid -eq $end.parent_uuid
+    }).Count -gt 0
+  })
+  if (-not $paired.Count) { throw "Missing paired $category records" }
+}
+Write-Output 'RELAY_QUICKSTART_TOOL_OK'
+Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
+```
+</Tab>
+</Tabs>
+
+Expected output from the verification command:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+These markers confirm the tool-created file and matching start/end records for
+custom turn, tool, and LLM work. The agent's final reply should include
+`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
+
+</details>
+
+## For More Details
+
+For more details, refer to:
+
+- [Claude Code guide](/nemo-relay-cli/claude-code)
+- [Installation](/getting-started/installation#cli)

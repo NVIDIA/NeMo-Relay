@@ -1,0 +1,338 @@
+---
+title: "OpenClaw Quick Start"
+sidebar-title: "OpenClaw"
+description: "Observe one OpenClaw agent turn with the NeMo Relay plugin and local ATOF output."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "openclaw",
+  "mode": "live",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": ".",
+  "requires": {
+    "openclaw": ">=2026.9.3",
+    "node": ">=24.16,<25",
+    "npm": "available",
+    "jq (bash only)": ">=1.6"
+  },
+  "setup": [
+    "Authenticated model provider with tool-use permissions",
+    "Disposable test agent and managed gateway service; do not change a shared gateway"
+  ],
+  "inputs": {
+    "RELAY_LOG_DIR": {
+      "kind": "path",
+      "token": "/absolute/path/to/relay-logs"
+    },
+    "AGENT_WORKSPACE": {
+      "kind": "path",
+      "token": "/absolute/path/to/agent-workspace"
+    },
+    "AGENT_ID": {
+      "kind": "argument",
+      "token": "YOUR_AGENT_ID"
+    }
+  },
+  "fresh": [
+    "/absolute/path/to/relay-logs/events.jsonl",
+    "/absolute/path/to/agent-workspace/relay-check.txt"
+  ],
+  "checks": [
+    {
+      "kind": "file-equals",
+      "path": "/absolute/path/to/agent-workspace/relay-check.txt",
+      "value": "RELAY_QUICKSTART_TOOL_OK",
+      "trim": true
+    },
+    {
+      "kind": "atof",
+      "path": "/absolute/path/to/relay-logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent"
+        },
+        {
+          "category": "tool"
+        },
+        {
+          "category": "llm"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
+Observe one gateway-backed OpenClaw agent turn and write its session, model, and
+tool lifecycle to a local ATOF event file.
+
+<Warning>
+Late shutdown hooks can restart Relay and truncate ATOF files in `overwrite`
+mode. This guide uses the supported default, `append`, to preserve exported
+spans. Extra session-only records can still appear during shutdown; append
+mode does not fix the lifecycle issue. Keep the paired tool and LLM checks in
+step 4.
+</Warning>
+
+The append-mode path was verified with Relay `0.9.1`, OpenClaw `2026.9.8`, and
+a custom OpenAI-compatible provider on Ubuntu 22.04. The PowerShell commands
+have not been live-tested. The install command follows this docs checkout's
+Relay version; that newer combination has not yet had the same live test.
+
+For NVIDIA inference on this tested combination, use a custom provider ID such
+as `relay-nvidia`, rather than the built-in `nvidia` provider ID. In your
+disposable OpenClaw configuration, copy the existing provider's `baseUrl`,
+`apiKey`, `api`, and `models` into `models.providers.relay-nvidia`, then select
+`relay-nvidia/<your-existing-model-id>` for the test agent. Keep the same endpoint,
+credentials, and model; Relay does not require a different model. This uses
+OpenClaw's supported [custom-provider configuration](https://docs.openclaw.ai/gateway/config-tools/custom-providers).
+Fresh runs using the built-in `nvidia` path completed the task but exported only
+session events, so they failed the tool and LLM checks. The custom-provider path
+passed those checks. This is a compatibility workaround, not a fix for the
+underlying missing-hook behavior.
+
+## Prerequisites
+
+- OpenClaw 2026.9.3 or newer
+- Node.js 24.16 or newer within the 24.x release line, and npm
+- A configured OpenClaw agent with a writable workspace and a selected model
+- Inference access through that provider's API key or a supported authenticated session
+- Permission to install plugins, restart, and stop your disposable OpenClaw gateway
+- A managed gateway service for the `gateway restart` and `gateway stop` commands below
+
+On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+
+Keep the agent's working model configuration; Relay does not require a
+particular model. For an NVIDIA example, configure an available
+[build.nvidia.com model](https://build.nvidia.com/explore/discover) and its
+[NVIDIA API key](https://build.nvidia.com/settings/api-keys) in OpenClaw before
+installing the Relay plugin.
+
+## 1. Install
+
+Install the pinned NeMo Relay plugin. OpenClaw registers the plugin ID
+and adds it to an existing `plugins.allow` list automatically:
+
+{/* quickstart-block {"id":"install","role":"manual","cwd":".","shells":["bash","powershell"],"session":"main","reason":"Review OpenClaw package-source confirmation separately from capability consent"} */}
+```bash
+openclaw plugins install npm:nemo-relay-openclaw@0.10.0 --pin --accept-capabilities
+```
+
+The plugin requires OpenClaw capability consent. The explicit flag grants and
+records that consent for the install. If OpenClaw asks you to confirm the package
+source, review and accept it separately; capability consent does not suppress
+that confirmation.
+
+The npm package is named `nemo-relay-openclaw`; its OpenClaw plugin ID is
+`nemo-relay`.
+
+## 2. Configure
+
+Use a disposable test agent and gateway configuration; this guide changes plugin
+configuration and restarts the gateway. Do not run automated tests against your
+normal shared gateway. Use a new, empty log directory for each run and an agent
+workspace without `relay-check.txt`, so previous results cannot satisfy step 4.
+
+First, run `openclaw config file` to confirm which configuration file OpenClaw
+will update. Then save the following partial configuration as
+`relay-openclaw.patch.json5`. Replace `/absolute/path/to/relay-logs` with a
+writable absolute directory. On Windows, use forward slashes, for example
+`C:/Users/alice/.openclaw/nemo-relay-quickstart`.
+
+{/* quickstart-block {"id":"config","role":"file","cwd":".","path":"relay-openclaw.patch.json5"} */}
+```json5
+{
+  plugins: {
+    entries: {
+      "nemo-relay": {
+        enabled: true,
+        hooks: {
+          allowConversationAccess: true,
+        },
+        config: {
+          enabled: true,
+          backend: "hooks",
+          plugins: {
+            version: 1,
+            policy: {
+              unknown_component: "error",
+              unknown_field: "error",
+              unsupported_value: "error",
+            },
+            components: [
+              {
+                kind: "observability",
+                enabled: true,
+                config: {
+                  version: 4,
+                  enable_full_payloads: false,
+                  atof: {
+                    enabled: true,
+                    sinks: [
+                      {
+                        type: "file",
+                        output_directory: "/absolute/path/to/relay-logs",
+                        filename: "events.jsonl",
+                        mode: "append",
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+          capture: {
+            includePrompts: false,
+            includeResponses: false,
+            stripToolArgs: true,
+            stripToolResults: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+This starting configuration records lifecycle metadata while excluding prompt,
+response, tool-argument, and tool-result content from OpenClaw's replay layer.
+Other event fields can still contain sensitive application data. Protect the
+output file and review the full capture controls before enabling richer payloads.
+
+Validate and apply the patch through OpenClaw instead of editing the complete
+configuration file:
+
+{/* quickstart-block {"id":"configure","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+openclaw config patch --file ./relay-openclaw.patch.json5 --dry-run
+openclaw config patch --file ./relay-openclaw.patch.json5
+openclaw gateway restart
+openclaw plugins inspect nemo-relay --runtime --json
+```
+
+Installing plugin code requires a gateway restart. A managed gateway can
+restart automatically; the explicit command is safe when you want to ensure
+the new package is loaded. Ordinary plugin configuration changes use OpenClaw's
+normal configuration reload behavior.
+
+For a foreground gateway (for example, on a headless test instance without a
+gateway service), run `openclaw gateway run` in a second terminal instead of
+`openclaw gateway restart`. Keep it running while you inspect the plugin and
+run the agent. Use the same OpenClaw profile and provider credentials in both
+terminals.
+
+## 3. Run
+
+Run `openclaw agents list` to find your test agent ID and workspace. Replace
+`YOUR_AGENT_ID` below with that ID. The marker file is created in the agent
+workspace, not necessarily the terminal's current directory:
+
+{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+openclaw agent --agent YOUR_AGENT_ID --message "Use a file-writing tool to create relay-check.txt in the agent workspace containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
+```
+
+After the reply, stop your disposable test gateway to close its Relay session
+and flush the event file. Do not run this against a shared gateway:
+
+{/* quickstart-block {"id":"shutdown","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+openclaw gateway stop
+```
+
+Wait for the stop command to finish successfully before verifying. The gateway
+remains stopped after this test; start it again when you want to resume use.
+For a foreground gateway, press **Ctrl+C** in its terminal instead of running
+`gateway stop`, and wait for that process to exit before verifying.
+
+## 4. Verify
+
+Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+
+<details>
+<summary>Run the verification checks</summary>
+
+Use the same log directory as the plugin configuration. Replace
+`/absolute/path/to/agent-workspace` with your test agent's workspace path
+(on Windows, use forward slashes, such as `C:/Users/alice/test-agent`).
+Check after the gateway has stopped:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' "/absolute/path/to/agent-workspace/relay-check.txt" > /dev/null &&
+jq -se '
+  . as $events |
+  def closed($category):
+    any($events[]; .kind == "scope" and .scope_category == "end" and
+      .category == $category and . as $end_event |
+      any($events[]; .kind == "scope" and .scope_category == "start" and
+        .uuid == $end_event.uuid and .name == $end_event.name and
+        .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));
+  length > 0 and
+  all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
+  closed("agent") and closed("tool") and closed("llm")
+' "/absolute/path/to/relay-logs/events.jsonl" > /dev/null &&
+printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+if ((Get-Content '/absolute/path/to/agent-workspace/relay-check.txt' -Raw -ErrorAction Stop).Trim() -ne 'RELAY_QUICKSTART_TOOL_OK') {
+  throw 'Expected tool-created marker file is missing'
+}
+$events = @(Get-Content '/absolute/path/to/relay-logs/events.jsonl' -ErrorAction Stop | ForEach-Object { ConvertFrom-Json -InputObject $_ -ErrorAction Stop })
+if (-not $events.Count -or @($events | Where-Object {
+  $_.atof_version -ne '0.1' -or $_.kind -notin @('scope', 'mark')
+}).Count) { throw 'Expected nonempty ATOF 0.1 records' }
+foreach ($category in @('agent', 'tool', 'llm')) {
+  $paired = @($events | Where-Object {
+    $end = $_
+    $end.kind -eq 'scope' -and $end.scope_category -eq 'end' -and
+    $end.category -eq $category -and @($events | Where-Object {
+      $_.kind -eq 'scope' -and $_.scope_category -eq 'start' -and
+      $_.uuid -eq $end.uuid -and $_.name -eq $end.name -and
+      $_.category -eq $end.category -and $_.parent_uuid -eq $end.parent_uuid
+    }).Count -gt 0
+  })
+  if (-not $paired.Count) { throw "Missing paired $category records" }
+}
+Write-Output 'RELAY_QUICKSTART_TOOL_OK'
+Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
+```
+</Tab>
+</Tabs>
+
+Expected output from the verification command:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+These markers confirm the tool-created file and matching start/end records for
+agent, tool, and LLM work. The agent's final reply should include
+`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
+
+</details>
+
+## For More Details
+
+For more details, refer to:
+
+- [NeMo Relay OpenClaw plugin guide](/supported-integrations/openclaw-plugin)
+- [OpenClaw plugin documentation](https://docs.openclaw.ai/tools/plugin)

@@ -1,0 +1,208 @@
+---
+title: "LangGraph Quick Start"
+sidebar-title: "LangGraph"
+description: "Run one LangGraph workflow with NeMo Relay observability."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "langgraph",
+  "mode": "local",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-langgraph-quickstart",
+  "requires": {
+    "python": ">=3.11",
+    "uv": "available"
+  },
+  "setup": [],
+  "inputs": {},
+  "fresh": [
+    "logs/events.jsonl"
+  ],
+  "checks": [
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent",
+          "name": "langgraph-request"
+        },
+        {
+          "category": "agent",
+          "name": "emit_marker"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
+Run one credential-free LangGraph workflow and write its lifecycle to a local
+ATOF event file.
+
+## Prerequisites
+
+- Python 3.11 or newer
+- `uv`
+
+## 1. Install
+
+Create a project and install the pinned NeMo Relay release with the LangGraph
+extra. In an existing `uv` project, skip `uv init`.
+
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
+```bash
+mkdir relay-langgraph-quickstart
+cd relay-langgraph-quickstart
+uv init
+uv add "nemo-relay[langgraph]==0.10.0"
+```
+
+## 2. Configure
+
+Save the following configuration as `plugins.toml` in your project directory:
+
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-langgraph-quickstart","path":"plugins.toml"} */}
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+```
+
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+
+## 3. Run
+
+Save this file as `quickstart.py` beside `plugins.toml`:
+
+{/* quickstart-block {"id":"program","role":"file","cwd":"relay-langgraph-quickstart","path":"quickstart.py"} */}
+```python
+import asyncio
+import json
+from pathlib import Path
+from typing_extensions import TypedDict
+
+import nemo_relay
+from langgraph.graph import END, START, StateGraph
+from nemo_relay.integrations.langgraph import NemoRelayCallbackHandler
+
+
+class State(TypedDict):
+    graph_marker: str
+    response_marker: str
+
+
+def emit_marker(_: State) -> State:
+    return {
+        "graph_marker": "RELAY_QUICKSTART_GRAPH_OK",
+        "response_marker": "RELAY_QUICKSTART_RESPONSE_OK",
+    }
+
+
+builder = StateGraph(State)
+builder.add_node("emit_marker", emit_marker)
+builder.add_edge(START, "emit_marker")
+builder.add_edge("emit_marker", END)
+graph = builder.compile()
+
+
+async def main() -> None:
+    async with nemo_relay.plugin.activate({}, "plugins.toml"):
+        try:
+            with nemo_relay.scope.scope("langgraph-request", nemo_relay.ScopeType.Agent):
+                result = await graph.ainvoke(
+                    {"graph_marker": "", "response_marker": ""},
+                    config={"callbacks": [NemoRelayCallbackHandler()]},
+                )
+
+            print(result["graph_marker"])
+            print(result["response_marker"])
+        finally:
+            await nemo_relay.subscribers.flush_async()
+
+    events = [json.loads(line) for line in Path("logs/events.jsonl").read_text().splitlines()]
+    if not events or any(
+        not isinstance(event, dict) or event.get("atof_version") != "0.1"
+        or event.get("kind") not in {"scope", "mark"}
+        for event in events
+    ):
+        raise RuntimeError("Expected a nonempty ATOF 0.1 event stream")
+    starts = {
+        event["uuid"]: event for event in events
+        if event["kind"] == "scope" and event.get("scope_category") == "start"
+    }
+    closed = [
+        event for event in events
+        if event["kind"] == "scope" and event.get("scope_category") == "end"
+        and event.get("uuid") in starts
+        and all(event.get(key) == starts[event["uuid"]].get(key)
+                for key in ("name", "category", "parent_uuid"))
+    ]
+    if not any(event.get("name") == "emit_marker" and event.get("category") == "agent" for event in closed):
+        raise RuntimeError("Expected the completed emit_marker graph node")
+    print("RELAY_QUICKSTART_EVENTS_OK")
+
+
+asyncio.run(main())
+```
+
+Run it from the project directory:
+
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-langgraph-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+uv run python quickstart.py
+```
+
+## 4. Verify
+
+The program parses every JSONL record and checks that the `emit_marker` graph
+node has matching start and end records before printing, in order:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-langgraph-quickstart","from":"run","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_GRAPH_OK
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+The event file contains the LangGraph workflow lifecycle. This deterministic
+path needs no model credentials; add a model and tool node after the basic
+integration works.
+
+## For More Details
+
+For more details, refer to:
+
+- [LangGraph integration guide](/supported-integrations/langgraph)
+- [ATOF exporter](/configure-plugins/observability/atof)

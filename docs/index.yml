@@ -6,10 +6,23 @@ navigation:
     title: "About NVIDIA NeMo Relay"
     slug: about-nemo-relay
     title-source: frontmatter
-  - folder: ./getting-started
-    title: "Getting Started"
+  - section: "Getting Started"
     slug: getting-started
-    title-source: frontmatter
+    contents:
+      - page: "About"
+        path: ./getting-started/about.mdx
+        slug: about
+      - page: "Installation Overview"
+        path: ./getting-started/installation.mdx
+        slug: installation
+      - page: "Configuration / Setup Overview"
+        path: ./getting-started/configuration.mdx
+        slug: configuration
+      - folder: ./getting-started/quick-start
+        title: "Quick Starts"
+        slug: quick-start
+        title-source: frontmatter
+        collapsed: open-by-default
   - folder: ./nemo-relay-cli
     title: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli

@@ -179,6 +179,9 @@ The helper updates:
    [`package-lock.json`](package-lock.json) to the same release version.
 5. The Python `nemo-relay-cli-bin` metadata, including the exact
    `nemo-relay[cli]` dependency version.
+6. Copyable Relay version pins in Getting Started and selected integration and
+   plugin-authoring docs. Historical test claims and the separately versioned
+   Switchyard bundle are not rewritten.
 Review docs and snippets that mention explicit versions, including:
 
 - [`README.md`](README.md)

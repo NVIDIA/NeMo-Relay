@@ -7,7 +7,8 @@ position: 32
 SPDX-License-Identifier: Apache-2.0 */}
 
 The `examples/rust-grpc-worker-plugin` project is the compiled counterpart to the
-[Python worker](/build-plugins/workers/python). It depends on `nemo-relay-worker` 0.10.0,
+[Python worker](/build-plugins/workers/python). It depends on the current
+`nemo-relay-worker` package,
 implements `WorkerPlugin`, registers all
 15 [surfaces](/build-plugins/workers/middleware-and-continuations), and lets the SDK
 create the authenticated `grpc-v1` server from the

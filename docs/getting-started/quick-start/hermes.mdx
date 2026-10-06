@@ -1,0 +1,219 @@
+---
+title: "Hermes Quick Start"
+sidebar-title: "Hermes"
+description: "Run one Hermes Agent turn with native NeMo Relay observability."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "hermes",
+  "mode": "live",
+  "shells": [
+    "bash"
+  ],
+  "cwd": ".",
+  "requires": {
+    "jq": ">=1.6"
+  },
+  "setup": [
+    "Hermes with native Relay integration and NeMo Relay Plugins diagnostics in hermes doctor",
+    "Authenticated model provider with tool-use permissions"
+  ],
+  "inputs": {},
+  "fresh": [
+    "logs/events.jsonl",
+    "relay-check.txt"
+  ],
+  "checks": [
+    {
+      "kind": "file-equals",
+      "path": "relay-check.txt",
+      "value": "RELAY_QUICKSTART_TOOL_OK",
+      "trim": true
+    },
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent"
+        },
+        {
+          "category": "tool"
+        },
+        {
+          "category": "llm"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
+Run one Hermes Agent turn and write its session, model, and tool lifecycle to a
+local ATOF event file.
+
+Use a Hermes installation with native NeMo Relay integration on a platform
+with a supported Relay native wheel. Do not install the former Hermes Relay
+observability plugin or launch Hermes through the `nemo-relay` CLI.
+
+This quickstart configures local Relay event export, not Hermes shared-metrics
+collection or sending to Nous; those have separate consent controls.
+
+## Prerequisites
+
+- Linux, macOS, or Windows Subsystem for Linux 2 (WSL2)
+- Hermes with native Relay support, plugin diagnostics in `hermes doctor`, and `chat --oneshot`
+- A configured Hermes model with inference access: a provider API key or a supported authenticated session
+- `jq` for the JSON event check
+- Permission to install Hermes in your user environment
+
+## 1. Install
+
+Install Hermes on Linux, macOS, or WSL2:
+
+{/* quickstart-block {"id":"install","role":"manual","cwd":".","shells":["bash"],"session":"main","reason":"Interactive Hermes installation and provider authentication; pre-provision the declared host for unattended tests"} */}
+```bash
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+```
+
+Complete the setup prompts and confirm that `hermes` can use your model
+provider before continuing. Check that `hermes chat --help` lists `--oneshot`;
+older builds may not support this recipe.
+
+Relay does not choose the model. For an NVIDIA example, select the NVIDIA
+provider in `hermes model`, supply an
+[NVIDIA API key](https://build.nvidia.com/settings/api-keys), and choose an
+available [build.nvidia.com model](https://build.nvidia.com/explore/discover).
+If Hermes already has a working provider and model, keep that configuration.
+
+## 2. Configure
+
+Start in a new working directory and permit the agent to write files there.
+
+Save the following configuration as `plugins.toml` in the directory where you
+will start Hermes:
+
+{/* quickstart-block {"id":"plugins","role":"file","cwd":".","path":"plugins.toml"} */}
+```toml
+version = 1
+
+[policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
+```
+
+Select that file in the shell that will start Hermes:
+
+{/* quickstart-block {"id":"environment","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+export HERMES_NEMO_RELAY_PLUGINS_TOML="$PWD/plugins.toml"
+```
+
+Run the diagnostic in that same shell:
+
+{/* quickstart-block {"id":"doctor","role":"manual","cwd":".","shells":["bash"],"session":"main","reason":"Hermes doctor checks unrelated optional services and can exit nonzero despite a valid Relay configuration; inspect its Relay section"} */}
+```bash
+hermes doctor
+```
+
+In the **NeMo Relay Plugins** section, confirm that the selected file is listed,
+plugins are enabled, and no Relay configuration problems are reported. This
+diagnostic checks configuration without loading plugin code. If the section is
+missing, update Hermes before continuing.
+
+`hermes doctor` also checks optional services unrelated to Relay and can exit
+nonzero when they are unconfigured. Resolve problems in **NeMo Relay Plugins**
+and your selected inference provider; unrelated optional-service warnings do not
+require enabling those services to complete this quick start.
+
+Hermes does not discover repository-local configuration automatically. The
+explicit path replaces the user configuration file; system configuration still
+applies. Relay plugins affect every profile hosted in the same Hermes process.
+Use separate processes when profiles require different plugin policies.
+
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Working-directory paths can reveal usernames and repository names.
+Protect `logs/events.jsonl` even when full payload export is disabled.
+
+## 3. Run
+
+From the same directory, run a one-shot turn with the common validation prompt:
+
+{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+hermes chat --oneshot -q "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
+```
+
+Hermes closes the Relay session before this command exits, allowing queued
+observability records to finish writing.
+
+## 4. Verify
+
+Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+
+<details>
+<summary>Run the verification checks</summary>
+
+{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt > /dev/null &&
+jq -se '
+  . as $events |
+  def closed($category):
+    any($events[]; .kind == "scope" and .scope_category == "end" and
+      .category == $category and . as $end_event |
+      any($events[]; .kind == "scope" and .scope_category == "start" and
+        .uuid == $end_event.uuid and .name == $end_event.name and
+        .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));
+  length > 0 and
+  all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
+  closed("agent") and closed("tool") and closed("llm")
+' logs/events.jsonl > /dev/null &&
+printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
+```
+
+Expected output from the verification command:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+These markers confirm the tool-created file and matching start/end records for
+agent, tool, and LLM work. The agent's final reply should include
+`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
+
+</details>
+
+## For More Details
+
+For more details, refer to:
+
+- [Hermes Relay integration and shared metrics](https://hermes-agent.nousresearch.com/docs/developer-guide/relay-shared-metrics)
+- [ATOF exporter](/configure-plugins/observability/atof)

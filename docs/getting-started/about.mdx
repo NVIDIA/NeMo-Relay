@@ -1,20 +1,55 @@
 ---
 title: "About"
-description: "Choose the right NeMo Relay getting-started path for your agent system."
+description: "Choose where NeMo Relay attaches to your agent system."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use Getting Started to choose the smallest NeMo Relay path that matches the
-boundary you want to observe or control. Relay can run beside a local
-coding-agent harness, wrap application-owned tool or LLM calls, connect through
-a maintained framework integration, or activate reusable plugin behavior from
-configuration.
+NeMo Relay observes and controls agent work at the boundary where it runs.
+Choose the path that matches the agent runtime, framework, or application you
+already use. The [Quick Starts](/getting-started/quick-start) page lists working
+examples that install a verified release, enable built-in observability, run
+one workflow, and check the local event output.
+
+## Choose Where Relay Attaches
+
+Use the boundary that owns the model request or tool execution:
+
+- **Agent runtime:** Observe Hermes, Claude Code, Codex, pi, or OpenClaw without
+  changing application code.
+- **Framework:** Use the maintained LangChain, LangGraph, or Deep Agents
+  integration when the framework owns callbacks and tool execution.
+- **Application:** Instrument Python, Node.js, or Rust code when your
+  application owns the tool or model call.
+
+Each path has its own requirements. You do not need a Rust compiler, a source
+checkout, or repository development tools to install a published CLI binary.
+
+## Featured External Plugins
+
+Try [Switchyard](/getting-started/quick-start/switchyard) to route model requests
+through a featured external Relay plugin.
+
+## Go Beyond the First Run
+
+- [Installation Overview](/getting-started/installation): Compare packages,
+  supported platforms, and alternative installers.
+- [Configuration / Setup Overview](/getting-started/configuration): Configure
+  runtime behavior and plugins in more detail.
+- [Development Setup](/contribute/development-setup): Build from source or
+  contribute to the repository.
+- [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer) and
+  [Concepts](/about-nemo-relay/concepts): Understand the runtime model.
+- [Integrate into Frameworks](/integrate-into-frameworks/about): Build custom
+  framework integrations.
+- [Build Plugins](/build-plugins/about): Package reusable Relay behavior.
+
+## Using an AI Coding Assistant
 
 <CardGroup cols={1}>
 <Card
-  title="Using an AI Coding Assistant?"
+  title="NVIDIA Agent Skills"
   icon="terminal"
   iconPosition="left"
 >
@@ -52,53 +87,3 @@ They do not replace installing NeMo Relay packages, configuring runtime
 plugins, or validating emitted events.
 </Card>
 </CardGroup>
-
-## Find the Right Starting Point
-
-Start with the fastest path that can prove Relay is working, then move toward
-more involved integration and development workflows only when you need them.
-
-- **Try now with the CLI:** Use [NeMo Relay CLI](/nemo-relay-cli/about) when a
-  local Claude Code or Codex coding-agent harness owns invocation.
-  Relay can observe hooks, gateway-routed model traffic, and exporter output
-  without changing application code.
-- **Use Hermes Agent's native integration:** NeMo Relay is built into Hermes
-  Agent, and Hermes Agent understands NeMo Relay plugin configurations. No
-  separate Relay installation, observability plugin, or Relay CLI setup is
-  required.
-- **Use a supported integration:** Start with
-  [Supported Integrations](/supported-integrations/about) when LangChain,
-  LangGraph, Deep Agents, or OpenClaw already owns scheduling, callbacks, tool
-  execution, provider payloads, or agent lifecycle hooks.
-- **Instrument application-owned calls:** Start with
-  [Quick Start](/getting-started/quick-start), then use
-  [Instrument Applications](/instrument-applications/about) when your Python,
-  Node.js, or Rust application owns the tool or LLM call site.
-- **Build a custom framework or provider integration:** Use
-  [Integrate into Frameworks](/integrate-into-frameworks/about) when a new
-  framework, orchestration layer, SDK, or provider adapter owns scheduling,
-  retries, callbacks, and provider payloads.
-- **Package reusable runtime behavior:** Use
-  [Build Plugins](/build-plugins/about) for shared middleware, subscribers,
-  exporters, model pricing, policy, or adaptive behavior. Use
-  [Observability](/configure-plugins/observability/about) for export setup and
-  [Adaptive](/configure-plugins/adaptive/about) after baseline instrumentation
-  is working.
-
-## Getting Started Process
-
-Use the pages in this section in order when you are setting up Relay for the
-first time:
-
-1. Review [Prerequisites](/getting-started/prerequisites) for language,
-   package, and repository tooling.
-2. Use [Installation](/getting-started/installation) to install the CLI,
-   language binding, or integration package that matches your boundary.
-3. Use [Configuration](/getting-started/configuration) when you need runtime,
-   plugin, observability, or adaptive setup guidance.
-4. Use [Quick Start](/getting-started/quick-start) to run the smallest
-   working path and confirm Relay emits the expected output.
-
-If you need the conceptual model before setup, read
-[Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer) and
-[Concepts](/about-nemo-relay/concepts).

@@ -14,7 +14,7 @@ failures, duplicate events, or sensitive telemetry, start with the
 
 ## Package Or Build Setup Fails
 
-Confirm that your environment matches [Prerequisites](/getting-started/prerequisites), then rerun the binding-specific setup command from [Installation](/getting-started/installation).
+For a published package, check its requirements in [Installation](/getting-started/installation). For a source build, check [Development Setup](/contribute/development-setup) before rerunning the failing command.
 
 If a command worked previously and now fails, check whether a toolchain update changed the active Rust, Python, Node.js, or Go version. Recreate generated artifacts after switching versions, especially Python virtual environments, Node.js `node_modules`, and Go build caches.
 
@@ -37,7 +37,7 @@ uv sync
 uv run pytest python/tests/test_types.py
 ```
 
-Confirm that Python satisfies the supported version from [Prerequisites](/getting-started/prerequisites). If multiple Python installations are available, make sure the `uv` environment is the one running the test or application process.
+Confirm that Python is 3.11 or newer. If multiple Python installations are available, make sure the `uv` environment is the one running the test or application process.
 
 ## Node.js Native Addon Does Not Load
 
