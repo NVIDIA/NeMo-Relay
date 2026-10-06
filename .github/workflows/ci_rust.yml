@@ -157,7 +157,11 @@ jobs:
             export AWS_ALLOW_HTTP=true
             export AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
           fi
-          just "${args[@]}" test-rust
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            pwsh -NoProfile -File .github/scripts/run-windows-tests.ps1 just "${args[@]}" test-rust
+          else
+            just "${args[@]}" test-rust
+          fi
 
       - name: Upload Rust coverage to Codecov
         if: ${{ matrix.platform != 'windows-arm64' }}

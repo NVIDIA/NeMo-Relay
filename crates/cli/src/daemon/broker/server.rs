@@ -43,10 +43,11 @@ use crate::daemon::common::address::{daemon_url, validate_bind_ip};
 use crate::daemon::common::control::{
     ACTIVATION_LIFETIME_MS, ActivationFailedPayload, CHALLENGE_LIFETIME_MS, CLIENT_TOKEN_HEADER,
     ChallengeRequest, ChallengeResponse, DRAIN_LIFETIME_MS, EmptyPayload, MAX_CONTROL_BODY_BYTES,
-    McpRegisterRequest, McpRegisterResponse, RECOVERY_LIFETIME_MS, SessionRequest,
-    WORKER_PROBE_PATH, WORKER_ROUTE_FAILURE_HEADER, WORKER_TOKEN_HEADER, WorkerDrainRequest,
-    WorkerGenerationGrant, WorkerNetworkHint, WorkerReadyPayload, WorkerRecoverRequest,
-    WorkerRegisterRequest, WorkerRegisterResponse, now_unix_ms, random_secret,
+    McpRegisterRequest, McpRegisterResponse, RECOVERY_LIFETIME_MS, ROUTE_CREDENTIAL_REJECTED_CODE,
+    SessionRequest, WORKER_PROBE_PATH, WORKER_ROUTE_FAILURE_HEADER, WORKER_TOKEN_HEADER,
+    WorkerDrainRequest, WorkerGenerationGrant, WorkerNetworkHint, WorkerReadyPayload,
+    WorkerRecoverRequest, WorkerRegisterRequest, WorkerRegisterResponse, now_unix_ms,
+    random_secret,
 };
 use crate::daemon::common::identity::{
     ChallengeId, ChallengeRecord, Fingerprint, MachineIdentity, TokenDigest,
@@ -67,7 +68,6 @@ use crate::daemon::common::transport::{
 use crate::daemon::common::worker_tls::WorkerClientPool;
 use crate::error::CliError;
 
-const RESPONSE_HEAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_PENDING_CHALLENGES: usize = 512;
 const MAX_PENDING_MCP_CHALLENGES: usize = 384;
@@ -125,8 +125,13 @@ struct WorkerControlSession {
 
 #[derive(Clone)]
 enum WorkerPublication {
-    Activation { activation_id: String },
-    Recovery { permit: RecoveryPermit },
+    Activation {
+        activation_id: String,
+    },
+    Recovery {
+        permit: RecoveryPermit,
+        launch_activation_id: Option<String>,
+    },
 }
 
 mod socket;
@@ -166,7 +171,9 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
     let sockets = socket::Hub::restarting(restarting_workers);
     let state = Arc::new(DaemonState {
         sockets,
-        registry: Registry::new(options.pass_through),
+        registry: Registry::new(options.pass_through)
+            .with_require_worker(options.require_worker)
+            .with_max_tokens_per_identity(options.max_tokens_per_identity),
         identity: load_or_create_daemon_identity()?,
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: uuid::Uuid::now_v7().to_string(),
@@ -503,13 +510,41 @@ fn reserve_worker_session_slot(
         < capacity
 }
 
+/// Run publication-fenced control transitions without parking Tokio runtime threads.
+async fn blocking_control(
+    transition: impl FnOnce() -> Response<Body> + Send + 'static,
+) -> Response<Body> {
+    tokio::task::spawn_blocking(transition)
+        .await
+        .unwrap_or_else(|error| {
+            control_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                CliError::Launch(format!("broker control transition task failed: {error}")),
+            )
+        })
+}
+
 async fn register_mcp(
     State(state): State<Arc<DaemonState>>,
     headers: HeaderMap,
     Json(request): Json<McpRegisterRequest>,
 ) -> Response<Body> {
+    blocking_control(move || register_mcp_blocking(State(state), headers, Json(request))).await
+}
+
+fn register_mcp_blocking(
+    State(state): State<Arc<DaemonState>>,
+    headers: HeaderMap,
+    Json(request): Json<McpRegisterRequest>,
+) -> Response<Body> {
     let credential = match public_credential(&headers) {
-        Ok(credential) => credential,
+        Ok(Some(credential)) => credential,
+        Ok(None) => {
+            return control_message(
+                StatusCode::UNAUTHORIZED,
+                "exactly one route credential is required",
+            );
+        }
         Err(response) => return response,
     };
     let transcript = &request.proof.transcript;
@@ -576,7 +611,8 @@ async fn register_mcp(
         Err(response) => return response,
     };
     // Enrollment is open to reachable clients with a valid identity proof. The registry binds
-    // this credential digest to that fingerprint and rejects attempts to rebind either side.
+    // this credential digest to that fingerprint's route, never rebinding a bound digest, and
+    // admits a bounded number of distinct tokens per fingerprint.
     let directive = match state.registry.register_mcp(
         McpRegistration {
             fingerprint: transcript.initiator_fingerprint,
@@ -587,7 +623,19 @@ async fn register_mcp(
         launch,
     ) {
         Ok(directive) => directive,
-        Err(error) => return registry_error(error),
+        Err(error) => {
+            if error == RegistryError::RouteTokenLimitReached {
+                let fingerprint = transcript.initiator_fingerprint.to_string();
+                log::warn!(
+                    target: "nemo_relay.daemon",
+                    event = "mcp_registration_rejected",
+                    fingerprint = fingerprint.as_str(),
+                    reason = "route_token_limit_reached";
+                    "Rejected a new client token for an identity that holds the maximum number of route tokens"
+                );
+            }
+            return registry_error(error);
+        }
     };
     if reuse_session {
         let session = sessions
@@ -667,6 +715,13 @@ async fn release_mcp(
     State(state): State<Arc<DaemonState>>,
     Json(request): Json<SessionRequest<EmptyPayload>>,
 ) -> Response<Body> {
+    blocking_control(move || release_mcp_blocking(State(state), Json(request))).await
+}
+
+fn release_mcp_blocking(
+    State(state): State<Arc<DaemonState>>,
+    Json(request): Json<SessionRequest<EmptyPayload>>,
+) -> Response<Body> {
     let authenticated = match authenticate_mcp(&state, &request, None) {
         Ok(authenticated) => authenticated,
         Err(response) => return response,
@@ -681,6 +736,10 @@ async fn release_mcp(
     if authenticated.duplicate {
         return StatusCode::NO_CONTENT.into_response();
     }
+    // Wait for durable publication before taking a route gate used by async handlers.
+    let _publication = lock(&state.worker_generation_publication);
+    let gate = state.sockets.route_gate(authenticated.fingerprint);
+    let _route = lock(&gate);
     if let Some(session) = lock(&state.mcp_sessions).get_mut(authenticated.session_id.as_str()) {
         session.released = true;
     }
@@ -706,7 +765,55 @@ async fn release_mcp(
     StatusCode::NO_CONTENT.into_response()
 }
 
+async fn cancel_activation(
+    State(state): State<Arc<DaemonState>>,
+    Json(request): Json<SessionRequest<crate::daemon::common::control::CancelActivationPayload>>,
+) -> Response<Body> {
+    blocking_control(move || cancel_activation_blocking(State(state), Json(request))).await
+}
+
+fn cancel_activation_blocking(
+    State(state): State<Arc<DaemonState>>,
+    Json(request): Json<SessionRequest<crate::daemon::common::control::CancelActivationPayload>>,
+) -> Response<Body> {
+    let authenticated = match authenticate_mcp(&state, &request, None) {
+        Ok(authenticated) => authenticated,
+        Err(response) => return response,
+    };
+    if request.payload.activation_id.len() > 128 || authenticated.released {
+        return control_message(StatusCode::BAD_REQUEST, "invalid activation cancellation");
+    }
+    // This runs on the blocking pool and fences cancellation against durable publication.
+    let _publication = lock(&state.worker_generation_publication);
+    match state.registry.cancel_activation(
+        authenticated.fingerprint,
+        &authenticated.session_id,
+        &request.payload.activation_id,
+    ) {
+        Ok(outcome) => {
+            if outcome == crate::daemon::common::control::ActivationCancellation::Cancelled {
+                revoke_activation(&state, &request.payload.activation_id);
+                cancel_staged_activation(
+                    &state,
+                    &request.payload.activation_id,
+                    "activation_cancelled",
+                );
+            }
+            state.sockets.changed.notify_waiters();
+            Json(outcome).into_response()
+        }
+        Err(error) => registry_error(error),
+    }
+}
+
 async fn activation_failed(
+    State(state): State<Arc<DaemonState>>,
+    Json(request): Json<SessionRequest<ActivationFailedPayload>>,
+) -> Response<Body> {
+    blocking_control(move || activation_failed_blocking(State(state), Json(request))).await
+}
+
+fn activation_failed_blocking(
     State(state): State<Arc<DaemonState>>,
     Json(request): Json<SessionRequest<ActivationFailedPayload>>,
 ) -> Response<Body> {
@@ -726,21 +833,28 @@ async fn activation_failed(
     if authenticated.duplicate {
         return StatusCode::NO_CONTENT.into_response();
     }
+    let _publication = lock(&state.worker_generation_publication);
     match state
         .registry
         .mark_activation_failed(authenticated.fingerprint, &request.payload.activation_id)
     {
         Ok(()) => {
             revoke_activation(&state, &request.payload.activation_id);
+            cancel_staged_activation(&state, &request.payload.activation_id, "activation_failed");
             let fingerprint = authenticated.fingerprint.to_string();
             log::error!(
                 target: "nemo_relay.daemon",
                 event = "worker_activation_failed",
                 fingerprint = fingerprint.as_str(),
                 route_mode = "pass_through",
-                failure_reason = request.payload.failure_reason.as_str();
+                failure_reason = request.payload.failure_reason.as_str(),
+                retry_after_ms = state.registry.activation_retry(authenticated.fingerprint).1;
+
                 "Worker activation failed; route changed to pass-through"
             );
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(RegistryError::ActivationMismatch | RegistryError::InvalidState { .. }) => {
             StatusCode::NO_CONTENT.into_response()
         }
         Err(error) => registry_error(error),
@@ -748,6 +862,13 @@ async fn activation_failed(
 }
 
 async fn register_worker(
+    State(state): State<Arc<DaemonState>>,
+    Json(request): Json<WorkerRegisterRequest>,
+) -> Response<Body> {
+    blocking_control(move || register_worker_blocking(State(state), Json(request))).await
+}
+
+fn register_worker_blocking(
     State(state): State<Arc<DaemonState>>,
     Json(request): Json<WorkerRegisterRequest>,
 ) -> Response<Body> {
@@ -760,6 +881,7 @@ async fn register_worker(
         Ok(proof) => proof,
         Err(response) => return response,
     };
+    let _publication = lock(&state.worker_generation_publication);
     let now = now_unix_ms();
     let (activation_fingerprint, replay) = {
         let mut activations = lock(&state.activations);
@@ -939,8 +1061,18 @@ fn recover_worker_after_validation(
         Ok(permit) => permit,
         Err(error) => return registry_error(error),
     };
-    let publication = WorkerPublication::Recovery { permit };
     let generation_id = request.generation_grant.generation_id.clone();
+    let launch_activation_id = match state
+        .active_worker_generations
+        .launch_activation_id(fingerprint, &generation_id)
+    {
+        Ok(activation_id) => activation_id,
+        Err(error) => return control_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    let publication = WorkerPublication::Recovery {
+        permit,
+        launch_activation_id,
+    };
     let worker_id = request.worker_id;
     let response = stage_worker(
         &state,
@@ -1299,10 +1431,11 @@ fn publish_ready_worker(
                     "worker activation is no longer current",
                 );
             }
-            match state
-                .active_worker_generations
-                .publish(fingerprint, &generation_id)
-            {
+            match state.active_worker_generations.publish(
+                fingerprint,
+                &generation_id,
+                Some(activation_id),
+            ) {
                 Ok(previous) => previous,
                 Err(error) => {
                     fail_worker_publication(&state, fingerprint, &publication);
@@ -1338,11 +1471,15 @@ fn publish_ready_worker(
             .registry
             .mark_worker_ready(fingerprint, activation_id, Arc::clone(&target))
             .map(|()| Some(activation_id.clone())),
-        WorkerPublication::Recovery { permit } => {
-            state
-                .registry
-                .publish_recovered_worker(fingerprint, permit, Arc::clone(&target))
-        }
+        WorkerPublication::Recovery {
+            permit,
+            launch_activation_id,
+        } => state.registry.publish_recovered_worker(
+            fingerprint,
+            permit,
+            launch_activation_id.as_deref(),
+            Arc::clone(&target),
+        ),
     };
     let canceled_activation = match publication_result {
         Ok(canceled_activation) => canceled_activation,
@@ -1351,7 +1488,7 @@ fn publish_ready_worker(
                 && let Err(restore_error) = state.active_worker_generations.restore_if_matches(
                     fingerprint,
                     &generation_id,
-                    previous_generation.as_deref(),
+                    previous_generation.as_ref(),
                 )
             {
                 log::error!(
@@ -1373,10 +1510,12 @@ fn publish_ready_worker(
         session.published = true;
         session.lease_expires_at_unix_ms = u64::MAX;
     }
+    let startup_elapsed_ms = state.registry.startup_elapsed_ms(fingerprint);
     let fingerprint = fingerprint.to_string();
     log::info!(
         target: "nemo_relay.daemon",
         event = "worker_added",
+        startup_elapsed_ms = startup_elapsed_ms,
         fingerprint = fingerprint.as_str(),
         worker_id = target.worker_id(),
         endpoint = target.endpoint(),
@@ -1399,9 +1538,9 @@ fn fail_worker_publication(
             .mark_activation_failed(fingerprint, activation_id)
             .ok()
             .map(|()| activation_id.clone()),
-        WorkerPublication::Recovery { .. } => state
+        WorkerPublication::Recovery { permit, .. } => state
             .registry
-            .mark_route_pass_through(fingerprint)
+            .mark_recovery_failed(fingerprint, permit)
             .ok()
             .flatten(),
     };
@@ -1460,6 +1599,14 @@ async fn public_proxy_inner(
         Ok(credential) => credential,
         Err(response) => return response,
     };
+    // `--require-worker` promises that no request bypasses a worker, so it keeps rejecting
+    // requests that cannot be attributed to a route.
+    if credential.is_none() && state.registry.requires_worker() {
+        return control_message(
+            StatusCode::UNAUTHORIZED,
+            "exactly one route credential is required",
+        );
+    }
     strip_public_relay_headers(request.headers_mut(), route);
     if responses_websocket_probe(&request) {
         return StatusCode::UPGRADE_REQUIRED.into_response();
@@ -1467,12 +1614,29 @@ async fn public_proxy_inner(
     if !public_method_allowed(request.method(), request.uri().path()) {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
-    let target = match state.registry.resolve_target(&credential.digest()) {
-        Ok(target) => target,
-        Err(ResolveError::UnknownToken) => {
-            return control_message(StatusCode::UNAUTHORIZED, "invalid route credential");
+    let (target, access) = match credential {
+        None => {
+            log_anonymous_pass_through(route, AnonymousReason::MissingCredential);
+            (ResolvedTarget::PassThrough, ProviderAccess::Anonymous)
         }
-        Err(ResolveError::Unavailable(_)) => return unavailable_response(),
+        Some(credential) => match state.registry.resolve_target(&credential.digest()) {
+            Ok(target) => (target, ProviderAccess::BoundRoute),
+            Err(ResolveError::UnknownToken) if !state.registry.requires_worker() => {
+                log_anonymous_pass_through(route, AnonymousReason::UnboundCredential);
+                (ResolvedTarget::PassThrough, ProviderAccess::Anonymous)
+            }
+            Err(ResolveError::UnknownToken) => {
+                return control_message(StatusCode::UNAUTHORIZED, "invalid route credential");
+            }
+            // A bound token whose route has no live MCP session (for example, a harness whose MCP
+            // exited during a daemon restart) passes through like an unbound token instead of
+            // returning 503 that harnesses retry indefinitely. Strict mode keeps the 503.
+            Err(ResolveError::Unavailable(_)) if !state.registry.requires_worker() => {
+                log_anonymous_pass_through(route, AnonymousReason::NoLiveSession);
+                (ResolvedTarget::PassThrough, ProviderAccess::Anonymous)
+            }
+            Err(ResolveError::Unavailable(_)) => return unavailable_response(),
+        },
     };
     match (target, route) {
         (ResolvedTarget::PassThrough, PublicRoute::Hook(hook)) => {
@@ -1483,7 +1647,18 @@ async fn public_proxy_inner(
             response
         }
         (ResolvedTarget::PassThrough, PublicRoute::Provider(provider)) => {
-            forward_to_provider(&state, request, provider).await
+            // A client-named upstream is honored only for a bound route. Anonymous pass-through
+            // would ignore it and send the caller's credential, meant for that upstream, to the
+            // configured provider instead, so fail closed until the route is bound again.
+            if access == ProviderAccess::Anonymous
+                && request
+                    .headers()
+                    .contains_key(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER)
+            {
+                log_named_upstream_without_route(provider);
+                return unavailable_response();
+            }
+            forward_to_provider(&state, request, provider, access).await
         }
         (ResolvedTarget::Worker(worker), _) => {
             if !worker.target().control_available() {
@@ -1517,9 +1692,10 @@ fn public_method_allowed(method: &Method, path: &str) -> bool {
 
 fn strip_public_relay_headers(headers: &mut HeaderMap, route: PublicRoute) {
     let keep_named_upstream = matches!(route, PublicRoute::Provider(_));
-    // This runs only after the public client credential has been authenticated. Preserve a valid
-    // forwarder-generated operation ID for hook requests so the worker shares that boundary's
-    // record. Provider requests always drop it before dispatch.
+    // This runs after the public credential header was validated or found absent. Preserve a
+    // valid forwarder-generated operation ID for hook requests so the worker shares that
+    // boundary's record; anonymous hooks never reach a worker. Provider requests always drop it
+    // before dispatch.
     let keep_hook_operation_id = matches!(route, PublicRoute::Hook(_))
         && headers
             .get(crate::operational::OPERATION_ID_HEADER)
@@ -1542,30 +1718,110 @@ fn strip_public_relay_headers(headers: &mut HeaderMap, route: PublicRoute) {
     }
 }
 
+/// Whether a pass-through provider request was attributed to a bound route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderAccess {
+    /// The request presented a credential bound to a registered route.
+    BoundRoute,
+    /// The request had no credential, or one no MCP session has bound.
+    Anonymous,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AnonymousReason {
+    MissingCredential,
+    UnboundCredential,
+    NoLiveSession,
+}
+
+impl AnonymousReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingCredential => "missing_credential",
+            Self::UnboundCredential => "unbound_credential",
+            Self::NoLiveSession => "no_live_session",
+        }
+    }
+}
+
+fn log_named_upstream_without_route(provider: ProviderRoute) {
+    static LIMITER: OnceLock<LogRateLimiter> = OnceLock::new();
+    let Some(suppressed_since_last_emit) = LIMITER
+        .get_or_init(|| LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL))
+        .record()
+    else {
+        return;
+    };
+    log::warn!(
+        target: "nemo_relay.daemon",
+        event = "public_request_named_upstream_rejected",
+        route = provider.as_str(),
+        reason = "no_bound_route",
+        suppressed_since_last_emit = suppressed_since_last_emit;
+        "Rejected a client-named upstream without a bound route credential"
+    );
+}
+
+fn log_anonymous_pass_through(route: PublicRoute, reason: AnonymousReason) {
+    static MISSING: OnceLock<LogRateLimiter> = OnceLock::new();
+    static UNBOUND: OnceLock<LogRateLimiter> = OnceLock::new();
+    static NO_LIVE_SESSION: OnceLock<LogRateLimiter> = OnceLock::new();
+    let limiter = match reason {
+        AnonymousReason::MissingCredential => &MISSING,
+        AnonymousReason::UnboundCredential => &UNBOUND,
+        AnonymousReason::NoLiveSession => &NO_LIVE_SESSION,
+    }
+    .get_or_init(|| LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL));
+    let Some(suppressed_since_last_emit) = limiter.record() else {
+        return;
+    };
+    let route_kind = match route {
+        PublicRoute::Hook(_) => "hook",
+        PublicRoute::Provider(provider) => provider.as_str(),
+    };
+    log::info!(
+        target: "nemo_relay.daemon",
+        event = "public_request_pass_through",
+        route = route_kind,
+        route_mode = "pass_through",
+        reason = reason.as_str(),
+        suppressed_since_last_emit = suppressed_since_last_emit;
+        "Public request has no bound route credential; using pass-through"
+    );
+}
+
 async fn forward_to_provider(
     state: &DaemonState,
     mut request: Request<Body>,
     route: ProviderRoute,
+    access: ProviderAccess,
 ) -> Response<Body> {
-    let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    let invocation_authenticated = access == ProviderAccess::BoundRoute;
+    // Daemon-held provider credentials (configured auth headers or the daemon's own API key
+    // environment) are only lent to requests attributed to a bound route, or to every request
+    // when the operator explicitly deployed the daemon in global pass-through mode.
+    let allow_environment_provider_auth = (invocation_authenticated || state.pass_through)
+        && crate::gateway::daemon_allows_environment_provider_auth(request.headers());
     let path_and_query = request
         .uri()
         .path_and_query()
         .map_or("/", |value| value.as_str());
-    let destination = match crate::gateway::daemon_provider_upstream_url(
+    let destination = match crate::gateway::daemon_provider_upstream_url_with_access(
         request.headers(),
         path_and_query,
         &state.config,
+        invocation_authenticated,
+        allow_environment_provider_auth,
     ) {
         Ok(Some(destination)) => destination,
         Ok(None) => route.upstream_url(&state.config, path_and_query),
         Err(error) => return error.into_response(),
     };
-    if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
+    if let Some(aligned) = crate::gateway::daemon_provider_forward_headers_with_access(
         request.headers(),
         request.uri().path(),
         &state.config,
+        allow_environment_provider_auth,
     ) {
         *request.headers_mut() = aligned;
     }
@@ -1575,7 +1831,15 @@ async fn forward_to_provider(
     if allow_environment_provider_auth {
         inject_provider_auth(request.headers_mut(), route, &state.config);
     }
-    let outcome = forward(&state.upstream, request, &destination, None, None).await;
+    let outcome = forward(
+        &state.upstream,
+        request,
+        &destination,
+        None,
+        None,
+        &state.config,
+    )
+    .await;
     if let Some(failure) = outcome.failure {
         log_upstream_request_failed(route, failure);
     }
@@ -1644,18 +1908,42 @@ async fn forward_to_worker(
         &destination,
         Some((HeaderName::from_static(WORKER_TOKEN_HEADER), token)),
         Some(worker),
+        &state.config,
     )
     .await;
     let route_failure = take_worker_route_failure(&mut outcome.response);
+    if matches!(outcome.failure, Some(ForwardFailure::ResponseHeadTimeout)) && !route_failure {
+        // Middleware and provider work can delay headers while worker control stays healthy.
+        // A request deadline alone does not establish loss of the assigned worker.
+        let fingerprint = fingerprint.to_string();
+        log::warn!(
+            target: "nemo_relay.daemon",
+            event = "worker_request_failed",
+            fingerprint = fingerprint.as_str(),
+            worker_id = worker_id.as_str(),
+            reason = "response_head_timeout",
+            route_mode = "worker";
+            "Worker request timed out waiting for response headers"
+        );
+        return outcome.response;
+    }
     if outcome.failure.is_some() || route_failure {
-        handle_worker_communication_failure(&state, fingerprint, &worker_id);
+        let reason = outcome
+            .failure
+            .map_or("worker_route_rejected", ForwardFailure::as_str);
+        handle_worker_communication_failure(&state, fingerprint, &worker_id, reason);
         return outcome.response;
     }
     let (parts, body) = outcome.response.into_parts();
     let observed = ErrorObservedBody {
         body,
         on_error: Some(move || {
-            handle_worker_communication_failure(&state, fingerprint, &worker_id);
+            handle_worker_communication_failure(
+                &state,
+                fingerprint,
+                &worker_id,
+                "response_body_error",
+            );
         }),
     };
     Response::from_parts(parts, Body::new(observed))
@@ -1766,6 +2054,7 @@ async fn forward(
     destination: &str,
     authentication: Option<(HeaderName, String)>,
     hold: Option<WorkerRequest>,
+    config: &GatewayConfig,
 ) -> ForwardOutcome {
     let destination = match destination.parse::<Uri>() {
         Ok(destination) => destination,
@@ -1795,8 +2084,7 @@ async fn forward(
         };
         request.headers_mut().insert(name, value);
     }
-    let response = match tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, client.request(request)).await
-    {
+    let response = match config.wait_for_response(client.request(request)).await {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
             let response = control_error(StatusCode::BAD_GATEWAY, &error);
@@ -1848,38 +2136,19 @@ fn handle_worker_communication_failure(
     state: &Arc<DaemonState>,
     fingerprint: Fingerprint,
     worker_id: &str,
+    reason: &'static str,
 ) {
-    // Remove the session and copy its generation before scheduling durable work. No filesystem
-    // operation or publication mutex acquisition may happen on the body-polling thread.
-    let generation = lock(&state.worker_sessions)
-        .remove(worker_id)
-        .map(|session| (session.fingerprint, session.generation_grant.generation_id));
-    if let Some((fingerprint, generation_id)) = generation {
-        let state = Arc::clone(state);
-        tokio::spawn(async move {
-            if let Err(error) = tokio::task::spawn_blocking(move || {
-                revoke_active_worker_generation(&state, fingerprint, &generation_id);
-            })
-            .await
-            {
-                log::error!(
-                    target: "nemo_relay.daemon",
-                    event = "worker_generation_revocation_join_failed",
-                    error_kind = if error.is_panic() { "panic" } else { "cancelled" };
-                    "Worker generation revocation task failed after communication loss"
-                );
-            }
-        });
-    }
-    let Ok(canceled_activation) = state
+    if state
         .registry
         .mark_worker_communication_failed(fingerprint, worker_id)
-    else {
+        .is_err()
+    {
         return;
-    };
-    if let Some(activation_id) = canceled_activation {
-        revoke_activation(state, &activation_id);
     }
+    // Force control reconnect, retaining the assigned generation during its 30-second grace.
+    state
+        .sockets
+        .cancel_worker(worker_id, "worker_communication_failed");
     state.sockets.changed.notify_waiters();
     let fingerprint = fingerprint.to_string();
     log::error!(
@@ -1887,6 +2156,7 @@ fn handle_worker_communication_failure(
         event = "worker_communication_failed",
         fingerprint = fingerprint.as_str(),
         worker_id = worker_id,
+        reason = reason,
         route_mode = "pass_through";
         "Worker communication failed; route changed to pass-through"
     );
@@ -2033,14 +2303,12 @@ fn has_required_transport_capabilities(
 }
 
 fn fresh_launch(worker_network: WorkerNetworkHint) -> Result<WorkerLaunch, CliError> {
-    worker_network.validate()?;
-    let now = now_unix_ms();
     let loopback = worker_network.is_loopback();
     Ok(WorkerLaunch {
         activation_id: random_secret(16)?,
         activation_token: SensitiveString::new(random_secret(32)?)
             .map_err(|error| CliError::Launch(error.to_string()))?,
-        deadline_unix_ms: now.saturating_add(ACTIVATION_LIFETIME_MS),
+        deadline_unix_ms: u64::MAX,
         bind_ip: if loopback {
             Ipv4Addr::LOCALHOST
         } else {
@@ -2089,19 +2357,41 @@ fn revoke_activation(state: &DaemonState, activation_id: &str) {
     });
 }
 
-fn expire_activation_routes(state: &DaemonState, now_unix_ms: u64) {
+/// Release terminal activations immediately instead of retaining staged admission slots.
+fn cancel_staged_activation(state: &Arc<DaemonState>, activation_id: &str, reason: &'static str) {
+    let workers = {
+        let mut sessions = lock(&state.worker_sessions);
+        let ids: Vec<_> = sessions
+            .iter()
+            .filter(|(_, session)| {
+                !session.published && matches!(&session.publication, WorkerPublication::Activation { activation_id: staged }
+                    if staged == activation_id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| sessions.remove(&id).map(|session| (id, session)))
+            .collect::<Vec<_>>()
+    };
+    for (id, session) in workers {
+        state.sockets.cancel_worker(&id, reason);
+        tokio::spawn(socket::cleanup_worker_session(
+            Arc::clone(state),
+            id,
+            session,
+        ));
+    }
+}
+
+fn expire_activation_routes(state: &Arc<DaemonState>, now_unix_ms: u64) {
+    let _publication = lock(&state.worker_generation_publication);
     for ExpiredActivation {
         fingerprint,
         activation_id,
     } in state.registry.expire_activations(now_unix_ms)
     {
         revoke_activation(state, &activation_id);
-        let workers: Vec<_> = lock(&state.worker_sessions).iter().filter(|(_, session)| {
-            matches!(&session.publication, WorkerPublication::Activation { activation_id: staged } if *staged == activation_id)
-        }).map(|(id, _)| id.clone()).collect();
-        for worker in workers {
-            state.sockets.cancel_worker(&worker);
-        }
+        cancel_staged_activation(state, &activation_id, "activation_expired");
         state.sockets.changed.notify_waiters();
         let fingerprint = fingerprint.to_string();
         log::error!(
@@ -2119,6 +2409,7 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
         ReleaseAction::NoChange => {}
         ReleaseAction::CancelActivation { activation_id } => {
             revoke_activation(&state, &activation_id);
+            cancel_staged_activation(&state, &activation_id, "activation_cancelled");
             let fingerprint = fingerprint.to_string();
             log::info!(
                 target: "nemo_relay.daemon",
@@ -2161,7 +2452,15 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
                     let now = now_unix_ms();
                     if target.in_flight() == 0 || now >= deadline_unix_ms {
                         let forced = target.in_flight() != 0;
-                        match state.registry.finish_draining(fingerprint, now) {
+                        match state.registry.finish_draining_worker(
+                            fingerprint,
+                            target.worker_id(),
+                            now,
+                        ) {
+                            Ok(
+                                super::registry::DrainCompletion::AlreadyRemoved
+                                | super::registry::DrainCompletion::Superseded,
+                            ) => {}
                             Ok(_) => {
                                 let fingerprint = fingerprint.to_string();
                                 log::info!(
@@ -2186,16 +2485,6 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             });
-        }
-        ReleaseAction::TransferActivation {
-            session_id,
-            directive,
-        } => {
-            lock(&state.pending_directives).insert(session_id.as_str().to_owned(), directive);
-            state.sockets.changed.notify_waiters();
-        }
-        ReleaseAction::NominateMcp { session_id } => {
-            nominate_relaunch(&state, fingerprint, session_id);
         }
     }
 }
@@ -2243,6 +2532,11 @@ fn revoke_active_worker_generation(
 }
 
 fn nominate_relaunch(state: &Arc<DaemonState>, fingerprint: Fingerprint, session_id: McpSessionId) {
+    let gate = state.sockets.route_gate(fingerprint);
+    let _route = lock(&gate);
+    if !state.sockets.mcp_connected(session_id.as_str()) {
+        return;
+    }
     let fingerprint_text = fingerprint.to_string();
     let worker_network = lock(&state.mcp_sessions)
         .get(session_id.as_str())
@@ -2297,6 +2591,7 @@ fn nominate_relaunch(state: &Arc<DaemonState>, fingerprint: Fingerprint, session
     log::info!(
         target: "nemo_relay.daemon",
         event = "worker_relaunch_requested",
+        attempt = state.registry.activation_retry(fingerprint).0,
         fingerprint = fingerprint_text.as_str(),
         mcp_session_id = session_id.as_str();
         "A live MCP session was asked to relaunch the worker"
@@ -2324,8 +2619,6 @@ fn release_action_name(action: &ReleaseAction) -> &'static str {
         ReleaseAction::NoChange => "route_retained",
         ReleaseAction::CancelActivation { .. } => "cancel_activation",
         ReleaseAction::BeginDrain { .. } => "begin_worker_drain",
-        ReleaseAction::TransferActivation { .. } => "transfer_activation",
-        ReleaseAction::NominateMcp { .. } => "nominate_relaunch",
     }
 }
 
@@ -2369,9 +2662,29 @@ fn spawn_maintenance(state: Arc<DaemonState>) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let now = now_unix_ms();
-            expire_activation_routes(&state, now);
-            lock(&state.activations).retain(|_, activation| activation.deadline_unix_ms > now);
+            let work = Arc::clone(&state);
+            if let Err(error) = tokio::task::spawn_blocking(move || {
+                let now = now_unix_ms();
+                expire_activation_routes(&work, now);
+                for (fingerprint, elapsed_ms) in work
+                    .registry
+                    .activation_progress(tokio::time::Instant::now())
+                {
+                    let fingerprint = fingerprint.to_string();
+                    log::info!(target: "nemo_relay.daemon", event = "worker_startup_pending",
+                    fingerprint = fingerprint.as_str(), elapsed_ms = elapsed_ms;
+                    "Worker startup is still in progress");
+                }
+                for (fingerprint, session_id) in work.registry.activation_candidates(now) {
+                    nominate_relaunch(&work, fingerprint, session_id);
+                }
+                lock(&work.activations).retain(|_, activation| activation.deadline_unix_ms > now);
+            })
+            .await
+            {
+                log::error!(target: "nemo_relay.daemon", event = "worker_maintenance_failed";
+                    "Worker maintenance task failed: {error}");
+            }
         }
     });
 }
@@ -2393,14 +2706,20 @@ fn prune_expired_mcp_control_state(
     }
 }
 
+/// Returns the single public route credential, `None` when the header is absent, or a 401 for a
+/// malformed or repeated header.
 #[allow(clippy::result_large_err)]
-fn public_credential(headers: &HeaderMap) -> Result<RouteCredential, Response<Body>> {
+fn public_credential(headers: &HeaderMap) -> Result<Option<RouteCredential>, Response<Body>> {
     let values = headers.get_all(CLIENT_TOKEN_HEADER);
-    if values.iter().count() != 1 {
-        return Err(control_message(
-            StatusCode::UNAUTHORIZED,
-            "exactly one route credential is required",
-        ));
+    match values.iter().count() {
+        0 => return Ok(None),
+        1 => {}
+        _ => {
+            return Err(control_message(
+                StatusCode::UNAUTHORIZED,
+                "exactly one route credential is required",
+            ));
+        }
     }
     let value = values
         .iter()
@@ -2408,6 +2727,7 @@ fn public_credential(headers: &HeaderMap) -> Result<RouteCredential, Response<Bo
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| control_message(StatusCode::UNAUTHORIZED, "invalid route credential"))?;
     RouteCredential::parse(value.to_owned())
+        .map(Some)
         .map_err(|_| control_message(StatusCode::UNAUTHORIZED, "invalid route credential"))
 }
 
@@ -2668,8 +2988,17 @@ fn unavailable_response() -> Response<Body> {
 
 fn registry_error(error: RegistryError) -> Response<Body> {
     let status = match error {
-        RegistryError::TokenAlreadyBound | RegistryError::FingerprintTokenMismatch => {
-            StatusCode::UNAUTHORIZED
+        RegistryError::TokenAlreadyBound | RegistryError::RouteTokenLimitReached => {
+            // A definitive rejection: the client must serve without a route rather than retry.
+            // The token limit reuses this code so every client version treats it as final.
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": {
+                    "message": error.to_string(),
+                    "code": ROUTE_CREDENTIAL_REJECTED_CODE,
+                } })),
+            )
+                .into_response();
         }
         RegistryError::UnknownRoute | RegistryError::UnknownMcpSession => StatusCode::NOT_FOUND,
         RegistryError::RouteCapacityReached | RegistryError::McpReferenceCapacityReached => {

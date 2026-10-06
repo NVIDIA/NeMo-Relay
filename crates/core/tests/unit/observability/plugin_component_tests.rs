@@ -28,13 +28,289 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::Arc;
-#[cfg(feature = "atof-streaming")]
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
+
+#[test]
+fn signal_header_resolution_validates_environment_sources_and_preserves_file_references() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let variable = "NEMO_RELAY_TEST_SIGNAL_HEADER_SOURCE";
+    let _environment = EnvironmentGuard::capture([variable]);
+    let mut endpoint = test_signal_endpoint();
+    endpoint
+        .header_env
+        .insert("authorization".into(), variable.into());
+    unsafe {
+        std::env::remove_var(variable);
+    }
+    assert!(
+        resolve_signal_headers("metrics", 3, &endpoint)
+            .unwrap_err()
+            .to_string()
+            .contains("could not read environment variable")
+    );
+    for value in ["", " padded "] {
+        unsafe {
+            std::env::set_var(variable, value);
+        }
+        assert!(
+            resolve_signal_headers("metrics", 3, &endpoint)
+                .unwrap_err()
+                .to_string()
+                .contains("blank or padded environment variable")
+        );
+    }
+    unsafe {
+        std::env::set_var(variable, "Bearer secret");
+    }
+    endpoint
+        .headers
+        .insert("Authorization".into(), "inline".into());
+    assert!(
+        resolve_signal_headers("logs", 4, &endpoint)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot appear in both headers and header_env")
+    );
+    endpoint.headers.clear();
+    endpoint
+        .header_env
+        .insert("x-blank".into(), " PADDED_VARIABLE ".into());
+    assert!(
+        resolve_signal_headers("logs", 4, &endpoint)
+            .unwrap_err()
+            .to_string()
+            .contains("must name a nonblank environment variable")
+    );
+    endpoint.header_env.remove("x-blank");
+    let directory = tempfile::tempdir().unwrap();
+    let token_file = directory.path().join("token");
+    std::fs::write(&token_file, b"file-token").unwrap();
+    endpoint
+        .header_file
+        .insert("x-token".into(), token_file.to_string_lossy().into_owned());
+    let (headers, files) = resolve_signal_headers("metrics", 3, &endpoint).unwrap();
+    assert_eq!(headers["authorization"], "Bearer secret");
+    assert_eq!(files["x-token"], token_file.to_string_lossy());
+    endpoint.header_file.insert(
+        "Authorization".into(),
+        token_file.to_string_lossy().into_owned(),
+    );
+    assert!(resolve_signal_headers("logs", 4, &endpoint).is_err());
+}
+
+#[test]
+fn otel_endpoint_editor_defaults_are_typed_and_expose_editable_header_sources() {
+    let trace: OpenTelemetryEndpointConfig =
+        serde_json::from_value(default_opentelemetry_endpoint_editor_value()).unwrap();
+    let signal: OpenTelemetrySignalEndpointConfig =
+        serde_json::from_value(default_opentelemetry_signal_endpoint_editor_value()).unwrap();
+    assert_eq!(trace.service_name, "unknown_service");
+    assert_eq!(signal.service_name, trace.service_name);
+    assert_eq!(signal.timeout_millis, 3000);
+    for schema in [
+        OpenTelemetryEndpointConfig::editor_schema(),
+        OpenTelemetrySignalEndpointConfig::editor_schema(),
+    ] {
+        for name in [
+            "headers",
+            "header_env",
+            "header_file",
+            "resource_attributes",
+        ] {
+            assert_eq!(schema.field(name).unwrap().kind, EditorFieldKind::StringMap);
+        }
+        assert_eq!(
+            schema.field("transport").unwrap().enum_values,
+            &["http_binary", "grpc"]
+        );
+        assert!(schema.field("service_namespace").unwrap().optional);
+    }
+    let excluded = OpenTelemetryEndpointConfig::editor_schema()
+        .field("mark_exclude_names")
+        .unwrap();
+    assert_eq!(excluded.list_item.unwrap().kind, EditorFieldKind::String);
+}
+
+#[test]
+fn signal_endpoint_configuration_reaches_exported_log_and_metric_resources() {
+    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use opentelemetry_proto::tonic::common::v1::any_value::Value;
+    use prost::Message;
+
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let token_file = directory.path().join("token");
+    fs::write(&token_file, "file-token").unwrap();
+    let (log_endpoint, log_request) = start_otlp_capture_server();
+    let (metric_endpoint, metric_request) = start_otlp_capture_server();
+    let endpoint = |address: String| {
+        serde_json::from_value::<OpenTelemetrySignalEndpointConfig>(json!({
+            "endpoint": address,
+            "service_name": "coverage-service",
+            "service_namespace": "coverage-namespace",
+            "service_version": "test-version",
+            "instrumentation_scope": "coverage-signal-scope",
+            "headers": {"x-inline-token": "inline-token"},
+            "header_file": {"x-file-token": token_file.to_string_lossy()},
+            "resource_attributes": {"coverage.project": "relay"}
+        }))
+        .unwrap()
+    };
+    let logs = OpenTelemetryLogSubscriber::new(
+        build_log_config(
+            0,
+            endpoint(log_endpoint.replace("/v1/traces", "/v1/logs")),
+            &serde_json::from_value(json!({"enabled": true})).unwrap(),
+            LogSeverity::Info,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let metrics = OpenTelemetryMetricSubscriber::new(
+        build_metric_config(
+            0,
+            endpoint(metric_endpoint.replace("/v1/traces", "/v1/metrics")),
+            &serde_json::from_value(json!({"enabled": true})).unwrap(),
+            MetricTemporality::Cumulative,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    logs.subscriber()(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("coverage.log")
+            .data(json!({"message": "exported"}))
+            .build(),
+        None,
+        None,
+    )));
+    metrics.subscriber()(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("coverage.metric")
+            .data(json!({"measurements": [{
+                "name": "coverage.requests", "kind": "counter", "value_type": "u64", "value": 3
+            }]}))
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    )));
+    logs.shutdown().unwrap();
+    metrics.shutdown().unwrap();
+    let logs = ExportLogsServiceRequest::decode(
+        log_request
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .as_slice(),
+    )
+    .unwrap();
+    let metrics = ExportMetricsServiceRequest::decode(
+        metric_request
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .as_slice(),
+    )
+    .unwrap();
+    assert_eq!(logs.resource_logs[0].scope_logs[0].log_records.len(), 1);
+    assert_eq!(
+        metrics.resource_metrics[0].scope_metrics[0].metrics[0].name,
+        "coverage.requests"
+    );
+    assert_eq!(
+        logs.resource_logs[0].scope_logs[0]
+            .scope
+            .as_ref()
+            .unwrap()
+            .name,
+        "coverage-signal-scope"
+    );
+    assert_eq!(
+        metrics.resource_metrics[0].scope_metrics[0]
+            .scope
+            .as_ref()
+            .unwrap()
+            .name,
+        "coverage-signal-scope"
+    );
+    for resource in [
+        logs.resource_logs[0].resource.as_ref().unwrap(),
+        metrics.resource_metrics[0].resource.as_ref().unwrap(),
+    ] {
+        for (key, expected) in [
+            ("service.name", "coverage-service"),
+            ("service.namespace", "coverage-namespace"),
+            ("service.version", "test-version"),
+            ("coverage.project", "relay"),
+        ] {
+            let value = resource
+                .attributes
+                .iter()
+                .find(|attribute| attribute.key == key)
+                .unwrap();
+            assert_eq!(
+                value.value.as_ref().unwrap().value,
+                Some(Value::StringValue(expected.into()))
+            );
+        }
+    }
+}
+
+#[test]
+fn signal_validation_rejects_trace_types_and_invalid_resource_promotion_prefixes() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    for signal in ["logs", "metrics"] {
+        let mut section = json!({"enabled": true, "endpoints": [{
+            "endpoint": "http://collector.example/",
+            "type": "full",
+            "promote_resource_metadata_prefixes": [" padded "]
+        }]});
+        let config =
+            plugin_config(json!({"opentelemetry": {"enabled": true, signal: section.take()}}));
+        let report = test_validate_static_plugin_config(&config);
+        for field in [
+            "endpoints[0].type",
+            "endpoints[0].promote_resource_metadata_prefixes",
+        ] {
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.field.as_deref() == Some(field)),
+                "missing {signal}.{field}: {:?}",
+                report.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
+fn trace_validation_rejects_resource_promotion_prefixes_before_activation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
+        "opentelemetry": {"enabled": true, "endpoints": [{
+            "type": "full", "endpoint": "http://collector.example/v1/traces",
+            "promote_resource_metadata_prefixes": [""]
+        }]}
+    })));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.field.as_deref()
+                == Some("endpoints[0].promote_resource_metadata_prefixes"))
+    );
+}
 
 impl Drop for RestoreThreadScopeStackGuard {
     fn drop(&mut self) {
@@ -296,6 +572,201 @@ fn automatic_otel_exporter_is_added_to_configured_relay_endpoints() {
 }
 
 #[test]
+fn automatic_otel_global_headers_survive_skipped_configured_endpoints() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let (endpoint, captures) = start_http_capture_server(3);
+    let _environment = EnvironmentGuard::capture([
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+    ]);
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", &endpoint);
+        std::env::set_var("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json");
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "authorization=Bearer%20automatic-token",
+        );
+    }
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "gen_ai", "endpoint": endpoint}],
+            "logs": {"enabled": true},
+            "metrics": {"enabled": true}
+        }
+    }));
+    futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+    let agent = push_agent("automatic-header-regression");
+    crate::api::scope::event(
+        crate::api::scope::EmitMarkEventParams::builder()
+            .name("sample.log")
+            .data(json!({"message": "exported"}))
+            .build(),
+    )
+    .unwrap();
+    crate::api::scope::event(
+        crate::api::scope::EmitMarkEventParams::builder()
+            .name("sample")
+            .data(json!({"measurements": [{
+                "name": "sample.counter", "kind": "counter", "value_type": "u64", "value": 1
+            }]}))
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+    )
+    .unwrap();
+    pop(&agent);
+    flush_subscribers().unwrap();
+    crate::plugin::test_close_plugin_host().unwrap();
+    let requests = wait_for_captures(&captures, 3);
+    assert_eq!(requests.len(), 3);
+    for path in ["/v1/traces", "/v1/logs", "/v1/metrics"] {
+        let request = requests
+            .iter()
+            .find(|request| request.headers.contains(path))
+            .unwrap();
+        assert!(
+            request
+                .headers
+                .contains("authorization: Bearer automatic-token")
+        );
+        assert!(!request.body.contains("automatic-token"));
+    }
+}
+
+#[test]
+fn automatic_otel_malformed_percent_headers_skip_exporters_without_disclosing_credentials() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let generic = "OTEL_EXPORTER_OTLP_HEADERS";
+    let signal_headers = [
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+    ];
+    let _environment =
+        EnvironmentGuard::capture([endpoint, generic].into_iter().chain(signal_headers));
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(endpoint, "http://127.0.0.1:4318");
+        for variable in signal_headers {
+            std::env::remove_var(variable);
+        }
+    }
+    for malformed in ["%ZZ", "%", "%2", "%2Z"] {
+        // SAFETY: the observability mutex serializes test-only environment changes.
+        unsafe {
+            std::env::set_var(
+                generic,
+                format!("authorization=Bearer%20secret-token,x-bad={malformed}"),
+            );
+        }
+        let errors = [
+            OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin()
+                .err()
+                .unwrap(),
+            OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin()
+                .err()
+                .unwrap(),
+            OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin()
+                .err()
+                .unwrap(),
+        ];
+        for error in errors {
+            let message = error.to_string();
+            assert!(message.contains("malformed percent escape"));
+            assert!(!message.contains("secret-token"));
+            assert!(!message.contains(malformed));
+        }
+    }
+    reset_runtime();
+    let collector = TcpListener::bind("127.0.0.1:0").unwrap();
+    collector.set_nonblocking(true).unwrap();
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(
+            endpoint,
+            format!("http://{}", collector.local_addr().unwrap()),
+        );
+    }
+    futures::executor::block_on(test_initialize_plugin_host_exact(plugin_config(
+        json!({"version": 4}),
+    )))
+    .unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .is_empty()
+    );
+    let agent = push_agent("malformed-header-regression");
+    pop(&agent);
+    flush_subscribers().unwrap();
+    crate::plugin::test_close_plugin_host().unwrap();
+    assert!(
+        matches!(collector.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+}
+
+#[test]
+fn automatic_otel_signal_headers_override_generic_headers() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let endpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
+    let generic = "OTEL_EXPORTER_OTLP_HEADERS";
+    let signal_headers = [
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+    ];
+    let _environment =
+        EnvironmentGuard::capture([endpoint, generic].into_iter().chain(signal_headers));
+    for (generic_value, signal_value, accepted) in [
+        // Explicitly empty signal lists override malformed generic headers.
+        ("authorization=Bearer%20generic-token,x-bad=%ZZ", "", true),
+        // Malformed signal lists override valid generic headers and skip exporters.
+        (
+            "authorization=Bearer%20generic-token",
+            "authorization=Bearer%20signal-token,x-bad=%ZZ",
+            false,
+        ),
+    ] {
+        // SAFETY: the observability mutex serializes test-only environment changes.
+        unsafe {
+            std::env::set_var(endpoint, "http://127.0.0.1:4318");
+            std::env::set_var(generic, generic_value);
+            for variable in signal_headers {
+                std::env::set_var(variable, signal_value);
+            }
+        }
+        let results = [
+            OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin().map(drop),
+            OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin().map(drop),
+            OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin().map(drop),
+        ];
+        for (variable, result) in signal_headers.into_iter().zip(results) {
+            if accepted {
+                result.expect("empty signal headers must override malformed generic headers");
+            } else {
+                let message = result.unwrap_err().to_string();
+                assert!(message.contains(variable));
+                assert!(message.contains("malformed percent escape"));
+                assert!(!message.contains("generic-token"));
+                assert!(!message.contains("signal-token"));
+            }
+        }
+    }
+}
+
+#[test]
 fn disabled_opentelemetry_section_suppresses_automatic_exporters() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
@@ -342,14 +813,12 @@ fn enabled_empty_opentelemetry_section_allows_automatic_exporters() {
     crate::plugin::test_close_plugin_host().unwrap();
 }
 
-#[cfg(feature = "atof-streaming")]
 #[derive(Clone, Debug)]
 struct HttpCapture {
     headers: String,
     body: String,
 }
 
-#[cfg(feature = "atof-streaming")]
 fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec<HttpCapture>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -449,7 +918,6 @@ fn start_http_status_server(
     (url, server)
 }
 
-#[cfg(feature = "atof-streaming")]
 fn wait_for_captures(captures: &Arc<Mutex<Vec<HttpCapture>>>, expected: usize) -> Vec<HttpCapture> {
     for _ in 0..100 {
         let snapshot = captures.lock().unwrap().clone();
@@ -1710,6 +2178,70 @@ fn all_invalid_trace_batch_configs_still_block_activation() {
 }
 
 #[test]
+fn file_only_sink_directory_creation_failure_reports_the_file_error() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let directory = tempfile::tempdir().unwrap();
+    let not_a_directory = directory.path().join("not-a-directory");
+    fs::write(&not_a_directory, b"file").unwrap();
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "file_sinks": [{
+                "output_directory": not_a_directory,
+                "filename": "trace.jsonl"
+            }]
+        }
+    }));
+
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("file_sinks[0]"), "{message}");
+    assert!(message.contains("not-a-directory"), "{message}");
+    assert!(
+        message.contains("failed to create OTLP output directory"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("requires at least one valid trace, log, or metric endpoint"),
+        "{message}"
+    );
+}
+
+#[test]
+fn mixed_file_sink_directory_failure_is_reported_in_activation_diagnostics() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let directory = tempfile::tempdir().unwrap();
+    let not_a_directory = directory.path().join("not-a-directory");
+    fs::write(&not_a_directory, b"file").unwrap();
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://127.0.0.1:4318/v1/traces"
+            }],
+            "file_sinks": [{
+                "output_directory": not_a_directory,
+                "filename": "trace.jsonl"
+            }]
+        }
+    }));
+
+    let report = futures::executor::block_on(test_initialize_plugin_host_exact(config)).unwrap();
+
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.invalid_otel_file_sink"
+            && diagnostic.field.as_deref() == Some("file_sinks[0]")
+            && diagnostic.message.contains("not-a-directory")
+    }));
+    test_close_plugin_host().unwrap();
+}
+
+#[test]
 fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
     let mut context = PluginRegistrationContext::new();
     let error = register_opentelemetry(
@@ -1721,6 +2253,7 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
             metrics: None,
         },
         &mut context,
+        false,
     )
     .unwrap_err();
     assert!(error.to_string().contains("at least one endpoint"));
@@ -6422,6 +6955,7 @@ fn opentelemetry_registration_accepts_a_section_with_only_file_sinks() {
             metrics: None,
         },
         &mut context,
+        false,
     )
     .unwrap();
 
@@ -6456,6 +6990,7 @@ fn a_failed_signal_leaves_an_overwrite_file_sink_untouched() {
             metrics: None,
         },
         &mut context,
+        false,
     )
     .unwrap_err();
 
@@ -6476,6 +7011,7 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_and_file_sink_list() {
             metrics: None,
         },
         &mut context,
+        false,
     )
     .unwrap_err();
 
@@ -6748,6 +7284,7 @@ fn an_invalid_file_sink_is_skipped_while_the_others_register() {
             metrics: None,
         },
         &mut context,
+        false,
     )
     .unwrap();
 
@@ -6786,6 +7323,7 @@ fn file_sinks_register_even_when_the_environment_configures_automatic_signals() 
                 metrics: None,
             },
             &mut context,
+            false,
         )
         .unwrap();
         // A section carrying only file sinks is not empty, so an automatic
@@ -6860,4 +7398,71 @@ fn validate_opentelemetry_section_reports_file_sink_filename_and_batch_errors() 
             .iter()
             .any(|d| d.field.as_deref() == Some("file_sinks[1].max_queue_size"))
     );
+}
+
+#[test]
+fn metric_delivery_continues_after_a_panicking_or_skipped_endpoint() {
+    let delivered = Arc::new(AtomicUsize::new(0));
+    let remaining = Arc::clone(&delivered);
+    let callbacks: Vec<IndexedOpenTelemetryResource<MetricEventCallback>> = vec![
+        IndexedOpenTelemetryResource {
+            index: 0,
+            value: OpenTelemetryResource::Skipped("invalid endpoint".into()),
+        },
+        IndexedOpenTelemetryResource {
+            index: 1,
+            value: OpenTelemetryResource::Active(Arc::new(|_, _| {
+                panic!("metric endpoint failure")
+            })),
+        },
+        IndexedOpenTelemetryResource {
+            index: 2,
+            value: OpenTelemetryResource::Active(Arc::new(move |_, measurements| {
+                assert_eq!(measurements.len(), 1);
+                remaining.fetch_add(1, Ordering::Relaxed);
+            })),
+        },
+    ];
+    let event = reserved_metric_mark(
+        "1",
+        json!({"measurements": [{
+            "name": "calls", "kind": "counter", "value_type": "u64", "value": 1
+        }]}),
+    );
+    deliver_opentelemetry_event(&[], &[], &[], &callbacks, &AtomicU64::new(0), None, &event);
+    assert_eq!(delivered.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn signal_shutdown_distinguishes_delivery_failures_from_provider_failures() {
+    use crate::observability::otel::OpenTelemetryError;
+    assert!(signal_shutdown_issue(Ok(()), None).is_none());
+    let delivery = signal_shutdown_issue(
+        Err(OpenTelemetryError::ExporterBuild("provider stopped".into())),
+        Some("records lost".into()),
+    )
+    .unwrap();
+    match shutdown_failure_from_errors(vec![delivery]).unwrap() {
+        OpenTelemetryShutdownFailure::Delivery(error) => {
+            let message = error.to_string();
+            assert!(message.contains("records lost"));
+            assert!(message.contains("provider stopped"));
+        }
+        OpenTelemetryShutdownFailure::Other(_) => {
+            panic!("delivery failure must retain its classification")
+        }
+    }
+    let provider = signal_shutdown_issue(
+        Err(OpenTelemetryError::ExporterBuild("flush failed".into())),
+        None,
+    )
+    .unwrap();
+    match shutdown_failure_from_errors(vec![provider]).unwrap() {
+        OpenTelemetryShutdownFailure::Other(error) => {
+            assert!(error.to_string().contains("flush failed"))
+        }
+        OpenTelemetryShutdownFailure::Delivery(_) => {
+            panic!("provider failure must not imply lost records")
+        }
+    }
 }

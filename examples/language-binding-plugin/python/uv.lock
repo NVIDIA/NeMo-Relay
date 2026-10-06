@@ -37,7 +37,9 @@ requires-dist = [
     { name = "langgraph", marker = "extra == 'langchain'", specifier = ">=1.2.9,<2.0.0" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.2.9,<2.0.0" },
     { name = "langgraph-checkpoint", marker = "extra == 'langchain'", specifier = ">=4.1.1" },
+    { name = "langgraph-sdk", marker = "extra == 'langchain'", specifier = ">=0.4.4" },
     { name = "langsmith", marker = "extra == 'langchain'", specifier = ">=0.9.4" },
+    { name = "multidict", marker = "extra == 'langchain-nvidia'", specifier = ">=6.9.1" },
     { name = "nemo-relay", extras = ["langchain"], marker = "extra == 'langchain-nvidia'" },
     { name = "nemo-relay", extras = ["langchain"], marker = "extra == 'langgraph'" },
     { name = "nemo-relay", extras = ["langgraph"], marker = "extra == 'deepagents'" },
@@ -59,7 +61,9 @@ dev = [
     { name = "ruff", specifier = "~=0.11" },
     { name = "soupsieve", specifier = ">=2.9.0" },
     { name = "ty", specifier = ">=0.0.1a7" },
+    { name = "urllib3", specifier = ">=2.8.0" },
     { name = "uv", specifier = "~=0.11.0" },
+    { name = "virtualenv", specifier = ">=21.7.13" },
 ]
 test = [
     { name = "grpcio", marker = "(platform_machine != 'ARM64' and platform_machine != 'aarch64' and platform_machine != 'arm64') or sys_platform != 'win32'", specifier = ">=1.81.1,<2" },

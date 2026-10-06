@@ -3,6 +3,80 @@
 
 use super::*;
 
+#[test]
+fn endpoint_announcement_creates_parents_and_reports_conflicting_paths() {
+    let directory = std::env::temp_dir().join(format!(
+        "relay-worker-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let endpoint = "http://127.0.0.1:4317";
+    let path = directory.as_path().join("nested/endpoint.txt");
+    write_endpoint_file(&path, endpoint).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), endpoint);
+    let occupied = directory.as_path().join("occupied");
+    std::fs::write(&occupied, b"existing file").unwrap();
+    let error = write_endpoint_file(&occupied.join("endpoint.txt"), endpoint).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("failed to create worker endpoint file directory")
+    );
+    let error = write_endpoint_file(directory.as_path(), endpoint).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("failed to write worker endpoint file")
+    );
+    assert_eq!(std::fs::read(&occupied).unwrap(), b"existing file");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn worker_socket_cleanup_removes_only_socket_files() {
+    use std::os::unix::fs::symlink;
+    use std::os::unix::net::UnixListener;
+
+    let directory = std::env::temp_dir().join(format!(
+        "relay-worker-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let socket = directory.as_path().join("worker.sock");
+    remove_stale_socket(&socket).unwrap();
+    let listener = UnixListener::bind(&socket).unwrap();
+    drop(listener);
+    remove_stale_socket(&socket).unwrap();
+    assert!(!socket.exists());
+    let regular = directory.as_path().join("regular");
+    std::fs::write(&regular, b"preserved").unwrap();
+    let linked = directory.as_path().join("linked");
+    symlink(&regular, &linked).unwrap();
+    for path in [&regular, &linked, &directory] {
+        assert!(
+            remove_stale_socket(path)
+                .unwrap_err()
+                .to_string()
+                .contains("exists and is not a socket")
+        );
+    }
+    assert_eq!(std::fs::read(&regular).unwrap(), b"preserved");
+    assert!(
+        std::fs::symlink_metadata(linked)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 fn disconnected_runtime() -> PluginRuntime {
     PluginRuntime {
         activation_id: "activation".into(),

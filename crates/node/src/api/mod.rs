@@ -106,6 +106,9 @@ use crate::types::{
     ScopeStack, ScopeType, ToolExecutionResult, ToolHandle,
 };
 
+#[cfg(test)]
+mod llm_stack_tests;
+
 static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static NODE_ENVIRONMENT_LIFECYCLE_LOCK: StdMutex<()> = StdMutex::new(());
 
@@ -3740,7 +3743,9 @@ pub fn llm_call_execute(
                                 .codec_opt(codec)
                                 .response_codec_opt(response_codec)
                                 .build();
-                            core_llm_api::llm_call_execute(params)
+                            // Construct the large core future when Tokio polls this
+                            // bridge, keeping it out of the JavaScript caller's stack.
+                            Box::pin(core_llm_api::llm_call_execute(params))
                                 .await
                                 .map_err(to_napi_err)
                         })
@@ -3839,7 +3844,7 @@ pub fn llm_call_execute_async(
                                 .codec_opt(codec)
                                 .response_codec_opt(response_codec)
                                 .build();
-                            core_llm_api::llm_call_execute(params)
+                            Box::pin(core_llm_api::llm_call_execute(params))
                                 .await
                                 .map_err(to_napi_err)
                         })
@@ -3993,9 +3998,10 @@ pub fn llm_stream_call_execute(
                                 .codec_opt(codec)
                                 .response_codec_opt(response_codec)
                                 .build();
-                            let rust_stream = core_llm_api::llm_stream_call_execute(params)
-                                .await
-                                .map_err(to_napi_err)?;
+                            let rust_stream =
+                                Box::pin(core_llm_api::llm_stream_call_execute(params))
+                                    .await
+                                    .map_err(to_napi_err)?;
 
                             let (tx, rx) = tokio::sync::mpsc::channel(32);
                             let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
@@ -5533,7 +5539,7 @@ pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<J
                 async move {
                     TASK_SCOPE_STACK
                         .scope(scope_stack, async move {
-                            core_llm_api::llm_request_intercepts(&name, llm_request)
+                            Box::pin(core_llm_api::llm_request_intercepts(&name, llm_request))
                                 .await
                                 .map(|r| {
                                     serde_json::json!({

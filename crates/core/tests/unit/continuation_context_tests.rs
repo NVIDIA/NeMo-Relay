@@ -6,9 +6,12 @@ use crate::api::optimization::{
     LlmOptimizationRecorder, record_llm_optimization_contribution, scope_llm_optimization_recorder,
 };
 use crate::api::runtime::scope_stack::{
-    TASK_SCOPE_STACK, active_event_uuid, create_scope_stack, current_scope_stack,
-    with_active_event_uuid,
+    TASK_SCOPE_STACK, active_event_uuid, capture_thread_scope_stack, create_scope_stack,
+    current_scope_stack, restore_thread_scope_stack, snapshot_scope_stack,
+    sync_thread_active_event_for_stack, task_scope_push, task_scope_remove, with_active_event_uuid,
+    with_scope_stack,
 };
+use crate::api::scope::{ScopeHandle, ScopeType};
 use crate::codec::optimization::LlmOptimizationContribution;
 use crate::error::FlowError;
 use std::sync::Arc;
@@ -80,6 +83,48 @@ fn continuation_context_isolates_each_scope_stack_snapshot() {
         assert!(!Arc::ptr_eq(&first.scope_stack, &scope_stack));
         assert!(!Arc::ptr_eq(&second.scope_stack, &scope_stack));
         assert!(!Arc::ptr_eq(&first.scope_stack, &second.scope_stack));
+    });
+}
+
+#[test]
+fn continuation_context_preserves_the_managed_event_anchor_across_nested_scopes() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let scope_stack = create_scope_stack();
+        let managed_event_uuid = uuid::Uuid::now_v7();
+        TASK_SCOPE_STACK
+            .scope(
+                scope_stack,
+                with_active_event_uuid(managed_event_uuid, async {
+                    let context = MiddlewareContinuationContext::capture();
+                    let nested = ScopeHandle::builder()
+                        .name("plugin-a")
+                        .scope_type(ScopeType::Custom)
+                        .parent_uuid(managed_event_uuid)
+                        .build();
+                    let nested_uuid = nested.uuid;
+                    task_scope_push(nested);
+                    let invocation = context.isolated().unwrap();
+
+                    let observed_parent = invocation
+                        .run(async {
+                            let callback_stack =
+                                snapshot_scope_stack(&current_scope_stack()).unwrap();
+                            let previous_thread_binding = capture_thread_scope_stack();
+                            sync_thread_active_event_for_stack(&callback_stack);
+                            let parent = with_scope_stack(callback_stack, || {
+                                crate::api::shared::resolve_parent_uuid(None)
+                            });
+                            restore_thread_scope_stack(previous_thread_binding);
+                            parent
+                        })
+                        .await;
+
+                    task_scope_remove(&nested_uuid).unwrap();
+                    assert_eq!(observed_parent, Some(nested_uuid));
+                }),
+            )
+            .await;
     });
 }
 

@@ -192,6 +192,74 @@ describe('LLM lifecycle', () => {
 // ===========================================================================
 
 describe('LLM execute', () => {
+  it('runs LLM entry points on a small worker stack', () => {
+    // Isolate native stack overflows from the test runner. V8 needs more
+    // startup stack than Python, so use a 512 KiB worker stack here. This limits
+    // bridge construction on the JavaScript thread; native polling runs on Tokio
+    // threads and has separate coverage in api/llm_stack_tests.rs.
+    const workerSource = `
+      const assert = require('node:assert/strict');
+      const { parentPort } = require('node:worker_threads');
+      const lib = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});
+      const request = () => ({ headers: {}, content: { messages: [], model: 'test-model' } });
+
+      async function main() {
+        lib.registerLlmRequestIntercept('small-stack-intercept', 1, false, ({ request, annotated }) => {
+          request.content.intercepted = true;
+          return { request, annotated, pendingMarks: [{ name: 'small-stack-mark' }] };
+        });
+        try {
+          const intercepted = await lib.llmRequestIntercepts('small-stack-request', request());
+          assert.equal(intercepted.request.content.intercepted, true);
+          assert.equal(intercepted.pendingMarks[0].name, 'small-stack-mark');
+          assert.deepEqual(
+            await lib.llmCallExecute('small-stack-sync', request(), value => ({ ok: value.content.intercepted })),
+            { ok: true },
+          );
+          assert.deepEqual(
+            await lib.llmCallExecuteAsync('small-stack-async', request(), async value => {
+              await Promise.resolve();
+              return { ok: value.content.intercepted };
+            }),
+            { ok: true },
+          );
+          const stream = await lib.llmStreamCallExecute('small-stack-stream', request(), wrapper => {
+            assert.equal(wrapper.__nemo_relay_native.content.intercepted, true);
+            lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'hello' });
+            lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'world' });
+            lib.endStream(wrapper.__nemo_relay_stream_id);
+          });
+          assert.deepEqual(await stream.next(), { token: 'hello' });
+          assert.deepEqual(await stream.next(), { token: 'world' });
+          assert.equal(await stream.next(), null);
+          await stream.close();
+        } finally {
+          lib.deregisterLlmRequestIntercept('small-stack-intercept');
+        }
+      }
+      main().then(
+        () => parentPort.postMessage('done'),
+        error => { console.error(error); process.exitCode = 1; },
+      );
+    `;
+    const script = `
+      const assert = require('node:assert/strict');
+      const { Worker } = require('node:worker_threads');
+      const worker = new Worker(${JSON.stringify(workerSource)}, {
+        eval: true,
+        resourceLimits: { stackSizeMb: 0.5 },
+      });
+      let result;
+      worker.once('message', value => { result = value; });
+      worker.once('error', error => { throw error; });
+      worker.once('exit', code => {
+        assert.equal(code, 0);
+        assert.equal(result, 'done');
+      });
+    `;
+    execFileSync(process.execPath, ['--eval', script], { timeout: 30_000, stdio: 'pipe' });
+  });
+
   it('basic execute', async () => {
     const native = makeNative();
     const result = await llmCallExecute(

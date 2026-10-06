@@ -77,13 +77,28 @@ pub(crate) fn daemon_provider_upstream_url(
     path_and_query: &str,
     config: &crate::configuration::GatewayConfig,
 ) -> Result<Option<String>, CliError> {
+    daemon_provider_upstream_url_with_access(headers, path_and_query, config, true, true)
+}
+
+/// Resolves a daemon provider destination for a request with explicit access rights.
+///
+/// `invocation_authenticated` controls whether the client may name its own upstream.
+/// `allow_provider_auth` controls whether daemon-held provider credentials may replace the
+/// client's agent-native credential when selecting the upstream.
+pub(crate) fn daemon_provider_upstream_url_with_access(
+    headers: &HeaderMap,
+    path_and_query: &str,
+    config: &crate::configuration::GatewayConfig,
+    invocation_authenticated: bool,
+    allow_provider_auth: bool,
+) -> Result<Option<String>, CliError> {
     let path = path_and_query
         .split_once('?')
         .map_or(path_and_query, |(path, _)| path);
     let Some(provider) = ProviderRoute::from_path(path) else {
         return Ok(None);
     };
-    match client_named_upstream_url(provider, headers, path_and_query, true) {
+    match client_named_upstream_url(provider, headers, path_and_query, invocation_authenticated) {
         crate::agents::pi::alignment::NamedUpstream::Named(destination) => {
             if !crate::provider_auth::has_provider_credential(headers) {
                 return Err(CliError::InvalidPayload(
@@ -96,8 +111,14 @@ pub(crate) fn daemon_provider_upstream_url(
             Err(CliError::InvalidPayload(reason.to_owned()))
         }
         crate::agents::pi::alignment::NamedUpstream::Absent => Ok(Some(
-            gateway_upstream_url_override(provider, headers, path_and_query, true, config)
-                .unwrap_or_else(|| provider.upstream_url(config, path_and_query)),
+            gateway_upstream_url_override(
+                provider,
+                headers,
+                path_and_query,
+                allow_provider_auth,
+                config,
+            )
+            .unwrap_or_else(|| provider.upstream_url(config, path_and_query)),
         )),
     }
 }
@@ -108,11 +129,27 @@ pub(crate) fn daemon_provider_forward_headers(
     path: &str,
     config: &crate::configuration::GatewayConfig,
 ) -> Option<HeaderMap> {
+    daemon_provider_forward_headers_with_access(
+        headers,
+        path,
+        config,
+        daemon_allows_environment_provider_auth(headers),
+    )
+}
+
+/// Applies agent-auth replacement only when daemon-held provider credentials may be injected, so
+/// a request that will not receive a replacement keeps its own credential.
+pub(crate) fn daemon_provider_forward_headers_with_access(
+    headers: &HeaderMap,
+    path: &str,
+    config: &crate::configuration::GatewayConfig,
+    allow_provider_auth: bool,
+) -> Option<HeaderMap> {
     let provider = ProviderRoute::from_path(path)?;
     Some(strip_replaceable_agent_auth_headers(
         headers,
         provider,
-        daemon_allows_environment_provider_auth(headers),
+        allow_provider_auth,
         provider.configured_auth_header(config),
     ))
 }
@@ -297,7 +334,11 @@ async fn run_managed_gateway(
         );
         state
             .sessions
-            .finish_gateway_call(&session_id, session_finish)
+            .finish_gateway_call(
+                &session_id,
+                prep.owner_subagent_id.as_deref(),
+                session_finish,
+            )
             .await;
         return run_unmanaged_gateway(state, prepared, Some(operational)).await;
     }
@@ -467,18 +508,22 @@ async fn run_managed_buffered(
             let response_body = Body::from(response_json.to_string());
             state
                 .sessions
-                .record_gateway_response_hints(&session_id, owner_subagent_id, response_json)
+                .record_gateway_response_hints(
+                    &session_id,
+                    owner_subagent_id.clone(),
+                    response_json,
+                )
                 .await;
             state
                 .sessions
-                .finish_gateway_call(&session_id, session_finish)
+                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
                 .await;
             build_response(StatusCode::OK, headers, response_body)
         }
         Err(error) => {
             state
                 .sessions
-                .finish_gateway_call(&session_id, session_finish)
+                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
                 .await;
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
@@ -619,7 +664,11 @@ async fn run_managed_streaming(
         let session_finish = prep.session_finish;
         state
             .sessions
-            .finish_gateway_call(&prep.session_id, session_finish)
+            .finish_gateway_call(
+                &prep.session_id,
+                prep.owner_subagent_id.as_deref(),
+                session_finish,
+            )
             .await;
         return passthrough_streaming(state, prepared, Some(operational)).await;
     };
@@ -672,7 +721,7 @@ async fn run_managed_streaming(
         Err(error) => {
             state
                 .sessions
-                .finish_gateway_call(&session_id, session_finish)
+                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
                 .await;
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
@@ -997,11 +1046,11 @@ async fn complete_gateway_call(
 ) {
     if let Some(response) = response {
         sessions
-            .record_gateway_response_hints(&session_id, owner_subagent_id, response)
+            .record_gateway_response_hints(&session_id, owner_subagent_id.clone(), response)
             .await;
     }
     sessions
-        .finish_gateway_call(&session_id, session_finish)
+        .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
         .await;
 }
 

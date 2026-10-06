@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::ptr;
@@ -687,20 +688,24 @@ unsafe fn unary_trampoline_impl(
     let future = catch_unwind(AssertUnwindSafe(|| match (invocation, context) {
         (Ok(invocation), Ok(context)) => (state.adapter)(invocation, context, next, completion_ref),
         (Err(error), _) | (_, Err(error)) => Box::pin(async move { Err(error) }) as UnaryFuture,
-    }));
+    }))
+    .unwrap_or_else(|_| {
+        Box::pin(async move { Err("typed native middleware callback panicked".into()) })
+    });
+    let future: UnaryFuture = match binding {
+        Ok(binding) => Box::pin(ScopedFuture::new(future, binding)),
+        Err(error) => {
+            completion.reject(&error);
+            set_last_error(&state.host.0.v3.v1, &error);
+            return NemoRelayNativeAsyncCallbackState::Pending as u32;
+        }
+    };
     if let Err(error) = state.executor.ensure_started() {
         completion.reject(&error);
         set_last_error(&state.host.0.v3.v1, &error);
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
-    let task = match future {
-        Ok(future) => drive_unary(future, binding, completion),
-        Err(_) => drive_unary(
-            Box::pin(async move { Err("typed native middleware callback panicked".into()) }),
-            binding,
-            completion,
-        ),
-    };
+    let task = drive_unary(future, completion);
     if let Err(error) = state.executor.spawn(async move {
         let _ = task.await;
     }) {
@@ -713,17 +718,9 @@ unsafe fn unary_trampoline_impl(
 
 fn drive_unary(
     future: UnaryFuture,
-    binding: Result<ScopePollBinding>,
     completion: Completion,
 ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
     Box::pin(async move {
-        let future: UnaryFuture = match binding {
-            Ok(binding) => Box::pin(ScopedFuture::new(future, binding)),
-            Err(error) => {
-                completion.reject(&error);
-                return;
-            }
-        };
         let result = tokio::select! {
             result = AssertUnwindSafe(future).catch_unwind() => {
                 result.unwrap_or_else(|_| Err("typed native middleware future panicked".into()))
@@ -808,6 +805,24 @@ impl ScopePollBinding {
         let status = unsafe { (self.host.scope_stack_restore_thread)(previous) };
         status_result(status, "restore executor scope stack")
     }
+
+    fn drop_bound<T>(&mut self, value: &mut ManuallyDrop<T>) {
+        let Ok(previous) = self.enter() else {
+            // Host last-error state is thread-local, so writing it from this
+            // executor thread would not report the failure to the caller. The
+            // value must still be reclaimed even when its context cannot be
+            // installed during teardown.
+            // SAFETY: `value` is initialized once and only dropped here.
+            unsafe { ManuallyDrop::drop(value) };
+            return;
+        };
+        let mut restore = ScopePollRestore::new(self, previous);
+        // SAFETY: `value` is initialized once and only dropped here.
+        unsafe { ManuallyDrop::drop(value) };
+        // There is no caller-visible error channel from `Drop`; `exit` still
+        // makes its best effort to restore the executor's previous context.
+        let _ = restore.restore();
+    }
 }
 
 struct ScopePollRestore<'a> {
@@ -852,13 +867,16 @@ impl Drop for ScopePollBinding {
 }
 
 struct ScopedFuture<F> {
-    future: F,
+    future: ManuallyDrop<F>,
     binding: ScopePollBinding,
 }
 
 impl<F> ScopedFuture<F> {
     fn new(future: F, binding: ScopePollBinding) -> Self {
-        Self { future, binding }
+        Self {
+            future: ManuallyDrop::new(future),
+            binding,
+        }
     }
 }
 
@@ -873,20 +891,29 @@ impl<F: Future> Future for ScopedFuture<F> {
             .enter()
             .unwrap_or_else(|error| panic!("{error}"));
         let mut restore = ScopePollRestore::new(&mut this.binding, previous);
-        let result = unsafe { Pin::new_unchecked(&mut this.future) }.poll(cx);
+        let result = unsafe { Pin::new_unchecked(&mut *this.future) }.poll(cx);
         restore.restore().unwrap_or_else(|error| panic!("{error}"));
         result
     }
 }
 
+impl<F> Drop for ScopedFuture<F> {
+    fn drop(&mut self) {
+        self.binding.drop_bound(&mut self.future);
+    }
+}
+
 struct ScopedStream<S> {
-    stream: S,
+    stream: ManuallyDrop<S>,
     binding: ScopePollBinding,
 }
 
 impl<S> ScopedStream<S> {
     fn new(stream: S, binding: ScopePollBinding) -> Self {
-        Self { stream, binding }
+        Self {
+            stream: ManuallyDrop::new(stream),
+            binding,
+        }
     }
 }
 
@@ -901,9 +928,15 @@ impl<S: Stream> Stream for ScopedStream<S> {
             .enter()
             .unwrap_or_else(|error| panic!("{error}"));
         let mut restore = ScopePollRestore::new(&mut this.binding, previous);
-        let result = unsafe { Pin::new_unchecked(&mut this.stream) }.poll_next(cx);
+        let result = unsafe { Pin::new_unchecked(&mut *this.stream) }.poll_next(cx);
         restore.restore().unwrap_or_else(|error| panic!("{error}"));
         result
+    }
+}
+
+impl<S> Drop for ScopedStream<S> {
+    fn drop(&mut self) {
+        self.binding.drop_bound(&mut self.stream);
     }
 }
 
@@ -1097,20 +1130,21 @@ unsafe extern "C" fn stream_trampoline(
     let future = future.unwrap_or_else(|_| {
         Box::pin(async move { Err("typed native stream callback panicked".into()) })
     });
+    let (future_binding, stream_binding) = match bindings {
+        Ok(bindings) => bindings,
+        Err(error) => {
+            output.reject_once(&error);
+            set_last_error(&state.host.0.v6.v5.v4.v3.v1, &error);
+            return NemoRelayNativeAsyncCallbackState::Pending as u32;
+        }
+    };
+    let future: StreamFuture = Box::pin(ScopedFuture::new(future, future_binding));
     if let Err(error) = state.executor.ensure_started() {
         output.reject_once(&error);
         set_last_error(&state.host.0.v6.v5.v4.v3.v1, &error);
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
     let task = async move {
-        let (future_binding, stream_binding) = match bindings {
-            Ok(bindings) => bindings,
-            Err(error) => {
-                output.reject(&error).await;
-                return;
-            }
-        };
-        let future: StreamFuture = Box::pin(ScopedFuture::new(future, future_binding));
         let stream = tokio::select! {
             result = AssertUnwindSafe(future).catch_unwind() => match result {
                 Ok(result) => result,

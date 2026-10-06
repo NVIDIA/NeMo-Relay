@@ -715,16 +715,21 @@ fn common_subagent_event_with_fallback(
 ) -> SubagentEvent {
     let session =
         common_session_event_with_fallback(payload, headers, kind, extractor, fallback_session_id);
-    let subagent_id = extractor
-        .subagent_id(payload, headers)
-        .unwrap_or_else(|| "subagent".to_string());
+    let source_id = extractor.subagent_id(payload, headers);
+    let mut metadata = session.metadata;
+    if source_id.is_none()
+        && let Some(metadata) = metadata.as_object_mut()
+    {
+        metadata.insert("subagent_id_generated".into(), json!(true));
+    }
+    let subagent_id = source_id.unwrap_or_else(|| "subagent".to_string());
     SubagentEvent {
         session_id: session.session_id,
         agent_kind: kind,
         event_name: session.event_name,
         subagent_id,
         payload: session.payload,
-        metadata: session.metadata,
+        metadata,
     }
 }
 
@@ -779,6 +784,11 @@ fn common_tool_event_with_fallback(
         .unwrap_or_else(|| "unknown_tool".to_string());
     let mut metadata = session.metadata;
     apply_mcp_tool_metadata(&mut metadata, kind, &tool_name);
+    if tool_call.tool_call_id.is_none()
+        && let Some(metadata) = metadata.as_object_mut()
+    {
+        metadata.insert("tool_call_id_generated".into(), json!(true));
+    }
     ToolEvent {
         session_id: session.session_id,
         agent_kind: kind,

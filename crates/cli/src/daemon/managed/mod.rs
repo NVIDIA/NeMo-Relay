@@ -19,7 +19,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::common::state::{ROUTE_TOKEN_ENV, RouteCredential};
+use super::common::client_token::{CredentialSource, client_token_path, resolve_route_credential};
+use super::common::state::ROUTE_TOKEN_ENV;
 use crate::error::CliError;
 
 pub(crate) const BUNDLE_FAMILY: &str = "nemo-relay-managed-v1";
@@ -154,6 +155,8 @@ impl ManagedBundleSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManagedBundleValidation {
     pub(crate) artifact_count: usize,
+    /// Route credential source; present when the managed environment was validated.
+    pub(crate) credential_source: Option<CredentialSource>,
     pub(crate) daemon_address: String,
     pub(crate) platform: ManagedPlatform,
     pub(crate) sha256: ManagedBundleDigest,
@@ -365,39 +368,71 @@ fn validate_bundle_files(
             "managed bundle SHA-256 mismatch: expected {expected_sha256}, calculated {sha256}"
         )));
     }
-    if validate_environment {
-        validate_managed_environment(&spec)?;
-    }
+    let credential_source = if validate_environment {
+        Some(validate_managed_environment(&spec)?)
+    } else {
+        None
+    };
     Ok(ManagedBundleValidation {
         artifact_count: expected.artifacts.len(),
+        credential_source,
         daemon_address: spec.daemon_address,
         platform: spec.platform,
         sha256,
     })
 }
 
-fn validate_managed_environment(spec: &ManagedBundleSpec) -> Result<(), CliError> {
-    let credential = RouteCredential::from_environment()?;
-    if !spec.agents.contains(&ManagedAgent::ClaudeCode) {
-        return Ok(());
+fn validate_managed_environment(spec: &ManagedBundleSpec) -> Result<CredentialSource, CliError> {
+    let Some(resolved) = resolve_route_credential() else {
+        let file = client_token_path().map_or_else(
+            || "the per-user client token file".to_owned(),
+            |path| path.display().to_string(),
+        );
+        return Err(CliError::Config(format!(
+            "managed daemon integration requires a route credential from {ROUTE_TOKEN_ENV} or {file}; run `nemo-relay daemon token ensure` as this user or contact the managed environment administrator"
+        )));
+    };
+    // The immutable v1 Pi extension reads only the environment and refuses to start without it.
+    if spec.agents.contains(&ManagedAgent::Pi) && resolved.source == CredentialSource::File {
+        return Err(CliError::Config(format!(
+            "managed Pi integration requires {ROUTE_TOKEN_ENV} in the Pi launch environment; the v1 Pi extension does not read the per-user client token file"
+        )));
     }
-    let custom_headers = std::env::var(CLAUDE_CUSTOM_HEADERS_ENV).map_err(|_| {
-        CliError::Config(format!(
-            "managed Claude Code integration requires {CLAUDE_CUSTOM_HEADERS_ENV}; enterprise bootstrap must derive it from {ROUTE_TOKEN_ENV}"
-        ))
-    })?;
+    if !spec.agents.contains(&ManagedAgent::ClaudeCode) {
+        return Ok(resolved.source);
+    }
+    let custom_headers = match std::env::var(CLAUDE_CUSTOM_HEADERS_ENV) {
+        Ok(value) => value,
+        // A present header must be checked even when it cannot be decoded.
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(CliError::Config(format!(
+                "{CLAUDE_CUSTOM_HEADERS_ENV} is set but is not valid Unicode"
+            )));
+        }
+        // A file-sourced credential cannot reach Claude Code model requests through the
+        // environment; those requests use daemon pass-through while hooks and MCP use the file.
+        Err(std::env::VarError::NotPresent) if resolved.source == CredentialSource::File => {
+            return Ok(resolved.source);
+        }
+        Err(std::env::VarError::NotPresent) => {
+            return Err(CliError::Config(format!(
+                "managed Claude Code integration requires {CLAUDE_CUSTOM_HEADERS_ENV}; enterprise bootstrap must derive it from {ROUTE_TOKEN_ENV}"
+            )));
+        }
+    };
     let matches = custom_headers
         .lines()
         .filter_map(|line| line.split_once(':'))
         .filter(|(name, _)| name.trim().eq_ignore_ascii_case(ROUTE_TOKEN_HEADER))
         .map(|(_, value)| value.trim())
         .collect::<Vec<_>>();
-    if matches.as_slice() != [credential.expose()] {
+    if matches.as_slice() != [resolved.credential.expose()] {
         return Err(CliError::Config(format!(
-            "{CLAUDE_CUSTOM_HEADERS_ENV} must contain exactly one {ROUTE_TOKEN_HEADER} header whose value matches {ROUTE_TOKEN_ENV}"
+            "{CLAUDE_CUSTOM_HEADERS_ENV} must contain exactly one {ROUTE_TOKEN_HEADER} header whose value matches the resolved route credential ({} source)",
+            resolved.source
         )));
     }
-    Ok(())
+    Ok(resolved.source)
 }
 
 fn render_bundle(spec: &ManagedBundleSpec) -> Result<RenderedBundle, CliError> {

@@ -28,6 +28,8 @@ pub(crate) const WORKER_TOKEN_HEADER: &str = "x-nemo-relay-worker-token";
 /// Private worker-to-daemon signal that a route-wide invariant failed after authentication.
 /// The daemon consumes this field and never exposes it on the public response.
 pub(crate) const WORKER_ROUTE_FAILURE_HEADER: &str = "x-nemo-relay-worker-route-failure";
+/// Control error code for a definitive route-credential rejection. Clients must not retry it.
+pub(crate) const ROUTE_CREDENTIAL_REJECTED_CODE: &str = "route_credential_rejected";
 pub(crate) const MAX_CONTROL_BODY_BYTES: usize = 256 * 1024;
 pub(crate) const CHALLENGE_LIFETIME_MS: u64 = 15_000;
 pub(crate) const ACTIVATION_LIFETIME_MS: u64 = 15_000;
@@ -516,6 +518,22 @@ impl WorkerActivationFailureReason {
     }
 }
 
+/// Negotiated publication-aware cleanup of a launcher-owned activation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CancelActivationPayload {
+    pub(crate) activation_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ActivationCancellation {
+    Cancelled,
+    Published,
+    Superseded,
+}
+
+pub(crate) const ACTIVATION_CANCEL_CAPABILITY: &str = "activation_cancel_v1";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ActivationFailedPayload {
     pub(crate) activation_id: String,
@@ -567,7 +585,8 @@ pub(crate) fn descriptor(role: ComponentRole) -> ComponentDescriptor {
     ComponentDescriptor::nemo_relay(
         role,
         super::protocol::ProtocolRange::default(),
-        super::protocol::Capabilities::streaming_transport(),
+        super::protocol::Capabilities::streaming_transport()
+            .with_capability(ACTIVATION_CANCEL_CAPABILITY),
         env!("CARGO_PKG_VERSION"),
     )
 }

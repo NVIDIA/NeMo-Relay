@@ -8,8 +8,9 @@ use nemo_relay_worker_proto::v1::{
     GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest,
     InvokeRequest, JsonEnvelope, JsonValue, LlmCodecIdentity, LlmCodecKind,
     LlmExecutionCodecContext, LlmInvocation, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
-    RegisterConditionalMiddlewareGuardrailRequest, RegistrationSurface, RuntimeDiagnostic,
-    ScopeType, ToolExecutionResult as ProtoToolExecutionResult, invoke_request,
+    PopScopeRequest, PushScopeRequest, RegisterConditionalMiddlewareGuardrailRequest,
+    RegistrationSurface, RuntimeDiagnostic, ScopeType,
+    ToolExecutionResult as ProtoToolExecutionResult, invoke_request,
 };
 use nemo_relay_worker_proto::{
     WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
@@ -285,6 +286,38 @@ fn tool_execution_result_tolerates_unknown_protobuf_fields() {
     assert_eq!(
         decode_json_value::<serde_json::Value>(decoded_proto.result.as_ref().unwrap()).unwrap(),
         json!({"ok": true})
+    );
+}
+
+#[test]
+fn scope_timestamps_are_additive_and_presence_aware() {
+    let legacy_push = PushScopeRequest::decode([].as_slice()).expect("decode legacy push");
+    let legacy_pop = PopScopeRequest::decode([].as_slice()).expect("decode legacy pop");
+    assert_eq!(legacy_push.timestamp_unix_micros, None);
+    assert_eq!(legacy_pop.timestamp_unix_micros, None);
+
+    let epoch_push = PushScopeRequest {
+        timestamp_unix_micros: Some(0),
+        ..PushScopeRequest::default()
+    };
+    assert_eq!(epoch_push.encode_to_vec(), vec![0x48, 0x00]);
+    assert_eq!(
+        PushScopeRequest::decode(epoch_push.encode_to_vec().as_slice())
+            .expect("decode epoch push")
+            .timestamp_unix_micros,
+        Some(0)
+    );
+
+    let historical_pop = PopScopeRequest {
+        timestamp_unix_micros: Some(-1_250_000),
+        ..PopScopeRequest::default()
+    };
+    assert_eq!(historical_pop.encode_to_vec()[0], 0x30);
+    assert_eq!(
+        PopScopeRequest::decode(historical_pop.encode_to_vec().as_slice())
+            .expect("decode historical pop")
+            .timestamp_unix_micros,
+        Some(-1_250_000)
     );
 }
 

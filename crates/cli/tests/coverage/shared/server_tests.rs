@@ -338,6 +338,7 @@ impl Drop for TestServer {
 fn test_config() -> GatewayConfig {
     crate::test_support::enable_operational_logs();
     GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -377,7 +378,7 @@ async fn gateway_clients_allow_active_streams_past_the_idle_timeout() {
             socket.write_all(b"0\r\n\r\n").await.unwrap();
         });
 
-        let response = gateway_http_client(Duration::from_millis(300), no_redirect)
+        let response = gateway_http_client(Some(Duration::from_millis(300)), no_redirect)
             .get(format!("http://{address}"))
             .send()
             .await
@@ -386,6 +387,68 @@ async fn gateway_clients_allow_active_streams_past_the_idle_timeout() {
             response.bytes().await.unwrap(),
             b"onex!x!x!x!x!x!".as_slice()
         );
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn default_gateway_clients_allow_long_headers_and_silent_streams() {
+    for no_redirect in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (headers_tx, headers_rx) = tokio::sync::oneshot::channel();
+        let (body_tx, body_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0_u8; 1];
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            started_tx.send(()).unwrap();
+            headers_rx.await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 4\r\nconnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            body_rx.await.unwrap();
+            socket.write_all(b"done").await.unwrap();
+        });
+        let request = tokio::spawn(async move {
+            gateway_http_client(GatewayConfig::default().response_timeout(), no_redirect)
+                .get(format!("http://{address}"))
+                .send()
+                .await
+                .unwrap()
+        });
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        assert!(
+            !request.is_finished(),
+            "default headers must have no deadline"
+        );
+        headers_tx.send(()).unwrap();
+        let response = request.await.unwrap();
+        let body = tokio::spawn(async move { response.bytes().await.unwrap() });
+        tokio::task::yield_now().await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        assert!(
+            !body.is_finished(),
+            "default body reads must have no idle deadline"
+        );
+        body_tx.send(()).unwrap();
+        assert_eq!(body.await.unwrap(), "done");
         server.await.unwrap();
     }
 }
@@ -412,7 +475,7 @@ async fn gateway_clients_reject_stalled_streams_after_the_idle_timeout() {
             tokio::time::sleep(Duration::from_millis(500)).await;
         });
 
-        let response = gateway_http_client(Duration::from_millis(200), no_redirect)
+        let response = gateway_http_client(Some(Duration::from_millis(200)), no_redirect)
             .get(format!("http://{address}"))
             .send()
             .await

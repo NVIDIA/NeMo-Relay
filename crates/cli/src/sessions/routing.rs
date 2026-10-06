@@ -127,6 +127,8 @@ pub(super) struct SessionEventApplier<'a> {
     sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
     activity: &'a SessionActivity,
     config: SessionConfig,
+    completions: &'a Arc<Mutex<super::completion::CompletionCache>>,
+    owner: Option<&'a str>,
 }
 
 pub(super) struct AppliedSessionEvent {
@@ -135,6 +137,7 @@ pub(super) struct AppliedSessionEvent {
         Option<SubscriberDelivery>,
         Option<ToolArgumentTransform>,
     )>,
+    pub(super) closed_subagents: Vec<(String, String)>,
     pub(super) session_gate: OwnedMutexGuard<()>,
     pub(super) activity: SessionActivityGuard,
 }
@@ -143,15 +146,20 @@ impl<'a> SessionEventApplier<'a> {
     pub(super) fn new(
         sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
         activity: &'a SessionActivity,
+        completions: &'a Arc<Mutex<super::completion::CompletionCache>>,
+        owner: Option<&'a str>,
         config: SessionConfig,
     ) -> Self {
         Self {
             sessions,
             activity,
             config,
+            completions,
+            owner,
         }
     }
 
+    /// Apply one routed hook while preserving cancellation guards and reporting closed child aliases.
     pub(super) async fn apply(
         &self,
         session_id: &str,
@@ -164,21 +172,35 @@ impl<'a> SessionEventApplier<'a> {
         if self.activity.is_closing() {
             return Ok(AppliedSessionEvent {
                 outcome: None,
+                closed_subagents: Vec::new(),
                 session_gate,
                 activity,
             });
+        }
+        let completion_key = super::completion::completion_key(&event, self.owner);
+        let child_completion_key = super::completion::completed_child_key(&event, self.owner);
+        let is_completion = super::completion::is_completion(&event);
+        {
+            let mut completions = self.completions.lock().await;
+            if completion_key
+                .as_ref()
+                .is_some_and(|key| completions.contains(key))
+                || child_completion_key
+                    .as_ref()
+                    .is_some_and(|key| completions.contains(key))
+            {
+                return Ok(AppliedSessionEvent {
+                    outcome: None,
+                    closed_subagents: Vec::new(),
+                    session_gate,
+                    activity,
+                });
+            }
         }
         let session = {
             let mut sessions = self.sessions.lock().await;
             sessions.remove(session_id)
         };
-        if session.is_none() && event.is_terminal() {
-            return Ok(AppliedSessionEvent {
-                outcome: None,
-                session_gate,
-                activity,
-            });
-        }
         let session = session.unwrap_or_else(|| {
             Session::new(session_id.to_string(), event_kind, self.config.clone())
         });
@@ -195,9 +217,18 @@ impl<'a> SessionEventApplier<'a> {
         {
             in_flight.session_mut().agent_kind = event_kind;
         }
+        let active_subagents: Vec<_> = in_flight.session_mut().subagents.keys().cloned().collect();
         match in_flight.session_mut().apply(event).await {
             Ok(subscriber_delivery) => {
+                if is_completion && let Some(key) = completion_key {
+                    self.completions.lock().await.record(key);
+                }
                 let session = in_flight.session_mut();
+                let closed_subagents = active_subagents
+                    .into_iter()
+                    .filter(|id| !session.subagents.contains_key(id))
+                    .map(|id| (session_id.to_string(), id))
+                    .collect();
                 let is_empty = session.is_empty();
                 let tool_argument_transform = session.take_tool_argument_transform();
                 let (session_gate, activity) = if is_empty {
@@ -207,6 +238,7 @@ impl<'a> SessionEventApplier<'a> {
                 };
                 Ok(AppliedSessionEvent {
                     outcome: Some((is_empty, subscriber_delivery, tool_argument_transform)),
+                    closed_subagents,
                     session_gate,
                     activity,
                 })

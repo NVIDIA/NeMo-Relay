@@ -471,6 +471,9 @@ impl OpenTelemetryMetricSubscriber {
     }
 
     pub(crate) fn new_from_automatic_configuration_for_plugin() -> Result<Self> {
+        super::otel_signal::validate_automatic_header_environment(
+            "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+        )?;
         let mut config = OpenTelemetryMetricConfig::from_automatic_configuration();
         config.diagnostic_field = Some("opentelemetry.automatic.metrics".to_string());
         Self::new_with_runtime_diagnostics(config)

@@ -9,7 +9,9 @@ use crate::api::event::{Event, EventSanitizeFields, ScopeCategory};
 use crate::api::llm::LlmRequest;
 use crate::api::registry::{EventMetadataInjector, Guardrail, RuntimeRegistrationKind};
 use crate::api::runtime::global_context;
-use crate::api::runtime::scope_stack::{W3cTraceContext, trace_context_for_managed_span};
+use crate::api::runtime::scope_stack::{
+    W3cTraceContext, thread_active_event_uuid, trace_context_for_managed_span,
+};
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
 };
@@ -35,6 +37,7 @@ pub(crate) fn resolve_parent_uuid(parent: Option<&ScopeHandle>) -> Option<Uuid> 
     Some(
         parent
             .map(|handle| handle.uuid)
+            .or_else(thread_active_event_uuid)
             .unwrap_or_else(|| task_scope_top().uuid),
     )
 }

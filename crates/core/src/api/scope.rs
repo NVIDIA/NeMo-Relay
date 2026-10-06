@@ -452,31 +452,52 @@ fn pop_scope_inner(
 /// # Errors
 /// Returns an error when the runtime owner check fails or when internal state
 /// cannot be read safely. Returns [`FlowError::InvalidArgument`] when a typed
-/// severity is provided with non-object metadata.
+/// severity is provided with non-object metadata or when a reserved
+/// `tool_end_without_start` mark lacks a nonblank string in `data.tool_name`.
 ///
 /// # Notes
 /// The mark event is queued with subscriber and sanitizer snapshots captured
 /// from the active scope stack.
 pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
-    let parent_uuid = resolve_parent_uuid(params.parent);
     let metadata = metadata_with_log_severity(params.metadata, params.severity)?;
     let scope_stack = current_scope_stack();
+    let partial_completion = matches!(
+        params.name,
+        "agent_end_without_start"
+            | "turn_end_without_start"
+            | "subagent_end_without_start"
+            | "tool_end_without_start"
+    ) && metadata
+        .as_ref()
+        .and_then(|value| value.get("start_observed"))
+        == Some(&Json::Bool(false));
+    let parent_uuid = if partial_completion && params.parent.is_none() && {
+        let stack = scope_stack
+            .read()
+            .map_err(|error| scope_stack_lock_error(error, "mark"))?;
+        stack.top().uuid == stack.root_uuid()
+    } {
+        None
+    } else {
+        resolve_parent_uuid(params.parent)
+    };
     let (event, subscribers, emission_scope_stack) = {
-        let subscribers = if params.name == COMPACTION_EVENT_NAME {
-            let mut scope_guard = scope_stack
-                .write()
-                .map_err(|error| scope_stack_lock_error(error, "mark"))?;
-            let subscribers =
-                snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
-            scope_guard.mark_agent_fresh(parent_uuid);
-            subscribers
-        } else {
+        let scope_subscribers = {
             let scope_guard = scope_stack
                 .read()
                 .map_err(|error| scope_stack_lock_error(error, "mark"))?;
-            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+            scope_guard.collect_scope_local_subscribers()
         };
+        // Subscriber selection can invoke plugin gates that snapshot this stack.
+        // Release the scope lock first, and preserve selection before freshness.
+        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
+        if params.name == COMPACTION_EVENT_NAME {
+            scope_stack
+                .write()
+                .map_err(|error| scope_stack_lock_error(error, "mark"))?
+                .mark_agent_fresh(parent_uuid);
+        }
         let context = global_context();
         let state = context
             .read()
@@ -496,12 +517,23 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
         (event, subscribers, scope_stack.clone())
     };
     let sanitizers = snapshot_event_sanitizers(&event, &emission_scope_stack).unwrap_or_default();
-    let _ = subscriber_dispatcher::dispatch_sanitized_event(
-        event,
-        sanitizers,
-        &subscribers,
-        emission_scope_stack,
-    );
+    if let Some(transform) = super::tool::completion_mark_transform(&event, &emission_scope_stack)?
+    {
+        let _ = subscriber_dispatcher::dispatch_transformed_event(
+            event,
+            transform,
+            sanitizers,
+            &subscribers,
+            emission_scope_stack,
+        );
+    } else {
+        let _ = subscriber_dispatcher::dispatch_sanitized_event(
+            event,
+            sanitizers,
+            &subscribers,
+            emission_scope_stack,
+        );
+    }
     Ok(())
 }
 

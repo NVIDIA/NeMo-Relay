@@ -284,3 +284,63 @@ async fn non_guardrail_http_failures_and_oversized_responses_are_rejected() {
     server.join().unwrap();
     assert!(matches!(error, CliError::PayloadTooLarge(_)));
 }
+
+#[tokio::test]
+async fn missing_credential_passes_through_without_contacting_the_daemon_even_fail_closed() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let daemon_address = format!("http://{}", listener.local_addr().unwrap());
+    for (agent, expected) in [
+        (CodingAgent::ClaudeCode, &br#"{"continue":true}"#[..]),
+        (CodingAgent::Codex, &b"{}"[..]),
+        (CodingAgent::Pi, &b"{}"[..]),
+    ] {
+        for failure_policy in [
+            HookFailurePolicy::FailClosed,
+            HookFailurePolicy::FailOpen,
+            HookFailurePolicy::Default,
+        ] {
+            let mut output = Vec::new();
+            run_with(
+                Options {
+                    agent,
+                    daemon_address: daemon_address.clone(),
+                    failure_policy,
+                },
+                &br#"{"hook_event_name":"PreToolUse"}"#[..],
+                None,
+                &mut output,
+            )
+            .await
+            .expect("missing credential passes through");
+            assert_eq!(output, expected, "{agent:?} {failure_policy:?}");
+        }
+    }
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "the daemon must not be contacted without a credential"
+    );
+}
+
+#[tokio::test]
+async fn present_credential_still_honors_fail_closed_delivery_failures() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let daemon_address = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let mut output = Vec::new();
+    let error = run_with(
+        Options {
+            agent: CodingAgent::Codex,
+            daemon_address,
+            failure_policy: HookFailurePolicy::FailClosed,
+        },
+        &b"{}"[..],
+        Some(RouteCredential::parse(valid_token()).unwrap()),
+        &mut output,
+    )
+    .await
+    .expect_err("fail closed");
+    assert!(matches!(error, CliError::HookDelivery { .. }), "{error}");
+    assert!(output.is_empty());
+}

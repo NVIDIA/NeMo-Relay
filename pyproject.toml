@@ -56,7 +56,11 @@ dev = [
     # Transitive dependency of beautifulsoup4; keep it at a patched release.
     "soupsieve>=2.9.0",
     "ty>=0.0.1a7",
+    # Transitive dependency of optional integrations; keep it at a patched release.
+    "urllib3>=2.8.0",
     "uv~=0.11.0",
+    # Transitive dependency of pre-commit; keep it at a patched release.
+    "virtualenv>=21.7.13",
 ]
 
 test = [
@@ -81,6 +85,7 @@ langchain = [
     "langchain-core",
     "langgraph>=1.2.9,<2.0.0",
     "langgraph-checkpoint>=4.1.1",
+    "langgraph-sdk>=0.4.4",
     "langsmith>=0.9.4",
 ]
 
@@ -101,6 +106,7 @@ langchain-nvidia = [
     "langchain-nvidia-ai-endpoints>=1.4.2,<2.0.0",
     "aiohttp>=3.14.3",
     "idna>=3.19",
+    "multidict>=6.9.1",
 ]
 
 [tool.maturin]

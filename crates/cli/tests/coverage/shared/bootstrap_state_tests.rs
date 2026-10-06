@@ -8,6 +8,108 @@ use std::io::Write;
 use std::net::TcpListener;
 
 #[test]
+fn owner_record_read_errors_and_invalid_ownership_preserve_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:9";
+    let path = owner_path(directory.path(), url);
+    assert_eq!(read_owner_record(&path).unwrap(), None);
+    assert!(!stop_owned_and_reset_locked(directory.path(), url).unwrap());
+    assert!(!stop_version_mismatched_owned_gateway_locked(directory.path(), url).unwrap());
+    assert!(!stop_unhealthy_owned_gateway_locked(directory.path(), url).unwrap());
+
+    std::fs::write(&path, b"not-json").unwrap();
+    assert!(
+        read_owner_record(&path)
+            .unwrap_err()
+            .contains("failed to parse gateway ownership")
+    );
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(
+        read_owner_record(&path)
+            .unwrap_err()
+            .contains("failed to read gateway ownership")
+    );
+    std::fs::remove_dir(&path).unwrap();
+
+    let valid = OwnerRecord::new(u32::MAX, url, "token", Some("fingerprint"));
+    for invalid in [
+        OwnerRecord {
+            service: "foreign".into(),
+            ..valid.clone()
+        },
+        OwnerRecord {
+            bootstrap_protocol: 0,
+            ..valid.clone()
+        },
+        OwnerRecord {
+            shutdown_token: String::new(),
+            ..valid.clone()
+        },
+        OwnerRecord {
+            bootstrap_fingerprint: None,
+            ..valid.clone()
+        },
+        OwnerRecord {
+            bootstrap_fingerprint: Some(String::new()),
+            ..valid.clone()
+        },
+    ] {
+        write_owner_record(&path, &invalid).unwrap();
+        assert!(
+            stop_owned_and_reset_locked(directory.path(), url)
+                .unwrap_err()
+                .contains("invalid ownership record")
+        );
+        assert!(!stop_unhealthy_owned_gateway_locked(directory.path(), url).unwrap());
+        assert_eq!(read_owner_record(&path).unwrap(), Some(invalid));
+    }
+}
+
+#[test]
+fn managed_owner_requires_state_and_owner_guard_removes_its_unchanged_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let address = "127.0.0.1:47632".parse().unwrap();
+    let _environment = EnvScope::set(&[
+        (BOOTSTRAP_STATE_DIR_ENV, None),
+        (
+            crate::configuration::BOOTSTRAP_FINGERPRINT_ENV,
+            Some(OsStr::new("fingerprint")),
+        ),
+    ]);
+    assert!(publish_owner_from_env(address, None).unwrap().is_none());
+    assert!(
+        publish_owner_from_env(address, Some("token"))
+            .unwrap_err()
+            .contains(BOOTSTRAP_STATE_DIR_ENV)
+    );
+    unsafe {
+        std::env::set_var(BOOTSTRAP_STATE_DIR_ENV, directory.path());
+    }
+    let guard = publish_owner_from_env(address, Some("token"))
+        .unwrap()
+        .unwrap();
+    let path = owner_path(directory.path(), "http://127.0.0.1:47632");
+    let record = read_owner_record(&path).unwrap().unwrap();
+    assert!(record.valid_for("http://127.0.0.1:47632"));
+    drop(guard);
+    assert!(!path.exists());
+    remove_if_matches(&path, &record).unwrap();
+}
+
+#[test]
+fn startup_lock_reports_an_unopenable_lock_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:9";
+    std::fs::create_dir(lock_path(directory.path(), url)).unwrap();
+    assert!(
+        lock_endpoint_for(directory.path(), url, Duration::ZERO)
+            .unwrap_err()
+            .contains("failed to open gateway lock")
+    );
+}
+
+#[test]
 fn owner_records_are_versioned_endpoint_scoped_and_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let url = "http://127.0.0.1:47632";

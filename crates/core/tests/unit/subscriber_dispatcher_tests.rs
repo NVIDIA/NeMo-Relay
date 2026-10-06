@@ -20,6 +20,77 @@ use std::sync::{Arc, Mutex, mpsc};
 use uuid::Uuid;
 
 #[test]
+fn failed_delivery_receipt_reports_the_closed_completion_channel() {
+    let (sender, completion) = tokio::sync::oneshot::channel();
+    drop(sender);
+    let error = futures::executor::block_on(SubscriberDelivery { completion }.wait()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("subscriber delivery completion channel closed")
+    );
+}
+
+#[test]
+fn unavailable_transform_runtime_drops_the_event_without_invoking_the_transform() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("unavailable-transform").build(),
+        None,
+        None,
+    ));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let transform: super::EventTransformFn = Box::new(move |event| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move { event })
+    });
+    set_sanitizer_runtime_failure_for_test(Some("transform runtime unavailable"));
+    let (published, nested) =
+        sanitize_event_snapshot(event, Some(transform), Vec::new(), Vec::new(), None);
+    set_sanitizer_runtime_failure_for_test(None);
+    assert!(published.is_none());
+    assert!(nested.is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn unavailable_metadata_injector_runtime_preserves_the_original_event() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("unavailable-injector")
+            .data(serde_json::json!({"original": true}))
+            .metadata(serde_json::json!({"original": "metadata"}))
+            .build(),
+        None,
+        None,
+    ));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let injector: EventMetadataInjectorFn = Arc::new(move |_| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(BTreeMap::new()) })
+    });
+    set_sanitizer_runtime_failure_for_test(Some("injector runtime unavailable"));
+    let (published, nested) = sanitize_event_snapshot(
+        event.clone(),
+        None,
+        vec![RegistryRecord::new("unavailable", 0, injector)],
+        Vec::new(),
+        None,
+    );
+    set_sanitizer_runtime_failure_for_test(None);
+    assert_eq!(published, Some(event));
+    assert!(nested.is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn publication_context_and_completed_delivery_restore_the_calling_thread() {
     assert!(publication_context::<String>().is_none());
     let observed = with_publication_context(Some(Arc::new("binding".to_string())), || {

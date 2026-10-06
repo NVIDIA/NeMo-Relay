@@ -11,6 +11,8 @@ use reqwest::header::{CONTENT_TYPE, HeaderValue};
 use serde_json::Value;
 
 use crate::agents::CodingAgent;
+use crate::daemon::common::client_token::resolve_route_credential;
+use crate::daemon::common::routes::PublicRoute;
 use crate::daemon::common::state::{ROUTE_TOKEN_ENV, RouteCredential};
 use crate::error::CliError;
 use crate::hooks::HookFailurePolicy;
@@ -29,17 +31,48 @@ pub(crate) struct Options {
 }
 
 /// Reads one native hook payload, sends it to the daemon, and relays the response to stdout.
+///
+/// Without a usable route credential the daemon is not contacted: the hook emits the daemon's own
+/// pass-through response for the agent and succeeds, regardless of the failure policy.
 pub(crate) async fn run(options: Options) -> Result<(), CliError> {
+    let credential = resolve_route_credential().map(|resolved| resolved.credential);
+    run_with(
+        options,
+        std::io::stdin(),
+        credential,
+        &mut std::io::stdout(),
+    )
+    .await
+}
+
+async fn run_with(
+    options: Options,
+    input: impl Read,
+    credential: Option<RouteCredential>,
+    output: &mut impl Write,
+) -> Result<(), CliError> {
     let operational = OperationalContext::new();
     operational::hook_started(&operational, "daemon_hook_forward");
-    let payload = read_hook_payload_with_context(std::io::stdin(), &operational);
+    let payload = read_hook_payload_with_context(input, &operational);
+    let Some(credential) = credential else {
+        log::warn!(
+            target: "nemo_relay.hook",
+            event = "daemon_hook_pass_through",
+            route_mode = "pass_through",
+            reason = "missing_credential";
+            "No NeMo Relay client credential is available; the hook passes through without daemon delivery"
+        );
+        output.write_all(pass_through_body(options.agent))?;
+        operational::hook_completed(&operational, "daemon_hook_forward", "pass_through");
+        return Ok(());
+    };
     let fail_closed = effective_fail_closed(options.failure_policy, payload.as_deref().ok());
     let result: Result<(), CliError> = async {
-        let token = route_token_from_environment()?;
+        let token = route_token_header(&credential)?;
         let payload = payload?;
         let body = forward(&options, payload, token, &operational).await?;
         if !body.is_empty() {
-            std::io::stdout().write_all(&body)?;
+            output.write_all(&body)?;
         }
         Ok(())
     }
@@ -63,6 +96,14 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
             );
             handle_delivery_failure(error, fail_closed)
         }
+    }
+}
+
+/// The exact response body the daemon returns for this agent's hook on a pass-through route.
+fn pass_through_body(agent: CodingAgent) -> &'static [u8] {
+    match PublicRoute::from_path(agent.hook_path()) {
+        Some(PublicRoute::Hook(hook)) => hook.pass_through_body(),
+        _ => b"{}",
     }
 }
 
@@ -122,8 +163,7 @@ fn read_hook_payload_with_context(
     }
 }
 
-fn route_token_from_environment() -> Result<HeaderValue, CliError> {
-    let credential = RouteCredential::from_environment()?;
+fn route_token_header(credential: &RouteCredential) -> Result<HeaderValue, CliError> {
     HeaderValue::from_str(credential.expose())
         .map_err(|_| CliError::Config(format!("{CLIENT_TOKEN_ENV} is not valid HTTP header text")))
 }

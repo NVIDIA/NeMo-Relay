@@ -193,11 +193,11 @@ impl PluginComponentSpec {
     }
 }
 
-/// Structured validation report.
+/// Structured configuration and activation report.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigReport {
-    /// Validation and compatibility diagnostics in evaluation order.
+    /// Configuration and activation diagnostics in evaluation order.
     #[serde(default)]
     pub diagnostics: Vec<ConfigDiagnostic>,
     /// Runtime delivery diagnostics recorded after activation.
@@ -409,6 +409,7 @@ impl PluginRegistration {
 #[derive(Default)]
 pub struct PluginRegistrationContext {
     registrations: Vec<PluginRegistration>,
+    activation_diagnostics: Vec<ConfigDiagnostic>,
     namespace: Option<PluginRegistrationNamespace>,
 }
 
@@ -427,6 +428,7 @@ impl PluginRegistrationContext {
     pub fn with_namespace(namespace: impl Into<String>) -> Self {
         Self {
             registrations: vec![],
+            activation_diagnostics: vec![],
             namespace: Some(PluginRegistrationNamespace::Plain(namespace.into())),
         }
     }
@@ -434,6 +436,7 @@ impl PluginRegistrationContext {
     fn with_plugin_component_namespace(namespace: String) -> Self {
         Self {
             registrations: vec![],
+            activation_diagnostics: vec![],
             namespace: Some(PluginRegistrationNamespace::PluginComponent(namespace)),
         }
     }
@@ -458,6 +461,7 @@ impl PluginRegistrationContext {
         };
         Self {
             registrations: vec![],
+            activation_diagnostics: vec![],
             namespace: Some(namespace),
         }
     }
@@ -1001,6 +1005,14 @@ impl PluginRegistrationContext {
     /// Extends the context with prebuilt registrations.
     pub fn extend_registrations(&mut self, registrations: Vec<PluginRegistration>) {
         self.registrations.extend(registrations);
+    }
+
+    pub(crate) fn record_activation_diagnostic(&mut self, diagnostic: ConfigDiagnostic) {
+        self.activation_diagnostics.push(diagnostic);
+    }
+
+    pub(crate) fn activation_diagnostics(&self) -> &[ConfigDiagnostic] {
+        &self.activation_diagnostics
     }
 
     /// Consumes the context and returns the recorded registrations.
@@ -1725,9 +1737,17 @@ async fn activate_initial_plugin_configuration(
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     enabled_component_count: usize,
 ) -> Result<ConfigReport> {
-    let registrations =
+    let initialized =
         initialize_plugin_components_catching_panics(config.clone(), rollback_failures).await?;
-    store_active_plugin_configuration(config, report.clone(), registrations)?;
+    let configuration_diagnostics = report.diagnostics.clone();
+    let mut report = report;
+    extend_activation_diagnostics(&mut report, &initialized.diagnostics);
+    store_active_plugin_configuration_with_configuration_diagnostics(
+        config,
+        report.clone(),
+        configuration_diagnostics,
+        initialized.registrations,
+    )?;
     log::info!(
         target: "nemo_relay.plugin",
         event = "plugin_configuration_activated",
@@ -1773,6 +1793,7 @@ fn install_previous_configuration_for_teardown(
     *guard = Some(ActivePluginConfiguration {
         config: previous_state.config.clone(),
         report: previous_state.report.clone(),
+        configuration_diagnostics: previous_state.configuration_diagnostics.clone(),
         runtime_diagnostics: previous_state.runtime_diagnostics.clone(),
         registrations: Vec::new(),
     });
@@ -1814,8 +1835,16 @@ async fn activate_replacement_or_restore(
     match initialize_plugin_components_catching_panics(config.clone(), rollback_failures.clone())
         .await
     {
-        Ok(registrations) => {
-            store_active_plugin_configuration(config, report.clone(), registrations)?;
+        Ok(initialized) => {
+            let configuration_diagnostics = report.diagnostics.clone();
+            let mut report = report;
+            extend_activation_diagnostics(&mut report, &initialized.diagnostics);
+            store_active_plugin_configuration_with_configuration_diagnostics(
+                config,
+                report.clone(),
+                configuration_diagnostics,
+                initialized.registrations,
+            )?;
             log::info!(
                 target: "nemo_relay.plugin",
                 event = "plugin_configuration_replaced",
@@ -1841,12 +1870,16 @@ async fn restore_previous_plugin_configuration(
     )
     .await
     {
-        Ok(registrations) => {
-            store_active_plugin_configuration_with_runtime_diagnostics(
+        Ok(initialized) => {
+            let mut report = previous_state.report;
+            report.diagnostics = previous_state.configuration_diagnostics.clone();
+            extend_activation_diagnostics(&mut report, &initialized.diagnostics);
+            store_active_plugin_configuration_with_diagnostics(
                 previous_state.config,
-                previous_state.report,
+                report,
+                previous_state.configuration_diagnostics,
                 previous_state.runtime_diagnostics,
-                registrations,
+                initialized.registrations,
             )?;
             log::warn!(
                 target: "nemo_relay.plugin",
@@ -1873,7 +1906,7 @@ async fn restore_previous_plugin_configuration(
 async fn initialize_plugin_components_catching_panics(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
-) -> Result<Vec<PluginRegistration>> {
+) -> Result<InitializedPluginComponents> {
     tokio::spawn(async move { initialize_plugin_components(&config, rollback_failures).await })
         .await
         .map_err(|error| {
@@ -2303,6 +2336,14 @@ fn skip_implicit_plugin_config() -> bool {
 /// Resolves the platform system configuration directory.
 #[doc(hidden)]
 pub fn system_config_dir() -> PathBuf {
+    #[cfg(feature = "__skip-implicit-config")]
+    if let Some(path) = std::env::var_os("NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR") {
+        return PathBuf::from(path);
+    }
+    platform_system_config_dir()
+}
+
+fn platform_system_config_dir() -> PathBuf {
     #[cfg(windows)]
     {
         std::env::var_os("ProgramData")
@@ -2709,14 +2750,28 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
 struct ActivePluginConfiguration {
     config: PluginConfig,
     report: ConfigReport,
+    configuration_diagnostics: Vec<ConfigDiagnostic>,
     runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
     registrations: Vec<PluginRegistration>,
+}
+
+struct InitializedPluginComponents {
+    registrations: Vec<PluginRegistration>,
+    diagnostics: Vec<ConfigDiagnostic>,
+}
+
+fn extend_activation_diagnostics(report: &mut ConfigReport, diagnostics: &[ConfigDiagnostic]) {
+    for diagnostic in diagnostics {
+        if !report.diagnostics.contains(diagnostic) {
+            report.diagnostics.push(diagnostic.clone());
+        }
+    }
 }
 
 async fn initialize_plugin_components(
     config: &PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
-) -> Result<Vec<PluginRegistration>> {
+) -> Result<InitializedPluginComponents> {
     ensure_builtin_plugins_registered()?;
     let mut ordinals: HashMap<&str, usize> = HashMap::new();
     let mut registrations = PendingPluginRegistrations::new(rollback_failures.clone());
@@ -2744,7 +2799,9 @@ async fn initialize_plugin_components(
         plugin
             .register(&component.config, &mut pending.context)
             .await?;
-        registrations.extend(pending.take());
+        let (component_registrations, diagnostics) = pending.take();
+        registrations.extend(component_registrations);
+        registrations.extend_diagnostics(diagnostics);
     }
 
     Ok(registrations.take())
@@ -2752,6 +2809,7 @@ async fn initialize_plugin_components(
 
 struct PendingPluginRegistrations {
     registrations: Vec<PluginRegistration>,
+    diagnostics: Vec<ConfigDiagnostic>,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
 }
 
@@ -2759,6 +2817,7 @@ impl PendingPluginRegistrations {
     fn new(rollback_failures: Option<Arc<Mutex<Vec<String>>>>) -> Self {
         Self {
             registrations: Vec::new(),
+            diagnostics: Vec::new(),
             rollback_failures,
         }
     }
@@ -2767,8 +2826,15 @@ impl PendingPluginRegistrations {
         self.registrations.extend(registrations);
     }
 
-    fn take(&mut self) -> Vec<PluginRegistration> {
-        std::mem::take(&mut self.registrations)
+    fn extend_diagnostics(&mut self, diagnostics: Vec<ConfigDiagnostic>) {
+        self.diagnostics.extend(diagnostics);
+    }
+
+    fn take(&mut self) -> InitializedPluginComponents {
+        InitializedPluginComponents {
+            registrations: std::mem::take(&mut self.registrations),
+            diagnostics: std::mem::take(&mut self.diagnostics),
+        }
     }
 }
 
@@ -2794,8 +2860,11 @@ impl PendingPluginRegistrationContext {
         }
     }
 
-    fn take(&mut self) -> Vec<PluginRegistration> {
-        std::mem::take(&mut self.context.registrations)
+    fn take(&mut self) -> (Vec<PluginRegistration>, Vec<ConfigDiagnostic>) {
+        (
+            std::mem::take(&mut self.context.registrations),
+            std::mem::take(&mut self.context.activation_diagnostics),
+        )
     }
 }
 
@@ -2822,22 +2891,41 @@ fn record_rollback_failures(
     }
 }
 
+#[cfg(test)]
 fn store_active_plugin_configuration(
     config: PluginConfig,
     report: ConfigReport,
     registrations: Vec<PluginRegistration>,
 ) -> Result<()> {
-    store_active_plugin_configuration_with_runtime_diagnostics(
+    let configuration_diagnostics = report.diagnostics.clone();
+    store_active_plugin_configuration_with_diagnostics(
         config,
         report,
+        configuration_diagnostics,
         BTreeMap::new(),
         registrations,
     )
 }
 
-fn store_active_plugin_configuration_with_runtime_diagnostics(
+fn store_active_plugin_configuration_with_configuration_diagnostics(
     config: PluginConfig,
     report: ConfigReport,
+    configuration_diagnostics: Vec<ConfigDiagnostic>,
+    registrations: Vec<PluginRegistration>,
+) -> Result<()> {
+    store_active_plugin_configuration_with_diagnostics(
+        config,
+        report,
+        configuration_diagnostics,
+        BTreeMap::new(),
+        registrations,
+    )
+}
+
+fn store_active_plugin_configuration_with_diagnostics(
+    config: PluginConfig,
+    report: ConfigReport,
+    configuration_diagnostics: Vec<ConfigDiagnostic>,
     runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
     registrations: Vec<PluginRegistration>,
 ) -> Result<()> {
@@ -2847,6 +2935,7 @@ fn store_active_plugin_configuration_with_runtime_diagnostics(
     *guard = Some(ActivePluginConfiguration {
         config,
         report,
+        configuration_diagnostics,
         runtime_diagnostics,
         registrations,
     });

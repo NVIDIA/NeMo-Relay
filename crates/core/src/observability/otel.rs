@@ -908,6 +908,9 @@ impl OpenTelemetrySubscriber {
     }
 
     pub(crate) fn new_from_automatic_configuration_for_plugin() -> Result<Self> {
+        super::otel_signal::validate_automatic_header_environment(
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        )?;
         Self::new_with_runtime_diagnostics(
             TraceConfig::Endpoint(OpenTelemetryConfig::from_automatic_configuration()),
             Some("opentelemetry.automatic.traces".to_string()),

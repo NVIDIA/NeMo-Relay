@@ -26,6 +26,76 @@ type CapturedProviderRequest = Arc<std::sync::Mutex<Option<(HeaderMap, Bytes)>>>
 type ProviderRequests = Arc<std::sync::Mutex<Vec<(HeaderMap, Bytes)>>>;
 
 #[tokio::test]
+async fn managed_provider_wait_has_no_default_deadline_and_honors_configuration() {
+    for (streaming, response_timeout_secs) in [(false, 0), (true, 0), (false, 90), (true, 90)] {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let app = Router::new().route(
+            "/",
+            post({
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                move || {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    async move {
+                        started.notify_one();
+                        release.notified().await;
+                        "compaction complete"
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let task = tokio::spawn(async move {
+            request_worker_upstream(
+                pooled_client().unwrap(),
+                Request::post(destination)
+                    .body(box_body(Body::empty()))
+                    .unwrap(),
+                &OperationalContext::new(),
+                streaming,
+                &GatewayConfig {
+                    response_timeout_secs,
+                    ..GatewayConfig::default()
+                },
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(61)).await;
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        if response_timeout_secs == 0 {
+            assert!(!task.is_finished());
+            release.notify_one();
+            let response = task.await.unwrap().unwrap();
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                "compaction complete"
+            );
+        } else {
+            assert!(
+                task.await
+                    .unwrap()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("response-head timeout")
+            );
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
 async fn observation_preserves_delivery_while_capturing_json() {
     let expected = Bytes::from_static(br#"{"ok":true}"#);
     let (body, observation) = observe_body(
@@ -208,7 +278,7 @@ async fn successful_stream_observation_can_outlive_the_response_head_deadline() 
     let task = tokio::spawn(observation.finish(ProviderSurface::OpenAIChat, true));
     tokio::task::yield_now().await;
     sender.send(Bytes::from_static(b"data: {\"id\":\"long\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"}}]}\n\n")).await.unwrap();
-    tokio::time::advance(RESPONSE_HEAD_TIMEOUT + Duration::from_secs(1)).await;
+    tokio::time::advance(Duration::from_secs(61)).await;
     tokio::task::yield_now().await;
     assert!(
         !task.is_finished(),

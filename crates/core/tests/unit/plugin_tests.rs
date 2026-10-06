@@ -52,25 +52,31 @@ static TEST_CONFIG_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(feature = "__skip-implicit-config")]
 struct TestConfigEnvironment {
     _guard: std::sync::MutexGuard<'static, ()>,
+    key: &'static str,
     previous: Option<OsString>,
 }
 
 #[cfg(feature = "__skip-implicit-config")]
 impl TestConfigEnvironment {
     fn set(value: Option<&OsStr>) -> Self {
+        Self::set_variable("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", value)
+    }
+
+    fn set_variable(key: &'static str, value: Option<&OsStr>) -> Self {
         let guard = TEST_CONFIG_ENV_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let previous = std::env::var_os("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG");
+        let previous = std::env::var_os(key);
         unsafe {
             match value {
-                Some(value) => std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", value),
-                None => std::env::remove_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG"),
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
             }
         }
         Self {
             _guard: guard,
+            key,
             previous,
         }
     }
@@ -81,8 +87,8 @@ impl Drop for TestConfigEnvironment {
     fn drop(&mut self) {
         unsafe {
             match self.previous.take() {
-                Some(value) => std::env::set_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", value),
-                None => std::env::remove_var("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG"),
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
             }
         }
     }
@@ -2846,6 +2852,10 @@ fn test_hook_skips_implicit_plugin_config_paths() {
 
 #[test]
 fn test_system_config_dir_matches_platform_convention() {
+    #[cfg(feature = "__skip-implicit-config")]
+    let _environment =
+        TestConfigEnvironment::set_variable("NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR", None);
+
     #[cfg(windows)]
     {
         let expected_base = std::env::var_os("ProgramData")
@@ -3132,4 +3142,320 @@ fn test_plugin_config_overlay_applies_non_default_values() {
         UnsupportedBehavior::Ignore,
         "a non-default field overrides the file"
     );
+}
+
+#[test]
+fn replacing_plugin_configuration_removes_old_callbacks_and_installs_new_ones() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(TestPlugin)).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let original = PluginConfig {
+        components: vec![PluginComponentSpec::new("test.plugin")],
+        ..PluginConfig::default()
+    };
+    runtime
+        .block_on(initialize_plugins_exact_inner(
+            original.clone(),
+            None,
+            vec![],
+        ))
+        .unwrap();
+    let before = list_runtime_registrations(None).unwrap();
+    assert!(
+        before
+            .iter()
+            .any(|entry| entry.owner.plugin_kind.as_deref() == Some("test.plugin"))
+    );
+
+    runtime
+        .block_on(initialize_plugins_exact_inner(
+            PluginConfig::default(),
+            None,
+            vec![],
+        ))
+        .unwrap();
+    assert!(plugin_configuration_is_active().unwrap());
+    assert!(
+        list_runtime_registrations(None)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.owner.plugin_kind.as_deref() != Some("test.plugin"))
+    );
+
+    runtime
+        .block_on(initialize_plugins_exact_inner(original, None, vec![]))
+        .unwrap();
+    assert_eq!(list_runtime_registrations(None).unwrap(), before);
+    clear_plugin_configuration_inner().result.unwrap();
+    reset_global();
+}
+
+#[test]
+fn failed_plugin_replacement_restores_callbacks_and_runtime_diagnostics() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(TestPlugin)).unwrap();
+    register_plugin(Arc::new(PartialFailPlugin)).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let invalid_output_directory = directory.path().join("not-a-directory");
+    std::fs::write(&invalid_output_directory, b"file").unwrap();
+    let mut original = programmatic_observability_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://127.0.0.1:4318/v1/traces"
+            }],
+            "file_sinks": [{
+                "output_directory": invalid_output_directory,
+                "filename": "trace.jsonl"
+            }]
+        }
+    }));
+    original
+        .components
+        .push(PluginComponentSpec::new("test.plugin"));
+    let initial_report = runtime
+        .block_on(initialize_plugins_exact_inner(original, None, vec![]))
+        .unwrap();
+    assert!(
+        initial_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "observability.invalid_otel_file_sink" })
+    );
+    assert!(
+        initial_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "test.warning")
+    );
+
+    std::fs::remove_file(&invalid_output_directory).unwrap();
+    std::fs::create_dir(&invalid_output_directory).unwrap();
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+        code: "fixture.preserved".into(),
+        component: "test.plugin".into(),
+        field: None,
+        message: "retain across rollback".into(),
+        session_id: None,
+        count: 2,
+    });
+    let registrations = list_runtime_registrations(None).unwrap();
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    let failures = Arc::new(Mutex::new(vec![]));
+    let error = runtime
+        .block_on(initialize_plugins_exact_inner(
+            PluginConfig {
+                components: vec![PluginComponentSpec::new("partial.fail.plugin")],
+                ..PluginConfig::default()
+            },
+            Some(failures.clone()),
+            vec![],
+        ))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("refused to finish initialization")
+    );
+    assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 1);
+    assert!(failures.lock().unwrap().is_empty());
+    assert_eq!(list_runtime_registrations(None).unwrap(), registrations);
+    let restored = active_runtime_diagnostics_snapshot();
+    assert_eq!(restored.len(), diagnostics.len());
+    assert_eq!(restored[0].code, diagnostics[0].code);
+    assert_eq!(restored[0].message, diagnostics[0].message);
+    assert_eq!(restored[0].count, diagnostics[0].count);
+    let restored_report = ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .report
+        .clone();
+    assert!(
+        !restored_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "observability.invalid_otel_file_sink" })
+    );
+    assert!(
+        restored_report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "test.warning")
+    );
+    clear_plugin_configuration_inner().result.unwrap();
+    reset_global();
+}
+
+#[test]
+fn failed_plugin_replacement_reports_failure_to_restore_the_previous_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(PartialFailPlugin)).unwrap();
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec::new("partial.fail.plugin")],
+        ..PluginConfig::default()
+    };
+    // A previously active plugin can start refusing registration during recovery.
+    store_active_plugin_configuration(config.clone(), ConfigReport::default(), vec![]).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(initialize_plugins_exact_inner(config, None, vec![]))
+        .unwrap_err();
+    assert!(matches!(error, PluginError::RegistrationFailed(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("previous plugin configuration could not be restored")
+    );
+    assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 2);
+    assert!(!plugin_configuration_is_active().unwrap());
+    reset_global();
+}
+
+#[test]
+fn replacement_teardown_failure_preserves_diagnostics_and_records_unremoved_callbacks() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let failures = Arc::new(Mutex::new(vec![]));
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "refused-cleanup",
+            Box::new(|| {
+                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+                    code: "fixture.cleanup_failed".into(),
+                    component: "fixture".into(),
+                    field: None,
+                    message: "cleanup refused".into(),
+                    session_id: None,
+                    count: 1,
+                });
+                Err(PluginError::RegistrationFailed("cleanup refused".into()))
+            }),
+        )],
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(initialize_plugins_exact_inner(
+            PluginConfig::default(),
+            Some(failures.clone()),
+            vec![],
+        ))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("previous plugin configuration could not be cleared")
+    );
+    assert!(failures.lock().unwrap()[0].contains("refused-cleanup"));
+    let report = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap();
+    assert_eq!(report.runtime_diagnostics[0].code, "fixture.cleanup_failed");
+    assert!(!plugin_configuration_is_active().unwrap());
+    reset_global();
+}
+
+/// Holds the runtime-owner lock because the spawned mutation updates process-global ownership.
+#[test]
+fn owned_plugin_mutation_contains_panics_and_accepts_the_next_operation() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(run_owned_plugin_mutation::<(), _, _>(
+            "fixture panic",
+            || async {
+                panic!("injected mutation panic");
+            },
+        ))
+        .unwrap_err();
+    assert!(matches!(error, PluginError::Internal(_)));
+    assert!(error.to_string().contains("fixture panic task failed"));
+    assert_eq!(
+        runtime
+            .block_on(run_owned_plugin_mutation("fixture recovery", || async {
+                Ok(42)
+            }))
+            .unwrap(),
+        42
+    );
+    reset_global();
+}
+
+#[test]
+fn stale_host_lease_cannot_read_or_clear_a_new_owners_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let first = acquire_plugin_host_lease().unwrap();
+    let stale_owner = first.owner_id();
+    drop(first);
+    let current = acquire_plugin_host_lease().unwrap();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+    let outcome = clear_plugin_configuration_for_host(stale_owner);
+    assert!(!outcome.callbacks_cleared);
+    assert!(matches!(outcome.result, Err(PluginError::Conflict(_))));
+    assert!(matches!(
+        plugin_configuration_report_for_host(stale_owner),
+        Err(PluginError::Conflict(_))
+    ));
+    assert!(
+        plugin_configuration_report_for_host(current.owner_id())
+            .unwrap()
+            .is_some()
+    );
+    clear_plugin_configuration_for_host(current.owner_id())
+        .result
+        .unwrap();
+    drop(current);
+    reset_global();
+}
+
+#[test]
+fn plugin_host_lease_rejects_an_active_static_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+    let error = acquire_plugin_host_lease()
+        .err()
+        .expect("static configuration owns registrations");
+    assert!(matches!(error, PluginError::Conflict(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("static plugin configuration is already active")
+    );
+    clear_plugin_configuration_inner().result.unwrap();
+    let lease = acquire_plugin_host_lease().unwrap();
+    drop(lease);
+    reset_global();
 }

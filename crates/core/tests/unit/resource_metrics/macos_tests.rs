@@ -3,6 +3,49 @@
 
 use std::process::{Child, Command};
 
+#[test]
+fn system_available_memory_matches_macos_non_compressed_pool() {
+    let output = Command::new("/usr/bin/vm_stat").output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let page_size = text
+        .split_once("page size of ")
+        .unwrap()
+        .1
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    let pages = |name| {
+        text.lines()
+            .find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                (key == name).then(|| value.trim().trim_end_matches('.').parse::<u64>().unwrap())
+            })
+            .unwrap()
+    };
+    // Apple defines available non-compressed memory as active + inactive + free
+    // + speculative. The previous sysinfo calculation subtracted compressor pages.
+    let expected_kib = (pages("Pages active")
+        + pages("Pages inactive")
+        + pages("Pages free")
+        + pages("Pages speculative"))
+        * page_size
+        / 1_024;
+    let sample = super::super::system_memory_sample().unwrap();
+    let measurement = sample.available.unwrap();
+    assert_eq!(measurement.unit, super::CapacityUnit::Kibibytes);
+    let super::super::ResourceMetricValue::Integer(actual_kib) = measurement.value else {
+        panic!("available memory must be an integer");
+    };
+    // Separate host queries can differ while other processes allocate memory.
+    assert!(
+        actual_kib.abs_diff(expected_kib) < 256 * 1_024,
+        "Relay available {actual_kib} KiB, macOS non-compressed pool {expected_kib} KiB"
+    );
+}
+
 #[derive(Default)]
 struct SleepingChildren(Vec<Child>);
 

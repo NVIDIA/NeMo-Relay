@@ -26,6 +26,8 @@ fn command(subcommand: Option<DaemonSubcommand>) -> DaemonCommand {
         tls_cert: None,
         tls_key: None,
         pass_through: false,
+        require_worker: false,
+        max_tokens_per_identity: None,
         command: subcommand,
     }
 }
@@ -114,4 +116,53 @@ fn daemon_value_parsers_cover_valid_and_invalid_address_shapes() {
     assert!(parse_daemon_address("https://relay.example:443/path").is_err());
     assert!(parse_daemon_address("https://0.0.0.0:443").is_err());
     assert!(parse_daemon_address("http://relay.example:80").is_err());
+}
+
+#[test]
+fn token_ensure_output_names_status_and_path_only() {
+    let path = std::path::Path::new("/home/user/.config/nemo-relay/.client-token");
+    for (status, expected) in [
+        (
+            daemon::common::client_token::EnsureStatus::Created,
+            "created",
+        ),
+        (
+            daemon::common::client_token::EnsureStatus::Existing,
+            "existing",
+        ),
+    ] {
+        let json: serde_json::Value =
+            serde_json::from_str(&render_token_ensure(status, path, true).unwrap()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"status": expected, "path": path.display().to_string()})
+        );
+        let human = render_token_ensure(status, path, false).unwrap();
+        assert!(human.contains(&path.display().to_string()), "{human}");
+    }
+}
+
+#[test]
+fn max_tokens_per_identity_prefers_the_flag_then_the_environment() {
+    assert_eq!(resolve_max_tokens_per_identity(None, None).unwrap(), 4);
+    assert_eq!(
+        resolve_max_tokens_per_identity(None, Some(" 8 ")).unwrap(),
+        8
+    );
+    assert_eq!(
+        resolve_max_tokens_per_identity(Some(2), Some("8")).unwrap(),
+        2
+    );
+    for invalid in ["0", "65", "four", ""] {
+        let error = resolve_max_tokens_per_identity(None, Some(invalid))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY"),
+            "{error}"
+        );
+        assert!(error.contains("1 through 64"), "{error}");
+    }
+    assert!(parse_max_tokens_per_identity("64").is_ok());
+    assert!(parse_max_tokens_per_identity("65").is_err());
 }

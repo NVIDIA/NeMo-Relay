@@ -310,6 +310,44 @@ async fn rust_worker_event_metadata_injector_enriches_events_and_is_removed_on_c
 
 #[tokio::test]
 async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_up() {
+    // A synchronous scope lock deadlock cannot be cancelled by a Tokio timeout.
+    // Bound the entire reproduction, including worker shutdown, in a child process.
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_COMPACTION_GATE_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "rust_worker_conditional_middleware_callback_controls_target_and_cleans_up",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .spawn()
+            .expect("compaction regression process should start");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if let Some(status) = child.try_wait().expect("regression process should poll") {
+                assert!(status.success(), "compaction regression failed: {status}");
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                // The fixture worker is owned by the reproduction process. Kill it
+                // before killing its deadlocked host, which cannot run Drop cleanup.
+                let processes = sysinfo::System::new_all();
+                let host_pid = sysinfo::Pid::from_u32(child.id());
+                for process in processes.processes().values() {
+                    if process.parent() == Some(host_pid) {
+                        let _ = process.kill();
+                    }
+                }
+                child
+                    .kill()
+                    .expect("deadlocked regression process should stop");
+                child.wait().expect("regression process should be reaped");
+                panic!("compaction or worker shutdown failed to complete within 20 seconds");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let target_name = "fixture_worker_gate_target";
     let deliveries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -321,6 +359,16 @@ async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_
         }),
     )
     .expect("gate target subscriber should register");
+    let events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured = events.clone();
+    let observer_name = "worker_compaction_gate_observer";
+    register_subscriber(
+        observer_name,
+        Arc::new(move |event| {
+            captured.lock().unwrap().push(event.name().to_owned());
+        }),
+    )
+    .expect("compaction observer should register");
 
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
@@ -338,14 +386,20 @@ async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_
     .expect("worker plugin host should activate");
     assert!(!report.has_errors());
 
-    event(
-        EmitMarkEventParams::builder()
-            .name("worker-gate-active")
-            .build(),
-    )
-    .expect("gated mark should emit");
+    let names = [
+        "worker-gate-active",
+        "worker-before-compaction",
+        "compaction",
+        "compaction",
+        "worker-after-compaction",
+    ];
+    for name in names {
+        event(EmitMarkEventParams::builder().name(name).build())
+            .expect("gated mark should emit without deadlocking");
+    }
     flush_subscribers().expect("gated mark should flush");
     assert_eq!(deliveries.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(*events.lock().unwrap(), names);
 
     activation.close().expect("worker plugin host should close");
     event(
@@ -357,6 +411,7 @@ async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_
     flush_subscribers().expect("post-clear mark should flush");
     assert_eq!(deliveries.load(std::sync::atomic::Ordering::SeqCst), 1);
     deregister_subscriber(target_name).expect("gate target subscriber should deregister");
+    deregister_subscriber(observer_name).expect("compaction observer should deregister");
 }
 
 #[tokio::test]
@@ -705,6 +760,17 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
     );
     assert_eq!(pending_mark.metadata().unwrap()["fixture"], true);
     assert_eq!(pending_mark.metadata().unwrap()["worker_plugin_mark"], true);
+    let runtime_mark = find_event(
+        &captured_events,
+        "fixture.worker.llm_execution.runtime.mark",
+        None,
+    );
+    assert_eq!(runtime_mark.parent_uuid(), Some(llm_start.uuid()));
+    assert!(runtime_mark.propagation_traceparent().is_some());
+    assert_eq!(
+        runtime_mark.metadata().unwrap()["name"],
+        "worker-fixture-llm-execute"
+    );
     let llm_end = find_event(
         &captured_events,
         "worker-fixture-llm-execute",
@@ -749,7 +815,27 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         stream_value["request"]["worker_plugin_llm_stream_execution_request"],
         true
     );
+    flush_subscribers().expect("worker fixture streaming events should flush");
+    let captured_events = events.lock().unwrap().clone();
+    let stream_start = find_event(
+        &captured_events,
+        "worker-fixture-llm-stream",
+        Some(ScopeCategory::Start),
+    );
+    let stream_runtime_mark = find_event(
+        &captured_events,
+        "fixture.worker.llm_stream_execution.runtime.mark",
+        None,
+    );
+    assert_eq!(stream_runtime_mark.parent_uuid(), Some(stream_start.uuid()));
+    assert!(stream_runtime_mark.propagation_traceparent().is_some());
+    assert_eq!(
+        stream_runtime_mark.metadata().unwrap()["name"],
+        "worker-fixture-llm-stream"
+    );
 
+    deregister_subscriber("worker_plugin_fixture_events")
+        .expect("worker fixture subscriber should deregister");
     loaded.clear();
 }
 
@@ -1691,7 +1777,20 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
 
     flush_subscribers().expect("Python callback mark should flush");
     let captured_events = events.lock().unwrap();
-    find_event(&captured_events, "example.python_worker.tool_request", None);
+    let tool_start = find_event(
+        &captured_events,
+        "python-worker-tool",
+        Some(ScopeCategory::Start),
+    );
+    let runtime_scope = find_event(
+        &captured_events,
+        "example.python_worker.request",
+        Some(ScopeCategory::Start),
+    );
+    assert_eq!(runtime_scope.parent_uuid(), Some(tool_start.uuid()));
+    assert!(runtime_scope.propagation_traceparent().is_some());
+    let runtime_mark = find_event(&captured_events, "example.python_worker.tool_request", None);
+    assert_eq!(runtime_mark.parent_uuid(), Some(runtime_scope.uuid()));
     let tool_mark = find_event(
         &captured_events,
         "example.python_worker.tool_execution",

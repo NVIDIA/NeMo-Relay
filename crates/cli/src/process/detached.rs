@@ -85,6 +85,26 @@ impl Drop for AttributeList {
     }
 }
 
+/// Restore inheritance even when preparing process creation fails.
+#[cfg(windows)]
+struct InheritedHandles(Vec<windows_sys::Win32::Foundation::HANDLE>);
+
+#[cfg(windows)]
+impl Drop for InheritedHandles {
+    fn drop(&mut self) {
+        for &handle in &self.0 {
+            // SAFETY: The stdio files outlive this guard.
+            unsafe {
+                windows_sys::Win32::Foundation::SetHandleInformation(
+                    handle,
+                    windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT,
+                    0,
+                );
+            }
+        }
+    }
+}
+
 #[cfg(not(windows))]
 pub(crate) type DetachedChild = Child;
 
@@ -125,6 +145,26 @@ impl DetachedChild {
         }
     }
 
+    pub(crate) fn start_kill(&mut self) -> std::io::Result<()> {
+        // SAFETY: The process handle is owned and remains live throughout this call.
+        if unsafe { windows_sys::Win32::System::Threading::TerminateProcess(self.process, 1) } == 0
+        {
+            if self.try_wait()?.is_some() {
+                return Ok(());
+            }
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn kill(&mut self) -> std::io::Result<()> {
+        self.start_kill()?;
+        while self.try_wait()?.is_none() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        Ok(())
+    }
+
     pub(crate) fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
         use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
         use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
@@ -153,9 +193,14 @@ impl Drop for DetachedChild {
 }
 
 #[cfg(windows)]
-fn spawn_detached_with_handle_list(command: &Command) -> std::io::Result<DetachedChild> {
+fn spawn_with_handle_list(
+    command: &Command,
+    stdin: &std::fs::File,
+    stdout: &std::fs::File,
+    stderr: &std::fs::File,
+    require_breakaway: bool,
+) -> std::io::Result<DetachedChild> {
     use std::ffi::c_void;
-    use std::fs::OpenOptions;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation};
     use windows_sys::Win32::System::Threading::{
@@ -164,17 +209,21 @@ fn spawn_detached_with_handle_list(command: &Command) -> std::io::Result<Detache
         STARTF_USESTDHANDLES, STARTUPINFOEXW, UpdateProcThreadAttribute,
     };
 
-    let stdin = OpenOptions::new().read(true).open(r"\\.\NUL")?;
-    let stdout = OpenOptions::new().write(true).open(r"\\.\NUL")?;
     let handles = [
         stdin.as_raw_handle().cast::<c_void>(),
         stdout.as_raw_handle().cast::<c_void>(),
+        stderr.as_raw_handle().cast::<c_void>(),
     ];
+    let mut inherited = InheritedHandles(Vec::new());
     for handle in handles {
-        // SAFETY: These are live handles owned by `stdin` and `stdout`.
+        if inherited.0.contains(&handle) {
+            continue;
+        }
+        // SAFETY: The stdio files own these live handles through process creation.
         if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
             return Err(std::io::Error::last_os_error());
         }
+        inherited.0.push(handle);
     }
 
     let mut attribute_bytes = 0;
@@ -199,8 +248,8 @@ fn spawn_detached_with_handle_list(command: &Command) -> std::io::Result<Detache
             attribute_list.0,
             0,
             PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-            handles.as_ptr().cast(),
-            std::mem::size_of_val(&handles),
+            inherited.0.as_ptr().cast(),
+            inherited.0.len() * std::mem::size_of::<HANDLE>(),
             std::ptr::null_mut(),
             std::ptr::null(),
         )
@@ -227,11 +276,16 @@ fn spawn_detached_with_handle_list(command: &Command) -> std::io::Result<Detache
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.StartupInfo.hStdInput = handles[0] as HANDLE;
     startup.StartupInfo.hStdOutput = handles[1] as HANDLE;
-    startup.StartupInfo.hStdError = handles[1] as HANDLE;
+    startup.StartupInfo.hStdError = handles[2] as HANDLE;
     startup.lpAttributeList = attribute_list.0;
     let mut process = PROCESS_INFORMATION::default();
     let (in_job, limits) = current_windows_job_limits();
-    let (creation_flags, _) = windows_creation_flags(in_job, limits);
+    let (creation_flags, limited_lifetime) = windows_creation_flags(in_job, limits);
+    if require_breakaway && limited_lifetime {
+        return Err(std::io::Error::other(
+            "the enclosing Windows Job Object forbids worker breakaway",
+        ));
+    }
     // SAFETY: Every pointer references initialized storage that remains live for this call.
     let created = unsafe {
         CreateProcessW(
@@ -250,18 +304,44 @@ fn spawn_detached_with_handle_list(command: &Command) -> std::io::Result<Detache
         )
     };
     let create_error = (created == 0).then(std::io::Error::last_os_error);
-    for handle in handles {
-        // SAFETY: The handles remain live; clear inheritance before releasing the spawn lock.
-        unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
-    }
     if let Some(error) = create_error {
         return Err(error);
     }
-    Ok(DetachedChild {
+    let mut child = DetachedChild {
         process: process.hProcess,
         thread: process.hThread,
         id: process.dwProcessId,
-    })
+    };
+    if require_breakaway {
+        let mut child_in_job = 0;
+        // A nested parent job can retain the child even after breakaway from the immediate job.
+        // SAFETY: The process handle is owned here and the output pointer is valid.
+        let queried = unsafe {
+            windows_sys::Win32::System::JobObjects::IsProcessInJob(
+                child.process,
+                std::ptr::null_mut(),
+                &mut child_in_job,
+            )
+        };
+        let error = if queried == 0 {
+            Some(std::io::Error::last_os_error())
+        } else if child_in_job != 0 {
+            Some(std::io::Error::other(
+                "an enclosing Windows Job Object retained the worker after breakaway",
+            ))
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            if let Err(cleanup) = child.start_kill().and_then(|()| child.wait().map(|_| ())) {
+                log::error!(target: "nemo_relay.bootstrap", event = "worker_breakaway_cleanup_failed",
+                    process_id = child.id(), error_kind = "io";
+                    "Failed to clean up worker after breakaway verification: {cleanup}");
+            }
+            return Err(error);
+        }
+    }
+    Ok(child)
 }
 
 #[cfg(windows)]
@@ -269,7 +349,65 @@ pub(crate) fn spawn_detached(command: &mut Command) -> std::io::Result<DetachedC
     let _spawn_guard = SIDECAR_SPAWN_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    spawn_detached_with_handle_list(command)
+    let stdin = std::fs::OpenOptions::new().read(true).open(r"\\.\NUL")?;
+    let stdout = std::fs::OpenOptions::new().write(true).open(r"\\.\NUL")?;
+    spawn_with_handle_list(command, &stdin, &stdout, &stdout, false)
+}
+
+/// Duplicate process stderr so the worker inherits only its intended logging handle.
+#[cfg(windows)]
+pub(crate) fn inherited_stderr() -> std::io::Result<std::fs::File> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
+    use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let source = std::io::stderr().as_raw_handle();
+    let mut duplicate = std::ptr::null_mut();
+    // SAFETY: The process pseudo-handle and stderr handle remain live. The returned duplicate
+    // has independent ownership and is whitelisted only for the child spawn.
+    if unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            source,
+            GetCurrentProcess(),
+            &mut duplicate,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    } == 0
+    {
+        // Background launchers can have no stderr at all; retain a disconnected fallback.
+        return std::fs::OpenOptions::new().write(true).open(r"\\.\NUL");
+    }
+    // SAFETY: DuplicateHandle returned an owned file/pipe handle.
+    Ok(unsafe { std::fs::File::from_raw_handle(duplicate) })
+}
+
+/// Detached worker with an explicitly whitelisted bootstrap pipe and stderr handle.
+#[cfg(windows)]
+pub(crate) fn spawn_worker_detached(
+    command: &Command,
+    stderr: &std::fs::File,
+) -> std::io::Result<(DetachedChild, std::fs::File)> {
+    use std::os::windows::io::FromRawHandle;
+    let _spawn_guard = SIDECAR_SPAWN_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut read = std::ptr::null_mut();
+    let mut write = std::ptr::null_mut();
+    // SAFETY: Both output pointers are valid; ownership transfers into File on success.
+    if unsafe {
+        windows_sys::Win32::System::Pipes::CreatePipe(&mut read, &mut write, std::ptr::null(), 0)
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: CreatePipe returned two distinct owned handles.
+    let stdin = unsafe { std::fs::File::from_raw_handle(read) };
+    let parent = unsafe { std::fs::File::from_raw_handle(write) };
+    let stdout = std::fs::OpenOptions::new().write(true).open(r"\\.\NUL")?;
+    let child = spawn_with_handle_list(command, &stdin, &stdout, stderr, true)?;
+    Ok((child, parent))
 }
 
 #[cfg(not(windows))]

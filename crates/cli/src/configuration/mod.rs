@@ -71,6 +71,7 @@ struct FileGatewayConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileUpstreamConfig {
+    response_timeout_secs: Option<u64>,
     openai_base_url: Option<String>,
     openai_auth_header: Option<String>,
     anthropic_base_url: Option<String>,
@@ -320,6 +321,7 @@ fn persistent_bootstrap_fingerprint(
         "openai_auth_header": gateway.openai_auth_header,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
+        "response_timeout_secs": gateway.response_timeout_secs,
         "metadata": gateway.metadata,
         "plugin_config": gateway.plugin_config,
         "max_hook_payload_bytes": gateway.max_hook_payload_bytes,
@@ -754,11 +756,16 @@ pub(crate) fn verify_python_environment_attestation_for_environment(
         return Ok(false);
     };
     let path = environment.join(".nemo-relay-environment.key");
-    let Some(key) = load_python_environment_hmac_key(&path)? else {
-        // Older installations kept this attestation key in the installing user's bootstrap
-        // directory. The caller also compares the measured environment tree to the attested
-        // digest, so retain read-only compatibility for existing system-owned environments.
-        return Ok(true);
+    let key = match load_python_environment_hmac_key(&path)? {
+        Some(key) => key,
+        None => {
+            // Legacy attestations require the installing user's original bootstrap key.
+            // Verification must not create a replacement key or trust an unsigned digest.
+            let Some(key) = load_existing_bootstrap_hmac_key()? else {
+                return Ok(false);
+            };
+            key
+        }
     };
     let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
     Ok(hmac::verify(
@@ -1641,11 +1648,15 @@ fn apply_file_upstream_config(
         return Ok(());
     };
     let FileUpstreamConfig {
+        response_timeout_secs,
         openai_base_url,
         openai_auth_header,
         anthropic_base_url,
         anthropic_auth_header,
     } = upstream;
+    if let Some(value) = response_timeout_secs {
+        gateway.response_timeout_secs = value;
+    }
     if let Some(value) = openai_base_url {
         gateway.openai_base_url = value;
         if openai_auth_header.is_none() {

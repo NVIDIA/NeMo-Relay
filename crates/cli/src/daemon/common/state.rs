@@ -27,6 +27,7 @@ const ACTIVE_WORKER_GENERATIONS_SCHEMA_VERSION: u32 = 1;
 const MAX_ACTIVE_WORKER_GENERATIONS: usize = 4_096;
 const MAX_ACTIVE_WORKER_GENERATIONS_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_GENERATION_ID_BYTES: usize = 128;
+const MAX_ACTIVATION_ID_BYTES: usize = 128;
 
 #[derive(Clone)]
 pub(crate) struct RouteCredential {
@@ -44,15 +45,6 @@ impl fmt::Debug for RouteCredential {
 }
 
 impl RouteCredential {
-    pub(crate) fn from_environment() -> Result<Self, CliError> {
-        let value = std::env::var(ROUTE_TOKEN_ENV).map_err(|_| {
-            CliError::Config(format!(
-                "managed daemon integration requires {ROUTE_TOKEN_ENV}; contact the managed environment administrator"
-            ))
-        })?;
-        Self::parse(value)
-    }
-
     pub(crate) fn parse(value: String) -> Result<Self, CliError> {
         if value.trim() != value || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
             return Err(CliError::Config(format!(
@@ -92,10 +84,16 @@ pub(crate) fn load_or_create_daemon_identity() -> Result<MachineIdentity, CliErr
     load_or_create_identity(&daemon_state_dir()?.join("daemon-identity.pk8"))
 }
 
-/// Owner-private durable record of the only worker generation allowed to recover per route.
+/// Owner-private durable record of the worker generation and launch allowed to recover per route.
 #[derive(Debug)]
 pub(crate) struct ActiveWorkerGenerations {
     path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ActiveWorkerGeneration {
+    generation_id: String,
+    activation_id: Option<String>,
 }
 
 impl ActiveWorkerGenerations {
@@ -121,7 +119,26 @@ impl ActiveWorkerGenerations {
             Ok((
                 generations
                     .get(&fingerprint)
-                    .is_some_and(|active| active == generation_id),
+                    .is_some_and(|active| active.generation_id == generation_id),
+                false,
+            ))
+        })
+    }
+
+    /// Returns the launch activation for an active generation, when one was recorded.
+    pub(crate) fn launch_activation_id(
+        &self,
+        fingerprint: Fingerprint,
+        generation_id: &str,
+    ) -> Result<Option<String>, CliError> {
+        validate_generation_id(generation_id)?;
+        self.with_locked_generations(|generations| {
+            Ok((
+                generations.get(&fingerprint).and_then(|active| {
+                    (active.generation_id == generation_id)
+                        .then(|| active.activation_id.clone())
+                        .flatten()
+                }),
                 false,
             ))
         })
@@ -129,7 +146,15 @@ impl ActiveWorkerGenerations {
 
     /// Captures generations that may reconnect after this daemon starts.
     pub(crate) fn snapshot(&self) -> Result<HashMap<Fingerprint, String>, CliError> {
-        self.with_locked_generations(|generations| Ok((generations.clone(), false)))
+        self.with_locked_generations(|generations| {
+            Ok((
+                generations
+                    .iter()
+                    .map(|(fingerprint, active)| (*fingerprint, active.generation_id.clone()))
+                    .collect(),
+                false,
+            ))
+        })
     }
 
     /// Publishes a ready generation, atomically replacing any prior generation for the route.
@@ -137,8 +162,12 @@ impl ActiveWorkerGenerations {
         &self,
         fingerprint: Fingerprint,
         generation_id: &str,
-    ) -> Result<Option<String>, CliError> {
+        activation_id: Option<&str>,
+    ) -> Result<Option<ActiveWorkerGeneration>, CliError> {
         validate_generation_id(generation_id)?;
+        if let Some(activation_id) = activation_id {
+            validate_activation_id(activation_id)?;
+        }
         self.with_locked_generations(|generations| {
             if !generations.contains_key(&fingerprint)
                 && generations.len() >= MAX_ACTIVE_WORKER_GENERATIONS
@@ -147,8 +176,12 @@ impl ActiveWorkerGenerations {
                     "active worker generation state exceeds {MAX_ACTIVE_WORKER_GENERATIONS} routes"
                 )));
             }
-            let previous = generations.insert(fingerprint, generation_id.to_owned());
-            let changed = previous.as_deref() != Some(generation_id);
+            let active = ActiveWorkerGeneration {
+                generation_id: generation_id.to_owned(),
+                activation_id: activation_id.map(ToOwned::to_owned),
+            };
+            let previous = generations.insert(fingerprint, active.clone());
+            let changed = previous.as_ref() != Some(&active);
             Ok((previous, changed))
         })
     }
@@ -163,7 +196,7 @@ impl ActiveWorkerGenerations {
         self.with_locked_generations(|generations| {
             let matches = generations
                 .get(&fingerprint)
-                .is_some_and(|active| active == generation_id);
+                .is_some_and(|active| active.generation_id == generation_id);
             if matches {
                 generations.remove(&fingerprint);
             }
@@ -176,22 +209,25 @@ impl ActiveWorkerGenerations {
         &self,
         fingerprint: Fingerprint,
         expected_generation_id: &str,
-        previous_generation_id: Option<&str>,
+        previous_generation: Option<&ActiveWorkerGeneration>,
     ) -> Result<bool, CliError> {
         validate_generation_id(expected_generation_id)?;
-        if let Some(previous) = previous_generation_id {
-            validate_generation_id(previous)?;
+        if let Some(previous) = previous_generation {
+            validate_generation_id(&previous.generation_id)?;
+            if let Some(activation_id) = previous.activation_id.as_deref() {
+                validate_activation_id(activation_id)?;
+            }
         }
         self.with_locked_generations(|generations| {
             let matches = generations
                 .get(&fingerprint)
-                .is_some_and(|active| active == expected_generation_id);
+                .is_some_and(|active| active.generation_id == expected_generation_id);
             if !matches {
                 return Ok((false, false));
             }
-            match previous_generation_id {
+            match previous_generation {
                 Some(previous) => {
-                    generations.insert(fingerprint, previous.to_owned());
+                    generations.insert(fingerprint, previous.clone());
                 }
                 None => {
                     generations.remove(&fingerprint);
@@ -203,7 +239,9 @@ impl ActiveWorkerGenerations {
 
     fn with_locked_generations<T>(
         &self,
-        operation: impl FnOnce(&mut HashMap<Fingerprint, String>) -> Result<(T, bool), CliError>,
+        operation: impl FnOnce(
+            &mut HashMap<Fingerprint, ActiveWorkerGeneration>,
+        ) -> Result<(T, bool), CliError>,
     ) -> Result<T, CliError> {
         let parent = self
             .path
@@ -243,9 +281,13 @@ struct PersistedActiveWorkerGenerations {
 struct PersistedActiveWorkerGeneration {
     fingerprint: Fingerprint,
     generation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    activation_id: Option<String>,
 }
 
-fn read_active_worker_generations(path: &Path) -> Result<HashMap<Fingerprint, String>, CliError> {
+fn read_active_worker_generations(
+    path: &Path,
+) -> Result<HashMap<Fingerprint, ActiveWorkerGeneration>, CliError> {
     let Some(bytes) = read_bounded(
         path,
         MAX_ACTIVE_WORKER_GENERATIONS_BYTES,
@@ -277,8 +319,17 @@ fn read_active_worker_generations(path: &Path) -> Result<HashMap<Fingerprint, St
     let mut generations = HashMap::with_capacity(persisted.generations.len());
     for entry in persisted.generations {
         validate_generation_id(&entry.generation_id)?;
+        if let Some(activation_id) = entry.activation_id.as_deref() {
+            validate_activation_id(activation_id)?;
+        }
         if generations
-            .insert(entry.fingerprint, entry.generation_id)
+            .insert(
+                entry.fingerprint,
+                ActiveWorkerGeneration {
+                    generation_id: entry.generation_id,
+                    activation_id: entry.activation_id,
+                },
+            )
             .is_some()
         {
             return Err(CliError::Config(format!(
@@ -292,16 +343,15 @@ fn read_active_worker_generations(path: &Path) -> Result<HashMap<Fingerprint, St
 
 fn write_active_worker_generations(
     path: &Path,
-    generations: &HashMap<Fingerprint, String>,
+    generations: &HashMap<Fingerprint, ActiveWorkerGeneration>,
 ) -> Result<(), CliError> {
     let mut entries = generations
         .iter()
-        .map(
-            |(fingerprint, generation_id)| PersistedActiveWorkerGeneration {
-                fingerprint: *fingerprint,
-                generation_id: generation_id.clone(),
-            },
-        )
+        .map(|(fingerprint, active)| PersistedActiveWorkerGeneration {
+            fingerprint: *fingerprint,
+            generation_id: active.generation_id.clone(),
+            activation_id: active.activation_id.clone(),
+        })
         .collect::<Vec<_>>();
     entries.sort_by_key(|entry| entry.fingerprint.to_string());
     let document = PersistedActiveWorkerGenerations {
@@ -326,6 +376,15 @@ fn validate_generation_id(generation_id: &str) -> Result<(), CliError> {
     if generation_id.is_empty() || generation_id.len() > MAX_GENERATION_ID_BYTES {
         return Err(CliError::Config(
             "active worker generation ID is invalid".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_activation_id(activation_id: &str) -> Result<(), CliError> {
+    if activation_id.is_empty() || activation_id.len() > MAX_ACTIVATION_ID_BYTES {
+        return Err(CliError::Config(
+            "active worker activation ID is invalid".into(),
         ));
     }
     Ok(())

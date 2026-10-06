@@ -5,18 +5,18 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Diagnostic severity returned by plugin validation.
+/// Severity of a plugin configuration or activation diagnostic.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum DiagnosticLevel {
-    /// Non-fatal compatibility or validation issue.
+    /// Non-fatal compatibility, validation, or activation issue.
     Warning,
-    /// Fatal validation issue that blocks initialization.
+    /// Fatal validation or activation issue that blocks initialization.
     Error,
 }
 
-/// Structured validation diagnostic for plugin validation.
+/// Structured diagnostic reported while validating or activating plugin configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigDiagnostic {

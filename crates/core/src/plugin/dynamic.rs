@@ -276,12 +276,28 @@ pub(super) fn validate_dynamic_plugin_relay_compatibility(
     let (relay, requirement) = parse_dynamic_plugin_relay_requirement(relay, plugin_type)?;
     let host_version = Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|error| PluginError::Internal(format!("failed to parse host version: {error}")))?;
-    if !requirement.matches(&host_version) {
+    if !relay_version_matches(&requirement, &host_version) {
         return Err(PluginError::InvalidConfig(format!(
             "{plugin_type} plugin requires relay '{relay}' but host version is {host_version}"
         )));
     }
     Ok(())
+}
+
+/// Returns whether a Relay version satisfies a `compat.relay` requirement.
+#[doc(hidden)]
+pub fn relay_version_matches(requirement: &VersionReq, version: &Version) -> bool {
+    let release = Version::new(version.major, version.minor, version.patch);
+    let targets_prerelease = requirement.comparators.iter().any(|comparator| {
+        !comparator.pre.is_empty()
+            && (comparator.major, comparator.minor, comparator.patch)
+                == (release.major, Some(release.minor), Some(release.patch))
+    });
+    if targets_prerelease {
+        requirement.matches(version)
+    } else {
+        requirement.matches(&release)
+    }
 }
 
 /// Plugin execution lane.

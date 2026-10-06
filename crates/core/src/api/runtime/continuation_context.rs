@@ -9,14 +9,23 @@ use crate::api::optimization::{
     LlmOptimizationRecorder, current_llm_optimization_recorder, scope_llm_optimization_recorder,
 };
 use crate::api::runtime::scope_stack::{
-    ScopeStackHandle, TASK_SCOPE_STACK, W3cTraceContext, active_event_trace_context,
-    active_event_uuid, current_context_scope_stack, current_scope_stack, scope_stack_active,
-    snapshot_scope_stack, with_active_event_trace_context,
+    AnchoredActiveEvent, ScopeStackHandle, TASK_SCOPE_STACK, W3cTraceContext,
+    active_event_trace_context, capture_anchored_active_event, current_context_scope_stack,
+    current_scope_stack, rebind_active_event_to_stack, scope_stack_active, snapshot_scope_stack,
+    with_anchored_active_event,
+};
+#[cfg(feature = "worker-grpc")]
+use crate::api::runtime::scope_stack::{
+    install_thread_continuation_context, restore_thread_scope_stack, with_scope_stack,
 };
 use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, PublicationContext, capture_nested_publication_buffer,
     capture_publication_context, with_task_nested_publication_buffer,
     with_task_publication_context,
+};
+#[cfg(feature = "worker-grpc")]
+use crate::api::runtime::subscriber_dispatcher::{
+    with_nested_publication_buffer, with_publication_context,
 };
 use crate::error::{FlowError, Result};
 
@@ -28,7 +37,7 @@ use crate::error::{FlowError, Result};
 #[derive(Clone)]
 pub struct MiddlewareContinuationContext {
     scope_stack: ScopeStackHandle,
-    active_event_uuid: Option<uuid::Uuid>,
+    active_event: Option<AnchoredActiveEvent>,
     active_event_trace_context: Option<W3cTraceContext>,
     publication_context: Option<PublicationContext>,
     publication_buffer: Option<PublicationBuffer>,
@@ -42,7 +51,7 @@ impl MiddlewareContinuationContext {
     pub fn capture() -> Self {
         Self {
             scope_stack: current_scope_stack(),
-            active_event_uuid: active_event_uuid(),
+            active_event: capture_anchored_active_event(),
             active_event_trace_context: active_event_trace_context(),
             publication_context: capture_publication_context(),
             publication_buffer: capture_nested_publication_buffer(),
@@ -66,13 +75,47 @@ impl MiddlewareContinuationContext {
     /// from the stack captured when the middleware callback began.
     #[doc(hidden)]
     pub fn isolated_with_scope_stack(&self, scope_stack: &ScopeStackHandle) -> Result<Self> {
+        let scope_stack = snapshot_scope_stack(scope_stack)?;
         Ok(Self {
-            scope_stack: snapshot_scope_stack(scope_stack)?,
-            active_event_uuid: self.active_event_uuid,
+            active_event: self
+                .active_event
+                .clone()
+                .map(|active_event| rebind_active_event_to_stack(active_event, &scope_stack)),
+            scope_stack,
             active_event_trace_context: self.active_event_trace_context.clone(),
             publication_context: self.publication_context.clone(),
             publication_buffer: self.publication_buffer.clone(),
             optimization_recorder: self.optimization_recorder.clone(),
+        })
+    }
+
+    #[cfg(feature = "worker-grpc")]
+    pub(crate) fn scope_stack(&self) -> ScopeStackHandle {
+        self.scope_stack.clone()
+    }
+
+    #[cfg(feature = "worker-grpc")]
+    pub(crate) fn run_sync<T>(&self, callback: impl FnOnce() -> T) -> T {
+        struct RestoreThreadContext(Option<crate::api::runtime::ThreadScopeStackBinding>);
+
+        impl Drop for RestoreThreadContext {
+            fn drop(&mut self) {
+                if let Some(previous) = self.0.take() {
+                    restore_thread_scope_stack(previous);
+                }
+            }
+        }
+
+        let previous = install_thread_continuation_context(
+            &self.scope_stack,
+            self.active_event.clone(),
+            self.active_event_trace_context.clone(),
+        );
+        let _restore = RestoreThreadContext(Some(previous));
+        with_publication_context(self.publication_context.clone(), || {
+            with_nested_publication_buffer(self.publication_buffer.clone(), || {
+                with_scope_stack(self.scope_stack.clone(), callback)
+            })
         })
     }
 
@@ -96,10 +139,10 @@ impl MiddlewareContinuationContext {
         let published =
             with_task_nested_publication_buffer(self.publication_buffer.clone(), published);
         let active = async {
-            match self.active_event_uuid {
-                Some(uuid) => {
-                    with_active_event_trace_context(
-                        uuid,
+            match self.active_event.clone() {
+                Some(active_event) => {
+                    with_anchored_active_event(
+                        active_event,
                         self.active_event_trace_context.clone(),
                         published,
                     )

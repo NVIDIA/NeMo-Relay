@@ -18,6 +18,7 @@ use std::marker::{PhantomData, PhantomPinned};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{
@@ -2094,6 +2095,36 @@ impl PluginRuntime {
         })
     }
 
+    /// Opens a scope and records `started_at` on its start event.
+    ///
+    /// This is typed SDK access to the timestamp slot already carried by the
+    /// native host's `scope_push` function. It does not introduce a distinct
+    /// scope event or change the native ABI.
+    pub fn scope_at(
+        &self,
+        name: &str,
+        scope_type: ScopeType,
+        data: Option<&Json>,
+        metadata: Option<&Json>,
+        input: Option<&Json>,
+        started_at: SystemTime,
+    ) -> Result<ScopeGuard<'_>> {
+        let timestamp = unix_micros(started_at)?;
+        let handle = push_scope_with_timestamp(
+            &self.host,
+            name,
+            scope_type.into(),
+            data,
+            metadata,
+            input,
+            Some(timestamp),
+        )?;
+        Ok(ScopeGuard {
+            runtime: self,
+            handle: Some(handle),
+        })
+    }
+
     /// Emits a mark event under the current scope.
     pub fn emit_mark(
         &self,
@@ -2215,7 +2246,8 @@ impl From<ScopeType> for NemoRelayNativeScopeType {
     }
 }
 
-/// RAII guard for a host scope opened by [`PluginRuntime::scope`].
+/// RAII guard for a host scope opened by [`PluginRuntime::scope`] or
+/// [`PluginRuntime::scope_at`].
 ///
 /// A guard may move between threads only while its scope stack is bound on the
 /// destination thread. Async middleware restores that binding around each poll;
@@ -2238,6 +2270,33 @@ impl<'a> ScopeGuard<'a> {
             return Ok(());
         };
         self.runtime.pop_scope(handle, output, metadata)?;
+        self.handle.take();
+        Ok(())
+    }
+
+    /// Pops the scope and records `ended_at` on its end event.
+    ///
+    /// This is typed SDK access to the timestamp slot already carried by the
+    /// native host's `scope_pop` function. The handle remains owned by this
+    /// guard if the host rejects the close, so [`Drop`] can still attempt the
+    /// ordinary cleanup path.
+    pub fn close_at(
+        &mut self,
+        output: Option<&Json>,
+        metadata: Option<&Json>,
+        ended_at: SystemTime,
+    ) -> Result<()> {
+        let Some(handle) = self.handle.as_ref() else {
+            return Ok(());
+        };
+        let timestamp = unix_micros(ended_at)?;
+        pop_scope_with_timestamp(
+            &self.runtime.host,
+            handle,
+            output,
+            metadata,
+            Some(timestamp),
+        )?;
         self.handle.take();
         Ok(())
     }
@@ -2560,6 +2619,18 @@ pub fn push_scope<'a>(
     metadata: Option<&Json>,
     input: Option<&Json>,
 ) -> Result<ScopeHandle<'a>> {
+    push_scope_with_timestamp(host, name, scope_type, data, metadata, input, None)
+}
+
+fn push_scope_with_timestamp<'a>(
+    host: &'a NemoRelayNativeHostApiV1,
+    name: &str,
+    scope_type: NemoRelayNativeScopeType,
+    data: Option<&Json>,
+    metadata: Option<&Json>,
+    input: Option<&Json>,
+    timestamp: Option<i64>,
+) -> Result<ScopeHandle<'a>> {
     let name =
         HostString::new(host, name).ok_or_else(|| "failed to allocate scope name".to_string())?;
     let data = OptionalHostJson::new(host, data)?;
@@ -2575,7 +2646,7 @@ pub fn push_scope<'a>(
             data.as_ptr(),
             metadata.as_ptr(),
             input.as_ptr(),
-            ptr::null(),
+            timestamp.as_ref().map_or(ptr::null(), ptr::from_ref),
             &mut out,
         )
     };
@@ -2593,6 +2664,16 @@ pub fn pop_scope(
     output: Option<&Json>,
     metadata: Option<&Json>,
 ) -> Result<()> {
+    pop_scope_with_timestamp(host, handle, output, metadata, None)
+}
+
+fn pop_scope_with_timestamp(
+    host: &NemoRelayNativeHostApiV1,
+    handle: &ScopeHandle<'_>,
+    output: Option<&Json>,
+    metadata: Option<&Json>,
+    timestamp: Option<i64>,
+) -> Result<()> {
     let output = OptionalHostJson::new(host, output)?;
     let metadata = OptionalHostJson::new(host, metadata)?;
     let status = unsafe {
@@ -2600,7 +2681,7 @@ pub fn pop_scope(
             handle.as_ptr(),
             output.as_ptr(),
             metadata.as_ptr(),
-            ptr::null(),
+            timestamp.as_ref().map_or(ptr::null(), ptr::from_ref),
         )
     };
     if status == NemoRelayStatus::Ok {
@@ -2608,6 +2689,22 @@ pub fn pop_scope(
     } else {
         Err(format!("scope_pop failed: {status:?}"))
     }
+}
+
+fn unix_micros(timestamp: SystemTime) -> Result<i64> {
+    let micros = match timestamp.duration_since(UNIX_EPOCH) {
+        Ok(duration) => i128::try_from(duration.as_micros()),
+        Err(error) => {
+            let duration = error.duration();
+            i128::try_from(duration.as_micros()).map(|micros| {
+                // `Duration::as_micros` truncates toward zero, but a signed
+                // Unix timestamp must floor pre-epoch sub-microsecond values.
+                -micros - i128::from(duration.subsec_nanos() % 1_000 != 0)
+            })
+        }
+    }
+    .map_err(|_| "scope timestamp exceeds the supported range".to_string())?;
+    i64::try_from(micros).map_err(|_| "scope timestamp exceeds the supported range".to_string())
 }
 
 /// Emits a mark event under the current scope.

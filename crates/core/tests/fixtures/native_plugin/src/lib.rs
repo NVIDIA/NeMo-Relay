@@ -28,6 +28,25 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct FixtureNativePlugin;
 
+struct DropScope {
+    runtime: PluginRuntime,
+    name: &'static str,
+}
+
+impl Drop for DropScope {
+    fn drop(&mut self) {
+        if let Ok(mut scope) = self.runtime.scope(
+            self.name,
+            ScopeType::Custom,
+            None,
+            None,
+            None,
+        ) {
+            let _ = scope.close(None, None);
+        }
+    }
+}
+
 static ASYNC_PENDING_ENTERED: AtomicBool = AtomicBool::new(false);
 
 #[unsafe(no_mangle)]
@@ -201,71 +220,7 @@ impl NativePlugin for FixtureNativePlugin {
                 }
             }
         })?;
-        ctx.register_tool_execution_intercept("fixture_tool_execution", 0, {
-            let runtime = runtime.clone();
-            move |context, next| {
-                let runtime = runtime.clone();
-                async move {
-                    let args = context.args;
-                    let args = mark_json(args, "native_plugin_tool_execution_request");
-                    let result = if args
-                        .get("use_isolated_next")
-                        .and_then(Json::as_bool)
-                        .unwrap_or(false)
-                    {
-                        let isolated = runtime.create_scope_stack()?;
-                        let previous = runtime.capture_scope_stack_thread()?;
-                        if isolated.set_thread() != NemoRelayStatus::Ok {
-                            return Err("failed to install isolated scope stack".into());
-                        }
-                        let mut scope = runtime.scope(
-                            "fixture.native.isolated.next",
-                            ScopeType::Custom,
-                            None,
-                            None,
-                            Some(&Json::String("isolated-next-input".into())),
-                        )?;
-                        let call_result = next.call(args).await;
-                        let close_result =
-                            scope.close(Some(&Json::String("isolated-next-output".into())), None);
-                        if previous.restore() != NemoRelayStatus::Ok {
-                            return Err("failed to restore callback scope stack".into());
-                        }
-                        close_result?;
-                        call_result?
-                    } else if args
-                        .get("use_concurrent_next")
-                        .and_then(Json::as_bool)
-                        .unwrap_or(false)
-                    {
-                        let first_next = next.clone();
-                        let (first, second) =
-                            tokio::join!(first_next.call(args.clone()), next.call(args),);
-                        let result = first?;
-                        second?;
-                        result
-                    } else {
-                        next.call(args).await?
-                    };
-                    let mut result = result;
-                    result.result = mark_json(result.result, "native_plugin_tool_execution");
-                    Ok(
-                        ToolExecutionInterceptOutcome::from(result).with_pending_mark(
-                            PendingMarkSpec::builder()
-                                .name("fixture.native.tool_execution.mark")
-                                .category(EventCategory::custom())
-                                .category_profile(CategoryProfile {
-                                    subtype: Some("fixture.native.tool_execution".into()),
-                                    ..CategoryProfile::default()
-                                })
-                                .data(json!({ "source": "native_tool_execution" }))
-                                .metadata(json!({ "fixture": true }))
-                                .build(),
-                        ),
-                    )
-                }
-            }
-        })?;
+        register_fixture_tool_execution(ctx, &runtime)?;
 
         ctx.register_llm_sanitize_request_guardrail(
             "fixture_llm_sanitize_request",
@@ -356,9 +311,170 @@ impl NativePlugin for FixtureNativePlugin {
                 Ok(stream)
             },
         )?;
+        ctx.register_llm_execution_intercept("fixture_llm_execution_cancellation", -1, {
+            let runtime = runtime.clone();
+            move |name, request, _context, next| {
+                let runtime = runtime.clone();
+                async move {
+                    if name != "native-fixture-cancelled-unary" {
+                        return next.call(request).await;
+                    }
+                    let _drop_scope = DropScope {
+                        runtime,
+                        name: "fixture.native.unary.drop",
+                    };
+                    ASYNC_PENDING_ENTERED.store(true, Ordering::Release);
+                    futures::future::pending::<nemo_relay_plugin::Result<Json>>().await
+                }
+            }
+        })?;
+        ctx.register_llm_stream_execution_intercept(
+            "fixture_llm_stream_execution_cancellation",
+            -1,
+            {
+                let runtime = runtime.clone();
+                move |name, request, _context, next| {
+                    let runtime = runtime.clone();
+                    async move {
+                        if name != "native-fixture-cancelled-stream" {
+                            return next.call(request).await;
+                        }
+                        let drop_scope = DropScope {
+                            runtime,
+                            name: "fixture.native.stream.drop",
+                        };
+                        let stream = next.call(request).await?;
+                        let stream: LlmJsonAsyncStream = Box::pin(stream.map(move |chunk| {
+                            let _ = &drop_scope;
+                            chunk
+                        }));
+                        Ok(stream)
+                    }
+                }
+            },
+        )?;
 
         Ok(())
     }
+}
+
+fn register_fixture_tool_execution(
+    ctx: &mut PluginContext<'_>,
+    runtime: &PluginRuntime,
+) -> nemo_relay_plugin::Result<()> {
+    ctx.register_tool_execution_intercept("fixture_tool_execution", 0, {
+        let runtime = runtime.clone();
+        move |context, next| {
+            let runtime = runtime.clone();
+            async move {
+                let args = context.args;
+                let args = mark_json(args, "native_plugin_tool_execution_request");
+                let result = if args
+                    .get("use_scoped_next")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false)
+                {
+                    let mut scope = runtime.scope(
+                        "fixture.native.scoped.next",
+                        ScopeType::Custom,
+                        None,
+                        None,
+                        Some(&Json::String("scoped-next-input".into())),
+                    )?;
+                    let call_result = next.call(args).await;
+                    let close_result =
+                        scope.close(Some(&Json::String("scoped-next-output".into())), None);
+                    close_result?;
+                    call_result?
+                } else if args
+                    .get("use_isolated_next")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false)
+                {
+                    let isolated = runtime.create_scope_stack()?;
+                    let previous = runtime.capture_scope_stack_thread()?;
+                    if isolated.set_thread() != NemoRelayStatus::Ok {
+                        return Err("failed to install isolated scope stack".into());
+                    }
+                    let mut scope = runtime.scope(
+                        "fixture.native.isolated.next",
+                        ScopeType::Custom,
+                        None,
+                        None,
+                        Some(&Json::String("isolated-next-input".into())),
+                    )?;
+                    let call_result = next.call(args).await;
+                    let close_result =
+                        scope.close(Some(&Json::String("isolated-next-output".into())), None);
+                    if previous.restore() != NemoRelayStatus::Ok {
+                        return Err("failed to restore callback scope stack".into());
+                    }
+                    close_result?;
+                    call_result?
+                } else if args
+                    .get("use_concurrent_next")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false)
+                {
+                    let first_next = next.clone();
+                    let (first, second) =
+                        tokio::join!(first_next.call(args.clone()), next.call(args),);
+                    let result = first?;
+                    second?;
+                    result
+                } else {
+                    next.call(args).await?
+                };
+                let mut result = result;
+                result.result = mark_json(result.result, "native_plugin_tool_execution");
+                Ok(
+                    ToolExecutionInterceptOutcome::from(result).with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("fixture.native.tool_execution.mark")
+                            .category(EventCategory::custom())
+                            .category_profile(CategoryProfile {
+                                subtype: Some("fixture.native.tool_execution".into()),
+                                ..CategoryProfile::default()
+                            })
+                            .data(json!({ "source": "native_tool_execution" }))
+                            .metadata(json!({ "fixture": true }))
+                            .build(),
+                    ),
+                )
+            }
+        }
+    })?;
+    ctx.register_tool_execution_intercept("fixture_tool_execution_nested", 1, {
+        let runtime = runtime.clone();
+        move |context, next| {
+            let runtime = runtime.clone();
+            async move {
+                let args = context.args;
+                if !args
+                    .get("use_scoped_next")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false)
+                {
+                    return next.call(args).await.map(Into::into);
+                }
+                let mut scope = runtime.scope(
+                    "fixture.native.scoped.next.downstream",
+                    ScopeType::Custom,
+                    None,
+                    None,
+                    Some(&Json::String("scoped-next-downstream-input".into())),
+                )?;
+                let call_result = next.call(args).await;
+                let close_result = scope.close(
+                    Some(&Json::String("scoped-next-downstream-output".into())),
+                    None,
+                );
+                close_result?;
+                call_result.map(Into::into)
+            }
+        }
+    })?;
+    Ok(())
 }
 
 fn register_fixture_event_metadata_injector(

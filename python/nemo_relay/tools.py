@@ -244,6 +244,8 @@ def request_intercepts(name: str, args: Json) -> Json | Awaitable[Json]:
     Notes:
         This runs only the request-intercept chain. It does not execute
         conditional guardrails, sanitize guardrails, or the tool callback.
+        Outside an event loop, middleware runs on a Relay helper thread while
+        the caller waits for the result.
     """
     ensure_scope_stack()
     return _native_tool_request_intercepts(name, args)
@@ -263,6 +265,8 @@ def conditional_execution(name: str, args: Json) -> Awaitable[None] | None:
     Notes:
         This helper evaluates only the conditional-execution guardrail chain
         and does not invoke request intercepts or tool execution.
+        Outside an event loop, middleware runs on a Relay helper thread while
+        the caller waits for the result.
 
     Raises:
         RuntimeError: If a guardrail rejects the call or an asynchronous

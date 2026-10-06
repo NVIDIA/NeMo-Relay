@@ -157,3 +157,92 @@ fn metric_rejects_the_entire_invalid_envelope_before_emission() {
     .unwrap_err();
     assert!(matches!(error, FlowError::InvalidArgument(_)));
 }
+
+#[test]
+fn malformed_reserved_tool_completion_marks_are_rejected_before_publication() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    let captured = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let capture = captured.clone();
+    register_subscriber(
+        "invalid-completion-mark",
+        Arc::new(move |event| {
+            capture.lock().unwrap().push(event.clone());
+        }),
+    )
+    .unwrap();
+    for data in [
+        None,
+        Some(json!({"arguments": {"secret": "request"}, "result": "secret"})),
+        Some(json!({"tool_name": 7, "result": "secret"})),
+        Some(json!({"tool_name": "   ", "arguments": "secret"})),
+    ] {
+        for metadata in [
+            None,
+            Some(json!({"start_observed": false})),
+            Some(json!({"start_observed": true})),
+        ] {
+            let error = event(
+                EmitMarkEventParams::builder()
+                    .name("tool_end_without_start")
+                    .data_opt(data.clone())
+                    .metadata_opt(metadata)
+                    .build(),
+            )
+            .unwrap_err();
+            assert!(matches!(error, FlowError::InvalidArgument(_)));
+        }
+    }
+    flush_subscribers().unwrap();
+    assert!(captured.lock().unwrap().is_empty());
+    deregister_subscriber("invalid-completion-mark").unwrap();
+}
+
+#[test]
+fn reserved_tool_completion_marks_sanitize_payloads_without_start_metadata() {
+    use crate::api::registry::{
+        deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+        register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
+    };
+    let _guard = lock_global_runtime();
+    reset_global();
+    register_tool_sanitize_request_guardrail(
+        "completion-request",
+        1,
+        Arc::new(|_, _| Box::pin(async { Ok(json!({"request": "redacted"})) })),
+    )
+    .unwrap();
+    register_tool_sanitize_response_guardrail(
+        "completion-response",
+        1,
+        Arc::new(|_, _| Box::pin(async { Ok(json!({"response": "redacted"})) })),
+    )
+    .unwrap();
+    let captured = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let capture = captured.clone();
+    register_subscriber(
+        "completion-sanitizer-observer",
+        Arc::new(move |event| {
+            capture.lock().unwrap().push(event.clone());
+        }),
+    )
+    .unwrap();
+    event(EmitMarkEventParams::builder().name("tool_end_without_start")
+        .data(json!({"tool_name": "example", "arguments": "request-secret", "result": "response-secret"}))
+        .build()).unwrap();
+    flush_subscribers().unwrap();
+    let events = captured.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].data().unwrap()["arguments"],
+        json!({"request": "redacted"})
+    );
+    assert_eq!(
+        events[0].data().unwrap()["result"],
+        json!({"response": "redacted"})
+    );
+    drop(events);
+    deregister_subscriber("completion-sanitizer-observer").unwrap();
+    deregister_tool_sanitize_request_guardrail("completion-request").unwrap();
+    deregister_tool_sanitize_response_guardrail("completion-response").unwrap();
+}

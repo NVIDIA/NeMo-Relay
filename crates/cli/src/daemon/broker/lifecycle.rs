@@ -234,6 +234,8 @@ pub(crate) enum RouteState {
     Recovering {
         target: Option<Arc<WorkerTarget>>,
         owner: Option<McpSessionId>,
+        // Restart-recovery registry simulation uses this; live control grace is owned by Hub.
+        #[cfg_attr(not(test), allow(dead_code))]
         deadline_unix_ms: u64,
     },
 }
