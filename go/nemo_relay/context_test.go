@@ -462,6 +462,39 @@ func TestPropagationContextPreservesW3CTraceContext(t *testing.T) {
 	}
 }
 
+func TestInvalidTracestateKeepsValidTraceparent(t *testing.T) {
+	traceparent := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	members := make([]string, 33)
+	for i := range members {
+		members[i] = fmt.Sprintf("v%d=x", i)
+	}
+	for _, tracestate := range []string{
+		"vendor=bad\r\nX-Injected: yes",
+		"vendor=one,vendor=two",
+		strings.Join(members, ","),
+		"vendor=" + strings.Repeat("z", 300),
+	} {
+		payload, err := json.Marshal(map[string]any{
+			"version": 1, "parent_uuid": propagationParentUUID,
+			"root_uuid":   propagationRootUUID,
+			"traceparent": traceparent, "tracestate": tracestate,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		context, err := PropagationContextFromJSON(string(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if context.Traceparent == nil || *context.Traceparent != traceparent || context.Tracestate != nil {
+			t.Fatalf("invalid tracestate must retain traceparent: %#v", context)
+		}
+		if context.ParentUUID != propagationParentUUID || context.RootUUID == nil || *context.RootUUID != propagationRootUUID {
+			t.Fatalf("Relay lineage changed: %#v", context)
+		}
+	}
+}
+
 func TestNewScopeStackFromRootlessAndRootParentPropagation(t *testing.T) {
 	parentUUID := "018f13f0-7c1a-7a80-8000-000000000004"
 	for _, context := range []PropagationContext{

@@ -1153,6 +1153,49 @@ fn rooted_import_llm_traceparent_matches_exported_span() {
 }
 
 #[test]
+fn invalid_imported_tracestate_is_absent_from_provider_and_exported_span() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber =
+        OpenTelemetrySubscriber::from_tracer_provider(provider, "invalid-tracestate-llm");
+    let subscriber_name = format!("invalid_tracestate_llm_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+    let root_uuid = Uuid::now_v7();
+    let parent_uuid = Uuid::now_v7();
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(root_uuid),
+        parent_uuid,
+        traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()),
+        tracestate: Some("vendor=bad\r\nX-Injected: yes".to_string()),
+    };
+    let imported = create_scope_stack_from_propagation(&context).unwrap();
+
+    let (traceparent, tracestate, callback_traceparent) = runtime.block_on(TASK_SCOPE_STACK.scope(
+        imported,
+        execute_llm_and_capture_trace_context("invalid-tracestate-llm"),
+    ));
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let llm_span = finished_span_named(&spans, "invalid-tracestate-llm");
+    assert_traceparent_matches_exported_span(&traceparent, llm_span);
+    assert_eq!(
+        llm_span.span_context.trace_id().to_string(),
+        "4bf92f3577b34da6a3ce929d0e0e4736"
+    );
+    assert_eq!(llm_span.parent_span_id.to_string(), "00f067aa0ba902b7");
+    assert!(llm_span.parent_span_is_remote);
+    assert_eq!(tracestate, None);
+    assert!(llm_span.span_context.trace_state().header().is_empty());
+    assert_eq!(callback_traceparent, traceparent);
+}
+
+#[test]
 fn imported_w3c_parent_survives_an_additional_fork() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());

@@ -205,8 +205,104 @@ fn propagation_context_preserves_valid_w3c_headers_and_discards_invalid_ones() {
         Uuid::now_v7(),
     ))
     .unwrap();
-    assert_eq!(invalid_tracestate.traceparent, None);
+    assert_eq!(invalid_tracestate.traceparent, context.traceparent);
     assert_eq!(invalid_tracestate.tracestate, None);
+}
+
+#[test]
+fn invalid_tracestate_preserves_imported_parentage() {
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    let parent_uuid = Uuid::now_v7();
+    let root_uuid = Uuid::now_v7();
+    let invalid_states = [
+        "vendor=bad\r\nX-Injected: yes".to_string(),
+        "vendor=bad\r".to_string(),
+        "vendor=bad\n".to_string(),
+        "vendor=bad\tvalue".to_string(),
+        "vendor=bad\0value".to_string(),
+        "vendor=bad\u{7f}".to_string(),
+        "vendor=café".to_string(),
+        "vendor=one,vendor=two".to_string(),
+        (0..33)
+            .map(|i| format!("v{i}=x"))
+            .collect::<Vec<_>>()
+            .join(","),
+        format!("vendor={}", "z".repeat(300)),
+        "vendor=".to_string(),
+        "vendor==value".to_string(),
+        "1vendor=value".to_string(),
+        "tenant@1system=value".to_string(),
+        "@system=value".to_string(),
+        "tenant@=value".to_string(),
+    ];
+    for flags in ["00", "01"] {
+        let traceparent = format!("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-{flags}");
+        for tracestate in &invalid_states {
+            let payload = serde_json::json!({
+                "version": 1,
+                "parent_uuid": parent_uuid,
+                "root_uuid": root_uuid,
+                "traceparent": traceparent,
+                "tracestate": tracestate,
+            });
+            let context = PropagationContext::from_json(&payload.to_string()).unwrap();
+            assert_eq!(
+                context.traceparent.as_deref(),
+                Some(traceparent.as_str()),
+                "{tracestate:?}"
+            );
+            assert_eq!(context.tracestate, None, "{tracestate:?}");
+            assert_eq!(context.parent_uuid, parent_uuid);
+            assert_eq!(context.root_uuid, Some(root_uuid));
+            set_thread_scope_stack(create_scope_stack_from_propagation(&context).unwrap());
+            assert_eq!(capture_traceparent().unwrap(), traceparent);
+        }
+    }
+}
+
+#[test]
+fn valid_tracestate_preserves_order_and_boundary_values() {
+    for tracestate in [
+        "rojo=00f067aa0ba902b7,congo=t61rcWkgMzE".to_string(),
+        format!("vendor={}", "z".repeat(256)),
+        (0..32)
+            .map(|i| format!("v{i}=x"))
+            .collect::<Vec<_>>()
+            .join(","),
+        "1tenant@system=value".to_string(),
+        "vendor=with spaces".to_string(),
+    ] {
+        let payload = serde_json::json!({
+            "version": 1,
+            "parent_uuid": Uuid::now_v7(),
+            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "tracestate": tracestate,
+        });
+        let context = PropagationContext::from_json(&payload.to_string()).unwrap();
+        assert_eq!(context.tracestate.as_deref(), Some(tracestate.as_str()));
+    }
+}
+
+#[test]
+fn tracestate_accepts_optional_whitespace_and_empty_members() {
+    for (tracestate, expected) in [
+        ("", None),
+        (" \t, ", None),
+        (
+            " \tvendor=value \t, , other=with spaces ",
+            Some("vendor=value,other=with spaces"),
+        ),
+    ] {
+        let payload = serde_json::json!({
+            "version": 1,
+            "parent_uuid": Uuid::now_v7(),
+            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "tracestate": tracestate,
+        });
+        let context = PropagationContext::from_json(&payload.to_string()).unwrap();
+        assert!(context.traceparent.is_some());
+        assert_eq!(context.tracestate.as_deref(), expected);
+    }
 }
 
 #[test]

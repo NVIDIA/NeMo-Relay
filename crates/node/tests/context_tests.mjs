@@ -92,6 +92,30 @@ describe('Context isolation', () => {
     assert.equal(invalid.tracestate, undefined);
   });
 
+  it('discards invalid tracestate while retaining the imported traceparent', () => {
+    const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+    for (const tracestate of [
+      'vendor=bad\r\nX-Injected: yes',
+      'vendor=one,vendor=two',
+      Array.from({ length: 33 }, (_, i) => `v${i}=x`).join(','),
+      'vendor=' + 'z'.repeat(300),
+    ]) {
+      const context = propagationContextFromJson(
+        JSON.stringify({
+          version: 1,
+          parent_uuid: '018f13f0-7c1a-7a80-8000-000000000002',
+          root_uuid: '018f13f0-7c1a-7a80-8000-000000000001',
+          traceparent,
+          tracestate,
+        }),
+      );
+      assert.equal(context.traceparent, traceparent);
+      assert.equal(context.tracestate, undefined);
+      const decoded = propagationContextFromJson(propagationContextToJson(context));
+      assert.deepEqual(decoded, context);
+    }
+  });
+
   it('captures a rooted context by default and supports explicit rootless capture', () => {
     const stack = createScopeStack();
     withScopeStack(stack, () => {
