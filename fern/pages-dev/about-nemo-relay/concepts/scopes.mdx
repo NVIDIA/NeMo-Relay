@@ -87,6 +87,23 @@ calls then attach beneath the active scope.
 Scopes have explicit lifetime boundaries. A scope starts when it becomes active
 and ends when it is popped or closed.
 
+### Replay Timestamps
+
+You can pass timestamps to scope push and pop operations to replay events.
+Python `datetime` values must include a time zone. Agent Trajectory Observability
+Format (ATOF) events keep the supplied timestamp.
+
+OpenTelemetry traces and logs encode timestamps as unsigned 64-bit nanoseconds
+since the Unix epoch. Their supported range is `1970-01-01T00:00:00Z` through
+`2554-07-21T23:34:33.709551615Z`, inclusive. The trace and log subscribers drop
+events outside this range and report an `otel.timestamp_out_of_range` runtime
+diagnostic. The scope operation still completes, and ATOF keeps the original
+timestamp. On Windows, trace and log timestamps have 100-nanosecond precision.
+
+A dropped start event creates no trace span. A dropped end event does not close
+an existing span. A later valid end event can close it. A dropped mark creates
+no span event, standalone span, or log record.
+
 ### Scope-Local Cleanup
 
 Scope-local middleware and subscribers are tied to the owning scope lifecycle.
@@ -168,7 +185,7 @@ logical trace and whether it runs concurrently:
 | Sequential nested work in the same trace | Reuse the active stack |
 | Concurrent branches in the same trace | Fork the stack for each branch |
 | Independent work | Start with a fresh isolated stack |
-| Same-trace work crossing a process boundary | Carry Relay propagation context; scope-local registrations do not cross the boundary |
+| Same-trace work crossing a process boundary | Carry Relay propagation context. Scope-local registrations do not cross the boundary. |
 | Independent work crossing a process boundary | Start with a fresh isolated stack instead of importing context |
 
 ### Why Isolation Matters
@@ -266,13 +283,13 @@ it to isolate concurrent branches that begin in the same synchronous callback.
 When work crosses a process or remote-workflow boundary, applications can carry
 the versioned Relay propagation context instead of a native stack handle. The
 context contains an immediate `parent_uuid` and an optional `root_uuid`.
-Rooted contexts carry a root UUID; explicit rootless contexts carry `None`.
+Rooted contexts carry a root UUID. Explicit rootless contexts carry `None`.
 By default, Relay uses the propagated root or the first local Agent scope as
 that root.
 
 The receiver creates a fresh isolated stack from that context and installs it
 only for request handling. Its first local event becomes a child of
-`parent_uuid`; scope-local middleware and subscribers are never transferred.
+`parent_uuid`. Relay does not transfer scope-local middleware or subscribers.
 The transport is application-owned: authenticate and authorize inbound context
 before importing it. Relay does not send headers, make IPC connections, or
 trust remote identifiers automatically.
@@ -288,17 +305,23 @@ starts a separate OpenTelemetry trace.
 run UUID explicitly.
 
 Relay's JSON context can also carry optional W3C `traceparent` and
-`tracestate` fields. When a receiver imports a valid pair, its first local
-OpenTelemetry span is a child of the upstream span and preserves upstream
-sampling and vendor state; Relay UUID lineage remains unchanged. Invalid W3C
-fields are ignored with a runtime warning, without rejecting the Relay context.
+`tracestate` fields. With a valid `traceparent`, the first local OpenTelemetry
+span is a child of the upstream span and keeps its trace ID and sampling flag.
+Relay keeps its UUID lineage unchanged.
+
+Relay drops invalid W3C fields and logs a warning without rejecting the Relay
+context. If only `tracestate` is invalid, Relay keeps the valid `traceparent`.
+Valid vendor state keeps its member order. Each value must contain 1 to 256
+printable ASCII characters. Keys must be unique, and the list can contain at
+most 32 members. Relay rejects values with control characters, such as carriage
+returns and newlines.
 
 For outbound-only W3C propagation, use `capture_traceparent()`
 (`captureTraceparent()` in Node.js) to obtain the current Relay traceparent
 directly, or convert a `PropagationContext`
 with `PropagationContext::to_traceparent` (and the equivalent binding methods).
-Capture requires an active Relay scope or a valid imported trace context;
-it does not require an exporter or collector. A managed LLM call closes its
+Capture requires an active Relay scope or a valid imported trace context.
+It does not require an exporter or collector. A managed LLM call closes its
 LLM scope before returning. Its completed span does not remain the current
 context. Without an enclosing active scope or imported context, capture
 returns an error.
@@ -316,7 +339,7 @@ from nemo_relay import ScopeType, capture_traceparent, llm, scope
 async def run_agent(request, provider):
     with scope.scope("agent-run", ScopeType.Agent):
         result = await llm.execute("provider", request, provider)
-        # The LLM scope has closed; the Agent scope is still active.
+        # The LLM scope has closed. The Agent scope is still active.
         agent_traceparent = capture_traceparent()
         return result, agent_traceparent
 ```
@@ -346,7 +369,7 @@ async fn run_agent(request: LlmRequest, provider: LlmExecutionNextFn) -> Result<
     )
     .await
     .and_then(|result| {
-        // The LLM scope has closed; the Agent scope is still active.
+        // The LLM scope has closed. The Agent scope is still active.
         let agent_traceparent = capture_traceparent()?;
         Ok((result, agent_traceparent))
     });
@@ -370,7 +393,7 @@ const {
 async function runAgent(request, provider) {
   return withScope("agent-run", ScopeType.Agent, async () => {
     const result = await llmCallExecuteAsync("provider", request, provider);
-    // The LLM scope has closed; the Agent scope is still active.
+    // The LLM scope has closed. The Agent scope is still active.
     const agentTraceparent = captureTraceparent();
     return { result, agentTraceparent };
   });
@@ -388,8 +411,8 @@ When a W3C context was imported upstream, rootless capture preserves that
 context and the receiver continues the upstream trace. To require a new trace
 even then, remove `traceparent` and `tracestate` before importing the context.
 Managed LLM execution automatically replaces both
-runtime-owned `traceparent` and `tracestate` headers on the provider request;
-a standalone request-intercept call adds the same pair only when a real Relay
+runtime-owned `traceparent` and `tracestate` headers on the provider request.
+A standalone request-intercept call adds the same pair only when a real Relay
 trace context exists.
 
 Use the binding's JSON helpers at the transport boundary: Rust
