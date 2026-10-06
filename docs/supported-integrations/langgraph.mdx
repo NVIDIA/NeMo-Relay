@@ -106,7 +106,7 @@ with nemo_relay.scope.scope("langgraph-request", nemo_relay.ScopeType.Agent):
 ```
 
 `NemoRelayCallbackHandler` records the graph lifecycle and provides its scopes.
-`create_tool_node` provides managed tool execution; use both for complete
+`create_tool_node` provides managed tool execution. Use both for complete
 standalone LangGraph instrumentation. For custom ToolNode wrapper composition,
 construct `ToolNode` directly and pass `wrap_tool_call` and `awrap_tool_call`
 from this integration.
