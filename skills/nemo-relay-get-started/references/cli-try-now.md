@@ -232,10 +232,11 @@ the coding-agent session is already instrumented, and later behavior can change
 through plugin configuration without reinstrumenting that boundary.
 
 Ask which outcome matters next and recommend one built-in plugin: Adaptive for
-optimization, PII Redaction for sensitive payloads, or Model Pricing for cost
-estimates. Use the plugin overview to show the smallest next configuration. Do
-not enable multiple plugins or extend instrumentation unless the user requests
-it or the current boundary is insufficient.
+optimization, NeMo Guardrails for policy, PII Redaction for sensitive payloads,
+or Model Pricing for cost estimates. Use the plugin overview to show the
+smallest next configuration. Do not enable multiple plugins or extend
+instrumentation unless the user requests it or the current boundary is
+insufficient.
 
 ## Troubleshoot The Smallest Failed Boundary
 

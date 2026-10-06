@@ -62,9 +62,9 @@ payloads.
 After this proof, preserve the demonstrated boundary and recommend one
 goal-aligned plugin as the primary next step. If the trial used only a
 short-lived subscriber, configure plugin-managed Observability first; otherwise
-choose Adaptive, PII Redaction, or Model Pricing based on the user's outcome.
-Use `nemo-relay-instrument-calls` only when the demonstrated boundary does not
-yet cover the real application workflow.
+choose Adaptive, NeMo Guardrails, PII Redaction, or Model Pricing based on the
+user's outcome. Use `nemo-relay-instrument-calls` only when the demonstrated
+boundary does not yet cover the real application workflow.
 
 For all supported languages, see the
 [Quick Start](https://docs.nvidia.com/nemo/relay/dev/getting-started/quick-start).

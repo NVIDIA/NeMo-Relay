@@ -101,6 +101,7 @@ establish the reusable plugin path. If Observability already produced the
 proof, ask what outcome matters next and recommend exactly one plugin:
 
 - Adaptive -> adaptive runtime behavior and optimization
+- NeMo Guardrails -> policy checks around managed execution
 - PII Redaction -> sanitization of sensitive observability payloads
 - Model Pricing -> cost estimates for managed LLM responses
 

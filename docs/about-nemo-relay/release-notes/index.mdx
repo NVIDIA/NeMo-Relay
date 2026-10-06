@@ -367,11 +367,6 @@ The following list covers unresolved issues from 0.9 and new limitations in
 - The Node.js binding and package workflows require Node.js 24 or later.
 - OpenClaw provides telemetry through public hooks. Its security and
   optimization coverage is partial because Relay does not manage its execution.
-- The built-in `nemo_guardrails` plugin remains deprecated but is still
-  available in 0.10.0. No replacement is included. The remote backend
-  depends on its configured service's availability, latency, and policy behavior.
-  The local backend requires Python 3.11 or later and `nemoguardrails==0.22.0`.
-  Refer to [NeMo Guardrails](/configure-plugins/nemo-guardrails/about).
 - The personally identifiable information (PII) redaction plugin supports its
   local backend based on fixed rules. Local-model backend configuration is
   reserved for future work.
