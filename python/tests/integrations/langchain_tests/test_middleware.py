@@ -1253,3 +1253,103 @@ def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMidd
     assert result["messages"][-1].content == _DEFAULT_MOCK_RESPONSE_MSG
 
     assert events == expected_events
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_agent_tool_interrupt_and_resume(
+    use_async: bool,
+    nemo_relay_middleware: NemoRelayMiddleware,
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    """Human approval survives the native tool boundary and closes tool scopes."""
+    from langchain.agents import create_agent
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.types import Command, interrupt
+
+    from nemo_relay.integrations.langgraph import configure_graph
+
+    question = {"question": "Approve refund for order 1234?"}
+
+    @tool
+    def approve_refund(order_id: str) -> str:
+        """Refund an order after human approval."""
+        return f"refund {order_id}: {interrupt(question)}"
+
+    model = _mk_mock_model(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "approve_refund", "args": {"order_id": "1234"}, "id": "call-refund"}],
+            ),
+            AIMessage(content="Refund approved and issued."),
+        ]
+    )
+    agent = configure_graph(
+        create_agent(
+            model=model,
+            tools=[approve_refund],
+            middleware=[nemo_relay_middleware],
+            checkpointer=InMemorySaver(),
+        )
+    )
+    config = {"configurable": {"thread_id": "refund-approval"}}
+    payload = {"messages": [{"role": "user", "content": "refund order 1234"}]}
+
+    async def invoke_async() -> tuple[dict[str, Any], dict[str, Any]]:
+        paused = await agent.ainvoke(payload, config)
+        resumed = await agent.ainvoke(Command(resume="yes"), config)
+        return paused, resumed
+
+    with nemo_relay.scope.scope("refund-request", nemo_relay.ScopeType.Agent):
+        if use_async:
+            paused, resumed = asyncio.run(invoke_async())
+        else:
+            paused = agent.invoke(payload, config)
+            resumed = agent.invoke(Command(resume="yes"), config)
+    nemo_relay.subscribers.flush()
+
+    assert paused["__interrupt__"][0].value == question
+    assert any(message.content == "refund 1234: yes" for message in resumed["messages"])
+    assert resumed["messages"][-1].content == "Refund approved and issued."
+    tool_events = [
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.name == "approve_refund"
+    ]
+    starts = [event.uuid for event in tool_events if event.scope_category == "start"]
+    ends = [event.uuid for event in tool_events if event.scope_category == "end"]
+    assert len(starts) == 2
+    assert ends == starts
+    marks = [event for event in subscribed_events if isinstance(event, nemo_relay.MarkEvent)]
+    interrupt_mark = next(event for event in marks if event.name == "Graph Interrupt")
+    assert interrupt_mark.data["interrupts"] == [
+        {"id": paused["__interrupt__"][0].id, "value": question},
+    ]
+    assert any(event.name == "Graph Resume" for event in marks)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_tool_call_preserves_graph_bubble_identity(
+    use_async: bool,
+    nemo_relay_middleware: NemoRelayMiddleware,
+    tool_call_request: ToolCallRequest,
+) -> None:
+    """Graph control flow must escape with the original exception object."""
+    from langgraph.errors import GraphBubbleUp
+
+    bubble = GraphBubbleUp("graph control flow")
+
+    def handler(_request: ToolCallRequest) -> ToolMessage:
+        raise bubble
+
+    async def async_handler(request: ToolCallRequest) -> ToolMessage:
+        return handler(request)
+
+    with pytest.raises(GraphBubbleUp) as caught:
+        if use_async:
+            asyncio.run(nemo_relay_middleware.awrap_tool_call(tool_call_request, async_handler))
+        else:
+            nemo_relay_middleware.wrap_tool_call(tool_call_request, handler)
+    assert caught.value is bubble

@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain.agents.middleware import AgentMiddleware
+from langgraph.errors import GraphBubbleUp
 
 import nemo_relay
 from nemo_relay.integrations.langchain._serialization import (
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
     from langgraph.types import Command
 
     from nemo_relay.codecs import LlmCodec, LlmResponseCodec
+
+
+_GRAPH_BUBBLE_RESULT = {"__nemo_relay_langgraph_graph_bubble_up__": True}
 
 
 class NemoRelayMiddleware(AgentMiddleware):
@@ -136,13 +140,20 @@ class NemoRelayMiddleware(AgentMiddleware):
         """Wrap a sync LangChain agent tool call in NeMo Relay tool execution."""
 
         (parent, codec, tool_name, tool_args, tool_call_id) = self._prepare_tool_call(request)
+        graph_bubble: GraphBubbleUp | None = None
 
-        def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any]]:
-            return nemo_relay.ToolExecutionResult(
-                handler(request.override(tool_call={**request.tool_call, "args": args}))
-            )
+        def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | dict[str, bool]]:
+            nonlocal graph_bubble
+            try:
+                result = handler(request.override(tool_call={**request.tool_call, "args": args}))
+            except GraphBubbleUp as error:
+                # Retain graph control flow outside the native callback boundary,
+                # which would otherwise convert it to a generic RuntimeError.
+                graph_bubble = error
+                result = _GRAPH_BUBBLE_RESULT
+            return nemo_relay.ToolExecutionResult(result)
 
-        return run_sync(
+        outcome = run_sync(
             nemo_relay.typed.tool_execute(
                 name=tool_name,
                 args=tool_args,
@@ -152,7 +163,10 @@ class NemoRelayMiddleware(AgentMiddleware):
                 handle=parent,
                 tool_call_id=tool_call_id,
             )
-        ).result
+        )
+        if graph_bubble is not None:
+            raise graph_bubble
+        return cast("ToolMessage | Command[Any]", outcome.result)
 
     async def awrap_tool_call(
         self,
@@ -162,20 +176,27 @@ class NemoRelayMiddleware(AgentMiddleware):
         """Wrap an async LangChain agent tool call in NeMo Relay tool execution."""
 
         (parent, codec, tool_name, tool_args, tool_call_id) = self._prepare_tool_call(request)
+        graph_bubble: GraphBubbleUp | None = None
 
-        async def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any]]:
-            return nemo_relay.ToolExecutionResult(
-                await handler(request.override(tool_call={**request.tool_call, "args": args}))
-            )
+        async def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | dict[str, bool]]:
+            nonlocal graph_bubble
+            try:
+                result = await handler(request.override(tool_call={**request.tool_call, "args": args}))
+            except GraphBubbleUp as error:
+                # Re-raise only after Relay has finished and closed the tool scope.
+                graph_bubble = error
+                result = _GRAPH_BUBBLE_RESULT
+            return nemo_relay.ToolExecutionResult(result)
 
-        return (
-            await nemo_relay.typed.tool_execute(
-                name=tool_name,
-                args=tool_args,
-                func=_call,
-                args_codec=codec,
-                result_codec=codec,
-                handle=parent,
-                tool_call_id=tool_call_id,
-            )
-        ).result
+        outcome = await nemo_relay.typed.tool_execute(
+            name=tool_name,
+            args=tool_args,
+            func=_call,
+            args_codec=codec,
+            result_codec=codec,
+            handle=parent,
+            tool_call_id=tool_call_id,
+        )
+        if graph_bubble is not None:
+            raise graph_bubble
+        return cast("ToolMessage | Command[Any]", outcome.result)
