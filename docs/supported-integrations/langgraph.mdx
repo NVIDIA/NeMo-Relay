@@ -121,13 +121,13 @@ callbacks are not part of the serialized LangGraph API request.
 from langchain.agents import create_agent
 from nemo_relay.integrations.langgraph import NemoRelayMiddleware, configure_graph
 
-agent = configure_graph(
-    create_agent(
-        model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-        tools=[],
-        middleware=[NemoRelayMiddleware()],
-    )
+agent = create_agent(
+    model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    tools=[],
+    middleware=[NemoRelayMiddleware()],
 )
+# Ensure the callables are configured with NeMo Relay scope events
+agent = configure_graph(agent)
 ```
 
 `configure_graph` stores a `NemoRelayCallbackHandler` in the graph's base
