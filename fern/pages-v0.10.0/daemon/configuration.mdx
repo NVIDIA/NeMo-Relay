@@ -343,23 +343,55 @@ a request, and preserves the caller's provider authentication.
 
 ### Replace a Client Token
 
-The daemon binds each machine-user identity to one token, in memory, until the
-daemon restarts. It does not release the binding when sessions end. If the token
-changes while the daemon is running, for example because the token file is
-removed and `nemo-relay daemon token ensure` creates a new one:
+The daemon binds each token to the machine-user identity that first registers
+it. Bindings are kept in memory and are not released just because sessions end.
+A binding is cleared only when:
 
-- MCP registration with the new token is rejected with
-  `route_credential_rejected`. `nemo-relay daemon mcp` does not retry the
-  rejection; it logs `daemon_mcp_pass_through` with
-  `reason = "credential_rejected"` and keeps serving MCP without a route, so the
-  harness keeps working.
-- Requests with the new token use pass-through until the daemon restarts, so
-  they produce no Relay telemetry or guardrail results.
-- Sessions that still hold the old token keep their route.
+- the daemon restarts;
+- the identity reaches its token limit and the token is its least recently
+  registered one without a live MCP session (described below); or
+- the daemon's route table is full and the identity's whole route is evicted
+  because it has no MCP references.
 
-To restore telemetry after replacing a token, restart the daemon and then the
-harness sessions. A token bound to another machine identity, such as a token
-copied from another user or machine, is rejected the same way.
+If the token changes while the daemon is running, for example because the token
+file is removed and `nemo-relay daemon token ensure` creates a new one:
+
+- MCP registration with the new token joins the identity's existing route and
+  worker. No second worker is launched.
+- The old token stays bound to that route alongside the new one, so sessions
+  that still hold it keep working, until one of the events above clears it.
+- Removing or purging a token file does not revoke a token the daemon has
+  already bound. Use a daemon restart to clear every binding at once.
+
+One identity can hold a limited number of distinct tokens at once: 4 by
+default. The limit bounds the daemon's in-memory token table; it is not a
+security control. When a new token arrives at the limit:
+
+1. The daemon releases the identity's least recently registered token that has
+   no live MCP session and logs `route_token_released`. A released token
+   resolves like any unbound token and can bind again later.
+2. If every bound token still has a live MCP session, the new token is rejected
+   with `route_credential_rejected`, and the daemon logs
+   `mcp_registration_rejected` with `reason = "route_token_limit_reached"`.
+   `nemo-relay daemon mcp` does not retry the rejection; it logs
+   `daemon_mcp_pass_through` with `reason = "credential_rejected"` and keeps
+   serving MCP without a route, so the harness keeps working. The same applies
+   when an already running MCP registers again after a reconnect or daemon
+   restart: it logs the fallback with `phase = "reregistration"` and keeps
+   serving instead of exiting. The fallen-back MCP does not register again, so
+   freeing a slot or restarting the daemon does not bind its token. Requests
+   with that token use pass-through, or receive `401` with `--require-worker`,
+   until a new MCP session with the token registers. Restart the affected
+   harness session to bind it once a slot is free.
+
+Change the limit with `nemo-relay daemon --max-tokens-per-identity <N>` or the
+`NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY` environment variable on the daemon
+service, from 1 through 64. The flag takes precedence. An invalid environment
+value stops daemon startup with a configuration error. Set the variable in the
+service definition, for example `EnvironmentVariables` in the macOS launchd
+plist, `Environment=` in a systemd unit, or the WinSW service environment, then
+restart the daemon. Raise it only if users legitimately run sessions on more
+than four tokens at the same time; idle tokens are released automatically.
 
 ### Requests Without a Bound Credential
 
@@ -368,7 +400,9 @@ request; the coding agent keeps working:
 
 - A public request with no `x-nemo-relay-client-token` header, or with a
   well-formed credential that no MCP session has bound (for example, after a
-  daemon restart and before MCP registers again), uses pass-through. Hook
+  daemon restart and before MCP registers again), uses pass-through. So does a
+  bound credential whose route has no live MCP session, for example from a
+  harness whose MCP exited while the daemon was restarted or reinstalled. Hook
   requests receive the agent's no-op pass-through response. Provider requests
   are forwarded directly to the configured provider with the caller's own
   provider authentication.
@@ -387,8 +421,9 @@ request; the coding agent keeps working:
   upstream cannot reach the configured provider. After a daemon restart, retry
   once MCP registers again. The daemon logs `public_request_named_upstream_rejected`.
 - The daemon logs each decision as `public_request_pass_through` with
-  `route_mode = "pass_through"` and `reason = "missing_credential"` or
-  `reason = "unbound_credential"`, rate-limited, without the credential.
+  `route_mode = "pass_through"` and `reason = "missing_credential"`,
+  `reason = "unbound_credential"`, or `reason = "no_live_session"`,
+  rate-limited, without the credential.
 
 On the client side, `nemo-relay daemon hook` with no resolvable credential does
 not contact the daemon. It writes the same pass-through response and exits `0`,

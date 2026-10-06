@@ -1,7 +1,7 @@
 ---
 title: "Struct Config Report"
 sidebar-title: "ConfigReport"
-description: "Structured validation report."
+description: "Structured configuration and activation report."
 position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,13 +11,13 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ConfigReport &#123;\n    pub diagnostics: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-configdiagnostic\">ConfigDiagnostic</a>&gt;,\n    pub runtime_diagnostics: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-runtimediagnostic\">RuntimeDiagnostic</a>&gt;,\n&#125;"}} /></pre>
 
-Structured validation report.
+Structured configuration and activation report.
 
 ## Fields
 
 ### `diagnostics: Vec<ConfigDiagnostic>`
 
-Validation and compatibility diagnostics in evaluation order.
+Configuration and activation diagnostics in evaluation order.
 
 ### `runtime_diagnostics: Vec<RuntimeDiagnostic>`
 

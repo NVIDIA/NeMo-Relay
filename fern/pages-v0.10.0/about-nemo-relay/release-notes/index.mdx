@@ -146,12 +146,23 @@ coding agent:
 - A hook without a credential returns its pass-through response locally.
 - The MCP server without a credential keeps running without registering a
   route.
-- The daemon sends public requests that have no credential header, or an
-  unbound credential, through pass-through.
-- If the daemon rejects a token at MCP registration, for example because the
-  user's token changed while the daemon kept the old binding, the MCP server
-  serves without a route instead of retrying until the harness times out.
-  Requests with that token pass through until the daemon restarts.
+- The daemon sends public requests that have no credential header, an
+  unbound credential, or a bound credential whose route has no live MCP
+  session, through pass-through. A harness whose MCP exited, for example during
+  a daemon reinstall, keeps working instead of retrying `503` indefinitely.
+- A new token for the same machine identity, for example after the token file
+  is replaced, joins that identity's existing route and worker. Old and new
+  tokens stay bound together. An identity holds up to 4 tokens
+  by default (`--max-tokens-per-identity` or
+  `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY`); at the limit, the least recently
+  registered token without a live session is released first.
+- If the daemon rejects a token at MCP registration, for example because it is
+  bound to another identity or exceeds the per-identity limit, the MCP server
+  serves without a route instead of retrying until the harness times out. This
+  also applies when a running MCP registers again after a reconnect or daemon
+  restart; it keeps serving instead of exiting. That MCP does not register
+  again, so requests with that token pass through until a new MCP session binds
+  it. With `--require-worker`, those requests receive `401` instead.
 
 Such requests never receive daemon-held provider credentials. The exception is
 a daemon started with `--pass-through`. A request that names its own upstream,
@@ -205,8 +216,8 @@ with `--require-worker` still returns `401`. Managed hooks without any
 resolvable credential now pass through and exit `0`, including hooks marked
 `--fail-closed`. Guardrail hooks therefore enforce only when a credential
 resolves. Run `nemo-relay daemon token ensure` for each user, and monitor
-`public_request_pass_through` daemon events with `reason = "missing_credential"`
-or `reason = "unbound_credential"`.
+`public_request_pass_through` daemon events with `reason = "missing_credential"`,
+`reason = "unbound_credential"`, or `reason = "no_live_session"`.
 
 </Warning>
 

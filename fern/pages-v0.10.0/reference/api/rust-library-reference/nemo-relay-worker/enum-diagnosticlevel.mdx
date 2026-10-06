@@ -1,7 +1,7 @@
 ---
 title: "Enum Diagnostic Level"
 sidebar-title: "DiagnosticLevel"
-description: "Diagnostic severity returned by plugin validation."
+description: "Severity of a plugin configuration or activation diagnostic."
 position: 45
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -16,7 +16,7 @@ pub enum DiagnosticLevel {
 }
 ```
 
-Diagnostic severity returned by plugin validation.
+Severity of a plugin configuration or activation diagnostic.
 
 ## Variants
 
@@ -24,13 +24,13 @@ Diagnostic severity returned by plugin validation.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Warning"}} /></pre>
 
-Non-fatal compatibility or validation issue.
+Non-fatal compatibility, validation, or activation issue.
 
 ### `Error`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Error"}} /></pre>
 
-Fatal validation issue that blocks initialization.
+Fatal validation or activation issue that blocks initialization.
 
 ## Trait Implementations
 
