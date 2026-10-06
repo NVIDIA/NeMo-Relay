@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nemo-relay-python-grpc-worker-example"
-version = "0.1.0"
+version = "0.10.0"
+license = "Apache-2.0"
 description = "Example Python gRPC worker plugin for NeMo Relay"
 requires-python = ">=3.11"
 dependencies = [
@@ -21,7 +22,7 @@ test = [
 ]
 
 [tool.uv.sources]
-nemo-relay-plugin = { path = "../../python/plugin" }
+nemo-relay-plugin = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

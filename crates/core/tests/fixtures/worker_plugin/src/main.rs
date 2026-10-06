@@ -50,16 +50,20 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             let runtime = ctx.runtime().expect("host runtime should be available");
             let registrations = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
-                    runtime.list_runtime_registrations(Some(BTreeSet::from([
-                        RuntimeRegistrationKind::Subscriber,
-                    ]))).await
+                    runtime
+                        .list_runtime_registrations(Some(BTreeSet::from([
+                            RuntimeRegistrationKind::Subscriber,
+                        ])))
+                        .await
                 })
-            })
-            ?;
-            let targets = registrations.into_iter().filter(|registration| {
-                registration.local_name == "opentelemetry"
-                    && registration.owner.plugin_kind.as_deref() == Some("observability")
-            }).collect::<Vec<_>>();
+            })?;
+            let targets = registrations
+                .into_iter()
+                .filter(|registration| {
+                    registration.local_name == "opentelemetry"
+                        && registration.owner.plugin_kind.as_deref() == Some("observability")
+                })
+                .collect::<Vec<_>>();
             if targets.len() != 1 {
                 return Err(WorkerSdkError::Callback(format!(
                     "expected one observability subscriber during registration; found {}",
@@ -389,13 +393,13 @@ fn register_fixture_llm_hooks(
                         Some(json!({ "name": name })),
                     )
                     .await?;
-            let response = next
-                .call(mark_llm_request(
-                    request,
-                    "worker_plugin_llm_execution_request",
-                ))
-                .await?;
-            Ok(mark_json(response, "worker_plugin_llm_execution"))
+                let response = next
+                    .call(mark_llm_request(
+                        request,
+                        "worker_plugin_llm_execution_request",
+                    ))
+                    .await?;
+                Ok(mark_json(response, "worker_plugin_llm_execution"))
             }
         },
     );

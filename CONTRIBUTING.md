@@ -156,6 +156,13 @@ The hooks enforce:
 - **Rust**: FFI header sync for `crates/ffi/nemo_relay.h` through Cargo/build.rs, `cargo fmt` formatting check, `cargo clippy` lints, `cargo deny` auditing
 - **Go**: `gofmt` formatting, `go vet` static analysis
 
+Dependency audit hooks always run, regardless of which files changed. Rust
+and Python projects, including examples, test fixtures, and benchmarks, share
+the root `Cargo.lock` and `uv.lock`. The root Rust workspace also
+keeps its license, source, and duplicate-dependency checks. npm audits the root
+workspace lockfile with `--audit-level=low`; Rust and Python reject vulnerability
+findings regardless of severity.
+
 During normal development, stage your changes and run:
 
 ```bash

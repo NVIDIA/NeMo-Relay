@@ -50,8 +50,7 @@ fn enabled_registration_control_requires_distinct_targets() {
 
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "examples.rust_native_policy.invalid_registration_control"
-            && diagnostic.field.as_deref()
-                == Some("registration_control.allowed_registration_name")
+            && diagnostic.field.as_deref() == Some("registration_control.allowed_registration_name")
     }));
 
     let disabled_diagnostics = validate_example_config(&object(json!({

@@ -10,6 +10,10 @@ of the existing Python latency suite. It supports HTTP/1.1 persistent
 connections, cleartext HTTP/2 prior knowledge, remote HTTP/2 through ALPN,
 and one client pool per protocol for the entire run.
 
+The fixture belongs to the root Cargo workspace and shares its lockfile and
+package version. The benchmark recipes use the `daemon-transport` profile to
+retain throughput-oriented optimization settings and line-table debug info.
+
 The benchmark is informational. Integrity failures make the command fail, but
 latency and throughput values have no CI threshold until a stable baseline is
 established.

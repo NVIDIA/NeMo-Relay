@@ -19,7 +19,7 @@ while streaming execution exposes request codec operations only.
 Run the example's own test project from this directory:
 
 ```bash
-uv run --locked --group test pytest
+uv run --locked --package nemo-relay-python-grpc-worker-example --group test pytest
 ```
 
 Each test owns one contract and can be selected independently. The suite builds

@@ -1169,6 +1169,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 
 [[package]]
+name = "hdrhistogram"
+version = "7.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f49d1053f4708f0af3cf9fc5bffc7e68a914a3c45becb231c80068c9c3f78bea"
+dependencies = [
+ "base64",
+ "byteorder",
+ "crossbeam-channel",
+ "flate2",
+ "nom",
+ "num-traits",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1932,6 +1946,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo-relay-daemon-transport-benchmark"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "base64",
+ "bytes",
+ "clap",
+ "const-hex",
+ "hdrhistogram",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tower-service",
+]
+
+[[package]]
 name = "nemo-relay-ffi"
 version = "0.10.0"
 dependencies = [
@@ -1948,6 +1988,17 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "uuid",
+]
+
+[[package]]
+name = "nemo-relay-language-binding-plugin-example"
+version = "0.10.0"
+dependencies = [
+ "futures",
+ "nemo-relay",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -2000,6 +2051,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo-relay-plugin-fixture"
+version = "0.10.0"
+dependencies = [
+ "futures",
+ "nemo-relay-plugin",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "nemo-relay-python"
 version = "0.10.0"
 dependencies = [
@@ -2016,6 +2077,37 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "uuid",
+]
+
+[[package]]
+name = "nemo-relay-rust-grpc-worker-plugin-example"
+version = "0.10.0"
+dependencies = [
+ "futures-util",
+ "nemo-relay",
+ "nemo-relay-worker",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml",
+ "uuid",
+]
+
+[[package]]
+name = "nemo-relay-rust-native-plugin-example"
+version = "0.10.0"
+dependencies = [
+ "futures",
+ "nemo-relay",
+ "nemo-relay-plugin",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml",
 ]
 
 [[package]]
@@ -2046,6 +2138,16 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tower",
+]
+
+[[package]]
+name = "nemo-relay-worker-plugin-fixture"
+version = "0.10.0"
+dependencies = [
+ "nemo-relay-worker",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

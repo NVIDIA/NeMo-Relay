@@ -129,7 +129,11 @@ nemo-relay-cli-bin = { path = "python/cli-bin" }
 nemo-relay-plugin = { workspace = true }
 
 [tool.uv.workspace]
-members = ["python/plugin"]
+members = [
+    "python/plugin",
+    "examples/language-binding-plugin/python",
+    "examples/python-grpc-worker-plugin",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]

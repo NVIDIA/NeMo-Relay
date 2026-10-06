@@ -14,5 +14,10 @@
   "devDependencies": {
     "fern-api": "5.57.0",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "openclaw": {
+      "@modelcontextprotocol/sdk": "1.32.1"
+    }
   }
 }

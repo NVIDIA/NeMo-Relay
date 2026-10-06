@@ -3,12 +3,11 @@
 
 [package]
 name = "nemo-relay-rust-native-plugin-example"
-version = "0.1.0"
+version.workspace = true
+license.workspace = true
 edition = "2024"
 publish = false
 description = "Example Rust native dynamic plugin for NeMo Relay"
-
-[workspace]
 
 [lib]
 name = "nemo_relay_rust_native_plugin_example"

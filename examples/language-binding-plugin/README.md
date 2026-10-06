@@ -13,7 +13,7 @@ Run each project from its own directory:
 
 ```bash
 (cd rust && cargo test)
-(cd python && uv run --locked --group test pytest)
+(cd python && uv run --locked --package nemo-relay-python-language-binding-plugin-example --group test pytest)
 (cd node && npm test)
 ```
 

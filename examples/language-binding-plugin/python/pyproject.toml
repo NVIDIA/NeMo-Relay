@@ -3,7 +3,8 @@
 
 [project]
 name = "nemo-relay-python-language-binding-plugin-example"
-version = "0.1.0"
+version = "0.10.0"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
   "nemo-relay==0.10.0",
@@ -19,7 +20,7 @@ test = [
 package = false
 
 [tool.uv.sources]
-nemo-relay = { path = "../../.." }
+nemo-relay = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

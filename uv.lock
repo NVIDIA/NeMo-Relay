@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "sys_platform == 'linux'",
@@ -10,6 +10,8 @@ resolution-markers = [
 members = [
     "nemo-relay",
     "nemo-relay-plugin",
+    "nemo-relay-python-grpc-worker-example",
+    "nemo-relay-python-language-binding-plugin-example",
 ]
 
 [[package]]
@@ -1487,6 +1489,7 @@ wheels = [
 [[package]]
 name = "nemo-relay"
 source = { editable = "." }
+default-groups = ["dev", "test"]
 
 [package.optional-dependencies]
 cli = [
@@ -1632,6 +1635,52 @@ dependencies = [
 requires-dist = [
     { name = "grpcio", specifier = ">=1.81.1,<2" },
     { name = "protobuf", specifier = ">=6.33.5" },
+]
+
+[[package]]
+name = "nemo-relay-python-grpc-worker-example"
+version = "0.10.0"
+source = { editable = "examples/python-grpc-worker-plugin" }
+dependencies = [
+    { name = "nemo-relay-plugin" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "nemo-relay-plugin", editable = "python/plugin" }]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.26" },
+]
+
+[[package]]
+name = "nemo-relay-python-language-binding-plugin-example"
+version = "0.10.0"
+source = { virtual = "examples/language-binding-plugin/python" }
+dependencies = [
+    { name = "nemo-relay" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "nemo-relay", editable = "." }]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.26" },
 ]
 
 [[package]]

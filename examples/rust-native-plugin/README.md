@@ -24,7 +24,7 @@ the callbacks before unloading the library:
 
 ```bash
 cargo test
-cargo build
+cargo build --target-dir target
 ```
 
 Copy `relay-plugin.toml` to `relay-plugin.local.toml` and replace

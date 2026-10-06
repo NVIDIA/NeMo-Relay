@@ -3,11 +3,10 @@
 
 [package]
 name = "nemo-relay-language-binding-plugin-example"
-version = "0.1.0"
+version.workspace = true
+license.workspace = true
 edition = "2024"
 publish = false
-
-[workspace]
 
 [dependencies]
 futures = "0.3"

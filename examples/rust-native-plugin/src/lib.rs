@@ -66,8 +66,7 @@ impl NativePlugin for ExampleNativePlugin {
                 &kinds,
                 &blocked_registration_name,
                 move |_, registration_name| {
-                    (registration_name == callback_registration_name)
-                        .then(|| reason.clone())
+                    (registration_name == callback_registration_name).then(|| reason.clone())
                 },
             )?;
             context.register_conditional_middleware_guardrail(

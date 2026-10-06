@@ -14,7 +14,27 @@ members = [
     # Language Bindings
     "crates/python",
     "crates/ffi",
-    "crates/node"
+    "crates/node",
+    # Unpublished examples, test fixtures, and benchmark tools share Cargo.lock.
+    "crates/core/tests/fixtures/native_plugin",
+    "crates/core/tests/fixtures/worker_plugin",
+    "examples/rust-native-plugin",
+    "examples/rust-grpc-worker-plugin",
+    "examples/language-binding-plugin/rust",
+    "scripts/latency_benchmark/daemon_transport",
+]
+default-members = [
+    "crates/core",
+    "crates/types",
+    "crates/plugin",
+    "crates/worker-proto",
+    "crates/worker",
+    "crates/adaptive",
+    "crates/pii-redaction",
+    "crates/cli",
+    "crates/python",
+    "crates/ffi",
+    "crates/node",
 ]
 exclude = [".tmp", ".uv-cache"]
 resolver = "2"
@@ -56,3 +76,12 @@ lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
 panic = "unwind"
+
+# Preserve the transport driver's throughput-oriented release settings.
+[profile.daemon-transport]
+inherits = "release"
+opt-level = 3
+codegen-units = 16
+strip = "none"
+debug = "line-tables-only"
+lto = "thin"

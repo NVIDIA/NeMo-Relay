@@ -1,13 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-[workspace]
-
 [package]
 name = "nemo-relay-worker-plugin-fixture"
-version = "0.0.0"
+version.workspace = true
 edition = "2024"
-license = "Apache-2.0"
+license.workspace = true
 publish = false
 
 [[bin]]

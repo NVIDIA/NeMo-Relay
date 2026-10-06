@@ -218,7 +218,7 @@ fn stream_response(
         hasher.update(&done);
         yield Ok(Frame::data(done));
         let mut trailers = HeaderMap::new();
-        trailers.insert(BODY_SHA256, HeaderValue::from_str(&format!("{:x}", hasher.finalize())).expect("SHA-256 header"));
+        trailers.insert(BODY_SHA256, HeaderValue::from_str(&const_hex::encode(hasher.finalize())).expect("SHA-256 header"));
         trailers.insert(EVENT_COUNT, HeaderValue::from_str(&event_count.to_string()).expect("event count header"));
         yield Ok(Frame::trailers(trailers));
         guard.complete = true;

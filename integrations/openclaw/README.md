@@ -41,6 +41,12 @@ through a public plugin hook.
 
 ## Installation
 
+Use OpenClaw `2026.9.3` with Node.js `>=24.16.0 <25` or `>=26.1.0`.
+The plugin is built and tested against this OpenClaw release.
+
+The workspace keeps OpenClaw at `2026.9.3` and overrides its MCP SDK dependency
+to `1.32.1` to address GHSA-6qxp-vccf-f47h.
+
 Install the package directly in a Node.js/OpenClaw environment:
 
 ```bash

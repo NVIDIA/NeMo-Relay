@@ -577,6 +577,7 @@ PY
 set_node_package_versions() {
     local version="$1"
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
+    set_npm_package_version examples/language-binding-plugin/node/package.json package-lock.json "$version" examples/language-binding-plugin/node
     set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
     set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$version"
     # `nemo-relay-pi` is private and not published, so this bump changes nothing today. It is here
@@ -591,16 +592,19 @@ set_node_package_versions() {
 
 set_example_package_versions() {
     local version="$1"
+    local python_version=""
+    python_version="$(semver_to_pep440 "$version")"
     local python_executable=""
     python_executable="$(uv_python_executable)"
 
-    "$python_executable" - "$version" <<'PY'
+    "$python_executable" - "$version" "$python_version" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
 version = sys.argv[1]
+python_version = sys.argv[2]
 
 def replace_one(path: str, pattern: str, replacement: str) -> None:
     file = Path(path)
@@ -642,13 +646,19 @@ replace_one(
 replace_one(
     "examples/language-binding-plugin/python/pyproject.toml",
     r'(nemo-relay==)[^"\n]+',
-    rf'\g<1>{version}',
+    rf'\g<1>{python_version}',
 )
 replace_one(
     "examples/python-grpc-worker-plugin/pyproject.toml",
     r'(nemo-relay-plugin>=)[^"\n]+',
-    rf'\g<1>{version}',
+    rf'\g<1>{python_version}',
 )
+
+for manifest in [
+    "examples/language-binding-plugin/python/pyproject.toml",
+    "examples/python-grpc-worker-plugin/pyproject.toml",
+]:
+    replace_one(manifest, r'(\nversion = ")[^"]+("\n)', rf'\g<1>{python_version}\2')
 
 node_example = Path("examples/language-binding-plugin/node/package.json")
 manifest = json.loads(node_example.read_text())
@@ -661,11 +671,6 @@ if dependency != "file:../../../crates/node":
 print("examples/language-binding-plugin/node/package.json links the local workspace package")
 PY
 
-    # Cargo metadata refreshes only the local path-package records in the checked example lock.
-    # Keep uv offline so an example-only version bump cannot opportunistically upgrade PyPI packages.
-    cargo metadata --manifest-path examples/language-binding-plugin/rust/Cargo.toml --format-version 1 >/dev/null
-    uv lock --directory examples/language-binding-plugin/python --offline
-    uv lock --directory examples/python-grpc-worker-plugin --offline
 }
 
 set_node_package_version() {
@@ -681,6 +686,9 @@ set_project_version() {
     set_python_package_version "$version" false
     set_python_plugin_package_version "$version"
     set_coding_agent_plugin_versions "$version"
+    # Resolve only after every workspace manifest has its final version.
+    cargo metadata --format-version 1 >/dev/null
+    uv lock --offline
 }
 
 semver_to_pep440() {
@@ -920,7 +928,8 @@ python_plugin_sync_args() {
     if ! python_plugin_grpc_dependencies_supported "$python_executable"; then
         printf '%s\0' \
             --no-install-package grpcio \
-            --no-install-package nemo-relay-plugin
+            --no-install-package nemo-relay-plugin \
+            --no-install-package nemo-relay-python-grpc-worker-example
     fi
 }
 
@@ -1184,8 +1193,7 @@ generate-test-plugin-lockfiles:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
-    cargo generate-lockfile --manifest-path crates/core/tests/fixtures/native_plugin/Cargo.toml
-    cargo generate-lockfile --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml
+    cargo metadata --format-version 1 >/dev/null
 
 generate-worker-plugin-lockfile: generate-test-plugin-lockfiles
 
@@ -1273,7 +1281,6 @@ clean:
         examples/python-grpc-worker-plugin/__pycache__ \
         examples/python-grpc-worker-plugin/nemo_relay_python_grpc_worker_example/__pycache__ \
         examples/python-grpc-worker-plugin/*.egg-info \
-        examples/rust-native-plugin/Cargo.lock \
         examples/rust-native-plugin/target \
         target
 
@@ -1307,10 +1314,10 @@ latency-benchmark *benchmark_args:
 test-latency-benchmark:
     uv run --locked python -m pytest scripts/latency_benchmark/tests
 
-# Checks the detached Rust benchmark workspace that workspace-wide Rust commands do not cover.
+# Focused checks for the transport benchmark workspace member.
 check-daemon-transport-benchmark:
-    cargo fmt --manifest-path scripts/latency_benchmark/daemon_transport/Cargo.toml -- --check
-    cargo clippy --manifest-path scripts/latency_benchmark/daemon_transport/Cargo.toml --all-targets -- -D warnings
+    cargo fmt -p nemo-relay-daemon-transport-benchmark -- --check
+    cargo clippy --locked -p nemo-relay-daemon-transport-benchmark --all-targets -- -D warnings
 
 # Small deterministic daemon transport check. Informational timings; stream integrity is required.
 daemon-transport-benchmark-smoke:
@@ -1318,8 +1325,8 @@ daemon-transport-benchmark-smoke:
     set -euo pipefail
     result_dir={{ quote(output_dir) }}
     result_dir="${result_dir:-target/benchmark-results}"
-    cargo run --locked --release \
-        --manifest-path scripts/latency_benchmark/daemon_transport/Cargo.toml \
+    cargo run --locked --profile daemon-transport \
+        -p nemo-relay-daemon-transport-benchmark \
         --target-dir target/daemon-transport-driver \
         -- smoke \
         --output "$result_dir/daemon-transport-smoke.json"
@@ -1327,16 +1334,16 @@ daemon-transport-benchmark-smoke:
 # Opt-in sustained daemon transport benchmark against already-running topology endpoints.
 [positional-arguments]
 daemon-transport-benchmark *benchmark_args:
-    cargo run --locked --release \
-        --manifest-path scripts/latency_benchmark/daemon_transport/Cargo.toml \
+    cargo run --locked --profile daemon-transport \
+        -p nemo-relay-daemon-transport-benchmark \
         --target-dir target/daemon-transport-driver \
         -- load "$@"
 
 # Deterministic provider used by the opt-in daemon transport benchmark.
 [positional-arguments]
 daemon-transport-benchmark-provider *provider_args:
-    cargo run --locked --release \
-        --manifest-path scripts/latency_benchmark/daemon_transport/Cargo.toml \
+    cargo run --locked --profile daemon-transport \
+        -p nemo-relay-daemon-transport-benchmark \
         --target-dir target/daemon-transport-driver \
         -- provider "$@"
 
@@ -1437,9 +1444,6 @@ test-rust:
         prepare_test_plugin_fixtures
         "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
     fi
-    "${nextest_command[@]}" --manifest-path examples/rust-native-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
-    "${nextest_command[@]}" --manifest-path examples/rust-grpc-worker-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
-    "${nextest_command[@]}" --manifest-path examples/language-binding-plugin/rust/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
 
 # --set [output_dir=<path>] [ci=true|false]
 test-python:
@@ -1488,7 +1492,7 @@ test-python:
     prepare_test_plugin_fixtures
     pytest_cmd+=(--durations=25)
     "$python_executable" -m "${pytest_cmd[@]}" --ignore=python/tests/integrations
-    (cd examples/language-binding-plugin/python && uv run --locked --group test --reinstall-package nemo-relay pytest)
+    (cd examples/language-binding-plugin/python && uv run --locked --no-sync --package nemo-relay-python-language-binding-plugin-example --group test pytest)
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \
             -p nemo-relay-python \
@@ -1521,8 +1525,8 @@ test-python-plugin:
         --cov=nemo_relay_plugin \
         --cov-report term-missing \
         --cov-fail-under=95
-    (cd examples/python-grpc-worker-plugin && uv run --locked --group test --reinstall-package nemo-relay-plugin pytest)
-    (cd examples/language-binding-plugin/python && uv run --locked --group test --reinstall-package nemo-relay pytest)
+    (cd examples/python-grpc-worker-plugin && uv run --locked --package nemo-relay-python-grpc-worker-example --group test --reinstall-package nemo-relay-plugin pytest)
+    (cd examples/language-binding-plugin/python && uv run --locked --package nemo-relay-python-language-binding-plugin-example --group test --reinstall-package nemo-relay pytest)
     just test-python-plugin-e2e
 
 test-python-plugin-e2e:
@@ -1755,8 +1759,8 @@ test-plugin-examples:
     (cd examples/rust-native-plugin && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
     (cd examples/rust-grpc-worker-plugin && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
     (cd examples/language-binding-plugin/rust && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
-    (cd examples/python-grpc-worker-plugin && uv run --locked --group test --reinstall-package nemo-relay-plugin pytest)
-    (cd examples/language-binding-plugin/python && uv run --locked --group test --reinstall-package nemo-relay pytest)
+    (cd examples/python-grpc-worker-plugin && uv run --locked --package nemo-relay-python-grpc-worker-example --group test --reinstall-package nemo-relay-plugin pytest)
+    (cd examples/language-binding-plugin/python && uv run --locked --package nemo-relay-python-language-binding-plugin-example --group test --reinstall-package nemo-relay pytest)
     npm test --workspace=nemo-relay-node-language-binding-plugin-example
 
 # --set [ci=true|false]

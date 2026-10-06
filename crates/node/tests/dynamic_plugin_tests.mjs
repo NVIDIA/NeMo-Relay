@@ -47,25 +47,9 @@ function workerBinaryName() {
 function buildFixture(manifestPath) {
   execFileSync(
     process.env.CARGO || 'cargo',
-    ['build', '--quiet', '--manifest-path', manifestPath, '--target-dir', fixtureTarget],
+    ['build', '--quiet', '--locked', '--manifest-path', manifestPath, '--target-dir', fixtureTarget],
     { stdio: 'inherit' },
   );
-}
-
-function buildNativeFixture(sourceManifestPath) {
-  const sourceDirectory = path.dirname(sourceManifestPath);
-  const fixtureDirectory = path.join(tempRoot, 'native-source');
-  const fixtureSourceDirectory = path.join(fixtureDirectory, 'src');
-  mkdirSync(fixtureSourceDirectory, { recursive: true });
-  const pluginCrate = path.join(repoRoot, 'crates', 'plugin');
-  const manifest = readFileSync(sourceManifestPath, 'utf8').replace(
-    'nemo-relay-plugin = { path = "../../../../plugin" }',
-    `nemo-relay-plugin = { path = ${tomlString(pluginCrate)} }`,
-  );
-  const fixtureManifest = path.join(fixtureDirectory, 'Cargo.toml');
-  writeFileSync(fixtureManifest, manifest);
-  writeFileSync(path.join(fixtureSourceDirectory, 'lib.rs'), readFileSync(path.join(sourceDirectory, 'src', 'lib.rs')));
-  buildFixture(fixtureManifest);
 }
 
 function writeNativeManifest(libraryPath) {
@@ -229,7 +213,7 @@ before(() => {
   process.env.XDG_CONFIG_HOME = isolatedConfigHome;
   const nativeFixture = path.join(repoRoot, 'crates', 'core', 'tests', 'fixtures', 'native_plugin', 'Cargo.toml');
   const workerFixture = path.join(repoRoot, 'crates', 'core', 'tests', 'fixtures', 'worker_plugin', 'Cargo.toml');
-  buildNativeFixture(nativeFixture);
+  buildFixture(nativeFixture);
   buildFixture(workerFixture);
   nativeManifestRef = writeNativeManifest(path.join(fixtureTarget, 'debug', nativeLibraryName()));
   workerManifestRef = writeWorkerManifest(path.join(fixtureTarget, 'debug', workerBinaryName()));

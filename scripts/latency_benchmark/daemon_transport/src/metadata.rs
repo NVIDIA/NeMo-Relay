@@ -82,7 +82,7 @@ fn binary_record(spec: &BinarySpec) -> Result<BinaryRecord> {
         profile: spec.profile.clone(),
         path: spec.path.display().to_string(),
         size_bytes: contents.len() as u64,
-        sha256: format!("{:x}", Sha256::digest(&contents)),
+        sha256: const_hex::encode(Sha256::digest(&contents)),
     })
 }
 

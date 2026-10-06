@@ -725,7 +725,7 @@ async fn perform_request(
     }
     tracker.finish();
     integrity.add(tracker.integrity);
-    let actual_hash = format!("{:x}", hasher.finalize());
+    let actual_hash = const_hex::encode(hasher.finalize());
     if trailer_hash.as_deref() != Some(&actual_hash) {
         integrity.body_hash_mismatches += 1;
     }

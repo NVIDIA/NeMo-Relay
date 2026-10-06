@@ -109,16 +109,16 @@ repos:
     hooks:
       - id: cargo-lockfile-check
         name: Cargo.lock is up to date
-        entry: bash -c 'cargo metadata --format-version 1 --no-deps >/dev/null'
+        entry: bash -c 'cargo metadata --format-version 1 >/dev/null'
         language: system
-        files: '^(Cargo\.toml|Cargo\.lock|crates/.*/Cargo\.toml)$'
+        files: '(^|/)(Cargo\.toml|Cargo\.lock)$'
         pass_filenames: false
 
       - id: uv-lockfile-check
         name: uv.lock is up to date
         entry: uv lock
         language: system
-        files: '^(pyproject\.toml|python/plugin/pyproject\.toml|uv\.lock)$'
+        files: '(^|/)(pyproject\.toml|uv\.lock)$'
         pass_filenames: false
 
       - id: python-worker-proto-check
@@ -173,11 +173,12 @@ repos:
         files: '^scripts/latency_benchmark/daemon_transport/.*\.(rs|toml)$'
         pass_filenames: false
 
+      # cargo-deny rejects vulnerability advisories regardless of severity.
       - id: cargo-deny
         name: cargo deny
-        entry: cargo deny check
+        entry: cargo deny --locked --all-features check
         language: system
-        files: '(Cargo\.toml|Cargo\.lock|deny\.toml)$'
+        always_run: true
         pass_filenames: false
 
       - id: pylic
@@ -193,18 +194,19 @@ repos:
         files: '^(uv\.lock)$'
         pass_filenames: false
 
+      # uv audit includes all severities, extras, and dependency groups.
       - id: uv-audit
         name: uv audit
         entry: uv audit --locked
         language: system
-        files: '^uv\.lock$'
+        always_run: true
         pass_filenames: false
 
       - id: npm-audit
         name: npm audit
-        entry: npm audit --audit-level=high
+        entry: npm audit --audit-level=low
         language: system
-        files: '^package-lock\.json$'
+        always_run: true
         pass_filenames: false
 
       - id: attributions-rust

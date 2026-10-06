@@ -5,7 +5,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use nemo_relay::api::event::Event;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
@@ -93,7 +96,10 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
     assert_eq!(result.annotation, Some(json!({"source": "application"})));
 
     flush_subscribers().expect("worker events should flush");
-    assert_eq!(controlled_events.load(Ordering::SeqCst), controlled_baseline);
+    assert_eq!(
+        controlled_events.load(Ordering::SeqCst),
+        controlled_baseline
+    );
     assert!(
         events
             .lock()
@@ -101,12 +107,18 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
             .iter()
             .any(|event| event.name() == "example.rust_worker.request.seen")
     );
-    assert!(events.lock().expect("event lock should not be poisoned").iter().any(|event| {
-        event
-            .metadata()
-            .and_then(|metadata| metadata.get("external.injector.transport"))
-            == Some(&json!("rust_grpc_worker"))
-    }));
+    assert!(
+        events
+            .lock()
+            .expect("event lock should not be poisoned")
+            .iter()
+            .any(|event| {
+                event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("external.injector.transport"))
+                    == Some(&json!("rust_grpc_worker"))
+            })
+    );
 
     activation
         .close()
@@ -114,10 +126,9 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
 
     let allowed_plugins_toml =
         write_plugins_toml(manifest_dir.path(), &manifest, &allowed_config());
-    let mut allowed_activation =
-        initialize(PluginConfig::default(), Some(allowed_plugins_toml))
-            .await
-            .expect("the allow-path worker configuration should activate");
+    let mut allowed_activation = initialize(PluginConfig::default(), Some(allowed_plugins_toml))
+        .await
+        .expect("the allow-path worker configuration should activate");
     assert!(
         !allowed_activation.report().config.has_errors(),
         "{:?}",
@@ -129,7 +140,9 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
         ToolCallExecuteParams::builder()
             .name("allowed_tool")
             .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
             .build(),
     )
     .await
@@ -144,15 +157,16 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
         ToolCallExecuteParams::builder()
             .name("restored_tool")
             .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
             .build(),
     )
     .await
     .expect("managed execution should continue after worker clear");
     flush_subscribers().expect("restored subscriber events should flush");
     assert!(controlled_events.load(Ordering::SeqCst) > controlled_baseline);
-    deregister_subscriber(CONTROLLED_SUBSCRIBER)
-        .expect("controlled subscriber should deregister");
+    deregister_subscriber(CONTROLLED_SUBSCRIBER).expect("controlled subscriber should deregister");
     deregister_subscriber(ALLOWED_SUBSCRIBER).expect("allowed subscriber should deregister");
     deregister_subscriber(SUBSCRIBER).expect("test subscriber should deregister");
 }
@@ -191,10 +205,7 @@ fn allowed_config() -> Map<String, serde_json::Value> {
         .get_mut("registration_control")
         .and_then(serde_json::Value::as_object_mut)
         .expect("registration control config should be an object")
-        .insert(
-            "registration_name".into(),
-            json!(ALLOWED_SUBSCRIBER),
-        );
+        .insert("registration_name".into(), json!(ALLOWED_SUBSCRIBER));
     config
 }
 
@@ -268,8 +279,8 @@ fn write_plugins_toml(
     config: &Map<String, serde_json::Value>,
 ) -> PathBuf {
     let path = directory.join(format!("plugins-{}.toml", uuid::Uuid::now_v7()));
-    let config = toml::Value::try_from(config.clone())
-        .expect("plugin config should serialize as TOML");
+    let config =
+        toml::Value::try_from(config.clone()).expect("plugin config should serialize as TOML");
     let document = toml::Value::Table(toml::map::Map::from_iter([
         ("version".into(), toml::Value::Integer(1)),
         (
@@ -298,8 +309,11 @@ fn write_plugins_toml(
             ])),
         ),
     ]));
-    std::fs::write(&path, toml::to_string(&document).expect("plugins.toml should serialize"))
-        .expect("plugins.toml should write");
+    std::fs::write(
+        &path,
+        toml::to_string(&document).expect("plugins.toml should serialize"),
+    )
+    .expect("plugins.toml should write");
     path
 }
 

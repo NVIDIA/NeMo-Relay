@@ -35,13 +35,10 @@ struct DropScope {
 
 impl Drop for DropScope {
     fn drop(&mut self) {
-        if let Ok(mut scope) = self.runtime.scope(
-            self.name,
-            ScopeType::Custom,
-            None,
-            None,
-            None,
-        ) {
+        if let Ok(mut scope) = self
+            .runtime
+            .scope(self.name, ScopeType::Custom, None, None, None)
+        {
             let _ = scope.close(None, None);
         }
     }
@@ -613,6 +610,10 @@ unsafe extern "C" fn fixture_compat_register(
 }
 
 /// Raw ABI-v3 entry used to verify host fallback for already-built plugins.
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v3(
     host: *const NemoRelayNativeHostApiV1,
@@ -630,6 +631,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v3(
 }
 
 /// Raw ABI-v2 entry used to verify host fallback for already-built plugins.
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v2(
     host: *const NemoRelayNativeHostApiV1,
@@ -647,6 +652,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v2(
 }
 
 /// Raw ABI-v5 entry used to verify that stale native binaries are rejected.
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v5(
     host: *const NemoRelayNativeHostApiV1,
@@ -664,6 +673,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v5(
 }
 
 /// Raw ABI-v6 entry used to verify that the immediately stale callback layout is rejected.
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v6(
     host: *const NemoRelayNativeHostApiV1,
@@ -681,6 +694,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v6(
 }
 
 /// Raw ABI-v4 entry used to verify fallback for plugins built with the previous SDK.
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v4(
     host: *const NemoRelayNativeHostApiV1,
@@ -730,6 +747,10 @@ unsafe fn fixture_compat_entry(
     NemoRelayStatus::Ok
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_async_entry(
     host: *const NemoRelayNativeHostApiV1,
@@ -738,6 +759,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_async_entry(
     unsafe { nemo_relay_plugin::export_plugin(host, out, FixtureAsyncPlugin { host: None }) }
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_observability_collision(
     host: *const NemoRelayNativeHostApiV1,
@@ -755,6 +780,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_observability_collision(
     }
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_entry_error(
     host: *const NemoRelayNativeHostApiV1,
@@ -764,6 +793,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_entry_error(
     NemoRelayStatus::Internal
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_small_descriptor(
     host: *const NemoRelayNativeHostApiV1,
@@ -781,6 +814,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_small_descriptor(
     }
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_null_kind(
     host: *const NemoRelayNativeHostApiV1,
@@ -801,6 +838,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_null_kind(
     NemoRelayStatus::Ok
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_no_register(
     host: *const NemoRelayNativeHostApiV1,
@@ -809,6 +850,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_no_register(
     unsafe { write_raw_descriptor(host, out, "fixture_native", None, None, None) }
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_validate_error(
     host: *const NemoRelayNativeHostApiV1,
@@ -826,6 +871,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_validate_error(
     }
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_invalid_diagnostics(
     host: *const NemoRelayNativeHostApiV1,
@@ -843,6 +892,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_invalid_diagnostics(
     }
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_register_error(
     host: *const NemoRelayNativeHostApiV1,
@@ -860,6 +913,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_register_error(
     }
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_tool_outcome_errors(
     host: *const NemoRelayNativeHostApiV1,
@@ -877,6 +934,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_tool_outcome_errors(
     }
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_abi_v2_api1(
     host: *const NemoRelayNativeHostApiV1,
@@ -900,6 +961,10 @@ pub unsafe extern "C" fn nemo_relay_fixture_abi_v2_api1(
     }
 }
 
+/// # Safety
+/// Non-null `host` and `out` pointers must be aligned and valid for reads and
+/// writes, respectively. Host callbacks must satisfy their native ABI contracts
+/// and remain valid until the returned plugin is dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_event_sanitize_errors(
     host: *const NemoRelayNativeHostApiV1,
@@ -941,9 +1006,11 @@ unsafe fn write_raw_descriptor(
         return NemoRelayStatus::NullPointer;
     }
     let host = unsafe { *host };
-    let mut plugin = NemoRelayNativePluginV1::default();
-    plugin.struct_size = struct_size.unwrap_or(std::mem::size_of::<NemoRelayNativePluginV1>());
-    plugin.plugin_kind = unsafe { raw_host_string(&host, kind) };
+    let mut plugin = NemoRelayNativePluginV1 {
+        struct_size: struct_size.unwrap_or(std::mem::size_of::<NemoRelayNativePluginV1>()),
+        plugin_kind: unsafe { raw_host_string(&host, kind) },
+        ..Default::default()
+    };
     if plugin.plugin_kind.is_null() && !kind.is_empty() {
         return NemoRelayStatus::Internal;
     }

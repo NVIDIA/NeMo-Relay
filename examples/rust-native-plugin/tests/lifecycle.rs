@@ -5,7 +5,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use nemo_relay::api::event::Event;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
@@ -111,12 +114,18 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
             .iter()
             .any(|event| event.name() == "example.native.request.seen")
     );
-    assert!(events.lock().expect("event lock should not be poisoned").iter().any(|event| {
-        event
-            .metadata()
-            .and_then(|metadata| metadata.get("external.injector.transport"))
-            == Some(&json!("rust_native_plugin"))
-    }));
+    assert!(
+        events
+            .lock()
+            .expect("event lock should not be poisoned")
+            .iter()
+            .any(|event| {
+                event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("external.injector.transport"))
+                    == Some(&json!("rust_native_plugin"))
+            })
+    );
 
     activation
         .close()
@@ -125,15 +134,16 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
         ToolCallExecuteParams::builder()
             .name("restored_tool")
             .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
             .build(),
     )
     .await
     .expect("managed execution should continue after plugin clear");
     flush_subscribers().expect("restored subscriber events should flush");
     assert!(controlled_events.load(Ordering::SeqCst) > controlled_baseline);
-    deregister_subscriber(CONTROLLED_SUBSCRIBER)
-        .expect("controlled subscriber should deregister");
+    deregister_subscriber(CONTROLLED_SUBSCRIBER).expect("controlled subscriber should deregister");
     deregister_subscriber(ALLOWED_SUBSCRIBER).expect("allowed subscriber should deregister");
     deregister_subscriber(SUBSCRIBER).expect("test subscriber should deregister");
     assert!(!list_plugin_kinds().contains(&PLUGIN_ID.to_owned()));
@@ -236,8 +246,8 @@ fn write_plugins_toml(
     config: &Map<String, serde_json::Value>,
 ) -> PathBuf {
     let path = directory.join("plugins.toml");
-    let config = toml::Value::try_from(config.clone())
-        .expect("plugin config should serialize as TOML");
+    let config =
+        toml::Value::try_from(config.clone()).expect("plugin config should serialize as TOML");
     let document = toml::Value::Table(toml::map::Map::from_iter([
         ("version".into(), toml::Value::Integer(1)),
         (
@@ -266,8 +276,11 @@ fn write_plugins_toml(
             ])),
         ),
     ]));
-    std::fs::write(&path, toml::to_string(&document).expect("plugins.toml should serialize"))
-        .expect("plugins.toml should write");
+    std::fs::write(
+        &path,
+        toml::to_string(&document).expect("plugins.toml should serialize"),
+    )
+    .expect("plugins.toml should write");
     path
 }
 

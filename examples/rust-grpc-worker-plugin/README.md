@@ -16,7 +16,7 @@ context before their continuation. Non-streaming callbacks also receive
 completed-response codec context; streaming callbacks do not because chunks
 are not complete provider responses.
 
-Run `cargo test` and `cargo build` from this directory. The configuration and
+Run `cargo test --locked` and `cargo build --locked --target-dir target` from this directory. The configuration and
 schema tests are order-independent. The lifecycle test builds a fresh worker,
 materializes a digest-checked manifest, activates it through `grpc-v1`, runs
 managed middleware, observes a host-runtime mark, and verifies shutdown. Copy

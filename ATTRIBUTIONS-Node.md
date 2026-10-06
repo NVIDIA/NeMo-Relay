@@ -2749,7 +2749,7 @@ Apache License
    See the License for the specific language governing permissions and
    limitations under the License.```
 
-## @modelcontextprotocol/sdk - 1.30.0
+## @modelcontextprotocol/sdk - 1.32.1
 **Repository URL**: https://github.com/modelcontextprotocol/typescript-sdk
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
