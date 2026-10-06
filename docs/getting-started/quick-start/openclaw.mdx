@@ -84,8 +84,21 @@ mode does not fix the lifecycle issue. Keep the paired tool and LLM checks in
 step 4.
 </Warning>
 
-The append-mode path was verified with Relay `0.9.1` and OpenClaw `2026.9.8`
-on Ubuntu 22.04. The PowerShell commands have not been live-tested.
+The append-mode path was verified with Relay `0.9.1`, OpenClaw `2026.9.8`, and
+a custom OpenAI-compatible provider on Ubuntu 22.04. The PowerShell commands
+have not been live-tested.
+
+For NVIDIA inference on this tested combination, use a custom provider ID such
+as `relay-nvidia`, rather than the built-in `nvidia` provider ID. In your
+disposable OpenClaw configuration, copy the existing provider's `baseUrl`,
+`apiKey`, `api`, and `models` into `models.providers.relay-nvidia`, then select
+`relay-nvidia/<your-existing-model-id>` for the test agent. Keep the same endpoint,
+credentials, and model; Relay does not require a different model. This uses
+OpenClaw's supported [custom-provider configuration](https://docs.openclaw.ai/gateway/config-tools/custom-providers).
+Fresh runs using the built-in `nvidia` path completed the task but exported only
+session events, so they failed the tool and LLM checks. The custom-provider path
+passed those checks. This is a compatibility workaround, not a fix for the
+underlying missing-hook behavior.
 
 ## Prerequisites
 

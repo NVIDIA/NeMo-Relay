@@ -140,6 +140,11 @@ plugins are enabled, and no Relay configuration problems are reported. This
 diagnostic checks configuration without loading plugin code. If the section is
 missing, update Hermes before continuing.
 
+`hermes doctor` also checks optional services unrelated to Relay and can exit
+nonzero when they are unconfigured. Resolve problems in **NeMo Relay Plugins**
+and your selected inference provider; unrelated optional-service warnings do not
+require enabling those services to complete this quick start.
+
 Hermes does not discover repository-local configuration automatically. The
 explicit path replaces the user configuration file; system configuration still
 applies. Relay plugins affect every profile hosted in the same Hermes process.

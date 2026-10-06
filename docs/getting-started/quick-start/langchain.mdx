@@ -152,6 +152,8 @@ from pathlib import Path
 
 import nemo_relay
 from langchain.agents import create_agent
+from langchain.agents.middleware import wrap_model_call
+from langchain.chat_models import init_chat_model
 from langchain_core.tools import tool
 from nemo_relay.integrations.langchain import NemoRelayCallbackHandler, NemoRelayMiddleware
 
@@ -162,10 +164,19 @@ def emit_marker() -> str:
     return "RELAY_QUICKSTART_TOOL_OK"
 
 
+@wrap_model_call
+async def require_marker_tool(request, handler):
+    # Require a real tool call before the final answer; a prompt alone can be ignored.
+    tool_used = any(getattr(message, "type", None) == "tool" for message in request.messages)
+    return await handler(request.override(tool_choice="none" if tool_used else "emit_marker"))
+
+
 agent = create_agent(
-    model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    model=init_chat_model(
+        "nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", temperature=0
+    ),
     tools=[emit_marker],
-    middleware=[NemoRelayMiddleware()],
+    middleware=[require_marker_tool, NemoRelayMiddleware()],
     system_prompt="Call emit_marker exactly once. Keep the final answer brief.",
 )
 

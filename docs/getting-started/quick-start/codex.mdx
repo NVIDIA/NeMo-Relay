@@ -78,10 +78,15 @@ Relay gateway.
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 
 Use Codex's configured model; Relay does not select or require one. For example,
-authenticate with `codex login`, or set `CODEX_API_KEY` for an API-key-backed
-non-interactive `exec` run. A custom gateway must provide the OpenAI Responses
+authenticate with `codex login`, or set `OPENAI_API_KEY` for an API-key-backed
+Relay-wrapped run. Relay 0.9.1 replaces Codex's model provider with its gateway
+provider, so `CODEX_API_KEY` or a custom provider's `env_key` alone is insufficient.
+A custom gateway must provide the OpenAI Responses
 API; configure its credentials, base URL, and model in Codex before wrapping
-the run. Refer to [Codex authentication](https://developers.openai.com/codex/auth).
+the run. Also add an `[upstream]` section with
+`openai_base_url = "https://YOUR_GATEWAY/v1"` to the Relay `config.toml` below;
+Codex's custom base URL is not carried over when Relay replaces its provider.
+Refer to [Codex authentication](https://developers.openai.com/codex/auth).
 
 ## 1. Install
 

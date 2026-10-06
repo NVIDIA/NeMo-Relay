@@ -74,7 +74,11 @@ Use Claude Code's configured model; Relay does not select or require one.
 For example, authenticate with `claude auth login`, or set `ANTHROPIC_API_KEY`
 for API-key access. A custom gateway must provide the Anthropic Messages API;
 configure its credentials, base URL, and model in Claude Code before wrapping
-the run. Refer to [Claude Code authentication](https://code.claude.com/docs/en/authentication).
+the run. Also add an `[upstream]` section with
+`anthropic_base_url = "https://YOUR_GATEWAY"` to the Relay `config.toml` below;
+Relay replaces `ANTHROPIC_BASE_URL` with its local gateway address. Use your
+provider's API root, without the `/v1/messages` route.
+Refer to [Claude Code authentication](https://code.claude.com/docs/en/authentication).
 
 ## 1. Install
 
