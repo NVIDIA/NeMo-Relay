@@ -421,7 +421,7 @@ export class HookReplayBackend {
     return ensureSession(this.sessionManager(), input);
   }
 
-  /** Drain, close, export, and delete one session. */
+  /** Share session cleanup across overlapping closes and permit retry after failure. */
   private closeSession(session: SessionState, summary: JsonRecord, metadata?: JsonRecord): Promise<void> {
     if (session.closePromise) {
       return session.closePromise;
@@ -440,7 +440,11 @@ export class HookReplayBackend {
       await this.flushSubscriberDelivery('session_close');
       this.forgetPendingSubagentLineage(session);
       deleteSession(this.stateValue, session);
-    })().then(resolveClose, rejectClose);
+    })().then(resolveClose, (error: unknown) => {
+      // Preserve partial root state, but let the next cleanup retry unfinished work.
+      delete session.closePromise;
+      rejectClose(error);
+    });
     return session.closePromise;
   }
 
@@ -471,10 +475,18 @@ export class HookReplayBackend {
     });
   }
 
-  /** Close every active session with the same lifecycle summary. */
+  /** Attempt every active session close before reporting any drain failures. */
   private async closeAllSessions(summary: JsonRecord): Promise<void> {
+    const errors: unknown[] = [];
     for (const session of [...this.stateValue.sessions.values()]) {
-      await this.closeSession(session, summary);
+      try {
+        await this.closeSession(session, summary);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'failed to close OpenClaw sessions');
     }
   }
 

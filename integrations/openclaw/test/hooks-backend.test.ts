@@ -316,6 +316,52 @@ describe('HookReplayBackend', () => {
     assert.equal(nf.calls.event[1]?.handle, nf.calls.event[0]?.handle);
   });
 
+  for (const failure of ['root creation', 'session-start mark']) {
+    it(`continues shutdown draining and retries failed ${failure}`, async () => {
+      const nf = createNemoRelayRuntime();
+      const backend = createBackend(nf);
+      const childKey = 'agent:child:subagent:child-key';
+      backend.onSessionStart(
+        { sessionId: 'child-session', sessionKey: childKey },
+        { sessionId: 'child-session', sessionKey: childKey },
+      );
+      backend.onSessionStart({ sessionId: 'other-session' }, { sessionId: 'other-session' });
+      const child = [...backend.state().sessions.values()].find((session) => session.sessionId === 'child-session');
+      assert.ok(child);
+      assert.equal(child.pendingRootOpen, true);
+      let failOnce = true;
+      const originalPush = nf.pushScope;
+      const originalEvent = nf.event;
+      nf.pushScope = (...args) => {
+        if (failure === 'root creation' && failOnce) {
+          failOnce = false;
+          throw new Error('injected root creation failure');
+        }
+        return originalPush(...args);
+      };
+      nf.event = (...args) => {
+        if (failure === 'session-start mark' && args[0] === 'openclaw.session_start' && failOnce) {
+          failOnce = false;
+          throw new Error('injected session-start mark failure');
+        }
+        return originalEvent(...args);
+      };
+
+      await assert.rejects(backend.drainForGatewayStop('shutdown'), /failed to close OpenClaw sessions/);
+      assert.equal(child.closePromise, undefined, 'a failed closure must permit retry');
+      assert.equal(backend.state().sessions.size, 1, 'the other session must still drain');
+      assert.equal(nf.calls.popScope.length, 1);
+      await backend.onSessionEnd(
+        { sessionId: 'child-session', sessionKey: childKey, messageCount: 1, reason: 'shutdown' },
+        { sessionId: 'child-session', sessionKey: childKey },
+      );
+      assert.equal(backend.state().sessions.size, 0);
+      assert.equal(nf.calls.pushScope.length, 2, 'retry must reuse a partially opened root');
+      assert.equal(nf.calls.popScope.length, 2);
+      assert.equal(nf.calls.popScope[1]?.handle, nf.calls.pushScope[1]?.handle);
+    });
+  }
+
   it('keeps gateway stop reason out of the root session output when a final answer is known', async () => {
     const nf = createNemoRelayRuntime();
     const backend = createBackend(nf);
