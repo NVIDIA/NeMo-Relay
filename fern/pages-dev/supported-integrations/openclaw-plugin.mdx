@@ -264,7 +264,7 @@ features such as adaptive hints require a managed execution path.
 | OpenClaw hook | NeMo Relay behavior |
 | --- | --- |
 | `gateway_start` | Touches the replay backend early; session roots still open lazily from session-scoped hooks. |
-| `gateway_stop` | Drains open sessions, shuts down subscribers, and clears the NeMo Relay plugin host. |
+| `gateway_stop` | Disables lazy startup and keeps the existing runtime and exporters available for final shutdown hooks until service stop. |
 | `session_start` | Opens or aliases a NeMo Relay session scope. |
 | `session_end` | Closes the session and flushes pending replay state; the generic observability component exports ATIF when enabled. |
 | `model_call_started` / `model_call_ended` | Records provider timing for later LLM span correlation. |
@@ -274,6 +274,14 @@ features such as adaptive hints require a managed execution path.
 | `agent_end` | Emits an agent lifecycle mark, flushes recorded assistant-turn LLM spans, and preserves the final assistant answer as the session output. |
 | `before_agent_finalize` | Preserves the last assistant message as fallback session output and emits a lifecycle mark without mutating the finalization payload. |
 | `subagent_spawned` / `subagent_ended` | Emits subagent lifecycle marks and nests child subagent session scopes under the requester session when stable lineage is available. |
+
+Gateway shutdown keeps active sessions open so final LLM, tool, and session hooks
+use the existing exporters. Service stop drains any remaining sessions, waits for
+subscriber delivery, and closes the NeMo Relay plugin host. If a session is already
+closing, service stop waits for it to finish. Overlapping session-end hooks do not
+create duplicate session spans or ATIF exports. Hooks after service
+stop are ignored and cannot restart NeMo Relay or recreate its exporters. An
+explicit service start allows replay to resume.
 
 ## LLM Replay Fidelity
 
@@ -319,8 +327,8 @@ If no export output appears:
   or each
   `config.plugins.components[].config.opentelemetry.endpoints[].endpoint`
 - verify the configured collector or output directory is reachable
-- verify session end or gateway stop hooks fired so pending replay state can
-  drain
+- Confirm that `session_end` ran or the OpenClaw plugin service stopped. Gateway
+  shutdown alone does not finish exporting pending events.
 
 If ambiguous timing marks appear, treat them as expected conservative behavior.
 The plugin avoids attaching unsafe latency when multiple timing candidates could
