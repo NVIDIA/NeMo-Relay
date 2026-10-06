@@ -64307,7 +64307,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## xxhash-rust - 0.8.15
+## xxhash-rust - 0.8.16
 
 **Repository URL**: https://github.com/DoumanAsh/xxhash-rust
 **License Type(s)**: BSL-1.0
