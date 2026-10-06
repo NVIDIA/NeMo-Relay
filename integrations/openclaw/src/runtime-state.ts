@@ -58,6 +58,7 @@ export class NemoRelayRuntimeState {
   private initializedPluginHost = false;
   private pluginHostOutputsHealthy = false;
   private started = false;
+  private hookStartupAllowed = true;
   private beforeExitListener?: () => void;
   private unavailableLogged = false;
   private missingStartContextLogged = false;
@@ -95,6 +96,7 @@ export class NemoRelayRuntimeState {
 
   /** Start NeMo Relay modules, generic plugins, and the hook replay backend. */
   async start(ctx: StartContext): Promise<void> {
+    this.hookStartupAllowed = true;
     this.lastStartContext = copyStartContext(ctx);
     this.missingStartContextLogged = false;
 
@@ -181,7 +183,7 @@ export class NemoRelayRuntimeState {
       degradedReason === undefined ? { state: 'ready' } : { state: 'degraded', reason: degradedReason };
   }
 
-  /** Stop the runtime because OpenClaw service or gateway shutdown is happening. */
+  /** Finalize the runtime at service stop or process exit. */
   async stop(reason: string, logger?: PluginLogger): Promise<void> {
     await this.stopWithStatus(reason, logger, { state: 'stopped', reason });
   }
@@ -209,6 +211,7 @@ export class NemoRelayRuntimeState {
     logger: PluginLogger | undefined,
     finalStatus: HookReplayBackendStatus,
   ): Promise<void> {
+    this.hookStartupAllowed = false;
     if (
       this.statusValue.state === 'stopped' ||
       this.statusValue.state === 'disabled' ||
@@ -277,6 +280,9 @@ export class NemoRelayRuntimeState {
         ? { state: 'not_initialized', reason: 'restart' }
         : { state: 'stopped', reason: ctx.reason },
     );
+    if (ctx.reason === 'restart' && this.statusValue.state === 'not_initialized') {
+      this.hookStartupAllowed = true;
+    }
   }
 
   /** Return a backend for a hook, lazily starting from runtime context if needed. */
@@ -285,8 +291,9 @@ export class NemoRelayRuntimeState {
       return this.backendValue;
     }
 
-    // Shutdown is terminal for lazy hook startup; only explicit restart paths may resume replay.
+    // During gateway shutdown, only the existing backend may accept final hooks.
     if (
+      !this.hookStartupAllowed ||
       this.statusValue.state === 'disabled' ||
       this.statusValue.state === 'stopping' ||
       this.statusValue.state === 'stopped'
@@ -341,8 +348,10 @@ export class NemoRelayRuntimeState {
       await this.replayWithBackend('gateway_start', ctx.workspaceDir, (backend) => backend.onGatewayStart(event, ctx));
     });
 
-    this.api.on('gateway_stop', async (event) => {
-      await this.stop(event.reason ?? 'gateway_stop', this.api.logger);
+    this.api.on('gateway_stop', () => {
+      // OpenClaw emits final session hooks before stopping plugin services.
+      // Keep this backend and its exporters alive until service stop drains them.
+      this.hookStartupAllowed = false;
     });
 
     this.api.on('session_start', async (event, ctx) => {

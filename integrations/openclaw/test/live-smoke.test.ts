@@ -125,6 +125,13 @@ it(
         },
         { runId: 'live-run-1', sessionId: '../live-session:1', agentId: 'agent-live' },
       );
+      // Gateway shutdown starts before OpenClaw delivers its final completion hooks.
+      const gatewayStop = api.calls.hooks.find((hook) => hook.hookName === 'gateway_stop');
+      assert.ok(gatewayStop);
+      await gatewayStop.handler({ reason: 'shutdown' }, {});
+      const drainingStatus = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+      assert.equal(drainingStatus.status.state, 'ready');
+
       await llmOutput.handler(
         {
           runId: 'live-run-1',
@@ -152,10 +159,17 @@ it(
           toolCallId: 'tool-live-1',
         },
       );
-      // OpenClaw drains final session hooks after gateway_stop and service stop.
-      const gatewayStop = api.calls.hooks.find((hook) => hook.hookName === 'gateway_stop');
-      assert.ok(gatewayStop);
-      await gatewayStop.handler({ reason: 'shutdown' }, {});
+      await sessionEnd.handler(
+        { sessionId: '../live-session:1', messageCount: 1, reason: 'shutdown' },
+        { sessionId: '../live-session:1' },
+      );
+      const completedStatus = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+      assert.equal(completedStatus.status.state, 'ready');
+      assert.equal(completedStatus.counters.llmSpansReplayed, 1);
+      assert.equal(completedStatus.counters.toolSpansReplayed, 1);
+
+      // Service stop also drains sessions that never received a final session_end.
+      await sessionStart.handler({ sessionId: 'undrained-session' }, { sessionId: 'undrained-session' });
       await service.stop?.({ stateDir: outputDir, config: {} as never, logger: api.logger });
       const stoppedStatus = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
       assert.equal(stoppedStatus.status.state, 'stopped');
@@ -169,7 +183,7 @@ it(
         const ends = records.filter((record) =>
           record.kind === 'scope' && record.category === category && record.scope_category === 'end',
         );
-        assert.equal(starts.length, 1, `expected one ${category} scope`);
+        assert.equal(starts.length, category === 'agent' ? 2 : 1, `expected paired ${category} scopes`);
         assert.deepEqual(ends.map((record) => record.uuid), starts.map((record) => record.uuid));
       }
 

@@ -568,7 +568,7 @@ describe('nemo-relay OpenClaw plugin shell', () => {
     },
   );
 
-  it('routes gateway_stop through runtime stop', async () => {
+  it('keeps sessions and exporters alive from gateway_stop until service stop', async () => {
     const modules = createModules();
     const api = createApi();
 
@@ -585,12 +585,51 @@ describe('nemo-relay OpenClaw plugin shell', () => {
     await gatewayStop.handler({ reason: 'test_stop' }, {});
 
     const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-    assert.equal(status.status.state, 'stopped');
-    assert.equal(status.counters.marksEmitted, 2);
+    assert.equal(status.status.state, 'ready');
+    assert.equal(status.counters.marksEmitted, 1);
+    assert.equal(modules.pluginHost.calls.initialize.length, 1);
+    assert.equal(modules.pluginHost.calls.close, 0);
+
+    const sessionEnd = api.calls.hooks.find((hook) => hook.hookName === 'session_end');
+    assert.ok(sessionEnd);
+    await sessionEnd.handler(
+      { sessionId: 'session-1', messageCount: 1, reason: 'shutdown' },
+      { sessionId: 'session-1' },
+    );
+    assert.equal(modules.pluginHost.calls.close, 0);
+    await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
+    const stoppedStatus = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(stoppedStatus.status.state, 'stopped');
+    assert.equal(stoppedStatus.counters.marksEmitted, 2);
+    assert.equal(modules.pluginHost.calls.close, 1);
     assert.deepEqual(
       modules.nf.calls.event.map((event) => event.name),
       ['openclaw.session_start', 'openclaw.session_end'],
     );
+  });
+
+  it('does not lazily initialize during gateway shutdown but permits explicit service start', async () => {
+    const modules = createModules();
+    const api = createApi();
+    registerPlugin(api, async () => modules);
+    const gatewayStop = api.calls.hooks.find((hook) => hook.hookName === 'gateway_stop');
+    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === 'session_start');
+    const service = api.calls.services[0];
+    assert.ok(gatewayStop);
+    assert.ok(sessionStart);
+    assert.ok(service);
+
+    await gatewayStop.handler({ reason: 'shutdown' }, {});
+    await sessionStart.handler({ sessionId: 'late-session' }, { sessionId: 'late-session' });
+    const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+    assert.equal(status.status.state, 'not_initialized');
+    assert.equal(modules.pluginHost.calls.initialize.length, 0);
+
+    await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
+    await sessionStart.handler({ sessionId: 'new-session' }, { sessionId: 'new-session' });
+    assert.equal(modules.pluginHost.calls.initialize.length, 1);
+    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ['openclaw.session_start']);
+    await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
   });
 
   it('keeps the runtime running for scoped lifecycle cleanup', async () => {
@@ -644,6 +683,9 @@ describe('nemo-relay OpenClaw plugin shell', () => {
     assert.ok(lifecycle?.cleanup);
     await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
 
+    const gatewayStop = api.calls.hooks.find((hook) => hook.hookName === 'gateway_stop');
+    assert.ok(gatewayStop);
+    await gatewayStop.handler({ reason: 'restart' }, {});
     await lifecycle.cleanup({ reason: 'restart' });
     const statusAfterRestart = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
     assert.equal(statusAfterRestart.status.state, 'not_initialized');
