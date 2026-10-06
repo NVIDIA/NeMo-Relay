@@ -318,6 +318,21 @@ sessions and let workers finish pending requests. Then stop the service and
 replace the binary at the same path. Keep the saved identity state and
 existing bundle files.
 
+### Update Codex Trajectory Consumers
+
+Codex now exports one Agent Trajectory Interchange Format (ATIF) file for each
+`codex-task` instead of one file for the whole session. A task groups parent
+turns and delegated agent work. Relay writes the file when the task closes.
+Separate tasks in the same Codex session produce separate files and traces.
+
+If you use the default filename template, update file lookups from
+`nemo-relay-atif-<session-id>.json` to `nemo-relay-atif-<task-scope-id>.json`.
+Use `extra.nemo_relay.session_id` in each trajectory to group tasks from the
+same Codex session. Update tools that expect a cumulative file after each
+parent `Stop` hook. A task can stay open while delegated agents finish and
+the parent prepares its final response. Refer to
+[Codex](/nemo-relay-cli/codex#verify-export).
+
 ### Review Managed Provider Credentials
 
 Managed Codex routes now forward ChatGPT OAuth to the native ChatGPT Codex

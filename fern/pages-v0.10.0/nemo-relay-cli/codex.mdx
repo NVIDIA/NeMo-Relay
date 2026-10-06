@@ -41,13 +41,12 @@ contains ciphertext in the tool call. Codex stores that value as
 service decrypt it for the recipient model.
 
 When the parent and child requests both pass through the Relay gateway, Relay
-can record the parent tool name, task name, and encrypted message; the sender
-and recipient routing fields in the child request; and the child's response. It
-cannot recover the delegated task from the ciphertext. The current Codex surface
-also does not give Relay a
-lifecycle edge for the built-in collaboration call. As a result, ATIF can emit
-the parent and child as separate top-level trajectories, and trace exporters
-can omit the parent-child delegation link. ATOF, ATIF, OpenTelemetry, and
+can record the parent tool name, task name, and encrypted message. It can also
+record the sender and recipient routing fields in the child request and the
+child's response. It cannot recover the delegated task from the ciphertext. Relay uses native agent
+and thread identities to link parent and child work under a shared `codex-task`
+scope. Links can be missing when Codex does not provide the identities or
+lifecycle events needed to match the work. ATOF, ATIF, OpenTelemetry, and
 OpenInference output can still show the activity they observe, but none of
 these formats can reconstruct the missing plaintext.
 
@@ -77,7 +76,7 @@ tool call and `encrypted_content` in the recipient request.
 
 Relay cannot decrypt a v2 payload. The setting applies to new Codex sessions and
 cannot recover ciphertext already stored in a trace. It changes the
-application-level inter-agent message format; it does not disable or weaken TLS
+application-level inter-agent message format. It does not disable or weaken TLS
 between Codex, Relay, and the upstream endpoint.
 
 ## Transparent Run
@@ -102,7 +101,7 @@ OpenAI auth path. Exact trust for the generated hooks and process-local disable
 entries for the known local and source Relay plugin hook identities are
 supplied in the same CLI layer. Relay does not replace or rewrite the selected
 Codex profile. If a Relay plugin is already enabled, its MCP process
-authenticates, borrows, and monitors that exact dynamic gateway; only the
+authenticates, borrows, and monitors that exact dynamic gateway. Only the
 wrapper-owned hooks remain enabled for that process. Those hooks authenticate
 the wrapper gateway before sending lifecycle payloads.
 
@@ -141,18 +140,18 @@ The installer creates a local marketplace, installs
 built-in `openai` provider through a plain URL on the managed loopback gateway.
 It appends a managed authentication assignment to `$CODEX_HOME/.env` (normally
 `~/.codex/.env`), which Codex reads at startup. The `OpenAI-Project` header carries
-a namespaced Relay proof; Relay validates and removes the proof before request
+a namespaced Relay proof. Relay validates and removes the proof before request
 observability or upstream forwarding. Existing project metadata is preserved.
 Credentials are not embedded in the generated URL. This preserves `openai` as the provider identity recorded in
 new Codex sessions, so sessions created before and after installing Relay stay
 in the same provider history. The installer retains the `nemo-relay-openai`
 alias only to resume sessions created by earlier Relay versions. It then uses
-the existing `nemo-relay` binary on `PATH`; it does not install a plugin-local
+the existing `nemo-relay` binary on `PATH`. It does not install a plugin-local
 Relay binary.
 
 Quit and restart Codex after installation, refresh, or removal so it reloads both
 configuration and startup environment. No special launcher or shell export is
-required. Existing `.env` settings are preserved; uninstall removes Relay's
+required. Existing `.env` settings are preserved. Uninstall removes Relay's
 managed assignment. Do not edit that assignment directly. Legacy capability URLs
 and dedicated Relay authentication headers remain accepted for older clients.
 
@@ -171,7 +170,7 @@ launches, it starts or reuses a detached Rust
 `nemo-relay --bind 127.0.0.1:47632` sidecar. It completes MCP initialization
 only after `/healthz` authenticates the Relay identity and confirms its version
 and bootstrap protocol. The compatibility check binds a one-way fingerprint
-that includes relevant environment values into a per-user bootstrap proof; it
+that includes relevant environment values into a per-user bootstrap proof. It
 does not return credentials or configuration secrets. A different effective
 persistent configuration fingerprint does not by itself prevent reuse. Clients
 that share the same user bootstrap state can reuse a healthy local sidecar, so
@@ -218,7 +217,7 @@ nemo-relay --bind 127.0.0.1:47632 gateway stop
 
 The command resolves the process listening at that exact loopback address,
 verifies that its executable is named `nemo-relay`, and stops it. It can only
-stop a gateway running on the local machine; remote gateway processes are not
+stop a gateway running on the local machine. Remote gateway processes are not
 supported. An open MCP client can restart the managed gateway as part of its
 one allowed recovery.
 
@@ -240,7 +239,7 @@ Persistent plugin mode loads system and user Relay configuration only. It does
 not load a project's `.nemo-relay` files. The sidecar starts in the user Relay
 configuration directory, so relative exporter paths are deterministic. When
 configuration belongs with a repository, use `nemo-relay --config
-path/to/config.toml run`; Relay selects its sibling `plugins.toml`
+path/to/config.toml run`. Relay selects its sibling `plugins.toml`
 automatically.
 
 The generated MCP entry forwards variable names, never values, for provider
@@ -259,7 +258,7 @@ protected owner/System DACL on Windows.
 
 Installer-owned hook commands pin `http://127.0.0.1:47632` and the
 install-generation fence. Hooks wait for the MCP-owned gateway and forward each
-canonical payload once; they never launch or recover Relay. An
+canonical payload once. They never launch or recover Relay. An
 ambient `NEMO_RELAY_GATEWAY_URL` cannot split hook traffic from the required
 MCP-managed gateway.
 
@@ -268,8 +267,8 @@ while an old sidecar is still running, the new MCP client explains the
 compatibility conflict instead of silently reusing the wrong process. Running
 `nemo-relay install codex --force` retires a sidecar owned by the prior install
 through Relay's private shutdown handshake before it refreshes the plugin.
-An ordinary reinstall leaves an existing fenced Codex installation unchanged;
-use `--force` to replace it safely.
+An ordinary reinstall leaves an existing fenced Codex installation unchanged.
+Use `--force` to replace it safely.
 
 An existing install without MCP generation fencing cannot be retired safely,
 even when Codex reports that the plugin is no longer registered, because an
@@ -285,7 +284,7 @@ codex plugin marketplace remove nemo-relay-local
 Remove `codex-marketplace` and `codex.json` from the install directory named in
 the error, then retry `nemo-relay install codex --force` to install a fenced
 generation. If removal was the original goal, run `nemo-relay uninstall codex`
-immediately afterward; the fenced reinstall lets Relay remove provider and hook
+immediately afterward. The fenced reinstall lets Relay remove provider and hook
 trust state in the same transaction.
 
 To check for the installed plugin, enter:
@@ -415,7 +414,7 @@ discover exactly one enabled, trusted handler for every generated event.
 `PostToolUseFailure`, `Notification`, and `SessionEnd` are not in the Codex 0.143
 plugin hook schema, so Relay does not generate undiscoverable handlers for them.
 Codex work exports a `codex-task` agent scope rather than a session-length span.
-Parent turns and delegated agents share this exported ancestor; a child's
+Parent turns and delegated agents share this exported ancestor. A child's
 `codex-turn` scope sits under its delegated agent, and owned model and tool calls
 sit under that child turn. Native child `agent_id` hooks and authenticated child
 session aliases preserve ownership when a parent turn ends first. Native parent
@@ -435,7 +434,7 @@ shutdown closes unfinished work. After completion, a new prompt in the same
 Codex session opens a separate task and trace.
 
 Relay maps delivered events to agent, turn, subagent, tool, and mark lifecycle
-events; prompt and stop payloads also provide LLM correlation context.
+events. Prompt and stop payloads also provide LLM correlation context.
 
 Relay emits an observed `skill.load` mark when it sees a complete file read
 through `cat`, `bat`, `batcat`, or PowerShell `Get-Content`. The final path
@@ -492,7 +491,7 @@ ls "${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay/atif"
 
 The Codex plugin schema does not expose `SessionEnd`, so the gateway finalizes
 ATIF when the bounded `codex-task` closes. A parent `Stop` closes a task with no
-remaining delegated agents; idle timeout and gateway shutdown finalize unfinished
+remaining delegated agents. Idle timeout and gateway shutdown finalize unfinished
 tasks. Unless you change `filename_template`, the file is named
 `nemo-relay-atif-<task-scope-id>.json`. It contains the parent turns and delegated
 work observed within that task. Separate tasks in the same Codex session produce
