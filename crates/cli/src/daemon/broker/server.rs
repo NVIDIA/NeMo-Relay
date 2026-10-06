@@ -1620,7 +1620,28 @@ async fn public_proxy_inner(
             (ResolvedTarget::PassThrough, ProviderAccess::Anonymous)
         }
         Some(credential) => match state.registry.resolve_target(&credential.digest()) {
-            Ok(target) => (target, ProviderAccess::BoundRoute),
+            Ok(target) => {
+                if matches!(target, ResolvedTarget::PassThrough) {
+                    let route_kind = match route {
+                        PublicRoute::Hook(_) => "hook",
+                        PublicRoute::Provider(provider) => provider.as_str(),
+                    };
+                    let reason = if state.pass_through {
+                        "configured_pass_through"
+                    } else {
+                        "worker_unavailable"
+                    };
+                    log::info!(
+                        target: "nemo_relay.daemon",
+                        event = "public_request_pass_through",
+                        route = route_kind,
+                        route_mode = "pass_through",
+                        reason = reason;
+                        "Bound public request is bypassing worker processing"
+                    );
+                }
+                (target, ProviderAccess::BoundRoute)
+            }
             Err(ResolveError::UnknownToken) if !state.registry.requires_worker() => {
                 log_anonymous_pass_through(route, AnonymousReason::UnboundCredential);
                 (ResolvedTarget::PassThrough, ProviderAccess::Anonymous)
