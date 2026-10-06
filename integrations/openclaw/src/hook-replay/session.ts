@@ -60,6 +60,10 @@ export type SessionState = {
   assistantMessageWrites?: AssistantMessageRecord[];
   stack: ReturnType<NemoRelayRuntimeModule['createScopeStack']>;
   rootHandle?: ReturnType<NemoRelayRuntimeModule['pushScope']>;
+  /** Shared closure retained while subscriber delivery is pending. */
+  closePromise?: Promise<void>;
+  /** Distinguishes a closed root from a deferred root that has not opened yet. */
+  rootClosed?: boolean;
   scopeRole?: 'subagent';
   pendingRootOpen?: boolean;
   pendingRootTimestampMicros?: number;
@@ -366,6 +370,7 @@ export function closeSessionRoot(
     manager.state.counters.marksEmitted += 1;
     manager.nf.popScope(session.rootHandle, rootOutput, timestamp ?? null);
     delete session.rootHandle;
+    session.rootClosed = true;
   });
 }
 
@@ -399,7 +404,7 @@ export function evictExpiredCorrelationRecords(state: HookReplayBackendState, no
 
 /** Open a deferred or new root session scope and flush queued child emissions. */
 export function materializeSessionRoot(manager: SessionManager, session: SessionState, input: EnsureSessionInput): void {
-  if (session.rootHandle) {
+  if (session.rootHandle || session.rootClosed) {
     return;
   }
 

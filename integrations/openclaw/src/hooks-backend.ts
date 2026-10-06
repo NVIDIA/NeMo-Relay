@@ -422,13 +422,26 @@ export class HookReplayBackend {
   }
 
   /** Drain, close, export, and delete one session. */
-  private async closeSession(session: SessionState, summary: JsonRecord, metadata?: JsonRecord): Promise<void> {
-    this.materializeDeferredSessionRoot(session);
-    drainSession(this.sessionManager(), session);
-    closeSessionRoot(this.sessionManager(), session, summary, session.finalOutput ?? summary, metadata);
-    await this.flushSubscriberDelivery('session_close');
-    this.forgetPendingSubagentLineage(session);
-    deleteSession(this.stateValue, session);
+  private closeSession(session: SessionState, summary: JsonRecord, metadata?: JsonRecord): Promise<void> {
+    if (session.closePromise) {
+      return session.closePromise;
+    }
+    let resolveClose!: () => void;
+    let rejectClose!: (reason: unknown) => void;
+    // Publish the closure before doing any work so overlapping cleanup joins it.
+    session.closePromise = new Promise<void>((resolve, reject) => {
+      resolveClose = resolve;
+      rejectClose = reject;
+    });
+    void (async () => {
+      this.materializeDeferredSessionRoot(session);
+      drainSession(this.sessionManager(), session);
+      closeSessionRoot(this.sessionManager(), session, summary, session.finalOutput ?? summary, metadata);
+      await this.flushSubscriberDelivery('session_close');
+      this.forgetPendingSubagentLineage(session);
+      deleteSession(this.stateValue, session);
+    })().then(resolveClose, rejectClose);
+    return session.closePromise;
   }
 
   /** Emit a session-level OpenClaw lifecycle mark. */
@@ -596,7 +609,7 @@ export class HookReplayBackend {
 
   /** Materialize one deferred session root with nested lineage when available. */
   private materializeDeferredSessionRoot(session: SessionState): void {
-    if (session.rootHandle) {
+    if (session.rootHandle || session.rootClosed) {
       return;
     }
 
