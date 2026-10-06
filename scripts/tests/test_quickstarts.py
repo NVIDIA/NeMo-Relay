@@ -72,6 +72,8 @@ class QuickstartTests(unittest.TestCase):
         original = (QS.PAGES / "python.mdx").read_text()
         changes = {
             "unlabeled": original + "\n```bash\necho hidden\n```\n",
+            "indented fence": original + "\n  ```bash\necho hidden\n  ```\n",
+            "tilde fence": original + "\n~~~bash\necho hidden\n~~~\n",
             "unknown schema": original.replace('"schema": 1', '"schema": 2'),
             "orphan": original + '\n{/* quickstart-block {"id":"orphan"} */}\n',
             "unsafe file": original.replace('"path":"quickstart.py"', '"path":"../escape.py"'),

@@ -132,6 +132,12 @@ Select that file in the shell that will start Hermes:
 {/* quickstart-block {"id":"environment","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
 export HERMES_NEMO_RELAY_PLUGINS_TOML="$PWD/plugins.toml"
+```
+
+Run the diagnostic in that same shell:
+
+{/* quickstart-block {"id":"doctor","role":"manual","cwd":".","shells":["bash"],"session":"main","reason":"Hermes doctor checks unrelated optional services and can exit nonzero despite a valid Relay configuration; inspect its Relay section"} */}
+```bash
 hermes doctor
 ```
 

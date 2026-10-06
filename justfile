@@ -675,12 +675,17 @@ set_node_package_version() {
 
 set_project_version() {
     local version="$1"
+    local previous_version=""
+    local python_executable=""
+    previous_version="$(read_workspace_version)"
+    python_executable="$(uv_python_executable)"
     set_cargo_workspace_version "$version"
     set_node_package_versions "$version"
     set_example_package_versions "$version"
     set_python_package_version "$version" false
     set_python_plugin_package_version "$version"
     set_coding_agent_plugin_versions "$version"
+    "$python_executable" scripts/docs/docs_version_pins.py update "$previous_version" "$version"
 }
 
 semver_to_pep440() {
@@ -1046,6 +1051,8 @@ docs:
     {{ bash_helpers }}
     ensure_docs_dependencies
     uv run --no-sync python scripts/check-quickstarts.py check
+    uv run --no-sync python scripts/docs/docs_version_pins.py check
+    uv run --no-sync python -m unittest discover -s scripts/tests -p 'test_*quickstart*.py'
     generate_docs_api_references
     cd "$NEMO_RELAY_REPO_ROOT/fern"
     npx fern check --warnings

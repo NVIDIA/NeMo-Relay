@@ -86,7 +86,8 @@ step 4.
 
 The append-mode path was verified with Relay `0.9.1`, OpenClaw `2026.9.8`, and
 a custom OpenAI-compatible provider on Ubuntu 22.04. The PowerShell commands
-have not been live-tested.
+have not been live-tested. The install command follows this docs checkout's
+Relay version; that newer combination has not yet had the same live test.
 
 For NVIDIA inference on this tested combination, use a custom provider ID such
 as `relay-nvidia`, rather than the built-in `nvidia` provider ID. In your
@@ -124,7 +125,7 @@ and adds it to an existing `plugins.allow` list automatically:
 
 {/* quickstart-block {"id":"install","role":"manual","cwd":".","shells":["bash","powershell"],"session":"main","reason":"Review OpenClaw package-source confirmation separately from capability consent"} */}
 ```bash
-openclaw plugins install npm:nemo-relay-openclaw@0.9.1 --pin --accept-capabilities
+openclaw plugins install npm:nemo-relay-openclaw@0.10.0 --pin --accept-capabilities
 ```
 
 The plugin requires OpenClaw capability consent. The explicit flag grants and

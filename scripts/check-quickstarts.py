@@ -24,6 +24,7 @@ PAGES = ROOT / "docs/getting-started/quick-start"
 SCENARIO = re.compile(r"\{/\* quickstart-scenario\s+(.*?)\*/\}", re.DOTALL)
 BLOCK = re.compile(r"\{/\* quickstart-block\s+(.*?)\*/\}\s*$", re.DOTALL)
 FENCE = re.compile(r"^```([\w+-]+)\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+FENCE_MARKER = re.compile(r"^[ \t]*(?:`{3,}|~{3,})", re.MULTILINE)
 ROLES = {"file", "run", "expected", "input", "manual"}
 
 
@@ -114,7 +115,9 @@ def extract(page: Path, shell: str | None = None) -> dict[str, Any]:
         block.update(language=fence.group(1), content=fence.group(2), line=text[: fence.start()].count("\n") + 1)
         blocks.append(block)
         previous = fence.end()
-    require(len(re.findall(r"^```", text, re.MULTILINE)) == len(blocks) * 2, "unsupported or unclosed code fence")
+    # Reject fences that the extractor cannot pair with a contract, including
+    # indented, tilde, or longer-backtick variants that Markdown still renders.
+    require(len(FENCE_MARKER.findall(text)) == len(blocks) * 2, "unsupported or unclosed code fence")
     require("quickstart-block" not in text[previous:], "orphan block annotation")
     require(bool(blocks), "no annotated code blocks")
     for variant in shells:

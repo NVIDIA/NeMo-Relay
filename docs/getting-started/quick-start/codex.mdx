@@ -73,13 +73,13 @@ Relay gateway.
 - Inference access: an OpenAI API key, a supported Codex login, or credentials for an OpenAI Responses-compatible gateway
 - A trusted Git working directory where Codex is permitted to create a file
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
-- Permission to download the NeMo Relay 0.9.1 release
+- Permission to download the NeMo Relay version used by this guide
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 
 Use Codex's configured model; Relay does not select or require one. For example,
 authenticate with `codex login`, or set `OPENAI_API_KEY` for an API-key-backed
-Relay-wrapped run. Relay 0.9.1 replaces Codex's model provider with its gateway
+Relay-wrapped run. Relay replaces Codex's model provider with its gateway
 provider, so `CODEX_API_KEY` or a custom provider's `env_key` alone is insufficient.
 A custom gateway must provide the OpenAI Responses
 API; configure its credentials, base URL, and model in Codex before wrapping
@@ -96,7 +96,7 @@ Install the pinned NeMo Relay CLI release:
 <Tab title="Unix shell">
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.1/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.0/install.sh | NEMO_RELAY_VERSION=0.10.0 sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 </Tab>
@@ -104,8 +104,8 @@ export PATH="$HOME/.local/bin:$PATH"
 <Tab title="Windows PowerShell">
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":600} */}
 ```powershell
-$env:NEMO_RELAY_VERSION = '0.9.1'
-irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.1/install.ps1 | iex
+$env:NEMO_RELAY_VERSION = '0.10.0'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.0/install.ps1 | iex
 ```
 </Tab>
 </Tabs>

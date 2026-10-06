@@ -66,7 +66,7 @@ and tool lifecycle to a local ATOF event file.
 - Claude Code 2.1.121 or newer
 - Inference access: an Anthropic API key, a supported Claude login, or credentials for an Anthropic Messages-compatible gateway
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
-- Permission to download the NeMo Relay 0.9.1 release
+- Permission to download the NeMo Relay version used by this guide
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 
@@ -88,7 +88,7 @@ Install the pinned NeMo Relay CLI release:
 <Tab title="Unix shell">
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.1/install.sh | NEMO_RELAY_VERSION=0.9.1 sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.0/install.sh | NEMO_RELAY_VERSION=0.10.0 sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 </Tab>
@@ -96,8 +96,8 @@ export PATH="$HOME/.local/bin:$PATH"
 <Tab title="Windows PowerShell">
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":600} */}
 ```powershell
-$env:NEMO_RELAY_VERSION = '0.9.1'
-irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.9.1/install.ps1 | iex
+$env:NEMO_RELAY_VERSION = '0.10.0'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.0/install.ps1 | iex
 ```
 </Tab>
 </Tabs>

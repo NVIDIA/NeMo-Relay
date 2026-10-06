@@ -128,7 +128,8 @@ just docs
 Quickstart pages own their executable examples and success criteria. Hidden
 `quickstart-scenario` and `quickstart-block` JSON comments label the existing
 MDX fences; do not maintain a second copy of their commands in CI.
-`just docs` checks these contracts without installing packages or calling a model.
+`just docs` runs the contract checker and its unit tests without installing
+quickstart packages or calling a model.
 
 From the repository root:
 
@@ -139,6 +140,22 @@ python3 scripts/check-quickstarts.py extract docs/getting-started/quick-start/py
 ```
 
 The extractor requires Python 3.11 or newer and has no third-party dependencies.
+The version checker separately keeps copyable Getting Started install pins and
+the OpenClaw/native-plugin examples on the base version in the root
+`Cargo.toml`. `just set-version <version>` updates those pins with the packages;
+version snapshots therefore keep literal, copyable commands without Fern
+build-time substitutions. Switchyard's native plugin bundle is independently
+versioned and remains explicitly pinned until a compatible bundle is published.
+`schema: 1` identifies this checker's annotation format; it is not an external
+JSON Schema or the Relay plugin configuration version. The checker is the
+authoritative validator. Each page's scenario must declare:
+
+| Field | Purpose |
+| --- | --- |
+| `id`, `mode`, `shells`, `cwd` | Page filename, local/live mode, supported shells, and project directory |
+| `requires`, `setup`, `inputs` | Version prerequisites, external setup, and explicitly typed placeholders |
+| `fresh`, `checks` | Artifacts that must not preexist and assertions on output files |
+
 Each page declares its prerequisites, live-provider requirements, fresh output
 paths, and artifact checks. Each fence has a stable ID and one role:
 
