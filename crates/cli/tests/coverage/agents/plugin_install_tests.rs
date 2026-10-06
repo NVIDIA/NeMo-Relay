@@ -1024,6 +1024,68 @@ fn write_installed_state(host: CodingAgent, dir: &Path) {
     mark_plugin_setup_installed(host, &layout, &options(dir)).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn persistent_hook_directories_load_under_permissive_umasks() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct UmaskGuard(libc::mode_t);
+    impl Drop for UmaskGuard {
+        fn drop(&mut self) {
+            // SAFETY: Restore the process umask while the environment-test mutex is held.
+            unsafe { libc::umask(self.0) };
+        }
+    }
+    let _lock = plugin_install_env_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for mask in [0o002, 0o000] {
+        // SAFETY: Serialize process-global umask changes with the environment-test mutex.
+        let _mask = UmaskGuard(unsafe { libc::umask(mask) });
+        let dir = tempdir().unwrap();
+        for host in CodingAgent::MARKETPLACE_HOSTS {
+            let layout = PluginLayout::new(host, dir.path());
+            // Exercise both initial generation and replacement of an existing plugin tree.
+            for _ in 0..2 {
+                write_plugin_marketplace(
+                    host,
+                    &layout,
+                    Path::new("/bin/nemo-relay"),
+                    &options(dir.path()),
+                )
+                .unwrap();
+                assert_eq!(
+                    std::fs::metadata(&layout.plugin_root)
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700
+                );
+                crate::hooks::HookCommandConfig::load(&layout.hook_config)
+                    .expect("generated persistent hooks must be able to load their configuration");
+                write_state(&layout, &options(dir.path())).unwrap();
+                let runner = MockRunner::default()
+                    .with_executable("nemo-relay", "/bin/nemo-relay")
+                    .with_executable("codex", "/bin/codex")
+                    .with_executable("claude", "/bin/claude");
+                let readiness = collect_host_plugin_readiness(
+                    host,
+                    &options(dir.path()),
+                    &runner,
+                    &MockSetupRunner::default(),
+                );
+                let hooks = readiness
+                    .checks
+                    .iter()
+                    .find(|check| check.name == "Generated hooks")
+                    .unwrap();
+                assert!(hooks.ok, "{}: {}", host.label(), hooks.details);
+            }
+        }
+    }
+}
+
 #[test]
 fn refresh_preflight_retires_every_managed_generation_before_replacement() {
     let home = tempdir().unwrap();

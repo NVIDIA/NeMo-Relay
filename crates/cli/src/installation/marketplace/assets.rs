@@ -59,6 +59,8 @@ pub(super) fn write_plugin_marketplace_for_generation(
             .unwrap_or(&layout.marketplace_root),
     )
     .map_err(|error| format!("failed to create {}: {error}", layout.plugin_root.display()))?;
+    crate::filesystem::create_private_dir(&layout.plugin_root)
+        .map_err(|error| format!("failed to create {}: {error}", layout.plugin_root.display()))?;
     fs::create_dir_all(layout.hooks_path.parent().unwrap_or(&layout.plugin_root))
         .map_err(|error| format!("failed to create {}: {error}", layout.hooks_path.display()))?;
     write_json(&layout.marketplace_manifest, &marketplace_manifest(host))?;

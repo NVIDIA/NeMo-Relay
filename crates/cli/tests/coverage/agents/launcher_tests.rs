@@ -369,6 +369,48 @@ fn prepares_codex_config_overrides() {
     prepared.restore().unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn transparent_hook_directories_load_under_permissive_umasks() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct UmaskGuard(libc::mode_t);
+    impl Drop for UmaskGuard {
+        fn drop(&mut self) {
+            // SAFETY: Restore the process umask while the environment-test mutex is held.
+            unsafe { libc::umask(self.0) };
+        }
+    }
+    let _lock = crate::test_support::ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let _cwd = current_dir_lock().lock().unwrap();
+    for mask in [0o002, 0o000] {
+        // SAFETY: Serialize process-global umask changes with the environment-test mutex.
+        let _mask = UmaskGuard(unsafe { libc::umask(mask) });
+        for agent in [CodingAgent::Codex, CodingAgent::ClaudeCode] {
+            let prepared = PreparedAgentLaunch::new(
+                agent,
+                vec![default_command_for(agent).into()],
+                "http://127.0.0.1:1234",
+                &ResolvedConfig::default(),
+                false,
+            )
+            .unwrap();
+            let root = &prepared.temp_dirs[0];
+            assert_eq!(
+                std::fs::metadata(root).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            crate::hooks::HookCommandConfig::load(&root.join(".nemo-relay-hook-config.json"))
+                .expect("generated transparent hooks must be able to load their configuration");
+            let root = root.clone();
+            prepared.restore().unwrap();
+            assert!(!root.exists());
+        }
+    }
+}
+
 #[test]
 fn prepares_codex_config_overrides_in_exec_scope() {
     let resolved = ResolvedConfig {

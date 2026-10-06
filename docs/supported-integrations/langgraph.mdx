@@ -106,7 +106,7 @@ with nemo_relay.scope.scope("langgraph-request", nemo_relay.ScopeType.Agent):
 ```
 
 `NemoRelayCallbackHandler` records the graph lifecycle and provides its scopes.
-`create_tool_node` provides managed tool execution; use both for complete
+`create_tool_node` provides managed tool execution. Use both for complete
 standalone LangGraph instrumentation. For custom ToolNode wrapper composition,
 construct `ToolNode` directly and pass `wrap_tool_call` and `awrap_tool_call`
 from this integration.
@@ -134,6 +134,11 @@ agent = configure_graph(agent)
 configuration and returns the same compiled graph, so the LangGraph server can
 load it. The callback handler creates the graph and node scopes. The middleware
 routes model and tool calls through Relay under those scopes.
+
+The handler closes each graph scope on the stack where it started. This works
+even when the server runs the completion callback in a different context.
+Successful runs emit an end event with status `OK`. Failed runs emit an end
+event with status `ERROR`.
 
 For LangChain agents inside a LangGraph workflow, use `NemoRelayMiddleware` from
 this package the same way as the LangChain integration and pass the LangGraph

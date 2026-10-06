@@ -1082,6 +1082,172 @@ async fn worker_response_head_timeout_preserves_the_route_and_next_request() {
     }
 }
 
+/// Captures each bound pass-through request with an isolated logger.
+#[tokio::test]
+async fn disconnected_worker_requests_log_pass_through_without_changing_responses() {
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_BOUND_PASS_THROUGH_LOG_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = tokio::time::timeout(
+            Duration::from_secs(20),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "daemon::broker::server::tests::disconnected_worker_requests_log_pass_through_without_changing_responses",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("pass-through logging child timed out")
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "pass-through logging child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    use nemo_relay::logging::{
+        FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let log_path = directory.path().join("pass-through.jsonl");
+    let logging = init_logging(&LoggingConfig {
+        level: LogLevel::Info,
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: log_path.clone(),
+            level: LogLevel::Info,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..LoggingConfig::default()
+    })
+    .unwrap();
+    let provider = Router::new().route("/v1/responses", post(|| async { "provider response" }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let provider_task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x76_u8; 32]);
+    let credential = RouteCredential::parse(token.clone()).unwrap();
+    for (pass_through, require_worker) in [(false, false), (false, true), (true, false)] {
+        let mut state = test_daemon_state(
+            false,
+            &token,
+            GatewayConfig {
+                openai_base_url: endpoint.clone(),
+                ..GatewayConfig::default()
+            },
+        );
+        let mutable = Arc::get_mut(&mut state).unwrap();
+        mutable.pass_through = pass_through;
+        mutable.registry = Registry::new(pass_through).with_require_worker(require_worker);
+        let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
+        state
+            .registry
+            .register_mcp(
+                McpRegistration {
+                    fingerprint,
+                    token_digest: credential.digest(),
+                    session_id: McpSessionId::new("pass-through-session").unwrap(),
+                    lease_expires_at_unix_ms: u64::MAX,
+                },
+                WorkerLaunch {
+                    activation_id: "pass-through-activation".into(),
+                    activation_token: SensitiveString::new("activation-token").unwrap(),
+                    deadline_unix_ms: u64::MAX,
+                    bind_ip: Ipv4Addr::LOCALHOST,
+                    port: 0,
+                    advertise_address: None,
+                },
+            )
+            .unwrap();
+        if !pass_through {
+            let target = Arc::new(
+                WorkerTarget::new(
+                    "disconnected-worker",
+                    endpoint.clone(),
+                    SensitiveString::new("worker-token").unwrap(),
+                )
+                .unwrap(),
+            );
+            state
+                .registry
+                .mark_worker_ready(fingerprint, "pass-through-activation", Arc::clone(&target))
+                .unwrap();
+            target.set_control_available(false);
+        }
+        let app = router(state);
+        for (path, body) in [
+            (
+                "/hooks/claude-code",
+                r#"{"session_id":"session","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"pwd"}}"#,
+            ),
+            ("/hooks/claude-code", "invalid hook payload"),
+            ("/v1/responses", "{}"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post(path)
+                        .header(CLIENT_TOKEN_HEADER, &token)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if require_worker {
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    StatusCode::OK
+                }
+            );
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let expected: &[u8] = if require_worker {
+                br#"{"error":{"message":"route is not ready"}}"#
+            } else if path == "/hooks/claude-code" {
+                HookRoute::Claude.pass_through_body()
+            } else {
+                b"provider response"
+            };
+            assert_eq!(bytes.as_ref(), expected);
+        }
+    }
+    provider_task.abort();
+    logging.shutdown();
+    let records: Vec<serde_json::Value> = std::fs::read_to_string(log_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let records: Vec<_> = records
+        .iter()
+        .filter(|record| record["event"] == "public_request_pass_through")
+        .collect();
+    assert_eq!(
+        records.len(),
+        6,
+        "every default/configured request must log; strict requests must not log pass-through"
+    );
+    for (records, reason) in records
+        .chunks_exact(3)
+        .zip(["worker_unavailable", "configured_pass_through"])
+    {
+        for (record, route) in records.iter().zip(["hook", "hook", "openai"]) {
+            assert_eq!(record["level"], "info");
+            assert_eq!(record["fields"]["route_mode"], "pass_through");
+            assert_eq!(record["fields"]["reason"], reason);
+            assert_eq!(record["fields"]["route"], route);
+        }
+    }
+}
+
 #[tokio::test]
 async fn unreachable_worker_marks_its_authenticated_route_pass_through() {
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x22_u8; 32]);

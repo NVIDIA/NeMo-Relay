@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import datetime
 import logging
 import math
@@ -14,12 +15,33 @@ import typing
 from langchain_core.callbacks.base import BaseCallbackHandler
 
 import nemo_relay
+from nemo_relay._native import capture_thread_scope_stack, restore_thread_scope_stack
 from nemo_relay.integrations.langchain._serialization import _prepare_lc_payloads
 
 if typing.TYPE_CHECKING:
     from uuid import UUID
 
+    from nemo_relay._native import _ThreadScopeStackBinding
+
 _logger = logging.getLogger(__name__)
+
+
+class _ScopeContext(typing.NamedTuple):
+    """The Python context and native thread binding that own a run's stack."""
+
+    context: contextvars.Context
+    binding: _ThreadScopeStackBinding
+
+    def drain(self, callback: typing.Callable[[], None]) -> None:
+        # A server may finish a run outside the context where it opened. Native
+        # bindings also matter for starts on explicitly bound worker threads,
+        # which need not have a Python scope-stack ContextVar.
+        previous_binding = capture_thread_scope_stack()
+        try:
+            restore_thread_scope_stack(self.binding)
+            self.context.run(callback)
+        finally:
+            restore_thread_scope_stack(previous_binding)
 
 
 class _CompletedScope(typing.NamedTuple):
@@ -30,11 +52,10 @@ class _CompletedScope(typing.NamedTuple):
     Recording the completion and closing it once it reaches the top preserves the stack's
     ordering without ever attempting a close the stack would reject.
 
-    A completion is only ever closed when its scope is the top of the active stack, so
-    ownership needs no separate check: a scope sits on exactly one stack, and its handle
-    uuid can only be the current top on that stack. Comparing ``ScopeStack`` objects
-    would not work anyway -- propagating a stack to a worker thread yields a different
-    Python wrapper for the same stack, with no way to correlate the two.
+    The owning context is retained until the scope closes. Completion callbacks
+    temporarily restore it, so a server callback arriving in another context can still
+    drain the original stack. The top-handle check preserves LIFO ordering without
+    comparing Python wrappers for native stacks.
 
     ``output`` is already serialized: callers own the mapping they hand to the callback
     and may mutate it afterwards, so it is snapshotted when the callback fires, for the
@@ -50,6 +71,7 @@ class _CompletedScope(typing.NamedTuple):
     output: nemo_relay.Json | None
     metadata: nemo_relay.Json | None
     ended_at: datetime.datetime
+    scope_context: _ScopeContext
 
 
 def _current_scope_handle() -> nemo_relay.ScopeHandle | None:
@@ -85,6 +107,7 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
         # Reentrant because completing a run drains, and both take the lock.
         self._lock = threading.RLock()
         self._scope_handles: dict[UUID, nemo_relay.ScopeHandle] = {}
+        self._scope_contexts: dict[UUID, _ScopeContext] = {}
         self._completed: dict[str, _CompletedScope] = {}
 
     def on_chain_start(
@@ -112,21 +135,19 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
             if name is None:
                 name = "Unknown"
 
-            parent = None
-            if parent_run_id is not None:
-                parent = self._scope_handles.get(parent_run_id)
-
             scope_metadata = metadata.copy() if metadata else {}
             scope_metadata["langchain_run_id"] = str(run_id)
             prepared_inputs = _prepare_lc_payloads(inputs)
-            handle = nemo_relay.scope.push(
-                name,
-                nemo_relay.ScopeType.Agent,
-                handle=parent,
-                input=prepared_inputs,
-                metadata=scope_metadata,
-            )
             with self._lock:
+                parent = self._scope_handles.get(parent_run_id) if parent_run_id is not None else None
+                handle = nemo_relay.scope.push(
+                    name,
+                    nemo_relay.ScopeType.Agent,
+                    handle=parent,
+                    input=prepared_inputs,
+                    metadata=scope_metadata,
+                )
+                self._scope_contexts[run_id] = _ScopeContext(contextvars.copy_context(), capture_thread_scope_stack())
                 self._scope_handles[run_id] = handle
         except Exception:
             _logger.error("NeMo Relay: on_chain_start failed", exc_info=True)
@@ -171,13 +192,15 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
             if handle is None:
                 return
 
-            self._completed[handle.uuid] = _CompletedScope(
+            completed = _CompletedScope(
                 handle=handle,
                 output=prepared_output,
                 metadata=metadata,
                 ended_at=datetime.datetime.now(datetime.timezone.utc),
+                scope_context=self._scope_contexts.pop(run_id),
             )
-            self._close_completed_scopes_locked()
+            self._completed[handle.uuid] = completed
+            completed.scope_context.drain(self._close_completed_scopes_locked)
 
     def _close_completed_scopes(self) -> None:
         """Close finished scopes from the top of the active stack down."""

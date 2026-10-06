@@ -95,8 +95,25 @@ body. For chat models built on the OpenAI or Anthropic Python SDKs, such as
 per-request `extra_headers` model setting, which those SDKs send as HTTP headers.
 NeMo Relay also uses `extra_headers` when your `model_settings` already configure
 it. Other providers, such as `ChatOCIGenAI` from `langchain-oci`, receive no Relay
-headers because their SDKs reject unknown request fields; the model call proceeds
+headers because their SDKs reject unknown request fields. The model call proceeds
 without them.
+
+## Human Approval in Tools
+
+`NemoRelayMiddleware` supports tools that pause for human approval with both
+`invoke` and `ainvoke`. When a tool calls `langgraph.types.interrupt()`, Relay
+closes its tool scope. The agent returns `__interrupt__` with the approval
+request.
+
+Configure the agent with a checkpointer and set `configurable.thread_id` to
+identify the conversation. To resume the tool, invoke the same agent with
+`Command(resume=...)` and the same thread ID.
+
+To record `Graph Interrupt` and `Graph Resume` marks, install the LangGraph
+callbacks with `nemo_relay.integrations.langgraph.configure_graph(agent)` before
+you run or serve the agent. Refer to the
+[LangGraph integration guide](/supported-integrations/langgraph) for callback
+configuration.
 
 ## Verify the Integration
 

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import operator
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
@@ -89,6 +90,35 @@ def test_handler_type(callback_handler: NemoRelayCallbackHandler) -> None:
 
     assert isinstance(callback_handler, LangChainCallbackHandler)
     assert isinstance(callback_handler, GraphCallbackHandler)
+
+
+async def test_configured_graph_stream_closes_across_consumer_contexts(
+    async_graph: CompiledStateGraph,
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    """Streaming servers may consume each graph chunk in a separate task context."""
+    from nemo_relay.integrations.langgraph import configure_graph
+
+    graph = configure_graph(configure_graph(async_graph))
+    stream = graph.astream({"value": 1})
+    chunks = []
+    try:
+        while True:
+            # No Relay stack is inherited by the consumer, including the task that
+            # resumes the generator to deliver the root on_chain_end callback.
+            chunks.append(await asyncio.create_task(anext(stream), context=contextvars.Context()))
+    except StopAsyncIteration:
+        pass
+    finally:
+        await stream.aclose()
+
+    assert chunks == [{"increment": {"value": 2}}]
+    await nemo_relay.subscribers.flush_async()
+    graph_events = [
+        event for event in subscribed_events if isinstance(event, nemo_relay.ScopeEvent) and event.name == "LangGraph"
+    ]
+    assert [event.scope_category for event in graph_events] == ["start", "end"]
+    assert cast(dict, graph_events[-1].metadata)["otel.status_code"] == "OK"
 
 
 def test_configure_graph_records_lifecycle_without_invocation_callbacks(

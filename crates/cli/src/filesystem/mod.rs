@@ -8,6 +8,19 @@ pub(crate) mod bounded;
 mod locks;
 mod snapshots;
 
+/// Creates a new Relay-owned directory without granting group or other access on Unix.
+pub(crate) fn create_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    let builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
+        builder.mode(0o700);
+        builder
+    };
+    builder.create(path)
+}
+
 #[cfg(test)]
 pub(crate) use atomic::fail_next_atomic_write;
 #[cfg(all(test, windows))]

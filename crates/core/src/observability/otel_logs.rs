@@ -1097,6 +1097,9 @@ impl LogEventProcessor {
     }
 
     fn process_with_logger(&mut self, event: &Event, logger: Option<&SdkLogger>) {
+        if !super::otel::accept_otlp_timestamp(event, &self.runtime_diagnostics) {
+            return;
+        }
         let expired_count = self
             .lineage
             .expire_completed(*event.timestamp(), self.completed_span_context_ttl);

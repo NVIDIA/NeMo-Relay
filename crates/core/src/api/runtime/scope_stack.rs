@@ -147,6 +147,53 @@ impl PropagationContext {
     }
 }
 
+/// Enforce the W3C list grammar before handing vendor state to OpenTelemetry.
+/// The SDK parser alone permits control characters, duplicate keys, and long lists.
+fn parse_w3c_tracestate(header: &str) -> Option<TraceState> {
+    let mut members = Vec::new();
+    let mut keys = HashSet::new();
+    for (index, member) in header.split(',').enumerate() {
+        if index >= 32 {
+            return None;
+        }
+        let member = member.trim_matches([' ', '\t']);
+        if member.is_empty() {
+            continue;
+        }
+        let (key, value) = member.split_once('=')?;
+        let name_chars = |name: &str| {
+            name.bytes().all(|b| {
+                b.is_ascii_lowercase()
+                    || b.is_ascii_digit()
+                    || matches!(b, b'_' | b'-' | b'*' | b'/')
+            })
+        };
+        let valid_key = if let Some((tenant, system)) = key.split_once('@') {
+            (1..=241).contains(&tenant.len())
+                && tenant.as_bytes()[0].is_ascii_alphanumeric()
+                && name_chars(tenant)
+                && (1..=14).contains(&system.len())
+                && system.as_bytes()[0].is_ascii_lowercase()
+                && name_chars(system)
+        } else {
+            (1..=256).contains(&key.len())
+                && key.as_bytes()[0].is_ascii_lowercase()
+                && name_chars(key)
+        };
+        if !valid_key
+            || !keys.insert(key)
+            || !(1..=256).contains(&value.len())
+            || !value
+                .bytes()
+                .all(|b| (0x20..=0x7e).contains(&b) && !matches!(b, b',' | b'='))
+        {
+            return None;
+        }
+        members.push((key, value));
+    }
+    TraceState::from_key_value(members).ok()
+}
+
 /// Validate and canonicalize a W3C header pair without ever logging header values.
 pub(crate) fn normalize_w3c_headers(
     traceparent: Option<&str>,
@@ -160,13 +207,10 @@ pub(crate) fn normalize_w3c_headers(
     };
     let mut carrier = HashMap::from([("traceparent".to_string(), traceparent.to_string())]);
     if let Some(tracestate) = tracestate {
-        carrier.insert("tracestate".to_string(), tracestate.to_string());
-        if tracestate
-            .parse::<opentelemetry::trace::TraceState>()
-            .is_err()
-        {
-            log::warn!(target: "nemo_relay.runtime", event = "invalid_w3c_trace_context"; "Ignoring invalid W3C trace context");
-            return (None, None, None);
+        if let Some(state) = parse_w3c_tracestate(tracestate) {
+            carrier.insert("tracestate".to_string(), state.header());
+        } else {
+            log::warn!(target: "nemo_relay.runtime", event = "invalid_w3c_trace_context"; "Ignoring invalid W3C tracestate");
         }
     }
     let context = TraceContextPropagator::new().extract(&carrier);

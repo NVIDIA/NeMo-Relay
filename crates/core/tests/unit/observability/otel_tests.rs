@@ -1153,6 +1153,49 @@ fn rooted_import_llm_traceparent_matches_exported_span() {
 }
 
 #[test]
+fn invalid_imported_tracestate_is_absent_from_provider_and_exported_span() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let (provider, exporter) = make_provider();
+    let subscriber =
+        OpenTelemetrySubscriber::from_tracer_provider(provider, "invalid-tracestate-llm");
+    let subscriber_name = format!("invalid_tracestate_llm_{}", Uuid::now_v7().simple());
+    subscriber.register(&subscriber_name).unwrap();
+    let root_uuid = Uuid::now_v7();
+    let parent_uuid = Uuid::now_v7();
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(root_uuid),
+        parent_uuid,
+        traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()),
+        tracestate: Some("vendor=bad\r\nX-Injected: yes".to_string()),
+    };
+    let imported = create_scope_stack_from_propagation(&context).unwrap();
+
+    let (traceparent, tracestate, callback_traceparent) = runtime.block_on(TASK_SCOPE_STACK.scope(
+        imported,
+        execute_llm_and_capture_trace_context("invalid-tracestate-llm"),
+    ));
+
+    let spans = finish_trace_subscriber(&subscriber, &subscriber_name, &exporter);
+    let llm_span = finished_span_named(&spans, "invalid-tracestate-llm");
+    assert_traceparent_matches_exported_span(&traceparent, llm_span);
+    assert_eq!(
+        llm_span.span_context.trace_id().to_string(),
+        "4bf92f3577b34da6a3ce929d0e0e4736"
+    );
+    assert_eq!(llm_span.parent_span_id.to_string(), "00f067aa0ba902b7");
+    assert!(llm_span.parent_span_is_remote);
+    assert_eq!(tracestate, None);
+    assert!(llm_span.span_context.trace_state().header().is_empty());
+    assert_eq!(callback_traceparent, traceparent);
+}
+
+#[test]
 fn imported_w3c_parent_survives_an_additional_fork() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let _restore_guard = RestoreThreadScopeStackGuard(capture_thread_scope_stack());
@@ -7624,4 +7667,108 @@ fn gen_ai_client_metrics_include_response_model_and_server_dimensions() {
             "server.address": "api.example.com", "server.port": 443
         }))
     );
+}
+
+#[test]
+fn otlp_timestamp_range_drops_invalid_events_and_preserves_boundaries() {
+    let scope_at = |uuid, category, timestamp| {
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(uuid)
+                .name("replay")
+                .timestamp(timestamp)
+                .build(),
+            category,
+            Vec::new(),
+            EventCategory::from(ScopeType::Custom),
+            None,
+        ))
+    };
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+                provider,
+                "timestamp-range-test".to_string(),
+                otel_type,
+                MarkProjection::Event,
+                Vec::new(),
+                Vec::new(),
+            );
+        let valid_uuid = Uuid::now_v7();
+        let epoch = DateTime::from_timestamp(0, 0).unwrap();
+        processor.process(&scope_at(valid_uuid, ScopeCategory::Start, epoch));
+        for value in [
+            "1969-12-31T23:59:59Z",
+            "1969-12-31T23:59:59.999999999Z",
+            "2554-07-21T23:34:33.709551616Z",
+            "9999-12-31T23:59:59.999999Z",
+        ] {
+            let timestamp = DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&Utc);
+            let invalid_uuid = Uuid::now_v7();
+            processor.process(&scope_at(invalid_uuid, ScopeCategory::Start, timestamp));
+            processor.process(&scope_at(invalid_uuid, ScopeCategory::End, timestamp));
+            processor.process(&scope_at(valid_uuid, ScopeCategory::End, timestamp));
+            for parent in [None, Some(valid_uuid)] {
+                let mark = Event::Mark(MarkEvent::new(
+                    BaseEvent::builder()
+                        .parent_uuid_opt(parent)
+                        .name("invalid-mark")
+                        .timestamp(timestamp)
+                        .build(),
+                    None,
+                    None,
+                ));
+                processor.process(&mark);
+            }
+            assert!(!processor.active_spans.contains_key(&invalid_uuid));
+            assert!(processor.active_spans.contains_key(&valid_uuid));
+            assert!(exporter.get_finished_spans().unwrap().is_empty());
+        }
+        assert_eq!(
+            processor
+                .runtime_diagnostics
+                .snapshot()
+                .get("otel.timestamp_out_of_range")
+                .unwrap()
+                .count,
+            20,
+        );
+        let maximum = DateTime::parse_from_rfc3339("2554-07-21T23:34:33.709551615Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        processor.process(&scope_at(valid_uuid, ScopeCategory::End, maximum));
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start_time, UNIX_EPOCH);
+        // SystemTime uses 100-nanosecond ticks on Windows. Range validation
+        // above still checks the original timestamp at nanosecond precision.
+        assert_eq!(
+            spans[0].end_time,
+            UNIX_EPOCH + Duration::from_nanos(u64::MAX)
+        );
+        assert!(spans[0].events.is_empty());
+        for value in [
+            "2554-07-21T23:34:33.709551615Z",
+            "2554-01-01T00:00:00Z",
+            "2020-01-01T05:30:00.000001+05:30",
+        ] {
+            let timestamp = DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&Utc);
+            let uuid = Uuid::now_v7();
+            processor.process(&scope_at(uuid, ScopeCategory::Start, timestamp));
+            processor.process(&scope_at(uuid, ScopeCategory::End, timestamp));
+            let spans = exporter.get_finished_spans().unwrap();
+            let span = spans.last().unwrap();
+            assert_eq!(span.start_time, to_system_time(timestamp));
+            assert_eq!(span.end_time, to_system_time(timestamp));
+        }
+    }
 }

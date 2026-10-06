@@ -161,12 +161,21 @@ logging. Failure events use warning or error levels.
 | Worker control | `worker_control_connected`, `worker_control_reconnected`, `worker_control_disconnected`, `worker_control_lost`, `worker_control_recovery_failed` |
 | Worker shutdown | `worker_drain_started`, `worker_removed`, `worker_stopped`, `worker_activation_cancelled` |
 | Worker degradation | `worker_registration_failed`, `worker_readiness_failed`, `worker_activation_failed`, `worker_activation_expired`, `worker_communication_failed`, `worker_failed`, `worker_recovery_failed`, `worker_recovery_expired`, `worker_relaunch_failed` |
-| Request forwarding | `upstream_request_failed`, `worker_request_failed` |
+| Request forwarding | `public_request_pass_through`, `upstream_request_failed`, `worker_request_failed` |
 
 Use `fingerprint` to match an MCP session to its worker route. Use `worker_id`
 to follow one worker generation. A `route_mode = "pass_through"` field reports
 a route without worker forwarding. With `--require-worker`, that route returns
 `503`. Share session and worker IDs only within your approved support process.
+
+When a bound route passes a request through, the daemon logs
+`public_request_pass_through` at info level with `route_mode = "pass_through"`.
+`reason = "worker_unavailable"` means the worker is not ready or its control
+connection is down, including during the recovery grace period.
+`reason = "configured_pass_through"` identifies `--pass-through` deployments.
+The `route` field identifies `hook`, `openai`, or `anthropic`. The daemon logs
+these events for every request, including repeated permission hooks.
+
 Both `worker_launch_failed` and `worker_activation_failed` include a
 `failure_reason`. This is a short, fixed code that names the step that failed,
 such as starting the worker, sending its startup permission, or waiting for it to
@@ -179,8 +188,8 @@ reports a timed-out request without disconnecting the worker or changing its
 route. Check worker and provider logs to identify the delay.
 Control disconnect events include a `reason` such as `acknowledgement_timeout`,
 `pong_timeout`, `peer_closed`, or `worker_communication_failed`. A staged worker
-cancelled when its launcher exits reports `activation_cancelled`; this does not
-mean that the startup deadline expired. Provider failure events are rate-limited and
+cancelled when its launcher exits reports `activation_cancelled`. This event does
+not mean that the startup deadline expired. Provider failure events are rate-limited and
 report the number of intervening failures in `suppressed_since_last_emit`.
 
 ## Diagnose Common Failures
@@ -193,7 +202,7 @@ Use this table to choose the next check for a failure:
 | TLS validation fails | Wrong name, expired chain, or untrusted CA | Check the advertised DNS name, certificate dates, and client native trust store. |
 | `401` from a public route | Malformed or repeated credential header, or `--require-worker` with a missing or unbound credential | Check the token value with `nemo-relay doctor --managed-bundle`, then start MCP registration before sending requests. |
 | Hooks or MCP produce no telemetry, with `reason = "missing_credential"`, `"unbound_credential"`, or `"no_live_session"` | No credential resolved, MCP has not registered since a daemon restart, or the harness's MCP exited (`no_live_session`) | Run `nemo-relay daemon token ensure` as the user, or export `NEMO_RELAY_CLIENT_TOKEN`. Then restart the harness so MCP registers. |
-| MCP logs `daemon_mcp_pass_through` with `reason = "credential_rejected"` | Every token the user's identity holds (4 by default) still has a live MCP session, so no idle token could be released; or the token file was copied from another user or machine | For a token limit, end the old sessions (the next registration then releases an idle token), raise `--max-tokens-per-identity`, or restart the daemon. For a copied file, remove it, run `nemo-relay daemon token ensure` as the user, then restart the daemon and the harness. |
+| MCP logs `daemon_mcp_pass_through` with `reason = "credential_rejected"` | All tokens for this identity (four by default) have a live MCP session, so the daemon can't release an idle token. The token file might also have been copied from another user or machine | For a token limit, end the old sessions (the next registration then releases an idle token), raise `--max-tokens-per-identity`, or restart the daemon. For a copied file, remove it, run `nemo-relay daemon token ensure` as the user, then restart the daemon and the harness. |
 | Model requests produce no telemetry, with `reason = "missing_credential"` | The harness sent no `x-nemo-relay-client-token` header. The token file does not cover model requests. | Configure the header for the harness and restart it. Codex: export `NEMO_RELAY_CLIENT_TOKEN` (or set a static `http_headers` entry). Claude Code gateway mode: set `ANTHROPIC_CUSTOM_HEADERS` to `x-nemo-relay-client-token: <token>` with the same token. |
 | Managed Pi fails to start | The v1 Pi extension requires `NEMO_RELAY_CLIENT_TOKEN` and ignores the token file | Export `NEMO_RELAY_CLIENT_TOKEN` in the Pi launch environment. |
 | Registered route returns `503` | No active MCP reference, or `--require-worker` is waiting for a worker | Keep the harness MCP process alive. Inspect registration and worker logs. |

@@ -1714,6 +1714,11 @@ test-node:
     junit_out=""
     rust_coverage_out=""
     cd "$NEMO_RELAY_REPO_ROOT"
+    # Keep temporary plugin builds on the same toolchain as coverage reports.
+    if [[ -z "${RUSTUP_TOOLCHAIN:-}" ]]; then
+        active_toolchain="$(rustup show active-toolchain)"
+        export RUSTUP_TOOLCHAIN="${active_toolchain%% *}"
+    fi
     test_config_home="$(mktemp -d)"
     trap 'rm -rf "$test_config_home"' EXIT
     export XDG_CONFIG_HOME="$test_config_home"

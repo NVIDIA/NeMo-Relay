@@ -191,6 +191,14 @@ generation fence, and hook lifecycle settings, so host-managed hook
 configuration does not expose those values or exceed Windows command-length
 limits. Both install and doctor verify the generated command and event ownership.
 
+On Unix, Relay creates the plugin root and temporary hook directories with mode
+`0700`. Hook configuration files use mode `0600`. These permissions allow only
+the owner to access the directories and files, even when your umask is `0002`.
+
+If `nemo-relay doctor` reports unsafe permissions on the hook configuration
+directory, run `nemo-relay install <host> --force`. Replace `<host>` with
+`claude-code` or `codex`. This recreates the plugin with safe permissions.
+
 Start a new Codex CLI process after installation. Restart the Codex desktop app
 if it was already running so it reloads the provider and hook configuration.
 

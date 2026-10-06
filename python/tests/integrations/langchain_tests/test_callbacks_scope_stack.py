@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import datetime
 import threading
 import typing
@@ -486,6 +487,81 @@ def test_completing_a_run_without_a_stack_does_not_create_one(
 
     assert not worker.is_alive(), "the worker thread did not finish"
     assert created == [False], "completing a run created a scope stack out of nothing"
+    assert handler._completed == {}, "completion did not close the owning stack"
+
+
+@pytest.mark.parametrize("failed", [False, True])
+async def test_completion_in_another_context_closes_the_owning_stack(
+    handler: NemoRelayCallbackHandler,
+    subscribed_events: list[nemo_relay.Event],
+    failed: bool,
+) -> None:
+    """A served graph's final callback can arrive outside its invocation context."""
+    owners = [nemo_relay.create_scope_stack() for _ in range(4)]
+    runs = [uuid4() for _ in owners]
+    handles = []
+    baselines = []
+    for stack, run_id in zip(owners, runs, strict=True):
+        with nemo_relay.use_scope_stack(stack):
+            baselines.append(nemo_relay.scope.get_handle().uuid)
+            _start(handler, run_id, "served-graph")
+            handles.append(handler._scope_handles[run_id].uuid)
+
+    # Finish in reverse order on an unrelated stack. Closing the graph's original
+    # stack must preserve the caller's Python and native bindings.
+    for run_id in reversed(runs):
+        with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()) as caller:
+            enclosing = nemo_relay.scope.push("caller", nemo_relay.ScopeType.Agent)
+            if failed:
+                handler.on_chain_error(ValueError("graph failed"), run_id=run_id)
+            else:
+                _end(handler, run_id, "served-graph")
+            assert nemo_relay.get_scope_stack() is caller
+            assert nemo_relay.scope.get_handle().uuid == enclosing.uuid
+            nemo_relay.scope.pop(enclosing)
+
+    assert handler._scope_handles == {}
+    assert handler._completed == {}
+    assert handler._scope_contexts == {}
+    for stack, baseline in zip(owners, baselines, strict=True):
+        with nemo_relay.use_scope_stack(stack):
+            assert nemo_relay.scope.get_handle().uuid == baseline
+
+    await nemo_relay.subscribers.flush_async()
+    ends = [
+        event.to_dict()
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.name == "served-graph" and event.scope_category == "end"
+    ]
+    assert len(ends) == len(runs)
+    assert {event["uuid"] for event in ends} == set(handles)
+    assert all(event["metadata"]["otel.status_code"] == ("ERROR" if failed else "OK") for event in ends)
+
+
+def test_worker_thread_started_run_closes_from_an_empty_context(handler: NemoRelayCallbackHandler) -> None:
+    """Preserve explicitly bound native stacks even when no Python stack is set."""
+    owner = nemo_relay.create_scope_stack()
+    run_id = uuid4()
+    failures = []
+
+    def start_on_thread() -> None:
+        try:
+            nemo_relay.set_thread_scope_stack(owner)
+            _start(handler, run_id, "worker-graph")
+        except BaseException as exc:  # noqa: BLE001 - surfaced through ``failures``
+            failures.append(exc)
+
+    worker = threading.Thread(target=start_on_thread)
+    worker.start()
+    worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert failures == []
+    assert run_id in handler._scope_handles
+    contextvars.Context().run(_end, handler, run_id, "worker-graph")
+    assert handler._completed == {}
+    assert handler._scope_contexts == {}
+    with nemo_relay.use_scope_stack(owner):
+        assert nemo_relay.scope.get_handle().name == "root"
 
 
 async def test_two_handlers_on_one_stack_only_close_their_own_scopes(

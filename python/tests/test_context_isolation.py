@@ -119,6 +119,29 @@ def test_propagation_context_preserves_w3c_trace_context() -> None:
     assert constructed_invalid.tracestate is None
 
 
+@pytest.mark.parametrize(
+    "tracestate",
+    [
+        "vendor=bad\r\nX-Injected: yes",
+        "vendor=one,vendor=two",
+        ",".join(f"v{i}=x" for i in range(33)),
+        "vendor=" + "z" * 300,
+    ],
+)
+def test_invalid_tracestate_keeps_valid_traceparent(tracestate: str) -> None:
+    traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    parent_uuid, root_uuid = str(uuid.uuid4()), str(uuid.uuid4())
+    context = nemo_relay.PropagationContext(parent_uuid, root_uuid, traceparent=traceparent, tracestate=tracestate)
+    decoded = nemo_relay.PropagationContext.from_json(context.to_json())
+    for imported in (context, decoded):
+        assert imported.traceparent == traceparent
+        assert imported.tracestate is None
+        assert imported.parent_uuid == parent_uuid
+        assert imported.root_uuid == root_uuid
+        with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack_from_propagation(imported)):
+            assert nemo_relay.capture_traceparent() == traceparent
+
+
 def test_rootless_and_root_parent_propagation_contexts_install_current_handle() -> None:
     parent_uuid = str(uuid.uuid4())
     rootless_stack = nemo_relay.create_scope_stack_from_propagation(nemo_relay.PropagationContext(parent_uuid))
