@@ -285,7 +285,12 @@ export class NemoRelayRuntimeState {
       return this.backendValue;
     }
 
-    if (this.statusValue.state === 'disabled' || this.statusValue.state === 'stopping') {
+    // Shutdown is terminal for lazy hook startup; only explicit restart paths may resume replay.
+    if (
+      this.statusValue.state === 'disabled' ||
+      this.statusValue.state === 'stopping' ||
+      this.statusValue.state === 'stopped'
+    ) {
       return undefined;
     }
 

@@ -29,7 +29,7 @@ async function waitForExportFile(outputDir: string, prefix: string, timeoutMs = 
 }
 
 it(
-  'runs a live NeMo Relay binding smoke for session ATIF export and hook replay',
+  'preserves live ATIF and overwrite-mode ATOF exports after shutdown and late hooks',
   { skip: !liveSmokeEnabled },
   async () => {
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nemo-relay-openclaw-live-'));
@@ -44,6 +44,17 @@ it(
               enabled: true,
               config: {
                 version: 4,
+                atof: {
+                  enabled: true,
+                  sinks: [
+                    {
+                      type: 'file',
+                      output_directory: outputDir,
+                      filename: 'events.jsonl',
+                      mode: 'overwrite',
+                    },
+                  ],
+                },
                 atif: {
                   enabled: true,
                   agent_name: 'openclaw',
@@ -141,10 +152,42 @@ it(
           toolCallId: 'tool-live-1',
         },
       );
+      // OpenClaw drains final session hooks after gateway_stop and service stop.
+      const gatewayStop = api.calls.hooks.find((hook) => hook.hookName === 'gateway_stop');
+      assert.ok(gatewayStop);
+      await gatewayStop.handler({ reason: 'shutdown' }, {});
+      await service.stop?.({ stateDir: outputDir, config: {} as never, logger: api.logger });
+      const stoppedStatus = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+      assert.equal(stoppedStatus.status.state, 'stopped');
+      const eventFile = path.join(outputDir, 'events.jsonl');
+      const eventsBeforeLateHooks = await fs.readFile(eventFile, 'utf8');
+      const records = eventsBeforeLateHooks.trim().split('\n').map((line) => JSON.parse(line));
+      for (const category of ['agent', 'tool', 'llm']) {
+        const starts = records.filter((record) =>
+          record.kind === 'scope' && record.category === category && record.scope_category === 'start',
+        );
+        const ends = records.filter((record) =>
+          record.kind === 'scope' && record.category === category && record.scope_category === 'end',
+        );
+        assert.equal(starts.length, 1, `expected one ${category} scope`);
+        assert.deepEqual(ends.map((record) => record.uuid), starts.map((record) => record.uuid));
+      }
+
       await sessionEnd.handler(
         { sessionId: '../live-session:1', messageCount: 1, reason: 'idle' },
         { sessionId: '../live-session:1' },
       );
+
+      await sessionStart.handler({ sessionId: 'late-session' }, { sessionId: 'late-session' });
+      await llmOutput.handler(
+        { runId: 'late-run', sessionId: 'late-session', assistantTexts: ['late'] },
+        { runId: 'late-run', sessionId: 'late-session' },
+      );
+      await afterToolCall.handler(
+        { toolName: 'late_tool', params: {}, result: 'late', durationMs: 1 },
+        { sessionId: 'late-session', toolName: 'late_tool' },
+      );
+      assert.equal(await fs.readFile(eventFile, 'utf8'), eventsBeforeLateHooks);
 
       const exportedPath = await waitForExportFile(outputDir, 'live-');
       assert.ok(exportedPath, 'expected generic observability ATIF export');
@@ -152,9 +195,18 @@ it(
       assert.equal(typeof exported, 'object');
 
       const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+      assert.equal(status.status.state, 'stopped');
+      assert.deepEqual(status.counters, stoppedStatus.counters);
       assert.equal(status.outputs.atif, 'enabled');
       assert.equal(status.counters.llmSpansReplayed, 1);
       assert.equal(status.counters.toolSpansReplayed, 1);
+
+      // An explicit service start still creates a fresh runtime after shutdown.
+      await service.start({ stateDir: outputDir, config: {} as never, logger: api.logger });
+      await sessionStart.handler({ sessionId: 'restarted-session' }, { sessionId: 'restarted-session' });
+      const restartedStatus = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
+      assert.equal(restartedStatus.status.state, 'ready');
+      assert.equal(restartedStatus.counters.marksEmitted, 1);
     } finally {
       if (serviceStarted) {
         await api.calls.services[0]?.stop?.({

@@ -275,6 +275,9 @@ features such as adaptive hints require a managed execution path.
 | `before_agent_finalize` | Preserves the last assistant message as fallback session output and emits a lifecycle mark without mutating the finalization payload. |
 | `subagent_spawned` / `subagent_ended` | Emits subagent lifecycle marks and nests child subagent session scopes under the requester session when stable lineage is available. |
 
+After gateway or service stop, late hooks are ignored and cannot restart NeMo Relay
+or recreate its exporters. An explicit service start allows replay to resume.
+
 ## LLM Replay Fidelity
 
 OpenClaw currently exposes request, response, message-write, and provider
