@@ -30,9 +30,6 @@ if TYPE_CHECKING:
     from nemo_relay.codecs import LlmCodec, LlmResponseCodec
 
 
-_GRAPH_BUBBLE_RESULT = {"__nemo_relay_langgraph_graph_bubble_up__": True}
-
-
 class NemoRelayMiddleware(AgentMiddleware):
     """Route LangChain agent model and tool calls through NeMo Relay.
 
@@ -142,28 +139,34 @@ class NemoRelayMiddleware(AgentMiddleware):
         (parent, codec, tool_name, tool_args, tool_call_id) = self._prepare_tool_call(request)
         graph_bubble: GraphBubbleUp | None = None
 
-        def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | dict[str, bool]]:
+        def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any]]:
+            """Retain graph control flow while Relay closes the interrupted tool."""
             nonlocal graph_bubble
             try:
                 result = handler(request.override(tool_call={**request.tool_call, "args": args}))
             except GraphBubbleUp as error:
-                # Retain graph control flow outside the native callback boundary,
-                # which would otherwise convert it to a generic RuntimeError.
+                # Save control flow before the native boundary converts it.
+                # Relay can then close the tool scope without a result.
                 graph_bubble = error
-                result = _GRAPH_BUBBLE_RESULT
+                raise
             return nemo_relay.ToolExecutionResult(result)
 
-        outcome = run_sync(
-            nemo_relay.typed.tool_execute(
-                name=tool_name,
-                args=tool_args,
-                func=_call,
-                args_codec=codec,
-                result_codec=codec,
-                handle=parent,
-                tool_call_id=tool_call_id,
+        try:
+            outcome = run_sync(
+                nemo_relay.typed.tool_execute(
+                    name=tool_name,
+                    args=tool_args,
+                    func=_call,
+                    args_codec=codec,
+                    result_codec=codec,
+                    handle=parent,
+                    tool_call_id=tool_call_id,
+                )
             )
-        )
+        except Exception:
+            if graph_bubble is not None:
+                raise graph_bubble from None
+            raise
         if graph_bubble is not None:
             raise graph_bubble
         return cast("ToolMessage | Command[Any]", outcome.result)
@@ -178,25 +181,31 @@ class NemoRelayMiddleware(AgentMiddleware):
         (parent, codec, tool_name, tool_args, tool_call_id) = self._prepare_tool_call(request)
         graph_bubble: GraphBubbleUp | None = None
 
-        async def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | dict[str, bool]]:
+        async def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any]]:
+            """Retain graph control flow while Relay closes the interrupted tool."""
             nonlocal graph_bubble
             try:
                 result = await handler(request.override(tool_call={**request.tool_call, "args": args}))
             except GraphBubbleUp as error:
-                # Re-raise only after Relay has finished and closed the tool scope.
+                # Save control flow and let Relay close the scope without output.
                 graph_bubble = error
-                result = _GRAPH_BUBBLE_RESULT
+                raise
             return nemo_relay.ToolExecutionResult(result)
 
-        outcome = await nemo_relay.typed.tool_execute(
-            name=tool_name,
-            args=tool_args,
-            func=_call,
-            args_codec=codec,
-            result_codec=codec,
-            handle=parent,
-            tool_call_id=tool_call_id,
-        )
+        try:
+            outcome = await nemo_relay.typed.tool_execute(
+                name=tool_name,
+                args=tool_args,
+                func=_call,
+                args_codec=codec,
+                result_codec=codec,
+                handle=parent,
+                tool_call_id=tool_call_id,
+            )
+        except Exception:
+            if graph_bubble is not None:
+                raise graph_bubble from None
+            raise
         if graph_bubble is not None:
             raise graph_bubble
         return cast("ToolMessage | Command[Any]", outcome.result)

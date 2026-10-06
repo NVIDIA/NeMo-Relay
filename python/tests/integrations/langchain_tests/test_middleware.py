@@ -1298,6 +1298,7 @@ def test_agent_tool_interrupt_and_resume(
     payload = {"messages": [{"role": "user", "content": "refund order 1234"}]}
 
     async def invoke_async() -> tuple[dict[str, Any], dict[str, Any]]:
+        """Pause and resume the agent within one event loop."""
         paused = await agent.ainvoke(payload, config)
         resumed = await agent.ainvoke(Command(resume="yes"), config)
         return paused, resumed
@@ -1322,6 +1323,11 @@ def test_agent_tool_interrupt_and_resume(
     ends = [event.uuid for event in tool_events if event.scope_category == "end"]
     assert len(starts) == 2
     assert ends == starts
+    tool_ends = [event for event in tool_events if event.scope_category == "end"]
+    assert tool_ends[0].data is None
+    assert tool_ends[0].metadata["otel.status_code"] == "ERROR"
+    assert tool_ends[1].data is not None
+    assert tool_ends[1].metadata["otel.status_code"] == "OK"
     marks = [event for event in subscribed_events if isinstance(event, nemo_relay.MarkEvent)]
     interrupt_mark = next(event for event in marks if event.name == "Graph Interrupt")
     assert interrupt_mark.data["interrupts"] == [
@@ -1342,9 +1348,11 @@ def test_tool_call_preserves_graph_bubble_identity(
     bubble = GraphBubbleUp("graph control flow")
 
     def handler(_request: ToolCallRequest) -> ToolMessage:
+        """Raise the graph exception whose identity must survive Relay."""
         raise bubble
 
     async def async_handler(request: ToolCallRequest) -> ToolMessage:
+        """Raise the same graph exception from the async tool handler."""
         return handler(request)
 
     with pytest.raises(GraphBubbleUp) as caught:
@@ -1353,3 +1361,26 @@ def test_tool_call_preserves_graph_bubble_identity(
         else:
             nemo_relay_middleware.wrap_tool_call(tool_call_request, handler)
     assert caught.value is bubble
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_tool_call_propagates_ordinary_errors(
+    use_async: bool,
+    nemo_relay_middleware: NemoRelayMiddleware,
+    tool_call_request: ToolCallRequest,
+) -> None:
+    """Restoring graph control flow must not suppress ordinary tool errors."""
+
+    def handler(_request: ToolCallRequest) -> ToolMessage:
+        """Fail the tool with an ordinary application error."""
+        raise ValueError("ordinary tool failure")
+
+    async def async_handler(request: ToolCallRequest) -> ToolMessage:
+        """Fail the async tool with the same application error."""
+        return handler(request)
+
+    with pytest.raises(RuntimeError, match="internal error: ValueError: ordinary tool failure"):
+        if use_async:
+            asyncio.run(nemo_relay_middleware.awrap_tool_call(tool_call_request, async_handler))
+        else:
+            nemo_relay_middleware.wrap_tool_call(tool_call_request, handler)
