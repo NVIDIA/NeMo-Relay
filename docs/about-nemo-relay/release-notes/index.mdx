@@ -37,6 +37,11 @@ from the 0.9 patch releases.
 
 This release adds the following features:
 
+- Python applications can use `configure_graph()` to add Relay lifecycle
+  callbacks to agents served through `langgraph dev` or `langgraph up`.
+  Use it with `NemoRelayMiddleware` to record model and tool calls under the
+  graph and node scopes. Refer to
+  [Served LangChain Agents](/supported-integrations/langgraph#served-langchain-agents).
 - The built-in `resource_metrics` plugin collects CPU, memory, process, disk,
   network, and GPU measurements on Linux, macOS, and Windows. Applications can
   request a set of current measurements or turn on polling for regular samples.
@@ -148,21 +153,17 @@ coding agent:
   route.
 - The daemon sends public requests that have no credential header, an
   unbound credential, or a bound credential whose route has no live MCP
-  session, through pass-through. A harness whose MCP exited, for example during
-  a daemon reinstall, keeps working instead of retrying `503` indefinitely.
+  session, through pass-through.
 - A new token for the same machine identity, for example after the token file
   is replaced, joins that identity's existing route and worker. Old and new
-  tokens stay bound together. An identity holds up to 4 tokens
+  tokens stay bound together. An identity holds up to four tokens
   by default (`--max-tokens-per-identity` or
-  `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY`); at the limit, the least recently
-  registered token without a live session is released first.
+  `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY`).
 - If the daemon rejects a token at MCP registration, for example because it is
   bound to another identity or exceeds the per-identity limit, the MCP server
-  serves without a route instead of retrying until the harness times out. This
-  also applies when a running MCP registers again after a reconnect or daemon
-  restart; it keeps serving instead of exiting. That MCP does not register
-  again, so requests with that token pass through until a new MCP session binds
-  it. With `--require-worker`, those requests receive `401` instead.
+  keeps serving without a route. Requests with that token pass through until
+  a new MCP session binds it. With `--require-worker`, those requests receive
+  `401` instead.
 
 Such requests never receive daemon-held provider credentials. The exception is
 a daemon started with `--pass-through`. A request that names its own upstream,
@@ -239,6 +240,25 @@ complete upgrade path.
 
 This release includes the following fixes and behavior changes:
 
+- The OpenClaw plugin keeps its runtime and exporters open during gateway
+  shutdown so final tool, LLM, and session hooks can finish. Service stop
+  closes remaining sessions and waits for pending events. Hooks after service
+  stop cannot restart Relay or overwrite saved telemetry.
+- Codex parent turns and delegated agents share a `codex-task` scope. Child
+  model and tool calls keep their parent links even when the parent turn ends
+  first. Each task produces a separate ATIF trajectory and trace. Refer to the
+  [Migration Guides](/reference/migration-guides#update-codex-trajectory-consumers)
+  for file lookup changes.
+- LangChain tool calls preserve LangGraph interrupts so agents can pause for
+  human approval and resume. LangChain and LangGraph callbacks close scopes
+  on the stack where they started, even when completion runs in a different
+  context.
+- Dynamic plugins with compatible `compat.relay` ranges can load on Relay
+  prerelease builds. Ranges without a prerelease suffix use the host's release
+  version for compatibility checks.
+- Operational logging identifies the file sink when its queue drops records
+  or flush requests. Repeated warnings are limited to avoid flooding standard
+  error.
 - Persistent Codex routing preserves the built-in `openai` provider identity.
   Sessions stay in the same provider history, and image generation uses Relay.
   New installs use a plain gateway URL with managed
@@ -319,7 +339,10 @@ The following list covers unresolved issues from 0.9 and new limitations in
   During startup, Codex can request `/models` before required MCP servers
   start. Relay retries the request.
 - Codex 0.143 does not expose `SessionEnd`, and Codex multi-agent v2 encrypts
-  delegated task payloads. Relay cannot decrypt them or reliably link the tasks.
+  delegated task payloads. Relay cannot recover the task text from encrypted
+  payloads. Parent-child links depend on the agent identities and lifecycle
+  events that Codex provides. Refer to
+  [Multi-Agent Delegation Traces](/nemo-relay-cli/codex#multi-agent-delegation-traces).
 - Pi support is a proof of concept tested with 0.84.x. By default, its personal
   extension lets work continue if the gateway is unavailable. Later extensions
   can change arguments after Relay checks them. Unsupported provider routes
