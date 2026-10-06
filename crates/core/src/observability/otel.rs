@@ -2130,6 +2130,9 @@ impl OtelEventProcessor {
     }
 
     fn process_with_root_tracer(&mut self, event: &Event, root_tracer: Option<SdkTracer>) {
+        if !accept_otlp_timestamp(event, &self.runtime_diagnostics) {
+            return;
+        }
         self.expire_completed_span_contexts(*event.timestamp());
         match event.scope_category() {
             Some(ScopeCategory::Start) => self.process_start(event, root_tracer),
@@ -3010,6 +3013,31 @@ fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {
         false,
         span_context.trace_state().clone(),
     )
+}
+
+/// OTLP encodes timestamps as an unsigned 64-bit count of nanoseconds since Unix epoch.
+pub(super) fn accept_otlp_timestamp(event: &Event, diagnostics: &SignalRuntimeDiagnostics) -> bool {
+    let timestamp = event.timestamp();
+    let valid = u64::try_from(timestamp.timestamp())
+        .ok()
+        .and_then(|seconds| seconds.checked_mul(1_000_000_000))
+        .and_then(|nanos| nanos.checked_add(u64::from(timestamp.timestamp_subsec_nanos())))
+        .is_some();
+    if !valid {
+        let count = diagnostics.record(
+            "otel.timestamp_out_of_range",
+            format!("OpenTelemetry event {:?} was dropped: timestamp {timestamp} is outside the OTLP unsigned 64-bit nanosecond range", event.name()),
+            1,
+        );
+        if should_relog_runtime_diagnostic(count) {
+            log::warn!(
+                target: "nemo_relay.observability",
+                event = "otel_timestamp_out_of_range";
+                "OpenTelemetry event was dropped: timestamp {timestamp} is outside the OTLP unsigned 64-bit nanosecond range"
+            );
+        }
+    }
+    valid
 }
 
 pub(super) fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {

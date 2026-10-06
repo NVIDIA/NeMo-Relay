@@ -10,6 +10,24 @@ Use the `opentelemetry` section to configure independent OpenTelemetry Protocol
 (OTLP) trace, log, and metric pipelines. OpenTelemetry support is always
 included; no Cargo feature enables or disables it.
 
+## Timestamp Range
+
+Trace and log timestamps must fit in OTLP's unsigned 64-bit count of nanoseconds
+since the Unix epoch: `1970-01-01T00:00:00Z` through
+`2554-07-21T23:34:33.709551615Z`, inclusive. This applies to network exporters and
+local OTLP file sinks, including all `full`, `gen_ai`, and `openinference` trace
+projections.
+
+The trace and log subscribers drop events outside this range and report
+`otel.timestamp_out_of_range` in runtime diagnostics. They do not replace invalid
+timestamps with different times.
+
+A dropped scope start creates no span. A dropped scope end leaves an existing
+span open for a later valid end. Dropped marks produce no span event, standalone
+span, or log record. Agent Trajectory Observability Format (ATOF) events keep the
+original timestamp, and scope operations still complete. Metric points use SDK
+collection timestamps instead of source event timestamps.
+
 ## Automatic OpenTelemetry Configuration
 
 When at least one nonblank OpenTelemetry OTLP endpoint environment variable is

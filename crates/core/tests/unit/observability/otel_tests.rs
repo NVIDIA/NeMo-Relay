@@ -7625,3 +7625,109 @@ fn gen_ai_client_metrics_include_response_model_and_server_dimensions() {
         }))
     );
 }
+
+#[test]
+fn otlp_timestamp_range_drops_invalid_events_and_preserves_boundaries() {
+    let scope_at = |uuid, category, timestamp| {
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(uuid)
+                .name("replay")
+                .timestamp(timestamp)
+                .build(),
+            category,
+            Vec::new(),
+            EventCategory::from(ScopeType::Custom),
+            None,
+        ))
+    };
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+                provider,
+                "timestamp-range-test".to_string(),
+                otel_type,
+                MarkProjection::Event,
+                Vec::new(),
+                Vec::new(),
+            );
+        let valid_uuid = Uuid::now_v7();
+        let epoch = DateTime::from_timestamp(0, 0).unwrap();
+        processor.process(&scope_at(valid_uuid, ScopeCategory::Start, epoch));
+        for value in [
+            "1969-12-31T23:59:59Z",
+            "1969-12-31T23:59:59.999999999Z",
+            "2554-07-21T23:34:33.709551616Z",
+            "9999-12-31T23:59:59.999999Z",
+        ] {
+            let timestamp = DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&Utc);
+            let invalid_uuid = Uuid::now_v7();
+            processor.process(&scope_at(invalid_uuid, ScopeCategory::Start, timestamp));
+            processor.process(&scope_at(invalid_uuid, ScopeCategory::End, timestamp));
+            processor.process(&scope_at(valid_uuid, ScopeCategory::End, timestamp));
+            for parent in [None, Some(valid_uuid)] {
+                let mark = Event::Mark(MarkEvent::new(
+                    BaseEvent::builder()
+                        .parent_uuid_opt(parent)
+                        .name("invalid-mark")
+                        .timestamp(timestamp)
+                        .build(),
+                    None,
+                    None,
+                ));
+                processor.process(&mark);
+            }
+            assert!(!processor.active_spans.contains_key(&invalid_uuid));
+            assert!(processor.active_spans.contains_key(&valid_uuid));
+            assert!(exporter.get_finished_spans().unwrap().is_empty());
+        }
+        assert_eq!(
+            processor
+                .runtime_diagnostics
+                .snapshot()
+                .get("otel.timestamp_out_of_range")
+                .unwrap()
+                .count,
+            20,
+        );
+        let maximum = DateTime::parse_from_rfc3339("2554-07-21T23:34:33.709551615Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        processor.process(&scope_at(valid_uuid, ScopeCategory::End, maximum));
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start_time, UNIX_EPOCH);
+        assert_eq!(
+            spans[0]
+                .end_time
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            u128::from(u64::MAX)
+        );
+        assert!(spans[0].events.is_empty());
+        for value in [
+            "2554-07-21T23:34:33.709551615Z",
+            "2554-01-01T00:00:00Z",
+            "2020-01-01T05:30:00.000001+05:30",
+        ] {
+            let timestamp = DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&Utc);
+            let uuid = Uuid::now_v7();
+            processor.process(&scope_at(uuid, ScopeCategory::Start, timestamp));
+            processor.process(&scope_at(uuid, ScopeCategory::End, timestamp));
+            let spans = exporter.get_finished_spans().unwrap();
+            let span = spans.last().unwrap();
+            assert_eq!(span.start_time, to_system_time(timestamp));
+            assert_eq!(span.end_time, to_system_time(timestamp));
+        }
+    }
+}

@@ -798,3 +798,51 @@ fn resource_provider_failures_remain_visible_in_endpoint_summary() {
         Some("otel.logs_dropped (1), otel.logs_export_failed (1)")
     );
 }
+
+#[test]
+fn otlp_timestamp_range_drops_invalid_logs_and_preserves_boundaries() {
+    let (mut processor, exporter, _provider) = processor(LogSeverity::Trace);
+    for value in [
+        "1969-12-31T23:59:59Z",
+        "1969-12-31T23:59:59.999999999Z",
+        "2554-07-21T23:34:33.709551616Z",
+        "9999-12-31T23:59:59.999999Z",
+        "1970-01-01T00:00:00Z",
+        "2554-07-21T23:34:33.709551615Z",
+    ] {
+        let timestamp = chrono::DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let event = Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name("replay")
+                .timestamp(timestamp)
+                .build(),
+            None,
+            None,
+        ));
+        processor.process(&event);
+    }
+    assert_eq!(
+        processor
+            .runtime_diagnostics
+            .snapshot()
+            .get("otel.timestamp_out_of_range")
+            .unwrap()
+            .count,
+        4
+    );
+    let logs = exporter.get_emitted_logs().unwrap();
+    assert_eq!(logs.len(), 2);
+    assert_eq!(logs[0].record.timestamp(), Some(std::time::UNIX_EPOCH));
+    assert_eq!(
+        logs[1]
+            .record
+            .timestamp()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        u128::from(u64::MAX)
+    );
+}

@@ -87,6 +87,23 @@ calls then attach beneath the active scope.
 Scopes have explicit lifetime boundaries. A scope starts when it becomes active
 and ends when it is popped or closed.
 
+### Replay Timestamps
+
+You can pass timestamps to scope push and pop operations to replay events.
+Python `datetime` values must include a time zone. Agent Trajectory Observability
+Format (ATOF) events keep the supplied timestamp.
+
+OpenTelemetry traces and logs encode timestamps as unsigned 64-bit nanoseconds
+since the Unix epoch. Their supported range is `1970-01-01T00:00:00Z` through
+`2554-07-21T23:34:33.709551615Z`, inclusive. The trace and log subscribers drop
+events outside this range and report an `otel.timestamp_out_of_range` runtime
+diagnostic. The scope operation still completes, and ATOF keeps the original
+timestamp.
+
+A dropped start event creates no trace span. A dropped end event does not close
+an existing span. A later valid end event can close it. A dropped mark creates
+no span event, standalone span, or log record.
+
 ### Scope-Local Cleanup
 
 Scope-local middleware and subscribers are tied to the owning scope lifecycle.
