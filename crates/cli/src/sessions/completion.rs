@@ -115,6 +115,43 @@ pub(super) fn completion_key(
     })
 }
 
+// Child hooks can trail task completion, after the owning Session has been discarded.
+// Reuse the bounded subagent completion identity to reject the whole late hook stream.
+pub(super) fn completed_child_key(
+    event: &NormalizedEvent,
+    owner: Option<&str>,
+) -> Option<CompletionKey> {
+    use NormalizedEvent::*;
+    let id = match event {
+        PromptSubmitted(event)
+        | TurnStarted(event)
+        | TurnEnded(event)
+        | Compaction(event)
+        | Notification(event)
+        | HookMark(event) => super::alignment::aliased_turn_subagent_id(event).or_else(|| {
+            event
+                .metadata
+                .get("agent_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        }),
+        LlmHint(event) => event.subagent_id.clone().or_else(|| event.agent_id.clone()),
+        ToolStarted(event) | ToolEnded(event) => event.subagent_id.clone(),
+        _ => None,
+    }?;
+    let agent_kind = super::event_agent_kind(event);
+    if agent_kind != AgentKind::Codex || id == event.session_id() || id.is_empty() {
+        return None;
+    }
+    Some(CompletionKey {
+        owner: owner.unwrap_or("").to_owned(),
+        session: event.session_id().to_owned(),
+        kind: "subagent",
+        agent_kind,
+        invocation: id,
+    })
+}
+
 fn source_id(payload: &serde_json::Value, names: &[&str]) -> Option<String> {
     names.iter().find_map(|name| {
         payload

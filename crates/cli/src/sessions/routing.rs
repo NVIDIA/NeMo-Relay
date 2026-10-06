@@ -178,12 +178,16 @@ impl<'a> SessionEventApplier<'a> {
             });
         }
         let completion_key = super::completion::completion_key(&event, self.owner);
+        let child_completion_key = super::completion::completed_child_key(&event, self.owner);
         let is_completion = super::completion::is_completion(&event);
         {
             let mut completions = self.completions.lock().await;
             if completion_key
                 .as_ref()
                 .is_some_and(|key| completions.contains(key))
+                || child_completion_key
+                    .as_ref()
+                    .is_some_and(|key| completions.contains(key))
             {
                 return Ok(AppliedSessionEvent {
                     outcome: None,

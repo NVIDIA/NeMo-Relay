@@ -10695,3 +10695,268 @@ async fn codex_long_child_tool_survives_idle_sweeps_and_parent_boundaries() {
         assert!(subscriber.deregister(name).unwrap());
     }
 }
+
+// Correlated child work must not consume the parent's reservation for a synthesis prompt.
+#[tokio::test]
+async fn codex_inferred_child_work_after_parent_stop_preserves_synthesis() {
+    for mode in [
+        "tool_hint",
+        "llm_hint",
+        "request_affinity",
+        "sticky",
+        "sole_child",
+    ] {
+        for managed in [false, true] {
+            if mode == "tool_hint" && !managed {
+                continue;
+            }
+            let manager = SessionManager::new(session_test_config());
+            let root_id = "inferred-work-root";
+            let child_id = "inferred-worker";
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "UserPromptSubmit"
+                }),
+            )
+            .await;
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "SubagentStart", "agent_id": child_id
+                }),
+            )
+            .await;
+            let request = llm_start_with_responses_task(root_id, "inspect delegated files");
+            let (task, child_scope) = {
+                let mut sessions = manager.inner.lock().await;
+                let root = sessions.get_mut(root_id).unwrap();
+                if mode == "tool_hint" {
+                    root.record_completed_llm_response(
+                        json!({"output": [{
+                            "type": "function_call", "call_id": "inferred-tool", "name": "Bash",
+                            "arguments": "{\"command\":\"cargo test\"}"
+                        }]}),
+                        Some(child_id.into()),
+                    );
+                } else if mode == "request_affinity" {
+                    root.record_llm_request_affinity(
+                        &request.provider,
+                        &request.request,
+                        Some(child_id),
+                        "explicit",
+                    );
+                } else if mode == "sticky" {
+                    root.set_last_llm_owner(Some(child_id.into()));
+                }
+                (
+                    root.task_scope.as_ref().unwrap().uuid,
+                    root.child_work_scope(child_id).unwrap().uuid,
+                )
+            };
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "Stop"
+                }),
+            )
+            .await;
+            {
+                let mut sessions = manager.inner.lock().await;
+                // The root Stop hint must not mask the ownership mechanism under test.
+                sessions.get_mut(root_id).unwrap().pending_llm_hints.clear();
+            }
+            if mode == "llm_hint" {
+                apply_owned_codex_hook(
+                    &manager,
+                    json!({
+                        "session_id": root_id, "hook_event_name": "Stop", "agent_id": child_id
+                    }),
+                )
+                .await;
+            }
+            if mode == "tool_hint" {
+                apply_owned_codex_hook(
+                    &manager,
+                    json!({
+                        "session_id": root_id, "hook_event_name": "PreToolUse",
+                        "tool_call_id": "inferred-tool", "tool_name": "Bash",
+                        "tool_input": {"command": "cargo test"}
+                    }),
+                )
+                .await;
+                let sessions = manager.inner.lock().await;
+                let tool = &sessions[root_id].tools["inferred-tool"];
+                assert_eq!(tool.owner_subagent_id.as_deref(), Some(child_id));
+                assert_eq!(tool.handle.parent_uuid, Some(child_scope));
+            } else if managed {
+                let prep = manager
+                    .prepare_gateway_call(&HeaderMap::new(), request)
+                    .await
+                    .unwrap();
+                assert_eq!(prep.owner_subagent_id.as_deref(), Some(child_id), "{mode}");
+                assert_eq!(prep.parent.as_ref().unwrap().uuid, child_scope);
+                manager
+                    .finish_gateway_call(
+                        &prep.session_id,
+                        prep.owner_subagent_id.as_deref(),
+                        prep.session_finish,
+                    )
+                    .await;
+            } else {
+                let active = manager.start_llm(&HeaderMap::new(), request).await.unwrap();
+                assert_eq!(
+                    active.owner_subagent_id.as_deref(),
+                    Some(child_id),
+                    "{mode}"
+                );
+                assert_eq!(active.handle.parent_uuid, Some(child_scope));
+                manager.end_llm(active, json!({}), json!({})).await.unwrap();
+            }
+            {
+                let sessions = manager.inner.lock().await;
+                let root = &sessions[root_id];
+                assert!(root.turn_scope.is_none(), "{mode}");
+                assert!(root.task_awaiting_synthesis, "{mode}");
+            }
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "SubagentStop", "agent_id": child_id
+                }),
+            )
+            .await;
+            apply_owned_codex_hook(&manager, json!({
+                "session_id": root_id, "hook_event_name": "UserPromptSubmit", "prompt": "synthesize"
+            })).await;
+            assert_eq!(
+                manager.inner.lock().await[root_id]
+                    .task_scope
+                    .as_ref()
+                    .unwrap()
+                    .uuid,
+                task,
+                "{mode}"
+            );
+            manager.close_all("test_shutdown").await.unwrap();
+        }
+    }
+}
+
+// A completed child cannot revive a task through delayed Stop hints, tools, prompts, or marks.
+#[tokio::test]
+async fn codex_finished_child_hooks_do_not_revive_parent_work() {
+    for task_finished in [false, true] {
+        let manager = SessionManager::new(session_test_config());
+        let root_id = "finished-hook-root";
+        let child_id = "finished-hook-child";
+        for (event, agent) in [
+            ("UserPromptSubmit", root_id),
+            ("SubagentStart", child_id),
+            ("Stop", root_id),
+            ("Stop", child_id),
+            ("SubagentStop", child_id),
+        ] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": event, "agent_id": agent
+                }),
+            )
+            .await;
+        }
+        let task = manager.inner.lock().await[root_id]
+            .task_scope
+            .as_ref()
+            .unwrap()
+            .uuid;
+        {
+            let mut sessions = manager.inner.lock().await;
+            let root = sessions.get_mut(root_id).unwrap();
+            root.record_completed_llm_response(
+                json!({"output": [{
+                    "type": "function_call", "call_id": "late-response-tool", "name": "Bash",
+                    "arguments": "{}"
+                }]}),
+                Some(child_id.into()),
+            );
+            assert!(root.pending_tool_hints.is_empty());
+        }
+        if task_finished {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "UserPromptSubmit"
+                }),
+            )
+            .await;
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "Stop"
+                }),
+            )
+            .await;
+        }
+        let last_activity = manager
+            .inner
+            .lock()
+            .await
+            .get(root_id)
+            .map(|root| root.last_activity);
+        for event in [
+            "Stop",
+            "PreCompact",
+            "Notification",
+            "CustomHook",
+            "PreToolUse",
+            "PostToolUse",
+            "UserPromptSubmit",
+            "SubagentStop",
+        ] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": event, "agent_id": child_id,
+                    "tool_name": "Bash", "tool_call_id": "late-tool", "tool_input": {}
+                }),
+            )
+            .await;
+            let sessions = manager.inner.lock().await;
+            if task_finished {
+                assert!(!sessions.contains_key(root_id), "{event}");
+                continue;
+            }
+            let root = &sessions[root_id];
+            assert!(root.turn_scope.is_none(), "{event}");
+            assert!(root.tools.is_empty(), "{event}");
+            assert!(
+                root.pending_llm_hints
+                    .iter()
+                    .all(|pending| pending.hint.agent_id.as_deref() != Some(child_id)
+                        && pending.hint.subagent_id.as_deref() != Some(child_id))
+            );
+            assert_eq!(Some(root.last_activity), last_activity, "{event}");
+            assert_eq!(root.task_awaiting_synthesis, !task_finished, "{event}");
+            assert_eq!(
+                root.task_scope.as_ref().map(|scope| scope.uuid),
+                (!task_finished).then_some(task),
+                "{event}"
+            );
+        }
+        if !task_finished {
+            apply_owned_codex_hook(&manager, json!({
+                "session_id": root_id, "hook_event_name": "UserPromptSubmit", "prompt": "synthesize"
+            })).await;
+            assert_eq!(
+                manager.inner.lock().await[root_id]
+                    .task_scope
+                    .as_ref()
+                    .unwrap()
+                    .uuid,
+                task
+            );
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+}

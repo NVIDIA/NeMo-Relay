@@ -1869,7 +1869,6 @@ impl Session {
         &mut self,
         event: NormalizedEvent,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
-        self.touch_activity();
         let child = match &event {
             NormalizedEvent::PromptSubmitted(event)
             | NormalizedEvent::TurnEnded(event)
@@ -1888,6 +1887,17 @@ impl Session {
             }
             _ => None,
         };
+        // Finished Codex children may deliver delayed hooks, including the hint preceding Stop.
+        // Ignore the entire event before it can revive a parent turn or refresh the idle clock.
+        if self.agent_kind == AgentKind::Codex
+            && !matches!(&event, NormalizedEvent::SubagentStarted(_))
+            && child
+                .as_ref()
+                .is_some_and(|id| self.completed_subagents.contains(id))
+        {
+            return Ok(None);
+        }
+        self.touch_activity();
         self.touch_subagent_activity(child.as_deref());
         let stack = self.scope_stack.clone();
         TASK_SCOPE_STACK
@@ -1939,12 +1949,12 @@ impl Session {
         let stack = self.scope_stack.clone();
         TASK_SCOPE_STACK
             .scope(stack.clone(), async move {
-                self.ensure_turn_started_for_gateway(&start)?;
+                let mut owner = self.resolve_llm_owner(&start);
+                self.ensure_turn_started_for_gateway(&start, &mut owner)?;
                 let mut attributes = LlmAttributes::empty();
                 if start.streaming {
                     attributes |= LlmAttributes::STREAMING;
                 }
-                let owner = self.resolve_llm_owner(&start);
                 self.touch_subagent_activity(owner.subagent_id.as_deref());
                 self.record_llm_request_affinity(
                     &start.provider,
@@ -2001,18 +2011,18 @@ impl Session {
         let result = TASK_SCOPE_STACK
             .scope(stack.clone(), async {
                 let policy = self.gateway_management_policy(&start);
-                if !policy.bypasses_managed_pipeline() {
-                    self.ensure_turn_started_for_gateway(&start)?;
-                }
                 let mut attributes = LlmAttributes::empty();
                 if start.streaming {
                     attributes |= LlmAttributes::STREAMING;
                 }
-                let owner = if policy.bypasses_managed_pipeline() {
+                let mut owner = if policy.bypasses_managed_pipeline() {
                     self.unmanaged_probe_owner(policy)
                 } else {
                     self.resolve_llm_owner(&start)
                 };
+                if !policy.bypasses_managed_pipeline() {
+                    self.ensure_turn_started_for_gateway(&start, &mut owner)?;
+                }
                 self.touch_subagent_activity(owner.subagent_id.as_deref());
                 self.record_llm_request_affinity(
                     &start.provider,
@@ -2213,25 +2223,26 @@ impl Session {
     }
 
     /// Open a parent turn when gateway traffic is not already owned by a live child.
-    fn ensure_turn_started_for_gateway(&mut self, start: &LlmGatewayStart) -> Result<(), CliError> {
-        if start
-            .subagent_id
-            .as_ref()
-            .is_some_and(|id| self.subagents.contains_key(id))
-        {
+    fn ensure_turn_started_for_gateway(
+        &mut self,
+        start: &LlmGatewayStart,
+        owner: &mut LlmOwnerResolution,
+    ) -> Result<(), CliError> {
+        if owner.subagent_id.is_some() {
             return Ok(());
         }
-        if self.turn_scope.is_some() {
-            return Ok(());
+        if self.turn_scope.is_none() {
+            if let Some(input) =
+                alignment::gateway_turn_input(self.agent_kind, &start.provider, &start.request)
+            {
+                self.open_turn(start.metadata.clone(), input, "gateway_request")?;
+                self.gateway_request_turn_open = true;
+            } else {
+                self.open_turn(Value::Null, Value::Null, "implicit")?;
+            }
         }
-        if let Some(input) =
-            alignment::gateway_turn_input(self.agent_kind, &start.provider, &start.request)
-        {
-            self.open_turn(start.metadata.clone(), input, "gateway_request")?;
-            self.gateway_request_turn_open = true;
-            return Ok(());
-        }
-        self.open_turn(Value::Null, Value::Null, "implicit")
+        owner.parent = self.root_work_scope();
+        Ok(())
     }
 
     fn gateway_management_policy(&self, start: &LlmGatewayStart) -> GatewayManagementPolicy {
@@ -3057,17 +3068,14 @@ impl Session {
     // scope. Duplicate tool IDs are ignored so repeated pre-tool hooks do not create parallel
     // handles for one agent tool invocation.
     async fn start_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
-        if !event
-            .subagent_id
-            .as_ref()
-            .is_some_and(|id| self.subagents.contains_key(id))
-        {
-            self.ensure_tool_scope_started(event.metadata.clone())?;
-        }
         if self.tools.contains_key(&event.tool_call_id) {
             return Ok(());
         }
-        let owner = self.resolve_tool_owner(&event);
+        let mut owner = self.resolve_tool_owner(&event);
+        if owner.subagent_id.is_none() {
+            self.ensure_tool_scope_started(event.metadata.clone())?;
+            owner.parent = self.root_work_scope();
+        }
         self.touch_subagent_activity(owner.subagent_id.as_deref());
         let arguments = if event.arguments.is_null() {
             owner
@@ -3650,6 +3658,15 @@ impl Session {
         response: Value,
         owner_subagent_id: Option<String>,
     ) {
+        // An in-flight gateway response can arrive after SubagentStop removed its owner.
+        // Do not let its tool suggestions become hints for unrelated parent work.
+        if self.agent_kind == AgentKind::Codex
+            && owner_subagent_id
+                .as_ref()
+                .is_some_and(|id| self.completed_subagents.contains(id))
+        {
+            return;
+        }
         self.cleanup_correlation_state();
         let hints = tool_hints_from_llm_response(&response, owner_subagent_id);
         self.pending_tool_hints
