@@ -37,3 +37,13 @@ def on_resume(event: GraphResumeEvent) -> Any
 
 Emit a NeMo Relay mark for a LangGraph resume lifecycle event.
 
+## Functions
+
+### `configure_graph`
+
+```python
+def configure_graph(graph: _GraphT) -> _GraphT
+```
+
+Install Relay lifecycle callbacks in a compiled graph's base config.
+
