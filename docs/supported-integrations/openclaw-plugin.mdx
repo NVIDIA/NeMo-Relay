@@ -277,7 +277,9 @@ features such as adaptive hints require a managed execution path.
 
 Gateway shutdown keeps active sessions open so final LLM, tool, and session hooks
 use the existing exporters. Service stop drains any remaining sessions, waits for
-subscriber delivery, and closes the NeMo Relay plugin host. Hooks after service
+subscriber delivery, and closes the NeMo Relay plugin host. If a session is already
+closing, service stop waits for it to finish. Overlapping session-end hooks do not
+create duplicate session spans or ATIF exports. Hooks after service
 stop are ignored and cannot restart NeMo Relay or recreate its exporters. An
 explicit service start allows replay to resume.
 
@@ -325,8 +327,8 @@ If no export output appears:
   or each
   `config.plugins.components[].config.opentelemetry.endpoints[].endpoint`
 - verify the configured collector or output directory is reachable
-- verify session end or gateway stop hooks fired so pending replay state can
-  drain
+- Confirm that `session_end` ran or the OpenClaw plugin service stopped. Gateway
+  shutdown alone does not finish exporting pending events.
 
 If ambiguous timing marks appear, treat them as expected conservative behavior.
 The plugin avoids attaching unsafe latency when multiple timing candidates could
