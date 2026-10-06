@@ -1224,6 +1224,7 @@ fn codex_setup_snapshot_restores_exact_files_and_trust() {
     fs::write(&hooks_path, "{\"custom\":true}\n").unwrap();
     fs::write(&config_backup, "original config backup\n").unwrap();
     fs::write(&hooks_backup, "original hooks backup\n").unwrap();
+    fs::write(codex_dir.join(".env"), "OPENAI_PROJECT=existing\n").unwrap();
     let original = [
         fs::read(&config_path).unwrap(),
         fs::read(&config_backup).unwrap(),
@@ -1238,12 +1239,17 @@ fn codex_setup_snapshot_restores_exact_files_and_trust() {
     fs::write(&hooks_path, "{}\n").unwrap();
     fs::remove_file(&config_backup).unwrap();
     fs::remove_file(&hooks_backup).unwrap();
+    fs::write(codex_dir.join(".env"), "CHANGED=value\n").unwrap();
     restore_codex_setup(&snapshot).unwrap();
 
     assert_eq!(fs::read(&config_path).unwrap(), original[0]);
     assert_eq!(fs::read(&config_backup).unwrap(), original[1]);
     assert_eq!(fs::read(&hooks_path).unwrap(), original[2]);
     assert_eq!(fs::read(&hooks_backup).unwrap(), original[3]);
+    assert_eq!(
+        fs::read_to_string(codex_dir.join(".env")).unwrap(),
+        "OPENAI_PROJECT=existing\n"
+    );
 }
 
 #[test]
@@ -1260,6 +1266,7 @@ fn codex_install_rolls_back_all_files_when_trust_activation_fails() {
     fs::write(&hooks_path, "{}\n").unwrap();
     fs::write(&config_backup, "original config backup\n").unwrap();
     fs::write(&hooks_backup, "original hooks backup\n").unwrap();
+    fs::write(codex_dir.join(".env"), "OPENAI_PROJECT=existing\n").unwrap();
 
     let error = install_codex_with_trust(
         DEFAULT_URL,
@@ -1281,6 +1288,10 @@ fn codex_install_rolls_back_all_files_when_trust_activation_fails() {
     assert_eq!(
         fs::read_to_string(&hooks_backup).unwrap(),
         "original hooks backup\n"
+    );
+    assert_eq!(
+        fs::read_to_string(codex_dir.join(".env")).unwrap(),
+        "OPENAI_PROJECT=existing\n"
     );
 }
 
@@ -1313,6 +1324,372 @@ fn repeated_codex_install_does_not_overwrite_original_backup() {
             .unwrap()
             .verify_client_token(token)
     );
+    assert_eq!(doc["model_provider"].as_str(), Some("openai"));
+    let expected_openai_base_url = crate::agents::codex::versioned_gateway_url(DEFAULT_URL);
+    assert_eq!(
+        doc["openai_base_url"].as_str(),
+        Some(expected_openai_base_url.as_str())
+    );
+    assert!(codex_config_doc_has_managed_install(&doc, DEFAULT_URL));
+}
+
+#[test]
+fn codex_refresh_migrates_legacy_capability_to_persistent_header() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model_provider = \"openai\"\n";
+    fs::write(&path, original).unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut doc = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let token = codex_provider_client_token(&doc).unwrap().to_string();
+    doc["openai_base_url"] = toml_edit::value(crate::configuration::persistent_openai_base_url(
+        DEFAULT_URL,
+        &token,
+    ));
+    fs::write(&path, doc.to_string()).unwrap();
+    fs::remove_file(path.with_file_name(".env")).unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        installed["openai_base_url"].as_str(),
+        Some("http://127.0.0.1:47632/v1")
+    );
+    assert!(
+        fs::read_to_string(path.with_file_name(".env"))
+            .unwrap()
+            .contains(&token)
+    );
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    assert!(!path.with_file_name(".env").exists());
+}
+
+#[test]
+fn codex_install_preserves_the_default_openai_provider_identity() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model = \"gpt-test\"\n";
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert!(installed.get("model_provider").is_none());
+    assert!(codex_provider_client_token(&installed).is_some());
+    let expected_openai_base_url = crate::agents::codex::versioned_gateway_url(DEFAULT_URL);
+    assert_eq!(
+        installed["openai_base_url"].as_str(),
+        Some(expected_openai_base_url.as_str())
+    );
+    assert!(codex_config_doc_has_managed_install(
+        &installed,
+        DEFAULT_URL
+    ));
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_switches_custom_provider_to_openai_and_restores_it() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model_provider = \"custom-provider\"\n";
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(installed["model_provider"].as_str(), Some("openai"));
+    assert!(codex_provider_client_token(&installed).is_some());
+    let expected_openai_base_url = crate::agents::codex::versioned_gateway_url(DEFAULT_URL);
+    assert_eq!(
+        installed["openai_base_url"].as_str(),
+        Some(expected_openai_base_url.as_str())
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_migrates_managed_legacy_provider_and_restores_explicit_openai() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model_provider = \"openai\"\n";
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut legacy = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    legacy["model_provider"] = toml_edit::value("nemo-relay-openai");
+    fs::write(&path, legacy.to_string()).unwrap();
+    fs::remove_file(path.with_file_name(".env")).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(installed["model_provider"].as_str(), Some("openai"));
+    assert!(
+        installed["model_providers"]
+            .as_table()
+            .unwrap()
+            .contains_key("nemo-relay-openai")
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_migrates_managed_legacy_provider_and_restores_absent_selection() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model = \"gpt-test\"\n";
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut legacy = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    legacy["model_provider"] = toml_edit::value("nemo-relay-openai");
+    fs::write(&path, legacy.to_string()).unwrap();
+    fs::remove_file(path.with_file_name(".env")).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(installed["model_provider"].as_str(), Some("openai"));
+    assert!(
+        installed["model_providers"]
+            .as_table()
+            .unwrap()
+            .contains_key("nemo-relay-openai")
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_treats_unmanaged_legacy_alias_as_user_configuration() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"model_provider = "nemo-relay-openai"
+
+[model_providers.nemo-relay-openai]
+name = "User Provider"
+base_url = "https://example.test/v1"
+wire_api = "responses"
+"#;
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(installed["model_provider"].as_str(), Some("openai"));
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_uninstall_preserves_a_user_url_with_matching_unverified_capability() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut doc = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let user_token = "hmac-sha256:unverified-user-value";
+    let user_url = crate::configuration::persistent_openai_base_url(DEFAULT_URL, user_token);
+    doc["openai_base_url"] = toml_edit::value(&user_url);
+    doc["model_providers"]["nemo-relay-openai"]["http_headers"][BOOTSTRAP_CLIENT_TOKEN_HEADER] =
+        toml_edit::value(user_token);
+    fs::write(&path, doc.to_string()).unwrap();
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let restored = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        restored["openai_base_url"].as_str(),
+        Some(user_url.as_str())
+    );
+}
+
+#[test]
+fn codex_uninstall_restores_a_user_openai_base_url() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "model_provider = \"openai\"\nopenai_base_url = \"https://example.test/v1\"\n";
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_excludes_project_proof_from_tools_and_restores_legacy_policy() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"[shell_environment_policy]
+inherit = "all"
+exclude = ["USER_SECRET"]
+"#;
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let excludes = installed["shell_environment_policy"]["exclude"]
+        .as_array()
+        .unwrap();
+    assert!(
+        excludes
+            .iter()
+            .any(|value| value.as_str() == Some("USER_SECRET"))
+    );
+    assert!(
+        excludes
+            .iter()
+            .any(|value| value.as_str() == Some("OPENAI_PROJECT"))
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_preserves_modern_tool_environment_filters() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"[shell_environment_policy.filters]
+"AWS_*" = "exclude"
+OPENAI_PROJECT = "include"
+"#;
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        installed["shell_environment_policy"]["filters"]["OPENAI_PROJECT"].as_str(),
+        Some("exclude")
+    );
+    assert_eq!(
+        installed["shell_environment_policy"]["filters"]["AWS_*"].as_str(),
+        Some("exclude")
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_preserves_inline_tool_environment_policy() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"shell_environment_policy = { inherit = "all", exclude = ["AWS_*"] }
+"#;
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let policy = installed["shell_environment_policy"]
+        .as_inline_table()
+        .unwrap();
+    assert_eq!(policy["inherit"].as_str(), Some("all"));
+    let excludes = policy["exclude"].as_array().unwrap();
+    assert!(excludes.iter().any(|value| value.as_str() == Some("AWS_*")));
+    assert!(
+        excludes
+            .iter()
+            .any(|value| value.as_str() == Some("OPENAI_PROJECT"))
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn codex_install_preserves_inline_tool_environment_filters() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"shell_environment_policy = { inherit = "all", filters = { "AWS_*" = "exclude", OPENAI_PROJECT = "include" } }
+"#;
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let policy = installed["shell_environment_policy"]
+        .as_inline_table()
+        .unwrap();
+    assert_eq!(policy["inherit"].as_str(), Some("all"));
+    let filters = policy["filters"].as_inline_table().unwrap();
+    assert_eq!(filters["AWS_*"].as_str(), Some("exclude"));
+    assert_eq!(filters["OPENAI_PROJECT"].as_str(), Some("exclude"));
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
 }
 
 #[test]
@@ -1461,7 +1838,8 @@ fn codex_install_and_uninstall_preserve_symlinked_config_path() {
             .is_symlink()
     );
     let installed = fs::read_to_string(&path).unwrap();
-    assert!(installed.contains("model_provider = \"nemo-relay-openai\""));
+    assert!(installed.contains("model_provider = \"openai\""));
+    assert!(installed.contains("openai_base_url = \"http://127.0.0.1:47632/v1\""));
     assert!(installed.contains("custom = \"target-marker\""));
     assert!(installed.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
     let installed = fs::read_to_string(&target).unwrap();
@@ -1511,7 +1889,8 @@ fn codex_install_allows_non_utf8_symlink_target_paths() {
     install_codex_config(&path, DEFAULT_URL).unwrap();
 
     let installed = fs::read_to_string(&path).unwrap();
-    assert!(installed.contains("model_provider = \"nemo-relay-openai\""));
+    assert!(!installed.contains("model_provider ="));
+    assert!(installed.contains("openai_base_url = \"http://127.0.0.1:47632/v1\""));
     assert!(installed.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
 
     let backup = fs::read_to_string(backup_path(&path)).unwrap();
@@ -1646,7 +2025,7 @@ fn codex_reinstall_sanitizes_managed_fields_from_a_partial_edit_backup() {
 
     let installed = fs::read_to_string(&path).unwrap();
     let partially_edited = installed.replacen(
-        "model_provider = \"nemo-relay-openai\"",
+        "model_provider = \"openai\"",
         "model_provider = \"local\"",
         1,
     );
@@ -2780,7 +3159,11 @@ fn codex_uninstall_removes_proof_from_a_user_modified_provider() {
     install_codex_config(&path, DEFAULT_URL).unwrap();
     let installed = fs::read_to_string(&path).unwrap();
     assert!(installed.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
-    let modified = installed.replacen(DEFAULT_URL, "http://127.0.0.1:49999", 1);
+    let modified = installed.replacen(
+        "base_url = \"http://127.0.0.1:47632/v1\"",
+        "base_url = \"http://127.0.0.1:49999/v1\"",
+        1,
+    );
     assert_ne!(installed, modified);
     fs::write(&path, modified).unwrap();
 

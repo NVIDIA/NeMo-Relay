@@ -18,6 +18,50 @@ use crate::error::CliError;
 
 pub(crate) const TRANSPARENT_PROXY_CREDENTIAL_ENV: &str = "NEMO_RELAY_PROXY_CREDENTIAL";
 pub(crate) const TRANSPARENT_PROXY_CREDENTIAL_HEADER: &str = "x-nemo-relay-proxy-token";
+pub(crate) const CODEX_CLIENT_PROOF_PREFIX: &str = "nemo-relay-v1;";
+pub(crate) const CODEX_CLIENT_PROOF_HEADER: &str = "openai-project";
+
+/// Consume the persistent Codex proof before request preparation, logging, or forwarding.
+/// Unmarked project metadata retains its ordinary meaning. A nested envelope can occur when
+/// a Codex child inherits its parent's environment and loads the same .env file again.
+pub(crate) fn consume_codex_client_proof(
+    headers: &mut HeaderMap,
+    key: Option<&crate::configuration::BootstrapChallengeKey>,
+) -> Result<bool, CliError> {
+    let values = headers.get_all(CODEX_CLIENT_PROOF_HEADER);
+    let marked = values.iter().any(|value| {
+        value
+            .as_bytes()
+            .starts_with(CODEX_CLIENT_PROOF_PREFIX.as_bytes())
+    });
+    if !marked {
+        return Ok(false);
+    }
+    let invalid = || CliError::Unauthorized("invalid Relay Codex client proof".into());
+    if values.iter().count() != 1 {
+        return Err(invalid());
+    }
+    let mut value = headers[CODEX_CLIENT_PROOF_HEADER]
+        .to_str()
+        .map_err(|_| invalid())?;
+    while let Some(envelope) = value.strip_prefix(CODEX_CLIENT_PROOF_PREFIX) {
+        let (token, project) = envelope.split_once(';').ok_or_else(invalid)?;
+        if !key.is_some_and(|key| key.verify_client_token(token)) {
+            return Err(invalid());
+        }
+        value = project;
+    }
+    let project = if value.is_empty() {
+        None
+    } else {
+        Some(HeaderValue::from_str(value).map_err(|_| invalid())?)
+    };
+    headers.remove(CODEX_CLIENT_PROOF_HEADER);
+    if let Some(project) = project {
+        headers.insert(CODEX_CLIENT_PROOF_HEADER, project);
+    }
+    Ok(true)
+}
 
 const TOKEN_BYTES: usize = 32;
 const PROVIDER_API_KEY_HEADERS: [&str; 3] = ["x-api-key", "api-key", "anthropic-api-key"];

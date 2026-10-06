@@ -22,6 +22,8 @@ pub(crate) struct ServerOptions {
     pub(crate) port: u16,
     pub(crate) advertise_address: Option<String>,
     pub(crate) pass_through: bool,
+    pub(crate) require_worker: bool,
+    pub(crate) max_tokens_per_identity: usize,
     pub(crate) gateway: crate::server::GatewayOverrides,
     pub(crate) tls_cert: Option<PathBuf>,
     pub(crate) tls_key: Option<PathBuf>,

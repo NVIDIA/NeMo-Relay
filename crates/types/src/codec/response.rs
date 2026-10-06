@@ -91,6 +91,13 @@ pub struct Usage {
     /// Tokens written to prompt cache.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<u64>,
+    /// Input tokens that were neither served from nor written to a provider
+    /// prompt cache.
+    ///
+    /// This is present only when the provider's usage contract makes the
+    /// split authoritative; its absence must not be interpreted as zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uncached_input_tokens: Option<u64>,
     /// Optional cost reported by provider data or estimated from Relay model pricing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<CostEstimate>,

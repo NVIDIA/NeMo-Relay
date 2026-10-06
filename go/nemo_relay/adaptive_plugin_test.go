@@ -164,7 +164,7 @@ func registerLifecycleInterceptors(ctx *PluginContext, pluginKind string) error 
 	return ctx.RegisterLlmExecutionIntercept(
 		"llm_exec",
 		7,
-		func(requestJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(requestJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 			responseJSON, err := next(requestJSON)
 			if err != nil {
 				return nil, err
@@ -195,7 +195,7 @@ func registerLifecycleStreamPlugin(streamPluginKind string) error {
 			return ctx.RegisterLlmStreamExecutionIntercept(
 				"llm_stream_exec",
 				7,
-				func(requestJSON json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+				func(requestJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 					responseJSON, err := next(requestJSON)
 					if err != nil {
 						return nil, err
@@ -555,12 +555,12 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 			return closed.RegisterToolRequestIntercept("tool_request", 1, false, func(name string, args json.RawMessage) json.RawMessage { return args })
 		}},
 		{"llm execution", func() error {
-			return closed.RegisterLlmExecutionIntercept("llm_exec", 1, func(request json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			return closed.RegisterLlmExecutionIntercept("llm_exec", 1, func(request json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 				return next(request)
 			})
 		}},
 		{"llm stream", func() error {
-			return closed.RegisterLlmStreamExecutionIntercept("llm_stream_exec", 1, func(request json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			return closed.RegisterLlmStreamExecutionIntercept("llm_stream_exec", 1, func(request json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 				return next(request)
 			})
 		}},

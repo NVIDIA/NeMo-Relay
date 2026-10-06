@@ -299,6 +299,7 @@ fn multiple_contributions_and_cache_savings_aggregate_explicitly() {
             total_tokens: Some(110),
             cache_read_tokens: Some(20),
             cache_write_tokens: Some(3),
+            uncached_input_tokens: None,
             ..Usage::default()
         }),
         ..AnnotatedLlmResponse::default()
@@ -1230,6 +1231,7 @@ fn missing_model_pricing_rate_makes_the_summary_partial() {
             completion_tokens: Some(100),
             total_tokens: Some(900),
             cache_write_tokens: Some(3),
+            uncached_input_tokens: None,
             ..Usage::default()
         }),
         ..AnnotatedLlmResponse::default()

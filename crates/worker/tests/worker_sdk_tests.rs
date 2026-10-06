@@ -61,6 +61,74 @@ use tonic::{Request, Response, Status};
 #[cfg(unix)]
 use tower::service_fn;
 
+/// Every runtime registration kind paired with the wire surface it maps to.
+const REGISTRATION_KIND_SURFACES: &[(RuntimeRegistrationKind, RegistrationSurface)] = &[
+    (
+        RuntimeRegistrationKind::Subscriber,
+        RegistrationSurface::Subscriber,
+    ),
+    (
+        RuntimeRegistrationKind::EventMetadataInjector,
+        RegistrationSurface::EventMetadataInjector,
+    ),
+    (
+        RuntimeRegistrationKind::MarkSanitizeGuardrail,
+        RegistrationSurface::MarkSanitizeGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
+        RegistrationSurface::ScopeSanitizeStartGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
+        RegistrationSurface::ScopeSanitizeEndGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+        RegistrationSurface::ToolSanitizeRequestGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+        RegistrationSurface::ToolSanitizeResponseGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+        RegistrationSurface::ToolConditionalExecutionGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::ToolRequestIntercept,
+        RegistrationSurface::ToolRequestIntercept,
+    ),
+    (
+        RuntimeRegistrationKind::ToolExecutionIntercept,
+        RegistrationSurface::ToolExecutionIntercept,
+    ),
+    (
+        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
+        RegistrationSurface::LlmSanitizeRequestGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+        RegistrationSurface::LlmSanitizeResponseGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+        RegistrationSurface::LlmConditionalExecutionGuardrail,
+    ),
+    (
+        RuntimeRegistrationKind::LlmRequestIntercept,
+        RegistrationSurface::LlmRequestIntercept,
+    ),
+    (
+        RuntimeRegistrationKind::LlmExecutionIntercept,
+        RegistrationSurface::LlmExecutionIntercept,
+    ),
+    (
+        RuntimeRegistrationKind::LlmStreamExecutionIntercept,
+        RegistrationSurface::LlmStreamExecutionIntercept,
+    ),
+];
+
 const ACTIVATION_ID: &str = "activation-1";
 const AUTH_TOKEN: &str = "secret-token";
 const PLUGIN_ID: &str = "acme.worker";
@@ -724,7 +792,7 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_json_field(tool_exec.clone(), "next", "tool");
     assert_json_field(tool_exec, "phase", "tool_exec");
     let logs = host.logs();
-    assert_eq!(logs.len(), 6);
+    assert_eq!(logs.len(), 11);
     for (request, level) in logs.iter().take(5).zip([
         LogLevel::Trace,
         LogLevel::Debug,
@@ -745,6 +813,21 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_eq!(logs[5].level, LogLevel::Info as i32);
     assert_eq!(logs[5].target, "");
     assert_eq!(logs[5].message, "direct message");
+    for (request, level) in logs[6..].iter().zip([
+        LogLevel::Trace,
+        LogLevel::Debug,
+        LogLevel::Info,
+        LogLevel::Warn,
+        LogLevel::Error,
+    ]) {
+        assert_eq!(request.level, level as i32);
+        assert_eq!(request.message, "method message");
+        assert_eq!(request.target, "plugin.methods");
+        assert_eq!(
+            decode_json_value::<Json>(request.fields.as_ref().unwrap()).unwrap(),
+            json!({"method": true})
+        );
+    }
     let conditional_middleware = client
         .invoke(Request::new(InvokeRequest {
             activation_id: ACTIVATION_ID.into(),
@@ -952,16 +1035,20 @@ async fn worker_service_invokes_every_registration_surface() {
 
     let calls = host.calls();
     let runtime_registration_requests = host.runtime_registration_requests();
-    assert_eq!(runtime_registration_requests.list.len(), 1);
     assert_eq!(
-        runtime_registration_requests.list[0].activation_id,
-        ACTIVATION_ID
+        runtime_registration_requests.list.len(),
+        REGISTRATION_KIND_SURFACES.len()
     );
-    assert_eq!(runtime_registration_requests.list[0].auth_token, AUTH_TOKEN);
-    assert_eq!(
-        runtime_registration_requests.list[0].kinds,
-        vec![RegistrationSurface::Subscriber as i32]
-    );
+    for (index, (kind, surface)) in REGISTRATION_KIND_SURFACES.iter().enumerate() {
+        let recorded = &runtime_registration_requests.list[index];
+        assert_eq!(recorded.activation_id, ACTIVATION_ID);
+        assert_eq!(recorded.auth_token, AUTH_TOKEN);
+        assert_eq!(
+            recorded.kinds,
+            vec![*surface as i32],
+            "{kind:?} should map to {surface:?}"
+        );
+    }
     assert_eq!(runtime_registration_requests.register.len(), 1);
     assert_eq!(
         runtime_registration_requests.register[0].activation_id,
@@ -1011,6 +1098,25 @@ async fn worker_service_invokes_every_registration_surface() {
     assert!(calls.contains(&"mark:stream-poll:stack-1:parent-1".into()));
     assert!(calls.contains(&"push:scope-agent:explicit-stack:".into()));
     assert!(calls.contains(&"push:scope-unknown:explicit-stack:".into()));
+    let scope_requests = host.scope_requests();
+    let historical_push = scope_requests
+        .push
+        .iter()
+        .find(|request| request.name == "worker-scope")
+        .expect("historical scope push");
+    assert_eq!(historical_push.timestamp_unix_micros, Some(-2));
+    let historical_pop = scope_requests
+        .pop
+        .iter()
+        .find(|request| request.scope_handle_id == "scope-handle-1")
+        .expect("historical scope pop");
+    assert_eq!(historical_pop.timestamp_unix_micros, Some(0));
+    let ordinary_push = scope_requests
+        .push
+        .iter()
+        .find(|request| request.name == "scope-agent")
+        .expect("ordinary scope push");
+    assert_eq!(ordinary_push.timestamp_unix_micros, None);
     let telemetry_mark = host
         .marks()
         .into_iter()
@@ -1149,7 +1255,7 @@ async fn worker_service_reports_structured_callback_and_payload_errors() {
         "boom",
     );
 
-    let stream_err = client
+    let mut stream_err = client
         .invoke_stream(Request::new(llm_invoke(
             "llm-stream-error",
             RegistrationSurface::LlmStreamExecutionIntercept,
@@ -1159,17 +1265,24 @@ async fn worker_service_reports_structured_callback_and_payload_errors() {
         )))
         .await
         .expect("stream error invoke")
-        .into_inner()
+        .into_inner();
+    let stream_error_chunk = stream_err
         .next()
         .await
         .expect("stream item")
         .expect("stream chunk");
-    match stream_err.item.expect("stream item") {
+    match stream_error_chunk.item.expect("stream item") {
         nemo_relay_worker_proto::v1::stream_chunk::Item::Error(error) => {
             assert!(error.message.contains("stream boom"));
         }
         other => panic!("unexpected stream item: {other:?}"),
     }
+    assert!(
+        tokio::time::timeout(WORKER_TEST_TIMEOUT, stream_err.next())
+            .await
+            .expect("worker stream should terminate after its error")
+            .is_none()
+    );
 
     let stream_surface_err = client
         .invoke_stream(Request::new(tool_invoke(
@@ -1971,7 +2084,7 @@ impl WorkerPlugin for CancellationPlugin {
         let stream_started = self.stream_started.clone();
         let stream_cancelled = self.stream_cancelled.clone();
         let stream_cancelled_notified = self.stream_cancelled_notified.clone();
-        ctx.register_llm_stream_execution_intercept("cancel-stream", 0, move |_, _, _| {
+        ctx.register_llm_stream_execution_intercept("cancel-stream", 0, move |_, _, _, _| {
             let stream_started = stream_started.clone();
             let stream_cancelled = stream_cancelled.clone();
             let stream_cancelled_notified = stream_cancelled_notified.clone();
@@ -1987,7 +2100,7 @@ impl WorkerPlugin for CancellationPlugin {
 
         let stream_setup_started = self.stream_setup_started.clone();
         let stream_setup_cancelled = self.stream_setup_cancelled.clone();
-        ctx.register_llm_stream_execution_intercept("cancel-stream-setup", 0, move |_, _, _| {
+        ctx.register_llm_stream_execution_intercept("cancel-stream-setup", 0, move |_, _, _, _| {
             let stream_setup_started = stream_setup_started.clone();
             let stream_setup_cancelled = stream_setup_cancelled.clone();
             async move {
@@ -2032,9 +2145,227 @@ impl Drop for FillThenPendingStream {
     }
 }
 
+async fn assert_runtime_registration_surfaces(runtime: &PluginRuntime) -> Result<()> {
+    // One request per kind: batching them would only expose the
+    // resulting set, which two swapped arms leave unchanged.
+    let expected_surfaces = REGISTRATION_KIND_SURFACES
+        .iter()
+        .map(|(_, surface)| *surface as i32)
+        .collect::<BTreeSet<_>>();
+    for (kind, _) in REGISTRATION_KIND_SURFACES {
+        let registrations = runtime
+            .list_runtime_registrations(Some(BTreeSet::from([*kind])))
+            .await?;
+        if registrations.len() != REGISTRATION_KIND_SURFACES.len() {
+            return Err(WorkerSdkError::Callback(format!(
+                "expected one registration per surface, got {}",
+                registrations.len()
+            )));
+        }
+        let mut decoded_surfaces = BTreeSet::new();
+        for registration in &registrations {
+            let surface: i32 = registration
+                .local_name
+                .strip_prefix("surface-")
+                .and_then(|value| value.parse().ok())
+                .ok_or_else(|| {
+                    WorkerSdkError::Callback(format!(
+                        "unexpected registration name {}",
+                        registration.local_name
+                    ))
+                })?;
+            let expected = REGISTRATION_KIND_SURFACES
+                .iter()
+                .find(|(_, candidate)| *candidate as i32 == surface)
+                .map(|(kind, _)| *kind)
+                .ok_or_else(|| WorkerSdkError::Callback(format!("unknown surface {surface}")))?;
+            if registration.kind != expected {
+                return Err(WorkerSdkError::Callback(format!(
+                    "surface {surface} decoded as {:?}, expected {expected:?}",
+                    registration.kind
+                )));
+            }
+            if registration.effective_name != format!("effective-{surface}") {
+                return Err(WorkerSdkError::Callback(format!(
+                    "surface {surface} decoded effective name {}",
+                    registration.effective_name
+                )));
+            }
+            if registration.owner.kind != nemo_relay_worker::RuntimeRegistrationOwnerKind::Plugin
+                || registration.owner.plugin_kind.as_deref() != Some("worker-sdk-tests")
+                || registration.owner.component_ordinal != Some(0)
+            {
+                return Err(WorkerSdkError::Callback(format!(
+                    "registration owner did not round-trip: {:?}",
+                    registration.owner
+                )));
+            }
+            decoded_surfaces.insert(surface);
+        }
+        // Set equality, so a duplicated surface standing in for a
+        // missing one cannot pass the count check.
+        if decoded_surfaces != expected_surfaces {
+            return Err(WorkerSdkError::Callback(format!(
+                "decoded surfaces {decoded_surfaces:?} do not match the table"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct SurfacePlugin {
     events: Arc<Mutex<Vec<String>>>,
+}
+
+struct DiscoveryPlugin;
+
+impl WorkerPlugin for DiscoveryPlugin {
+    fn plugin_id(&self) -> &str {
+        PLUGIN_ID
+    }
+
+    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+        let runtime = ctx.runtime().unwrap();
+        ctx.register_tool_request_intercept("discover", 1, false, move |_, _| {
+            let runtime = runtime.clone();
+            async move {
+                Ok(serde_json::to_value(
+                    runtime.list_runtime_registrations(None).await?,
+                )?)
+            }
+        });
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_runtime_discovery_validates_host_identities_and_preserves_owner_kinds() {
+    use nemo_relay_worker_proto::v1::{
+        RuntimeRegistrationIdentity as Identity, RuntimeRegistrationOwner as Owner,
+        RuntimeRegistrationOwnerKind as OwnerKind,
+    };
+
+    let host = MockHost::default();
+    let (host_handle, host_endpoint) = spawn_host(host.clone()).await;
+    let (worker_handle, mut client) =
+        spawn_worker(Arc::new(DiscoveryPlugin), tcp_endpoint(&host_endpoint)).await;
+    register_plugin(&mut client).await;
+    let valid = Identity {
+        kind: RegistrationSurface::Subscriber as i32,
+        local_name: "local".into(),
+        effective_name: "effective".into(),
+        owner: Some(Owner {
+            kind: OwnerKind::Plugin as i32,
+            plugin_kind: Some("acme.owner".into()),
+            component_ordinal: Some(3),
+        }),
+    };
+    for (kind, expected) in [
+        (OwnerKind::Core, "core"),
+        (OwnerKind::GlobalApi, "global_api"),
+        (OwnerKind::Plugin, "plugin"),
+    ] {
+        let mut identity = valid.clone();
+        identity.owner.as_mut().unwrap().kind = kind as i32;
+        *host.registration_response.lock().unwrap() = Some(ListRuntimeRegistrationsResponse {
+            registrations: vec![identity],
+            error: None,
+        });
+        let result = invoke_json(
+            &mut client,
+            tool_invoke(
+                "discover",
+                RegistrationSurface::ToolRequestIntercept,
+                json!({}),
+            ),
+        )
+        .await;
+        assert_eq!(result[0]["kind"], "subscriber");
+        assert_eq!(result[0]["local_name"], "local");
+        assert_eq!(result[0]["effective_name"], "effective");
+        assert_eq!(result[0]["owner"]["kind"], expected);
+        assert_eq!(result[0]["owner"]["plugin_kind"], "acme.owner");
+        assert_eq!(result[0]["owner"]["component_ordinal"], 3);
+    }
+    let owner = |kind| {
+        Some(Owner {
+            kind,
+            ..valid.owner.clone().unwrap()
+        })
+    };
+    for (identity, expected) in [
+        (
+            Identity {
+                kind: i32::MAX,
+                ..valid.clone()
+            },
+            "unknown registration kind",
+        ),
+        (
+            Identity {
+                kind: RegistrationSurface::Unspecified as i32,
+                ..valid.clone()
+            },
+            "surface is not a runtime registration kind",
+        ),
+        (
+            Identity {
+                owner: None,
+                ..valid.clone()
+            },
+            "runtime registration owner is missing",
+        ),
+        (
+            Identity {
+                owner: owner(i32::MAX),
+                ..valid.clone()
+            },
+            "unknown registration owner kind",
+        ),
+        (
+            Identity {
+                owner: owner(OwnerKind::Unspecified as i32),
+                ..valid.clone()
+            },
+            "registration owner kind is unspecified",
+        ),
+    ] {
+        *host.registration_response.lock().unwrap() = Some(ListRuntimeRegistrationsResponse {
+            registrations: vec![identity],
+            error: None,
+        });
+        assert_worker_error(
+            client
+                .invoke(Request::new(tool_invoke(
+                    "discover",
+                    RegistrationSurface::ToolRequestIntercept,
+                    json!({}),
+                )))
+                .await
+                .unwrap()
+                .into_inner(),
+            expected,
+        );
+    }
+    *host.registration_response.lock().unwrap() = Some(ListRuntimeRegistrationsResponse {
+        registrations: vec![],
+        error: Some(worker_error("host discovery failed")),
+    });
+    assert_worker_error(
+        client
+            .invoke(Request::new(tool_invoke(
+                "discover",
+                RegistrationSurface::ToolRequestIntercept,
+                json!({}),
+            )))
+            .await
+            .unwrap()
+            .into_inner(),
+        "host discovery failed",
+    );
+    worker_handle.abort();
+    host_handle.abort();
 }
 
 impl WorkerPlugin for SurfacePlugin {
@@ -2144,16 +2475,7 @@ impl WorkerPlugin for SurfacePlugin {
                 }
                 let tool_call_id = context.tool_call_id().map(str::to_owned);
                 let value = context.into_args();
-                let registrations = runtime
-                    .list_runtime_registrations(Some(BTreeSet::from([
-                        RuntimeRegistrationKind::Subscriber,
-                    ])))
-                    .await?;
-                if !registrations.is_empty() {
-                    return Err(WorkerSdkError::Callback(
-                        "mock runtime registration discovery was not empty".into(),
-                    ));
-                }
+                assert_runtime_registration_surfaces(&runtime).await?;
                 let duplicate_error = runtime
                     .register_conditional_middleware_guardrail(
                         "initial-gate",
@@ -2204,6 +2526,12 @@ impl WorkerPlugin for SurfacePlugin {
                 nemo_relay_worker::relay_warn!(runtime, target: "plugin.logging", "warn message").await?;
                 nemo_relay_worker::relay_error!(runtime, target: "plugin.logging", "error message").await?;
                 runtime.log(PluginLogLevel::Info, "", "direct message", None).await?;
+                let method_fields = serde_json::Map::from_iter([("method".into(), json!(true))]);
+                runtime.trace("plugin.methods", "method message", Some(&method_fields)).await?;
+                runtime.debug("plugin.methods", "method message", Some(&method_fields)).await?;
+                runtime.info("plugin.methods", "method message", Some(&method_fields)).await?;
+                runtime.warn("plugin.methods", "method message", Some(&method_fields)).await?;
+                runtime.error("plugin.methods", "method message", Some(&method_fields)).await?;
                 runtime.emit_mark("tool-exec", None, None).await?;
                 runtime
                     .emit_mark_with_options_and_category(
@@ -2250,9 +2578,19 @@ impl WorkerPlugin for SurfacePlugin {
                     .await?;
                 runtime.emit_mark("tool-exec-restored", None, None).await?;
                 let handle = runtime
-                    .push_scope(None, "worker-scope", ScopeType::Function, None, None, None)
+                    .push_scope_at(
+                        None,
+                        "worker-scope",
+                        ScopeType::Function,
+                        None,
+                        None,
+                        None,
+                        UNIX_EPOCH - Duration::from_nanos(1_500),
+                    )
                     .await?;
-                runtime.pop_scope(&handle, None, None).await?;
+                runtime
+                    .pop_scope_at(&handle, None, None, UNIX_EPOCH)
+                    .await?;
                 runtime.drop_scope_stack(&stack_id).await?;
                 let mut next_value = next.call(value).await?;
                 next_value.result = set_json_field(next_value.result, "phase", "tool_exec");
@@ -2367,7 +2705,7 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_llm_execution_intercept(
             "llm-exec",
             1,
-            move |_, request, next: LlmNext| async move {
+            move |_, request, _context, next: LlmNext| async move {
                 let next_value = next.call(request).await?;
                 Ok(set_json_field(next_value, "phase", "llm_exec"))
             },
@@ -2377,7 +2715,7 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_llm_stream_execution_intercept(
             "llm-stream",
             1,
-            move |_, request, next: LlmStreamNext| {
+            move |_, request, _context, next: LlmStreamNext| {
                 let runtime = stream_runtime.clone();
                 async move {
                     let next_stream = next.call(request).await?;
@@ -2385,15 +2723,18 @@ impl WorkerPlugin for SurfacePlugin {
                 }
             },
         );
-        ctx.register_llm_stream_execution_intercept("llm-stream-error", 1, |_, _, _| async {
-            let stream: JsonStream = Box::pin(tokio_stream::iter(vec![Err(
-                WorkerSdkError::Callback("stream boom".into()),
-            )]));
+        ctx.register_llm_stream_execution_intercept("llm-stream-error", 1, |_, _, _, _| async {
+            let stream: JsonStream = Box::pin(
+                tokio_stream::once(Err(WorkerSdkError::Callback("stream boom".into())))
+                    .chain(tokio_stream::pending()),
+            );
             Ok(stream)
         });
-        ctx.register_llm_stream_execution_intercept("llm-stream-open-error", 1, |_, _, _| async {
-            Err(WorkerSdkError::Callback("stream open boom".into()))
-        });
+        ctx.register_llm_stream_execution_intercept(
+            "llm-stream-open-error",
+            1,
+            |_, _, _, _| async { Err(WorkerSdkError::Callback("stream open boom".into())) },
+        );
         Ok(())
     }
 }
@@ -2483,12 +2824,20 @@ struct RuntimeRegistrationRequests {
 }
 
 #[derive(Clone, Default)]
+struct ScopeRequests {
+    push: Vec<PushScopeRequest>,
+    pop: Vec<PopScopeRequest>,
+}
+
+#[derive(Clone, Default)]
 struct MockHost {
     calls: Arc<Mutex<Vec<String>>>,
     logs: Arc<Mutex<Vec<LogRequest>>>,
     marks: Arc<Mutex<Vec<EmitMarkRequest>>>,
     failures: Arc<Mutex<MockHostFailures>>,
     runtime_registration_requests: Arc<Mutex<RuntimeRegistrationRequests>>,
+    scope_requests: Arc<Mutex<ScopeRequests>>,
+    registration_response: Arc<Mutex<Option<ListRuntimeRegistrationsResponse>>>,
 }
 
 impl MockHost {
@@ -2522,6 +2871,13 @@ impl MockHost {
             .expect("runtime registration requests lock")
             .clone()
     }
+
+    fn scope_requests(&self) -> ScopeRequests {
+        self.scope_requests
+            .lock()
+            .expect("scope requests lock")
+            .clone()
+    }
 }
 
 #[tonic::async_trait]
@@ -2548,8 +2904,28 @@ impl RelayHostRuntime for MockHost {
             .expect("runtime registration requests lock")
             .list
             .push(request);
+        if let Some(response) = self.registration_response.lock().unwrap().clone() {
+            return Ok(Response::new(response));
+        }
         Ok(Response::new(ListRuntimeRegistrationsResponse {
-            registrations: Vec::new(),
+            registrations: REGISTRATION_KIND_SURFACES
+                .iter()
+                .map(
+                    |(_, surface)| nemo_relay_worker_proto::v1::RuntimeRegistrationIdentity {
+                        kind: *surface as i32,
+                        // Names the surface that produced the record, so the
+                        // decoded kind is checked against it.
+                        local_name: format!("surface-{}", *surface as i32),
+                        effective_name: format!("effective-{}", *surface as i32),
+                        owner: Some(nemo_relay_worker_proto::v1::RuntimeRegistrationOwner {
+                            kind: nemo_relay_worker_proto::v1::RuntimeRegistrationOwnerKind::Plugin
+                                as i32,
+                            plugin_kind: Some("worker-sdk-tests".into()),
+                            component_ordinal: Some(0),
+                        }),
+                    },
+                )
+                .collect(),
             error: None,
         }))
     }
@@ -2645,6 +3021,11 @@ impl RelayHostRuntime for MockHost {
     ) -> std::result::Result<Response<PushScopeResponse>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.scope_requests
+            .lock()
+            .expect("scope requests lock")
+            .push
+            .push(request.clone());
         let scope = request.scope.expect("scope context");
         self.record(format!(
             "push:{}:{}:{}",
@@ -2668,6 +3049,11 @@ impl RelayHostRuntime for MockHost {
     ) -> std::result::Result<Response<HostAck>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.scope_requests
+            .lock()
+            .expect("scope requests lock")
+            .pop
+            .push(request.clone());
         self.record(format!("pop:{}", request.scope_handle_id));
         match self.failures().pop_scope {
             HostFailure::None => {}
@@ -3121,6 +3507,7 @@ fn llm_invoke(
     annotated_request: Option<Json>,
     response: Option<Json>,
 ) -> InvokeRequest {
+    let execution_codec_context = execution_codec_context_for(surface);
     InvokeRequest {
         activation_id: ACTIVATION_ID.into(),
         invocation_id: "invoke-1".into(),
@@ -3138,8 +3525,29 @@ fn llm_invoke(
                 annotated_request: annotated_request.map(json_env),
                 response: response.map(json_env),
                 sanitize_context: None,
+                execution_codec_context,
             },
         )),
+    }
+}
+
+fn execution_codec_context_for(
+    surface: RegistrationSurface,
+) -> Option<Box<nemo_relay_worker_proto::v1::LlmExecutionCodecContext>> {
+    match surface {
+        RegistrationSurface::LlmExecutionIntercept => Some(Box::new(
+            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                request: Some(empty_request_codec_context()),
+                response: Some(empty_response_codec_context()),
+            },
+        )),
+        RegistrationSurface::LlmStreamExecutionIntercept => Some(Box::new(
+            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                request: Some(empty_request_codec_context()),
+                response: None,
+            },
+        )),
+        _ => None,
     }
 }
 
@@ -3162,8 +3570,29 @@ fn llm_invoke_without_request(
                 annotated_request: None,
                 response: None,
                 sanitize_context: None,
+                execution_codec_context: execution_codec_context_for(surface),
             },
         )),
+    }
+}
+
+fn empty_request_codec_context() -> nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+    nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+        codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+            kind: nemo_relay_worker_proto::v1::LlmCodecKind::Unspecified as i32,
+            id: None,
+        }),
+        codec_capability_id: None,
+    }
+}
+
+fn empty_response_codec_context() -> nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
+    nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
+        codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+            kind: nemo_relay_worker_proto::v1::LlmCodecKind::Unspecified as i32,
+            id: None,
+        }),
+        codec_capability_id: None,
     }
 }
 

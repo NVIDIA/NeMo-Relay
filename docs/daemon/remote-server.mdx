@@ -194,6 +194,12 @@ Continue with [Remote Linux: Deploy Clients](/daemon/remote-clients). Validate a
 real worker-backed session before opening access to more users. A server listener
 check alone does not prove that the return path to a worker works.
 
+The unauthenticated `/healthz` and `/_nemo_relay/v1/workers` operational paths
+are reachable anywhere the daemon listener is reachable. They expose no
+credentials, user fingerprints, or worker endpoints, but worker UUIDs and
+activity counts are operational metadata. Limit the listener, firewall, and any
+reverse proxy to the approved client and operations networks.
+
 ## Operate and Remove
 
 Use the system-service journal for daemon logs; ask the client administrator for

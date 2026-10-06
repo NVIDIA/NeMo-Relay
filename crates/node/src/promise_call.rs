@@ -26,11 +26,12 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_task_nested_publication_buffer,
 };
 use nemo_relay::api::runtime::{
-    LlmStreamInner, MiddlewareContinuationContext, ScopeStackHandle, capture_propagation_context,
-    current_scope_stack,
+    LlmStreamInner, MiddlewareContinuationContext, PropagationContext as CorePropagationContext,
+    ScopeStackHandle, capture_propagation_context, current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 
+use crate::api::{PropagationContext, propagation_context_to_napi};
 use crate::callback_factory;
 use crate::types::ScopeStack;
 use tokio_stream::Stream;
@@ -98,7 +99,8 @@ struct CallArgs {
     publication_context_id: Option<String>,
     /// Scope stack captured when Relay invokes the middleware.
     scope_stack: Option<ScopeStackHandle>,
-    propagation_parent_uuid: String,
+    propagation_parent_uuid: Option<String>,
+    propagation_context: Option<CorePropagationContext>,
     publication_buffer: Option<PublicationBuffer>,
     stream_result: bool,
     continuation_context: Option<MiddlewareContinuationContext>,
@@ -603,10 +605,22 @@ impl PromiseAwareFn {
                         }
                         None => undefined_to_unknown(&ctx.env)?,
                     };
-                    let propagation_parent_uuid = json_to_unknown(
-                        &ctx.env,
-                        Json::String(ctx.value.propagation_parent_uuid),
-                    )?;
+                    let propagation_parent_uuid = match ctx.value.propagation_parent_uuid {
+                        Some(parent_uuid) => json_to_unknown(&ctx.env, Json::String(parent_uuid))?,
+                        None => undefined_to_unknown(&ctx.env)?,
+                    };
+                    let propagation_context = match ctx.value.propagation_context {
+                        Some(context) => unsafe {
+                            JsUnknown::from_raw_unchecked(
+                                ctx.env.raw(),
+                                PropagationContext::to_napi_value(
+                                    ctx.env.raw(),
+                                    propagation_context_to_napi(context),
+                                )?,
+                            )
+                        },
+                        None => undefined_to_unknown(&ctx.env)?,
+                    };
                     let (resolve, reject, stream_push, stream_end) =
                         build_completion_unknowns(&ctx.env, ctx.value.completion)?;
                     let register_abort =
@@ -627,6 +641,7 @@ impl PromiseAwareFn {
                         publication_context_id,
                         scope_stack,
                         propagation_parent_uuid,
+                        propagation_context,
                         register_abort,
                         stream_result,
                         stream_push,
@@ -716,11 +731,47 @@ impl PromiseAwareFn {
         .await
     }
 
+    /// Call a spread JavaScript callback with builder-constructed arguments
+    /// followed by a middleware-style `next(arg)` callback.
+    pub async fn call_spread_with_arg0_and_json_next(
+        &self,
+        build_arg0: Arg0Builder,
+        next: JsonNextFn,
+    ) -> FlowResult<Json> {
+        self.call_inner(
+            PrimaryArg::Build(build_arg0),
+            CallMode::SPREAD,
+            Some(NextFn::Json(next)),
+        )
+        .await
+    }
+
     /// Call the JS function with a middleware-style `next(arg)` callback that
     /// resolves to a lazy downstream stream.
     pub async fn call_with_stream_next(
         &self,
         args: Json,
+        next: JsonStreamNextFn,
+    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+        self.call_with_stream_next_inner(PrimaryArg::Json(args), false, next)
+            .await
+    }
+
+    /// Call a spread JavaScript callback with builder-constructed arguments
+    /// followed by a middleware-style streaming `next(arg)` callback.
+    pub async fn call_spread_with_arg0_and_stream_next(
+        &self,
+        build_arg0: Arg0Builder,
+        next: JsonStreamNextFn,
+    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+        self.call_with_stream_next_inner(PrimaryArg::Build(build_arg0), true, next)
+            .await
+    }
+
+    async fn call_with_stream_next_inner(
+        &self,
+        arg0: PrimaryArg,
+        spread: bool,
         next: JsonStreamNextFn,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
@@ -731,7 +782,10 @@ impl PromiseAwareFn {
         let cancellation = CallCancellation::default();
         let mut cancellation_guard = CallCancellationGuard::new(cancellation.clone());
         let continuation_context = MiddlewareContinuationContext::capture();
-        let propagation_parent_uuid = capture_propagation_context()?.parent_uuid.to_string();
+        let propagation_context = capture_propagation_context().ok();
+        let propagation_parent_uuid = propagation_context
+            .as_ref()
+            .map(|context| context.parent_uuid.to_string());
         let tsfn = self
             .tsfn
             .lock()
@@ -741,13 +795,14 @@ impl PromiseAwareFn {
             .ok_or_else(closed_tsfn_error)?;
         let status = tsfn.call(
             Ok(CallArgs {
-                arg0: PrimaryArg::Json(args),
-                spread: false,
+                arg0,
+                spread,
                 next: Some(NextFn::Stream(next)),
                 publication: false,
                 publication_context_id: publication_callback_context_id(),
                 scope_stack: Some(current_scope_stack()),
                 propagation_parent_uuid,
+                propagation_context,
                 publication_buffer: capture_nested_publication_buffer(),
                 stream_result: true,
                 continuation_context: Some(continuation_context),
@@ -790,7 +845,10 @@ impl PromiseAwareFn {
         let continuation_context = next
             .as_ref()
             .map(|_| MiddlewareContinuationContext::capture());
-        let propagation_parent_uuid = capture_propagation_context()?.parent_uuid.to_string();
+        let propagation_context = capture_propagation_context().ok();
+        let propagation_parent_uuid = propagation_context
+            .as_ref()
+            .map(|context| context.parent_uuid.to_string());
         let tsfn = self
             .tsfn
             .lock()
@@ -810,6 +868,7 @@ impl PromiseAwareFn {
                 // sanitizers avoid waiting on their own publication.
                 scope_stack: Some(current_scope_stack()),
                 propagation_parent_uuid,
+                propagation_context,
                 publication_buffer: capture_nested_publication_buffer(),
                 stream_result: false,
                 continuation_context,

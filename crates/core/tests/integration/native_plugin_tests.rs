@@ -7,8 +7,9 @@ mod plugin_host_test_support;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{
@@ -217,6 +218,15 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
     }])
     .expect("native plugin should load");
+    let fixture_library = unsafe { libloading::Library::new(&fixture.library_path) }
+        .expect("native fixture should open for synchronization");
+    let pending_entered = unsafe {
+        *fixture_library
+            .get::<unsafe extern "C" fn() -> bool>(b"nemo_relay_fixture_async_pending_entered\0")
+            .expect("native fixture should export its pending-entry signal")
+    };
+    // Clear a signal left by any earlier fixture use in this process.
+    let _ = unsafe { pending_entered() };
     let mut cleanup = NativePluginTestCleanup::new();
 
     let mut plugin_config = PluginConfig::default();
@@ -476,6 +486,57 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     );
 
     events.lock().unwrap().clear();
+    let result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("native-fixture-tool-scoped-next")
+            .args(json!({
+                "input": "scoped-next",
+                "use_scoped_next": true
+            }))
+            .func(Arc::new(|_args| {
+                Box::pin(async move {
+                    emit_scope_mark(
+                        EmitMarkEventParams::builder()
+                            .name("native-fixture-tool-scoped-next-callback-mark")
+                            .build(),
+                    )?;
+                    Ok(ToolExecutionResult::new(json!({ "tool_callback": true })))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .expect("native scoped next middleware should run");
+    assert_eq!(result.result["tool_callback"], true);
+    flush_subscribers().expect("scoped next native fixture events should flush");
+    let scoped_next_events = events.lock().unwrap().clone();
+    let scoped_next_scope = find_event(
+        &scoped_next_events,
+        "fixture.native.scoped.next",
+        Some(ScopeCategory::Start),
+    );
+    let downstream_scoped_next_scope = find_event(
+        &scoped_next_events,
+        "fixture.native.scoped.next.downstream",
+        Some(ScopeCategory::Start),
+    );
+    let scoped_next_callback_mark = find_event(
+        &scoped_next_events,
+        "native-fixture-tool-scoped-next-callback-mark",
+        None,
+    );
+    assert_eq!(
+        downstream_scoped_next_scope.parent_uuid(),
+        Some(scoped_next_scope.uuid()),
+        "the downstream native callback should inherit the scope opened around next.call"
+    );
+    assert_eq!(
+        scoped_next_callback_mark.parent_uuid(),
+        Some(downstream_scoped_next_scope.uuid()),
+        "work below the downstream native callback should remain nested"
+    );
+
+    events.lock().unwrap().clear();
     {
         let thread_stack = create_scope_stack();
         let _thread_stack_restore = ThreadScopeStackRestore::capture();
@@ -586,6 +647,59 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     assert!(llm_end.annotated_response().is_none());
 
     events.lock().unwrap().clear();
+    let cancelled_unary = tokio::spawn(llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("native-fixture-cancelled-unary")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({ "prompt": "cancel" }),
+            })
+            .func(Arc::new(|_| Box::pin(std::future::pending())))
+            .build(),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !unsafe { pending_entered() } {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("native unary future should start before cancellation");
+    cancelled_unary.abort();
+    assert!(
+        cancelled_unary
+            .await
+            .expect_err("pending native unary call should be cancelled")
+            .is_cancelled()
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            flush_subscribers().expect("cancelled unary events should flush");
+            if events.lock().unwrap().iter().any(|event| {
+                event.name() == "fixture.native.unary.drop"
+                    && event.scope_category() == Some(ScopeCategory::End)
+            }) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("plugin unary future Drop should emit its scope after cancellation");
+    let cancelled_unary_events = events.lock().unwrap().clone();
+    let cancelled_unary_start = find_event(
+        &cancelled_unary_events,
+        "native-fixture-cancelled-unary",
+        Some(ScopeCategory::Start),
+    );
+    assert_parent(
+        &cancelled_unary_events,
+        "fixture.native.unary.drop",
+        Some(ScopeCategory::End),
+        Some(cancelled_unary_start.uuid()),
+    );
+    drop(fixture_library);
+
+    events.lock().unwrap().clear();
     let collected_stream_chunks = Arc::new(Mutex::new(Vec::<Json>::new()));
     let collector_chunks = collected_stream_chunks.clone();
     let finalizer_chunks = collected_stream_chunks.clone();
@@ -647,6 +761,66 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     assert_eq!(
         stream_end.output().unwrap()[0]["native_plugin_llm_stream_execution"],
         true
+    );
+
+    events.lock().unwrap().clear();
+    let provider_polled = Arc::new(AtomicBool::new(false));
+    let polled = Arc::clone(&provider_polled);
+    let cancelled_stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("native-fixture-cancelled-stream")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({ "prompt": "cancel" }),
+            })
+            .func(Arc::new(move |_request| {
+                let polled = Arc::clone(&polled);
+                Box::pin(async move {
+                    Ok(LlmJsonStream::new(futures::stream::poll_fn(move |_| {
+                        polled.store(true, Ordering::SeqCst);
+                        Poll::Pending
+                    })))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| Json::Null))
+            .build(),
+    )
+    .await
+    .expect("pending native stream should open");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !provider_polled.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("provider stream should be polled before cancellation");
+    drop(cancelled_stream);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            flush_subscribers().expect("cancelled stream events should flush");
+            if events.lock().unwrap().iter().any(|event| {
+                event.name() == "fixture.native.stream.drop"
+                    && event.scope_category() == Some(ScopeCategory::End)
+            }) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("plugin stream Drop should emit its scope after cancellation");
+    let cancelled_stream_events = events.lock().unwrap().clone();
+    let cancelled_stream_start = find_event(
+        &cancelled_stream_events,
+        "native-fixture-cancelled-stream",
+        Some(ScopeCategory::Start),
+    );
+    assert_parent(
+        &cancelled_stream_events,
+        "fixture.native.stream.drop",
+        Some(ScopeCategory::End),
+        Some(cancelled_stream_start.uuid()),
     );
 
     events.lock().unwrap().clear();
@@ -965,47 +1139,17 @@ async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
     activation.clear();
 }
 
-#[tokio::test]
-async fn native_api_one_preserves_results_after_abi_v2_negotiation() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+#[test]
+fn native_api_one_does_not_admit_a_stale_abi_v2_binary() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest_with_symbol(&fixture, "nemo_relay_fixture_abi_v2_api1");
-    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
-        .expect("native API 1 plugin should negotiate the ABI v2 host table");
-    let mut cleanup = NativePluginTestCleanup::new();
-
-    let mut plugin_config = PluginConfig::default();
-    plugin_config.components.push(PluginComponentSpec {
-        kind: "fixture_native".into(),
-        enabled: true,
-        config: Map::new(),
-    });
-    test_initialize_plugin_host_exact(plugin_config)
-        .await
-        .expect("ABI v2 native API 1 fixture should initialize");
-    cleanup.mark_plugin_configuration_active();
-
-    let result = tool_call_execute(
-        ToolCallExecuteParams::builder()
-            .name("fixture-abi-v2-api1")
-            .args(json!({"input": true}))
-            .func(Arc::new(|args| {
-                Box::pin(async move {
-                    Ok(ToolExecutionResult::annotated(
-                        args,
-                        json!({"source": "provider"}),
-                    ))
-                })
-            }))
-            .build(),
-    )
-    .await
-    .expect("ABI v2 callback should use the canonical native API 1 result contract");
-    assert_eq!(result.result, json!({"input": true}));
-    assert_eq!(result.annotation, Some(json!({"source": "provider"})));
-
-    drop(cleanup);
-    activation.clear();
+    let error = expect_native_load_error_from_specs(
+        [load_spec("fixture_native", &manifest_ref)],
+        "a native_api=1 manifest must not make an ABI-v2 binary compatible",
+    );
+    assert!(error.contains("rejected native ABI 7"), "{error}");
+    assert!(error.contains("rebuild the plugin"), "{error}");
 }
 
 #[tokio::test]
@@ -1128,6 +1272,28 @@ async fn native_loader_rejects_manifest_that_admits_pre_zero_eight_relay() {
     );
 }
 
+#[tokio::test]
+async fn native_abi_v7_rejects_manifest_that_admits_relay_zero_nine() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest_text(ManifestOptions {
+        manifest_dir: fixture.manifest_dir.path(),
+        plugin_id: "fixture_native",
+        relay: ">=0.9,<1.0",
+        library: &fixture.library_path.to_string_lossy(),
+        symbol: "nemo_relay_fixture_native_plugin",
+        integrity: None,
+    });
+    let error = expect_native_load_error_from_specs(
+        [load_spec("fixture_native", &manifest_ref)],
+        "an ABI-v7 native plugin must exclude Relay 0.9",
+    );
+    assert!(
+        error.contains("uses native ABI v7") && error.contains("excludes Relay 0.9"),
+        "{error}"
+    );
+}
+
 #[test]
 fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
@@ -1158,7 +1324,7 @@ fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
 }
 
 #[test]
-fn native_loader_falls_back_to_abi_v3_plugins() {
+fn native_loader_rejects_abi_v3_plugins() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest_text(ManifestOptions {
@@ -1170,17 +1336,21 @@ fn native_loader_falls_back_to_abi_v3_plugins() {
         integrity: None,
     });
 
-    let activation = load_native_plugins([load_spec("fixture_native_v3", &manifest_ref)])
-        .expect("ABI-v3 fixture should load through compatibility fallback");
-    activation.clear();
+    let error = expect_native_load_error_from_specs(
+        [load_spec("fixture_native_v3", &manifest_ref)],
+        "ABI-v3 plugins must be rebuilt for ABI v7",
+    );
+    assert!(error.contains("rejected native ABI 7"), "{error}");
+    assert!(error.contains("rebuild the plugin"), "{error}");
 }
 
 #[test]
-fn native_loader_supports_current_v5_frozen_v4_and_legacy_v2_plugins() {
+fn native_loader_rejects_v2_v4_v5_and_v6_plugins() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_plugin();
 
     for (plugin_id, symbol) in [
+        ("fixture_native_v6", "nemo_relay_fixture_native_plugin_v6"),
         ("fixture_native_v5", "nemo_relay_fixture_native_plugin_v5"),
         ("fixture_native_v4", "nemo_relay_fixture_native_plugin_v4"),
         ("fixture_native_v2", "nemo_relay_fixture_native_plugin_v2"),
@@ -1194,9 +1364,12 @@ fn native_loader_supports_current_v5_frozen_v4_and_legacy_v2_plugins() {
             integrity: None,
         });
 
-        let activation = load_native_plugins([load_spec(plugin_id, &manifest_ref)])
-            .unwrap_or_else(|error| panic!("ABI compatibility fixture should load: {error}"));
-        activation.clear();
+        let error = expect_native_load_error_from_specs(
+            [load_spec(plugin_id, &manifest_ref)],
+            "stale native plugins must be rebuilt for ABI v7",
+        );
+        assert!(error.contains("rejected native ABI 7"), "{error}");
+        assert!(error.contains("rebuild the plugin"), "{error}");
     }
 }
 

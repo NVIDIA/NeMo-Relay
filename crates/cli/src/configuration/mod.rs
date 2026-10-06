@@ -71,6 +71,7 @@ struct FileGatewayConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileUpstreamConfig {
+    response_timeout_secs: Option<u64>,
     openai_base_url: Option<String>,
     openai_auth_header: Option<String>,
     anthropic_base_url: Option<String>,
@@ -320,6 +321,7 @@ fn persistent_bootstrap_fingerprint(
         "openai_auth_header": gateway.openai_auth_header,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
+        "response_timeout_secs": gateway.response_timeout_secs,
         "metadata": gateway.metadata,
         "plugin_config": gateway.plugin_config,
         "max_hook_payload_bytes": gateway.max_hook_payload_bytes,
@@ -551,6 +553,16 @@ const PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN: &[u8] =
 /// Private proof installed into supported coding-agent provider configuration.
 pub(crate) const BOOTSTRAP_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-client-token";
 pub(crate) const HOOK_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-hook-client";
+pub(crate) const PROVIDER_CAPABILITY_PATH_SEGMENT: &str = "nemo-relay";
+
+/// Returns the legacy capability endpoint accepted for existing persistent Codex installations.
+/// New installs use a plain URL and deliver the proof through Codex's startup .env header.
+pub(crate) fn persistent_openai_base_url(gateway_url: &str, client_token: &str) -> String {
+    format!(
+        "{}/v1/{PROVIDER_CAPABILITY_PATH_SEGMENT}/{client_token}",
+        gateway_url.trim_end_matches('/').trim_end_matches("/v1")
+    )
+}
 
 /// Stable health-proof context shared by a transparent wrapper and plugin-owned MCP client.
 pub(crate) fn transparent_gateway_fingerprint(gateway_url: &str) -> String {
@@ -682,23 +694,7 @@ fn decode_fixed_hex<const N: usize>(encoded: &str) -> Option<[u8; N]> {
     Some(decoded)
 }
 
-pub(crate) fn sign_python_environment_attestation(
-    source_artifact_sha256: &str,
-    environment_sha256: &str,
-) -> Result<String, CliError> {
-    let key = hmac::Key::new(hmac::HMAC_SHA256, &load_or_create_bootstrap_hmac_key()?);
-    let message =
-        python_environment_attestation_message(source_artifact_sha256, environment_sha256);
-    let tag = hmac::sign(&key, &message);
-    Ok(format!(
-        "hmac-sha256:{}",
-        tag.as_ref()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
-}
-
+#[cfg(test)]
 pub(crate) fn verify_python_environment_attestation(
     source_artifact_sha256: &str,
     environment_sha256: &str,
@@ -717,6 +713,180 @@ pub(crate) fn verify_python_environment_attestation(
         &tag,
     )
     .is_ok())
+}
+
+pub(crate) fn sign_python_environment_attestation_for_environment(
+    environment: &Path,
+    source_artifact_sha256: &str,
+    environment_sha256: &str,
+) -> Result<String, CliError> {
+    let key = hmac::Key::new(
+        hmac::HMAC_SHA256,
+        &load_or_create_python_environment_hmac_key(environment)?,
+    );
+    let tag = hmac::sign(
+        &key,
+        &python_environment_attestation_message(source_artifact_sha256, environment_sha256),
+    );
+    Ok(format!(
+        "hmac-sha256:{}",
+        tag.as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
+pub(crate) fn ensure_python_environment_attestation_key(
+    environment: &Path,
+) -> Result<(), CliError> {
+    load_or_create_python_environment_hmac_key(environment).map(|_| ())
+}
+
+pub(crate) fn verify_python_environment_attestation_for_environment(
+    environment: &Path,
+    source_artifact_sha256: &str,
+    environment_sha256: &str,
+    authentication: &str,
+) -> Result<bool, CliError> {
+    let Some(encoded) = authentication.strip_prefix("hmac-sha256:") else {
+        return Ok(false);
+    };
+    let Some(tag) = decode_fixed_hex::<32>(encoded) else {
+        return Ok(false);
+    };
+    let path = environment.join(".nemo-relay-environment.key");
+    let key = match load_python_environment_hmac_key(&path)? {
+        Some(key) => key,
+        None => {
+            // Legacy attestations require the installing user's original bootstrap key.
+            // Verification must not create a replacement key or trust an unsigned digest.
+            let Some(key) = load_existing_bootstrap_hmac_key()? else {
+                return Ok(false);
+            };
+            key
+        }
+    };
+    let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
+    Ok(hmac::verify(
+        &key,
+        &python_environment_attestation_message(source_artifact_sha256, environment_sha256),
+        &tag,
+    )
+    .is_ok())
+}
+
+fn load_or_create_python_environment_hmac_key(
+    environment: &Path,
+) -> Result<[u8; BOOTSTRAP_HMAC_KEY_BYTES], CliError> {
+    const KEY_FILENAME: &str = ".nemo-relay-environment.key";
+    let path = environment.join(KEY_FILENAME);
+    if let Some(key) = load_python_environment_hmac_key(&path)? {
+        return Ok(key);
+    }
+
+    let mut key = [0_u8; BOOTSTRAP_HMAC_KEY_BYTES];
+    SystemRandom::new().fill(&mut key).map_err(|_| {
+        CliError::Config("failed to generate Python environment attestation key".into())
+    })?;
+    let (temporary_path, mut temporary_file) =
+        create_python_environment_hmac_key_temp_file(environment, KEY_FILENAME)?;
+    let publish_result = (|| -> std::io::Result<()> {
+        temporary_file.write_all(&key)?;
+        temporary_file.sync_all()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            temporary_file.set_permissions(fs::Permissions::from_mode(0o644))?;
+        }
+        drop(temporary_file);
+        fs::hard_link(&temporary_path, &path)
+    })();
+    let _ = fs::remove_file(&temporary_path);
+    match publish_result {
+        Ok(()) => Ok(key),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            load_python_environment_hmac_key(&path)?.ok_or_else(|| {
+                CliError::Config(format!(
+                    "Python environment attestation key {} disappeared",
+                    path.display()
+                ))
+            })
+        }
+        Err(error) => Err(CliError::Config(format!(
+            "failed to publish Python environment attestation key {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+fn create_python_environment_hmac_key_temp_file(
+    environment: &Path,
+    key_filename: &str,
+) -> Result<(PathBuf, fs::File), CliError> {
+    for _ in 0..10 {
+        let mut suffix = [0_u8; 16];
+        SystemRandom::new().fill(&mut suffix).map_err(|_| {
+            CliError::Config("failed to generate Python environment attestation temp name".into())
+        })?;
+        let suffix = suffix
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let path = environment.join(format!("{key_filename}.{suffix}.tmp"));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(CliError::Config(format!(
+                    "failed to create temporary Python environment attestation key in {}: {error}",
+                    environment.display()
+                )));
+            }
+        }
+    }
+    Err(CliError::Config(format!(
+        "failed to allocate a unique temporary Python environment attestation key in {}",
+        environment.display()
+    )))
+}
+
+fn load_python_environment_hmac_key(
+    path: &Path,
+) -> Result<Option<[u8; BOOTSTRAP_HMAC_KEY_BYTES]>, CliError> {
+    let mut file = match OpenOptions::new().read(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(CliError::Config(format!(
+                "failed to open Python environment attestation key {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    let mut key = [0_u8; BOOTSTRAP_HMAC_KEY_BYTES];
+    file.read_exact(&mut key).map_err(|error| {
+        CliError::Config(format!(
+            "failed to read Python environment attestation key {}: {error}",
+            path.display()
+        ))
+    })?;
+    if file.metadata().map(|metadata| metadata.len()).unwrap_or(0)
+        != BOOTSTRAP_HMAC_KEY_BYTES as u64
+    {
+        return Err(CliError::Config(format!(
+            "Python environment attestation key {} has invalid length",
+            path.display()
+        )));
+    }
+    Ok(Some(key))
 }
 
 fn python_environment_attestation_message(
@@ -1060,6 +1230,54 @@ pub(crate) fn resolve_plugins_config_with_path(
     Ok(resolved)
 }
 
+/// Resolve only the selected plugin configuration files for scoped CLI diagnostics.
+pub(crate) fn resolve_plugin_config_from_paths(
+    paths: impl IntoIterator<Item = PathBuf>,
+) -> Result<ResolvedConfig, CliError> {
+    let plugin_toml = load_plugin_toml_config_from_paths(paths)?;
+    let mut resolved = ResolvedConfig::default();
+    apply_plugin_toml_config(&mut resolved, plugin_toml);
+    Ok(resolved)
+}
+
+/// Read the effective host policy without loading manifests from other scopes.
+pub(crate) fn resolve_dynamic_plugin_policy_from_paths(
+    paths: impl IntoIterator<Item = PathBuf>,
+) -> Result<DynamicPluginHostPolicy, CliError> {
+    let mut policy = DynamicPluginHostPolicy::default();
+    for path in deduplicate_plugin_config_paths(paths) {
+        let Some(raw) = read_config_file(&path, false, "plugin configuration")? else {
+            continue;
+        };
+        let parsed = raw.parse::<toml::Table>().map_err(|error| {
+            CliError::Config(format!(
+                "invalid plugin TOML in {}: {error}",
+                path.display()
+            ))
+        })?;
+        let Some(plugins) = parsed.get("plugins") else {
+            continue;
+        };
+        let plugins = plugins.as_table().ok_or_else(|| {
+            CliError::Config(format!(
+                "invalid plugin TOML in {}: [plugins] must be a table",
+                path.display()
+            ))
+        })?;
+        if let Some(value) = plugins.get("policy") {
+            let file_policy: crate::plugins::policy::FileDynamicPluginHostPolicy =
+                value.clone().try_into().map_err(|error| {
+                    CliError::Config(format!(
+                        "invalid dynamic plugin policy in {}: {error}",
+                        path.display()
+                    ))
+                })?;
+            policy.merge_from(file_policy.into());
+        }
+    }
+    Ok(policy)
+}
+
 /// Resolves transparent `run` configuration and switches the gateway to an ephemeral bind address.
 ///
 /// Explicit run arguments override inherited top-level server flags, which override shared config.
@@ -1363,7 +1581,21 @@ pub(crate) fn user_config_dir() -> Option<PathBuf> {
 
 /// Resolves the platform system config directory shared with the core plugin runtime.
 pub(crate) fn system_config_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(path) = TEST_SYSTEM_CONFIG_DIR.with(|value| value.borrow().clone()) {
+        return path;
+    }
     nemo_relay::plugin::system_config_dir()
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SYSTEM_CONFIG_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_system_config_dir(path: Option<PathBuf>) -> Option<PathBuf> {
+    TEST_SYSTEM_CONFIG_DIR.with(|value| value.replace(path))
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
@@ -1416,11 +1648,15 @@ fn apply_file_upstream_config(
         return Ok(());
     };
     let FileUpstreamConfig {
+        response_timeout_secs,
         openai_base_url,
         openai_auth_header,
         anthropic_base_url,
         anthropic_auth_header,
     } = upstream;
+    if let Some(value) = response_timeout_secs {
+        gateway.response_timeout_secs = value;
+    }
     if let Some(value) = openai_base_url {
         gateway.openai_base_url = value;
         if openai_auth_header.is_none() {

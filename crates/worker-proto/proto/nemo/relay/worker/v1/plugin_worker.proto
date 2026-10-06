@@ -288,6 +288,15 @@ message LlmInvocation {
     LlmSanitizeRequestContext request_sanitize_context = 9;
     LlmSanitizeResponseContext response_sanitize_context = 10;
   }
+  // Present for LLM execution interceptors. Older workers ignore this
+  // additive field at the wire boundary, but worker SDK callback signatures
+  // are release-versioned and must match the Relay release they target.
+  LlmExecutionCodecContext execution_codec_context = 11;
+}
+
+message LlmExecutionCodecContext {
+  LlmSanitizeRequestContext request = 1;
+  LlmSanitizeResponseContext response = 2;
 }
 
 message LlmCodecIdentity {
@@ -436,6 +445,7 @@ message PushScopeRequest {
   JsonEnvelope data = 6;
   JsonEnvelope metadata = 7;
   JsonEnvelope input = 8;
+  optional int64 timestamp_unix_micros = 9;
 }
 
 message PushScopeResponse {
@@ -449,6 +459,7 @@ message PopScopeRequest {
   string scope_handle_id = 3;
   JsonEnvelope output = 4;
   JsonEnvelope metadata = 5;
+  optional int64 timestamp_unix_micros = 6;
 }
 
 message CreateScopeStackRequest {

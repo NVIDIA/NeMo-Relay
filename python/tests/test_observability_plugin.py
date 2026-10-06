@@ -13,6 +13,7 @@ import typing
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from plugin_host_test_helper import validate_plugin_config
 
 from nemo_relay import (
@@ -32,6 +33,7 @@ from nemo_relay.observability import (
     AtofFileSinkConfig,
     AtofStreamSinkConfig,
     ComponentSpec,
+    ConfigPolicy,
     HttpStorageConfig,
     ObservabilityConfig,
     OpenTelemetryEndpointConfig,
@@ -49,6 +51,7 @@ if typing.TYPE_CHECKING:
 class _AtofCaptureServer(http.server.ThreadingHTTPServer):
     requests: list[tuple[dict[str, str], bytes]]
     request_event: threading.Event
+    first_response_gate: threading.Event | None
 
 
 class _AtofCaptureHandler(http.server.BaseHTTPRequestHandler):
@@ -57,6 +60,8 @@ class _AtofCaptureHandler(http.server.BaseHTTPRequestHandler):
         server = typing.cast(_AtofCaptureServer, self.server)
         server.requests.append((dict(self.headers.items()), self.rfile.read(content_length)))
         server.request_event.set()
+        if len(server.requests) == 1 and server.first_response_gate is not None:
+            server.first_response_gate.wait(timeout=30)
         self.send_response(200)
         self.end_headers()
 
@@ -68,18 +73,27 @@ class _AtofCapture:
     server: "_AtofCaptureServer"
     thread: threading.Thread
 
+    def __init__(self, *, block_first_response: bool = False) -> None:
+        self.first_response_gate = threading.Event() if block_first_response else None
+
     def __enter__(self) -> _AtofCapture:
         self.server = _AtofCaptureServer(("127.0.0.1", 0), _AtofCaptureHandler)
         self.server.requests = []
         self.server.request_event = threading.Event()
+        self.server.first_response_gate = self.first_response_gate
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         return self
 
     def __exit__(self, *args: object) -> None:
+        self.release_first_response()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=1)
+
+    def release_first_response(self) -> None:
+        if self.first_response_gate is not None:
+            self.first_response_gate.set()
 
     @property
     def url(self) -> str:
@@ -96,6 +110,80 @@ class _AtofCapture:
 
 
 class TestObservabilityConfigHelpers:
+    async def test_otlp_queue_overflow_is_accounted_per_endpoint_after_close(self) -> None:
+        burst_size = 300
+        projected_spans = burst_size + 2  # The seed child, burst children, and enclosing Agent.
+        with _AtofCapture(block_first_response=True) as tiny, _AtofCapture() as healthy:
+            endpoints = [capture.url for capture in (tiny, healthy)]
+            config = plugin.PluginConfig(
+                components=[
+                    ComponentSpec(
+                        ObservabilityConfig(
+                            opentelemetry=OpenTelemetrySectionConfig(
+                                enabled=True,
+                                endpoints=[
+                                    OpenTelemetryEndpointConfig(
+                                        "full",
+                                        endpoint,
+                                        max_queue_size=capacity,
+                                        max_export_batch_size=1,
+                                        scheduled_delay_millis=60_000,
+                                        timeout_millis=30_000,
+                                    )
+                                    for endpoint, capacity in zip(endpoints, (1, projected_spans), strict=True)
+                                ],
+                            )
+                        )
+                    )
+                ]
+            )
+            activation = await plugin.initialize(config)
+            try:
+                with scope.scope("overflow-agent", ScopeType.Agent):
+                    with scope.scope("overflow-seed", ScopeType.Function):
+                        pass
+                    tiny.wait_for_requests(1)
+                    for index in range(burst_size):
+                        with scope.scope(f"overflow-child-{index}", ScopeType.Function):
+                            pass
+                # Drain event delivery while the first export still holds the tiny queue.
+                await subscribers.flush_async()
+                tiny.release_first_response()
+                with pytest.raises(RuntimeError, match=r"otel\.spans_dropped"):
+                    await activation.close()
+
+                assert not activation.is_active
+                retained = activation.report["config"]["runtime_diagnostics"]
+                drops = [diagnostic for diagnostic in retained if diagnostic["code"] == "otel.spans_dropped"]
+                assert retained == drops
+                assert len(drops) == 1
+                assert drops[0]["field"] == "opentelemetry.traces[0].endpoint"
+                assert endpoints[0] in drops[0]["message"]
+                assert drops[0]["count"] > 0
+
+                for capture, dropped in zip((tiny, healthy), (drops[0]["count"], 0), strict=True):
+                    delivered = sum(
+                        len(scope_spans.spans)
+                        for _, body in capture.server.requests
+                        for resource_spans in ExportTraceServiceRequest.FromString(body).resource_spans
+                        for scope_spans in resource_spans.scope_spans
+                    )
+                    assert delivered > 0
+                    assert delivered + dropped == projected_spans
+
+                assert activation.report["config"]["runtime_diagnostics"] == retained
+                assert activation.report["config"]["runtime_diagnostics"] == retained
+                with pytest.raises(RuntimeError, match=r"otel\.spans_dropped"):
+                    await activation.close()
+                assert activation.report["config"]["runtime_diagnostics"] == retained
+
+                replacement = await plugin.initialize(plugin.PluginConfig(components=[]))
+                await replacement.close()
+            finally:
+                tiny.release_first_response()
+                if activation.is_active:
+                    await activation.close()
+
     def test_opentelemetry_endpoint_preserves_existing_positional_arguments(self) -> None:
         endpoint = OpenTelemetryEndpointConfig(
             "full",
@@ -240,6 +328,43 @@ class TestObservabilityConfigHelpers:
         assert section["logs"] == logs.to_dict()
         assert section["metrics"] == metrics.to_dict()
         assert typing.cast(dict[str, object], section["metrics"])["endpoints"] == [endpoint.to_dict()]
+
+    @pytest.mark.parametrize("signal", ["logs", "metrics"])
+    @pytest.mark.parametrize("prefixes", [None, [], ["deployment.", "nv.client."], ["nv.*"]])
+    def test_signal_resource_promotion_serialization_and_validation(
+        self, signal: str, prefixes: list[str] | None
+    ) -> None:
+        endpoint = OpenTelemetrySignalEndpointConfig(f"http://localhost:4318/v1/{signal}")
+        if prefixes is not None:
+            endpoint = OpenTelemetrySignalEndpointConfig(endpoint.endpoint, promote_resource_metadata_prefixes=prefixes)
+        serialized = endpoint.to_dict()
+        if prefixes:
+            assert serialized["promote_resource_metadata_prefixes"] == prefixes
+        else:
+            assert "promote_resource_metadata_prefixes" not in serialized
+
+        section = OpenTelemetrySectionConfig(enabled=True)
+        if signal == "logs":
+            section.logs = OpenTelemetryLogSectionConfig(enabled=True, endpoints=[endpoint])
+        else:
+            section.metrics = OpenTelemetryMetricSectionConfig(enabled=True, endpoints=[endpoint])
+        report = validate_plugin_config(
+            plugin.PluginConfig(
+                components=[
+                    ComponentSpec(
+                        ObservabilityConfig(opentelemetry=section, policy=ConfigPolicy(unknown_field="error"))
+                    )
+                ]
+            )
+        )
+        if prefixes == ["nv.*"]:
+            assert any(
+                diagnostic.get("component") == f"opentelemetry.{signal}"
+                and diagnostic.get("field") == "endpoints[0].promote_resource_metadata_prefixes"
+                for diagnostic in report["diagnostics"]
+            )
+        else:
+            assert report["diagnostics"] == []
 
     def test_validation_rejects_bad_values(self) -> None:
         report = validate_plugin_config(

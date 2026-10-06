@@ -486,7 +486,7 @@ fn test_open_telemetry_config_and_subscriber_cover_lifecycle() {
         );
 
         let config = pyo3::Py::new(py, config).unwrap();
-        let subscriber = PyOpenTelemetrySubscriber::new(config.bind(py).borrow()).unwrap();
+        let subscriber = PyOpenTelemetrySubscriber::new(config.bind(py).as_any()).unwrap();
         let subscriber_name = format!("py_otel_{}", Uuid::now_v7().simple());
         subscriber.register(subscriber_name.clone()).unwrap();
         assert!(subscriber.deregister(subscriber_name.clone()).unwrap());
@@ -494,6 +494,99 @@ fn test_open_telemetry_config_and_subscriber_cover_lifecycle() {
         subscriber.force_flush(py).unwrap();
         subscriber.shutdown(py).unwrap();
         assert_eq!(subscriber.__repr__(), "<OpenTelemetrySubscriber>");
+    });
+}
+
+#[test]
+fn test_open_telemetry_file_sink_config_writes_a_trace_file() {
+    let _python = crate::test_support::init_python_test();
+    let directory = tempfile::tempdir().unwrap();
+    Python::attach(|py| {
+        let config = PyOtlpFileSink::new(
+            "full".into(),
+            directory.path().display().to_string(),
+            Some("py-trace.jsonl".into()),
+            "json_lines".into(),
+            "overwrite".into(),
+        );
+        let config = pyo3::Py::new(py, config).unwrap();
+        let subscriber = PyOpenTelemetrySubscriber::new(config.bind(py).as_any()).unwrap();
+        assert!(directory.path().join("py-trace.jsonl").is_file());
+        subscriber.shutdown(py).unwrap();
+    });
+}
+
+#[test]
+fn test_open_telemetry_file_sink_defaults_name_the_file_after_the_format() {
+    let _python = crate::test_support::init_python_test();
+    let directory = tempfile::tempdir().unwrap();
+    Python::attach(|py| {
+        let config = PyOtlpFileSink::new(
+            "full".into(),
+            directory.path().display().to_string(),
+            None,
+            "proto".into(),
+            "overwrite".into(),
+        );
+        let config = pyo3::Py::new(py, config).unwrap();
+        let subscriber = PyOpenTelemetrySubscriber::new(config.bind(py).as_any()).unwrap();
+        assert!(
+            std::fs::read_dir(directory.path())
+                .expect("output directory should exist")
+                .filter_map(|entry| entry.ok())
+                .any(|entry| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    name.starts_with("nemo-relay-otlp-") && name.ends_with("otlp.pb")
+                })
+        );
+        subscriber.shutdown(py).unwrap();
+    });
+}
+
+#[test]
+fn test_open_telemetry_file_sink_rejects_invalid_inputs() {
+    let _python = crate::test_support::init_python_test();
+    let directory = tempfile::tempdir().unwrap();
+    Python::attach(|py| {
+        for (filename, format, mode, expected) in [
+            (None, "yaml", "overwrite", "format must be"),
+            (None, "proto", "truncate", "mode must be"),
+            (
+                Some("../escape.jsonl"),
+                "proto",
+                "append",
+                "single path component",
+            ),
+        ] {
+            let config = PyOtlpFileSink::new(
+                "full".into(),
+                directory.path().display().to_string(),
+                filename.map(str::to_string),
+                format.into(),
+                mode.into(),
+            );
+            let config = pyo3::Py::new(py, config).unwrap();
+            let Err(error) = PyOpenTelemetrySubscriber::new(config.bind(py).as_any()) else {
+                panic!("expected {expected:?} to be rejected");
+            };
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected:?}, got {error}"
+            );
+        }
+
+        let config = PyOtlpFileSink::new(
+            "full".into(),
+            String::new(),
+            None,
+            "json_lines".into(),
+            "overwrite".into(),
+        );
+        let config = pyo3::Py::new(py, config).unwrap();
+        let Err(error) = PyOpenTelemetrySubscriber::new(config.bind(py).as_any()) else {
+            panic!("a blank output_directory must be rejected");
+        };
+        assert!(error.to_string().contains("output_directory"));
     });
 }
 
@@ -552,7 +645,7 @@ fn test_openinference_typed_otel_config_and_subscriber_cover_lifecycle() {
         );
 
         let config = pyo3::Py::new(py, config).unwrap();
-        let subscriber = PyOpenTelemetrySubscriber::new(config.bind(py).borrow()).unwrap();
+        let subscriber = PyOpenTelemetrySubscriber::new(config.bind(py).as_any()).unwrap();
         let subscriber_name = format!("py_openinference_{}", Uuid::now_v7().simple());
         subscriber.register(subscriber_name.clone()).unwrap();
         assert!(subscriber.deregister(subscriber_name.clone()).unwrap());
@@ -736,6 +829,7 @@ fn test_event_wrappers_cover_remaining_methods() {
                     total_tokens: Some(3),
                     cache_read_tokens: None,
                     cache_write_tokens: None,
+                    uncached_input_tokens: None,
                     cost: None,
                 }),
                 api_specific: Some(ApiSpecificResponse::Custom {
@@ -1717,6 +1811,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
                         total_tokens: Some(5),
                         cache_read_tokens: Some(1),
                         cache_write_tokens: None,
+                        uncached_input_tokens: None,
                         cost: Some(CostEstimate {
                             total: Some(0.000_001),
                             currency: "USD".into(),
@@ -2031,6 +2126,7 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     total_tokens: Some(5),
                     cache_read_tokens: Some(1),
                     cache_write_tokens: None,
+                    uncached_input_tokens: None,
                     cost: None,
                 }),
                 api_specific: Some(ApiSpecificResponse::Custom {

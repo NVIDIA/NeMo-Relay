@@ -31,6 +31,19 @@ use crate::plugins::policy::{
 };
 
 #[test]
+fn response_deadlines_default_to_disabled_and_can_be_reset_to_zero() {
+    let mut gateway = GatewayConfig::default();
+    assert_eq!(gateway.response_timeout(), None);
+    for (value, expected) in [(90, Some(Duration::from_secs(90))), (0, None)] {
+        let config: FileConfig =
+            toml::from_str(&format!("[upstream]\nresponse_timeout_secs = {value}\n")).unwrap();
+        apply_file_upstream_config(&mut gateway, config.upstream).unwrap();
+        assert_eq!(gateway.response_timeout(), expected);
+    }
+    assert!(toml::from_str::<FileConfig>("[upstream]\nresponse_timeout_secs = -1\n").is_err());
+}
+
+#[test]
 fn transparent_gateway_fingerprints_are_stable_and_url_scoped() {
     let first = transparent_gateway_fingerprint("http://127.0.0.1:47632");
     assert_eq!(
@@ -392,6 +405,7 @@ max_passthrough_body_bytes = 5678
 
 [upstream]
 openai_base_url = "https://admin.example/openai"
+response_timeout_secs = 180
 openai_auth_header = "Bearer admin-file-openai"
 anthropic_base_url = "https://admin.example/anthropic"
 anthropic_auth_header = "Basic admin-file-anthropic"
@@ -459,6 +473,10 @@ anthropic_auth_header = "Basic admin-file-anthropic"
     );
     assert_eq!(managed.resolved.gateway.max_hook_payload_bytes, 1234);
     assert_eq!(managed.resolved.gateway.max_passthrough_body_bytes, 5678);
+    assert_eq!(
+        managed.resolved.gateway.response_timeout(),
+        Some(Duration::from_secs(180))
+    );
     assert_eq!(
         managed.resolved.gateway.plugin_config,
         Some(json!({ "components": [], "version": 1 }))
@@ -589,6 +607,7 @@ manifest = "plugins/acme/relay-plugin.toml"
 
 fn config() -> GatewayConfig {
     GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -597,6 +616,7 @@ fn config() -> GatewayConfig {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     }
 }
@@ -837,22 +857,6 @@ fn write_dynamic_plugin_state(plugins_toml_path: &std::path::Path, plugin_id: &s
     .unwrap();
 }
 
-fn read_dynamic_plugin_state(
-    plugins_toml_path: &std::path::Path,
-) -> nemo_relay::plugin::dynamic::DynamicPluginRecord {
-    let persisted: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(
-            plugins_toml_path
-                .parent()
-                .unwrap()
-                .join(".dynamic-plugins.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    serde_json::from_value(persisted["records"][0].clone()).unwrap()
-}
-
 #[test]
 fn session_config_prefers_headers_and_parses_json() {
     let mut headers = HeaderMap::new();
@@ -928,6 +932,7 @@ fn explicit_toml_config_maps_supported_sections() {
         r#"
 [upstream]
 openai_base_url = "http://openai"
+response_timeout_secs = 120
 openai_auth_header = "Bearer openai-file"
 anthropic_base_url = "http://anthropic"
 anthropic_auth_header = "Basic anthropic-file"
@@ -961,6 +966,10 @@ command = "codex --approval-mode never"
 
     assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
     assert_eq!(resolved.gateway.openai_base_url, "http://openai");
+    assert_eq!(
+        resolved.gateway.response_timeout(),
+        Some(Duration::from_secs(120))
+    );
     assert_eq!(
         resolved.gateway.openai_auth_header.as_deref(),
         Some("Bearer openai-file")
@@ -2806,6 +2815,234 @@ fn bootstrap_hmac_state_reports_invalid_path_and_existing_key_shapes() {
     );
 }
 
+#[test]
+fn python_environment_attestation_key_is_atomically_published_for_concurrent_users() {
+    let environment = tempfile::tempdir().unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let writers = (0..8)
+        .map(|_| {
+            let environment = environment.path().to_path_buf();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                load_or_create_python_environment_hmac_key(&environment).unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    let keys = writers
+        .into_iter()
+        .map(|writer| writer.join().unwrap())
+        .collect::<Vec<_>>();
+    assert!(keys.iter().all(|key| key == &keys[0]));
+
+    let key_path = environment.path().join(".nemo-relay-environment.key");
+    assert_eq!(std::fs::read(&key_path).unwrap().as_slice(), &keys[0]);
+    assert_eq!(
+        std::fs::read_dir(environment.path()).unwrap().count(),
+        1,
+        "temporary attestation key files should be removed after publication"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(key_path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+}
+
+#[test]
+fn python_environment_attestation_verification_is_key_scoped_and_rejects_malformed_input() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_environment = temp.path().join("first-environment");
+    let second_environment = temp.path().join("second-environment");
+    std::fs::create_dir_all(&first_environment).unwrap();
+    std::fs::create_dir_all(&second_environment).unwrap();
+    let source_digest = "sha256:source-artifact";
+    let environment_digest = "sha256:environment-tree";
+    let authentication = sign_python_environment_attestation_for_environment(
+        &first_environment,
+        source_digest,
+        environment_digest,
+    )
+    .unwrap();
+
+    assert!(
+        verify_python_environment_attestation_for_environment(
+            &first_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap()
+    );
+
+    let mut tampered = authentication.clone().into_bytes();
+    let tag_byte = tampered
+        .get_mut("hmac-sha256:".len())
+        .expect("authentication tag byte");
+    *tag_byte = if *tag_byte == b'0' { b'1' } else { b'0' };
+    let tampered = String::from_utf8(tampered).unwrap();
+    assert!(
+        !verify_python_environment_attestation_for_environment(
+            &first_environment,
+            source_digest,
+            environment_digest,
+            &tampered,
+        )
+        .unwrap()
+    );
+
+    ensure_python_environment_attestation_key(&second_environment).unwrap();
+    assert!(
+        !verify_python_environment_attestation_for_environment(
+            &second_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap()
+    );
+
+    for malformed in [
+        "missing-prefix",
+        "hmac-sha256:short",
+        "hmac-sha256:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    ] {
+        assert!(
+            !verify_python_environment_attestation_for_environment(
+                &first_environment,
+                source_digest,
+                environment_digest,
+                malformed,
+            )
+            .unwrap()
+        );
+    }
+
+    let corrupt_environment = temp.path().join("corrupt-environment");
+    std::fs::create_dir_all(&corrupt_environment).unwrap();
+    std::fs::write(
+        corrupt_environment.join(".nemo-relay-environment.key"),
+        b"short",
+    )
+    .unwrap();
+    let error = load_or_create_python_environment_hmac_key(&corrupt_environment).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Python environment attestation key"),
+        "{error}"
+    );
+}
+
+#[test]
+fn python_environment_attestation_without_environment_key_authenticates_legacy_signatures() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let legacy_environment = temp.path().join("legacy-environment");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&legacy_environment).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let source_digest = "sha256:source-artifact";
+    let environment_digest = "sha256:environment-tree";
+    let legacy_key = BootstrapChallengeKey::load().unwrap();
+    let message = python_environment_attestation_message(source_digest, environment_digest);
+    let authentication = encode_hmac_tag(ring::hmac::sign(&legacy_key.0, &message));
+    assert!(
+        verify_python_environment_attestation(source_digest, environment_digest, &authentication)
+            .unwrap()
+    );
+
+    assert!(
+        verify_python_environment_attestation_for_environment(
+            &legacy_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap()
+    );
+    for (source, environment, authentication) in [
+        (
+            "sha256:changed-source",
+            environment_digest,
+            authentication.clone(),
+        ),
+        (
+            source_digest,
+            "sha256:changed-environment",
+            authentication.clone(),
+        ),
+        (
+            source_digest,
+            environment_digest,
+            format!("hmac-sha256:{}", "00".repeat(32)),
+        ),
+    ] {
+        assert!(
+            !verify_python_environment_attestation_for_environment(
+                &legacy_environment,
+                source,
+                environment,
+                &authentication,
+            )
+            .unwrap(),
+            "legacy attestations must authenticate both digests"
+        );
+    }
+    std::fs::write(
+        bootstrap_hmac_key_path().unwrap(),
+        [42_u8; BOOTSTRAP_HMAC_KEY_BYTES],
+    )
+    .unwrap();
+    assert!(
+        !verify_python_environment_attestation_for_environment(
+            &legacy_environment,
+            source_digest,
+            environment_digest,
+            &authentication,
+        )
+        .unwrap(),
+        "a different bootstrap key must not authenticate the legacy attestation"
+    );
+    assert!(
+        !legacy_environment
+            .join(".nemo-relay-environment.key")
+            .exists(),
+        "legacy verification should not create an environment key"
+    );
+}
+
+#[test]
+fn python_environment_attestation_without_any_key_rejects_forgery_without_creating_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let environment = temp.path().join("environment");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&environment).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let key_path = bootstrap_hmac_key_path().unwrap();
+    assert!(
+        !verify_python_environment_attestation_for_environment(
+            &environment,
+            "sha256:source-artifact",
+            "sha256:changed-environment",
+            &format!("hmac-sha256:{}", "00".repeat(32)),
+        )
+        .unwrap()
+    );
+    assert!(
+        !key_path.exists(),
+        "verification must not create a bootstrap key"
+    );
+    assert!(
+        !environment.join(".nemo-relay-environment.key").exists(),
+        "verification must not create an environment key"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn bounded_identity_reader_reports_missing_unreadable_and_invalid_utf8_inputs() {
@@ -2894,7 +3131,7 @@ fn persistent_server_resolution_excludes_project_config_and_fingerprints_credent
 }
 
 #[test]
-fn persistent_fingerprint_tracks_provider_auth_headers() {
+fn persistent_fingerprint_tracks_provider_auth_headers_and_response_timeout() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let xdg = temp.path().join("xdg");
@@ -2934,6 +3171,16 @@ fn persistent_fingerprint_tracks_provider_auth_headers() {
 
     assert_ne!(first, openai_changed);
     assert_ne!(openai_changed, anthropic_changed);
+    std::fs::write(
+        &config_path,
+        "[upstream]\nopenai_auth_header = \"Bearer two\"\nanthropic_auth_header = \"Basic two\"\nresponse_timeout_secs = 90\n",
+    )
+    .unwrap();
+    let timeout_changed = resolve_persistent_server_config(&GatewayOverrides::default())
+        .unwrap()
+        .bootstrap_fingerprint
+        .unwrap();
+    assert_ne!(anthropic_changed, timeout_changed);
 }
 
 #[test]
@@ -3526,6 +3773,11 @@ startup = "required"
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3538,32 +3790,7 @@ startup = "required"
     assert!(error.contains("acme.worker"));
     assert!(error.contains("integrity verification"));
 
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.integrity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::IntegrityOnly)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("integrity verification")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -3595,6 +3822,11 @@ attestation = "signature_required"
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3607,32 +3839,7 @@ attestation = "signature_required"
     assert!(error.contains("acme.worker"));
     assert!(error.contains("no trusted_public_keys"));
 
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.authenticity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::SignatureRequired)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("no trusted_public_keys")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -3668,6 +3875,11 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_truste
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3680,32 +3892,7 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_truste
     assert!(error.contains("acme.worker"));
     assert!(error.contains("failed signature verification"));
 
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.authenticity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::SignatureRequired)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("failed signature verification")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -3741,6 +3928,11 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_malformed_si
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let state_path = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     let args = GatewayOverrides {
         config: Some(config_path),
@@ -3752,33 +3944,7 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_malformed_si
     assert!(error.contains("required dynamic plugin startup preflight failed"));
     assert!(error.contains("acme.worker"));
     assert!(error.contains("invalid base64 signature"));
-
-    let record = read_dynamic_plugin_state(&plugins_toml_path);
-    assert_eq!(
-        record.status.validation.authenticity,
-        DynamicPluginCheckState::Invalid
-    );
-    assert_eq!(
-        record.status.validation.policy_satisfied,
-        DynamicPluginCheckState::Valid
-    );
-    assert_eq!(
-        record.status.startup_class,
-        Some(DynamicPluginStartupClass::Required)
-    );
-    assert_eq!(
-        record.status.attestation_mode,
-        Some(DynamicPluginAttestationMode::SignatureIfPresent)
-    );
-    assert!(
-        record
-            .status
-            .last_error
-            .as_ref()
-            .unwrap()
-            .message
-            .contains("invalid base64 signature")
-    );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]

@@ -220,6 +220,11 @@ typedef struct FfiPluginContext FfiPluginContext;
 typedef struct FfiPluginHostActivation FfiPluginHostActivation;
 
 /**
+ * Opaque handle for an asynchronous resource metrics collection.
+ */
+typedef struct FfiResourceMetricsCollection FfiResourceMetricsCollection;
+
+/**
  * Opaque handle representing an active execution scope.
  */
 typedef struct FfiScopeHandle FfiScopeHandle;
@@ -299,8 +304,9 @@ typedef char *(*NemoRelayCodecEncodeFn)(void *user_data,
                                         const struct FfiLLMRequest *original_request);
 
 /**
- * Codec identity supplied to an LLM sanitizer. `codec_id` is null for
- * `None` and `Opaque`, and is valid only for the duration of the callback.
+ * Request codec context shared by LLM sanitizer and execution callbacks.
+ * `codec_id` is null for `None` and `Opaque`, and is valid only for the
+ * duration of the callback.
  */
 typedef struct NemoRelayLlmSanitizeRequestContext {
   /**
@@ -328,7 +334,7 @@ typedef struct FfiLLMRequest *(*NemoRelayLlmSanitizeRequestCb)(void *user_data,
                                                                struct NemoRelayLlmSanitizeRequestContext context);
 
 /**
- * Directional codec context supplied to an LLM response sanitizer.
+ * Response codec context shared by LLM sanitizer and execution callbacks.
  */
 typedef struct NemoRelayLlmSanitizeResponseContext {
   /**
@@ -382,6 +388,35 @@ typedef NemoRelayStatus (*NemoRelayLlmRequestInterceptCb)(void *user_data,
                                                           char **out_outcome_json);
 
 /**
+ * Request codec context exposed to an LLM execution intercept.
+ */
+typedef struct NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
+
+/**
+ * Response codec context exposed to an LLM execution intercept.
+ */
+typedef struct NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
+
+/**
+ * Directional codec context supplied to an LLM execution intercept.
+ *
+ * `request_codec` is always present. `response_codec` is non-null for unary
+ * execution and null for streaming execution, where Relay has no completed
+ * response to decode. Pointers reachable from this value are borrowed and
+ * valid only until the intercept callback returns.
+ */
+typedef struct NemoRelayLlmExecutionContext {
+  /**
+   * Active request codec identity and capability.
+   */
+  NemoRelayLlmRequestContext request_codec;
+  /**
+   * Active unary-response codec context, or null for streaming execution.
+   */
+  const NemoRelayLlmResponseContext *response_codec;
+} NemoRelayLlmExecutionContext;
+
+/**
  * Runtime-provided "next" callback for LLM execution middleware chain.
  * Takes a native JSON C string, returns a response JSON C string.
  * `next_ctx` is borrowed and valid only until the intercept callback returns;
@@ -393,10 +428,13 @@ typedef char *(*NemoRelayLlmExecNextFn)(const char *native_json, void *next_ctx)
 
 /**
  * Callback for LLM execution intercepts with middleware chain support.
- * Receives native JSON C string plus a `next` callback and its context.
+ * Receives the managed LLM call name, native JSON C string, execution context,
+ * plus a `next` callback and its context.
  */
 typedef char *(*NemoRelayLlmExecInterceptCb)(void *user_data,
+                                             const char *name,
                                              const char *native_json,
+                                             struct NemoRelayLlmExecutionContext context,
                                              NemoRelayLlmExecNextFn next_fn,
                                              void *next_ctx);
 
@@ -644,6 +682,43 @@ typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
  * Read `f64_value`.
  */
 #define NEMO_RELAY_METRIC_VALUE_TYPE_F64 3
+
+/**
+ * Start an asynchronous resource metrics collection using the active plugin.
+ *
+ * Poll the returned handle with `nemo_relay_resource_metrics_collect_poll`.
+ * Release it with `nemo_relay_resource_metrics_collect_free`, including when
+ * abandoning a pending collection.
+ *
+ * # Safety
+ * `out_collection` must point to writable pointer storage.
+ */
+NemoRelayStatus nemo_relay_resource_metrics_collect_start(struct FfiResourceMetricsCollection **out_collection);
+
+/**
+ * Check a collection without blocking. `out_done` is false while pending.
+ *
+ * Once done, this function returns the collection status and, on success, a
+ * canonical JSON string owned by the caller. Free the string with
+ * `nemo_relay_string_free`. A completed result can be retrieved only once.
+ *
+ * # Safety
+ * The collection must be live. Both output pointers must be writable.
+ * Do not free the handle while another thread is polling it.
+ */
+NemoRelayStatus nemo_relay_resource_metrics_collect_poll(struct FfiResourceMetricsCollection *collection,
+                                                         bool *out_done,
+                                                         char **out_json);
+
+/**
+ * Release a collection handle and cancel its pending wait.
+ *
+ * An OS query already running on a worker may finish after this call returns.
+ *
+ * # Safety
+ * `collection` must be null or a live handle, freed exactly once and not in use.
+ */
+void nemo_relay_resource_metrics_collect_free(struct FfiResourceMetricsCollection *collection);
 
 /**
  * Initializes the Go binding runtime and installs default operational logging.
@@ -1480,14 +1555,15 @@ NemoRelayStatus nemo_relay_deregister_llm_request_intercept(const char *name);
 
 /**
  * Register an LLM execution intercept following the middleware chain pattern.
- * The callback receives `(request, next_fn, next_ctx)` — call
+ * The callback receives `(name, request, context, next_fn, next_ctx)` — call
  * `next_fn(request, next_ctx)` to invoke the next intercept or the original
  * LLM call, or skip calling it to short-circuit.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, codec
+ *   context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -1510,14 +1586,17 @@ NemoRelayStatus nemo_relay_deregister_llm_execution_intercept(const char *name);
 
 /**
  * Register an LLM streaming execution intercept following the middleware chain
- * pattern. The callback receives `(request, next_fn, next_ctx)` — call
+ * pattern. The callback receives
+ * `(name, request, context, next_fn, next_ctx)` — call
  * `next_fn(request, next_ctx)` to invoke the next intercept or the original
- * streaming LLM call, or skip calling it to short-circuit.
+ * streaming LLM call, or skip calling it to short-circuit. The response codec
+ * in `context` is null because chunks are not complete provider responses.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, request
+ *   codec context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -1770,6 +1849,43 @@ NemoRelayStatus nemo_relay_otel_subscriber_create(const char *otel_type,
                                                   struct FfiOpenTelemetrySubscriber **out);
 
 /**
+ * Creates one typed OpenTelemetry exporter subscriber that writes OTLP to a file.
+ *
+ * `otel_type` must be `full`, `gen_ai`, or `openinference`. `output_directory` is
+ * required. `filename` may be null to use a default name for the format.
+ * `format` is `json_lines` (the OpenTelemetry file-exporter specification's
+ * serialization, and the default when null) or `proto`. `mode` is `overwrite`
+ * (the default when null) or `append`.
+ *
+ * The projection controls match the endpoint entrypoints: `mark_projection` is
+ * `inherit`, `event`, or `tool`; `mark_exclude_names_json`,
+ * `promote_metadata_prefixes_json`, and `promote_resource_metadata_prefixes_json`
+ * are JSON arrays of strings; `attribute_mappings_json` is a JSON array of
+ * `{"key","alias"}` objects; and `completed_span_context_ttl_millis` must be
+ * greater than zero. A null JSON pointer takes the core default.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_file_sink(const char *otel_type,
+                                                            const char *output_directory,
+                                                            const char *filename,
+                                                            const char *format,
+                                                            const char *mode,
+                                                            const char *resource_attributes_json,
+                                                            const char *service_name,
+                                                            const char *service_namespace,
+                                                            const char *service_version,
+                                                            const char *instrumentation_scope,
+                                                            const char *mark_projection,
+                                                            const char *mark_exclude_names_json,
+                                                            const char *attribute_mappings_json,
+                                                            const char *promote_metadata_prefixes_json,
+                                                            const char *promote_resource_metadata_prefixes_json,
+                                                            uint64_t completed_span_context_ttl_millis,
+                                                            struct FfiOpenTelemetrySubscriber **out);
+
+/**
  * Creates one typed OpenTelemetry exporter subscriber with projection controls.
  *
  * The JSON arrays use `mark_exclude_names: ["llm.chunk"]` and
@@ -1795,11 +1911,42 @@ NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options(const 
                                                                           struct FfiOpenTelemetrySubscriber **out);
 
 /**
+ * Creates one typed OpenTelemetry exporter subscriber with projection, metadata,
+ * resource-promotion, and lineage controls.
+ *
+ * `promote_metadata_prefixes_json` and `promote_resource_metadata_prefixes_json`
+ * are JSON arrays of literal metadata prefixes, such as `["nv."]`. Pass null to
+ * disable that promotion. `completed_span_context_ttl_millis` must be greater
+ * than zero.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options_v5(const char *otel_type,
+                                                                             const char *transport,
+                                                                             const char *endpoint,
+                                                                             const char *headers_json,
+                                                                             const char *header_env_json,
+                                                                             const char *resource_attributes_json,
+                                                                             const char *service_name,
+                                                                             const char *service_namespace,
+                                                                             const char *service_version,
+                                                                             const char *instrumentation_scope,
+                                                                             uint64_t timeout_millis,
+                                                                             const char *mark_projection,
+                                                                             const char *mark_exclude_names_json,
+                                                                             const char *attribute_mappings_json,
+                                                                             const char *promote_metadata_prefixes_json,
+                                                                             const char *promote_resource_metadata_prefixes_json,
+                                                                             uint64_t completed_span_context_ttl_millis,
+                                                                             struct FfiOpenTelemetrySubscriber **out);
+
+/**
  * Creates one typed OpenTelemetry exporter subscriber with projection and metadata controls.
  *
- * `promote_metadata_prefixes_json` is a JSON array of literal metadata prefixes,
- * such as `["nv."]`. Pass null to disable metadata promotion.
- * `completed_span_context_ttl_millis` must be greater than zero.
+ * This compatibility entrypoint promotes no resource metadata. Use
+ * `nemo_relay_otel_subscriber_create_with_projection_options_v5` for
+ * `promote_resource_metadata_prefixes`.
  *
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.
@@ -2863,13 +3010,15 @@ NemoRelayStatus nemo_relay_scope_deregister_llm_request_intercept(const char *sc
 
 /**
  * Register a scope-local LLM execution intercept following the middleware
- * chain pattern.
+ * chain pattern. The callback receives
+ * `(name, request, context, next_fn, next_ctx)`.
  *
  * # Parameters
  * - `scope_uuid`: UUID of the target scope (null-terminated C string).
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, codec
+ *   context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -2894,13 +3043,16 @@ NemoRelayStatus nemo_relay_scope_deregister_llm_execution_intercept(const char *
 
 /**
  * Register a scope-local LLM streaming execution intercept following the
- * middleware chain pattern.
+ * middleware chain pattern. The callback receives
+ * `(name, request, context, next_fn, next_ctx)`. The response codec in
+ * `context` is null.
  *
  * # Parameters
  * - `scope_uuid`: UUID of the target scope (null-terminated C string).
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, request
+ *   codec context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *

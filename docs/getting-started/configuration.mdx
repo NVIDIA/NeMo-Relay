@@ -14,27 +14,35 @@ operational logging also supports environment variables and TOML configuration.
 
 ## Core Runtime Setup
 
-Most applications configure NeMo Relay by:
+Most applications follow these steps to configure NeMo Relay:
 
-1. Creating or reusing a scope stack.
-2. Registering guardrails, intercepts, or subscribers.
-3. Calling the managed tool or LLM helpers from the active scope.
-4. Deregistering global middleware that should not remain active for the lifetime of the process.
+1. Create or reuse a scope stack.
+2. Register guardrails, intercepts, or subscribers.
+3. Call the managed tool or LLM helpers from the active scope.
+4. Deregister global middleware that should not remain active for the lifetime
+   of the process.
 
-Use scope-local registration when behavior must be tied to one request, session, or agent run.
+Use scope-local registration when behavior must be tied to one request, session,
+or agent run.
 
 For process-wide stderr and file logging, refer to
 [Operational Logging](/reference/operational-logging).
 
+Configure resource metrics through the built-in `resource_metrics` plugin in
+`plugins.toml` or a plugin configuration object. Refer to
+[Resource Metrics](/configure-plugins/resource-metrics) for category options,
+units, polling marks, and on-demand snapshots.
+
 ## Plugin Setup
 
-Plugins use a structured plugin configuration with:
+A plugin configuration has these parts:
 
 - A version
 - One or more component definitions
 - Optional component policy
 
-Start with [Language Binding Plugins](/build-plugins/language-binding/about) when you need reusable middleware, subscribers, or adaptive behavior.
+Start with [Language Binding Plugins](/build-plugins/language-binding/about)
+when you need reusable middleware, subscribers, or adaptive behavior.
 
 Use [NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration)
 only to maintain or remove an existing NeMo Relay 0.8 `nemo_guardrails`
@@ -70,4 +78,5 @@ deployment manifests.
 
 ## Adaptive Setup
 
-Adaptive tuning is enabled through the adaptive plugin component and binding helper APIs. Refer to [Adaptive Configuration](/configure-plugins/adaptive/configuration).
+Enable adaptive tuning through the adaptive plugin component and binding helper
+APIs. Refer to [Adaptive Configuration](/configure-plugins/adaptive/configuration).

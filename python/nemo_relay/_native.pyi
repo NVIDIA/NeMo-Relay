@@ -63,6 +63,7 @@ def list_runtime_registrations(kinds: set[str] | None = None) -> list[_RuntimeRe
 
 def _shutdown_default_logging() -> None: ...
 def log(level: str, message: str, target: str = "", fields: _JsonObject | None = None) -> None: ...
+def _collect_resource_metrics() -> Awaitable[_JsonObject]: ...
 
 class _EventSanitizeFields(TypedDict):
     data: _Json | None
@@ -105,11 +106,16 @@ _LlmRequestIntercept: TypeAlias = Callable[
     "LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome]",
 ]
 _LlmExecutionIntercept: TypeAlias = Callable[
-    [str, "LLMRequest", Callable[["LLMRequest"], Awaitable[_Json]]],
+    [str, "LLMRequest", "LlmExecutionContext", Callable[["LLMRequest"], Awaitable[_Json]]],
     _Json | Awaitable[_Json],
 ]
 _LlmStreamExecutionIntercept: TypeAlias = Callable[
-    ["LLMRequest", Callable[["LLMRequest"], Awaitable[AsyncIterator[_Json]]]],
+    [
+        str,
+        "LLMRequest",
+        "LlmExecutionContext",
+        Callable[["LLMRequest"], Awaitable[AsyncIterator[_Json]]],
+    ],
     AsyncIterator[_Json] | Awaitable[AsyncIterator[_Json]],
 ]
 
@@ -122,18 +128,29 @@ class LlmCodecIdentity:
     def id(self) -> str | None: ...
 
 class LlmSanitizeRequestContext:
-    """Per-call context passed to an LLM request sanitizer callback."""
+    """Request codec context shared by sanitizer and execution callbacks."""
 
     @property
     def codec(self) -> LlmCodecIdentity: ...
     def resolve_codec(self) -> LlmSanitizeRequestCodec | None: ...
 
 class LlmSanitizeResponseContext:
-    """Per-call context passed to an LLM response sanitizer callback."""
+    """Response codec context shared by sanitizer and execution callbacks."""
 
     @property
     def codec(self) -> LlmCodecIdentity: ...
     def resolve_codec(self) -> LlmSanitizeResponseCodec | None: ...
+
+LlmRequestContext: TypeAlias = LlmSanitizeRequestContext
+LlmResponseContext: TypeAlias = LlmSanitizeResponseContext
+
+class LlmExecutionContext:
+    """Codec capabilities for one managed LLM execution intercept invocation."""
+
+    @property
+    def request_codec(self) -> LlmRequestContext: ...
+    @property
+    def response_codec(self) -> LlmResponseContext | None: ...
 
 class LlmSanitizeRequestCodec:
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...
@@ -1219,6 +1236,53 @@ class OpenTelemetryConfig:
         ...
     def set_resource_attribute(self, key: str, value: str) -> None:
         """Set one OpenTelemetry resource attribute key/value pair."""
+        ...
+
+class OpenTelemetryFileSinkConfig:
+    """Configuration for a subscriber that writes OTLP to a local file.
+
+    Description:
+        Carries no endpoint, transport, headers, or timeout: a file
+        destination has no use for them. ``json_lines`` is the OpenTelemetry
+        file-exporter specification's serialization; ``proto`` writes each
+        record length-delimited.
+    """
+
+    type: Literal["full", "gen_ai", "openinference"]
+    output_directory: str
+    filename: Optional[str]
+    format: Literal["json_lines", "proto"]
+    mode: Literal["append", "overwrite"]
+    service_name: str
+    service_namespace: Optional[str]
+    service_version: Optional[str]
+    instrumentation_scope: str
+    completed_span_context_ttl_millis: int
+    mark_projection: Literal["inherit", "event", "tool"]
+    mark_exclude_names: list[str]
+    promote_metadata_prefixes: list[str]
+    promote_resource_metadata_prefixes: list[str]
+
+    def __init__(
+        self,
+        otel_type: Literal["full", "gen_ai", "openinference"],
+        output_directory: str,
+        filename: Optional[str] = None,
+        format: Literal["json_lines", "proto"] = "json_lines",
+        mode: Literal["append", "overwrite"] = "overwrite",
+    ) -> None:
+        """Create a file sink config."""
+        ...
+    def set_resource_attribute(self, key: str, value: str) -> None:
+        """Add an OpenTelemetry resource attribute."""
+        ...
+    @property
+    def attribute_mappings(self) -> list[dict[str, str]]:
+        """Return configured full/OpenInference attribute aliases."""
+        ...
+    @attribute_mappings.setter
+    def attribute_mappings(self, value: list[dict[str, str]]) -> None:
+        """Replace configured full/OpenInference attribute aliases."""
         ...
 
 class OpenTelemetrySubscriber:

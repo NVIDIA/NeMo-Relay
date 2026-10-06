@@ -42,6 +42,9 @@ typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
 typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
 typedef struct NemoRelayLlmSanitizeRequestContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeRequestCodec* codec; } NemoRelayLlmSanitizeRequestContext;
 typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeResponseCodec* codec; } NemoRelayLlmSanitizeResponseContext;
+typedef NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
+typedef NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
+typedef struct NemoRelayLlmExecutionContext { NemoRelayLlmRequestContext request_codec; const NemoRelayLlmResponseContext* response_codec; } NemoRelayLlmExecutionContext;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 
@@ -173,7 +176,7 @@ typedef int32_t (*NemoRelayLlmRequestInterceptCb)(void* user_data, const char* n
 extern int32_t nemo_relay_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NemoRelayLlmRequestInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_llm_request_intercept(const char* name);
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
-typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* native_json, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
+typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* name, const char* native_json, NemoRelayLlmExecutionContext context, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
 
 extern int32_t nemo_relay_register_llm_execution_intercept(const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
 extern int32_t nemo_relay_deregister_llm_execution_intercept(const char* name);
@@ -288,6 +291,8 @@ extern int32_t nemo_relay_otel_subscriber_create_with_projection_options(const c
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v3(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v4(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v5(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create_file_sink(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
@@ -326,7 +331,7 @@ extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
 extern char* goToolExecInterceptContextTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
-extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoRelayLlmExecNextFn, void*);
+extern char* goLlmExecInterceptTrampoline(void*, const char*, const char*, NemoRelayLlmExecutionContext, NemoRelayLlmExecNextFn, void*);
 
 // Codec trampolines (used at execute time, not registration)
 extern char* goCodecDecodeTrampoline(void*, const FfiLLMRequest*);
@@ -1896,9 +1901,10 @@ func DeregisterLlmRequestIntercept(name string) error {
 }
 
 // RegisterLlmExecutionIntercept registers an execution intercept following
-// the middleware chain pattern. execFn is called with the request parameters
-// and a `next` function. Call `next` to invoke the next intercept or original
-// implementation; skip calling `next` to short-circuit the chain.
+// the middleware chain pattern. execFn is called with the request parameters,
+// codec context, and a `next` function. Call `next` to invoke the next
+// intercept or original implementation; skip calling `next` to short-circuit
+// the chain.
 func RegisterLlmExecutionIntercept(name string, priority int32, execFn LLMExecutionInterceptFunc) error {
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
@@ -1921,9 +1927,9 @@ func DeregisterLlmExecutionIntercept(name string) error {
 
 // RegisterLlmStreamExecutionIntercept registers an execution intercept for
 // streaming LLM calls following the middleware chain pattern. execFn is called
-// with the request parameters and a `next` function. Call `next` to invoke the
-// next intercept or original implementation; skip calling `next` to
-// short-circuit.
+// with the request parameters, codec context, and a `next` function. Call
+// `next` to invoke the next intercept or original implementation; skip calling
+// `next` to short-circuit.
 func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLMExecutionInterceptFunc) error {
 	execID := registerClosure(execFn)
 	cName := C.CString(name)
@@ -2459,18 +2465,19 @@ type OpenTelemetryConfig struct {
 	Endpoint  string
 	Headers   map[string]string
 	// HeaderEnv maps outbound header names to environment variables resolved at activation.
-	HeaderEnv               map[string]string
-	ResourceAttributes      map[string]string
-	ServiceName             string
-	ServiceNamespace        string
-	ServiceVersion          string
-	InstrumentationScope    string
-	Timeout                 time.Duration
-	CompletedSpanContextTTL *time.Duration
-	MarkProjection          MarkProjection
-	MarkExcludeNames        []string
-	AttributeMappings       []OtlpAttributeMapping
-	PromoteMetadataPrefixes []string
+	HeaderEnv                       map[string]string
+	ResourceAttributes              map[string]string
+	ServiceName                     string
+	ServiceNamespace                string
+	ServiceVersion                  string
+	InstrumentationScope            string
+	Timeout                         time.Duration
+	CompletedSpanContextTTL         *time.Duration
+	MarkProjection                  MarkProjection
+	MarkExcludeNames                []string
+	AttributeMappings               []OtlpAttributeMapping
+	PromoteMetadataPrefixes         []string
+	PromoteResourceMetadataPrefixes []string
 }
 
 // NewOpenTelemetryConfig returns a typed config for the required endpoint.
@@ -2488,7 +2495,7 @@ func NewOpenTelemetryConfig(otelType OpenTelemetryType, endpoint string) OpenTel
 		Timeout:                 3 * time.Second,
 		CompletedSpanContextTTL: &completedSpanContextTTL,
 		MarkProjection:          MarkProjectionInherit,
-		MarkExcludeNames:        []string{"llm.chunk"},
+		MarkExcludeNames:        []string{llmChunkEventName},
 		AttributeMappings:       []OtlpAttributeMapping{},
 		PromoteMetadataPrefixes: []string{},
 	}
@@ -2507,7 +2514,11 @@ type OpenTelemetryRuntimeDiagnostic struct {
 	Count   uint64 `json:"count"`
 }
 
-const openTelemetryEndpointRequiredMessage = "endpoint is required"
+const (
+	openTelemetryEndpointRequiredMessage = "endpoint is required"
+	llmChunkEventName                    = "llm.chunk"
+	completedSpanContextTTLField         = "completed span context TTL"
+)
 
 func decodeOpenTelemetryRuntimeDiagnostics(out *C.char) ([]OpenTelemetryRuntimeDiagnostic, error) {
 	defer C.nemo_relay_string_free(out)
@@ -2544,7 +2555,7 @@ func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConf
 	if *config.CompletedSpanContextTTL <= 0 {
 		return config, fmt.Errorf("completed span context TTL must be greater than 0")
 	}
-	if err := requireWholeMillisecondDuration("completed span context TTL", *config.CompletedSpanContextTTL); err != nil {
+	if err := requireWholeMillisecondDuration(completedSpanContextTTLField, *config.CompletedSpanContextTTL); err != nil {
 		return config, err
 	}
 	if config.Headers == nil {
@@ -2560,13 +2571,16 @@ func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConf
 		config.MarkProjection = MarkProjectionInherit
 	}
 	if config.MarkExcludeNames == nil {
-		config.MarkExcludeNames = []string{"llm.chunk"}
+		config.MarkExcludeNames = []string{llmChunkEventName}
 	}
 	if config.AttributeMappings == nil {
 		config.AttributeMappings = []OtlpAttributeMapping{}
 	}
 	if config.PromoteMetadataPrefixes == nil {
 		config.PromoteMetadataPrefixes = []string{}
+	}
+	if config.PromoteResourceMetadataPrefixes == nil {
+		config.PromoteResourceMetadataPrefixes = []string{}
 	}
 	return config, nil
 }
@@ -2644,9 +2658,15 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	}
 	cPromoteMetadataPrefixesJSON := C.CString(string(promoteMetadataPrefixesJSON))
 	defer C.free(unsafe.Pointer(cPromoteMetadataPrefixesJSON))
+	promoteResourceMetadataPrefixesJSON, err := jsonMarshal(config.PromoteResourceMetadataPrefixes)
+	if err != nil {
+		return nil, err
+	}
+	cPromoteResourceMetadataPrefixesJSON := C.CString(string(promoteResourceMetadataPrefixesJSON))
+	defer C.free(unsafe.Pointer(cPromoteResourceMetadataPrefixesJSON))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create_with_projection_options_v4(
+	status := C.nemo_relay_otel_subscriber_create_with_projection_options_v5(
 		cType,
 		cTransport,
 		cEndpoint,
@@ -2662,6 +2682,170 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 		cMarkExcludeNamesJSON,
 		cAttributeMappingsJSON,
 		cPromoteMetadataPrefixesJSON,
+		cPromoteResourceMetadataPrefixesJSON,
+		C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
+		&ptr,
+	)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	return &OpenTelemetrySubscriber{ptr: ptr}, nil
+}
+
+// OpenTelemetryFileSinkFormat selects the on-disk encoding for a file sink.
+type OpenTelemetryFileSinkFormat string
+
+const (
+	// OpenTelemetryFileSinkFormatJSONLines writes one OTLP/JSON-encoded
+	// ExportTraceServiceRequest per line, the serialization described by the
+	// OpenTelemetry Protocol File Exporter specification.
+	OpenTelemetryFileSinkFormatJSONLines OpenTelemetryFileSinkFormat = "json_lines"
+	// OpenTelemetryFileSinkFormatProto writes each request length-delimited.
+	OpenTelemetryFileSinkFormatProto OpenTelemetryFileSinkFormat = "proto"
+)
+
+// OpenTelemetryFileSinkMode selects how an existing output file is opened.
+type OpenTelemetryFileSinkMode string
+
+const (
+	// OpenTelemetryFileSinkModeOverwrite truncates an existing file.
+	OpenTelemetryFileSinkModeOverwrite OpenTelemetryFileSinkMode = "overwrite"
+	// OpenTelemetryFileSinkModeAppend appends to an existing file.
+	OpenTelemetryFileSinkModeAppend OpenTelemetryFileSinkMode = "append"
+)
+
+// OpenTelemetryFileSinkConfig configures a subscriber that writes OTLP to a
+// local file instead of exporting it to a collector. It carries no endpoint,
+// transport, headers, or timeout: those apply only to a network destination.
+type OpenTelemetryFileSinkConfig struct {
+	Type                            OpenTelemetryType
+	OutputDirectory                 string
+	Filename                        string
+	Format                          OpenTelemetryFileSinkFormat
+	Mode                            OpenTelemetryFileSinkMode
+	ResourceAttributes              map[string]string
+	ServiceName                     string
+	ServiceNamespace                string
+	ServiceVersion                  string
+	InstrumentationScope            string
+	CompletedSpanContextTTL         *time.Duration
+	MarkProjection                  MarkProjection
+	MarkExcludeNames                []string
+	AttributeMappings               []OtlpAttributeMapping
+	PromoteMetadataPrefixes         []string
+	PromoteResourceMetadataPrefixes []string
+}
+
+// NewOpenTelemetryFileSinkSubscriber creates a subscriber that writes projected
+// spans to a local file.
+func NewOpenTelemetryFileSinkSubscriber(config OpenTelemetryFileSinkConfig) (*OpenTelemetrySubscriber, error) {
+	if config.Type == "" {
+		config.Type = OpenTelemetryTypeFull
+	}
+	if config.InstrumentationScope == "" {
+		config.InstrumentationScope = "opentelemetry"
+	}
+	// A nil map or slice marshals to null, which the FFI boundary rejects.
+	if config.ResourceAttributes == nil {
+		config.ResourceAttributes = map[string]string{}
+	}
+	if config.MarkProjection == "" {
+		config.MarkProjection = MarkProjectionInherit
+	}
+	if config.MarkExcludeNames == nil {
+		config.MarkExcludeNames = []string{llmChunkEventName}
+	}
+	if config.AttributeMappings == nil {
+		config.AttributeMappings = []OtlpAttributeMapping{}
+	}
+	if config.PromoteMetadataPrefixes == nil {
+		config.PromoteMetadataPrefixes = []string{}
+	}
+	if config.PromoteResourceMetadataPrefixes == nil {
+		config.PromoteResourceMetadataPrefixes = []string{}
+	}
+	if config.CompletedSpanContextTTL == nil {
+		completedSpanContextTTL := 60 * time.Second
+		config.CompletedSpanContextTTL = &completedSpanContextTTL
+	}
+	if *config.CompletedSpanContextTTL <= 0 {
+		return nil, fmt.Errorf("completed span context TTL must be greater than 0")
+	}
+	if err := requireWholeMillisecondDuration(completedSpanContextTTLField, *config.CompletedSpanContextTTL); err != nil {
+		return nil, err
+	}
+
+	cType := C.CString(string(config.Type))
+	defer C.free(unsafe.Pointer(cType))
+	cOutputDirectory := C.CString(config.OutputDirectory)
+	defer C.free(unsafe.Pointer(cOutputDirectory))
+	cFilename := optionalCString(config.Filename)
+	defer C.free(unsafe.Pointer(cFilename))
+	cFormat := optionalCString(string(config.Format))
+	defer C.free(unsafe.Pointer(cFormat))
+	cMode := optionalCString(string(config.Mode))
+	defer C.free(unsafe.Pointer(cMode))
+
+	resourceAttrsJSON, err := jsonMarshal(config.ResourceAttributes)
+	if err != nil {
+		return nil, err
+	}
+	cResourceAttrsJSON := C.CString(string(resourceAttrsJSON))
+	defer C.free(unsafe.Pointer(cResourceAttrsJSON))
+
+	cServiceName := optionalCString(config.ServiceName)
+	defer C.free(unsafe.Pointer(cServiceName))
+	cServiceNamespace := optionalCString(config.ServiceNamespace)
+	defer C.free(unsafe.Pointer(cServiceNamespace))
+	cServiceVersion := optionalCString(config.ServiceVersion)
+	defer C.free(unsafe.Pointer(cServiceVersion))
+	cInstrumentationScope := C.CString(config.InstrumentationScope)
+	defer C.free(unsafe.Pointer(cInstrumentationScope))
+
+	cMarkProjection := C.CString(string(config.MarkProjection))
+	defer C.free(unsafe.Pointer(cMarkProjection))
+	markExcludeNamesJSON, err := jsonMarshal(config.MarkExcludeNames)
+	if err != nil {
+		return nil, err
+	}
+	cMarkExcludeNamesJSON := C.CString(string(markExcludeNamesJSON))
+	defer C.free(unsafe.Pointer(cMarkExcludeNamesJSON))
+	attributeMappingsJSON, err := jsonMarshal(config.AttributeMappings)
+	if err != nil {
+		return nil, err
+	}
+	cAttributeMappingsJSON := C.CString(string(attributeMappingsJSON))
+	defer C.free(unsafe.Pointer(cAttributeMappingsJSON))
+	promoteMetadataPrefixesJSON, err := jsonMarshal(config.PromoteMetadataPrefixes)
+	if err != nil {
+		return nil, err
+	}
+	cPromoteMetadataPrefixesJSON := C.CString(string(promoteMetadataPrefixesJSON))
+	defer C.free(unsafe.Pointer(cPromoteMetadataPrefixesJSON))
+	promoteResourceMetadataPrefixesJSON, err := jsonMarshal(config.PromoteResourceMetadataPrefixes)
+	if err != nil {
+		return nil, err
+	}
+	cPromoteResourceMetadataPrefixesJSON := C.CString(string(promoteResourceMetadataPrefixesJSON))
+	defer C.free(unsafe.Pointer(cPromoteResourceMetadataPrefixesJSON))
+
+	var ptr unsafe.Pointer
+	status := C.nemo_relay_otel_subscriber_create_file_sink(
+		cType,
+		cOutputDirectory,
+		cFilename,
+		cFormat,
+		cMode,
+		cResourceAttrsJSON,
+		cServiceName,
+		cServiceNamespace,
+		cServiceVersion,
+		cInstrumentationScope,
+		cMarkProjection,
+		cMarkExcludeNamesJSON,
+		cAttributeMappingsJSON,
+		cPromoteMetadataPrefixesJSON,
+		cPromoteResourceMetadataPrefixesJSON,
 		C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
 		&ptr,
 	)
@@ -2906,7 +3090,7 @@ func normalizeOpenTelemetryLogConfig(config OpenTelemetryLogConfig) (OpenTelemet
 	if err := requireWholeMillisecondDuration("scheduled delay", config.ScheduledDelay); err != nil {
 		return config, err
 	}
-	if err := requireWholeMillisecondDuration("completed span context TTL", config.CompletedSpanContextTTL); err != nil {
+	if err := requireWholeMillisecondDuration(completedSpanContextTTLField, config.CompletedSpanContextTTL); err != nil {
 		return config, err
 	}
 	if config.MinimumSeverity == "" {

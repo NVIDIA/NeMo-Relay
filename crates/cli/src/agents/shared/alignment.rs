@@ -608,12 +608,23 @@ pub(crate) fn gateway_management_policy(
     }
 }
 
+/// Native root identity takes precedence over heuristic delegated ownership.
+pub(crate) fn gateway_has_root_identity(
+    agent_kind: AgentKind,
+    provider: &str,
+    request: &LlmRequest,
+    session_id: &str,
+) -> bool {
+    agent_kind == AgentKind::Codex
+        && codex::owns_gateway_provider(provider)
+        && codex::root_thread_matches(&request.content, session_id)
+}
+
 /// Decide whether this agent kind should emit a long-lived session agent scope.
 ///
-/// Claude Code and Codex can outlive a user-visible run, so the CLI represents
-/// their work with bounded Custom turn scopes instead of exporting a long-lived
-/// agent scope that needs synthetic termination. Every turn uses Custom scope
-/// semantics, while Agent scopes remain reserved for agent and subagent lineage.
+/// Claude Code and Codex session IDs can outlive a user-visible run, so neither
+/// exports a durable session agent scope. Claude Code uses bounded Custom turns;
+/// Codex groups its Custom turns and delegated agents under a bounded task Agent.
 pub(crate) fn should_emit_session_agent_scope(agent_kind: AgentKind) -> bool {
     !matches!(agent_kind, AgentKind::ClaudeCode | AgentKind::Codex)
 }

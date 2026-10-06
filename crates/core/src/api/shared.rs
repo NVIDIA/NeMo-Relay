@@ -9,7 +9,9 @@ use crate::api::event::{Event, EventSanitizeFields, ScopeCategory};
 use crate::api::llm::LlmRequest;
 use crate::api::registry::{EventMetadataInjector, Guardrail, RuntimeRegistrationKind};
 use crate::api::runtime::global_context;
-use crate::api::runtime::scope_stack::trace_context_for_llm;
+use crate::api::runtime::scope_stack::{
+    W3cTraceContext, thread_active_event_uuid, trace_context_for_managed_span,
+};
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
 };
@@ -35,6 +37,7 @@ pub(crate) fn resolve_parent_uuid(parent: Option<&ScopeHandle>) -> Option<Uuid> 
     Some(
         parent
             .map(|handle| handle.uuid)
+            .or_else(thread_active_event_uuid)
             .unwrap_or_else(|| task_scope_top().uuid),
     )
 }
@@ -251,10 +254,18 @@ pub(crate) fn inject_trace_context_value(
     }
 }
 
-pub(crate) fn inject_traceparent(request: &mut LlmRequest, parent_uuid: Uuid) -> Result<()> {
-    let (traceparent, tracestate) = trace_context_for_llm(parent_uuid)?;
-    inject_trace_context_value(request, traceparent, tracestate);
-    Ok(())
+pub(crate) fn inject_traceparent(
+    request: &mut LlmRequest,
+    span_uuid: Uuid,
+    causal_parent_uuid: Option<Uuid>,
+) -> Result<W3cTraceContext> {
+    let context = trace_context_for_managed_span(span_uuid, causal_parent_uuid)?;
+    inject_trace_context_value(
+        request,
+        context.traceparent().to_owned(),
+        context.tracestate().map(ToOwned::to_owned),
+    );
+    Ok(context)
 }
 
 pub(crate) fn metadata_with_otel_status(

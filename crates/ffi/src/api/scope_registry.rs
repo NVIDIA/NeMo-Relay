@@ -616,13 +616,15 @@ pub unsafe extern "C" fn nemo_relay_scope_deregister_llm_request_intercept(
 }
 
 /// Register a scope-local LLM execution intercept following the middleware
-/// chain pattern.
+/// chain pattern. The callback receives
+/// `(name, request, context, next_fn, next_ctx)`.
 ///
 /// # Parameters
 /// - `scope_uuid`: UUID of the target scope (null-terminated C string).
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
-/// - `exec_cb`: Middleware callback receiving request and a next function.
+/// - `exec_cb`: Middleware callback receiving the LLM name, request, codec
+///   context, and a next function.
 /// - `exec_user_data`: Opaque pointer for the execution callback.
 /// - `exec_free`: Optional destructor for `exec_user_data`.
 ///
@@ -678,13 +680,16 @@ pub unsafe extern "C" fn nemo_relay_scope_deregister_llm_execution_intercept(
 }
 
 /// Register a scope-local LLM streaming execution intercept following the
-/// middleware chain pattern.
+/// middleware chain pattern. The callback receives
+/// `(name, request, context, next_fn, next_ctx)`. The response codec in
+/// `context` is null.
 ///
 /// # Parameters
 /// - `scope_uuid`: UUID of the target scope (null-terminated C string).
 /// - `name`: Unique intercept name.
 /// - `priority`: Execution priority (lower runs first).
-/// - `exec_cb`: Middleware callback receiving request and a next function.
+/// - `exec_cb`: Middleware callback receiving the LLM name, request, request
+///   codec context, and a next function.
 /// - `exec_user_data`: Opaque pointer for the execution callback.
 /// - `exec_free`: Optional destructor for `exec_user_data`.
 ///

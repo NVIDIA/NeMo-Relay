@@ -2024,3 +2024,21 @@ fn dynamic_plugin_relay_compatibility_requires_the_zero_eight_baseline() {
         .expect_err("a range that excludes the current host should fail");
     assert!(error.to_string().contains("but host version is"));
 }
+
+#[test]
+fn relay_version_matches_prerelease_hosts_as_their_release() {
+    let matches = |requirement: &str, host: &str| {
+        relay_version_matches(
+            &VersionReq::parse(requirement).unwrap(),
+            &Version::parse(host).unwrap(),
+        )
+    };
+    for host in ["0.10.0-alpha.20261005", "0.10.0-beta.1", "0.10.0-rc.1"] {
+        assert!(matches(">=0.8.0, <1.0.0", host));
+        assert!(matches(">=0.10.0,<1.0", host));
+        assert!(matches(">=0.9.0-rc.1,<1.0", host));
+        assert!(!matches("<0.10.0", host));
+    }
+    assert!(matches(">=0.10.0-rc.1, <1.0.0", "0.10.0-rc.1"));
+    assert!(!matches(">=0.10.0-rc.2", "0.10.0-rc.1"));
+}

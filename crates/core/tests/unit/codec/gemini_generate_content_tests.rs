@@ -1711,6 +1711,7 @@ fn test_decode_response_cached_content_token_count() {
     assert_eq!(usage.completion_tokens, Some(10));
     assert_eq!(usage.cache_read_tokens, Some(80));
     assert_eq!(usage.cache_write_tokens, None);
+    assert_eq!(usage.uncached_input_tokens, Some(20));
 }
 
 #[test]

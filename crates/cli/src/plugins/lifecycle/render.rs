@@ -5,6 +5,13 @@
 
 use super::*;
 
+pub(super) fn warn_incomplete_uninstall_cleanup(path: &Path, error: &std::io::Error) {
+    eprintln!(
+        "warning: could not fully delete {}: {error}",
+        path.display()
+    );
+}
+
 pub(crate) fn render_plugin_error(
     error: &CliError,
     json: bool,
@@ -123,7 +130,7 @@ impl fmt::Display for PluginListView<'_> {
 
         write!(
             f,
-            "{:<id_width$} {:<scope_width$} {:<enabled_width$} {:<state_width$} {:<validation_width$} {:<policy_width$} HOST CONFIG",
+            "{:<id_width$} {:<scope_width$} {:<enabled_width$} {:<state_width$} {:<validation_width$} {:<policy_width$} HOST CONFIG  SOURCE",
             "ID",
             "SCOPE",
             "ENABLED",
@@ -143,7 +150,7 @@ impl fmt::Display for PluginListView<'_> {
             let policy: &'static str = entry.record.status.validation.policy_satisfied.into();
             write!(
                 f,
-                "\n{:<id_width$} {:<scope_width$} {:<enabled_width$} {:<state_width$} {:<validation_width$} {:<policy_width$} {}",
+                "\n{:<id_width$} {:<scope_width$} {:<enabled_width$} {:<state_width$} {:<validation_width$} {:<policy_width$} {:<host_width$}  {}",
                 entry.record.metadata.id,
                 scope,
                 entry.record.spec.enabled,
@@ -151,12 +158,16 @@ impl fmt::Display for PluginListView<'_> {
                 validation,
                 policy,
                 host_config_label(self.host_config_by_id.get(&entry.record.metadata.id)),
+                super::installation::receipt_for(entry)
+                    .map(|receipt| format!("{} ({})", receipt.source, receipt.tag))
+                    .unwrap_or_else(|| "-".into()),
                 id_width = widths.id,
                 scope_width = widths.scope,
                 enabled_width = widths.enabled,
                 state_width = widths.state,
                 validation_width = widths.validation,
                 policy_width = widths.policy,
+                host_width = "HOST CONFIG".len(),
             )?;
         }
         Ok(())

@@ -14,6 +14,7 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_stream_call_execute,
 };
+use nemo_relay::api::runtime::LlmCodecIdentity;
 use nemo_relay::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK, create_scope_stack};
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
@@ -22,8 +23,10 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::api::tool::{
     ToolCallExecuteParams, ToolExecutionResult, tool_call_execute, tool_request_intercepts,
 };
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::traits::LlmCodec;
+use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::observability::otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber};
 use nemo_relay::observability::otel_metrics::{
@@ -307,6 +310,44 @@ async fn rust_worker_event_metadata_injector_enriches_events_and_is_removed_on_c
 
 #[tokio::test]
 async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_up() {
+    // A synchronous scope lock deadlock cannot be cancelled by a Tokio timeout.
+    // Bound the entire reproduction, including worker shutdown, in a child process.
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_COMPACTION_GATE_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "rust_worker_conditional_middleware_callback_controls_target_and_cleans_up",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .spawn()
+            .expect("compaction regression process should start");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if let Some(status) = child.try_wait().expect("regression process should poll") {
+                assert!(status.success(), "compaction regression failed: {status}");
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                // The fixture worker is owned by the reproduction process. Kill it
+                // before killing its deadlocked host, which cannot run Drop cleanup.
+                let processes = sysinfo::System::new_all();
+                let host_pid = sysinfo::Pid::from_u32(child.id());
+                for process in processes.processes().values() {
+                    if process.parent() == Some(host_pid) {
+                        let _ = process.kill();
+                    }
+                }
+                child
+                    .kill()
+                    .expect("deadlocked regression process should stop");
+                child.wait().expect("regression process should be reaped");
+                panic!("compaction or worker shutdown failed to complete within 20 seconds");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let target_name = "fixture_worker_gate_target";
     let deliveries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -318,6 +359,16 @@ async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_
         }),
     )
     .expect("gate target subscriber should register");
+    let events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured = events.clone();
+    let observer_name = "worker_compaction_gate_observer";
+    register_subscriber(
+        observer_name,
+        Arc::new(move |event| {
+            captured.lock().unwrap().push(event.name().to_owned());
+        }),
+    )
+    .expect("compaction observer should register");
 
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
@@ -335,14 +386,20 @@ async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_
     .expect("worker plugin host should activate");
     assert!(!report.has_errors());
 
-    event(
-        EmitMarkEventParams::builder()
-            .name("worker-gate-active")
-            .build(),
-    )
-    .expect("gated mark should emit");
+    let names = [
+        "worker-gate-active",
+        "worker-before-compaction",
+        "compaction",
+        "compaction",
+        "worker-after-compaction",
+    ];
+    for name in names {
+        event(EmitMarkEventParams::builder().name(name).build())
+            .expect("gated mark should emit without deadlocking");
+    }
     flush_subscribers().expect("gated mark should flush");
     assert_eq!(deliveries.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(*events.lock().unwrap(), names);
 
     activation.close().expect("worker plugin host should close");
     event(
@@ -354,6 +411,7 @@ async fn rust_worker_conditional_middleware_callback_controls_target_and_cleans_
     flush_subscribers().expect("post-clear mark should flush");
     assert_eq!(deliveries.load(std::sync::atomic::Ordering::SeqCst), 1);
     deregister_subscriber(target_name).expect("gate target subscriber should deregister");
+    deregister_subscriber(observer_name).expect("compaction observer should deregister");
 }
 
 #[tokio::test]
@@ -702,6 +760,17 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
     );
     assert_eq!(pending_mark.metadata().unwrap()["fixture"], true);
     assert_eq!(pending_mark.metadata().unwrap()["worker_plugin_mark"], true);
+    let runtime_mark = find_event(
+        &captured_events,
+        "fixture.worker.llm_execution.runtime.mark",
+        None,
+    );
+    assert_eq!(runtime_mark.parent_uuid(), Some(llm_start.uuid()));
+    assert!(runtime_mark.propagation_traceparent().is_some());
+    assert_eq!(
+        runtime_mark.metadata().unwrap()["name"],
+        "worker-fixture-llm-execute"
+    );
     let llm_end = find_event(
         &captured_events,
         "worker-fixture-llm-execute",
@@ -746,7 +815,27 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         stream_value["request"]["worker_plugin_llm_stream_execution_request"],
         true
     );
+    flush_subscribers().expect("worker fixture streaming events should flush");
+    let captured_events = events.lock().unwrap().clone();
+    let stream_start = find_event(
+        &captured_events,
+        "worker-fixture-llm-stream",
+        Some(ScopeCategory::Start),
+    );
+    let stream_runtime_mark = find_event(
+        &captured_events,
+        "fixture.worker.llm_stream_execution.runtime.mark",
+        None,
+    );
+    assert_eq!(stream_runtime_mark.parent_uuid(), Some(stream_start.uuid()));
+    assert!(stream_runtime_mark.propagation_traceparent().is_some());
+    assert_eq!(
+        stream_runtime_mark.metadata().unwrap()["name"],
+        "worker-fixture-llm-stream"
+    );
 
+    deregister_subscriber("worker_plugin_fixture_events")
+        .expect("worker fixture subscriber should deregister");
     loaded.clear();
 }
 
@@ -1453,6 +1542,37 @@ fn worker_loader_rejects_manifest_that_admits_pre_zero_eight_relay() {
 }
 
 #[test]
+fn worker_llm_execution_context_requires_zero_ten_compatibility() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) =
+        write_manifest_with_relay(fixture.binary_path(), ">=0.9,<1.0");
+
+    let activation = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::from_iter([("event_metadata_injector_only".into(), json!(true))]),
+    }])
+    .expect("the 0.10 floor applies only to workers that register LLM execution intercepts");
+    activation.clear();
+
+    let error = match load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::new(),
+    }]) {
+        Ok(activation) => {
+            activation.clear();
+            panic!("an execution-context worker must exclude Relay 0.9");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("excludes Relay 0.9"), "{error}");
+}
+
+#[test]
 fn invalid_worker_relay_requirement_reports_parse_error() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
     let missing_binary = std::env::temp_dir().join(format!("unused-worker-{}", Uuid::now_v7()));
@@ -1581,28 +1701,9 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     let manifest_ref = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/python-grpc-worker-plugin/relay-plugin.toml");
     let config = Map::from_iter([("tag".into(), json!("managed-environment"))]);
-    let activation = load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "examples.python_grpc_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: Some(
-            PathBuf::from(environment_ref)
-                .to_string_lossy()
-                .into_owned(),
-        ),
-        config: config.clone(),
-    }])
-    .expect("managed Python worker should load");
-    let mut cleanup = PythonWorkerCleanup::new(activation);
-
-    let mut plugin_config = PluginConfig::default();
-    plugin_config.components.push(PluginComponentSpec {
-        kind: "examples.python_grpc_worker".into(),
-        enabled: true,
-        config,
-    });
-    test_initialize_plugin_host_exact(plugin_config)
-        .await
-        .expect("managed Python worker should initialize");
+    let mut cleanup =
+        load_and_initialize_python_worker(&manifest_ref, &PathBuf::from(environment_ref), config)
+            .await;
 
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured = events.clone();
@@ -1676,7 +1777,20 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
 
     flush_subscribers().expect("Python callback mark should flush");
     let captured_events = events.lock().unwrap();
-    find_event(&captured_events, "example.python_worker.tool_request", None);
+    let tool_start = find_event(
+        &captured_events,
+        "python-worker-tool",
+        Some(ScopeCategory::Start),
+    );
+    let runtime_scope = find_event(
+        &captured_events,
+        "example.python_worker.request",
+        Some(ScopeCategory::Start),
+    );
+    assert_eq!(runtime_scope.parent_uuid(), Some(tool_start.uuid()));
+    assert!(runtime_scope.propagation_traceparent().is_some());
+    let runtime_mark = find_event(&captured_events, "example.python_worker.tool_request", None);
+    assert_eq!(runtime_mark.parent_uuid(), Some(runtime_scope.uuid()));
     let tool_mark = find_event(
         &captured_events,
         "example.python_worker.tool_execution",
@@ -1692,6 +1806,137 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     drop(captured_events);
 
     drop(cleanup);
+}
+
+#[tokio::test]
+async fn python_worker_execution_codec_context_round_trips_host_codecs() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let Some(environment_ref) = std::env::var_os("NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT")
+    else {
+        eprintln!(
+            "skipping Python worker codec-context round-trip; \
+             NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT is unset"
+        );
+        return;
+    };
+    let (manifest_dir, manifest_ref) = write_python_codec_context_worker();
+    let cleanup = load_and_initialize_python_worker(
+        &manifest_ref,
+        &PathBuf::from(environment_ref),
+        Map::new(),
+    )
+    .await;
+
+    struct Case {
+        name: &'static str,
+        identity_kind: &'static str,
+        identity_id: &'static str,
+        answer: &'static str,
+        request_codec: Arc<dyn LlmCodec>,
+        response_codec: Arc<dyn LlmResponseCodec>,
+    }
+
+    for case in [
+        Case {
+            name: "builtin-openai-chat",
+            identity_kind: "builtin",
+            identity_id: "openai_chat",
+            answer: "provider answer",
+            request_codec: Arc::new(OpenAIChatCodec),
+            response_codec: Arc::new(OpenAIChatCodec),
+        },
+        Case {
+            name: "runtime-openai-chat",
+            identity_kind: "runtime",
+            identity_id: "tests.openai_chat.v1",
+            answer: "runtime answer",
+            request_codec: Arc::new(RuntimeOpenAiChatCodec),
+            response_codec: Arc::new(RuntimeOpenAiChatCodec),
+        },
+    ] {
+        let provider_only = json!({"lane": case.name, "preserve": true});
+        let expected_provider_only = provider_only.clone();
+        let answer = case.answer;
+        let response = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name(format!("python-worker-codec-context-{}", case.name))
+                .request(LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "caller-model",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "provider_only": provider_only,
+                    }),
+                })
+                .codec(case.request_codec)
+                .response_codec(case.response_codec)
+                .func(Arc::new(move |request| {
+                    let expected_provider_only = expected_provider_only.clone();
+                    Box::pin(async move {
+                        assert_eq!(request.content["model"], "worker-model");
+                        assert_eq!(request.content["provider_only"], expected_provider_only);
+                        Ok(json!({
+                            "id": "chatcmpl-codec-context",
+                            "object": "chat.completion",
+                            "model": "provider-model",
+                            "choices": [{
+                                "index": 0,
+                                "message": {"role": "assistant", "content": answer},
+                                "finish_reason": "stop",
+                            }],
+                        }))
+                    })
+                }))
+                .build(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{} codec-context call failed: {error}", case.name));
+
+        assert_eq!(
+            response["_codec_context_probe"],
+            json!({
+                "request_kind": case.identity_kind,
+                "request_id": case.identity_id,
+                "response_kind": case.identity_kind,
+                "response_id": case.identity_id,
+                "decoded_model": "provider-model",
+                "decoded_message": case.answer,
+            })
+        );
+    }
+
+    drop(cleanup);
+    drop(manifest_dir);
+}
+
+struct RuntimeOpenAiChatCodec;
+
+impl LlmCodec for RuntimeOpenAiChatCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Runtime("tests.openai_chat.v1".into())
+    }
+
+    fn decode(&self, request: &LlmRequest) -> FlowResult<AnnotatedLlmRequest> {
+        OpenAIChatCodec.decode(request)
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> FlowResult<LlmRequest> {
+        OpenAIChatCodec.encode(annotated, original)
+    }
+}
+
+impl LlmResponseCodec for RuntimeOpenAiChatCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::Runtime("tests.openai_chat.v1".into())
+    }
+
+    fn decode_response(&self, response: &Json) -> FlowResult<AnnotatedLlmResponse> {
+        OpenAIChatCodec.decode_response(response)
+    }
 }
 
 struct FixtureCodec;
@@ -1752,6 +1997,31 @@ impl PythonWorkerCleanup {
             subscriber_name: None,
         }
     }
+}
+
+async fn load_and_initialize_python_worker(
+    manifest_ref: &Path,
+    environment_ref: &Path,
+    config: Map<String, Json>,
+) -> PythonWorkerCleanup {
+    let activation = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "examples.python_grpc_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: Some(environment_ref.to_string_lossy().into_owned()),
+        config: config.clone(),
+    }])
+    .expect("managed Python worker should load");
+    let cleanup = PythonWorkerCleanup::new(activation);
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "examples.python_grpc_worker".into(),
+        enabled: true,
+        config,
+    });
+    test_initialize_plugin_host_exact(plugin_config)
+        .await
+        .expect("managed Python worker should initialize");
+    cleanup
 }
 
 impl Drop for PythonWorkerCleanup {
@@ -1889,6 +2159,61 @@ entrypoint = {entrypoint}
         runtime = toml_string(runtime),
         entrypoint = toml_string(entrypoint)
     ))
+}
+
+fn write_python_codec_context_worker() -> (TempDir, PathBuf) {
+    const WORKER: &str = r#"
+from nemo_relay_plugin import WorkerPlugin, serve_plugin
+
+
+class CodecContextProbe(WorkerPlugin):
+    plugin_id = "examples.python_grpc_worker"
+
+    def register(self, ctx, config):
+        del config
+
+        async def execute(_name, request, context, next_call):
+            if context.response_codec is None:
+                raise RuntimeError("unary response codec context is unavailable")
+            request_codec = context.request_codec.resolve_codec()
+            response_codec = context.response_codec.resolve_codec()
+            if request_codec is None or response_codec is None:
+                raise RuntimeError("directional codec capability is unavailable")
+
+            annotated = await request_codec.decode(request)
+            annotated["model"] = "worker-model"
+            encoded = await request_codec.encode(annotated, request)
+            response = await next_call.call(encoded)
+            decoded = await response_codec.decode(response)
+
+            result = dict(response)
+            result["_codec_context_probe"] = {
+                "request_kind": context.request_codec.codec.kind,
+                "request_id": context.request_codec.codec.id,
+                "response_kind": context.response_codec.codec.kind,
+                "response_id": context.response_codec.codec.id,
+                "decoded_model": decoded.get("model"),
+                "decoded_message": decoded.get("message"),
+            }
+            return result
+
+        ctx.register_llm_execution_intercept("codec_context_probe", execute)
+
+
+async def main():
+    await serve_plugin(CodecContextProbe())
+"#;
+
+    let relay = supported_relay_requirement();
+    let (temp, manifest) = write_worker_manifest(
+        "examples.python_grpc_worker",
+        &relay,
+        "python",
+        "codec_context_probe:main",
+    );
+    std::fs::write(temp.path().join("codec_context_probe.py"), WORKER)
+        .expect("Python codec-context worker fixture should be written");
+    (temp, manifest)
 }
 
 fn write_manifest_text(contents: &str) -> (TempDir, PathBuf) {

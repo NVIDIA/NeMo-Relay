@@ -13,6 +13,7 @@ import {
   OpenTelemetryMetricSubscriber,
   OpenTelemetrySubscriber,
 } from '../index.js';
+import { openTelemetrySignalEndpoint, openTelemetryLogConfig, openTelemetryMetricConfig } from '../observability.js';
 
 const dataSchema: DataSchema = { name: 'example.fixture', version: '1' };
 
@@ -66,3 +67,11 @@ traceSubscriber.shutdown();
 if (!logDiagnostics || !metricDiagnostics || !logDeregistered || !metricDeregistered) {
   throw new Error('fixture observability operations failed');
 }
+
+// Plugin configuration supports promotion independently for each signal.
+const signalEndpoint = openTelemetrySignalEndpoint({
+  endpoint: 'http://localhost:4318',
+  promote_resource_metadata_prefixes: ['deployment.'],
+});
+openTelemetryLogConfig({ enabled: true, endpoints: [signalEndpoint] });
+openTelemetryMetricConfig({ enabled: true, endpoints: [signalEndpoint] });

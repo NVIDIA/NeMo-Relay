@@ -45,6 +45,7 @@ pub(crate) mod header_file;
 pub(crate) mod manual;
 pub(crate) mod openinference;
 pub mod otel;
+pub mod otel_file;
 mod otel_genai;
 pub mod otel_logs;
 pub mod otel_metrics;
@@ -857,6 +858,9 @@ pub(crate) fn merge_usage(
             total_tokens: primary.total_tokens.or(secondary.total_tokens),
             cache_read_tokens: primary.cache_read_tokens.or(secondary.cache_read_tokens),
             cache_write_tokens: primary.cache_write_tokens.or(secondary.cache_write_tokens),
+            uncached_input_tokens: primary
+                .uncached_input_tokens
+                .or(secondary.uncached_input_tokens),
             cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
         }),
     }

@@ -3,8 +3,10 @@
 
 //! Resolved runtime configuration model.
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use axum::http::HeaderMap;
 use nemo_relay::logging::LoggingConfig;
@@ -12,11 +14,18 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use strum::{Display, IntoStaticStr};
 
+use crate::events::AgentKind;
 use crate::plugins::policy::DynamicPluginHostPolicy;
 
 use super::{
     DEFAULT_MAX_HOOK_PAYLOAD_BYTES, DEFAULT_MAX_PASSTHROUGH_BODY_BYTES, header_json, header_string,
 };
+
+#[derive(Debug, Clone)]
+pub(crate) struct LaunchedAgent {
+    pub(crate) kind: AgentKind,
+    pub(crate) version: String,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct GatewayConfig {
@@ -25,7 +34,11 @@ pub(crate) struct GatewayConfig {
     pub(crate) openai_auth_header: Option<String>,
     pub(crate) anthropic_base_url: String,
     pub(crate) anthropic_auth_header: Option<String>,
+    /// Provider response wait in seconds; zero leaves cancellation to the caller.
+    pub(crate) response_timeout_secs: u64,
     pub(crate) metadata: Option<Value>,
+    /// Runtime-only identity from the launched executable's version probe.
+    pub(crate) launched_agent: Option<LaunchedAgent>,
     pub(crate) plugin_config: Option<Value>,
     pub(crate) max_hook_payload_bytes: usize,
     pub(crate) max_passthrough_body_bytes: usize,
@@ -34,12 +47,27 @@ pub(crate) struct GatewayConfig {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SessionConfig {
     pub(crate) metadata: Option<Value>,
+    pub(crate) launched_agent: Option<LaunchedAgent>,
     pub(crate) plugin_config: Option<Value>,
     pub(crate) profile: Option<String>,
     pub(crate) gateway_mode: Option<String>,
 }
 
 impl GatewayConfig {
+    pub(crate) fn response_timeout(&self) -> Option<Duration> {
+        (self.response_timeout_secs > 0).then(|| Duration::from_secs(self.response_timeout_secs))
+    }
+
+    pub(crate) async fn wait_for_response<F: Future>(
+        &self,
+        response: F,
+    ) -> Result<F::Output, tokio::time::error::Elapsed> {
+        match self.response_timeout() {
+            Some(timeout) => tokio::time::timeout(timeout, response).await,
+            None => Ok(response.await),
+        }
+    }
+
     pub(crate) fn session_config_from_headers(&self, headers: &HeaderMap) -> SessionConfig {
         let metadata =
             header_json(headers, "x-nemo-relay-session-metadata").or_else(|| self.metadata.clone());
@@ -49,6 +77,7 @@ impl GatewayConfig {
         let gateway_mode = header_string(headers, "x-nemo-relay-gateway-mode");
         SessionConfig {
             metadata,
+            launched_agent: self.launched_agent.clone(),
             plugin_config,
             profile,
             gateway_mode,
@@ -115,7 +144,9 @@ impl Default for GatewayConfig {
             openai_auth_header: None,
             anthropic_base_url: "https://api.anthropic.com".into(),
             anthropic_auth_header: None,
+            response_timeout_secs: 0,
             metadata: None,
+            launched_agent: None,
             plugin_config: None,
             max_hook_payload_bytes: DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
             max_passthrough_body_bytes: DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,

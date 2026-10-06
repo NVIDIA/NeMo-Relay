@@ -14,25 +14,6 @@ fn route_credential_is_exactly_256_bits() {
     assert!(RouteCredential::parse(format!("{value}\n")).is_err());
 }
 
-#[test]
-fn route_credential_loads_from_the_environment_and_reports_absence() {
-    let value = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([8_u8; 32]);
-    let environment = crate::test_support::EnvScope::set(&[(
-        ROUTE_TOKEN_ENV,
-        Some(std::ffi::OsStr::new(&value)),
-    )]);
-    let credential = RouteCredential::from_environment().expect("environment credential");
-    assert_eq!(credential.expose(), value);
-    assert_eq!(
-        credential.digest(),
-        TokenDigest::from_token(value.as_bytes())
-    );
-    drop(environment);
-
-    let _environment = crate::test_support::EnvScope::set(&[(ROUTE_TOKEN_ENV, None)]);
-    assert!(RouteCredential::from_environment().is_err());
-}
-
 #[cfg(unix)]
 #[test]
 fn identity_and_lock_files_reject_symlinks_and_repair_owner_private_modes() {
@@ -79,7 +60,9 @@ fn active_generation_survives_restart_but_revoked_generation_does_not() {
 
     assert!(!generations.matches(fingerprint, "generation-one").unwrap());
     assert_eq!(
-        generations.publish(fingerprint, "generation-one").unwrap(),
+        generations
+            .publish(fingerprint, "generation-one", Some("activation-one"))
+            .unwrap(),
         None
     );
     assert!(generations.matches(fingerprint, "generation-one").unwrap());
@@ -88,8 +71,16 @@ fn active_generation_survives_restart_but_revoked_generation_does_not() {
     let reloaded = ActiveWorkerGenerations::load_for_test(path.clone()).expect("reload state");
     assert!(reloaded.matches(fingerprint, "generation-one").unwrap());
     assert_eq!(
-        reloaded.publish(fingerprint, "generation-two").unwrap(),
-        Some("generation-one".into())
+        reloaded
+            .launch_activation_id(fingerprint, "generation-one")
+            .unwrap(),
+        Some("activation-one".into())
+    );
+    assert!(
+        reloaded
+            .publish(fingerprint, "generation-two", None)
+            .unwrap()
+            .is_some()
     );
     assert!(
         !reloaded
@@ -108,6 +99,37 @@ fn active_generation_survives_restart_but_revoked_generation_does_not() {
 }
 
 #[test]
+fn active_generation_state_without_activation_id_remains_compatible() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join(ACTIVE_WORKER_GENERATIONS_FILENAME);
+    let fingerprint = MachineIdentity::generate()
+        .expect("machine identity")
+        .identity
+        .fingerprint();
+    let legacy = serde_json::json!({
+        "schema_version": ACTIVE_WORKER_GENERATIONS_SCHEMA_VERSION,
+        "generations": [{
+            "fingerprint": fingerprint,
+            "generation_id": "legacy-generation"
+        }]
+    });
+    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).expect("write legacy state");
+
+    let generations = ActiveWorkerGenerations::load_for_test(path).expect("load legacy state");
+    assert!(
+        generations
+            .matches(fingerprint, "legacy-generation")
+            .unwrap()
+    );
+    assert_eq!(
+        generations
+            .launch_activation_id(fingerprint, "legacy-generation")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
 fn active_worker_generation_restore_is_compare_and_set() {
     let directory = tempfile::tempdir().expect("tempdir");
     let path = directory.path().join(ACTIVE_WORKER_GENERATIONS_FILENAME);
@@ -117,23 +139,33 @@ fn active_worker_generation_restore_is_compare_and_set() {
         .fingerprint();
     let generations = ActiveWorkerGenerations::load_for_test(path).expect("load state");
     generations
-        .publish(fingerprint, "generation-old")
+        .publish(fingerprint, "generation-old", Some("activation-old"))
         .expect("publish old generation");
     let previous = generations
-        .publish(fingerprint, "generation-candidate")
+        .publish(
+            fingerprint,
+            "generation-candidate",
+            Some("activation-candidate"),
+        )
         .expect("publish candidate");
 
     assert!(
         !generations
-            .restore_if_matches(fingerprint, "different-candidate", previous.as_deref(),)
+            .restore_if_matches(fingerprint, "different-candidate", previous.as_ref(),)
             .unwrap()
     );
     assert!(
         generations
-            .restore_if_matches(fingerprint, "generation-candidate", previous.as_deref(),)
+            .restore_if_matches(fingerprint, "generation-candidate", previous.as_ref(),)
             .unwrap()
     );
     assert!(generations.matches(fingerprint, "generation-old").unwrap());
+    assert_eq!(
+        generations
+            .launch_activation_id(fingerprint, "generation-old")
+            .unwrap(),
+        Some("activation-old".into())
+    );
     assert!(
         generations
             .restore_if_matches(fingerprint, "generation-old", None)
@@ -152,7 +184,7 @@ fn active_worker_generation_ids_are_validated_on_every_public_operation() {
     let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
     for invalid in ["", &"x".repeat(MAX_GENERATION_ID_BYTES + 1)] {
         assert!(generations.matches(fingerprint, invalid).is_err());
-        assert!(generations.publish(fingerprint, invalid).is_err());
+        assert!(generations.publish(fingerprint, invalid, None).is_err());
         assert!(generations.revoke_if_matches(fingerprint, invalid).is_err());
         assert!(
             generations
@@ -160,16 +192,17 @@ fn active_worker_generation_ids_are_validated_on_every_public_operation() {
                 .is_err()
         );
     }
-    generations.publish(fingerprint, "current").unwrap();
+    generations.publish(fingerprint, "current", None).unwrap();
+    let invalid_previous = ActiveWorkerGeneration {
+        generation_id: "x".repeat(MAX_GENERATION_ID_BYTES + 1),
+        activation_id: None,
+    };
     assert!(
         generations
-            .restore_if_matches(
-                fingerprint,
-                "current",
-                Some(&"x".repeat(MAX_GENERATION_ID_BYTES + 1)),
-            )
+            .restore_if_matches(fingerprint, "current", Some(&invalid_previous))
             .is_err()
     );
+    assert!(generations.publish(fingerprint, "next", Some("")).is_err());
 }
 
 #[test]
@@ -326,7 +359,7 @@ fn active_worker_generation_state_is_owner_private_and_rejects_symlinks() {
     let generations =
         ActiveWorkerGenerations::load_for_test(path.clone()).expect("load generation state");
     generations
-        .publish(fingerprint, "generation")
+        .publish(fingerprint, "generation", None)
         .expect("publish generation");
     assert_eq!(
         std::fs::metadata(&path)

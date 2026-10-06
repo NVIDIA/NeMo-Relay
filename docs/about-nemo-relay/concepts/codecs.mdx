@@ -79,6 +79,21 @@ Response decoding improves observability and downstream consistency. It does not
 automatically change the value returned to the application unless a separate
 typed value codec also does so.
 
+### Codec Access in Execution Intercepts
+
+LLM execution intercepts receive `LlmExecutionContext`, which exposes the codec
+Relay selected before the execution chain starts.
+
+| Call Type | Available Codec Operations | Valid Until |
+|---|---|---|
+| Non-streaming | Decode and encode the request; decode the completed response | The interceptor finishes |
+| Streaming | Decode and encode the request | The returned stream ends or closes |
+
+The request context is always present and reports `none` when Relay did not
+select a codec. Runtime and opaque codecs remain usable when Relay has a codec
+implementation. Rewriting a request does not select another codec, so the
+replacement must remain compatible with the selected codec.
+
 The built-in request codecs are lossless patch codecs. For an unchanged
 annotation, the following identity holds at the JSON-value level:
 

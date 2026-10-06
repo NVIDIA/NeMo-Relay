@@ -1154,6 +1154,12 @@ check-python-worker-proto:
     }
     assert pb.SUBSCRIBER == 1
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
+    execution_context = pb.LlmInvocation.DESCRIPTOR.fields_by_name["execution_codec_context"]
+    assert execution_context.number == 11
+    assert execution_context.containing_oneof is None
+    assert {
+        field.name for field in pb.LlmInvocation.DESCRIPTOR.oneofs_by_name["sanitize_context"].fields
+    } == {"request_sanitize_context", "response_sanitize_context"}
     tool_next = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["ToolNext"]
     assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
     runtime_diagnostics = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["GetRuntimeDiagnostics"]
@@ -1362,6 +1368,17 @@ test-rust:
             is_windows=true
             ;;
     esac
+    nextest_command=(cargo nextest run)
+    if [[ "$is_windows" == true ]]; then
+        # Cargo's Windows job forbids breakaway. Run nextest directly so the lifecycle
+        # tests can detach workers from their own jobs while testing cleanup normally.
+        nextest_command=(cargo-nextest nextest run)
+        # Keep temporary child builds on the same toolchain as the workspace.
+        if [[ -z "${RUSTUP_TOOLCHAIN:-}" ]]; then
+            active_toolchain="$(rustup show active-toolchain)"
+            export RUSTUP_TOOLCHAIN="${active_toolchain%% *}"
+        fi
+    fi
     native_test_config_path() {
         if [[ "$is_windows" == true ]] && command -v cygpath >/dev/null 2>&1; then
             cygpath -w "$1"
@@ -1373,6 +1390,9 @@ test-rust:
     xdg_config_home="$test_config_root/xdg"
     mkdir -p "$xdg_config_home"
     export XDG_CONFIG_HOME="$(native_test_config_path "$xdg_config_home")"
+    system_config_home="$test_config_root/system"
+    mkdir -p "$system_config_home"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$(native_test_config_path "$system_config_home")"
     export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     if [[ "$is_windows" == true ]]; then
         appdata_home="$test_config_root/AppData/Roaming"
@@ -1391,21 +1411,37 @@ test-rust:
             prepare_llvm_cov_workspace
         fi
         prepare_test_plugin_fixtures
-        cargo nextest run --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
+        "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
-            cargo llvm-cov report \
+            # LLVM deduplicates unmangled FFI symbols using the first object's
+            # coverage mapping. Prefer the tested binary over the shared library.
+            ffi_test_binary=""
+            for binary in target/debug/deps/nemo_relay_ffi-*; do
+                if [[ -f "$binary" && "$binary" =~ -[[:xdigit:]]{16}(\.exe)?$ ]]; then
+                    if [[ -n "$ffi_test_binary" ]]; then
+                        echo "ERROR: multiple FFI test binaries found after the clean coverage build" >&2
+                        exit 1
+                    fi
+                    ffi_test_binary="$binary"
+                fi
+            done
+            if [[ -z "$ffi_test_binary" ]]; then
+                echo "ERROR: FFI test binary missing from the coverage build" >&2
+                exit 1
+            fi
+            LLVM_COV_FLAGS="$ffi_test_binary${LLVM_COV_FLAGS:+ $LLVM_COV_FLAGS}" cargo llvm-cov report \
                 --ignore-filename-regex '.*/tests/.*\.rs$' \
                 --cobertura \
                 --output-path "$coverage_out"
         fi
     else
         prepare_test_plugin_fixtures
-        cargo nextest run --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
+        "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
     fi
-    cargo nextest run --manifest-path examples/rust-native-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
-    cargo nextest run --manifest-path examples/rust-grpc-worker-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
-    cargo nextest run --manifest-path examples/language-binding-plugin/rust/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
+    "${nextest_command[@]}" --manifest-path examples/rust-native-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
+    "${nextest_command[@]}" --manifest-path examples/rust-grpc-worker-plugin/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
+    "${nextest_command[@]}" --manifest-path examples/language-binding-plugin/rust/Cargo.toml --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci
 
 # --set [output_dir=<path>] [ci=true|false]
 test-python:
@@ -1568,7 +1604,7 @@ test-python-plugin-e2e:
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
         cargo nextest run --locked -p nemo-relay --features worker-grpc \
         --test worker_plugin_integration \
-        -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip)' \
+        -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip) + test(python_worker_execution_codec_context_round_trips_host_codecs)' \
         --no-capture \
         --profile ci
     kill "$gateway_pid" 2>/dev/null || true
@@ -1755,6 +1791,20 @@ test-pi:
 
 # --set [output_dir=<path>] [ci=true|false]
 test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw test-pi
+
+# Print a SemVer version in the PEP 440 form used for Python packages.
+semver-to-pep440 version:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    semver_to_pep440 {{ quote(version) }}
+
+# Print the crates published to crates.io, one per line.
+published-cargo-packages:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    published_cargo_packages
 
 # [version] or --set ref_name=<version>
 set-version version="":

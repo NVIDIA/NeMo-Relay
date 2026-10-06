@@ -75,6 +75,14 @@ pub(crate) fn responses_subagent_id(body: &Value, route: GatewayRouteKind) -> Op
         .flatten()
 }
 
+/// A root thread ID is an ownership signal as strong as a child ID. It prevents parent waiting
+/// and synthesis requests from inheriting the last delegated worker's affinity.
+pub(crate) fn root_thread_matches(body: &Value, session_id: &str) -> bool {
+    has_codex_client_metadata(body)
+        && json_string_at(body, &[&["client_metadata", "thread_id"][..]]).as_deref()
+            == Some(session_id)
+}
+
 fn has_codex_client_metadata(body: &Value) -> bool {
     json_string_at(body, &[&["client_metadata", "x-codex-installation-id"][..]]).is_some()
 }

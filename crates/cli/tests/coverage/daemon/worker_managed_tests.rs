@@ -26,6 +26,76 @@ type CapturedProviderRequest = Arc<std::sync::Mutex<Option<(HeaderMap, Bytes)>>>
 type ProviderRequests = Arc<std::sync::Mutex<Vec<(HeaderMap, Bytes)>>>;
 
 #[tokio::test]
+async fn managed_provider_wait_has_no_default_deadline_and_honors_configuration() {
+    for (streaming, response_timeout_secs) in [(false, 0), (true, 0), (false, 90), (true, 90)] {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let app = Router::new().route(
+            "/",
+            post({
+                let started = Arc::clone(&started);
+                let release = Arc::clone(&release);
+                move || {
+                    let started = Arc::clone(&started);
+                    let release = Arc::clone(&release);
+                    async move {
+                        started.notify_one();
+                        release.notified().await;
+                        "compaction complete"
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let task = tokio::spawn(async move {
+            request_worker_upstream(
+                pooled_client().unwrap(),
+                Request::post(destination)
+                    .body(box_body(Body::empty()))
+                    .unwrap(),
+                &OperationalContext::new(),
+                streaming,
+                &GatewayConfig {
+                    response_timeout_secs,
+                    ..GatewayConfig::default()
+                },
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(61)).await;
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        if response_timeout_secs == 0 {
+            assert!(!task.is_finished());
+            release.notify_one();
+            let response = task.await.unwrap().unwrap();
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                "compaction complete"
+            );
+        } else {
+            assert!(
+                task.await
+                    .unwrap()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("response-head timeout")
+            );
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
 async fn observation_preserves_delivery_while_capturing_json() {
     let expected = Bytes::from_static(br#"{"ok":true}"#);
     let (body, observation) = observe_body(
@@ -208,7 +278,7 @@ async fn successful_stream_observation_can_outlive_the_response_head_deadline() 
     let task = tokio::spawn(observation.finish(ProviderSurface::OpenAIChat, true));
     tokio::task::yield_now().await;
     sender.send(Bytes::from_static(b"data: {\"id\":\"long\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"}}]}\n\n")).await.unwrap();
-    tokio::time::advance(RESPONSE_HEAD_TIMEOUT + Duration::from_secs(1)).await;
+    tokio::time::advance(Duration::from_secs(61)).await;
     tokio::task::yield_now().await;
     assert!(
         !task.is_finished(),
@@ -1479,7 +1549,7 @@ async fn managed_runtime_rejects_response_mutating_execution_middleware() {
     register_llm_execution_intercept(
         INTERCEPT,
         1,
-        Arc::new(|_name, _request, _next| Box::pin(async { Ok(json!({})) })),
+        Arc::new(|_name, _request, _context, _next| Box::pin(async { Ok(json!({})) })),
     )
     .expect("register execution middleware");
 
@@ -1846,6 +1916,105 @@ async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses()
 }
 
 #[tokio::test]
+async fn daemon_permission_requests_emit_policy_marks() {
+    use nemo_relay::api::subscriber::{
+        deregister_subscriber, flush_subscribers, register_subscriber,
+    };
+
+    const SUBSCRIBER: &str = "daemon-permission-audit";
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = deregister_subscriber(SUBSCRIBER);
+    let runtime = ManagedRuntime::initialize(
+        GatewayConfig::default(),
+        Vec::new(),
+        "permission-machine-owner".into(),
+    )
+    .await
+    .unwrap();
+    let captured = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let events = Arc::clone(&captured);
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| {
+            if event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .or_else(|| event.data().and_then(|data| data.get("session_id")))
+                .and_then(Value::as_str)
+                .is_some_and(|session| session.starts_with("daemon-permission-audit"))
+                && matches!(
+                    event.name(),
+                    "hook_mark" | "nemo_relay.permission.policy_decision"
+                )
+            {
+                events.lock().unwrap().push(json!({
+                    "name": event.name(),
+                    "data": event.data(),
+                    "metadata": event.metadata(),
+                }));
+            }
+        }),
+    )
+    .unwrap();
+
+    let session_id = "daemon-permission-audit-claude-code";
+    for event_name in ["PreToolUse", "PermissionRequest"] {
+        let mut payload = json!({
+            "session_id": session_id,
+            "hook_event_name": event_name,
+            "permission_mode": "default",
+            "tool_use_id": "audit-tool-1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "pwd"},
+        });
+        if event_name == "PermissionRequest" {
+            payload.as_object_mut().unwrap().remove("tool_use_id");
+        }
+        let response = runtime
+            .handle_hook(
+                HookRoute::Claude,
+                Request::post("/hooks/claude-code")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        if event_name == "PermissionRequest" {
+            assert_eq!(body["hookSpecificOutput"]["decision"]["behavior"], "allow");
+        }
+    }
+    flush_subscribers().unwrap();
+    {
+        let events = captured.lock().unwrap();
+        let marks: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event["name"] == "nemo_relay.permission.policy_decision"
+                    && event["metadata"]["session_id"] == session_id
+            })
+            .collect();
+        assert_eq!(marks.len(), 1);
+        assert!(marks[0]["data"].get("decision").is_none());
+        assert_eq!(marks[0]["data"]["policy_outcome"], "pass");
+        assert_eq!(marks[0]["data"]["decision_source"], "nemo_relay");
+        assert_eq!(marks[0]["data"]["tool_call_id"], "audit-tool-1");
+        assert_eq!(marks[0]["data"]["harness_permission_mode"], "default");
+        assert!(events.iter().any(|event| {
+            event["name"] == "hook_mark"
+                && event["data"]["session_id"] == session_id
+                && event["data"]["permission_mode"] == "default"
+        }));
+        assert!(!marks[0].to_string().contains("permission-machine-owner"));
+    }
+    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn malformed_permission_hooks_fail_closed_in_each_native_response_shape() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let runtime =
@@ -1872,12 +2041,17 @@ async fn malformed_permission_hooks_fail_closed_in_each_native_response_shape() 
     assert_eq!(codex.status(), StatusCode::OK);
     let codex: Value =
         serde_json::from_slice(&codex.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(codex["decision"], "deny");
-    assert!(
-        codex["reason"]
-            .as_str()
-            .is_some_and(|reason| !reason.is_empty())
+    assert_eq!(
+        codex["hookSpecificOutput"]["hookEventName"],
+        "PermissionRequest"
     );
+    assert_eq!(codex["hookSpecificOutput"]["decision"]["behavior"], "deny");
+    assert!(
+        codex["hookSpecificOutput"]["decision"]["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty())
+    );
+    assert!(codex.get("decision").is_none());
 
     let claude = runtime
         .handle_hook(

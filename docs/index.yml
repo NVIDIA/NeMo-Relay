@@ -63,6 +63,9 @@ navigation:
       - page: "Model Pricing"
         path: ./configure-plugins/model-pricing.mdx
         slug: model-pricing
+      - page: "Resource Metrics"
+        path: ./configure-plugins/resource-metrics.mdx
+        slug: resource-metrics
       - page: "Configure Discoverable Plugins"
         path: ./configure-plugins/discoverable-plugins.mdx
         slug: discoverable-plugins

@@ -1437,17 +1437,21 @@ fn decode_response_tool_call(index: usize, value: &Json) -> Option<ResponseToolC
 /// OpenAI and xAI models report cache hits under
 /// `promptTokensDetails.cachedTokens`.
 fn decode_oci_usage(usage: &serde_json::Map<String, Json>) -> Usage {
+    let prompt_tokens = usage.get("promptTokens").and_then(Json::as_u64);
     let cache_read_tokens = usage
         .get("promptTokensDetails")
         .and_then(Json::as_object)
         .and_then(|details| details.get("cachedTokens"))
         .and_then(Json::as_u64);
     Usage {
-        prompt_tokens: usage.get("promptTokens").and_then(Json::as_u64),
+        prompt_tokens,
         completion_tokens: usage.get("completionTokens").and_then(Json::as_u64),
         total_tokens: usage.get("totalTokens").and_then(Json::as_u64),
         cache_read_tokens,
         cache_write_tokens: None,
+        uncached_input_tokens: prompt_tokens
+            .zip(cache_read_tokens)
+            .and_then(|(total, cached)| total.checked_sub(cached)),
         cost: None,
     }
 }

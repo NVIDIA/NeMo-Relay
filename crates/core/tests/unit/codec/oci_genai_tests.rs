@@ -808,6 +808,7 @@ fn test_usage_cached_tokens_mapped_to_cache_read() {
     assert_eq!(usage.prompt_tokens, Some(13));
     assert_eq!(usage.cache_read_tokens, Some(3));
     assert_eq!(usage.cache_write_tokens, None);
+    assert_eq!(usage.uncached_input_tokens, Some(10));
 }
 
 #[test]
@@ -2063,4 +2064,92 @@ fn oci_streaming_codec_infers_api_format_from_event_shape() {
         Some(MessageContent::Text("hello!".into()))
     );
     assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+}
+
+#[test]
+fn edited_generic_messages_encode_roles_and_tool_identifiers_without_exposing_old_content() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(unmodeled_generic());
+    let mut annotated = codec.decode(&original).unwrap();
+    annotated.messages = vec![
+        Message::System {
+            content: MessageContent::Text("safe instructions".into()),
+            name: None,
+        },
+        Message::User {
+            content: MessageContent::Text("safe prompt".into()),
+            name: None,
+        },
+        Message::Tool {
+            content: MessageContent::Text("safe result".into()),
+            tool_call_id: "call-123".into(),
+        },
+    ];
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(
+        encoded.content["chatRequest"]["messages"],
+        json!([
+            {"role": "SYSTEM", "content": [{"type": "TEXT", "text": "safe instructions"}]},
+            {"role": "USER", "content": [{"type": "TEXT", "text": "safe prompt"}]},
+            {"role": "TOOL", "content": [{"type": "TEXT", "text": "safe result"}], "toolCallId": "call-123"},
+        ])
+    );
+    assert_eq!(
+        encoded.content["opcRetryToken"],
+        original.content["opcRetryToken"]
+    );
+    assert_eq!(
+        encoded.content["chatRequest"]["topK"],
+        original.content["chatRequest"]["topK"]
+    );
+    assert_eq!(codec.decode(&encoded).unwrap().messages, annotated.messages);
+}
+
+#[test]
+fn oci_envelope_edits_update_and_remove_only_selected_provider_fields() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(unmodeled_generic());
+    let mut annotated = codec.decode(&original).unwrap();
+    for (compartment_id, serving_mode) in [
+        (
+            Some("replacement-compartment".into()),
+            Some(json!({"servingType": "ON_DEMAND", "modelId": "replacement-model"})),
+        ),
+        (None, None),
+    ] {
+        annotated.api_specific = Some(ApiSpecificRequest::OCIGenAI {
+            compartment_id: compartment_id.clone(),
+            serving_mode: serving_mode.clone(),
+            api_format: Some("GENERIC".into()),
+        });
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        assert_eq!(
+            encoded.content.get("compartmentId"),
+            compartment_id.map(Json::String).as_ref()
+        );
+        assert_eq!(encoded.content.get("servingMode"), serving_mode.as_ref());
+        assert_eq!(
+            encoded.content["chatRequest"],
+            original.content["chatRequest"]
+        );
+        assert_eq!(
+            encoded.content["opcRetryToken"],
+            original.content["opcRetryToken"]
+        );
+    }
+}
+
+#[test]
+fn edited_oci_requests_reject_messages_from_other_provider_surfaces() {
+    for payload in [generic_chat_details(), cohere_chat_details()] {
+        let original = make_request(payload);
+        let codec = OCIGenAIChatCodec;
+        let mut annotated = codec.decode(&original).unwrap();
+        annotated.messages[0] = Message::Developer {
+            content: MessageContent::Text("unsupported instructions".into()),
+            name: None,
+        };
+        let error = codec.encode(&annotated, &original).unwrap_err();
+        assert!(error.to_string().contains("cannot be encoded"), "{error}");
+    }
 }

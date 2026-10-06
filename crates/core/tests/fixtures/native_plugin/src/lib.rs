@@ -12,19 +12,40 @@ use nemo_relay_plugin::{
     Json, LlmJsonAsyncStream, LlmRequest, LlmRequestInterceptOutcome, MetricKind,
     MetricMeasurement, MetricValueType, NEMO_RELAY_NATIVE_ABI_VERSION,
     NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL, NativeExecutorConfig, NativePlugin,
-    NemoRelayNativeAsyncCallbackState,
-    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
-    NemoRelayNativeAsyncStream, NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3,
-    NemoRelayNativeHostApiV4, NemoRelayNativeHostApiV5, NemoRelayNativePluginContext,
-    NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus,
-    PendingMarkSpec, PluginContext, PluginRuntime, RuntimeRegistrationKind, ScopeCategory,
-    ScopeType, ToolExecutionInterceptOutcome,
+    NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING, NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL,
+    NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT, NativeExecutorConfig, NativePlugin,
+    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareCb,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
+    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
+    NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeHostApiV7,
+    NemoRelayNativeLlmExecutionContext, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
+    NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus, PendingMarkSpec,
+    PluginContext, PluginRuntime, RuntimeRegistrationKind, ScopeCategory, ScopeType,
+    ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct FixtureNativePlugin;
+
+struct DropScope {
+    runtime: PluginRuntime,
+    name: &'static str,
+}
+
+impl Drop for DropScope {
+    fn drop(&mut self) {
+        if let Ok(mut scope) = self.runtime.scope(
+            self.name,
+            ScopeType::Custom,
+            None,
+            None,
+            None,
+        ) {
+            let _ = scope.close(None, None);
+        }
+    }
+}
 
 static ASYNC_PENDING_ENTERED: AtomicBool = AtomicBool::new(false);
 
@@ -199,71 +220,7 @@ impl NativePlugin for FixtureNativePlugin {
                 }
             }
         })?;
-        ctx.register_tool_execution_intercept("fixture_tool_execution", 0, {
-            let runtime = runtime.clone();
-            move |context, next| {
-                let runtime = runtime.clone();
-                async move {
-                    let args = context.args;
-                    let args = mark_json(args, "native_plugin_tool_execution_request");
-                    let result = if args
-                        .get("use_isolated_next")
-                        .and_then(Json::as_bool)
-                        .unwrap_or(false)
-                    {
-                        let isolated = runtime.create_scope_stack()?;
-                        let previous = runtime.capture_scope_stack_thread()?;
-                        if isolated.set_thread() != NemoRelayStatus::Ok {
-                            return Err("failed to install isolated scope stack".into());
-                        }
-                        let mut scope = runtime.scope(
-                            "fixture.native.isolated.next",
-                            ScopeType::Custom,
-                            None,
-                            None,
-                            Some(&Json::String("isolated-next-input".into())),
-                        )?;
-                        let call_result = next.call(args).await;
-                        let close_result =
-                            scope.close(Some(&Json::String("isolated-next-output".into())), None);
-                        if previous.restore() != NemoRelayStatus::Ok {
-                            return Err("failed to restore callback scope stack".into());
-                        }
-                        close_result?;
-                        call_result?
-                    } else if args
-                        .get("use_concurrent_next")
-                        .and_then(Json::as_bool)
-                        .unwrap_or(false)
-                    {
-                        let first_next = next.clone();
-                        let (first, second) =
-                            tokio::join!(first_next.call(args.clone()), next.call(args),);
-                        let result = first?;
-                        second?;
-                        result
-                    } else {
-                        next.call(args).await?
-                    };
-                    let mut result = result;
-                    result.result = mark_json(result.result, "native_plugin_tool_execution");
-                    Ok(
-                        ToolExecutionInterceptOutcome::from(result).with_pending_mark(
-                            PendingMarkSpec::builder()
-                                .name("fixture.native.tool_execution.mark")
-                                .category(EventCategory::custom())
-                                .category_profile(CategoryProfile {
-                                    subtype: Some("fixture.native.tool_execution".into()),
-                                    ..CategoryProfile::default()
-                                })
-                                .data(json!({ "source": "native_tool_execution" }))
-                                .metadata(json!({ "fixture": true }))
-                                .build(),
-                        ),
-                    )
-                }
-            }
-        })?;
+        register_fixture_tool_execution(ctx, &runtime)?;
 
         ctx.register_llm_sanitize_request_guardrail(
             "fixture_llm_sanitize_request",
@@ -328,7 +285,7 @@ impl NativePlugin for FixtureNativePlugin {
         ctx.register_llm_execution_intercept(
             "fixture_llm_execution",
             0,
-            |_name, request, next| async move {
+            |_name, request, _context, next| async move {
                 let response = next
                     .call(mark_llm_request(
                         request,
@@ -341,7 +298,7 @@ impl NativePlugin for FixtureNativePlugin {
         ctx.register_llm_stream_execution_intercept(
             "fixture_llm_stream_execution",
             0,
-            |_name, request, next| async move {
+            |_name, request, _context, next| async move {
                 let stream = next
                     .call(mark_llm_request(
                         request,
@@ -354,9 +311,170 @@ impl NativePlugin for FixtureNativePlugin {
                 Ok(stream)
             },
         )?;
+        ctx.register_llm_execution_intercept("fixture_llm_execution_cancellation", -1, {
+            let runtime = runtime.clone();
+            move |name, request, _context, next| {
+                let runtime = runtime.clone();
+                async move {
+                    if name != "native-fixture-cancelled-unary" {
+                        return next.call(request).await;
+                    }
+                    let _drop_scope = DropScope {
+                        runtime,
+                        name: "fixture.native.unary.drop",
+                    };
+                    ASYNC_PENDING_ENTERED.store(true, Ordering::Release);
+                    futures::future::pending::<nemo_relay_plugin::Result<Json>>().await
+                }
+            }
+        })?;
+        ctx.register_llm_stream_execution_intercept(
+            "fixture_llm_stream_execution_cancellation",
+            -1,
+            {
+                let runtime = runtime.clone();
+                move |name, request, _context, next| {
+                    let runtime = runtime.clone();
+                    async move {
+                        if name != "native-fixture-cancelled-stream" {
+                            return next.call(request).await;
+                        }
+                        let drop_scope = DropScope {
+                            runtime,
+                            name: "fixture.native.stream.drop",
+                        };
+                        let stream = next.call(request).await?;
+                        let stream: LlmJsonAsyncStream = Box::pin(stream.map(move |chunk| {
+                            let _ = &drop_scope;
+                            chunk
+                        }));
+                        Ok(stream)
+                    }
+                }
+            },
+        )?;
 
         Ok(())
     }
+}
+
+fn register_fixture_tool_execution(
+    ctx: &mut PluginContext<'_>,
+    runtime: &PluginRuntime,
+) -> nemo_relay_plugin::Result<()> {
+    ctx.register_tool_execution_intercept("fixture_tool_execution", 0, {
+        let runtime = runtime.clone();
+        move |context, next| {
+            let runtime = runtime.clone();
+            async move {
+                let args = context.args;
+                let args = mark_json(args, "native_plugin_tool_execution_request");
+                let result = if args
+                    .get("use_scoped_next")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false)
+                {
+                    let mut scope = runtime.scope(
+                        "fixture.native.scoped.next",
+                        ScopeType::Custom,
+                        None,
+                        None,
+                        Some(&Json::String("scoped-next-input".into())),
+                    )?;
+                    let call_result = next.call(args).await;
+                    let close_result =
+                        scope.close(Some(&Json::String("scoped-next-output".into())), None);
+                    close_result?;
+                    call_result?
+                } else if args
+                    .get("use_isolated_next")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false)
+                {
+                    let isolated = runtime.create_scope_stack()?;
+                    let previous = runtime.capture_scope_stack_thread()?;
+                    if isolated.set_thread() != NemoRelayStatus::Ok {
+                        return Err("failed to install isolated scope stack".into());
+                    }
+                    let mut scope = runtime.scope(
+                        "fixture.native.isolated.next",
+                        ScopeType::Custom,
+                        None,
+                        None,
+                        Some(&Json::String("isolated-next-input".into())),
+                    )?;
+                    let call_result = next.call(args).await;
+                    let close_result =
+                        scope.close(Some(&Json::String("isolated-next-output".into())), None);
+                    if previous.restore() != NemoRelayStatus::Ok {
+                        return Err("failed to restore callback scope stack".into());
+                    }
+                    close_result?;
+                    call_result?
+                } else if args
+                    .get("use_concurrent_next")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false)
+                {
+                    let first_next = next.clone();
+                    let (first, second) =
+                        tokio::join!(first_next.call(args.clone()), next.call(args),);
+                    let result = first?;
+                    second?;
+                    result
+                } else {
+                    next.call(args).await?
+                };
+                let mut result = result;
+                result.result = mark_json(result.result, "native_plugin_tool_execution");
+                Ok(
+                    ToolExecutionInterceptOutcome::from(result).with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("fixture.native.tool_execution.mark")
+                            .category(EventCategory::custom())
+                            .category_profile(CategoryProfile {
+                                subtype: Some("fixture.native.tool_execution".into()),
+                                ..CategoryProfile::default()
+                            })
+                            .data(json!({ "source": "native_tool_execution" }))
+                            .metadata(json!({ "fixture": true }))
+                            .build(),
+                    ),
+                )
+            }
+        }
+    })?;
+    ctx.register_tool_execution_intercept("fixture_tool_execution_nested", 1, {
+        let runtime = runtime.clone();
+        move |context, next| {
+            let runtime = runtime.clone();
+            async move {
+                let args = context.args;
+                if !args
+                    .get("use_scoped_next")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false)
+                {
+                    return next.call(args).await.map(Into::into);
+                }
+                let mut scope = runtime.scope(
+                    "fixture.native.scoped.next.downstream",
+                    ScopeType::Custom,
+                    None,
+                    None,
+                    Some(&Json::String("scoped-next-downstream-input".into())),
+                )?;
+                let call_result = next.call(args).await;
+                let close_result = scope.close(
+                    Some(&Json::String("scoped-next-downstream-output".into())),
+                    None,
+                );
+                close_result?;
+                call_result.map(Into::into)
+            }
+        }
+    })?;
+    Ok(())
 }
 
 fn register_fixture_event_metadata_injector(
@@ -528,7 +646,7 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v2(
     }
 }
 
-/// Raw ABI-v5 entry used to verify the current table.
+/// Raw ABI-v5 entry used to verify that stale native binaries are rejected.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v5(
     host: *const NemoRelayNativeHostApiV1,
@@ -538,9 +656,26 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v5(
         fixture_compat_entry(
             host,
             out,
-            NEMO_RELAY_NATIVE_ABI_VERSION,
+            NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT,
             std::mem::size_of::<NemoRelayNativeHostApiV5>(),
             b"fixture_native_v5",
+        )
+    }
+}
+
+/// Raw ABI-v6 entry used to verify that the immediately stale callback layout is rejected.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v6(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        fixture_compat_entry(
+            host,
+            out,
+            NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING,
+            std::mem::size_of::<NemoRelayNativeHostApiV6>(),
+            b"fixture_native_v6",
         )
     }
 }
@@ -943,7 +1078,7 @@ unsafe extern "C" fn raw_register_event_sanitize_errors(
 }
 
 struct FixtureAsyncPlugin {
-    host: Option<Box<NemoRelayNativeHostApiV3>>,
+    host: Option<Box<NemoRelayNativeHostApiV7>>,
 }
 
 impl NativePlugin for FixtureAsyncPlugin {
@@ -957,25 +1092,25 @@ impl NativePlugin for FixtureAsyncPlugin {
         ctx: &mut PluginContext<'_>,
     ) -> nemo_relay_plugin::Result<()> {
         let host = ctx.host_api();
-        if host.abi_version < 3
-            || host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
+        if host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION
+            || host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
         {
-            return Err("fixture async plugin requires ABI v3".into());
+            return Err("fixture async plugin requires ABI v7".into());
         }
         self.host = Some(Box::new(unsafe {
-            *(host as *const _ as *const NemoRelayNativeHostApiV3)
+            *(host as *const _ as *const NemoRelayNativeHostApiV7)
         }));
         let user_data = self
             .host
             .as_deref()
-            .map(|host| (host as *const NemoRelayNativeHostApiV3).cast_mut().cast())
+            .map(|host| (host as *const NemoRelayNativeHostApiV7).cast_mut().cast())
             .expect("fixture async host was initialized");
 
         let registrations: [(
             NemoRelayNativeAsyncMiddlewareKind,
             &str,
             NemoRelayNativeAsyncMiddlewareCb,
-        ); 13] = [
+        ); 12] = [
             (
                 NemoRelayNativeAsyncMiddlewareKind::ToolSanitizeRequest,
                 "fixture_async_tool_sanitize_request",
@@ -1022,11 +1157,6 @@ impl NativePlugin for FixtureAsyncPlugin {
                 raw_async_passthrough_callback,
             ),
             (
-                NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept,
-                "fixture_async_llm_execution",
-                raw_async_tool_execution_callback,
-            ),
-            (
                 NemoRelayNativeAsyncMiddlewareKind::MarkSanitize,
                 "fixture_async_mark",
                 raw_async_passthrough_callback,
@@ -1057,6 +1187,20 @@ impl NativePlugin for FixtureAsyncPlugin {
             if status != NemoRelayStatus::Ok {
                 return Err(format!("async registration failed: {status:?}"));
             }
+        }
+        let status = unsafe {
+            ctx.register_async_llm_execution_intercept_raw(
+                "fixture_async_llm_execution",
+                0,
+                raw_async_llm_execution_callback,
+                user_data,
+                None,
+            )
+        };
+        if status != NemoRelayStatus::Ok {
+            return Err(format!(
+                "async LLM execution registration failed: {status:?}"
+            ));
         }
         let status = unsafe {
             ctx.register_async_stream_middleware_raw(
@@ -1115,6 +1259,7 @@ unsafe extern "C" fn raw_async_stream_forward(
 unsafe extern "C" fn raw_async_stream_callback(
     user_data: *mut c_void,
     invocation_json: *const NemoRelayNativeString,
+    _context: *const NemoRelayNativeLlmExecutionContext,
     next: *const NemoRelayNativeAsyncNext,
     stream: *const NemoRelayNativeAsyncStream,
 ) -> u32 {
@@ -1159,6 +1304,16 @@ unsafe extern "C" fn raw_async_stream_callback(
         }
         NemoRelayNativeAsyncCallbackState::Complete as u32
     }
+}
+
+unsafe extern "C" fn raw_async_llm_execution_callback(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    _context: *const NemoRelayNativeLlmExecutionContext,
+    next: *const NemoRelayNativeAsyncNext,
+    completion: *const nemo_relay_plugin::NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    unsafe { raw_async_tool_execution_callback(user_data, invocation_json, next, completion) }
 }
 
 unsafe extern "C" fn raw_async_allow_callback(

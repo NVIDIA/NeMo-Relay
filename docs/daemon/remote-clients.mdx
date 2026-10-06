@@ -62,8 +62,10 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' \
   https://relay.example.com:8443/v1/models
 ```
 
-Without a route credential, the expected HTTP status is `401`. This checks DNS,
-TLS trust, and access to the daemon; it is not worker verification. A public-CA
+Without a route credential, the daemon passes the request through to the
+configured provider, so the expected HTTP status is the provider's answer to an
+unauthenticated request, normally `401`. This checks DNS, TLS trust, and access
+to the daemon; it is not worker verification. A public-CA
 certificate normally needs no additional trust-store entry. Restart running
 harnesses after changing trust. Relay uses native trust roots for daemon HTTPS.
 

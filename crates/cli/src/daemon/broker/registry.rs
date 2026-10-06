@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use thiserror::Error;
@@ -11,8 +11,26 @@ use crate::daemon::common::identity::{Fingerprint, TokenDigest};
 use crate::daemon::common::protocol::{BrokerDirective, WorkerLaunch};
 
 const DEFAULT_RETRY_AFTER_MS: u64 = 100;
+const PUBLISHED_ACTIVATION_CAPACITY: usize = 32;
+const PUBLISHED_ACTIVATION_RETENTION_MS: u64 = 300_000;
+
+fn activation_retry_delay(attempts: u32) -> u64 {
+    (1_000_u64 << attempts.saturating_sub(1).min(6)).min(60_000)
+}
+
 const MAX_ROUTE_BINDINGS: usize = 4_096;
 const MAX_MCP_REFERENCES_PER_ROUTE: usize = 1_024;
+/// Default number of distinct route tokens one machine-user identity may hold at once.
+///
+/// A replaced token file yields a new token for the same identity while sessions holding the old
+/// token keep running, so a route accepts several tokens instead of rebinding to the latest one.
+/// This is a resource bound on the in-memory token table, not a security control: a new token at
+/// the limit first releases the identity's least recently registered token that has no live MCP
+/// session, and is rejected only when every bound token is in use. Operators can change it with
+/// `nemo-relay daemon --max-tokens-per-identity` or `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY`.
+pub(crate) const DEFAULT_MAX_TOKENS_PER_IDENTITY: usize = 4;
+/// Upper bound accepted for the per-identity token limit.
+pub(crate) const MAX_TOKENS_PER_IDENTITY_LIMIT: usize = 64;
 
 /// An authenticated MCP registration applied idempotently by session ID.
 #[derive(Debug, Clone)]
@@ -26,8 +44,10 @@ pub(crate) struct McpRegistration {
 /// A lock-bounded broker registry keyed by stable user-machine fingerprint.
 pub(crate) struct Registry {
     global_pass_through: bool,
+    require_worker: bool,
     retry_after_ms: u64,
     route_capacity: usize,
+    max_tokens_per_identity: usize,
     inner: RwLock<RegistryInner>,
 }
 
@@ -75,6 +95,7 @@ impl Registry {
         &self,
         fingerprint: Fingerprint,
         permit: &RecoveryPermit,
+        launch_activation_id: Option<&str>,
         target: Arc<WorkerTarget>,
     ) -> Result<Option<String>, RegistryError> {
         let mut inner = self.write();
@@ -85,18 +106,18 @@ impl Registry {
         if route.refs.is_empty() {
             return Err(RegistryError::NoLiveMcpReferences);
         }
-        let authorized = match (&route.state, permit) {
+        let canceled_activation = match (&route.state, permit) {
             (
                 RouteState::Activating { launch, .. },
                 RecoveryPermit::Activating { activation_id },
-            ) => launch.activation_id == *activation_id,
+            ) if launch.activation_id == *activation_id => Some(activation_id.clone()),
             (
                 RouteState::Ready { target },
                 RecoveryPermit::ExistingWorker {
                     worker_id,
                     recovering: false,
                 },
-            ) => target.worker_id() == worker_id,
+            ) if target.worker_id() == worker_id => None,
             (
                 RouteState::Recovering {
                     target: Some(target),
@@ -106,16 +127,12 @@ impl Registry {
                     worker_id,
                     recovering: true,
                 },
-            ) => target.worker_id() == worker_id,
-            _ => false,
+            ) if target.worker_id() == worker_id => None,
+            _ => return Err(RegistryError::RecoveryGenerationChanged),
         };
-        if !authorized {
-            return Err(RegistryError::RecoveryGenerationChanged);
+        if let Some(activation_id) = launch_activation_id {
+            route.record_published_activation(activation_id);
         }
-        let canceled_activation = match &route.state {
-            RouteState::Activating { launch, .. } => Some(launch.activation_id.clone()),
-            _ => None,
-        };
         route.state = RouteState::Ready { target };
         Ok(canceled_activation)
     }
@@ -124,10 +141,168 @@ impl Registry {
     pub(crate) fn new(global_pass_through: bool) -> Self {
         Self {
             global_pass_through,
+            require_worker: false,
             retry_after_ms: DEFAULT_RETRY_AFTER_MS,
             route_capacity: MAX_ROUTE_BINDINGS,
+            max_tokens_per_identity: DEFAULT_MAX_TOKENS_PER_IDENTITY,
             inner: RwLock::new(RegistryInner::default()),
         }
+    }
+
+    /// Sets how many distinct route tokens one identity may hold; see
+    /// [`DEFAULT_MAX_TOKENS_PER_IDENTITY`].
+    pub(crate) fn with_max_tokens_per_identity(mut self, max_tokens_per_identity: usize) -> Self {
+        self.max_tokens_per_identity =
+            max_tokens_per_identity.clamp(1, MAX_TOKENS_PER_IDENTITY_LIMIT);
+        self
+    }
+
+    pub(crate) fn with_require_worker(mut self, require_worker: bool) -> Self {
+        self.require_worker = require_worker;
+        self
+    }
+
+    /// Whether every public request must be served by an authenticated worker.
+    pub(crate) const fn requires_worker(&self) -> bool {
+        self.require_worker
+    }
+
+    pub(crate) fn activation_progress(&self, now: tokio::time::Instant) -> Vec<(Fingerprint, u64)> {
+        let mut inner = self.write();
+        inner
+            .routes
+            .iter_mut()
+            .filter_map(|(fingerprint, route)| {
+                let started = route.activation_started?;
+                let last = route.last_startup_progress.unwrap_or(started);
+                if matches!(route.state, RouteState::Activating { .. })
+                    && now.saturating_duration_since(last).as_secs() >= 60
+                {
+                    route.last_startup_progress = Some(now);
+                    Some((
+                        *fingerprint,
+                        now.saturating_duration_since(started).as_millis() as u64,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn activation_retry(&self, fingerprint: Fingerprint) -> (u32, u64) {
+        self.read()
+            .routes
+            .get(&fingerprint)
+            .map_or((0, 0), |route| {
+                (
+                    route.attempts,
+                    route
+                        .retry_at_unix_ms
+                        .saturating_sub(crate::daemon::common::control::now_unix_ms()),
+                )
+            })
+    }
+
+    pub(crate) fn startup_elapsed_ms(&self, fingerprint: Fingerprint) -> u64 {
+        self.read()
+            .routes
+            .get(&fingerprint)
+            .and_then(|route| route.activation_started)
+            .map_or(0, |started| started.elapsed().as_millis() as u64)
+    }
+
+    /// Connection eligibility is independent of retained references during reconnect grace.
+    pub(crate) fn mcp_connected(&self, fingerprint: Fingerprint, session_id: &McpSessionId) {
+        let mut inner = self.write();
+        if let Some(route) = inner.routes.get_mut(&fingerprint)
+            && route.refs.contains_key(session_id)
+        {
+            route.connected.insert(session_id.clone());
+        }
+    }
+
+    pub(crate) fn mcp_disconnected(
+        &self,
+        fingerprint: Fingerprint,
+        session_id: &McpSessionId,
+    ) -> Option<String> {
+        let mut inner = self.write();
+        let route = inner.routes.get_mut(&fingerprint)?;
+        route.connected.remove(session_id);
+        if matches!(&route.state, RouteState::Activating { owner, .. } if owner == session_id) {
+            let RouteState::Activating { launch, .. } = std::mem::replace(
+                &mut route.state,
+                RouteState::PassThrough { permanent: false },
+            ) else {
+                unreachable!()
+            };
+            // Owner loss is a consumed attempt, but handoff need not wait for the old lease.
+            route.retry_at_unix_ms = 0;
+            return Some(launch.activation_id);
+        }
+        None
+    }
+
+    pub(crate) fn activation_candidates(&self, now: u64) -> Vec<(Fingerprint, McpSessionId)> {
+        self.read()
+            .routes
+            .iter()
+            .filter_map(|(fingerprint, route)| {
+                let launchable = matches!(
+                    &route.state,
+                    RouteState::Empty
+                        | RouteState::PassThrough { permanent: false }
+                        | RouteState::Recovering { target: None, .. }
+                );
+                (launchable && now >= route.retry_at_unix_ms)
+                    .then(|| {
+                        route
+                            .connected
+                            .iter()
+                            .find(|id| route.refs.contains_key(*id))
+                    })
+                    .flatten()
+                    .cloned()
+                    .map(|id| (*fingerprint, id))
+            })
+            .collect()
+    }
+
+    pub(crate) fn cancel_activation(
+        &self,
+        fingerprint: Fingerprint,
+        session_id: &McpSessionId,
+        activation_id: &str,
+    ) -> Result<crate::daemon::common::control::ActivationCancellation, RegistryError> {
+        use crate::daemon::common::control::ActivationCancellation;
+        let mut inner = self.write();
+        let route = inner
+            .routes
+            .get_mut(&fingerprint)
+            .ok_or(RegistryError::UnknownRoute)?;
+        if route.published_activation.as_deref() == Some(activation_id)
+            || route.published_activations.iter().any(|(id, expires)| {
+                id == activation_id && *expires > crate::daemon::common::control::now_unix_ms()
+            })
+        {
+            return Ok(ActivationCancellation::Published);
+        }
+        if let RouteState::Activating { owner, launch } = &route.state
+            && launch.activation_id == activation_id
+        {
+            if owner != session_id {
+                return Err(RegistryError::NotLaunchOwner);
+            }
+            route.state = if route.refs.is_empty() {
+                RouteState::Empty
+            } else {
+                RouteState::PassThrough { permanent: false }
+            };
+            route.retry_at_unix_ms = 0;
+            return Ok(ActivationCancellation::Cancelled);
+        }
+        Ok(ActivationCancellation::Superseded)
     }
 
     #[cfg(test)]
@@ -154,11 +329,18 @@ impl Registry {
         evict_inactive_routes_at_capacity(&mut inner, fingerprint, self.route_capacity);
         validate_binding(&inner, fingerprint, token_digest)?;
         validate_capacity(&inner, fingerprint, self.route_capacity)?;
-        inner.tokens.insert(token_digest, fingerprint);
-        inner
-            .routes
-            .entry(fingerprint)
-            .or_insert_with(|| RouteEntry::new(token_digest, self.global_pass_through));
+        admit_token(
+            &mut inner,
+            fingerprint,
+            token_digest,
+            self.max_tokens_per_identity,
+        )?;
+        bind_token(
+            &mut inner,
+            fingerprint,
+            token_digest,
+            self.global_pass_through,
+        );
         Ok(())
     }
 
@@ -178,25 +360,47 @@ impl Registry {
         );
         validate_binding(&inner, registration.fingerprint, registration.token_digest)?;
         validate_capacity(&inner, registration.fingerprint, self.route_capacity)?;
-        inner
-            .tokens
-            .insert(registration.token_digest, registration.fingerprint);
-        let route = inner
-            .routes
-            .entry(registration.fingerprint)
-            .or_insert_with(|| {
-                RouteEntry::new(registration.token_digest, self.global_pass_through)
-            });
-        if !route.refs.contains_key(&registration.session_id)
+        // Check reference capacity before binding, so a rejected registration never consumes one
+        // of the identity's limited token slots.
+        if let Some(route) = inner.routes.get(&registration.fingerprint)
+            && !route.refs.contains_key(&registration.session_id)
             && route.refs.len() >= MAX_MCP_REFERENCES_PER_ROUTE
         {
             return Err(RegistryError::McpReferenceCapacityReached);
         }
+        admit_token(
+            &mut inner,
+            registration.fingerprint,
+            registration.token_digest,
+            self.max_tokens_per_identity,
+        )?;
+        let route = bind_token(
+            &mut inner,
+            registration.fingerprint,
+            registration.token_digest,
+            self.global_pass_through,
+        );
         route.refs.insert(
             registration.session_id.clone(),
             registration.lease_expires_at_unix_ms,
         );
+        route
+            .ref_tokens
+            .insert(registration.session_id.clone(), registration.token_digest);
         Ok(route.directive_for(&registration.session_id, launch, self.retry_after_ms))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register_connected_mcp(
+        &self,
+        registration: McpRegistration,
+        launch: WorkerLaunch,
+    ) -> Result<BrokerDirective, RegistryError> {
+        let fingerprint = registration.fingerprint;
+        let id = registration.session_id.clone();
+        let directive = self.register_mcp(registration, launch)?;
+        self.mcp_connected(fingerprint, &id);
+        Ok(directive)
     }
 
     /// Renews an existing MCP reference without changing its lifecycle state.
@@ -265,6 +469,8 @@ impl Registry {
             .routes
             .get_mut(&fingerprint)
             .ok_or(RegistryError::UnknownRoute)?;
+        route.connected.remove(session_id);
+        route.ref_tokens.remove(session_id);
         if route.refs.remove(session_id).is_none() {
             return Ok(ReleaseAction::NoChange);
         }
@@ -302,6 +508,8 @@ impl Registry {
             };
             for session in expired {
                 route.refs.remove(&session);
+                route.ref_tokens.remove(&session);
+                route.connected.remove(&session);
             }
             let action = route.after_reference_removed(&removed_session, drain_deadline_unix_ms);
             if !matches!(action, ReleaseAction::NoChange) {
@@ -328,6 +536,7 @@ impl Registry {
         }
         match &route.state {
             RouteState::Activating { launch, .. } if launch.activation_id == activation_id => {
+                route.record_published_activation(activation_id);
                 route.state = RouteState::Ready { target };
                 Ok(())
             }
@@ -352,6 +561,8 @@ impl Registry {
             .ok_or(RegistryError::UnknownRoute)?;
         match &route.state {
             RouteState::Activating { launch, .. } if launch.activation_id == activation_id => {
+                route.retry_at_unix_ms = crate::daemon::common::control::now_unix_ms()
+                    .saturating_add(activation_retry_delay(route.attempts));
                 route.state = if route.refs.is_empty() {
                     RouteState::Empty
                 } else {
@@ -389,6 +600,8 @@ impl Registry {
             } else {
                 RouteState::PassThrough { permanent: false }
             };
+            route.retry_at_unix_ms =
+                now_unix_ms.saturating_add(activation_retry_delay(route.attempts));
             expired.push(ExpiredActivation {
                 fingerprint: *fingerprint,
                 activation_id,
@@ -397,11 +610,10 @@ impl Registry {
         expired
     }
 
-    /// Converts an authenticated worker communication failure into route-wide pass-through.
+    /// Marks the assigned worker unavailable while its control connection recovers.
     ///
     /// The worker ID prevents a delayed failure from an old stream from displacing a newer ready
-    /// generation. An activation that raced the failed request is returned so its grant can be
-    /// revoked by the control plane.
+    /// generation or an activation that raced the failed request.
     pub(crate) fn mark_worker_communication_failed(
         &self,
         fingerprint: Fingerprint,
@@ -412,71 +624,68 @@ impl Registry {
             .routes
             .get_mut(&fingerprint)
             .ok_or(RegistryError::UnknownRoute)?;
-        let state = std::mem::replace(&mut route.state, RouteState::Empty);
-        let canceled_activation = match state {
-            RouteState::Ready { target } if target.worker_id() == worker_id => None,
-            RouteState::Draining {
-                target,
-                deadline_unix_ms,
+        match &route.state {
+            RouteState::Ready { target }
+            | RouteState::Recovering {
+                target: Some(target),
+                ..
             } if target.worker_id() == worker_id => {
-                route.state = RouteState::Draining {
-                    target,
-                    deadline_unix_ms,
-                };
-                return Err(RegistryError::InvalidState {
+                target.set_control_available(false);
+                Ok(None)
+            }
+            RouteState::Draining { target, .. } if target.worker_id() == worker_id => {
+                Err(RegistryError::InvalidState {
                     expected: RouteStateKind::Ready,
                     actual: RouteStateKind::Draining,
-                });
+                })
             }
-            RouteState::Recovering { target, .. }
-                if target
-                    .as_ref()
-                    .is_none_or(|target| target.worker_id() == worker_id) =>
-            {
-                None
-            }
-            RouteState::Activating { launch, .. } => Some(launch.activation_id),
-            RouteState::PassThrough { permanent } => {
-                route.state = RouteState::PassThrough { permanent };
-                return Ok(None);
-            }
-            RouteState::Empty => return Ok(None),
-            RouteState::Ready { target } => {
-                route.state = RouteState::Ready { target };
-                return Err(RegistryError::WorkerMismatch);
-            }
-            RouteState::Draining {
-                target,
-                deadline_unix_ms,
-            } => {
-                route.state = RouteState::Draining {
-                    target,
-                    deadline_unix_ms,
+            _ => Err(RegistryError::WorkerMismatch),
+        }
+    }
+
+    /// Failure callbacks from recovery may only affect the generation they preflighted.
+    pub(crate) fn mark_recovery_failed(
+        &self,
+        fingerprint: Fingerprint,
+        permit: &RecoveryPermit,
+    ) -> Result<Option<String>, RegistryError> {
+        let mut inner = self.write();
+        let route = inner
+            .routes
+            .get_mut(&fingerprint)
+            .ok_or(RegistryError::UnknownRoute)?;
+        match (&route.state, permit) {
+            (
+                RouteState::Activating { launch, .. },
+                RecoveryPermit::Activating { activation_id },
+            ) if &launch.activation_id == activation_id => {
+                let activation_id = activation_id.clone();
+                route.retry_at_unix_ms = crate::daemon::common::control::now_unix_ms()
+                    .saturating_add(activation_retry_delay(route.attempts));
+                route.state = if route.refs.is_empty() {
+                    RouteState::Empty
+                } else {
+                    RouteState::PassThrough { permanent: false }
                 };
-                return Err(RegistryError::WorkerMismatch);
+                Ok(Some(activation_id))
             }
-            RouteState::Recovering {
-                target,
-                owner,
-                deadline_unix_ms,
-            } => {
-                route.state = RouteState::Recovering {
-                    target,
-                    owner,
-                    deadline_unix_ms,
-                };
-                return Err(RegistryError::WorkerMismatch);
+            (
+                RouteState::Ready { target }
+                | RouteState::Recovering {
+                    target: Some(target),
+                    ..
+                },
+                RecoveryPermit::ExistingWorker { worker_id, .. },
+            ) if target.worker_id() == worker_id => {
+                target.set_control_available(false);
+                Ok(None)
             }
-        };
-        route.state = if route.refs.is_empty() {
-            RouteState::Empty
-        } else {
-            RouteState::PassThrough { permanent: false }
-        };
-        Ok(canceled_activation)
+            _ => Err(RegistryError::RecoveryGenerationChanged),
+        }
     }
 
     /// Forces an authenticated route into transient pass-through after activation setup fails.
+    #[cfg(test)]
     pub(crate) fn mark_route_pass_through(
         &self,
         fingerprint: Fingerprint,
@@ -513,33 +722,41 @@ impl Registry {
             .routes
             .get_mut(&fingerprint)
             .ok_or(RegistryError::UnknownRoute)?;
-        let state = std::mem::replace(&mut route.state, RouteState::Empty);
-        match state {
-            RouteState::Ready { target } if target.worker_id() == worker_id => {
-                let owner = route.refs.keys().next().cloned();
-                if let Some(owner) = owner {
-                    route.state = RouteState::Recovering {
-                        target: None,
-                        owner: Some(owner.clone()),
-                        deadline_unix_ms: recovery_deadline_unix_ms,
-                    };
-                    Ok(WorkerFailureAction::NominateMcp { session_id: owner })
+        match &route.state {
+            RouteState::Ready { target }
+            | RouteState::Recovering {
+                target: Some(target),
+                ..
+            } if target.worker_id() == worker_id => {
+                route.removed_worker = Some(worker_id.to_owned());
+                route.published_activation = None;
+                route.attempts = 0;
+                route.retry_at_unix_ms = 0;
+                let owner = route
+                    .connected
+                    .iter()
+                    .find(|id| route.refs.contains_key(*id))
+                    .cloned();
+                route.state = if route.refs.is_empty() {
+                    RouteState::Empty
                 } else {
-                    Ok(WorkerFailureAction::RouteEmpty)
-                }
+                    RouteState::Recovering {
+                        target: None,
+                        owner: owner.clone(),
+                        deadline_unix_ms: recovery_deadline_unix_ms,
+                    }
+                };
+                Ok(owner.map_or(WorkerFailureAction::RouteEmpty, |session_id| {
+                    WorkerFailureAction::NominateMcp { session_id }
+                }))
             }
-            RouteState::Ready { target } => {
-                route.state = RouteState::Ready { target };
-                Err(RegistryError::WorkerMismatch)
+            RouteState::Draining { target, .. } if target.worker_id() == worker_id => {
+                Ok(WorkerFailureAction::Draining)
             }
-            other => {
-                let actual = other.kind();
-                route.state = other;
-                Err(RegistryError::InvalidState {
-                    expected: RouteStateKind::Ready,
-                    actual,
-                })
+            _ if route.removed_worker.as_deref() == Some(worker_id) => {
+                Ok(WorkerFailureAction::AlreadyRemoved)
             }
+            _ => Ok(WorkerFailureAction::Superseded),
         }
     }
 
@@ -555,22 +772,36 @@ impl Registry {
             .routes
             .get_mut(&fingerprint)
             .ok_or(RegistryError::UnknownRoute)?;
-        match &route.state {
-            RouteState::Recovering {
-                owner: Some(owner), ..
-            } if owner == session_id => {
-                route.state = RouteState::Activating {
-                    owner: session_id.clone(),
-                    launch: launch.clone(),
-                };
-                Ok(launch.into_directive())
-            }
-            RouteState::Recovering { .. } => Err(RegistryError::NotLaunchOwner),
-            state => Err(RegistryError::InvalidState {
-                expected: RouteStateKind::Recovering,
-                actual: state.kind(),
-            }),
+        if !route.connected.contains(session_id) || !route.refs.contains_key(session_id) {
+            return Err(RegistryError::NotLaunchOwner);
         }
+        if !matches!(
+            &route.state,
+            RouteState::Empty
+                | RouteState::PassThrough { permanent: false }
+                | RouteState::Recovering { target: None, .. }
+        ) {
+            return Err(RegistryError::InvalidState {
+                expected: RouteStateKind::Recovering,
+                actual: route.state.kind(),
+            });
+        }
+        if let RouteState::Recovering {
+            owner: Some(owner), ..
+        } = &route.state
+            && owner != session_id
+            && route.connected.contains(owner)
+        {
+            return Err(RegistryError::NotLaunchOwner);
+        }
+        route.attempts = route.attempts.saturating_add(1);
+        route.activation_started = Some(tokio::time::Instant::now());
+        route.last_startup_progress = None;
+        route.state = RouteState::Activating {
+            owner: session_id.clone(),
+            launch: launch.clone(),
+        };
+        Ok(launch.into_directive())
     }
 
     /// Places a restored route into bounded daemon-restart recovery.
@@ -669,9 +900,35 @@ impl Registry {
     }
 
     /// Completes a drained worker after all requests finish or the deadline elapses.
+    #[cfg(test)]
     pub(crate) fn finish_draining(
         &self,
         fingerprint: Fingerprint,
+        now: u64,
+    ) -> Result<DrainCompletion, RegistryError> {
+        let worker = {
+            let inner = self.read();
+            let route = inner
+                .routes
+                .get(&fingerprint)
+                .ok_or(RegistryError::UnknownRoute)?;
+            match &route.state {
+                RouteState::Draining { target, .. } => target.worker_id().to_owned(),
+                state => {
+                    return Err(RegistryError::InvalidState {
+                        expected: RouteStateKind::Draining,
+                        actual: state.kind(),
+                    });
+                }
+            }
+        };
+        self.finish_draining_worker(fingerprint, &worker, now)
+    }
+
+    pub(crate) fn finish_draining_worker(
+        &self,
+        fingerprint: Fingerprint,
+        worker_id: &str,
         now_unix_ms: u64,
     ) -> Result<DrainCompletion, RegistryError> {
         let mut inner = self.write();
@@ -679,6 +936,14 @@ impl Registry {
             .routes
             .get_mut(&fingerprint)
             .ok_or(RegistryError::UnknownRoute)?;
+        if !matches!(&route.state, RouteState::Draining { target, .. } if target.worker_id() == worker_id)
+        {
+            return Ok(if route.removed_worker.as_deref() == Some(worker_id) {
+                DrainCompletion::AlreadyRemoved
+            } else {
+                DrainCompletion::Superseded
+            });
+        }
         match &route.state {
             RouteState::Draining {
                 target,
@@ -694,6 +959,8 @@ impl Registry {
                 });
             }
         }
+        route.removed_worker = Some(worker_id.to_owned());
+        route.published_activation = None;
         route.state = RouteState::Empty;
         Ok(route
             .refs
@@ -720,17 +987,46 @@ impl Registry {
             .get(fingerprint)
             .ok_or(ResolveError::UnknownToken)?;
         match &route.state {
-            RouteState::Ready { target } => {
+            RouteState::Ready { target } if target.control_available() => {
                 Ok(ResolvedTarget::Worker(target.acquire(*fingerprint)))
             }
-            RouteState::PassThrough { .. } if !route.refs.is_empty() => {
-                Ok(ResolvedTarget::PassThrough)
-            }
+            _ if !route.refs.is_empty() && !self.require_worker => Ok(ResolvedTarget::PassThrough),
             RouteState::PassThrough { .. } => {
                 Err(ResolveError::Unavailable(RouteStateKind::PassThrough))
             }
             state => Err(ResolveError::Unavailable(state.kind())),
         }
+    }
+
+    /// Returns credential-free snapshots of assigned workers for operational status reporting.
+    pub(crate) fn worker_status_snapshots(&self) -> Vec<WorkerStatusSnapshot> {
+        let inner = self.read();
+        let mut snapshots = inner
+            .routes
+            .values()
+            .filter_map(|route| {
+                let target = match &route.state {
+                    RouteState::Ready { target } | RouteState::Draining { target, .. } => target,
+                    RouteState::Recovering {
+                        target: Some(target),
+                        ..
+                    } => target,
+                    RouteState::Empty
+                    | RouteState::Activating { .. }
+                    | RouteState::PassThrough { .. }
+                    | RouteState::Recovering { target: None, .. } => return None,
+                };
+                Some(WorkerStatusSnapshot {
+                    worker_id: target.worker_id().to_owned(),
+                    state: route.state.kind(),
+                    reference_count: route.refs.len(),
+                    control_available: target.control_available(),
+                    in_flight: target.in_flight(),
+                })
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| left.worker_id.cmp(&right.worker_id));
+        snapshots
     }
 
     /// Returns a credential-free route snapshot for status and tests.
@@ -790,31 +1086,129 @@ fn evict_inactive_routes_at_capacity(
                 route.state,
                 RouteState::Empty | RouteState::PassThrough { permanent: true }
             ))
-        .then_some((*fingerprint, route.token_digest))
+        .then_some(*fingerprint)
     });
-    if let Some((fingerprint, token_digest)) = removable {
-        inner.routes.remove(&fingerprint);
-        inner.tokens.remove(&token_digest);
+    if let Some(route) = removable.and_then(|fingerprint| inner.routes.remove(&fingerprint)) {
+        for token_digest in &route.token_digests {
+            inner.tokens.remove(token_digest);
+        }
     }
+}
+
+/// Binds a validated token to the identity's single route, creating the route on first use.
+///
+/// Every digest in `tokens` maps to the route whose `token_digests` contains it; additional
+/// tokens join the existing route and never replace or remove an earlier binding.
+fn bind_token(
+    inner: &mut RegistryInner,
+    fingerprint: Fingerprint,
+    token_digest: TokenDigest,
+    global_pass_through: bool,
+) -> &mut RouteEntry {
+    let newly_bound = inner.tokens.insert(token_digest, fingerprint).is_none();
+    let route = inner
+        .routes
+        .entry(fingerprint)
+        .or_insert_with(|| RouteEntry::new(global_pass_through));
+    if !newly_bound {
+        // Keep `token_digests` in least-recently-registered order for idle-token release.
+        route.token_digests.retain(|digest| *digest != token_digest);
+    }
+    route.token_digests.push(token_digest);
+    route
+}
+
+/// Makes room for a new token at the identity's limit by releasing its least recently registered
+/// token with no live MCP session. A released token resolves as unknown and passes through like any
+/// unbound token; it can bind again later. Rejects only when every bound token is in use.
+fn admit_token(
+    inner: &mut RegistryInner,
+    fingerprint: Fingerprint,
+    token_digest: TokenDigest,
+    max_tokens_per_identity: usize,
+) -> Result<(), RegistryError> {
+    let Some(route) = inner.routes.get_mut(&fingerprint) else {
+        return Ok(());
+    };
+    if route.token_digests.contains(&token_digest)
+        || route.token_digests.len() < max_tokens_per_identity
+    {
+        return Ok(());
+    }
+    let Some(position) = route.token_digests.iter().position(|digest| {
+        !route
+            .ref_tokens
+            .values()
+            .any(|session_digest| session_digest == digest)
+    }) else {
+        return Err(RegistryError::RouteTokenLimitReached);
+    };
+    let released = route.token_digests.remove(position);
+    inner.tokens.remove(&released);
+    log::info!(
+        target: "nemo_relay.daemon",
+        event = "route_token_released",
+        reason = "identity_token_limit";
+        "Released an idle route token to admit a new token for the same identity"
+    );
+    Ok(())
 }
 
 #[derive(Default)]
 struct RegistryInner {
     routes: HashMap<Fingerprint, RouteEntry>,
+    /// Many-to-one: an identity may hold up to its configured per-identity token limit.
     tokens: HashMap<TokenDigest, Fingerprint>,
 }
 
 struct RouteEntry {
-    token_digest: TokenDigest,
+    /// Every token bound to this route; mirrors the route's entries in `RegistryInner::tokens`.
+    token_digests: Vec<TokenDigest>,
     refs: BTreeMap<McpSessionId, u64>,
+    /// The token each referencing MCP session registered with; a bound token without a live
+    /// session here is idle and can be released at the identity's token limit.
+    ref_tokens: BTreeMap<McpSessionId, TokenDigest>,
+    connected: BTreeSet<McpSessionId>,
+    attempts: u32,
+    retry_at_unix_ms: u64,
+    activation_started: Option<tokio::time::Instant>,
+    last_startup_progress: Option<tokio::time::Instant>,
+    published_activations: VecDeque<(String, u64)>,
+    published_activation: Option<String>,
+    removed_worker: Option<String>,
     state: RouteState,
 }
 
 impl RouteEntry {
-    fn new(token_digest: TokenDigest, global_pass_through: bool) -> Self {
+    fn record_published_activation(&mut self, activation_id: &str) {
+        let now_unix_ms = crate::daemon::common::control::now_unix_ms();
+        self.published_activations
+            .retain(|(_, expires)| *expires > now_unix_ms);
+        if self.published_activations.len() >= PUBLISHED_ACTIVATION_CAPACITY {
+            self.published_activations.pop_front();
+        }
+        self.published_activations.push_back((
+            activation_id.to_owned(),
+            now_unix_ms.saturating_add(PUBLISHED_ACTIVATION_RETENTION_MS),
+        ));
+        self.published_activation = Some(activation_id.to_owned());
+        self.attempts = 0;
+        self.retry_at_unix_ms = 0;
+    }
+
+    fn new(global_pass_through: bool) -> Self {
         Self {
-            token_digest,
+            token_digests: Vec::with_capacity(1),
             refs: BTreeMap::new(),
+            ref_tokens: BTreeMap::new(),
+            connected: BTreeSet::new(),
+            attempts: 0,
+            retry_at_unix_ms: 0,
+            activation_started: None,
+            last_startup_progress: None,
+            published_activations: VecDeque::new(),
+            published_activation: None,
+            removed_worker: None,
             state: if global_pass_through {
                 RouteState::PassThrough { permanent: true }
             } else {
@@ -831,6 +1225,9 @@ impl RouteEntry {
     ) -> BrokerDirective {
         match &self.state {
             RouteState::Empty => {
+                self.attempts = self.attempts.saturating_add(1);
+                self.activation_started = Some(tokio::time::Instant::now());
+                self.last_startup_progress = None;
                 self.state = RouteState::Activating {
                     owner: session_id.clone(),
                     launch: launch.clone(),
@@ -991,30 +1388,19 @@ impl RouteEntry {
     }
 
     fn transfer_owner_if_needed(&mut self, removed_session: &McpSessionId) -> ReleaseAction {
-        let replacement = self
-            .refs
-            .keys()
-            .next()
-            .expect("route has live references")
-            .clone();
-        match &mut self.state {
-            RouteState::Activating { owner, launch } if owner == removed_session => {
-                *owner = replacement.clone();
-                ReleaseAction::TransferActivation {
-                    session_id: replacement,
-                    directive: launch.clone().into_directive(),
-                }
-            }
-            RouteState::Recovering { owner, .. }
-                if owner.as_ref().is_some_and(|owner| owner == removed_session) =>
-            {
-                *owner = Some(replacement.clone());
-                ReleaseAction::NominateMcp {
-                    session_id: replacement,
-                }
-            }
-            _ => ReleaseAction::NoChange,
+        if matches!(&self.state, RouteState::Activating { owner, .. } if owner == removed_session) {
+            let RouteState::Activating { launch, .. } = std::mem::replace(
+                &mut self.state,
+                RouteState::PassThrough { permanent: false },
+            ) else {
+                unreachable!()
+            };
+            self.retry_at_unix_ms = 0;
+            return ReleaseAction::CancelActivation {
+                activation_id: launch.activation_id,
+            };
         }
+        ReleaseAction::NoChange
     }
 }
 
@@ -1023,21 +1409,11 @@ fn validate_binding(
     fingerprint: Fingerprint,
     token_digest: TokenDigest,
 ) -> Result<(), RegistryError> {
-    if inner
-        .tokens
-        .get(&token_digest)
-        .is_some_and(|existing| *existing != fingerprint)
-    {
-        return Err(RegistryError::TokenAlreadyBound);
+    match inner.tokens.get(&token_digest) {
+        Some(existing) if *existing == fingerprint => Ok(()),
+        Some(_) => Err(RegistryError::TokenAlreadyBound),
+        None => Ok(()),
     }
-    if inner
-        .routes
-        .get(&fingerprint)
-        .is_some_and(|existing| !existing.token_digest.matches(&token_digest))
-    {
-        return Err(RegistryError::FingerprintTokenMismatch);
-    }
-    Ok(())
 }
 
 fn validate_capacity(
@@ -1062,6 +1438,16 @@ pub(crate) struct RouteSnapshot {
     pub(crate) in_flight: usize,
 }
 
+/// Last-known broker information for an assigned worker generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkerStatusSnapshot {
+    pub(crate) worker_id: String,
+    pub(crate) state: RouteStateKind,
+    pub(crate) reference_count: usize,
+    pub(crate) control_available: bool,
+    pub(crate) in_flight: usize,
+}
+
 /// An activation grant whose signed launch deadline elapsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExpiredActivation {
@@ -1080,18 +1466,14 @@ pub(crate) enum ReleaseAction {
         target: Arc<WorkerTarget>,
         deadline_unix_ms: u64,
     },
-    TransferActivation {
-        session_id: McpSessionId,
-        directive: BrokerDirective,
-    },
-    NominateMcp {
-        session_id: McpSessionId,
-    },
 }
 
 /// Work required after a ready worker disconnects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WorkerFailureAction {
+    AlreadyRemoved,
+    Superseded,
+    Draining,
     NominateMcp { session_id: McpSessionId },
     RouteEmpty,
 }
@@ -1122,6 +1504,8 @@ pub(crate) enum RecoveryAction {
 /// Result of completing a worker drain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DrainCompletion {
+    AlreadyRemoved,
+    Superseded,
     RouteEmpty,
     ActivationRequired { session_id: McpSessionId },
 }
@@ -1131,8 +1515,8 @@ pub(crate) enum DrainCompletion {
 pub(crate) enum RegistryError {
     #[error("the route token is already bound to a different user-machine fingerprint")]
     TokenAlreadyBound,
-    #[error("the user-machine fingerprint is already bound to a different route token")]
-    FingerprintTokenMismatch,
+    #[error("the user-machine fingerprint has reached its route token limit")]
+    RouteTokenLimitReached,
     #[error("the broker route does not exist")]
     UnknownRoute,
     #[error("the broker route binding capacity has been reached")]

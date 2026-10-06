@@ -5,6 +5,9 @@
 
 import asyncio
 import contextvars
+import subprocess
+import sys
+import textwrap
 import threading
 from collections.abc import AsyncIterator, Awaitable
 from typing import Never, NoReturn, cast
@@ -325,6 +328,126 @@ class TestLLMGuardrails:
         assert request_codec_used is True
         assert response_codec_used is True
 
+    async def test_execution_context_exposes_codec_states_operations_and_lifetime(self) -> None:
+        class OpaqueCodec:
+            def __init__(self) -> None:
+                self.inner = OpenAIChatCodec()
+
+            def decode(self, request):
+                return self.inner.decode(request)
+
+            def encode(self, annotated, original):
+                return self.inner.encode(annotated, original)
+
+            def decode_response(self, response):
+                return self.inner.decode_response(response)
+
+        expected = {
+            "py_llm_execution_context_builtin": ("builtin", "openai_chat"),
+            "py_llm_execution_context_opaque": ("opaque", None),
+            "py_llm_execution_context_absent": ("none", None),
+        }
+        seen: list[str] = []
+        retained_codec = None
+
+        async def execution_intercept(name, request, context, next_call):
+            nonlocal retained_codec
+            seen.append(name)
+            expected_kind, expected_id = expected[name]
+            assert context.request_codec.codec.kind == expected_kind
+            assert context.response_codec is not None
+            assert context.response_codec.codec.kind == expected_kind
+
+            if expected_id is not None:
+                assert context.request_codec.codec.id == expected_id
+                assert context.response_codec.codec.id == expected_id
+
+            if expected_kind == "none":
+                assert context.request_codec.resolve_codec() is None
+                assert context.response_codec.resolve_codec() is None
+                return await next_call(request)
+
+            request_codec = context.request_codec.resolve_codec()
+            assert request_codec is not None
+            request = request_codec.encode(request_codec.decode(request), request)
+            retained_codec = retained_codec or request_codec
+
+            response = await next_call(request)
+            resolved_response_codec = context.response_codec.resolve_codec()
+            assert resolved_response_codec is not None
+            assert resolved_response_codec.decode_response(response).model == "test-model"
+            return response
+
+        response = {
+            "id": "chatcmpl-execution-context-matrix",
+            "model": "test-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}],
+        }
+        intercepts.register_llm_execution("py_llm_execution_context_matrix", 1, execution_intercept)
+        try:
+            results = []
+            for name, codec in (
+                ("py_llm_execution_context_builtin", OpenAIChatCodec()),
+                ("py_llm_execution_context_opaque", OpaqueCodec()),
+                ("py_llm_execution_context_absent", None),
+            ):
+                codec_options = {} if codec is None else {"codec": codec, "response_codec": codec}
+                results.append(
+                    await llm.execute(
+                        name,
+                        make_request(),
+                        lambda _request: response,
+                        **codec_options,
+                    )
+                )
+        finally:
+            intercepts.deregister_llm_execution("py_llm_execution_context_matrix")
+
+        assert results == [response, response, response]
+        assert seen == list(expected)
+        assert retained_codec is not None
+        with pytest.raises(RuntimeError, match="LLM execution codec capability is no longer active"):
+            retained_codec.decode(make_request())
+
+    async def test_stream_execution_context_has_no_response_codec(self) -> None:
+        observed = False
+        retained_codec = None
+
+        async def execution_intercept(name, request, context, next_call):
+            nonlocal observed, retained_codec
+            assert name == "py_llm_stream_execution_context"
+            assert context.request_codec.codec.kind == "builtin"
+            retained_codec = context.request_codec.resolve_codec()
+            assert retained_codec is not None
+            assert context.response_codec is None
+            observed = True
+            return await next_call(request)
+
+        async def provider(_request):
+            yield {"token": "ok"}
+
+        codec = OpenAIChatCodec()
+        intercepts.register_llm_stream_execution("py_llm_stream_execution_context", 1, execution_intercept)
+        try:
+            stream = await llm.stream_execute(
+                "py_llm_stream_execution_context",
+                make_request(),
+                provider,
+                lambda _chunk: None,
+                lambda: {},
+                codec=codec,
+                response_codec=codec,
+            )
+            assert retained_codec is not None
+            assert retained_codec.decode(make_request()).model == "test-model"
+            assert [chunk async for chunk in stream] == [{"token": "ok"}]
+            with pytest.raises(RuntimeError, match="LLM execution codec capability is no longer active"):
+                retained_codec.decode(make_request())
+        finally:
+            intercepts.deregister_llm_stream_execution("py_llm_stream_execution_context")
+
+        assert observed
+
     def test_none_omits_payload_and_short_circuits_later_sanitizers(self) -> None:
         events = []
         later_called = False
@@ -604,12 +727,12 @@ class TestLLMIntercepts:
         intercepts.register_llm_execution(
             "py_llm_exec",
             1,
-            lambda name, request, next: {"intercepted": True},
+            lambda name, request, context, next: {"intercepted": True},
         )
         assert intercepts.deregister_llm_execution("py_llm_exec")
 
     def test_stream_execution_intercept(self) -> None:
-        def stream_fn(request, next):
+        def stream_fn(name, request, context, next):
             async def gen():
                 yield {"token": "test"}
 
@@ -636,21 +759,35 @@ class TestLLMInterceptsAsync:
         observed = []
         subscribers.register("py_llm_capture_traceparent", events.append)
 
-        async def execution_intercept(_name, request, next_handler):
-            observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
+        async def execution_intercept(_name, request, _context, next_handler):
+            context = capture_propagation_context()
+            explicit_root = "018f13f0-7c1a-7a80-8000-000000000799"
+            rooted = capture_propagation_context_with_root(explicit_root)
+            assert rooted.root_uuid == explicit_root
+            assert rooted.parent_uuid == context.parent_uuid
+            assert rooted.traceparent is None
+            assert rooted.tracestate is None
+            rootless = capture_rootless_propagation_context()
+            observed.append((context.parent_uuid, context.root_uuid, capture_traceparent(), rootless.traceparent))
             return await next_handler(request)
 
         async def provider(_request):
-            observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
+            context = capture_propagation_context()
+            rootless = capture_rootless_propagation_context()
+            observed.append((context.parent_uuid, context.root_uuid, capture_traceparent(), rootless.traceparent))
             return {"ok": True}
 
         try:
             intercepts.register_llm_execution("py_llm_capture_traceparent", 10, execution_intercept)
-            assert await llm.execute("py_llm_capture_traceparent", make_request(), provider) == {"ok": True}
+            with scope.scope("py-llm-callback-root", ScopeType.Custom) as turn:
+                assert await llm.execute("py_llm_capture_traceparent", make_request(), provider) == {"ok": True}
             await subscribers.flush_async()
             start = _llm_event(events, "py_llm_capture_traceparent", "start")
-            expected = f"00-{start.uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
-            assert observed == [(start.uuid, expected), (start.uuid, expected)]
+            expected = f"00-{turn.uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
+            assert observed == [
+                (start.uuid, turn.uuid, expected, None),
+                (start.uuid, turn.uuid, expected, None),
+            ]
         finally:
             intercepts.deregister_llm_execution("py_llm_capture_traceparent")
             subscribers.deregister("py_llm_capture_traceparent")
@@ -663,7 +800,7 @@ class TestLLMInterceptsAsync:
         observed = []
         subscribers.register("py_llm_capture_propagated_trace_root", events.append)
 
-        async def execution_intercept(_name, request, next_handler):
+        async def execution_intercept(_name, request, _context, next_handler):
             observed.append(capture_traceparent())
             return await next_handler(request)
 
@@ -683,6 +820,56 @@ class TestLLMInterceptsAsync:
             intercepts.deregister_llm_execution("py_llm_capture_propagated_trace_root")
             subscribers.deregister("py_llm_capture_propagated_trace_root")
 
+    async def test_pre_event_callbacks_preserve_exact_imported_w3c_trace_context(self):
+        root_uuid = "018f13f0-7c1a-7a80-8000-000000000721"
+        parent_uuid = "018f13f0-7c1a-7a80-8000-000000000722"
+        traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+        stack = create_scope_stack_from_propagation(
+            PropagationContext(
+                parent_uuid,
+                root_uuid,
+                traceparent=traceparent,
+                tracestate="vendor=value",
+            )
+        )
+        observed = []
+
+        def capture(label):
+            context = capture_propagation_context()
+            observed.append(
+                (
+                    label,
+                    context.parent_uuid,
+                    context.root_uuid,
+                    context.traceparent,
+                    context.tracestate,
+                    capture_traceparent(),
+                )
+            )
+
+        def conditional(_request):
+            capture("conditional")
+            return None
+
+        def request_intercept(_name, request, annotated):
+            capture("request")
+            return LLMRequestInterceptOutcome(request, annotated)
+
+        guardrails.register_llm_conditional_execution("py_llm_imported_w3c_conditional", 10, conditional)
+        intercepts.register_llm_request("py_llm_imported_w3c_request", 10, False, request_intercept)
+        try:
+            with use_scope_stack(stack):
+                assert await llm.execute("py_llm_imported_w3c_pre_event", make_request(), lambda _request: {}) == {}
+        finally:
+            intercepts.deregister_llm_request("py_llm_imported_w3c_request")
+            guardrails.deregister_llm_conditional_execution("py_llm_imported_w3c_conditional")
+
+        expected = (parent_uuid, root_uuid, traceparent, "vendor=value", traceparent)
+        assert observed == [
+            ("conditional", *expected),
+            ("request", *expected),
+        ]
+
     async def test_execution_callback_preserves_imported_w3c_trace_context(self) -> None:
         root_uuid = "018f13f0-7c1a-7a80-8000-000000000711"
         parent_uuid = "018f13f0-7c1a-7a80-8000-000000000712"
@@ -698,12 +885,14 @@ class TestLLMInterceptsAsync:
         observed = []
         subscribers.register("py_llm_capture_propagated_w3c", events.append)
 
-        async def execution_intercept(_name, request, next_handler):
+        async def execution_intercept(_name, request, _context, next_handler):
             context = capture_propagation_context()
             rootless = capture_rootless_propagation_context()
             explicit_root = capture_propagation_context_with_root(root_uuid)
             observed.append(
                 (
+                    context.parent_uuid,
+                    context.root_uuid,
                     context.traceparent,
                     context.tracestate,
                     capture_traceparent(),
@@ -725,11 +914,43 @@ class TestLLMInterceptsAsync:
             start = _llm_event(events, "py_llm_propagated_w3c", "start")
             expected = f"00-4bf92f3577b34da6a3ce929d0e0e4736-{start.uuid.replace('-', '')[-16:]}-00"
             assert observed == [
-                (expected, "vendor=value", expected, expected, "vendor=value", expected, "vendor=value")
+                (
+                    start.uuid,
+                    root_uuid,
+                    expected,
+                    "vendor=value",
+                    expected,
+                    expected,
+                    "vendor=value",
+                    expected,
+                    "vendor=value",
+                )
             ]
         finally:
             intercepts.deregister_llm_execution("py_llm_capture_propagated_w3c")
             subscribers.deregister("py_llm_capture_propagated_w3c")
+
+    async def test_use_scope_stack_inside_callback_overrides_callback_context(self):
+        root_uuid = "018f13f0-7c1a-7a80-8000-000000000711"
+        parent_uuid = "018f13f0-7c1a-7a80-8000-000000000712"
+        stack = create_scope_stack_from_propagation(PropagationContext(parent_uuid, root_uuid))
+        observed = []
+
+        async def provider(_request):
+            before = capture_propagation_context()
+            with use_scope_stack(stack):
+                imported = capture_propagation_context()
+                observed.append((imported.parent_uuid, imported.root_uuid, capture_traceparent()))
+            after = capture_propagation_context()
+            observed.append((before.parent_uuid, after.parent_uuid))
+            return {"ok": True}
+
+        assert await llm.execute("py_llm_use_imported_stack", make_request(), provider) == {"ok": True}
+
+        expected = f"00-{root_uuid.replace('-', '')}-{parent_uuid.replace('-', '')[-16:]}-01"
+        assert observed[0] == (parent_uuid, root_uuid, expected)
+        assert observed[1][0] == observed[1][1]
+        assert observed[1][0] != parent_uuid
 
     async def test_cancelling_execute_cancels_pending_execution_intercept(self) -> None:
         started = asyncio.Event()
@@ -738,7 +959,7 @@ class TestLLMInterceptsAsync:
         provider_calls: list[LLMRequest] = []
         events: list[Event] = []
 
-        async def middleware(_name, request, next):
+        async def middleware(_name, request, _context, next):
             started.set()
             try:
                 await release.wait()
@@ -779,7 +1000,7 @@ class TestLLMInterceptsAsync:
         provider_calls: list[LLMRequest] = []
         events: list[Event] = []
 
-        async def middleware(request, next):
+        async def middleware(_name, request, _context, next):
             started.set()
             try:
                 await release.wait()
@@ -839,7 +1060,7 @@ class TestLLMInterceptsAsync:
             observed.append(("request", request_id.get()))
             return LLMRequestInterceptOutcome(request, annotated)
 
-        def execution_intercept(_name, _request, _next):
+        def execution_intercept(_name, _request, _context, _next):
             observed.append(("execution", request_id.get()))
             return {"ok": True}
 
@@ -870,7 +1091,7 @@ class TestLLMInterceptsAsync:
         request_id = contextvars.ContextVar("llm_stream_middleware_request_id", default="registration")
         observed: list[tuple[str, str]] = []
 
-        def middleware(request, next):
+        def middleware(_name, request, _context, next):
             observed.append(("callback", request_id.get()))
 
             async def generate():
@@ -939,7 +1160,7 @@ class TestLLMInterceptsAsync:
 
                 return close()
 
-        def middleware(_request, _next):
+        def middleware(_name, _request, _context, _next):
             observed.append(("callback", request_id.get()))
             return CustomIterator()
 
@@ -1079,7 +1300,7 @@ class TestLLMInterceptsAsync:
         intercepts.register_llm_execution(
             "py_llm_exec_rep",
             1,
-            lambda name, request, next: {"from_intercept": True},
+            lambda name, request, context, next: {"from_intercept": True},
         )
 
         def original_func(request):
@@ -1093,7 +1314,7 @@ class TestLLMInterceptsAsync:
         intercepts.deregister_llm_execution("py_llm_exec_rep")
 
     async def test_execution_intercept_can_await_next(self) -> None:
-        async def middleware(name, request, next):
+        async def middleware(name, request, context, next):
             updated = LLMRequest(request.headers, {**request.content, "model": "via-next"})
             result = await next(updated)
             result["from_intercept"] = True
@@ -1114,7 +1335,7 @@ class TestLLMInterceptsAsync:
         captured_next = None
         provider_calls = 0
 
-        async def middleware(_name, _request, next):
+        async def middleware(_name, _request, _context, next):
             nonlocal captured_next
             captured_next = next
             return {"source": "intercept"}
@@ -1137,7 +1358,7 @@ class TestLLMInterceptsAsync:
         assert provider_calls == 0
 
     async def test_stream_execution_intercept_can_await_next(self) -> None:
-        def middleware(request, next):
+        def middleware(_name, request, _context, next):
             async def gen():
                 updated = LLMRequest(request.headers, {**request.content, "prefix": "wrapped"})
                 stream = await next(updated)
@@ -1170,7 +1391,7 @@ class TestLLMInterceptsAsync:
         captured_next = None
         provider_calls = 0
 
-        async def middleware(_request, next):
+        async def middleware(_name, _request, _context, next):
             nonlocal captured_next
             captured_next = next
 
@@ -1203,7 +1424,7 @@ class TestLLMInterceptsAsync:
         assert provider_calls == 0
 
     async def test_stream_execution_intercept_async_function_is_supported(self) -> None:
-        def middleware(request, next):
+        def middleware(_name, request, _context, next):
             updated = LLMRequest(request.headers, {**request.content, "prefix": "async"})
 
             async def gen():
@@ -1235,6 +1456,143 @@ class TestLLMInterceptsAsync:
 
 
 class TestLLMStreaming:
+    def test_execute_on_small_thread_stack(self) -> None:
+        """Check small-stack LLM calls and isolation between synchronous callers."""
+        # musl defaults to 128 KiB thread stacks. Isolate a native stack
+        # overflow so a regression reports a failed test instead of killing pytest.
+        script = textwrap.dedent(
+            """
+            import asyncio
+            import contextvars
+            import threading
+            from concurrent.futures import Future, ThreadPoolExecutor
+
+            from nemo_relay import (
+                LLMRequest, LLMRequestInterceptOutcome, PendingMarkSpec,
+                intercepts, llm, subscribers,
+            )
+
+            request_id = contextvars.ContextVar("small-stack-request-id")
+            concurrent_intercept_barrier = threading.Barrier(2)
+
+            def intercept(name, request, annotated):
+                "Check each callback's context before and after overlapping calls."
+                expected_context = request.content.get("expected_context", "small-stack")
+                assert request_id.get() == expected_context
+                if name.startswith("concurrent-"):
+                    concurrent_intercept_barrier.wait(timeout=5)
+                    assert request_id.get() == expected_context
+                content = request.content
+                content["intercepted"] = True
+                return LLMRequestInterceptOutcome(
+                    LLMRequest(request.headers, content), annotated,
+                    [PendingMarkSpec("small-stack-intercept")],
+                )
+
+            def check_request_outcome(outcome):
+                "Check that request rewriting and pending marks survive the bridge."
+                assert outcome.request.content["intercepted"] is True
+                assert [mark.name for mark in outcome.pending_marks] == ["small-stack-intercept"]
+
+            async def main():
+                "Exercise asynchronous LLM APIs on the constrained caller stack."
+                outcome = await llm.request_intercepts(
+                    "small-stack-request", LLMRequest({}, {"messages": []}),
+                )
+                check_request_outcome(outcome)
+                collected = []
+                events = []
+                finalized = []
+                subscribers.register("small-stack", events.append)
+
+                async def provider(request):
+                    "Produce a deterministic stream for lifecycle checks."
+                    yield {"token": "hello"}
+                    yield {"token": "world"}
+
+                def finalize():
+                    "Record finalization and return the collected stream payload."
+                    finalized.append(True)
+                    return {"chunks": collected}
+
+                try:
+                    stream = await llm.stream_execute(
+                        "small-stack",
+                        LLMRequest({}, {"messages": [], "model": "test-model"}),
+                        provider,
+                        collected.append,
+                        finalize,
+                    )
+                    chunks = [chunk async for chunk in stream]
+                    assert chunks == [{"token": "hello"}, {"token": "world"}]
+                    assert collected == chunks
+                    assert finalized == [True]
+                    await subscribers.flush_async()
+                    lifecycle = [e for e in events if e.name == "small-stack"]
+                    assert [e.scope_category for e in lifecycle] == ["start", "end"]
+                    assert lifecycle[-1].data == {"chunks": chunks}
+                    response = await llm.execute(
+                        "small-stack-single",
+                        LLMRequest({}, {"messages": [], "model": "test-model"}),
+                        lambda request: {"ok": True},
+                    )
+                    assert response == {"ok": True}
+                finally:
+                    subscribers.deregister("small-stack")
+
+            result = Future()
+
+            def run():
+                "Run synchronous, concurrent, and asynchronous caller scenarios."
+                try:
+                    request_id.set("small-stack")
+                    intercepts.register_llm_request("small-stack-intercept", 1, False, intercept)
+                    try:
+                        outcome = llm.request_intercepts(
+                            "small-stack-request", LLMRequest({}, {"messages": []}),
+                        )
+                        check_request_outcome(outcome)
+
+                        def check_concurrent_context(value):
+                            "Invoke synchronous middleware with a distinct caller context."
+                            request_id.set(value)
+                            outcome = llm.request_intercepts(
+                                f"concurrent-{value}",
+                                LLMRequest({}, {"messages": [], "expected_context": value}),
+                            )
+                            check_request_outcome(outcome)
+
+                        with ThreadPoolExecutor(max_workers=2) as pool:
+                            futures = [
+                                pool.submit(check_concurrent_context, value)
+                                for value in ("request-a", "request-b")
+                            ]
+                            for future in futures:
+                                future.result(timeout=10)
+                        asyncio.run(main())
+                    finally:
+                        intercepts.deregister_llm_request("small-stack-intercept")
+                except BaseException as error:
+                    result.set_exception(error)
+                else:
+                    result.set_result(None)
+
+            threading.stack_size(128 * 1024)
+            worker = threading.Thread(target=run)
+            worker.start()
+            worker.join()
+            result.result()
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-X", "faulthandler", "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert completed.returncode == 0, completed.stderr
+
     async def test_stream_execute(self) -> None:
         # Stream functions now take LLMRequest and return async iterator of Json
         def stream_func(request):
@@ -1412,7 +1770,7 @@ class TestLLMStreaming:
         intercepts.register_llm_stream_execution(
             "py_llm_stream_bad_iter",
             1,
-            cast(intercepts.LlmStreamExecutionIntercept, lambda request, next: object()),
+            cast(intercepts.LlmStreamExecutionIntercept, lambda name, request, context, next: object()),
         )
         try:
             stream = await llm.stream_execute(
@@ -1431,7 +1789,7 @@ class TestLLMStreaming:
         intercepts.register_llm_stream_execution(
             "py_llm_stream_direct_stop",
             1,
-            lambda request, next: _ImmediateStopAsyncIter(),
+            lambda name, request, context, next: _ImmediateStopAsyncIter(),
         )
         try:
             stream = await llm.stream_execute(
@@ -1452,7 +1810,7 @@ class TestLLMStreaming:
         intercepts.register_llm_stream_execution(
             "py_llm_stream_direct_error",
             1,
-            lambda request, next: _BrokenAsyncIter(),
+            lambda name, request, context, next: _BrokenAsyncIter(),
         )
         try:
             stream = await llm.stream_execute(
@@ -1471,7 +1829,7 @@ class TestLLMStreaming:
         events = []
         subscribers.register("py_llm_stream_intercept_failure_sub", events.append)
 
-        def failing_middleware(request, next) -> Never:
+        def failing_middleware(name, request, context, next) -> Never:
             raise ValueError("stream intercept boom")
 
         intercepts.register_llm_stream_execution(

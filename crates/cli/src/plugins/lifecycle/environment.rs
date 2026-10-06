@@ -264,6 +264,77 @@ pub(super) fn provision_python_environment(
     Ok(Some(environment))
 }
 
+#[cfg(unix)]
+pub(super) fn make_global_environment_readable(environment: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let parent = environment.parent().ok_or_else(|| {
+        format!(
+            "managed Python environment {} has no parent",
+            environment.display()
+        )
+    })?;
+    for directory in [parent, environment] {
+        if !std::fs::symlink_metadata(directory)
+            .map_err(|error| format!("failed to inspect {}: {error}", directory.display()))?
+            .file_type()
+            .is_dir()
+        {
+            return Err(format!(
+                "managed Python environment directory {} must not be a symbolic link",
+                directory.display()
+            ));
+        }
+    }
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755))
+        .map_err(|error| format!("failed to set permissions on {}: {error}", parent.display()))?;
+
+    let mut pending = vec![environment.to_path_buf()];
+    let mut entries = 0_usize;
+    while let Some(directory) = pending.pop() {
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).map_err(
+            |error| {
+                format!(
+                    "failed to set permissions on {}: {error}",
+                    directory.display()
+                )
+            },
+        )?;
+        for entry in std::fs::read_dir(&directory)
+            .map_err(|error| format!("failed to read {}: {error}", directory.display()))?
+        {
+            let entry = entry.map_err(|error| error.to_string())?;
+            entries += 1;
+            if entries > MAX_ENVIRONMENT_FILES {
+                return Err(format!(
+                    "managed Python environment exceeds the {MAX_ENVIRONMENT_FILES}-entry permission budget"
+                ));
+            }
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+            if metadata.file_type().is_dir() {
+                pending.push(path);
+            } else if metadata.file_type().is_file() {
+                let mode = if metadata.permissions().mode() & 0o111 != 0 {
+                    0o755
+                } else {
+                    0o644
+                };
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).map_err(
+                    |error| format!("failed to set permissions on {}: {error}", path.display()),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(super) fn make_global_environment_readable(_environment: &Path) -> Result<(), String> {
+    Ok(())
+}
+
 pub(super) fn read_environment_attestation(
     environment: &Path,
     expected_source_artifact_sha256: &str,
@@ -290,7 +361,8 @@ pub(super) fn read_environment_attestation(
             attestation_path.display()
         ));
     }
-    if !crate::configuration::verify_python_environment_attestation(
+    if !crate::configuration::verify_python_environment_attestation_for_environment(
+        environment,
         &attestation.source_artifact_sha256,
         &attestation.environment_sha256,
         &attestation.authentication,
@@ -324,11 +396,16 @@ pub(super) fn write_environment_attestation(
     environment: &Path,
     source_artifact_sha256: &str,
 ) -> Result<(), String> {
+    crate::configuration::ensure_python_environment_attestation_key(environment)
+        .map_err(|error| error.to_string())?;
     let digest = environment_tree_digest(environment)?;
     let path = environment.join(ENVIRONMENT_ATTESTATION_FILE);
-    let authentication =
-        crate::configuration::sign_python_environment_attestation(source_artifact_sha256, &digest)
-            .map_err(|error| error.to_string())?;
+    let authentication = crate::configuration::sign_python_environment_attestation_for_environment(
+        environment,
+        source_artifact_sha256,
+        &digest,
+    )
+    .map_err(|error| error.to_string())?;
     let mut bytes = serde_json::to_vec_pretty(&EnvironmentAttestation {
         version: 1,
         source_artifact_sha256: source_artifact_sha256.trim().to_owned(),
@@ -344,30 +421,94 @@ pub(super) fn write_environment_attestation(
 pub(super) fn environment_tree_digest(environment: &Path) -> Result<String, String> {
     #[cfg(test)]
     ENVIRONMENT_TREE_DIGEST_CALLS.fetch_add(1, Ordering::Relaxed);
-    environment_tree_digest_with_limit(environment, MAX_ENVIRONMENT_FILES)
+    environment_tree_digest_with_entry_limit(environment, MAX_ENVIRONMENT_FILES)
 }
 
-fn environment_tree_digest_with_limit(
+fn environment_tree_digest_with_entry_limit(
     environment: &Path,
     max_entries: usize,
 ) -> Result<String, String> {
-    let mut digest = Sha256::new();
-    let mut total = 0_u64;
-    let mut entries = 0_usize;
+    environment_tree_digest_with_budget(
+        environment,
+        max_entries,
+        crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES,
+    )
+}
+
+fn environment_tree_digest_with_budget(
+    environment: &Path,
+    max_entries: usize,
+    max_bytes: u64,
+) -> Result<String, String> {
+    let mut digest = EnvironmentDigest::new(max_entries, max_bytes);
     digest_environment_directory(
         environment,
         Path::new(""),
         &mut Vec::new(),
         &mut digest,
-        &mut total,
-        &mut entries,
-        max_entries,
+        true,
     )?;
-    Ok(digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(digest.finalize())
+}
+
+struct EnvironmentDigest {
+    hasher: Sha256,
+    total_bytes: u64,
+    entries: usize,
+    max_entries: usize,
+    max_bytes: u64,
+}
+
+impl EnvironmentDigest {
+    fn new(max_entries: usize, max_bytes: u64) -> Self {
+        Self {
+            hasher: Sha256::new(),
+            total_bytes: 0,
+            entries: 0,
+            max_entries,
+            max_bytes,
+        }
+    }
+
+    fn charge_entry(&mut self, directory: &Path) -> Result<(), String> {
+        self.entries = self.entries.saturating_add(1);
+        if self.entries > self.max_entries {
+            return Err(format!(
+                "managed Python environment exceeds the {}-entry attestation budget at {}",
+                self.max_entries,
+                directory.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn charge_bytes(&mut self, bytes: usize) -> Result<(), String> {
+        self.total_bytes = self.total_bytes.saturating_add(bytes as u64);
+        if self.total_bytes > self.max_bytes {
+            return Err(format!(
+                "managed Python environment exceeds the {}-byte attestation budget",
+                self.max_bytes
+            ));
+        }
+        Ok(())
+    }
+
+    fn update(&mut self, entry_type: u8, path: &Path, payload: &[u8]) {
+        let path = raw_path_bytes(path);
+        self.hasher.update([entry_type]);
+        self.hasher.update((path.len() as u64).to_le_bytes());
+        self.hasher.update(&path);
+        self.hasher.update((payload.len() as u64).to_le_bytes());
+        self.hasher.update(payload);
+    }
+
+    fn finalize(self) -> String {
+        self.hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -375,7 +516,16 @@ pub(super) fn test_environment_tree_digest_with_entry_limit(
     environment: &Path,
     max_entries: usize,
 ) -> Result<String, String> {
-    environment_tree_digest_with_limit(environment, max_entries)
+    environment_tree_digest_with_entry_limit(environment, max_entries)
+}
+
+#[cfg(all(test, unix))]
+pub(super) fn test_environment_tree_digest_with_budget(
+    environment: &Path,
+    max_entries: usize,
+    max_bytes: u64,
+) -> Result<String, String> {
+    environment_tree_digest_with_budget(environment, max_entries, max_bytes)
 }
 
 #[cfg(test)]
@@ -392,10 +542,8 @@ fn digest_environment_directory(
     directory: &Path,
     relative_directory: &Path,
     ancestors: &mut Vec<PathBuf>,
-    digest: &mut Sha256,
-    total: &mut u64,
-    entries: &mut usize,
-    max_entries: usize,
+    digest: &mut EnvironmentDigest,
+    charge_bytes: bool,
 ) -> Result<(), String> {
     if ancestors.len() >= MAX_ENVIRONMENT_DEPTH {
         return Err(format!(
@@ -416,28 +564,14 @@ fn digest_environment_directory(
     for child in std::fs::read_dir(directory)
         .map_err(|error| format!("failed to read {}: {error}", directory.display()))?
     {
-        *entries = entries.saturating_add(1);
-        if *entries > max_entries {
-            return Err(format!(
-                "managed Python environment exceeds the {max_entries}-entry attestation budget at {}",
-                directory.display()
-            ));
-        }
+        digest.charge_entry(directory)?;
         children.push(
             child.map_err(|error| format!("failed to read {}: {error}", directory.display()))?,
         );
     }
     children.sort_by_key(std::fs::DirEntry::file_name);
     for child in children {
-        digest_environment_entry(
-            child,
-            relative_directory,
-            ancestors,
-            digest,
-            total,
-            entries,
-            max_entries,
-        )?;
+        digest_environment_entry(child, relative_directory, ancestors, digest, charge_bytes)?;
     }
     ancestors.pop();
     Ok(())
@@ -447,10 +581,8 @@ fn digest_environment_entry(
     child: std::fs::DirEntry,
     relative_directory: &Path,
     ancestors: &mut Vec<PathBuf>,
-    digest: &mut Sha256,
-    total: &mut u64,
-    entries: &mut usize,
-    max_entries: usize,
+    digest: &mut EnvironmentDigest,
+    charge_bytes: bool,
 ) -> Result<(), String> {
     let path = child.path();
     let relative = relative_directory.join(child.file_name());
@@ -461,16 +593,11 @@ fn digest_environment_entry(
     let metadata = std::fs::metadata(&source)
         .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
     if metadata.is_dir() {
-        update_tree_digest(digest, b'd', &relative, &[]);
-        return digest_environment_directory(
-            &source,
-            &relative,
-            ancestors,
-            digest,
-            total,
-            entries,
-            max_entries,
-        );
+        digest.update(b'd', &relative, &[]);
+        // Linux venvs expose the same installed tree through `lib` and `lib64 -> lib`.
+        // Keep hashing the alias for digest compatibility, but charge its bytes through `lib` only.
+        let charge_bytes = charge_bytes && !is_python_lib64_alias(&path, &relative)?;
+        return digest_environment_directory(&source, &relative, ancestors, digest, charge_bytes);
     }
     if !metadata.is_file() {
         return Err(format!(
@@ -482,15 +609,30 @@ fn digest_environment_entry(
         &source,
         "managed Python environment file",
     )?;
-    *total = total.saturating_add(bytes.len() as u64);
-    if *total > crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES {
-        return Err(format!(
-            "managed Python environment exceeds the {}-byte attestation budget",
-            crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES
-        ));
+    if charge_bytes {
+        digest.charge_bytes(bytes.len())?;
     }
-    update_tree_digest(digest, b'f', &relative, &bytes);
+    digest.update(b'f', &relative, &bytes);
     Ok(())
+}
+
+fn is_python_lib64_alias(path: &Path, relative: &Path) -> Result<bool, String> {
+    if !cfg!(unix)
+        || relative != Path::new("lib64")
+        || path
+            .parent()
+            .is_none_or(|root| !root.join("pyvenv.cfg").is_file())
+    {
+        return Ok(false);
+    }
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if !metadata.file_type().is_symlink() {
+        return Ok(false);
+    }
+    std::fs::read_link(path)
+        .map(|target| target == Path::new("lib"))
+        .map_err(|error| format!("failed to read Python venv lib64 symlink: {error}"))
 }
 
 fn environment_entry_is_ignored(path: &Path, relative: &Path) -> bool {
@@ -508,15 +650,6 @@ fn resolve_environment_entry(path: &Path) -> Result<PathBuf, String> {
     } else {
         Ok(path.to_path_buf())
     }
-}
-
-fn update_tree_digest(digest: &mut Sha256, entry_type: u8, path: &Path, payload: &[u8]) {
-    let path = raw_path_bytes(path);
-    digest.update([entry_type]);
-    digest.update((path.len() as u64).to_le_bytes());
-    digest.update(&path);
-    digest.update((payload.len() as u64).to_le_bytes());
-    digest.update(payload);
 }
 
 #[cfg(unix)]
@@ -549,6 +682,14 @@ pub(super) fn remove_managed_environment(
         ));
     }
     remove_directory_if_present(&configured, "delete")
+}
+
+pub(super) fn remove_managed_environment_for_plugin(
+    state_path: &Path,
+    plugin_id: &str,
+) -> Result<(), String> {
+    let expected = managed_environment_path(state_path, plugin_id)?;
+    remove_directory_if_present(&expected, "delete")
 }
 
 pub(super) fn environment_state(

@@ -7,6 +7,7 @@ use super::*;
 
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Barrier;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -33,6 +34,503 @@ use crate::api::runtime::{
 };
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::response::AnnotatedLlmResponse;
+
+#[test]
+fn native_logging_preserves_levels_targets_and_structured_fields() {
+    use crate::logging::{
+        FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
+    };
+
+    let _logging = crate::logging::lock_test_logging();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("native.jsonl");
+    let runtime = init_logging(&LoggingConfig {
+        level: LogLevel::Trace,
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            level: LogLevel::Trace,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..LoggingConfig::default()
+    })
+    .unwrap();
+    let target = native_string("fixture.logging");
+    let default_target = native_string("");
+    let message = native_string("native message");
+    let fields = native_string(r#"{"nested":{"ok":true},"ordinal":9007199254740993}"#);
+    for level in [
+        NemoRelayNativeLogLevel::Trace,
+        NemoRelayNativeLogLevel::Debug,
+        NemoRelayNativeLogLevel::Info,
+        NemoRelayNativeLogLevel::Warn,
+        NemoRelayNativeLogLevel::Error,
+    ] {
+        assert_eq!(
+            unsafe { native_log(level, target, message, fields) },
+            NemoRelayStatus::Ok
+        );
+    }
+    assert_eq!(
+        unsafe {
+            native_log(
+                NemoRelayNativeLogLevel::Info,
+                default_target,
+                message,
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    unsafe {
+        native_string_free(target);
+        native_string_free(default_target);
+        native_string_free(message);
+        native_string_free(fields);
+    }
+    runtime.shutdown();
+    let records: Vec<Json> = std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|record: &Json| {
+            record["target"]
+                .as_str()
+                .is_some_and(|target| target.starts_with("nemo_relay.plugin.native"))
+        })
+        .collect();
+    assert_eq!(records.len(), 6);
+    for (record, level) in records
+        .iter()
+        .zip(["trace", "debug", "info", "warn", "error"])
+    {
+        assert_eq!(record["level"], level);
+        assert_eq!(record["target"], "nemo_relay.plugin.native.fixture.logging");
+        assert_eq!(record["message"], "native message");
+        assert_eq!(record["fields"]["nested"], json!({"ok": true}));
+        assert_eq!(record["fields"]["ordinal"], json!(9007199254740993_u64));
+    }
+    assert_eq!(records[5]["target"], "nemo_relay.plugin.native");
+}
+
+#[test]
+fn native_logging_rejects_invalid_targets_and_fields_without_leaking_strings() {
+    let message = native_string("message");
+    let target = native_string("valid");
+    let live = native_string_live_allocations();
+    for invalid_target in ["x".repeat(257), "bad\ntarget".into(), "bad\0target".into()] {
+        let invalid = native_string(&invalid_target);
+        assert_eq!(
+            unsafe { native_log(NemoRelayNativeLogLevel::Info, invalid, message, ptr::null()) },
+            NemoRelayStatus::InvalidArg
+        );
+        assert_last_error_contains("invalid plugin log target");
+        unsafe { native_string_free(invalid) };
+    }
+    for invalid_fields in ["[]", "true", "null", "not-json"] {
+        let fields = native_string(invalid_fields);
+        assert_eq!(
+            unsafe { native_log(NemoRelayNativeLogLevel::Info, target, message, fields) },
+            NemoRelayStatus::InvalidJson
+        );
+        unsafe { native_string_free(fields) };
+    }
+    assert_eq!(
+        unsafe {
+            native_log(
+                NemoRelayNativeLogLevel::Info,
+                ptr::null(),
+                message,
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe {
+            native_log(
+                NemoRelayNativeLogLevel::Info,
+                target,
+                ptr::null(),
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(native_string_live_allocations(), live);
+    unsafe {
+        native_string_free(target);
+        native_string_free(message);
+    }
+}
+
+/// Uses a native-specific registry target so worker gate tests can run concurrently.
+#[test]
+fn native_owned_gate_handles_are_activation_scoped_and_cleanup_disables_the_capability() {
+    let _context = GlobalContextRestore::replace_with_empty();
+    let runtime = Arc::new(NativeHostPluginRuntime {
+        namespace: "fixture:".into(),
+        encode_local_names: true,
+        instance: Weak::new(),
+        active: AtomicBool::new(true),
+        gates: Mutex::new(HashMap::new()),
+    });
+    struct GateCleanup(Arc<NativeHostPluginRuntime>);
+    impl Drop for GateCleanup {
+        /// Remove global gates even when a test assertion unwinds.
+        fn drop(&mut self) {
+            let _ = self.0.cleanup();
+        }
+    }
+    let _cleanup = GateCleanup(Arc::clone(&runtime));
+    let raw: *const NemoRelayNativePluginRuntime = Arc::into_raw(runtime.clone()).cast();
+    let name = native_string("gate:with/separators");
+    let kinds = native_string(r#"["subscriber"]"#);
+    let registration_name = native_string("native-fixture-subscriber");
+    let reason = native_string("disabled by native plugin");
+    let live = native_string_live_allocations();
+    let mut handle = ptr::null_mut();
+    let register = |out| unsafe {
+        native_plugin_runtime_register_conditional_middleware_guardrail(
+            raw,
+            name,
+            kinds,
+            registration_name,
+            reason,
+            out,
+        )
+    };
+    assert_eq!(register(&mut handle), NemoRelayStatus::Ok);
+    assert!(!handle.is_null());
+    let owned_name = runtime
+        .gates
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .qualified_name
+        .clone();
+    assert_eq!(
+        owned_name,
+        format!(
+            "fixture:{}",
+            crate::plugin::encode_plugin_component_field("gate:with/separators")
+        )
+    );
+    assert!(!crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "native-fixture-subscriber"
+    ));
+    let mut duplicate = ptr::null_mut();
+    assert_eq!(register(&mut duplicate), NemoRelayStatus::AlreadyExists);
+    assert!(duplicate.is_null());
+    let mut removed = false;
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_deregister_conditional_middleware_guardrail(
+                raw,
+                handle,
+                &mut removed,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    assert!(removed);
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_deregister_conditional_middleware_guardrail(
+                raw,
+                handle,
+                &mut removed,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    assert!(!removed);
+    unsafe { native_string_free(handle) };
+    assert_eq!(register(&mut handle), NemoRelayStatus::Ok);
+    runtime.cleanup().unwrap();
+    assert!(runtime.gates.lock().unwrap().is_empty());
+    assert!(crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "native-fixture-subscriber"
+    ));
+    let mut output = ptr::null_mut();
+    assert_eq!(register(&mut output), NemoRelayStatus::NotFound);
+    assert!(output.is_null());
+    assert_eq!(
+        unsafe { native_plugin_runtime_list_registrations(raw, ptr::null(), &mut output) },
+        NemoRelayStatus::NotFound
+    );
+    unsafe { native_string_free(handle) };
+    assert_eq!(native_string_live_allocations(), live);
+    unsafe {
+        native_plugin_runtime_release(raw);
+        native_string_free(name);
+        native_string_free(kinds);
+        native_string_free(registration_name);
+        native_string_free(reason);
+    }
+}
+
+#[test]
+fn native_runtime_discovery_validates_filters_and_returns_matching_registrations() {
+    let runtime = NativeHostPluginRuntime {
+        namespace: "fixture:".into(),
+        encode_local_names: false,
+        instance: Weak::new(),
+        active: AtomicBool::new(true),
+        gates: Mutex::new(HashMap::new()),
+    };
+    let raw = ptr::from_ref(&runtime).cast();
+    let kinds = native_string(r#"["subscriber"]"#);
+    let invalid_kinds = native_string(r#"["unknown_kind"]"#);
+    let mut out = ptr::null_mut();
+    assert_eq!(
+        unsafe { native_plugin_runtime_list_registrations(raw, invalid_kinds, &mut out) },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(
+        unsafe { native_plugin_runtime_list_registrations(raw, kinds, ptr::null_mut()) },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe { native_plugin_runtime_list_registrations(ptr::null(), kinds, &mut out) },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe { native_plugin_runtime_list_registrations(raw, kinds, &mut out) },
+        NemoRelayStatus::Ok
+    );
+    let registrations: Json = serde_json::from_str(&take_native_string(out).unwrap()).unwrap();
+    assert!(
+        registrations
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["kind"] == "subscriber")
+    );
+    unsafe {
+        native_string_free(kinds);
+        native_string_free(invalid_kinds);
+    }
+}
+
+#[test]
+fn native_runtime_control_rejects_missing_arguments_and_invalid_registration_kinds() {
+    let runtime = NativeHostPluginRuntime {
+        namespace: "fixture:".into(),
+        encode_local_names: false,
+        instance: Weak::new(),
+        active: AtomicBool::new(true),
+        gates: Mutex::new(HashMap::new()),
+    };
+    let raw = ptr::from_ref(&runtime).cast();
+    let name = native_string("gate");
+    let kinds = native_string(r#"["subscriber"]"#);
+    let invalid_kinds = native_string(r#"["unknown_kind"]"#);
+    let reason = native_string("disabled");
+    let mut out = ptr::null_mut();
+    let register = |runtime, name, kinds, target, reason, out| unsafe {
+        native_plugin_runtime_register_conditional_middleware_guardrail(
+            runtime, name, kinds, target, reason, out,
+        )
+    };
+    assert_eq!(
+        register(raw, name, kinds, name, reason, ptr::null_mut()),
+        NemoRelayStatus::NullPointer
+    );
+    for arguments in [
+        (
+            ptr::null(),
+            name.cast_const(),
+            kinds.cast_const(),
+            name.cast_const(),
+            reason.cast_const(),
+        ),
+        (raw, ptr::null(), kinds, name, reason),
+        (raw, name, ptr::null(), name, reason),
+        (raw, name, kinds, ptr::null(), reason),
+        (raw, name, kinds, name, ptr::null()),
+    ] {
+        assert_eq!(
+            register(
+                arguments.0,
+                arguments.1,
+                arguments.2,
+                arguments.3,
+                arguments.4,
+                &mut out
+            ),
+            if arguments.2.is_null() {
+                NemoRelayStatus::InvalidArg
+            } else {
+                NemoRelayStatus::NullPointer
+            }
+        );
+        assert!(out.is_null());
+    }
+    assert_eq!(
+        register(raw, name, invalid_kinds, name, reason, &mut out),
+        NemoRelayStatus::InvalidArg
+    );
+    let mut removed = true;
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_deregister_conditional_middleware_guardrail(
+                raw,
+                name,
+                ptr::null_mut(),
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_deregister_conditional_middleware_guardrail(
+                ptr::null(),
+                name,
+                &mut removed,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert!(!removed);
+    assert_eq!(
+        unsafe {
+            native_plugin_runtime_deregister_conditional_middleware_guardrail(
+                raw,
+                ptr::null(),
+                &mut removed,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    let empty_kinds = native_string("[]");
+    assert_eq!(
+        register(raw, name, empty_kinds, name, reason, &mut out),
+        NemoRelayStatus::InvalidArg
+    );
+    assert!(runtime.gates.lock().unwrap().is_empty());
+    fail_native_string_allocation_after(0);
+    assert_eq!(
+        register(raw, name, kinds, name, reason, &mut out),
+        NemoRelayStatus::Internal
+    );
+    assert!(out.is_null());
+    assert!(runtime.gates.lock().unwrap().is_empty());
+    assert!(crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "gate"
+    ));
+    unsafe {
+        native_string_free(name);
+        native_string_free(kinds);
+        native_string_free(invalid_kinds);
+        native_string_free(reason);
+        native_string_free(empty_kinds);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_context_gate_registration_validates_inputs_and_rolls_back_the_gate() {
+    let instance = Arc::new(NativePluginInstance {
+        plugin_kind: "test.native".into(),
+        relay_compat: "^0.8".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(NemoRelayNativePluginV1::default()),
+        _library: libloading::os::unix::Library::this().into(),
+    });
+    let mut registration = PluginRegistrationContext::with_namespace("fixture:");
+    let mut host = NativeHostPluginContext {
+        ctx: ptr::from_mut(&mut registration),
+        instance,
+    };
+    let ctx = ptr::from_mut(&mut host).cast();
+    let name = native_string("context-gate");
+    let kinds = native_string(r#"["subscriber"]"#);
+    let invalid_kinds = native_string("not-json");
+    let reason = native_string("disabled");
+    for arguments in [
+        (
+            ptr::null_mut(),
+            name.cast_const(),
+            kinds.cast_const(),
+            name.cast_const(),
+            reason.cast_const(),
+        ),
+        (ctx, ptr::null(), kinds, name, reason),
+        (ctx, name, ptr::null(), name, reason),
+        (ctx, name, kinds, ptr::null(), reason),
+        (ctx, name, kinds, name, ptr::null()),
+    ] {
+        assert_eq!(
+            unsafe {
+                native_plugin_context_register_conditional_middleware_guardrail(
+                    arguments.0,
+                    arguments.1,
+                    arguments.2,
+                    arguments.3,
+                    arguments.4,
+                )
+            },
+            if arguments.2.is_null() {
+                NemoRelayStatus::InvalidArg
+            } else {
+                NemoRelayStatus::NullPointer
+            }
+        );
+    }
+    assert_eq!(
+        unsafe {
+            native_plugin_context_register_conditional_middleware_guardrail(
+                ctx,
+                name,
+                invalid_kinds,
+                name,
+                reason,
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(
+        unsafe {
+            native_plugin_context_register_conditional_middleware_guardrail(
+                ctx, name, kinds, name, reason,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    assert!(!crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "context-gate"
+    ));
+    assert_eq!(
+        unsafe {
+            native_plugin_context_register_conditional_middleware_guardrail(
+                ctx, name, kinds, name, reason,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert_last_error_contains("already exists");
+    let cleanup = crate::plugin::rollback_registrations(&mut registration.into_registrations());
+    assert!(cleanup.callbacks_cleared());
+    assert!(cleanup.errors().is_empty());
+    assert!(crate::api::registry::runtime_registration_is_enabled(
+        RuntimeRegistrationKind::Subscriber,
+        "context-gate"
+    ));
+    unsafe {
+        native_string_free(name);
+        native_string_free(kinds);
+        native_string_free(invalid_kinds);
+        native_string_free(reason);
+    }
+}
 
 type RawToolExecutionNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
@@ -136,7 +634,8 @@ fn native_async_release_defers_library_guard_drop_to_host_reaper() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: Some(callback_user_data),
     });
@@ -633,55 +1132,55 @@ fn assert_native_digest_edges() {
 
 fn assert_native_host_api_versions() {
     let current = native_host_api();
+    let frozen_v6 = native_host_api_v6();
     let frozen_v5 = native_host_api_v5();
     let frozen_v4 = native_host_api_v4();
     let frozen_v3 = native_host_api_v3();
     let legacy = native_host_api_v2();
-    assert!(!current.is_null());
-    assert!(!frozen_v5.is_null());
-    assert!(!frozen_v4.is_null());
-    assert!(!frozen_v3.is_null());
-    assert!(!legacy.is_null());
-    assert_eq!(
-        unsafe { (*current).abi_version },
-        NEMO_RELAY_NATIVE_ABI_VERSION
+    assert_native_host_api_descriptor(
+        current,
+        NEMO_RELAY_NATIVE_ABI_VERSION,
+        std::mem::size_of::<NemoRelayNativeHostApiV7>(),
     );
-    assert_eq!(unsafe { (*frozen_v3).abi_version }, 3);
-    assert_eq!(
-        unsafe { (*frozen_v5).abi_version },
-        NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT
+    assert_native_host_api_descriptor(
+        frozen_v6,
+        NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING,
+        std::mem::size_of::<NemoRelayNativeHostApiV6>(),
     );
-    assert_eq!(
-        unsafe { (*frozen_v4).abi_version },
-        NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
+    assert_native_host_api_descriptor(
+        frozen_v5,
+        NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT,
+        std::mem::size_of::<NemoRelayNativeHostApiV5>(),
     );
-    assert_eq!(
-        unsafe { (*legacy).abi_version },
-        NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY
+    assert_native_host_api_descriptor(
+        frozen_v4,
+        NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL,
+        std::mem::size_of::<NemoRelayNativeHostApiV4>(),
     );
-    assert_eq!(
-        unsafe { (*current).struct_size },
-        std::mem::size_of::<NemoRelayNativeHostApiV6>()
+    assert_native_host_api_descriptor(
+        frozen_v3,
+        3,
+        std::mem::size_of::<NemoRelayNativeHostApiV3>(),
     );
-    assert_eq!(
-        unsafe { (*frozen_v5).struct_size },
-        std::mem::size_of::<NemoRelayNativeHostApiV5>()
+    assert_native_host_api_descriptor(
+        legacy,
+        NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+        std::mem::size_of::<NemoRelayNativeHostApiV1>(),
     );
-    assert_eq!(
-        unsafe { (*frozen_v4).struct_size },
-        std::mem::size_of::<NemoRelayNativeHostApiV4>()
-    );
-    assert_eq!(
-        unsafe { (*frozen_v3).struct_size },
-        std::mem::size_of::<NemoRelayNativeHostApiV3>()
-    );
-    assert_eq!(
-        unsafe { (*legacy).struct_size },
-        std::mem::size_of::<NemoRelayNativeHostApiV1>()
-    );
+    assert_native_host_api_v7_layout();
     assert_native_host_api_v6_layout();
     assert_native_host_api_v5_layout();
     assert_native_host_api_v4_layout();
+}
+
+fn assert_native_host_api_descriptor(
+    host: *const NemoRelayNativeHostApiV1,
+    expected_version: u32,
+    expected_size: usize,
+) {
+    assert!(!host.is_null());
+    assert_eq!(unsafe { (*host).abi_version }, expected_version);
+    assert_eq!(unsafe { (*host).struct_size }, expected_size);
 }
 
 fn assert_native_host_api_v4_layout() {
@@ -803,6 +1302,71 @@ fn assert_native_host_api_v6_layout() {
     }
 }
 
+fn assert_native_host_api_v7_layout() {
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV7>(), 8);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV7>(), 648);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV7, v6), 0);
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV7,
+                plugin_context_register_async_llm_execution_intercept
+            ),
+            616
+        );
+        assert_eq!(
+            std::mem::offset_of!(NemoRelayNativeHostApiV7, async_stream_retain),
+            624
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV7,
+                async_stream_llm_request_codec_decode
+            ),
+            632
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV7,
+                async_stream_llm_request_codec_encode
+            ),
+            640
+        );
+    }
+    #[cfg(target_pointer_width = "32")]
+    {
+        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV7>(), 4);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV7>(), 320);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV7, v6), 0);
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV7,
+                plugin_context_register_async_llm_execution_intercept
+            ),
+            304
+        );
+        assert_eq!(
+            std::mem::offset_of!(NemoRelayNativeHostApiV7, async_stream_retain),
+            308
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV7,
+                async_stream_llm_request_codec_decode
+            ),
+            312
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                NemoRelayNativeHostApiV7,
+                async_stream_llm_request_codec_encode
+            ),
+            316
+        );
+    }
+}
+
 #[tokio::test]
 async fn native_async_wait_and_rejection_cover_dropped_and_aborted_continuations() {
     let (sender, receiver) = tokio::sync::oneshot::channel::<FlowResult<Json>>();
@@ -814,7 +1378,8 @@ async fn native_async_wait_and_rejection_cover_dropped_and_aborted_continuations
             next_invoked: AtomicBool::new(false),
             next_abort: Mutex::new(None),
             continuation_aborts: Mutex::new(HashMap::new()),
-            codec: None,
+            request_codec: None,
+            response_codec: None,
             before_settlement_lock: None,
             _callback_user_data: None,
         }),
@@ -836,7 +1401,8 @@ async fn native_async_wait_and_rejection_cover_dropped_and_aborted_continuations
         next_invoked: AtomicBool::new(true),
         next_abort: Mutex::new(Some(abort)),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -871,6 +1437,7 @@ fn native_stream_callback_guard_covers_terminal_drop_modes() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -930,6 +1497,7 @@ async fn native_async_stream_forwarding_reports_conversion_and_stream_errors() {
             backpressured: AtomicBool::new(false),
             downstream_aborts: Mutex::new(HashMap::new()),
             settlement: Mutex::new(()),
+            request_codec: None,
             before_settlement_lock: None,
             _callback_user_data: None,
         })
@@ -1144,7 +1712,8 @@ fn accepted_native_callbacks_settle_when_cancelled_before_first_poll() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1190,6 +1759,7 @@ fn accepted_native_callbacks_settle_when_cancelled_before_first_poll() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1281,6 +1851,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1308,6 +1879,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1333,6 +1905,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1356,6 +1929,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1432,6 +2006,7 @@ async fn native_async_stream_next_entrypoint_validates_handle_kind_and_request()
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1529,6 +2104,7 @@ unsafe extern "C" fn invoke_native_next_then_return_state(
 unsafe extern "C" fn invoke_native_stream_next_then_return_state(
     user_data: *mut c_void,
     invocation_json: *const NemoRelayNativeString,
+    _context: *const NemoRelayNativeLlmExecutionContext,
     next: *const NemoRelayNativeAsyncNext,
     stream: *const NemoRelayNativeAsyncStream,
 ) -> u32 {
@@ -1573,6 +2149,7 @@ unsafe extern "C" fn invoke_native_stream_next_then_return_state(
 unsafe extern "C" fn invoke_detached_next_and_finish_replacement_stream(
     user_data: *mut c_void,
     invocation_json: *const NemoRelayNativeString,
+    _context: *const NemoRelayNativeLlmExecutionContext,
     next: *const NemoRelayNativeAsyncNext,
     stream: *const NemoRelayNativeAsyncStream,
 ) -> u32 {
@@ -1807,7 +2384,7 @@ fn assert_native_json_output_and_host_api() {
     assert_eq!(host_api.abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
     assert_eq!(
         host_api.struct_size,
-        std::mem::size_of::<NemoRelayNativeHostApiV6>()
+        std::mem::size_of::<NemoRelayNativeHostApiV7>()
     );
 }
 
@@ -1846,7 +2423,8 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
             next_invoked: AtomicBool::new(false),
             next_abort: Mutex::new(None),
             continuation_aborts: Mutex::new(HashMap::new()),
-            codec: None,
+            request_codec: None,
+            response_codec: None,
             before_settlement_lock: None,
             _callback_user_data: None,
         });
@@ -1885,7 +2463,8 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -1946,7 +2525,8 @@ fn native_async_next_reports_a_revoked_continuation_without_calling_the_provider
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -2186,6 +2766,96 @@ fn native_v4_pull_stream_orders_chunks_ends_and_cancels_pending_pulls() {
 }
 
 #[test]
+fn native_pull_stream_errors_and_panics_are_terminal_and_release_callback_strings() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let live_before = native_string_live_allocations();
+    assert_eq!(
+        unsafe {
+            native_async_llm_stream_pull(ptr::null(), complete_pull_stream_item, ptr::null_mut())
+        },
+        NemoRelayStatus::NullPointer
+    );
+    for panic_in_stream in [false, true] {
+        let stream = if panic_in_stream {
+            LlmJsonStream::new(futures_util::stream::poll_fn(
+                |_| -> std::task::Poll<Option<FlowResult<Json>>> {
+                    panic!("pull stream panic");
+                },
+            ))
+        } else {
+            LlmJsonStream::new(tokio_stream::iter([Err(FlowError::Internal(
+                "pull stream error".into(),
+            ))]))
+        };
+        let stream = Arc::new(NativePullLlmStream {
+            stream: tokio::sync::Mutex::new(Some(stream)),
+            runtime: runtime.handle().clone(),
+            context: MiddlewareContinuationContext::capture(),
+            state: Mutex::new(NativePullStreamState::Idle),
+            _library_guard: None,
+        });
+        let stream_ref = Arc::into_raw(stream) as *const NemoRelayNativeLlmAsyncStream;
+        let (sender, receiver) = tokio::sync::oneshot::channel::<PullItemResult>();
+        assert_eq!(
+            unsafe {
+                native_async_llm_stream_pull(
+                    stream_ref,
+                    complete_pull_stream_item,
+                    Box::into_raw(Box::new(sender)).cast(),
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        let error = runtime.block_on(receiver).unwrap().unwrap_err();
+        assert!(
+            error.contains(if panic_in_stream {
+                "pull stream panic"
+            } else {
+                "pull stream error"
+            }),
+            "{error}"
+        );
+        assert_eq!(
+            unsafe {
+                native_async_llm_stream_pull(stream_ref, complete_pull_stream_item, ptr::null_mut())
+            },
+            NemoRelayStatus::InvalidArg
+        );
+        unsafe { native_async_llm_stream_release(stream_ref) };
+    }
+    assert_eq!(native_string_live_allocations(), live_before);
+}
+
+#[test]
+fn native_pull_delivery_handles_chunk_and_error_allocation_failures_without_leaks() {
+    let live_before = native_string_live_allocations();
+    let (sender, receiver) = tokio::sync::oneshot::channel::<PullItemResult>();
+    fail_native_string_allocation_after(0);
+    deliver_native_pull_result(
+        complete_pull_stream_item,
+        Box::into_raw(Box::new(sender)) as usize,
+        Ok(Some(json!({"chunk": 1}))),
+    );
+    let error = futures::executor::block_on(receiver).unwrap().unwrap_err();
+    assert!(error.contains("failed to allocate stream chunk"));
+    let (sender, receiver) = tokio::sync::oneshot::channel::<PullItemResult>();
+    fail_native_string_allocation_after(0);
+    deliver_native_pull_result(
+        complete_pull_stream_item,
+        Box::into_raw(Box::new(sender)) as usize,
+        Err(FlowError::Internal("unallocatable error".into())),
+    );
+    assert_eq!(
+        futures::executor::block_on(receiver).unwrap().unwrap(),
+        None
+    );
+    assert_eq!(native_string_live_allocations(), live_before);
+}
+
+#[test]
 fn owned_native_result_continuation_is_aborted_when_completion_is_cancelled() {
     struct DropProbe(Arc<AtomicBool>);
 
@@ -2206,7 +2876,8 @@ fn owned_native_result_continuation_is_aborted_when_completion_is_cancelled() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -2358,6 +3029,165 @@ fn native_continuation_context_observation(
 }
 
 #[test]
+fn thread_active_event_applies_only_at_the_captured_stack_top() {
+    let _restore = ThreadScopeStackRestore::capture();
+    let callback_stack = create_scope_stack();
+    let same_lineage_stack =
+        crate::api::runtime::scope_stack::snapshot_scope_stack(&callback_stack).unwrap();
+    set_thread_scope_stack(callback_stack);
+    let managed_event_uuid = uuid::Uuid::now_v7();
+    let assert_parent = |active_event, expected_parent| {
+        assert_eq!(active_event_uuid(), active_event);
+        assert_eq!(
+            crate::api::shared::resolve_parent_uuid(None),
+            Some(expected_parent)
+        );
+        assert_eq!(
+            crate::api::runtime::capture_propagation_context()
+                .unwrap()
+                .parent_uuid,
+            expected_parent
+        );
+    };
+    let nested = ScopeHandle::builder()
+        .name("nested")
+        .scope_type(ScopeType::Custom)
+        .build();
+    let nested_uuid = nested.uuid;
+    Runtime::new()
+        .unwrap()
+        .block_on(with_active_event_uuid(managed_event_uuid, async {
+            sync_thread_active_event_for_stack(&current_scope_stack());
+            crate::api::runtime::task_scope_push(nested);
+            // Re-entering another native callback must not move the managed
+            // event's anchor past a scope opened by the first callback.
+            sync_thread_active_event_for_stack(&current_scope_stack());
+        }));
+
+    assert_parent(None, nested_uuid);
+    crate::api::runtime::task_scope_remove(&nested_uuid).unwrap();
+    assert_parent(Some(managed_event_uuid), managed_event_uuid);
+
+    let same_lineage_top_uuid = same_lineage_stack
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .top()
+        .uuid;
+    set_thread_scope_stack(same_lineage_stack);
+    assert_parent(None, same_lineage_top_uuid);
+}
+
+#[test]
+fn thread_stack_setters_clear_context_only_when_the_stack_allocation_changes() {
+    let _restore = ThreadScopeStackRestore::capture();
+    let runtime = Runtime::new().unwrap();
+    let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    let install_event = |event_uuid| {
+        let trace_context = crate::api::runtime::scope_stack::W3cTraceContext::new(
+            traceparent,
+            Some("vendor=value".into()),
+        )
+        .expect("trace context should be valid");
+        runtime.block_on(
+            crate::api::runtime::scope_stack::with_active_event_trace_context(
+                event_uuid,
+                Some(trace_context),
+                async {
+                    sync_thread_active_event_for_stack(&current_scope_stack());
+                },
+            ),
+        );
+    };
+    let assert_event = |expected| {
+        assert_eq!(active_event_uuid(), expected);
+        assert_eq!(
+            crate::api::runtime::scope_stack::active_event_trace_context()
+                .map(|context| context.traceparent().to_owned()),
+            expected.map(|_| traceparent.to_string())
+        );
+    };
+
+    let explicit_stack = create_scope_stack();
+    set_thread_scope_stack(explicit_stack.clone());
+    let explicit_event = uuid::Uuid::now_v7();
+    install_event(explicit_event);
+    set_thread_scope_stack(explicit_stack);
+    assert_event(Some(explicit_event));
+
+    let synchronized_stack = create_scope_stack();
+    let synchronized_top = synchronized_stack
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .top()
+        .uuid;
+    set_thread_scope_stack(synchronized_stack.clone());
+    assert_event(None);
+    assert_eq!(
+        crate::api::shared::resolve_parent_uuid(None),
+        Some(synchronized_top)
+    );
+
+    let synchronized_event = uuid::Uuid::now_v7();
+    install_event(synchronized_event);
+    sync_thread_scope_stack(synchronized_stack);
+    assert_event(Some(synchronized_event));
+
+    let replacement = create_scope_stack();
+    let replacement_top = replacement
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .top()
+        .uuid;
+    sync_thread_scope_stack(replacement);
+    assert_event(None);
+    assert_eq!(
+        crate::api::shared::resolve_parent_uuid(None),
+        Some(replacement_top)
+    );
+}
+
+#[test]
+fn restored_thread_active_event_rebases_after_its_stack_anchor_closes() {
+    let _restore = ThreadScopeStackRestore::capture();
+    set_thread_scope_stack(create_scope_stack());
+    let callback_parent = ScopeHandle::builder()
+        .name("callback-parent")
+        .scope_type(ScopeType::Custom)
+        .build();
+    let callback_parent_uuid = callback_parent.uuid;
+    crate::api::runtime::task_scope_push(callback_parent);
+    let managed_event_uuid = uuid::Uuid::now_v7();
+    let callback_binding =
+        Runtime::new()
+            .unwrap()
+            .block_on(with_active_event_uuid(managed_event_uuid, async {
+                sync_thread_active_event_for_stack(&current_scope_stack());
+                capture_thread_scope_stack()
+            }));
+
+    crate::api::runtime::task_scope_remove(&callback_parent_uuid).unwrap();
+    restore_thread_scope_stack(callback_binding);
+    assert_eq!(active_event_uuid(), Some(managed_event_uuid));
+    assert_eq!(
+        crate::api::shared::resolve_parent_uuid(None),
+        Some(managed_event_uuid)
+    );
+
+    let nested = ScopeHandle::builder()
+        .name("nested")
+        .scope_type(ScopeType::Custom)
+        .build();
+    let nested_uuid = nested.uuid;
+    crate::api::runtime::task_scope_push(nested);
+    assert_eq!(active_event_uuid(), None);
+    assert_eq!(
+        crate::api::shared::resolve_parent_uuid(None),
+        Some(nested_uuid)
+    );
+    crate::api::runtime::task_scope_remove(&nested_uuid).unwrap();
+}
+
+#[test]
 fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuations() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -2406,7 +3236,8 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
                                 next_invoked: AtomicBool::new(false),
                                 next_abort: Mutex::new(None),
                                 continuation_aborts: Mutex::new(HashMap::new()),
-                                codec: None,
+                                request_codec: None,
+                                response_codec: None,
                                 before_settlement_lock: None,
                                 _callback_user_data: None,
                             });
@@ -2465,6 +3296,7 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
                                 backpressured: AtomicBool::new(false),
                                 downstream_aborts: Mutex::new(HashMap::new()),
                                 settlement: Mutex::new(()),
+                                request_codec: None,
                                 before_settlement_lock: None,
                                 _callback_user_data: None,
                             });
@@ -2652,7 +3484,8 @@ fn native_async_next_panics_settle_unary_and_stream_errors() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -2697,6 +3530,7 @@ fn native_async_next_panics_settle_unary_and_stream_errors() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -2773,7 +3607,8 @@ fn native_async_next_is_permanently_one_shot() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -2826,7 +3661,8 @@ fn cancelled_native_async_next_does_not_start_unary_or_stream_continuations() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -2859,6 +3695,7 @@ fn cancelled_native_async_next_does_not_start_unary_or_stream_continuations() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -2922,7 +3759,8 @@ fn malformed_llm_next_does_not_consume_the_completion() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -2972,6 +3810,7 @@ fn native_async_stream_next_supports_repeated_concurrent_calls() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -3089,6 +3928,7 @@ fn native_async_stream_settlement_rejects_late_next_and_aborts_in_flight_next() 
             backpressured: AtomicBool::new(false),
             downstream_aborts: Mutex::new(HashMap::new()),
             settlement: Mutex::new(()),
+            request_codec: None,
             before_settlement_lock: None,
             _callback_user_data: None,
         });
@@ -3210,6 +4050,7 @@ fn native_async_stream_next_stops_callbacks_after_false() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -3284,6 +4125,7 @@ fn native_async_stream_in_flight_cancellation_releases_callback_state() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -3366,6 +4208,7 @@ fn native_async_stream_cancellation_before_first_poll_releases_callback_state() 
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -3442,7 +4285,8 @@ fn native_async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlemen
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -3479,7 +4323,8 @@ fn native_async_completion_abi_rejects_invalid_duplicate_and_cancelled_settlemen
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -3507,7 +4352,8 @@ fn completed_native_async_wait_is_not_marked_cancelled() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -3563,7 +4409,8 @@ fn native_async_completion_cancellation_wins_resolve_and_reject_settlement_races
             next_invoked: AtomicBool::new(false),
             next_abort: Mutex::new(None),
             continuation_aborts: Mutex::new(HashMap::new()),
-            codec: None,
+            request_codec: None,
+            response_codec: None,
             before_settlement_lock: Some(Arc::clone(&settlement_checkpoint)),
             _callback_user_data: None,
         });
@@ -3646,7 +4493,8 @@ fn cancelling_completion_aborts_pending_native_next() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: None,
+        request_codec: None,
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -3745,7 +4593,7 @@ fn native_async_callback_contract_errors_abort_an_invoked_next() {
                         })
                     }
                 }))),
-                None,
+                NativeAsyncCodecCapabilities::default(),
             ))
             .unwrap_err();
 
@@ -3820,6 +4668,7 @@ fn native_async_stream_contract_errors_abort_an_invoked_next() {
                 headers: Map::new(),
                 content: Json::Null,
             },
+            LlmExecutionContext::default(),
             next,
         ));
         let error = match result {
@@ -3879,6 +4728,7 @@ fn native_replacement_stream_does_not_wait_for_a_detached_pending_next() {
                 headers: Map::new(),
                 content: Json::Null,
             },
+            LlmExecutionContext::default(),
             next,
         ))
         .expect("replacement stream must not wait for detached downstream construction");
@@ -3924,6 +4774,7 @@ fn native_async_stream_settlement_cannot_succeed_after_cancellation() {
             backpressured: AtomicBool::new(false),
             downstream_aborts: Mutex::new(HashMap::new()),
             settlement: Mutex::new(()),
+            request_codec: None,
             before_settlement_lock: Some(Arc::clone(&settlement_checkpoint)),
             _callback_user_data: None,
         });
@@ -3993,6 +4844,7 @@ fn native_async_stream_push_is_bounded_retryable_and_incremental() {
         backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
+        request_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -4722,6 +5574,7 @@ unsafe extern "C" fn noop_llm_execution(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
     _request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmExecutionContext,
     _next_fn: NemoRelayNativeLlmNextFn,
     _next_ctx: *mut c_void,
     _out_json: *mut *mut NemoRelayNativeString,
@@ -4733,6 +5586,7 @@ unsafe extern "C" fn noop_llm_stream_execution(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
     _request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmExecutionContext,
     _next_fn: NemoRelayNativeLlmStreamNextFn,
     _next_ctx: *mut c_void,
     _out_stream: *mut NemoRelayNativeLlmStreamV1,
@@ -5394,6 +6248,403 @@ unsafe extern "C" fn resolve_async_static_json(
     NemoRelayNativeAsyncCallbackState::Complete as u32
 }
 
+#[derive(Debug)]
+struct NativeCallbackEntryObservation {
+    isolated_stack: bool,
+    scope_local_subscriber_preserved: bool,
+    managed_event_is_parent: bool,
+    nested_scope_closed: bool,
+}
+
+struct NativeCallbackEntryProbe {
+    original_stack: ScopeStackHandle,
+    expected_subscriber: EventSubscriberFn,
+    expected_parent: uuid::Uuid,
+    observation: Mutex<Option<NativeCallbackEntryObservation>>,
+}
+
+unsafe extern "C" fn observe_native_callback_entry(
+    user_data: *mut c_void,
+    _invocation_json: *const NemoRelayNativeString,
+    _next: *const NemoRelayNativeAsyncNext,
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    let probe = unsafe { &*user_data.cast::<NativeCallbackEntryProbe>() };
+    let callback_stack = current_scope_stack();
+    let subscribers = callback_stack
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .collect_scope_local_subscribers();
+    let managed_event_is_parent =
+        crate::api::shared::resolve_parent_uuid(None) == Some(probe.expected_parent);
+    let nested = ScopeHandle::builder()
+        .name("callback-entry")
+        .scope_type(ScopeType::Custom)
+        .parent_uuid(crate::api::shared::resolve_parent_uuid(None).unwrap())
+        .build();
+    let nested_uuid = nested.uuid;
+    crate::api::runtime::task_scope_push(nested);
+    *probe
+        .observation
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(NativeCallbackEntryObservation {
+        isolated_stack: !Arc::ptr_eq(&callback_stack, &probe.original_stack),
+        scope_local_subscriber_preserved: subscribers
+            .iter()
+            .any(|subscriber| Arc::ptr_eq(subscriber, &probe.expected_subscriber)),
+        managed_event_is_parent,
+        nested_scope_closed: crate::api::runtime::task_scope_remove(&nested_uuid).is_ok(),
+    });
+
+    let value = native_string_from_json(&Json::Null).unwrap();
+    assert_eq!(
+        unsafe { native_async_completion_resolve_json(completion, value) },
+        NemoRelayStatus::Ok
+    );
+    unsafe { native_string_free(value) };
+    NemoRelayNativeAsyncCallbackState::Complete as u32
+}
+
+#[test]
+fn native_callback_entry_uses_an_isolated_snapshot() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let original_stack = create_scope_stack();
+    let outer = ScopeHandle::builder()
+        .name("outer")
+        .scope_type(ScopeType::Custom)
+        .parent_uuid(
+            original_stack
+                .read()
+                .unwrap_or_else(|error| error.into_inner())
+                .root_uuid(),
+        )
+        .build();
+    let outer_uuid = outer.uuid;
+    let subscriber: EventSubscriberFn = Arc::new(|_| {});
+    {
+        let mut stack = original_stack
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        stack.push(outer);
+        stack
+            .local_registries_mut(&outer_uuid)
+            .unwrap()
+            .event_subscribers
+            .insert("callback-local".into(), subscriber.clone());
+    }
+    let managed_event_uuid = uuid::Uuid::now_v7();
+    let probe = NativeCallbackEntryProbe {
+        original_stack: original_stack.clone(),
+        expected_subscriber: subscriber,
+        expected_parent: managed_event_uuid,
+        observation: Mutex::new(None),
+    };
+    let user_data = Arc::new(NativeCallbackUserData {
+        ptr: (&probe as *const NativeCallbackEntryProbe)
+            .cast_mut()
+            .cast(),
+        free_fn: None,
+        _instance: None,
+    });
+
+    let result = runtime.block_on(TASK_SCOPE_STACK.scope(
+        original_stack.clone(),
+        with_active_event_uuid(
+            managed_event_uuid,
+            invoke_native_async_callback(
+                observe_native_callback_entry,
+                user_data,
+                Json::Null,
+                None,
+                NativeAsyncCodecCapabilities::default(),
+            ),
+        ),
+    ));
+    assert_eq!(result.unwrap(), Json::Null);
+    let observation = probe.observation.lock().unwrap().take().unwrap();
+    assert!(observation.isolated_stack);
+    assert!(observation.scope_local_subscriber_preserved);
+    assert!(observation.managed_event_is_parent);
+    assert!(observation.nested_scope_closed);
+    assert_eq!(
+        original_stack
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .top()
+            .uuid,
+        outer_uuid
+    );
+}
+
+struct NativeCallbackInterleave {
+    original_stack: ScopeStackHandle,
+    callbacks_entered: Barrier,
+    first_opened: Barrier,
+    both_opened: Barrier,
+    first_closed: Barrier,
+}
+
+impl NativeCallbackInterleave {
+    fn new(original_stack: ScopeStackHandle) -> Self {
+        Self {
+            original_stack,
+            callbacks_entered: Barrier::new(2),
+            first_opened: Barrier::new(2),
+            both_opened: Barrier::new(2),
+            first_closed: Barrier::new(2),
+        }
+    }
+
+    fn run(&self, branch: u8) -> bool {
+        // Both callbacks must capture their context before either mutates it.
+        self.callbacks_entered.wait();
+
+        let scope = ScopeHandle::builder()
+            .name(format!("callback-{branch}"))
+            .scope_type(ScopeType::Custom)
+            .parent_uuid(crate::api::shared::resolve_parent_uuid(None).unwrap())
+            .build();
+        let scope_uuid = scope.uuid;
+        if branch == 0 {
+            crate::api::runtime::task_scope_push(scope);
+            self.first_opened.wait();
+        } else {
+            self.first_opened.wait();
+            crate::api::runtime::task_scope_push(scope);
+        }
+
+        // Force A-push, B-push, A-close, B-close. A shared LIFO stack rejects
+        // A's close because B is still on top.
+        self.both_opened.wait();
+        if branch == 0 {
+            let closed = crate::api::runtime::task_scope_remove(&scope_uuid).is_ok();
+            self.first_closed.wait();
+            closed
+        } else {
+            self.first_closed.wait();
+            crate::api::runtime::task_scope_remove(&scope_uuid).is_ok()
+        }
+    }
+}
+
+unsafe extern "C" fn free_native_callback_interleave(user_data: *mut c_void) {
+    drop(unsafe { Box::from_raw(user_data.cast::<Arc<NativeCallbackInterleave>>()) });
+}
+
+fn native_callback_interleave_user_data(
+    state: Arc<NativeCallbackInterleave>,
+) -> Arc<NativeCallbackUserData> {
+    Arc::new(NativeCallbackUserData {
+        ptr: Box::into_raw(Box::new(state)).cast(),
+        free_fn: Some(free_native_callback_interleave),
+        _instance: None,
+    })
+}
+
+fn native_callback_branch(invocation_json: *const NemoRelayNativeString) -> u8 {
+    let invocation: Json = serde_json::from_str(&read_native_string(invocation_json).unwrap())
+        .expect("native callback invocation should be JSON");
+    invocation
+        .get("branch")
+        .or_else(|| invocation.pointer("/request/content/branch"))
+        .and_then(Json::as_u64)
+        .expect("native callback invocation should identify its branch") as u8
+}
+
+unsafe extern "C" fn interleave_native_callback_scopes(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    _next: *const NemoRelayNativeAsyncNext,
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    let branch = native_callback_branch(invocation_json);
+    let state = unsafe { &*user_data.cast::<Arc<NativeCallbackInterleave>>() }.clone();
+    let isolated_entry = !Arc::ptr_eq(&current_scope_stack(), &state.original_stack);
+    let binding = capture_thread_scope_stack();
+    let completion = completion as usize;
+    std::thread::spawn(move || {
+        let _restore = ThreadScopeStackRestore::capture();
+        restore_thread_scope_stack(binding);
+        let closed = state.run(branch);
+        let value = native_string_from_json(
+            &json!({"branch": branch, "closed": closed, "isolated_entry": isolated_entry}),
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe {
+                native_async_completion_resolve_json(
+                    completion as *const NemoRelayNativeAsyncCompletion,
+                    value,
+                )
+            },
+            NemoRelayStatus::Ok
+        );
+        unsafe {
+            native_string_free(value);
+            native_async_completion_release(completion as *const NemoRelayNativeAsyncCompletion);
+        }
+    });
+    NemoRelayNativeAsyncCallbackState::Pending as u32
+}
+
+#[test]
+fn concurrent_native_callbacks_close_scopes_on_isolated_stacks() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let original_stack = create_scope_stack();
+    let user_data = native_callback_interleave_user_data(Arc::new(NativeCallbackInterleave::new(
+        original_stack.clone(),
+    )));
+
+    let (first, second) = runtime
+        .block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                TASK_SCOPE_STACK.scope(original_stack, async {
+                    tokio::join!(
+                        invoke_native_async_callback(
+                            interleave_native_callback_scopes,
+                            user_data.clone(),
+                            json!({"branch": 0}),
+                            None,
+                            NativeAsyncCodecCapabilities::default(),
+                        ),
+                        invoke_native_async_callback(
+                            interleave_native_callback_scopes,
+                            user_data,
+                            json!({"branch": 1}),
+                            None,
+                            NativeAsyncCodecCapabilities::default(),
+                        )
+                    )
+                }),
+            )
+            .await
+        })
+        .expect("concurrent native callbacks should settle");
+    assert_eq!(
+        first.unwrap(),
+        json!({"branch": 0, "closed": true, "isolated_entry": true})
+    );
+    assert_eq!(
+        second.unwrap(),
+        json!({"branch": 1, "closed": true, "isolated_entry": true})
+    );
+}
+
+unsafe extern "C" fn interleave_native_stream_callback_scopes(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    _context: *const NemoRelayNativeLlmExecutionContext,
+    next: *const NemoRelayNativeAsyncNext,
+    stream: *const NemoRelayNativeAsyncStream,
+) -> u32 {
+    let branch = native_callback_branch(invocation_json);
+    let state = unsafe { &*user_data.cast::<Arc<NativeCallbackInterleave>>() }.clone();
+    let isolated_entry = !Arc::ptr_eq(&current_scope_stack(), &state.original_stack);
+    let binding = capture_thread_scope_stack();
+    let next = next as usize;
+    let stream = stream as usize;
+    std::thread::spawn(move || {
+        let _restore = ThreadScopeStackRestore::capture();
+        restore_thread_scope_stack(binding);
+        let closed = state.run(branch);
+        let value = native_string_from_json(
+            &json!({"branch": branch, "closed": closed, "isolated_entry": isolated_entry}),
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe {
+                native_async_stream_push_json(stream as *const NemoRelayNativeAsyncStream, value)
+            },
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            unsafe { native_async_stream_finish(stream as *const NemoRelayNativeAsyncStream) },
+            NemoRelayStatus::Ok
+        );
+        unsafe {
+            native_string_free(value);
+            native_async_next_release(next as *const NemoRelayNativeAsyncNext);
+            native_async_stream_release(stream as *const NemoRelayNativeAsyncStream);
+        }
+    });
+    NemoRelayNativeAsyncCallbackState::Pending as u32
+}
+
+#[test]
+fn concurrent_native_stream_callbacks_close_scopes_on_isolated_stacks() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let original_stack = create_scope_stack();
+    let wrapped = wrap_native_incremental_llm_stream_execution_with_user_data(
+        interleave_native_stream_callback_scopes,
+        native_callback_interleave_user_data(Arc::new(NativeCallbackInterleave::new(
+            original_stack.clone(),
+        ))),
+    );
+    let downstream: LlmStreamExecutionNextFn =
+        Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) }));
+
+    let (first_chunk, second_chunk, first_done, second_done) = runtime
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let (first, second) = TASK_SCOPE_STACK
+                    .scope(original_stack, async {
+                        tokio::join!(
+                            wrapped(
+                                "first",
+                                LlmRequest {
+                                    headers: Map::new(),
+                                    content: json!({"branch": 0}),
+                                },
+                                LlmExecutionContext::default(),
+                                downstream.clone(),
+                            ),
+                            wrapped(
+                                "second",
+                                LlmRequest {
+                                    headers: Map::new(),
+                                    content: json!({"branch": 1}),
+                                },
+                                LlmExecutionContext::default(),
+                                downstream,
+                            )
+                        )
+                    })
+                    .await;
+                let mut first = first.unwrap();
+                let mut second = second.unwrap();
+                let (first_chunk, second_chunk) = tokio::join!(first.next(), second.next());
+                (
+                    first_chunk,
+                    second_chunk,
+                    first.next().await,
+                    second.next().await,
+                )
+            })
+            .await
+        })
+        .expect("concurrent native streams should settle");
+    assert_eq!(
+        first_chunk.unwrap().unwrap(),
+        json!({"branch": 0, "closed": true, "isolated_entry": true})
+    );
+    assert_eq!(
+        second_chunk.unwrap().unwrap(),
+        json!({"branch": 1, "closed": true, "isolated_entry": true})
+    );
+    assert!(first_done.is_none());
+    assert!(second_done.is_none());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn native_async_wrappers_validate_callback_result_shapes() {
@@ -5649,7 +6900,7 @@ fn native_codec_operations_report_json_and_codec_failures() {
 }
 
 #[test]
-fn native_v4_completion_scoped_codecs_enforce_direction_and_expiration() {
+fn native_completion_scoped_codecs_enforce_direction_and_expiration() {
     let (sender, _receiver) = tokio::sync::oneshot::channel();
     let completion = Arc::new(NativeAsyncCompletion {
         sender: Mutex::new(Some(sender)),
@@ -5657,9 +6908,10 @@ fn native_v4_completion_scoped_codecs_enforce_direction_and_expiration() {
         next_invoked: AtomicBool::new(false),
         next_abort: Mutex::new(None),
         continuation_aborts: Mutex::new(HashMap::new()),
-        codec: Some(NativeAsyncCodecCapability::Request(
-            Arc::new(OpenAIChatCodec) as Arc<dyn LlmCodec>,
+        request_codec: Some(NativeHostLlmRequestCodec(
+            Arc::new(OpenAIChatCodec) as Arc<dyn LlmCodec>
         )),
+        response_codec: None,
         before_settlement_lock: None,
         _callback_user_data: None,
     });
@@ -5740,6 +6992,81 @@ fn native_v4_completion_scoped_codecs_enforce_direction_and_expiration() {
         native_string_free(request_json);
         native_string_free(annotated_json);
         native_async_completion_release(completion_ref);
+    }
+}
+
+#[test]
+fn native_stream_scoped_codec_expires_after_stream_settlement() {
+    let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+    let stream = Arc::new(NativeAsyncStream {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
+        settlement: Mutex::new(()),
+        request_codec: Some(NativeHostLlmRequestCodec(
+            Arc::new(OpenAIChatCodec) as Arc<dyn LlmCodec>
+        )),
+        before_settlement_lock: None,
+        _callback_user_data: None,
+    });
+    let stream_ref = Arc::into_raw(Arc::clone(&stream)) as *const NemoRelayNativeAsyncStream;
+    assert_eq!(
+        unsafe { native_async_stream_retain(stream_ref) },
+        NemoRelayStatus::Ok
+    );
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "secret"}]
+        }),
+    };
+    let request_json = native_string(&serde_json::to_string(&request).unwrap());
+    let mut output = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            native_async_stream_llm_request_codec_decode(stream_ref, request_json, &mut output)
+        },
+        NemoRelayStatus::Ok
+    );
+    let annotated: AnnotatedLlmRequest =
+        serde_json::from_str(&read_native_string(output).unwrap()).unwrap();
+    unsafe { native_string_free(output) };
+    let annotated_json = native_string(&serde_json::to_string(&annotated).unwrap());
+    assert_eq!(
+        unsafe {
+            native_async_stream_llm_request_codec_encode(
+                stream_ref,
+                annotated_json,
+                request_json,
+                &mut output,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    unsafe { native_string_free(output) };
+
+    assert_eq!(
+        unsafe { native_async_stream_finish(stream_ref) },
+        NemoRelayStatus::Ok
+    );
+    let sentinel = native_string("expired");
+    output = sentinel;
+    assert_eq!(
+        unsafe {
+            native_async_stream_llm_request_codec_decode(stream_ref, request_json, &mut output)
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert!(output.is_null());
+    unsafe {
+        native_string_free(sentinel);
+        native_string_free(request_json);
+        native_string_free(annotated_json);
+        native_async_stream_release(stream_ref);
+        native_async_stream_release(stream_ref);
     }
 }
 
@@ -6070,6 +7397,7 @@ unsafe extern "C" fn llm_execution_error(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
     _request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmExecutionContext,
     _next_fn: NemoRelayNativeLlmNextFn,
     _next_ctx: *mut c_void,
     out_json: *mut *mut NemoRelayNativeString,
@@ -6084,6 +7412,7 @@ unsafe extern "C" fn llm_stream_execution_error(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
     _request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmExecutionContext,
     _next_fn: NemoRelayNativeLlmStreamNextFn,
     _next_ctx: *mut c_void,
     out_stream: *mut NemoRelayNativeLlmStreamV1,
@@ -6363,11 +7692,16 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
         None,
     );
     assert!(
-        llm_execution("model", request.clone(), llm_next(Ok(Json::Null)))
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("LLM execution failed")
+        llm_execution(
+            "model",
+            request.clone(),
+            LlmExecutionContext::default(),
+            llm_next(Ok(Json::Null)),
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("LLM execution failed")
     );
 
     let stream_next: LlmStreamExecutionNextFn =
@@ -6375,12 +7709,17 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
     let llm_stream_execution =
         wrap_llm_stream_execution_fn(instance, llm_stream_execution_error, ptr::null_mut(), None);
     assert!(
-        llm_stream_execution("model", request, stream_next)
-            .await
-            .err()
-            .expect("native stream callback should fail")
-            .to_string()
-            .contains("LLM stream execution failed")
+        llm_stream_execution(
+            "model",
+            request,
+            LlmExecutionContext::default(),
+            stream_next,
+        )
+        .await
+        .err()
+        .expect("native stream callback should fail")
+        .to_string()
+        .contains("LLM stream execution failed")
     );
 }
 
@@ -6544,6 +7883,94 @@ fn native_llm_sanitize_context_preserves_all_codec_identity_states() {
             unsafe { native_string_free(context_id) };
         }
     }
+}
+
+#[test]
+fn native_execution_context_is_directional_and_streaming_omits_response_codec() {
+    let request_codec: Arc<dyn LlmCodec> = Arc::new(OpenAIChatCodec);
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+    let unary = LlmExecutionContext::new(
+        LlmSanitizeRequestContext::for_request_codec(Some(request_codec.clone())),
+        Some(LlmSanitizeResponseContext::for_response_codec(Some(
+            response_codec.clone(),
+        ))),
+    );
+    let native_request_codec = NativeHostLlmRequestCodec(request_codec.clone());
+    let native_response_codec = NativeHostLlmResponseCodec(response_codec);
+    let bridge = NativeLlmExecutionContextBridge::new(
+        &unary,
+        Some(&native_request_codec),
+        Some(&native_response_codec),
+    )
+    .unwrap();
+    bridge.with_native_context(|context| {
+        assert_eq!(
+            context.request_codec.codec_kind,
+            NemoRelayNativeLlmCodecKind::BuiltIn
+        );
+        assert_eq!(
+            read_native_string(context.request_codec.codec_id).unwrap(),
+            "openai_chat"
+        );
+        assert!(!context.request_codec.codec.is_null());
+        assert!(!context.response_codec.is_null());
+        let response = unsafe { &*context.response_codec };
+        assert_eq!(response.codec_kind, NemoRelayNativeLlmCodecKind::BuiltIn);
+        assert_eq!(
+            read_native_string(response.codec_id).unwrap(),
+            "openai_chat"
+        );
+        assert!(!response.codec.is_null());
+    });
+
+    let streaming = LlmExecutionContext::new(
+        LlmSanitizeRequestContext::for_request_codec(Some(request_codec)),
+        None,
+    );
+    let bridge =
+        NativeLlmExecutionContextBridge::new(&streaming, Some(&native_request_codec), None)
+            .unwrap();
+    bridge.with_native_context(|context| {
+        assert!(!context.request_codec.codec.is_null());
+        assert!(context.response_codec.is_null());
+    });
+
+    let absent = LlmExecutionContext::new(
+        LlmSanitizeRequestContext::for_request_codec(None),
+        Some(LlmSanitizeResponseContext::for_response_codec(None)),
+    );
+    let bridge = NativeLlmExecutionContextBridge::new(&absent, None, None).unwrap();
+    bridge.with_native_context(|context| {
+        assert_eq!(
+            context.request_codec.codec_kind,
+            NemoRelayNativeLlmCodecKind::None
+        );
+        assert!(context.request_codec.codec_id.is_null());
+        assert!(context.request_codec.codec.is_null());
+        assert!(!context.response_codec.is_null());
+        let response = unsafe { &*context.response_codec };
+        assert_eq!(response.codec_kind, NemoRelayNativeLlmCodecKind::None);
+        assert!(response.codec_id.is_null());
+        assert!(response.codec.is_null());
+    });
+
+    let allocation_failure = LlmExecutionContext::new(
+        LlmSanitizeRequestContext::with_identity(LlmCodecIdentity::Runtime("request.v1".into())),
+        Some(LlmSanitizeResponseContext::with_identity(
+            LlmCodecIdentity::Runtime("response.v1".into()),
+        )),
+    );
+    let live_before = native_string_live_allocations();
+    fail_native_string_allocation_after(1);
+    let error = NativeLlmExecutionContextBridge::new(&allocation_failure, None, None)
+        .err()
+        .expect("response codec ID allocation should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("failed to allocate native LLM codec ID")
+    );
+    assert_eq!(native_string_live_allocations(), live_before);
 }
 
 #[test]
@@ -7082,7 +8509,7 @@ async fn native_stream_adapter_covers_chunks_end_errors_and_cancellation() {
         NativeStreamItem::Json(json!({"chunk": 1})),
         NativeStreamItem::End,
     ]);
-    let mut stream = native_stream_to_relay_stream(raw, None, None).unwrap();
+    let mut stream = native_stream_to_relay_stream(raw, None, None, None).unwrap();
     assert_eq!(stream.next().await.unwrap().unwrap(), json!({"chunk": 1}));
     assert!(stream.next().await.is_none());
     assert_eq!(cancel_count.load(Ordering::SeqCst), 0);
@@ -7091,7 +8518,7 @@ async fn native_stream_adapter_covers_chunks_end_errors_and_cancellation() {
     let (raw, cancel_count, drop_count) = test_native_stream([NativeStreamItem::Json(json!({
         "chunk": 2
     }))]);
-    let stream = native_stream_to_relay_stream(raw, None, None).unwrap();
+    let stream = native_stream_to_relay_stream(raw, None, None, None).unwrap();
     drop(stream);
     assert_eq!(cancel_count.load(Ordering::SeqCst), 1);
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
@@ -7103,7 +8530,7 @@ async fn native_stream_adapter_covers_chunks_end_errors_and_cancellation() {
         NativeStreamItem::ErrorWithJson(NemoRelayStatus::InvalidArg),
     ] {
         let (raw, _, drop_count) = test_native_stream([item]);
-        let mut stream = native_stream_to_relay_stream(raw, None, None).unwrap();
+        let mut stream = native_stream_to_relay_stream(raw, None, None, None).unwrap();
         assert!(stream.next().await.unwrap().is_err());
         assert!(stream.next().await.is_none());
         assert_eq!(drop_count.load(Ordering::SeqCst), 1);
@@ -7111,16 +8538,16 @@ async fn native_stream_adapter_covers_chunks_end_errors_and_cancellation() {
 
     let (mut raw, _, drop_count) = test_native_stream([]);
     raw.struct_size = 0;
-    assert!(NativeRelayLlmStream::from_raw(raw, None, None).is_err());
+    assert!(NativeRelayLlmStream::from_raw(raw, None, None, None).is_err());
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
 
     let (mut raw, _, drop_count) = test_native_stream([]);
     raw.next = None;
-    assert!(NativeRelayLlmStream::from_raw(raw, None, None).is_err());
+    assert!(NativeRelayLlmStream::from_raw(raw, None, None, None).is_err());
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
 
     let (raw, _, drop_count) = test_native_stream([NativeStreamItem::EndWithJson]);
-    let mut stream = native_stream_to_relay_stream(raw, None, None).unwrap();
+    let mut stream = native_stream_to_relay_stream(raw, None, None, None).unwrap();
     assert!(stream.next().await.is_none());
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
 
@@ -7129,6 +8556,7 @@ async fn native_stream_adapter_covers_chunks_end_errors_and_cancellation() {
         finished: false,
         _next_ctx: None,
         _callback_user_data: None,
+        _request_codec: None,
     };
     assert!(invalid.next().await.unwrap().is_err());
     assert!(invalid.next().await.is_none());
@@ -7264,4 +8692,95 @@ fn native_stream_continuation_covers_success_and_error() {
         unsafe { native_llm_stream_next(ptr::null(), ptr::null_mut(), ptr::null_mut()) },
         NemoRelayStatus::NullPointer
     );
+}
+
+#[cfg(unix)]
+/// Returns owned intercept outcomes, including invalid variants for string cleanup checks.
+unsafe extern "C" fn echo_native_llm_intercept(
+    _user_data: *mut c_void,
+    name: *const NemoRelayNativeString,
+    request: *const NemoRelayNativeString,
+    annotated: *const NemoRelayNativeString,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let Ok(name) = read_native_string(name) else {
+        return NemoRelayStatus::InvalidUtf8;
+    };
+    match name.as_str() {
+        "missing" => unsafe {
+            *out = ptr::null_mut();
+        },
+        "malformed" => unsafe {
+            *out = native_string("not-json");
+        },
+        "shape" => unsafe {
+            *out = native_string("{}");
+        },
+        _ => {
+            let Ok(request) = read_native_string(request).and_then(|text| {
+                serde_json::from_str::<Json>(&text)
+                    .map_err(|error| PluginError::InvalidConfig(error.to_string()))
+            }) else {
+                return NemoRelayStatus::InvalidJson;
+            };
+            let annotated = if annotated.is_null() {
+                Json::Null
+            } else {
+                let Ok(value) = read_native_string(annotated).and_then(|text| {
+                    serde_json::from_str::<Json>(&text)
+                        .map_err(|error| PluginError::InvalidConfig(error.to_string()))
+                }) else {
+                    return NemoRelayStatus::InvalidJson;
+                };
+                value
+            };
+            unsafe {
+                *out = native_string_from_json(
+                    &json!({"request": request, "annotated_request": annotated}),
+                )
+                .unwrap();
+            }
+        }
+    }
+    NemoRelayStatus::Ok
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_llm_intercept_preserves_annotations_and_releases_invalid_output_strings() {
+    let instance = Arc::new(NativePluginInstance {
+        plugin_kind: "test.native.intercept".into(),
+        relay_compat: "^0.10".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(NemoRelayNativePluginV1::default()),
+        _library: libloading::os::unix::Library::this().into(),
+    });
+    let callback =
+        wrap_llm_request_intercept_fn(instance, echo_native_llm_intercept, ptr::null_mut(), None);
+    let request = LlmRequest {
+        headers: Map::from_iter([("authorization".into(), json!("token"))]),
+        content: json!({"model": "fixture", "messages": [{"role": "user", "content": "hello"}]}),
+    };
+    let annotated = OpenAIChatCodec.decode(&request).unwrap();
+    let before = native_string_live_allocations();
+    for annotation in [None, Some(annotated)] {
+        let outcome = callback("echo".into(), request.clone(), annotation.clone())
+            .await
+            .unwrap();
+        assert_eq!(outcome.request, request);
+        assert_eq!(outcome.annotated_request, annotation);
+        assert!(outcome.pending_marks.is_empty());
+        assert_eq!(native_string_live_allocations(), before);
+    }
+    for (name, reason) in [
+        ("missing", "null outcome"),
+        ("malformed", "invalid JSON"),
+        ("shape", "invalid LLM request intercept outcome JSON"),
+    ] {
+        let error = callback(name.into(), request.clone(), None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(reason), "{error}");
+        assert_eq!(native_string_live_allocations(), before);
+    }
 }

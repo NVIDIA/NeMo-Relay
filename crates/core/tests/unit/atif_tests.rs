@@ -987,6 +987,7 @@ fn test_exporter_prefers_effective_response_model_over_requested_profile_model()
                 total_tokens: Some(10),
                 cache_read_tokens: None,
                 cache_write_tokens: None,
+                uncached_input_tokens: None,
                 cost: None,
             },
         ))
@@ -1514,6 +1515,7 @@ fn test_exporter_prefers_annotated_usage_over_raw_usage_conflicts() {
                 total_tokens: Some(46),
                 cache_read_tokens: Some(5),
                 cache_write_tokens: None,
+                uncached_input_tokens: None,
                 cost: Some(provider_reported_cost(0.42, "USD", "annotated-model")),
             },
         ))
@@ -1542,6 +1544,7 @@ fn test_extract_metrics_does_not_mix_raw_cost_when_annotated_cost_is_non_usd() {
             total_tokens: Some(46),
             cache_read_tokens: None,
             cache_write_tokens: None,
+            uncached_input_tokens: None,
             cost: Some(provider_reported_cost(0.42, "EUR", "annotated-model")),
         },
     );

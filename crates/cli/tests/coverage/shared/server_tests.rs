@@ -28,8 +28,8 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
 use nemo_relay::plugin::{
-    ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
-    ensure_builtin_plugins_registered, register_plugin,
+    ConfigDiagnostic, Plugin, PluginConfig, PluginRegistration, PluginRegistrationContext,
+    deregister_plugin, ensure_builtin_plugins_registered, register_plugin,
 };
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -338,6 +338,7 @@ impl Drop for TestServer {
 fn test_config() -> GatewayConfig {
     crate::test_support::enable_operational_logs();
     GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -346,6 +347,7 @@ fn test_config() -> GatewayConfig {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     }
 }
@@ -376,7 +378,7 @@ async fn gateway_clients_allow_active_streams_past_the_idle_timeout() {
             socket.write_all(b"0\r\n\r\n").await.unwrap();
         });
 
-        let response = gateway_http_client(Duration::from_millis(300), no_redirect)
+        let response = gateway_http_client(Some(Duration::from_millis(300)), no_redirect)
             .get(format!("http://{address}"))
             .send()
             .await
@@ -385,6 +387,68 @@ async fn gateway_clients_allow_active_streams_past_the_idle_timeout() {
             response.bytes().await.unwrap(),
             b"onex!x!x!x!x!x!".as_slice()
         );
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn default_gateway_clients_allow_long_headers_and_silent_streams() {
+    for no_redirect in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (headers_tx, headers_rx) = tokio::sync::oneshot::channel();
+        let (body_tx, body_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0_u8; 1];
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            started_tx.send(()).unwrap();
+            headers_rx.await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 4\r\nconnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            body_rx.await.unwrap();
+            socket.write_all(b"done").await.unwrap();
+        });
+        let request = tokio::spawn(async move {
+            gateway_http_client(GatewayConfig::default().response_timeout(), no_redirect)
+                .get(format!("http://{address}"))
+                .send()
+                .await
+                .unwrap()
+        });
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        assert!(
+            !request.is_finished(),
+            "default headers must have no deadline"
+        );
+        headers_tx.send(()).unwrap();
+        let response = request.await.unwrap();
+        let body = tokio::spawn(async move { response.bytes().await.unwrap() });
+        tokio::task::yield_now().await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        assert!(
+            !body.is_finished(),
+            "default body reads must have no idle deadline"
+        );
+        body_tx.send(()).unwrap();
+        assert_eq!(body.await.unwrap(), "done");
         server.await.unwrap();
     }
 }
@@ -411,7 +475,7 @@ async fn gateway_clients_reject_stalled_streams_after_the_idle_timeout() {
             tokio::time::sleep(Duration::from_millis(500)).await;
         });
 
-        let response = gateway_http_client(Duration::from_millis(200), no_redirect)
+        let response = gateway_http_client(Some(Duration::from_millis(200)), no_redirect)
             .get(format!("http://{address}"))
             .send()
             .await
@@ -430,6 +494,7 @@ async fn responses_websocket_upgrades_request_http_fallback() {
         "/responses",
         "/v1/responses",
         "/backend-api/codex/responses",
+        "/v1/nemo-relay/test-capability/responses",
     ] {
         let response = app
             .clone()
@@ -456,6 +521,7 @@ async fn responses_plain_get_remains_method_not_allowed() {
         "/responses",
         "/v1/responses",
         "/backend-api/codex/responses",
+        "/v1/nemo-relay/test-capability/responses",
     ] {
         let response = app
             .clone()
@@ -648,21 +714,34 @@ async fn codex_permission_request_without_tool_call_id_requires_one_matching_act
         }};
     }
 
+    // Codex's documented shapes: PermissionRequest carries an approval `description` that the
+    // matching PreToolUse does not.
     let permission = |session_id, command| {
         json!({
             "session_id": session_id,
             "hook_event_name": "PermissionRequest",
-            "tool_name": "shell",
-            "tool_input": {"cmd": command}
+            "tool_name": "Bash",
+            "tool_input": {"command": command, "description": "needs approval"}
         })
     };
     let pre_tool = |session_id, command| {
         json!({
             "session_id": session_id,
             "hook_event_name": "PreToolUse",
-            "tool_name": "shell",
-            "tool_input": {"cmd": command}
+            "tool_name": "Bash",
+            "tool_input": {"command": command}
         })
+    };
+    let assert_denied = |body: Value| {
+        assert_eq!(body.as_object().map(|object| object.len()), Some(1));
+        let output = &body["hookSpecificOutput"];
+        assert_eq!(output["hookEventName"], json!("PermissionRequest"));
+        assert_eq!(output["decision"]["behavior"], json!("deny"));
+        assert!(
+            output["decision"]["message"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty())
+        );
     };
 
     let single_match = "codex-permission-single-match";
@@ -680,10 +759,7 @@ async fn codex_permission_request_without_tool_call_id_requires_one_matching_act
         json!({})
     );
     assert_eq!(send_codex_hook!(pre_tool(no_match, "pwd")), json!({}));
-    assert_eq!(
-        send_codex_hook!(permission(no_match, "whoami"))["decision"],
-        json!("deny")
-    );
+    assert_denied(send_codex_hook!(permission(no_match, "whoami")));
 
     let ambiguous = "codex-permission-ambiguous";
     assert_eq!(
@@ -692,10 +768,7 @@ async fn codex_permission_request_without_tool_call_id_requires_one_matching_act
     );
     assert_eq!(send_codex_hook!(pre_tool(ambiguous, "pwd")), json!({}));
     assert_eq!(send_codex_hook!(pre_tool(ambiguous, "pwd")), json!({}));
-    assert_eq!(
-        send_codex_hook!(permission(ambiguous, "pwd"))["decision"],
-        json!("deny")
-    );
+    assert_denied(send_codex_hook!(permission(ambiguous, "pwd")));
 
     let session_one = "codex-permission-session-one";
     let session_two = "codex-permission-session-two";
@@ -708,10 +781,25 @@ async fn codex_permission_request_without_tool_call_id_requires_one_matching_act
         json!({})
     );
     assert_eq!(send_codex_hook!(pre_tool(session_two, "pwd")), json!({}));
-    assert_eq!(
-        send_codex_hook!(permission(session_one, "pwd"))["decision"],
-        json!("deny")
-    );
+    assert_denied(send_codex_hook!(permission(session_one, "pwd")));
+
+    // MCP tools forward their real arguments, so a `description` argument must still match.
+    let mcp = "codex-permission-mcp-description";
+    let mcp_tool = |event| {
+        json!({
+            "session_id": mcp,
+            "hook_event_name": event,
+            "tool_name": "mcp__docs__create_page",
+            "tool_input": {"title": "Notes", "description": "page summary"}
+        })
+    };
+    for payload in [
+        json!({"session_id": mcp, "hook_event_name": "SessionStart"}),
+        mcp_tool("PreToolUse"),
+        mcp_tool("PermissionRequest"),
+    ] {
+        assert_eq!(send_codex_hook!(payload), json!({}));
+    }
 }
 
 #[tokio::test]
@@ -1005,8 +1093,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     let mut headers = HeaderMap::new();
     assert!(
         !state
-            .authorize_provider_request(&mut headers)
+            .authorize_provider_request(&mut headers, "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
     headers.insert(
@@ -1015,8 +1104,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
     assert!(
         !state
-            .authorize_provider_request(&mut headers)
+            .authorize_provider_request(&mut headers, "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
     headers.insert(
@@ -1025,16 +1115,18 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
     assert!(
         state
-            .authorize_provider_request(&mut headers)
+            .authorize_provider_request(&mut headers, "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
 
     let foreground = AppState::new(test_config());
     assert!(
         foreground
-            .authorize_provider_request(&mut HeaderMap::new())
+            .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
 
@@ -1042,8 +1134,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), false, None, None);
     assert!(
         explicit_daemon
-            .authorize_provider_request(&mut HeaderMap::new())
+            .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .unwrap()
+            .0
             .allow_environment_provider_auth
     );
 
@@ -1057,7 +1150,7 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
     assert!(
         transparent
-            .authorize_provider_request(&mut HeaderMap::new())
+            .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .is_err()
     );
     let mut transparent_headers = HeaderMap::new();
@@ -1066,13 +1159,150 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         HeaderValue::from_static("test-proxy-token"),
     );
     let authorization = transparent
-        .authorize_provider_request(&mut transparent_headers)
+        .authorize_provider_request(&mut transparent_headers, "/v1/responses")
         .unwrap();
-    assert!(authorization.allow_environment_provider_auth);
+    assert!(authorization.0.allow_environment_provider_auth);
     assert!(
         !transparent_headers
             .contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
     );
+}
+
+#[tokio::test]
+async fn managed_sidecar_consumes_codex_project_proof_and_preserves_provider_metadata() {
+    use crate::provider_auth::{CODEX_CLIENT_PROOF_HEADER, CODEX_CLIENT_PROOF_PREFIX};
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let state =
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
+    let proof = format!("{CODEX_CLIENT_PROOF_PREFIX}{};", key.client_token());
+    for (value, expected, authenticated) in [
+        (
+            "project-original".to_string(),
+            Some("project-original"),
+            false,
+        ),
+        (proof.clone(), None, true),
+        (
+            format!("{proof}project-original"),
+            Some("project-original"),
+            true,
+        ),
+        (
+            format!("{proof}{proof}project-original"),
+            Some("project-original"),
+            true,
+        ),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(CODEX_CLIENT_PROOF_HEADER, value.parse().unwrap());
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer nvapi-caller".parse().unwrap(),
+        );
+        headers.insert("openai-organization", "org-user".parse().unwrap());
+        let (authorization, path) = state
+            .authorize_provider_request(&mut headers, "/v1/responses")
+            .unwrap();
+        assert_eq!(authorization.allow_environment_provider_auth, authenticated);
+        assert_eq!(path, "/v1/responses");
+        assert_eq!(
+            headers
+                .get(CODEX_CLIENT_PROOF_HEADER)
+                .map(|value| value.to_str().unwrap()),
+            expected
+        );
+        assert_eq!(headers[header::AUTHORIZATION], "Bearer nvapi-caller");
+        assert_eq!(headers["openai-organization"], "org-user");
+    }
+    for value in [
+        format!("{CODEX_CLIENT_PROOF_PREFIX}bad;project"),
+        format!("{proof}{CODEX_CLIENT_PROOF_PREFIX}bad;project"),
+        CODEX_CLIENT_PROOF_PREFIX.to_string(),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(CODEX_CLIENT_PROOF_HEADER, value.parse().unwrap());
+        let error = state
+            .authorize_provider_request(&mut headers, "/v1/responses")
+            .unwrap_err();
+        assert!(!error.to_string().contains(&key.client_token()));
+    }
+    let mut duplicates = HeaderMap::new();
+    duplicates.append(CODEX_CLIENT_PROOF_HEADER, proof.parse().unwrap());
+    duplicates.append(
+        CODEX_CLIENT_PROOF_HEADER,
+        "ordinary-project".parse().unwrap(),
+    );
+    assert!(
+        state
+            .authorize_provider_request(&mut duplicates, "/v1/responses")
+            .is_err()
+    );
+    let mut browser = HeaderMap::new();
+    browser.insert(
+        CODEX_CLIENT_PROOF_HEADER,
+        format!("{CODEX_CLIENT_PROOF_PREFIX}{};", key.client_token())
+            .parse()
+            .unwrap(),
+    );
+    browser.insert(header::ORIGIN, "https://example.com".parse().unwrap());
+    assert!(
+        state
+            .authorize_provider_request(&mut browser, "/v1/responses")
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn managed_sidecar_accepts_capability_urls_without_forwarding_the_capability() {
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let state = AppState::new_with_bootstrap(
+        test_config(),
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    );
+    let path = format!("/v1/nemo-relay/{}/responses", key.client_token());
+
+    let (authorization, provider_path) = state
+        .authorize_provider_request(&mut HeaderMap::new(), &path)
+        .unwrap();
+
+    assert!(authorization.allow_environment_provider_auth);
+    assert_eq!(provider_path, "/v1/responses");
+    assert!(
+        state
+            .authorize_provider_request(
+                &mut HeaderMap::new(),
+                "/v1/nemo-relay/hmac-sha256:wrong/responses"
+            )
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn router_rejects_invalid_provider_capabilities_before_proxying() {
+    let app = router_with_state(AppState::new_with_bootstrap(
+        test_config(),
+        Some("expected-fingerprint".into()),
+        Some(BootstrapChallengeKey::from_bytes(b"test challenge key")),
+        true,
+        None,
+        None,
+    ));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/nemo-relay/hmac-sha256:invalid/responses")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -1495,6 +1725,39 @@ async fn serve_listener_exits_after_codex_stop_without_session_end() {
         .unwrap();
     result.unwrap();
 }
+#[test]
+fn cli_resource_metrics_defaults_to_global_and_honors_explicit_scope() {
+    let mut config: PluginConfig = serde_json::from_value(json!({
+        "components": [{"kind": "resource_metrics", "config": {}}]
+    }))
+    .unwrap();
+    super::apply_cli_resource_metrics_scope_default(&mut config);
+    assert_eq!(config.components[0].config["measurement_scope"], "global");
+
+    let mut config: PluginConfig = serde_json::from_value(json!({
+        "components": [{
+            "kind": "resource_metrics",
+            "config": {"measurement_scope": "runtime_default"}
+        }]
+    }))
+    .unwrap();
+    super::apply_cli_resource_metrics_scope_default(&mut config);
+    assert_eq!(config.components[0].config["measurement_scope"], "global");
+
+    let mut config: PluginConfig = serde_json::from_value(json!({
+        "components": [{
+            "kind": "resource_metrics",
+            "config": {"measurement_scope": "process_tree"}
+        }]
+    }))
+    .unwrap();
+    super::apply_cli_resource_metrics_scope_default(&mut config);
+    assert_eq!(
+        config.components[0].config["measurement_scope"],
+        "process_tree"
+    );
+}
+
 #[tokio::test]
 async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -2804,6 +3067,93 @@ async fn claude_code_hook_returns_continue_shape() {
 }
 
 #[tokio::test]
+async fn gateway_permission_requests_emit_policy_marks() {
+    const SUBSCRIBER: &str = "gateway-permission-audit";
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = deregister_subscriber(SUBSCRIBER);
+    let app = router(test_config());
+    let captured = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let events = Arc::clone(&captured);
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| {
+            if event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .or_else(|| event.data().and_then(|data| data.get("session_id")))
+                .and_then(Value::as_str)
+                .is_some_and(|session| session.starts_with("gateway-permission-audit"))
+                && matches!(
+                    event.name(),
+                    "hook_mark" | "nemo_relay.permission.policy_decision"
+                )
+            {
+                events.lock().unwrap().push(json!({
+                    "name": event.name(),
+                    "data": event.data(),
+                    "metadata": event.metadata(),
+                }));
+            }
+        }),
+    )
+    .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(SUBSCRIBER);
+
+    let session_id = "gateway-permission-audit-codex";
+    for event_name in ["PreToolUse", "PermissionRequest"] {
+        let mut payload = json!({
+            "session_id": session_id,
+            "hook_event_name": event_name,
+            "permission_mode": "default",
+            "tool_use_id": "audit-tool-1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "pwd"},
+        });
+        if event_name == "PermissionRequest" {
+            payload.as_object_mut().unwrap().remove("tool_use_id");
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/hooks/codex")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        if event_name == "PermissionRequest" {
+            assert_eq!(body, json!({}));
+        }
+    }
+    flush_subscribers().unwrap();
+    let events = captured.lock().unwrap();
+    let marks: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event["name"] == "nemo_relay.permission.policy_decision"
+                && event["metadata"]["session_id"] == session_id
+        })
+        .collect();
+    assert_eq!(marks.len(), 1);
+    assert!(marks[0]["data"].get("decision").is_none());
+    assert_eq!(marks[0]["data"]["policy_outcome"], "pass");
+    assert_eq!(marks[0]["data"]["decision_source"], "nemo_relay");
+    assert_eq!(marks[0]["data"]["tool_call_id"], "audit-tool-1");
+    assert_eq!(marks[0]["data"]["harness_permission_mode"], "default");
+    assert!(events.iter().any(|event| {
+        event["name"] == "hook_mark"
+            && event["data"]["session_id"] == session_id
+            && event["data"]["permission_mode"] == "default"
+    }));
+    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
+}
+
+#[tokio::test]
 async fn claude_permission_request_allows_an_exact_active_tool() {
     let app = router(test_config());
     let pre_tool = app
@@ -3250,6 +3600,120 @@ async fn gateway_transparently_forwards_openai_image_generations() {
         json!("/v1/images/generations?output_format=png")
     );
     assert_eq!(body["authorization"], json!("Bearer image-test"));
+}
+
+#[tokio::test]
+async fn managed_capability_url_forwards_a_normalized_responses_request() {
+    let upstream = spawn_upstream(false).await;
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/nemo-relay/{}/responses?include=usage",
+                    key.client_token()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "model": "gpt-test", "input": "hello" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/responses?include=usage"));
+}
+
+#[tokio::test]
+async fn managed_capability_url_forwards_a_normalized_models_request() {
+    let upstream = spawn_models_upstream().await;
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v1/nemo-relay/{}/models?limit=10",
+                    key.client_token()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/models?limit=10"));
+}
+
+#[tokio::test]
+async fn managed_capability_url_forwards_a_normalized_image_request() {
+    let upstream = spawn_upstream(false).await;
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/nemo-relay/{}/images/generations?output_format=png",
+                    key.client_token()
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "model": "gpt-image-1", "prompt": "relay" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["path"],
+        json!("/v1/images/generations?output_format=png")
+    );
 }
 
 #[tokio::test]
@@ -4683,7 +5147,7 @@ async fn gateway_concurrent_next_uses_canonical_selected_buffered_response() {
     register_llm_execution_intercept(
         INTERCEPT_NAME,
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             let release_losing = release_from_intercept.clone();
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
@@ -4771,7 +5235,7 @@ async fn gateway_concurrent_next_uses_canonical_selected_streaming_response() {
     register_llm_stream_execution_intercept(
         INTERCEPT_NAME,
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             let release_losing = release_from_intercept.clone();
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
@@ -4854,7 +5318,7 @@ async fn gateway_concurrent_next_relays_selected_buffered_failure() {
     register_llm_execution_intercept(
         INTERCEPT_NAME,
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             let release_losing = release_from_intercept.clone();
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
@@ -4933,7 +5397,7 @@ async fn gateway_concurrent_next_relays_selected_streaming_failure() {
     register_llm_stream_execution_intercept(
         INTERCEPT_NAME,
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             let release_losing = release_from_intercept.clone();
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
@@ -5233,7 +5697,7 @@ async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_
     register_llm_execution_intercept(
         INTERCEPT_NAME,
         1,
-        Arc::new(|_name, request, next| {
+        Arc::new(|_name, request, _context, next| {
             Box::pin(async move {
                 let marked = request.content["messages"][0]["content"].as_str() == Some(MARKER);
                 let response = next(request).await?;
@@ -5884,7 +6348,7 @@ async fn model_call_policy_still_applies_on_a_named_upstream() {
     register_llm_execution_intercept(
         INTERCEPT,
         1,
-        Arc::new(move |_name, request, next| {
+        Arc::new(move |_name, request, _context, next| {
             Box::pin(async move {
                 if request.content["messages"][0]["content"].as_str() == Some("blocked by policy") {
                     return Err(nemo_relay::error::FlowError::GuardrailRejected(

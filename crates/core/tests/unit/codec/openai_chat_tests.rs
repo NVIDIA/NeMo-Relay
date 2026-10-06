@@ -116,6 +116,7 @@ fn test_decode_response_cached_tokens() {
     let resp = codec.decode_response(&response).unwrap();
     let usage = resp.usage.unwrap();
     assert_eq!(usage.cache_read_tokens, Some(42));
+    assert_eq!(usage.uncached_input_tokens, Some(58));
 }
 
 #[test]

@@ -70,6 +70,12 @@ stream extends that active lifetime until it closes, so a lazy stream adapter
 can call `next` while it is being consumed. A stream successfully returned by
 streaming `next` keeps its ordinary stream lifetime.
 
+LLM execution intercepts also receive `LlmExecutionContext`. Non-streaming
+calls expose request and completed-response codec access. Streaming calls expose
+request codec access only. Relay selects the codecs before the execution chain
+starts. Refer to [Provider Codecs](/about-nemo-relay/concepts/codecs#codec-access-in-execution-intercepts)
+for the operations and lifetimes.
+
 A tool execution continuation returns `ToolExecutionResult`, which contains the
 application-owned `result` and an optional opaque `annotation`. A forwarding
 intercept must preserve both fields in its `ToolExecutionInterceptOutcome` or

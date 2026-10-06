@@ -7,6 +7,76 @@ use super::*;
 use std::ptr;
 
 #[test]
+fn rootless_ffi_capture_preserves_the_causal_parent_without_a_session_root() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    unsafe {
+        assert_eq!(
+            nemo_relay_capture_rootless_propagation_context_json(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        let mut context = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_capture_rootless_propagation_context_json(&mut context),
+            NemoRelayStatus::Ok
+        );
+        let value: Json = serde_json::from_str(CStr::from_ptr(context).to_str().unwrap()).unwrap();
+        nemo_relay_string_free(context);
+        assert_eq!(value["version"], 1);
+        assert!(value.get("root_uuid").is_none());
+        let parent = uuid::Uuid::parse_str(value["parent_uuid"].as_str().unwrap()).unwrap();
+        assert!(!parent.is_nil());
+    }
+}
+
+#[test]
+fn ffi_propagation_normalization_discards_bad_w3c_headers_and_rejects_invalid_relay_ids() {
+    let parent = "018f13f0-7c1a-7a80-8000-000000000702";
+    let input = CString::new(
+        json!({
+            "version": 1, "parent_uuid": parent,
+            "traceparent": "invalid-traceparent", "tracestate": "vendor=value"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut output = ptr::null_mut();
+    unsafe {
+        assert_eq!(
+            nemo_relay_propagation_context_normalize_json(input.as_ptr(), ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_propagation_context_normalize_json(ptr::null(), &mut output),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_propagation_context_normalize_json(input.as_ptr(), &mut output),
+            NemoRelayStatus::Ok
+        );
+        let normalized: Json =
+            serde_json::from_str(CStr::from_ptr(output).to_str().unwrap()).unwrap();
+        nemo_relay_string_free(output);
+        assert_eq!(normalized["parent_uuid"], parent);
+        assert!(normalized.get("traceparent").is_none());
+        assert!(normalized.get("tracestate").is_none());
+        for value in [
+            "not-json".to_string(),
+            json!({"version": 2, "parent_uuid": parent}).to_string(),
+            json!({"version": 1, "parent_uuid": "00000000-0000-0000-0000-000000000000"})
+                .to_string(),
+        ] {
+            output = ptr::null_mut();
+            let value = CString::new(value).unwrap();
+            assert_eq!(
+                nemo_relay_propagation_context_normalize_json(value.as_ptr(), &mut output),
+                NemoRelayStatus::InvalidArg
+            );
+            assert!(output.is_null());
+        }
+    }
+}
+
+#[test]
 #[allow(clippy::cognitive_complexity)] // Covers the exported scope-stack contracts in one causal flow.
 fn scope_stack_propagation_entrypoints_round_trip_through_the_ffi() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());

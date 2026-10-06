@@ -16,6 +16,14 @@ changes the tool-result boundary to structural protobuf messages. Rebuild worker
 regenerate custom bindings, and declare `compat.relay` beginning at `0.8.0`; an earlier
 worker cannot decode the current `ToolNext` response or tool-execution outcome.
 
+Relay 0.10 retains those protocol identifiers and adds execution codec context to
+`LlmInvocation`. The field is protobuf-compatible, but the 0.10 Rust and Python
+SDKs change non-streaming and streaming LLM execution callbacks to receive
+`LlmExecutionContext` before the continuation. Workers that register either
+surface must update their callback signatures, rebuild, and declare
+`compat.relay` beginning at `0.10.0`. Custom workers that register either
+surface must regenerate their bindings to read the field.
+
 The protocol consists of the worker-facing service implemented by the plugin process
 and the host-runtime service implemented by Relay. These are the current service
 definitions, including cancellation, codecs, and streaming continuations:
@@ -130,7 +138,8 @@ An invocation names the activation, invocation, registration, surface, optional
 continuation, captured scope, and token. Its payload is exactly one event, tool
 invocation, LLM invocation, or conditional middleware invocation. LLM sanitizer
 invocations additionally carry codec identity and an opaque invocation-scoped codec
-capability.
+capability. LLM execution invocations carry separate request and completed-response
+codec context. Streaming execution carries only the request context.
 
 For `EVENT_METADATA_INJECTOR`, Relay sends the immutable Event snapshot in
 `InvokeRequest.event`. The worker returns an `InvokeResponse.json` object containing
@@ -171,6 +180,12 @@ message LlmInvocation {
     LlmSanitizeRequestContext request_sanitize_context = 9;
     LlmSanitizeResponseContext response_sanitize_context = 10;
   }
+  LlmExecutionCodecContext execution_codec_context = 11;
+}
+
+message LlmExecutionCodecContext {
+  LlmSanitizeRequestContext request = 1;
+  LlmSanitizeResponseContext response = 2;
 }
 
 message ToolInvocation {
@@ -252,6 +267,13 @@ identity deliberately withholds an ID. The capability ID is optional and
 invocation-scoped. A worker must treat it as a secret and must not use it after the owner
 invocation ends.
 
+For an LLM execution invocation, `execution_codec_context.request` is required.
+Its identity is present even when no codec resolves, and its capability ID is
+present only when host codec operations are available. Non-streaming execution
+also includes `response`; streaming execution omits it because Relay's response
+codecs require a complete provider response. The worker SDK hides both opaque
+capability IDs behind `resolve_codec()` proxies.
+
 ## Host-Runtime Service
 
 | RPC | Contract |
@@ -259,8 +281,8 @@ invocation ends.
 | `Log` | Emits an authenticated operational log record through Relay's configured sinks. |
 | `EmitMark` | Emits mark data and metadata under the supplied scope context. |
 | `GetRuntimeDiagnostics` | Returns the current bounded host-level diagnostic snapshot. |
-| `PushScope` | Opens a typed scope with name, data, metadata, and input, returning the handle required for pop. |
-| `PopScope` | Closes the owned scope handle with output and metadata. |
+| `PushScope` | Opens a typed scope with name, data, metadata, input, and an optional historical start timestamp, returning the handle required for pop. |
+| `PopScope` | Closes the owned scope handle with output, metadata, and an optional historical end timestamp. |
 | `CreateScopeStack` | Allocates an isolated stack and returns its opaque ID. |
 | `DropScopeStack` | Releases an isolated stack owned by the activation. |
 | `ToolNext` | Executes a tool continuation with JSON arguments and captured scope, returning a structural tool result or worker error. |
@@ -277,8 +299,8 @@ The host-runtime request and response fields are complete in the following table
 | `Log` | `activation_id`, `auth_token`, required `level`, optional `target`, `message`, and JSON-object `fields` | `HostAck.ok` or `HostAck.error` |
 | `EmitMark` | `activation_id`, `auth_token`, captured `scope`, `name`, optional `data`, `metadata`, `data_schema`, `severity`, and `category` | `HostAck.ok` or `HostAck.error` |
 | `GetRuntimeDiagnostics` | `activation_id` and `auth_token` | Ordered `RuntimeDiagnostic` entries with `code`, `message`, and `count` |
-| `PushScope` | `activation_id`, `auth_token`, captured `scope`, `name`, `scope_type`, and optional `data`, `metadata`, and `input` | `scope_handle_id` or `error` |
-| `PopScope` | `activation_id`, `auth_token`, owned `scope_handle_id`, and optional `output` and `metadata` | `HostAck.ok` or `HostAck.error` |
+| `PushScope` | `activation_id`, `auth_token`, captured `scope`, `name`, `scope_type`, and optional `data`, `metadata`, `input`, and `timestamp_unix_micros` | `scope_handle_id` or `error` |
+| `PopScope` | `activation_id`, `auth_token`, owned `scope_handle_id`, and optional `output`, `metadata`, and `timestamp_unix_micros` | `HostAck.ok` or `HostAck.error` |
 | `CreateScopeStack` | `activation_id` and `auth_token` | `scope_stack_id` or `error` |
 | `DropScopeStack` | `activation_id`, `auth_token`, and owned `scope_stack_id` | `HostAck.ok` or `HostAck.error` |
 | `ToolNext` | `activation_id`, `auth_token`, `continuation_id`, JSON `value`, and captured `scope` | `ToolExecutionResultResponse.value` or `error` |
@@ -291,6 +313,12 @@ The host-runtime request and response fields are complete in the following table
 `ScopeContext` contains `scope_stack_id` and `parent_scope_id`. `ScopeType` supports
 agent, function, tool, LLM, retriever, embedder, reranker, guardrail, evaluator, custom,
 and unknown scopes. The unspecified wire value is invalid for a pushed scope.
+
+Scope timestamps are signed Unix microseconds. Omitting the field preserves the normal
+host-clock behavior; an explicitly present zero records the Unix epoch. The fields are an
+additive `grpc-v1` extension. Workers that require historical timestamp preservation must
+declare a Relay compatibility range beginning at 0.10, because an older protobuf host can
+ignore an unknown field.
 
 `LogRequest.level` is one of `error`, `warn`, `info`, `debug`, or `trace`. Relay prefixes
 the optional target with its worker-plugin namespace and applies its configured log filter.

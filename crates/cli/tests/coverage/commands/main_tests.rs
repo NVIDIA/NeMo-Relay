@@ -1148,6 +1148,7 @@ fn safe_dispatch_helpers_cover_plugins_paths() {
         run_plugins(
             PluginsCommand {
                 command: PluginsSubcommand::List(PluginsListCommand {
+                    scope: PluginsScopeArgs::default(),
                     all: false,
                     json: false,
                 }),

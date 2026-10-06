@@ -12,6 +12,7 @@ import os
 import socket
 import tempfile
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 from unittest import mock
@@ -637,11 +638,11 @@ class AllSurfacesPlugin(WorkerPlugin):
                 pending_marks=[PendingMarkSpec("worker.pending", data={"source": "python"})],
             )
 
-        async def llm_execution(name: str, request: Json, next_call: Any) -> Json:
+        async def llm_execution(name: str, request: Json, _context: Any, next_call: Any) -> Json:
             result = await next_call.call(_tag_llm_request(request, f"llm_execute_{name}"))
             return _tag(result, "llm_execution")
 
-        async def llm_stream_execution(name: str, request: Json, next_call: Any) -> AsyncIterator[Json]:
+        async def llm_stream_execution(name: str, request: Json, _context: Any, next_call: Any) -> AsyncIterator[Json]:
             stream = next_call.call(_tag_llm_request(request, f"llm_stream_{name}"))
             async for chunk in stream:
                 yield _tag(chunk, "llm_stream_execution")
@@ -736,6 +737,9 @@ def test_generated_proto_matches_worker_contract() -> None:
         "Shutdown",
     }
     assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 7
+    execution_context = pb.LlmInvocation.DESCRIPTOR.fields_by_name["execution_codec_context"]
+    assert execution_context.number == 11
+    assert execution_context.containing_oneof is None
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["activation_id"].number == 1
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 2
     assert pb.SUBSCRIBER == 1
@@ -1106,6 +1110,162 @@ def test_plugin_context_registers_llm_sanitizers_under_standard_names() -> None:
         ("request", pb.LLM_SANITIZE_REQUEST_GUARDRAIL),
         ("response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL),
     ]
+
+
+async def test_execution_callback_receives_directional_codec_context() -> None:
+    seen: list[plugin_api.LlmExecutionContext] = []
+
+    class ContextualExecutionPlugin(WorkerPlugin):
+        plugin_id = "tests.contextual_execution"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def execution(name: str, request: Json, context: Any, next_call: Any) -> Json:
+                assert name == "model"
+                assert request == {"content": {"model": "gpt-test"}}
+                seen.append(context)
+                assert context.request_codec.codec == plugin_api.LlmCodecIdentity("builtin", "openai_chat")
+                assert context.response_codec is not None
+                assert context.response_codec.codec == plugin_api.LlmCodecIdentity("builtin", "openai_chat")
+                request_codec = context.request_codec.resolve_codec()
+                assert request_codec is not None
+                await request_codec.decode(request)
+                result = await next_call.call(request)
+                response_codec = context.response_codec.resolve_codec()
+                assert response_codec is not None
+                await response_codec.decode(result)
+                return result
+
+            ctx.register_llm_execution_intercept("execution", execution)
+
+    host = RecordingHostStub()
+    service = _service(ContextualExecutionPlugin(), host)
+    await _register(service)
+
+    new_context = pb.LlmExecutionCodecContext(
+        request=pb.LlmSanitizeRequestContext(
+            codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_BUILTIN, id="openai_chat"),
+            codec_capability_id="request-capability",
+        ),
+        response=pb.LlmSanitizeResponseContext(
+            codec=pb.LlmCodecIdentity(kind=pb.LLM_CODEC_KIND_BUILTIN, id="openai_chat"),
+            codec_capability_id="response-capability",
+        ),
+    )
+    payload = _llm_payload(request={"content": {"model": "gpt-test"}})
+    payload.execution_codec_context.CopyFrom(new_context)
+    result = await _invoke_json_async(
+        service,
+        "execution",
+        pb.LLM_EXECUTION_INTERCEPT,
+        payload=payload,
+    )
+    assert "next_llm" in result
+
+    assert len(seen) == 1
+    codec_capabilities = [
+        request.codec_capability_id
+        for request in host.requests
+        if isinstance(request, (pb.LlmCodecDecodeRequest, pb.LlmCodecDecodeResponse))
+    ]
+    assert codec_capabilities == ["request-capability", "response-capability"]
+
+
+@pytest.mark.parametrize(
+    ("proto_kind", "capability_prefix", "expected_kind", "resolves"),
+    [
+        (pb.LLM_CODEC_KIND_UNSPECIFIED, None, "none", False),
+        (pb.LLM_CODEC_KIND_OPAQUE, "opaque", "opaque", True),
+    ],
+)
+def test_execution_context_distinguishes_absent_and_resolved_opaque_codecs(
+    proto_kind: int,
+    capability_prefix: str | None,
+    expected_kind: str,
+    resolves: bool,
+) -> None:
+    runtime = PluginRuntime(
+        activation_id=ACTIVATION_ID,
+        auth_token=AUTH_TOKEN,
+        host_stub=RecordingHostStub(),
+    )
+    request = pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity(kind=proto_kind))
+    response = pb.LlmSanitizeResponseContext(codec=pb.LlmCodecIdentity(kind=proto_kind))
+    if capability_prefix is not None:
+        request.codec_capability_id = f"{capability_prefix}-request"
+        response.codec_capability_id = f"{capability_prefix}-response"
+    invocation = pb.LlmInvocation(
+        execution_codec_context=pb.LlmExecutionCodecContext(
+            request=request,
+            response=response,
+        )
+    )
+    context = plugin_api._llm_execution_context(
+        invocation,
+        runtime,
+        "invocation",
+        response_required=True,
+    )
+    assert context.request_codec.codec == plugin_api.LlmCodecIdentity(expected_kind)
+    assert (context.request_codec.resolve_codec() is not None) is resolves
+    assert context.response_codec is not None
+    assert context.response_codec.codec == plugin_api.LlmCodecIdentity(expected_kind)
+    assert (context.response_codec.resolve_codec() is not None) is resolves
+
+
+@pytest.mark.parametrize(
+    ("invocation", "expected"),
+    [
+        (pb.LlmInvocation(), "execution context is missing"),
+        (
+            pb.LlmInvocation(execution_codec_context=pb.LlmExecutionCodecContext()),
+            "request context is missing",
+        ),
+        (
+            pb.LlmInvocation(
+                execution_codec_context=pb.LlmExecutionCodecContext(
+                    request=pb.LlmSanitizeRequestContext(),
+                )
+            ),
+            "request codec identity is missing",
+        ),
+        (
+            pb.LlmInvocation(
+                execution_codec_context=pb.LlmExecutionCodecContext(
+                    request=pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity()),
+                    response=pb.LlmSanitizeResponseContext(),
+                )
+            ),
+            "response codec identity is missing",
+        ),
+        (
+            pb.LlmInvocation(
+                execution_codec_context=pb.LlmExecutionCodecContext(
+                    request=pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity()),
+                )
+            ),
+            "response context is missing",
+        ),
+    ],
+)
+def test_execution_context_rejects_malformed_unary_contexts(
+    invocation: pb.LlmInvocation,
+    expected: str,
+) -> None:
+    runtime = PluginRuntime(
+        activation_id=ACTIVATION_ID,
+        auth_token=AUTH_TOKEN,
+        host_stub=RecordingHostStub(),
+    )
+
+    with pytest.raises(WorkerSdkError, match=expected):
+        plugin_api._llm_execution_context(
+            invocation,
+            runtime,
+            "invocation",
+            response_required=True,
+        )
 
 
 async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads() -> None:
@@ -2232,8 +2392,8 @@ async def test_stream_callback_exception_is_structured() -> None:
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            async def fail(name: str, request: Json, next_call: Any) -> AsyncIterator[Json]:
-                del name, request, next_call
+            async def fail(name: str, request: Json, context: Any, next_call: Any) -> AsyncIterator[Json]:
+                del name, request, context, next_call
                 raise RuntimeError("stream boom")
                 yield {}
 
@@ -2262,8 +2422,8 @@ async def test_stream_callback_can_return_sync_iterable() -> None:
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            def stream(name: str, request: Json, next_call: Any) -> list[Json]:
-                del name, request, next_call
+            def stream(name: str, request: Json, context: Any, next_call: Any) -> list[Json]:
+                del name, request, context, next_call
                 return [{"sync": True}]
 
             ctx.register_llm_stream_execution_intercept("sync_stream", stream)
@@ -2292,8 +2452,8 @@ async def test_stream_callback_rejects_scalar_and_mapping_results(invalid_stream
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            def stream(name: str, request: Json, next_call: Any) -> Any:
-                del name, request, next_call
+            def stream(name: str, request: Json, context: Any, next_call: Any) -> Any:
+                del name, request, context, next_call
                 return invalid_stream
 
             ctx.register_llm_stream_execution_intercept("invalid_stream", stream)
@@ -2374,7 +2534,25 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         await runtime.emit_mark("mark", {"ok": True})
         await runtime.emit_mark("override-parent", parent_scope_id="parent-2")
         scope_id = await runtime.push_scope("scope", scope_type=ScopeType.TOOL, input={"in": True})
+        ordinary_push = _last_request(host_stub, pb.PushScopeRequest)
+        assert not ordinary_push.HasField("timestamp_unix_micros")
         await runtime.pop_scope(scope_id, output={"out": True})
+        ordinary_pop = _last_request(host_stub, pb.PopScopeRequest)
+        assert not ordinary_pop.HasField("timestamp_unix_micros")
+        historical_scope_id = await runtime.push_scope(
+            "historical-scope",
+            timestamp=datetime(1969, 12, 31, 23, 59, 59, 999998, tzinfo=timezone.utc),
+        )
+        historical_push = _last_request(host_stub, pb.PushScopeRequest)
+        assert historical_push.HasField("timestamp_unix_micros")
+        assert historical_push.timestamp_unix_micros == -2
+        await runtime.pop_scope(
+            historical_scope_id,
+            timestamp=datetime(1970, 1, 1, tzinfo=timezone.utc),
+        )
+        historical_pop = _last_request(host_stub, pb.PopScopeRequest)
+        assert historical_pop.HasField("timestamp_unix_micros")
+        assert historical_pop.timestamp_unix_micros == 0
         tool_next = await ToolNext(runtime, "tool-next").call({"value": 1})
         llm_next = await _llm_next(runtime, {"content": {"prompt": "hello"}})
         stream_next = [chunk async for chunk in _llm_stream_next(runtime, {"content": {"prompt": "hello"}})]
@@ -2694,6 +2872,30 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub) -> No
             pass
 
 
+@pytest.mark.parametrize(
+    ("timestamp", "error_type", "message"),
+    [
+        (datetime(2026, 1, 1), ValueError, "timezone-aware"),
+        ("2026-01-01T00:00:00Z", TypeError, "datetime.datetime"),
+    ],
+)
+async def test_runtime_scope_timestamps_reject_invalid_values_before_host_call(
+    host_stub: RecordingHostStub,
+    timestamp: Any,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
+    request_count = len(host_stub.requests)
+
+    with pytest.raises(error_type, match=message):
+        await runtime.push_scope("scope", timestamp=timestamp)
+    with pytest.raises(error_type, match=message):
+        await runtime.pop_scope("scope", timestamp=timestamp)
+
+    assert len(host_stub.requests) == request_count
+
+
 async def test_lifecycle_acks(service: _WorkerService) -> None:
     cancel = await service.CancelInvocation(
         pb.CancelInvocationRequest(
@@ -2794,8 +2996,8 @@ async def test_cancel_invocation_stops_active_async_stream() -> None:
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            async def llm_stream(model_name: str, request: Json, next_call: Any) -> AsyncIterator[Json]:
-                del model_name, request, next_call
+            async def llm_stream(model_name: str, request: Json, context: Any, next_call: Any) -> AsyncIterator[Json]:
+                del model_name, request, context, next_call
                 started.set()
                 try:
                     await asyncio.Event().wait()
@@ -2848,8 +3050,8 @@ async def test_cancel_invocation_discards_buffered_chunks_after_stream_callback_
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            async def llm_stream(model_name: str, request: Json, next_call: Any) -> AsyncIterator[Json]:
-                del model_name, request, next_call
+            async def llm_stream(model_name: str, request: Json, context: Any, next_call: Any) -> AsyncIterator[Json]:
+                del model_name, request, context, next_call
                 for index in range(4):
                     yield {"index": index}
                 finished.set()
@@ -2900,8 +3102,8 @@ async def test_stream_callback_cancellation_without_host_reason_is_terminal_erro
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            async def llm_stream(model_name: str, request: Json, next_call: Any) -> AsyncIterator[Json]:
-                del model_name, request, next_call
+            async def llm_stream(model_name: str, request: Json, context: Any, next_call: Any) -> AsyncIterator[Json]:
+                del model_name, request, context, next_call
                 if False:
                     yield {}
                 raise asyncio.CancelledError
@@ -3377,6 +3579,13 @@ def _invoke_request(
     continuation_id: str = "next-1",
     **kwargs: Any,
 ) -> Any:
+    llm = kwargs.get("llm")
+    if llm is not None and surface in {pb.LLM_EXECUTION_INTERCEPT, pb.LLM_STREAM_EXECUTION_INTERCEPT}:
+        if not llm.HasField("execution_codec_context"):
+            context = pb.LlmExecutionCodecContext(request=pb.LlmSanitizeRequestContext(codec=pb.LlmCodecIdentity()))
+            if surface == pb.LLM_EXECUTION_INTERCEPT:
+                context.response.CopyFrom(pb.LlmSanitizeResponseContext(codec=pb.LlmCodecIdentity()))
+            llm.execution_codec_context.CopyFrom(context)
     return pb.InvokeRequest(
         activation_id=ACTIVATION_ID,
         invocation_id=invocation_id,

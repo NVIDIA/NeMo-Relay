@@ -1249,15 +1249,20 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
         let model_for_pricing = raw.model.as_deref();
         let model_provider = infer_model_provider("openai", model_for_pricing);
         let usage = raw.usage.map(|u| {
+            let cache_read_tokens = u
+                .input_tokens_details
+                .as_ref()
+                .and_then(|details| details.cached_tokens);
             let mut usage = Usage {
                 prompt_tokens: u.input_tokens,
                 completion_tokens: u.output_tokens,
                 total_tokens: u.total_tokens,
-                cache_read_tokens: u
-                    .input_tokens_details
-                    .as_ref()
-                    .and_then(|d| d.cached_tokens),
+                cache_read_tokens,
                 cache_write_tokens: None,
+                uncached_input_tokens: u
+                    .input_tokens
+                    .zip(cache_read_tokens)
+                    .and_then(|(total, cached)| total.checked_sub(cached)),
                 cost: provider_reported_cost(u.provider_cost, u.cost),
             };
             if usage.cost.is_none() {

@@ -6,6 +6,7 @@
 pub mod callbacks;
 mod continuation_context;
 pub mod global;
+mod llm_execution_context;
 pub mod scope_stack;
 pub mod state;
 pub mod subscriber_dispatcher;
@@ -13,18 +14,18 @@ pub mod subscriber_dispatcher;
 pub use callbacks::{
     BuiltinLlmCodec, ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn,
     EventSubscriberFn, LlmCodecIdentity, LlmCollectorFn, LlmConditionalFn, LlmExecutionFn,
-    LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmRequestInterceptFn,
-    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamInner,
-    ToolConditionalFn, ToolExecutionContext, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn,
-    ToolSanitizeFn,
+    LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmRequestContext, LlmRequestInterceptFn,
+    LlmResponseContext, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, LlmStreamInner, ToolConditionalFn, ToolExecutionContext,
+    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 #[doc(hidden)]
 pub use continuation_context::MiddlewareContinuationContext;
 #[cfg(test)]
 pub(crate) use continuation_context::MiddlewareContinuationLease;
 pub use global::global_context;
-pub(crate) use scope_stack::capture_trace_context;
+pub use llm_execution_context::LlmExecutionContext;
 pub use scope_stack::{
     PropagationContext, ScopeStack, ScopeStackHandle, TASK_SCOPE_STACK, ThreadScopeStackBinding,
     capture_propagation_context, capture_propagation_context_with_root,
@@ -34,6 +35,7 @@ pub use scope_stack::{
     set_thread_scope_stack, sync_thread_scope_stack, task_scope_push, task_scope_remove,
     task_scope_top, with_active_event_uuid, with_scope_stack,
 };
+pub(crate) use scope_stack::{capture_trace_context, sync_thread_active_event_for_stack};
 pub use state::NemoRelayContextState;
 #[doc(hidden)]
 pub use subscriber_dispatcher::SubscriberDelivery;

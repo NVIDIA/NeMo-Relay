@@ -154,9 +154,12 @@ identities remain in each user's config directory.
 
 ## Verify, Restart, and Remove
 
-Check the listener and complete [worker-backed verification](/daemon/operations#verify-worker-backed-operation):
+Check daemon health and assigned workers, then complete
+[worker-backed verification](/daemon/operations#verify-worker-backed-operation):
 
 ```bash
+curl -f http://127.0.0.1:47632/healthz
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers/status
 lsof -nP -iTCP:47632 -sTCP:LISTEN
 ```
 

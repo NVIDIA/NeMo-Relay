@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::ptr;
@@ -153,6 +154,12 @@ struct HostV4(NemoRelayNativeHostApiV4);
 unsafe impl Send for HostV4 {}
 unsafe impl Sync for HostV4 {}
 
+#[derive(Clone, Copy)]
+struct HostV7(NemoRelayNativeHostApiV7);
+
+unsafe impl Send for HostV7 {}
+unsafe impl Sync for HostV7 {}
+
 struct Completion {
     host: HostV4,
     raw: *const NemoRelayNativeAsyncCompletion,
@@ -234,6 +241,75 @@ impl CompletionRef {
             })
         };
         Ok(LlmSanitizeResponseContext { codec, resolved })
+    }
+
+    fn execution_request_context(
+        self,
+        host: Arc<NemoRelayNativeHostApiV4>,
+        codec: LlmCodecIdentity,
+        resolved: bool,
+    ) -> Result<LlmRequestContext> {
+        let resolved = if resolved {
+            let status = unsafe { (host.async_completion_retain)(self.raw) };
+            status_result(status, "retain native async completion capability")?;
+            Some(LlmExecutionRequestCodec {
+                owner: LlmExecutionRequestCodecOwner::Completion {
+                    host,
+                    completion: self.raw,
+                },
+            })
+        } else {
+            None
+        };
+        Ok(LlmRequestContext { codec, resolved })
+    }
+
+    fn execution_response_context(
+        self,
+        host: Arc<NemoRelayNativeHostApiV4>,
+        codec: LlmCodecIdentity,
+        resolved: bool,
+    ) -> Result<LlmResponseContext> {
+        let resolved = if resolved {
+            let status = unsafe { (host.async_completion_retain)(self.raw) };
+            status_result(status, "retain native async completion capability")?;
+            Some(LlmExecutionResponseCodec {
+                host,
+                completion: self.raw,
+            })
+        } else {
+            None
+        };
+        Ok(LlmResponseContext { codec, resolved })
+    }
+}
+
+struct StreamRef {
+    host: Arc<NemoRelayNativeHostApiV7>,
+    raw: *const NemoRelayNativeAsyncStream,
+}
+
+unsafe impl Send for StreamRef {}
+
+impl StreamRef {
+    fn execution_request_context(
+        self,
+        codec: LlmCodecIdentity,
+        resolved: bool,
+    ) -> Result<LlmRequestContext> {
+        let resolved = if resolved {
+            let status = unsafe { (self.host.async_stream_retain)(self.raw) };
+            status_result(status, "retain native async stream capability")?;
+            Some(LlmExecutionRequestCodec {
+                owner: LlmExecutionRequestCodecOwner::Stream {
+                    host: self.host,
+                    stream: self.raw,
+                },
+            })
+        } else {
+            None
+        };
+        Ok(LlmRequestContext { codec, resolved })
     }
 }
 
@@ -534,11 +610,13 @@ unsafe extern "C" fn unary_next_callback(
 }
 
 type UnaryFuture = Pin<Box<dyn Future<Output = Result<Json>> + Send>>;
-type UnaryAdapter =
-    dyn Fn(Json, Option<Arc<NextInner>>, CompletionRef) -> UnaryFuture + Send + Sync;
+type UnaryAdapter = dyn Fn(Json, Option<LlmExecutionContext>, Option<Arc<NextInner>>, CompletionRef) -> UnaryFuture
+    + Send
+    + Sync;
 
 struct UnaryCallbackState {
     host: HostV4,
+    execution_host: Option<Arc<NemoRelayNativeHostApiV4>>,
     executor: Arc<NativeExecutor>,
     adapter: Box<UnaryAdapter>,
 }
@@ -552,6 +630,26 @@ unsafe extern "C" fn drop_unary_callback(user_data: *mut c_void) {
 unsafe extern "C" fn unary_trampoline(
     user_data: *mut c_void,
     invocation_json: *const NemoRelayNativeString,
+    next: *const NemoRelayNativeAsyncNext,
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    unsafe { unary_trampoline_impl(user_data, invocation_json, ptr::null(), next, completion) }
+}
+
+unsafe extern "C" fn unary_llm_execution_trampoline(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    context: *const NemoRelayNativeLlmExecutionContext,
+    next: *const NemoRelayNativeAsyncNext,
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    unsafe { unary_trampoline_impl(user_data, invocation_json, context, next, completion) }
+}
+
+unsafe fn unary_trampoline_impl(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    context: *const NemoRelayNativeLlmExecutionContext,
     next: *const NemoRelayNativeAsyncNext,
     completion: *const NemoRelayNativeAsyncCompletion,
 ) -> u32 {
@@ -572,24 +670,42 @@ unsafe extern "C" fn unary_trampoline(
     });
     let invocation = read_json_value(&state.host.0.v3.v1, invocation_json, "async invocation")
         .map_err(|status| format!("invalid async invocation: {status:?}"));
+    let context = (!context.is_null())
+        .then(|| {
+            llm_execution_context_from_completion(
+                completion_ref,
+                Arc::clone(
+                    state
+                        .execution_host
+                        .as_ref()
+                        .expect("LLM execution callbacks have a codec host"),
+                ),
+                unsafe { &*context },
+            )
+        })
+        .transpose();
     let binding = ScopePollBinding::capture(state.host.0.v3.v1);
-    let future = catch_unwind(AssertUnwindSafe(|| match invocation {
-        Ok(invocation) => (state.adapter)(invocation, next, completion_ref),
-        Err(error) => Box::pin(async move { Err(error) }) as UnaryFuture,
-    }));
+    let future = catch_unwind(AssertUnwindSafe(|| match (invocation, context) {
+        (Ok(invocation), Ok(context)) => (state.adapter)(invocation, context, next, completion_ref),
+        (Err(error), _) | (_, Err(error)) => Box::pin(async move { Err(error) }) as UnaryFuture,
+    }))
+    .unwrap_or_else(|_| {
+        Box::pin(async move { Err("typed native middleware callback panicked".into()) })
+    });
+    let future: UnaryFuture = match binding {
+        Ok(binding) => Box::pin(ScopedFuture::new(future, binding)),
+        Err(error) => {
+            completion.reject(&error);
+            set_last_error(&state.host.0.v3.v1, &error);
+            return NemoRelayNativeAsyncCallbackState::Pending as u32;
+        }
+    };
     if let Err(error) = state.executor.ensure_started() {
         completion.reject(&error);
         set_last_error(&state.host.0.v3.v1, &error);
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
-    let task = match future {
-        Ok(future) => drive_unary(future, binding, completion),
-        Err(_) => drive_unary(
-            Box::pin(async move { Err("typed native middleware callback panicked".into()) }),
-            binding,
-            completion,
-        ),
-    };
+    let task = drive_unary(future, completion);
     if let Err(error) = state.executor.spawn(async move {
         let _ = task.await;
     }) {
@@ -602,17 +718,9 @@ unsafe extern "C" fn unary_trampoline(
 
 fn drive_unary(
     future: UnaryFuture,
-    binding: Result<ScopePollBinding>,
     completion: Completion,
 ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
     Box::pin(async move {
-        let future: UnaryFuture = match binding {
-            Ok(binding) => Box::pin(ScopedFuture::new(future, binding)),
-            Err(error) => {
-                completion.reject(&error);
-                return;
-            }
-        };
         let result = tokio::select! {
             result = AssertUnwindSafe(future).catch_unwind() => {
                 result.unwrap_or_else(|_| Err("typed native middleware future panicked".into()))
@@ -697,6 +805,24 @@ impl ScopePollBinding {
         let status = unsafe { (self.host.scope_stack_restore_thread)(previous) };
         status_result(status, "restore executor scope stack")
     }
+
+    fn drop_bound<T>(&mut self, value: &mut ManuallyDrop<T>) {
+        let Ok(previous) = self.enter() else {
+            // Host last-error state is thread-local, so writing it from this
+            // executor thread would not report the failure to the caller. The
+            // value must still be reclaimed even when its context cannot be
+            // installed during teardown.
+            // SAFETY: `value` is initialized once and only dropped here.
+            unsafe { ManuallyDrop::drop(value) };
+            return;
+        };
+        let mut restore = ScopePollRestore::new(self, previous);
+        // SAFETY: `value` is initialized once and only dropped here.
+        unsafe { ManuallyDrop::drop(value) };
+        // There is no caller-visible error channel from `Drop`; `exit` still
+        // makes its best effort to restore the executor's previous context.
+        let _ = restore.restore();
+    }
 }
 
 struct ScopePollRestore<'a> {
@@ -741,13 +867,16 @@ impl Drop for ScopePollBinding {
 }
 
 struct ScopedFuture<F> {
-    future: F,
+    future: ManuallyDrop<F>,
     binding: ScopePollBinding,
 }
 
 impl<F> ScopedFuture<F> {
     fn new(future: F, binding: ScopePollBinding) -> Self {
-        Self { future, binding }
+        Self {
+            future: ManuallyDrop::new(future),
+            binding,
+        }
     }
 }
 
@@ -762,20 +891,29 @@ impl<F: Future> Future for ScopedFuture<F> {
             .enter()
             .unwrap_or_else(|error| panic!("{error}"));
         let mut restore = ScopePollRestore::new(&mut this.binding, previous);
-        let result = unsafe { Pin::new_unchecked(&mut this.future) }.poll(cx);
+        let result = unsafe { Pin::new_unchecked(&mut *this.future) }.poll(cx);
         restore.restore().unwrap_or_else(|error| panic!("{error}"));
         result
     }
 }
 
+impl<F> Drop for ScopedFuture<F> {
+    fn drop(&mut self) {
+        self.binding.drop_bound(&mut self.future);
+    }
+}
+
 struct ScopedStream<S> {
-    stream: S,
+    stream: ManuallyDrop<S>,
     binding: ScopePollBinding,
 }
 
 impl<S> ScopedStream<S> {
     fn new(stream: S, binding: ScopePollBinding) -> Self {
-        Self { stream, binding }
+        Self {
+            stream: ManuallyDrop::new(stream),
+            binding,
+        }
     }
 }
 
@@ -790,9 +928,15 @@ impl<S: Stream> Stream for ScopedStream<S> {
             .enter()
             .unwrap_or_else(|error| panic!("{error}"));
         let mut restore = ScopePollRestore::new(&mut this.binding, previous);
-        let result = unsafe { Pin::new_unchecked(&mut this.stream) }.poll_next(cx);
+        let result = unsafe { Pin::new_unchecked(&mut *this.stream) }.poll_next(cx);
         restore.restore().unwrap_or_else(|error| panic!("{error}"));
         result
+    }
+}
+
+impl<S> Drop for ScopedStream<S> {
+    fn drop(&mut self) {
+        self.binding.drop_bound(&mut self.stream);
     }
 }
 
@@ -850,10 +994,11 @@ struct EventMetadataInvocation {
 }
 
 type StreamFuture = Pin<Box<dyn Future<Output = Result<LlmJsonAsyncStream>> + Send>>;
-type StreamAdapter = dyn Fn(Json, LlmStreamNext) -> StreamFuture + Send + Sync;
+type StreamAdapter = dyn Fn(Json, LlmExecutionContext, LlmStreamNext) -> StreamFuture + Send + Sync;
 
 struct StreamCallbackState {
-    host: HostV4,
+    host: HostV7,
+    codec_host: Arc<NemoRelayNativeHostApiV7>,
     executor: Arc<NativeExecutor>,
     adapter: Box<StreamAdapter>,
 }
@@ -865,7 +1010,7 @@ unsafe extern "C" fn drop_stream_callback(user_data: *mut c_void) {
 }
 
 struct OutputStream {
-    host: HostV4,
+    host: HostV7,
     raw: *const NemoRelayNativeAsyncStream,
 }
 
@@ -874,18 +1019,19 @@ unsafe impl Sync for OutputStream {}
 
 impl OutputStream {
     fn cancelled(&self) -> bool {
-        unsafe { (self.host.0.v3.async_stream_is_cancelled)(self.raw) }
+        unsafe { (self.host.0.v6.v5.v4.v3.async_stream_is_cancelled)(self.raw) }
     }
 
     async fn push(&self, value: &Json) -> Result<()> {
-        let value = HostString::from_json(&self.host.0.v3.v1, value)
+        let value = HostString::from_json(&self.host.0.v6.v5.v4.v3.v1, value)
             .ok_or_else(|| "failed to serialize native stream chunk".to_string())?;
         loop {
             if self.cancelled() {
                 return Err("native stream consumer cancelled".into());
             }
-            let status =
-                unsafe { (self.host.0.v3.async_stream_push_json)(self.raw, value.as_ptr()) };
+            let status = unsafe {
+                (self.host.0.v6.v5.v4.v3.async_stream_push_json)(self.raw, value.as_ptr())
+            };
             match status {
                 NemoRelayStatus::Ok => return Ok(()),
                 NemoRelayStatus::Backpressured => {
@@ -898,19 +1044,20 @@ impl OutputStream {
 
     fn finish(&self) -> Result<()> {
         status_result(
-            unsafe { (self.host.0.v3.async_stream_finish)(self.raw) },
+            unsafe { (self.host.0.v6.v5.v4.v3.async_stream_finish)(self.raw) },
             "finish native stream",
         )
     }
 
     async fn reject(&self, error: &str) {
-        if let Some(error) = HostString::new(&self.host.0.v3.v1, error) {
+        if let Some(error) = HostString::new(&self.host.0.v6.v5.v4.v3.v1, error) {
             loop {
                 if self.cancelled() {
                     break;
                 }
-                let status =
-                    unsafe { (self.host.0.v3.async_stream_reject)(self.raw, error.as_ptr()) };
+                let status = unsafe {
+                    (self.host.0.v6.v5.v4.v3.async_stream_reject)(self.raw, error.as_ptr())
+                };
                 match status {
                     NemoRelayStatus::Backpressured => {
                         tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await;
@@ -922,9 +1069,9 @@ impl OutputStream {
     }
 
     fn reject_once(&self, error: &str) {
-        if let Some(error) = HostString::new(&self.host.0.v3.v1, error) {
+        if let Some(error) = HostString::new(&self.host.0.v6.v5.v4.v3.v1, error) {
             unsafe {
-                (self.host.0.v3.async_stream_reject)(self.raw, error.as_ptr());
+                (self.host.0.v6.v5.v4.v3.async_stream_reject)(self.raw, error.as_ptr());
             }
         }
     }
@@ -932,13 +1079,14 @@ impl OutputStream {
 
 impl Drop for OutputStream {
     fn drop(&mut self) {
-        unsafe { (self.host.0.v3.async_stream_release)(self.raw) };
+        unsafe { (self.host.0.v6.v5.v4.v3.async_stream_release)(self.raw) };
     }
 }
 
 unsafe extern "C" fn stream_trampoline(
     user_data: *mut c_void,
     invocation_json: *const NemoRelayNativeString,
+    context: *const NemoRelayNativeLlmExecutionContext,
     next: *const NemoRelayNativeAsyncNext,
     stream: *const NemoRelayNativeAsyncStream,
 ) -> u32 {
@@ -952,35 +1100,51 @@ unsafe extern "C" fn stream_trampoline(
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
     let next = LlmStreamNext(Arc::new(NextInner {
-        host: state.host,
+        host: HostV4(state.host.0.v6.v5.v4),
         raw: next,
     }));
-    let invocation = read_json_value(&state.host.0.v3.v1, invocation_json, "stream invocation")
-        .map_err(|status| format!("invalid native stream invocation: {status:?}"));
-    let bindings = ScopePollBinding::capture(state.host.0.v3.v1).and_then(|future| {
-        ScopePollBinding::capture(state.host.0.v3.v1).map(|stream| (future, stream))
+    let invocation = read_json_value(
+        &state.host.0.v6.v5.v4.v3.v1,
+        invocation_json,
+        "stream invocation",
+    )
+    .map_err(|status| format!("invalid native stream invocation: {status:?}"));
+    let context = unsafe { context.as_ref() }
+        .ok_or_else(|| "native LLM stream execution context was null".to_string())
+        .and_then(|context| {
+            llm_stream_execution_context_from_native(
+                StreamRef {
+                    host: Arc::clone(&state.codec_host),
+                    raw: stream,
+                },
+                context,
+            )
+        });
+    let bindings = ScopePollBinding::capture(state.host.0.v6.v5.v4.v3.v1).and_then(|future| {
+        ScopePollBinding::capture(state.host.0.v6.v5.v4.v3.v1).map(|stream| (future, stream))
     });
-    let future = catch_unwind(AssertUnwindSafe(|| match invocation {
-        Ok(invocation) => (state.adapter)(invocation, next),
-        Err(error) => Box::pin(async move { Err(error) }) as StreamFuture,
+    let future = catch_unwind(AssertUnwindSafe(|| match (invocation, context) {
+        (Ok(invocation), Ok(context)) => (state.adapter)(invocation, context, next),
+        (Err(error), _) | (_, Err(error)) => Box::pin(async move { Err(error) }) as StreamFuture,
     }));
     let future = future.unwrap_or_else(|_| {
         Box::pin(async move { Err("typed native stream callback panicked".into()) })
     });
+    let (future_binding, stream_binding) = match bindings {
+        Ok(bindings) => bindings,
+        Err(error) => {
+            output.reject_once(&error);
+            set_last_error(&state.host.0.v6.v5.v4.v3.v1, &error);
+            return NemoRelayNativeAsyncCallbackState::Pending as u32;
+        }
+    };
+    let future: StreamFuture = Box::pin(ScopedFuture::new(future, future_binding));
     if let Err(error) = state.executor.ensure_started() {
         output.reject_once(&error);
-        set_last_error(&state.host.0.v3.v1, &error);
+        set_last_error(&state.host.0.v6.v5.v4.v3.v1, &error);
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
     let task = async move {
-        let (future_binding, stream_binding) = match bindings {
-            Ok(bindings) => bindings,
-            Err(error) => {
-                output.reject(&error).await;
-                return;
-            }
-        };
-        let future: StreamFuture = Box::pin(ScopedFuture::new(future, future_binding));
         let stream = tokio::select! {
             result = AssertUnwindSafe(future).catch_unwind() => match result {
                 Ok(result) => result,
@@ -1031,7 +1195,7 @@ unsafe extern "C" fn stream_trampoline(
         }
     };
     if let Err(error) = state.executor.spawn(task) {
-        set_last_error(&state.host.0.v3.v1, &error);
+        set_last_error(&state.host.0.v6.v5.v4.v3.v1, &error);
     }
     NemoRelayNativeAsyncCallbackState::Pending as u32
 }
@@ -1074,6 +1238,71 @@ impl CodecIdentityInvocation {
     }
 }
 
+fn execution_codec_identity(
+    host: &NemoRelayNativeHostApiV1,
+    kind: NemoRelayNativeLlmCodecKind,
+    codec_id: *const NemoRelayNativeString,
+) -> Result<LlmCodecIdentity> {
+    let id = (!codec_id.is_null())
+        .then(|| read_host_string(host, codec_id).map_err(|_| "invalid LLM codec ID".to_string()))
+        .transpose()?;
+    match (kind, id) {
+        (NemoRelayNativeLlmCodecKind::None, _) => Ok(LlmCodecIdentity::None),
+        (NemoRelayNativeLlmCodecKind::Opaque, _) => Ok(LlmCodecIdentity::Opaque),
+        (NemoRelayNativeLlmCodecKind::BuiltIn, Some(id)) => BuiltinLlmCodec::from_id(&id)
+            .map(LlmCodecIdentity::BuiltIn)
+            .ok_or_else(|| format!("unknown built-in LLM codec: {id}")),
+        (NemoRelayNativeLlmCodecKind::Runtime, Some(id)) => Ok(LlmCodecIdentity::Runtime(id)),
+        (kind, None) => Err(format!("missing LLM codec ID for {kind:?}")),
+    }
+}
+
+fn llm_execution_context_from_completion(
+    completion: CompletionRef,
+    host: Arc<NemoRelayNativeHostApiV4>,
+    context: &NemoRelayNativeLlmExecutionContext,
+) -> Result<LlmExecutionContext> {
+    let request = context.request_codec;
+    let request_codec = completion.execution_request_context(
+        Arc::clone(&host),
+        execution_codec_identity(&host.v3.v1, request.codec_kind, request.codec_id)?,
+        !request.codec.is_null(),
+    )?;
+    let response_codec = unsafe { context.response_codec.as_ref() }
+        .map(|response| {
+            completion.execution_response_context(
+                Arc::clone(&host),
+                execution_codec_identity(&host.v3.v1, response.codec_kind, response.codec_id)?,
+                !response.codec.is_null(),
+            )
+        })
+        .transpose()?;
+    Ok(LlmExecutionContext {
+        request_codec,
+        response_codec,
+    })
+}
+
+fn llm_stream_execution_context_from_native(
+    stream: StreamRef,
+    context: &NemoRelayNativeLlmExecutionContext,
+) -> Result<LlmExecutionContext> {
+    if !context.response_codec.is_null() {
+        return Err("native LLM stream execution context exposed a response codec".into());
+    }
+    let request = context.request_codec;
+    let codec = execution_codec_identity(
+        &stream.host.v6.v5.v4.v3.v1,
+        request.codec_kind,
+        request.codec_id,
+    )?;
+    let request_codec = stream.execution_request_context(codec, !request.codec.is_null())?;
+    Ok(LlmExecutionContext {
+        request_codec,
+        response_codec: None,
+    })
+}
+
 impl PluginContext<'_> {
     fn host_v4(&self) -> Result<HostV4> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL
@@ -1083,6 +1312,17 @@ impl PluginContext<'_> {
         }
         Ok(HostV4(unsafe {
             *(self.host as *const _ as *const NemoRelayNativeHostApiV4)
+        }))
+    }
+
+    fn host_v7(&self) -> Result<HostV7> {
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV7>()
+        {
+            return Err("typed LLM execution middleware requires Relay ABI v7".into());
+        }
+        Ok(HostV7(unsafe {
+            *(self.host as *const _ as *const NemoRelayNativeHostApiV7)
         }))
     }
 
@@ -1096,6 +1336,7 @@ impl PluginContext<'_> {
     ) -> Result<()> {
         let state = Box::into_raw(Box::new(UnaryCallbackState {
             host: self.host_v4()?,
+            execution_host: None,
             executor: Arc::clone(&self.executor),
             adapter,
         }));
@@ -1121,6 +1362,35 @@ impl PluginContext<'_> {
         }
     }
 
+    fn register_llm_execution_adapter(
+        &mut self,
+        name: &str,
+        priority: i32,
+        adapter: Box<UnaryAdapter>,
+    ) -> Result<()> {
+        let host = self.host_v4()?;
+        let state = Box::into_raw(Box::new(UnaryCallbackState {
+            host,
+            execution_host: Some(Arc::new(host.0)),
+            executor: Arc::clone(&self.executor),
+            adapter,
+        }));
+        let status = unsafe {
+            self.register_async_llm_execution_intercept_raw(
+                name,
+                priority,
+                unary_llm_execution_trampoline,
+                state.cast(),
+                Some(drop_unary_callback),
+            )
+        };
+        if status == NemoRelayStatus::Ok {
+            Ok(())
+        } else {
+            Err(status_message(self.host, status, "LLM execution intercept"))
+        }
+    }
+
     fn register_event_adapter<F, Fut>(
         &mut self,
         kind: NemoRelayNativeAsyncMiddlewareKind,
@@ -1138,7 +1408,7 @@ impl PluginContext<'_> {
             name,
             priority,
             false,
-            Box::new(move |value, _, _| {
+            Box::new(move |value, _, _, _| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     let invocation: EventInvocation = serde_json::from_value(value)
@@ -1169,7 +1439,7 @@ impl PluginContext<'_> {
             name,
             priority,
             false,
-            Box::new(move |value, _, _| {
+            Box::new(move |value, _, _, _| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     let invocation: EventMetadataInvocation = serde_json::from_value(value)
@@ -1258,7 +1528,7 @@ impl PluginContext<'_> {
             name,
             priority,
             break_chain,
-            Box::new(move |value, _, _| {
+            Box::new(move |value, _, _, _| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     let invocation: NameValueInvocation =
@@ -1326,7 +1596,7 @@ impl PluginContext<'_> {
             name,
             priority,
             false,
-            Box::new(move |value, _, _| {
+            Box::new(move |value, _, _, _| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     let invocation: NameValueInvocation =
@@ -1376,7 +1646,7 @@ impl PluginContext<'_> {
             name,
             priority,
             false,
-            Box::new(move |value, next, _| {
+            Box::new(move |value, _, next, _| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     let invocation: ToolExecutionInvocation =
@@ -1413,7 +1683,7 @@ impl PluginContext<'_> {
             name,
             priority,
             false,
-            Box::new(move |value, _, completion| {
+            Box::new(move |value, _, _, completion| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     #[derive(Deserialize)]
@@ -1448,7 +1718,7 @@ impl PluginContext<'_> {
             name,
             priority,
             false,
-            Box::new(move |value, _, completion| {
+            Box::new(move |value, _, _, completion| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     #[derive(Deserialize)]
@@ -1483,7 +1753,7 @@ impl PluginContext<'_> {
             name,
             priority,
             false,
-            Box::new(move |value, _, _| {
+            Box::new(move |value, _, _, _| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     let invocation: RequestInvocation =
@@ -1513,7 +1783,7 @@ impl PluginContext<'_> {
             name,
             priority,
             break_chain,
-            Box::new(move |value, _, _| {
+            Box::new(move |value, _, _, _| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     let invocation: LlmRequestInterceptInvocation =
@@ -1535,24 +1805,24 @@ impl PluginContext<'_> {
         callback: F,
     ) -> Result<()>
     where
-        F: Fn(String, LlmRequest, LlmNext) -> Fut + Send + Sync + 'static,
+        F: Fn(String, LlmRequest, LlmExecutionContext, LlmNext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Json>> + Send + 'static,
     {
         let callback = Arc::new(callback);
-        self.register_unary_adapter(
-            NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept,
+        self.register_llm_execution_adapter(
             name,
             priority,
-            false,
-            Box::new(move |value, next, _| {
+            Box::new(move |value, context, next, _| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     let invocation: NameRequestInvocation =
                         serde_json::from_value(value).map_err(|error| error.to_string())?;
+                    let context = context
+                        .ok_or_else(|| "native LLM execution context was null".to_string())?;
                     let next = LlmNext(
                         next.ok_or_else(|| "LLM execution continuation was null".to_string())?,
                     );
-                    callback(invocation.name, invocation.request, next).await
+                    callback(invocation.name, invocation.request, context, next).await
                 })
             }),
         )
@@ -1566,19 +1836,24 @@ impl PluginContext<'_> {
         callback: F,
     ) -> Result<()>
     where
-        F: Fn(String, LlmRequest, LlmStreamNext) -> Fut + Send + Sync + 'static,
+        F: Fn(String, LlmRequest, LlmExecutionContext, LlmStreamNext) -> Fut
+            + Send
+            + Sync
+            + 'static,
         Fut: Future<Output = Result<LlmJsonAsyncStream>> + Send + 'static,
     {
         let callback = Arc::new(callback);
+        let host = self.host_v7()?;
         let state = Box::into_raw(Box::new(StreamCallbackState {
-            host: self.host_v4()?,
+            host,
+            codec_host: Arc::new(host.0),
             executor: Arc::clone(&self.executor),
-            adapter: Box::new(move |value, next| {
+            adapter: Box::new(move |value, context, next| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
                     let invocation: NameRequestInvocation =
                         serde_json::from_value(value).map_err(|error| error.to_string())?;
-                    callback(invocation.name, invocation.request, next).await
+                    callback(invocation.name, invocation.request, context, next).await
                 })
             }),
         }));

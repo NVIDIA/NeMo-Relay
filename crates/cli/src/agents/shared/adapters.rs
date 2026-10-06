@@ -349,6 +349,8 @@ pub(super) fn permission_request(
         Some(value) => value,
         None => return Some(Err("permission request is missing tool arguments".into())),
     };
+    let mut metadata = extractor.metadata(payload, headers, kind, &event_name);
+    apply_mcp_tool_metadata(&mut metadata, kind, &tool_name);
     Some(Ok(ToolEvent {
         session_id,
         agent_kind: kind,
@@ -360,7 +362,7 @@ pub(super) fn permission_request(
         result: Value::Null,
         status: tool.status,
         payload: payload.clone(),
-        metadata: extractor.metadata(payload, headers, kind, &event_name),
+        metadata,
     }))
 }
 
@@ -713,16 +715,21 @@ fn common_subagent_event_with_fallback(
 ) -> SubagentEvent {
     let session =
         common_session_event_with_fallback(payload, headers, kind, extractor, fallback_session_id);
-    let subagent_id = extractor
-        .subagent_id(payload, headers)
-        .unwrap_or_else(|| "subagent".to_string());
+    let source_id = extractor.subagent_id(payload, headers);
+    let mut metadata = session.metadata;
+    if source_id.is_none()
+        && let Some(metadata) = metadata.as_object_mut()
+    {
+        metadata.insert("subagent_id_generated".into(), json!(true));
+    }
+    let subagent_id = source_id.unwrap_or_else(|| "subagent".to_string());
     SubagentEvent {
         session_id: session.session_id,
         agent_kind: kind,
         event_name: session.event_name,
         subagent_id,
         payload: session.payload,
-        metadata: session.metadata,
+        metadata,
     }
 }
 
@@ -772,6 +779,16 @@ fn common_tool_event_with_fallback(
     let session =
         common_session_event_with_fallback(payload, headers, kind, extractor, fallback_session_id);
     let tool_call = extractor.tool_call(payload, headers, &session.event_name);
+    let tool_name = tool_call
+        .tool_name
+        .unwrap_or_else(|| "unknown_tool".to_string());
+    let mut metadata = session.metadata;
+    apply_mcp_tool_metadata(&mut metadata, kind, &tool_name);
+    if tool_call.tool_call_id.is_none()
+        && let Some(metadata) = metadata.as_object_mut()
+    {
+        metadata.insert("tool_call_id_generated".into(), json!(true));
+    }
     ToolEvent {
         session_id: session.session_id,
         agent_kind: kind,
@@ -779,15 +796,36 @@ fn common_tool_event_with_fallback(
         tool_call_id: tool_call
             .tool_call_id
             .unwrap_or_else(|| format!("tool-{}", Uuid::now_v7())),
-        tool_name: tool_call
-            .tool_name
-            .unwrap_or_else(|| "unknown_tool".to_string()),
+        tool_name,
         subagent_id: tool_call.subagent_id,
         arguments: tool_call.arguments.unwrap_or(Value::Null),
         result: tool_call.result.unwrap_or(Value::Null),
         status: tool_call.status,
         payload: session.payload,
-        metadata: session.metadata,
+        metadata,
+    }
+}
+
+/// Claude and Codex qualify MCP tool identities as `mcp__<server>__<tool>`.
+/// This identifies the requested operation, not successful execution or delivery
+/// to a server. Never infer an endpoint or protocol session from the server alias.
+fn apply_mcp_tool_metadata(metadata: &mut Value, kind: AgentKind, tool_name: &str) {
+    if !matches!(kind, AgentKind::ClaudeCode | AgentKind::Codex) {
+        return;
+    }
+    let Some((server, tool)) = tool_name
+        .strip_prefix("mcp__")
+        .and_then(|name| name.split_once("__"))
+    else {
+        return;
+    };
+    if server.is_empty() || tool.is_empty() || tool_name.chars().any(char::is_whitespace) {
+        return;
+    }
+    if let Some(metadata) = metadata.as_object_mut() {
+        metadata
+            .entry("mcp.method.name")
+            .or_insert_with(|| json!("tools/call"));
     }
 }
 

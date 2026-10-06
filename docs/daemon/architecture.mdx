@@ -1,6 +1,6 @@
 ---
 title: "Architecture and Startup"
-description: "See how coding harnesses, MCP clients, workers, and the daemon communicate."
+description: "Learn how coding harnesses, MCP clients, workers, and the daemon communicate."
 position: 2
 ---
 
@@ -18,7 +18,10 @@ whether the user-machine route needs a new worker or can share an existing one.
 
 The MCP process starts a worker on the **client computer** only when the broker
 instructs it to. The worker loads the administrator's system configuration and
-plugins. Install the daemon as a service; do not install MCP or workers as services.
+plugins. Install the daemon as a service. The harness starts MCP, and the broker
+controls worker startup and shutdown.
+
+The diagram shows how these processes communicate:
 
 <div role="region" aria-label="Process communication diagram" tabIndex={0} style={{ overflowX: "auto" }}>
 <div style={{ minWidth: "800px" }}>
@@ -46,7 +49,7 @@ flowchart TD
 </div>
 </div>
 
-Dotted arrows show process startup. Solid arrows show communication; responses
+Dotted arrows show process startup. Solid arrows show communication. Responses
 return along the request path. Model streams travel back through the worker and
 daemon to the harness. Hook responses return through the hook forwarder.
 The harness and hook forwarder do not contact a worker directly.
@@ -55,7 +58,16 @@ MCP and worker processes each open a persistent WebSocket control session to the
 daemon. The daemon pushes route decisions and drain commands on those sessions.
 Model and hook traffic use separate HTTP connections.
 
+The daemon also exposes read-only HTTP operations for process health and
+last-known worker assignments. `/healthz` describes the daemon process and its
+global deployment mode. `/_nemo_relay/v1/workers`,
+`/_nemo_relay/v1/workers/status`, and the per-worker status path read the
+broker's in-memory state without probing workers. Routes without an assigned
+worker, including pass-through routes, do not appear in worker results.
+
 ## Local Deployment
+
+The diagram shows the processes on one computer:
 
 <div role="region" aria-label="Local deployment diagram" tabIndex={0} style={{ overflowX: "auto" }}>
 <div style={{ minWidth: "760px" }}>
@@ -83,10 +95,12 @@ flowchart TD
 
 A system daemon has its own service identity. Each user's MCP and worker use that
 user's identity. Several harness sessions for the same identity share one worker.
-Different users do not share runtime state. The default worker port is assigned
-by the operating system; there is no worker service to enable at login.
+Different users do not share runtime state. The operating system assigns the
+default worker port. MCP starts workers when the broker requests them.
 
 ## Initialization Sequence
+
+The diagram shows startup with a daemon that supports parallel initialization:
 
 <div role="region" aria-label="Initialization sequence diagram" tabIndex={0} style={{ overflowX: "auto" }}>
 <div style={{ minWidth: "1000px" }}>
@@ -101,6 +115,9 @@ sequenceDiagram
     M->>D: Request challenge and verify daemon identity
     D-->>M: Signed challenge
     M->>D: Signed registration and credential binding
+    H->>M: MCP initialize
+    M-->>H: MCP initialized after authenticated registration
+    Note over M,D: Worker starts in the background. Requests use passthrough until ready.
     alt Route needs a worker
         D-->>M: LaunchWorker and one-time grant
         M->>W: Launch with grant through protected stdin
@@ -117,8 +134,6 @@ sequenceDiagram
     else Pass-through route
         D-->>M: UsePassThrough
     end
-    H->>M: MCP initialize
-    M-->>H: MCP initialized after route is ready
     H->>D: Model or hook request with route credential
     Note over M,D: MCP control socket stays open for the session
 ```
@@ -126,13 +141,22 @@ sequenceDiagram
 </div>
 </div>
 
-The harness may send its MCP initialize message earlier; Relay does not serve
-the MCP protocol until it has acquired a usable route. A waiting client follows
-later broker decisions before completing startup. If worker activation fails
-after authentication, the route can become pass-through. MCP readiness alone
-does not prove that a worker is running.
+After registration and authentication, MCP handles standard input and output
+while the worker starts. MCP readiness alone does not prove that a worker is
+running. New requests use passthrough during startup by default.
+
+The daemon starts routing new requests to a worker after these checks pass:
+
+- The worker has initialized its runtime and plugins.
+- Its control connection is authenticated.
+- Its HTTP readiness probe succeeds.
+
+Use `--require-worker` to return HTTP `503` while these checks are pending.
+With older daemons, MCP waits for a usable route before it handles initialization.
 
 ## Shutdown and Recovery
+
+The diagram shows the main worker states and how they change:
 
 <div role="region" aria-label="Worker lifecycle diagram" tabIndex={0} style={{ overflowX: "auto" }}>
 <div style={{ minWidth: "600px" }}>
@@ -146,6 +170,7 @@ stateDiagram-v2
     Ready --> Recovering: Worker fails
     Recovering --> Activating: One MCP relaunches
     Ready --> Draining: Last MCP leaves
+    PassThrough --> Activating: Connected MCP retries after failure
     PassThrough --> Empty: Last MCP leaves
     Draining --> Empty: Worker exits
 ```
@@ -153,10 +178,27 @@ stateDiagram-v2
 </div>
 </div>
 
-The diagram shows the main transitions. Explicit `--pass-through` never launches
-a worker. A draining worker cannot be revived; new MCP clients wait for it to
-exit. Accepted requests have up to two minutes to finish. Workers also stop
-accepting new requests if they lose authenticated daemon control.
+The `--pass-through` flag disables worker startup. A draining worker cannot
+return to service. Its replacement waits for it to exit. During that wait, new
+requests use passthrough by default. Accepted requests have up to two minutes to
+finish. Workers stop accepting new requests if they lose authenticated daemon
+control.
 
-See [Identity and Lifecycle](/daemon/reference#understand-broker-identity-and-lifecycle)
+Refer to [Identity and Lifecycle](/daemon/reference#understand-broker-identity-and-lifecycle)
 for reconnect grace, remote keepalive timing, restart recovery, and all broker states.
+
+Worker startup has no deadline. The daemon logs a progress message every
+60 seconds and records how long startup took when the worker joins the route.
+If startup fails, the daemon retries after one second, then two, four, and so on.
+Retry delays stop increasing at 60 seconds. There is no attempt limit.
+
+If the MCP client that starts the worker disconnects, the daemon cancels its
+launch grant. Another connected MCP can then receive a new grant.
+
+When startup fails or the daemon cancels a launch, it releases the worker's
+staged registration right away. Published workers keep their reconnect grace
+period. Slow writes to daemon state do not block request streams or health checks.
+
+Each request keeps the destination selected when it starts. Streams already
+sent through passthrough finish on that path. Later requests use the ready
+worker. Relay never sends the same submitted request to both destinations.

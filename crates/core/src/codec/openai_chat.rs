@@ -1174,6 +1174,10 @@ impl LlmResponseCodec for OpenAIChatCodec {
         let model_for_pricing = raw.model.as_deref();
         let model_provider = infer_model_provider("openai", model_for_pricing);
         let usage = raw.usage.map(|u| {
+            let cache_read_tokens = u
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|details| details.cached_tokens);
             let (scalar_provider_cost, detailed_cost) = match u.cost {
                 Some(RawChatUsageCost::Scalar(cost)) => (Some(cost), None),
                 Some(RawChatUsageCost::Detailed(cost)) => (None, Some(cost)),
@@ -1183,8 +1187,12 @@ impl LlmResponseCodec for OpenAIChatCodec {
                 prompt_tokens: u.prompt_tokens,
                 completion_tokens: u.completion_tokens,
                 total_tokens: u.total_tokens,
-                cache_read_tokens: u.prompt_tokens_details.and_then(|d| d.cached_tokens),
+                cache_read_tokens,
                 cache_write_tokens: None,
+                uncached_input_tokens: u
+                    .prompt_tokens
+                    .zip(cache_read_tokens)
+                    .and_then(|(total, cached)| total.checked_sub(cached)),
                 cost: provider_reported_cost(
                     u.provider_cost.or(scalar_provider_cost),
                     detailed_cost,

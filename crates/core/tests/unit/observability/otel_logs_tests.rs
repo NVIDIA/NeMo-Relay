@@ -267,6 +267,8 @@ fn log_config_validates_batch_limits_and_retains_resource_identity() {
             .with_max_export_batch_size(2),
         OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
             .with_scheduled_delay(Duration::ZERO),
+        OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
+            .with_promote_resource_metadata_prefixes(["nv.*"]),
     ] {
         assert!(config.validate().is_err());
     }
@@ -274,12 +276,17 @@ fn log_config_validates_batch_limits_and_retains_resource_identity() {
     let config = OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
         .with_service_namespace("relay")
         .with_service_version("0.8.0")
+        .with_promote_resource_metadata_prefixes(["nv.client.", "nv.env."])
         .with_resource_attribute("deployment.environment", "test");
     assert_eq!(config.service_namespace.as_deref(), Some("relay"));
     assert_eq!(config.service_version.as_deref(), Some("0.8.0"));
     assert_eq!(
         config.resource_attributes.get("deployment.environment"),
         Some(&"test".to_string())
+    );
+    assert_eq!(
+        config.promote_resource_metadata_prefixes,
+        ["nv.client.", "nv.env."]
     );
 }
 
@@ -542,6 +549,36 @@ fn log_projection_preserves_imported_w3c_trace_identity_and_sampling_flag() {
 }
 
 #[test]
+fn log_projection_uses_event_w3c_context_for_an_unobserved_local_parent() {
+    let (mut processor, exporter, provider) = processor(LogSeverity::Info);
+    let local_parent = Uuid::now_v7();
+    let local_scope = Uuid::now_v7();
+    let mut child = scope_with_parent(local_scope, Some(local_parent), ScopeCategory::Start);
+    child.set_propagation_traceparent(Some(crate::observability::format_traceparent(
+        local_parent,
+        local_parent,
+    )));
+    processor.process(&child);
+    processor.process(&mark(
+        Some(local_scope),
+        "relay.late-local-parent",
+        None,
+        None,
+        None,
+    ));
+    provider.force_flush().unwrap();
+
+    let logs = exporter.get_emitted_logs().unwrap();
+    let context = logs[0]
+        .record
+        .trace_context()
+        .expect("event-carried W3C context should attach the unobserved local parent");
+    assert_eq!(context.trace_id, relay_trace_id(local_parent));
+    assert_eq!(context.span_id, relay_span_id(local_scope));
+    assert_eq!(context.trace_flags, Some(TraceFlags::SAMPLED));
+}
+
+#[test]
 fn mark_projection_preserves_category_profile_schema_and_json_scalars() {
     let (mut processor, exporter, provider) = processor(LogSeverity::Trace);
     let event = Event::Mark(MarkEvent::new(
@@ -664,5 +701,100 @@ fn severity_and_json_conversion_cover_remaining_scalar_variants() {
     assert_eq!(
         json_any_value(&json!(1.25), false),
         Some(AnyValue::Double(1.25))
+    );
+}
+
+#[test]
+fn provider_delivery_counters_do_not_report_other_providers_pending_logs_as_dropped() {
+    #[derive(Debug)]
+    struct RetainedExporter(InMemoryLogExporter);
+    impl LogExporter for RetainedExporter {
+        async fn export(&self, batch: LogBatch<'_>) -> OTelSdkResult {
+            self.0.export(batch).await
+        }
+    }
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let guard = runtime.enter();
+    let diagnostics = Arc::new(LogDeliveryDiagnostics::new(
+        "in-memory".to_string(),
+        SignalRuntimeDiagnostics::new(Some("opentelemetry.logs".to_string())),
+    ));
+    let mut providers = Vec::new();
+    let mut exporters = Vec::new();
+    for count in [1, 3] {
+        let provider_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
+            diagnostics.endpoint.clone(),
+            diagnostics.runtime_diagnostics.clone(),
+        ));
+        diagnostics
+            .children
+            .lock()
+            .unwrap()
+            .push(Arc::clone(&provider_diagnostics));
+        let capture = InMemoryLogExporter::default();
+        let exporter = DiagnosticLogExporter {
+            inner: RetainedExporter(capture.clone()),
+            diagnostics: Arc::clone(&provider_diagnostics),
+        };
+        let processor = DiagnosticBatchLogProcessor {
+            inner: AsyncBatchLogProcessor::builder(exporter, runtime::Tokio)
+                .with_batch_config(
+                    BatchConfigBuilder::default()
+                        .with_scheduled_delay(Duration::from_secs(3600))
+                        .build(),
+                )
+                .build(),
+            diagnostics: Arc::clone(&provider_diagnostics),
+            retry_timeout: Duration::from_secs(1),
+        };
+        let provider = SdkLoggerProvider::builder()
+            .with_log_processor(processor)
+            .build();
+        let logger = provider.logger("regression");
+        for _ in 0..count {
+            logger.emit(logger.create_log_record());
+        }
+        providers.push(provider);
+        exporters.push(capture);
+    }
+    drop(guard);
+    let first = providers[0].shutdown();
+    let second = providers[1].shutdown();
+    let delivered: usize = exporters
+        .iter()
+        .map(|exporter| exporter.get_emitted_logs().unwrap().len())
+        .sum();
+    assert_eq!(delivered, 4, "all records must reach exporters");
+    assert_eq!(diagnostics.failure_summary(), None);
+    assert!(
+        diagnostics
+            .runtime_diagnostics
+            .snapshot()
+            .get("otel.logs_dropped")
+            .is_none()
+    );
+    assert!(
+        first.is_ok(),
+        "all four records delivered, but first shutdown failed: {first:?}"
+    );
+    assert!(second.is_ok());
+}
+
+#[test]
+fn resource_provider_failures_remain_visible_in_endpoint_summary() {
+    let diagnostics =
+        LogDeliveryDiagnostics::new("endpoint".to_string(), SignalRuntimeDiagnostics::new(None));
+    let child = Arc::new(LogDeliveryDiagnostics::new(
+        "endpoint".to_string(),
+        diagnostics.runtime_diagnostics.clone(),
+    ));
+    child.emitted.store(3, Ordering::Relaxed);
+    child.accepted.store(2, Ordering::Relaxed);
+    child.export_failures.store(1, Ordering::Relaxed);
+    diagnostics.children.lock().unwrap().push(child);
+    assert_eq!(
+        diagnostics.failure_summary().as_deref(),
+        Some("otel.logs_dropped (1), otel.logs_export_failed (1)")
     );
 }

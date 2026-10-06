@@ -18,7 +18,9 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::agents::CodingAgent;
-use crate::configuration::{AgentConfigs, GatewayConfig, ResolvedConfig, resolve_run_config};
+use crate::configuration::{
+    AgentConfigs, GatewayConfig, LaunchedAgent, ResolvedConfig, resolve_run_config,
+};
 use crate::diagnostics::UpstreamAuthInfo;
 use crate::error::CliError;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
@@ -90,7 +92,11 @@ impl TransparentRun {
                 agent,
                 &invocation.argv[..=invocation.host_index],
             );
-            validate_agent_version(agent, &probe).await?;
+            let version = validate_agent_version(agent, &probe).await?;
+            resolved.gateway.launched_agent = Some(LaunchedAgent {
+                kind: agent.event_kind(),
+                version: version.to_string(),
+            });
         }
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -176,6 +182,19 @@ async fn execute_live_run_with_dynamic(
     gateway_url: &str,
     prepared: PreparedAgentLaunch,
 ) -> Result<ExitCode, CliError> {
+    let target_resource_metrics = cli_process_tree_metrics_enabled(&gateway_config);
+    let _resource_metrics_launch = if target_resource_metrics {
+        Some(
+            nemo_relay::api::resource_metrics::prepare_cli_resource_metrics_process_tree()
+                .map_err(|error| {
+                    CliError::Launch(format!(
+                        "failed to prepare resource metrics process-tree target: {error}"
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
     let bootstrap_fingerprint = crate::configuration::transparent_gateway_fingerprint(gateway_url);
     let proxy_credential = prepared.proxy_credential.clone();
     let running_server = RunningGateway::start(
@@ -192,12 +211,68 @@ async fn execute_live_run_with_dynamic(
         server_result?;
         return Err(error);
     }
-    supervise_prepared_run(&prepared, running_server).await
+    supervise_prepared_run(&prepared, running_server, target_resource_metrics).await
+}
+
+fn cli_process_tree_metrics_enabled(config: &GatewayConfig) -> bool {
+    config
+        .plugin_config
+        .as_ref()
+        .and_then(|config| serde_json::from_value::<PluginConfig>(config.clone()).ok())
+        .is_some_and(|config| {
+            config.components.iter().any(|component| {
+                component.enabled
+                    && component.kind == "resource_metrics"
+                    && component
+                        .config
+                        .get("measurement_scope")
+                        .and_then(|value| value.as_str())
+                        == Some("process_tree")
+            })
+        })
 }
 
 async fn supervise_prepared_run(
     prepared: &PreparedAgentLaunch,
+    running_server: RunningGateway,
+    target_resource_metrics: bool,
+) -> Result<ExitCode, CliError> {
+    supervise_prepared_run_with_target(prepared, running_server, target_resource_metrics, |child| {
+        let child_process_id = child.process_id().ok_or_else(|| {
+            CliError::Launch("spawned coding-agent process did not expose a process ID".into())
+        })?;
+        #[cfg(not(windows))]
+        let result =
+            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
+                child_process_id,
+            );
+        #[cfg(windows)]
+        // SAFETY: The supervised child owns this live job. The API duplicates it here.
+        let result = unsafe {
+            nemo_relay::api::resource_metrics::target_resource_metrics_to_owned_process_tree(
+                child_process_id,
+                child.resource_metrics_job_handle(),
+            )
+        };
+        result.map_err(|error| {
+            CliError::Launch(format!(
+                "resource metrics could not target the launched agent process tree: {error}"
+            ))
+        })
+    })
+    .await
+}
+
+async fn supervise_prepared_run_with_target(
+    prepared: &PreparedAgentLaunch,
     mut running_server: RunningGateway,
+    target_resource_metrics: bool,
+    select_target: impl FnOnce(
+        &super::SupervisedChild,
+    ) -> Result<
+        Option<nemo_relay::api::resource_metrics::ResourceMetricsTargetGuard>,
+        CliError,
+    >,
 ) -> Result<ExitCode, CliError> {
     let mut child = match prepared.spawn().await {
         Ok(child) => child,
@@ -208,6 +283,22 @@ async fn supervise_prepared_run(
             server_result?;
             return Err(error);
         }
+    };
+    let _resource_metrics_target = if target_resource_metrics {
+        match select_target(&child) {
+            Ok(target) => target,
+            Err(error) => {
+                let child_result = child.terminate().await;
+                let restore = prepared.restore();
+                let server_result = running_server.stop().await;
+                restore?;
+                child_result?;
+                server_result?;
+                return Err(error);
+            }
+        }
+    } else {
+        None
     };
 
     tokio::select! {
@@ -296,7 +387,10 @@ const fn default_command_for(agent: CodingAgent) -> &'static str {
 
 /// Builds a version probe that preserves wrappers such as `npx codex` or `mise exec -- codex`.
 /// Opaque wrappers remain supported when their `--version` output identifies the selected host.
-async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<(), CliError> {
+async fn validate_agent_version(
+    agent: CodingAgent,
+    probe: &[String],
+) -> Result<semver::Version, CliError> {
     let mut command = crate::process::tokio_command(probe);
     command
         .stdin(std::process::Stdio::null())
@@ -330,8 +424,7 @@ async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<
     let version = agent
         .validate_version_output(&stdout)
         .map_err(CliError::Launch)?;
-    // Logged rather than returned: this is not a reason to refuse the launch, and there is no
-    // note channel here -- `PreparedAgentLaunch` is already built by the time the probe runs.
+    // An unverified version is diagnostic only; retain the validated version for telemetry.
     if let Some(unverified) = agent.unverified_version(&version) {
         log::warn!(
             target: "nemo_relay.cli",
@@ -341,7 +434,7 @@ async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<
             "{unverified}"
         );
     }
-    Ok(())
+    Ok(version)
 }
 
 // Splits a configured command string into argv words for run mode. This intentionally uses simple

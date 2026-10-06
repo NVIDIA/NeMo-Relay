@@ -722,6 +722,7 @@ fn daemon_router_with_ready_worker(
         identity,
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: "test-daemon".into(),
+        pass_through: false,
         public_origin: "http://127.0.0.1:1".into(),
         config: GatewayConfig::default(),
         upstream: pooled_client().expect("daemon pass-through client"),
@@ -795,6 +796,7 @@ fn daemon_router_with_pass_through(
         identity,
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: "test-pass-through-daemon".into(),
+        pass_through: true,
         public_origin: "http://127.0.0.1:1".into(),
         config,
         upstream: client_for(protocol),
@@ -879,6 +881,7 @@ fn daemon_router_with_two_ready_workers(
         identity,
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: "test-two-route-daemon".into(),
+        pass_through: false,
         public_origin: "http://127.0.0.1:1".into(),
         config: GatewayConfig::default(),
         upstream: client_for(protocol),
@@ -1897,12 +1900,22 @@ fn lifecycle_daemon_router(
     route_token: &str,
     worker_address: std::net::SocketAddr,
 ) -> (Router, LifecycleDaemonHarness) {
+    lifecycle_daemon_router_with_activation(route_token, worker_address, None)
+}
+
+// A provider address starts the route in default passthrough while activation is pending.
+fn lifecycle_daemon_router_with_activation(
+    route_token: &str,
+    worker_address: std::net::SocketAddr,
+    startup_provider: Option<std::net::SocketAddr>,
+) -> (Router, LifecycleDaemonHarness) {
     let fingerprint = MachineIdentity::generate()
         .expect("machine identity")
         .identity
         .fingerprint();
     let credential = RouteCredential::parse(route_token.to_owned()).expect("route credential");
-    let registry = Registry::new(false);
+    let ready = startup_provider.is_none();
+    let registry = Registry::new(false).with_require_worker(ready);
     let mcp_session_id = "lifecycle-mcp-session".to_owned();
     let activation_id = "lifecycle-activation";
     registry
@@ -1936,9 +1949,11 @@ fn lifecycle_daemon_router(
         )
         .expect("worker target"),
     );
-    registry
-        .mark_worker_ready(fingerprint, activation_id, Arc::clone(&target))
-        .expect("publish lifecycle worker");
+    if ready {
+        registry
+            .mark_worker_ready(fingerprint, activation_id, Arc::clone(&target))
+            .expect("publish lifecycle worker");
+    }
 
     let daemon_identity = MachineIdentity::generate()
         .expect("daemon identity")
@@ -1955,20 +1970,25 @@ fn lifecycle_daemon_router(
     )
     .expect("active generation state");
     active_worker_generations
-        .publish(fingerprint, &generation_id)
+        .publish(fingerprint, &generation_id, None)
         .expect("publish active generation");
 
     let mcp_secret = SensitiveString::new("lifecycle-mcp-control-token").expect("MCP token");
     let worker_control_secret =
         SensitiveString::new("unused-test-control-token").expect("worker control token");
+    let mut config = GatewayConfig::default();
+    if let Some(provider) = startup_provider {
+        config.openai_base_url = format!("http://{provider}/v1");
+    }
     let state = Arc::new(DaemonState {
         sockets: socket::Hub::default(),
         registry,
         identity: daemon_identity,
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: "lifecycle-daemon".into(),
+        pass_through: false,
         public_origin: "http://127.0.0.1:1".into(),
-        config: GatewayConfig::default(),
+        config,
         upstream: pooled_client().expect("daemon pass-through client"),
         worker_clients: WorkerClientPool::new().expect("daemon worker clients"),
         challenges: Mutex::new(HashMap::new()),
@@ -2004,7 +2024,7 @@ fn lifecycle_daemon_router(
                 publication: WorkerPublication::Activation {
                     activation_id: activation_id.into(),
                 },
-                published: true,
+                published: ready,
                 generation_grant,
             },
         )])),
@@ -2025,6 +2045,80 @@ fn lifecycle_daemon_router(
             _generation_state: generation_state,
         },
     )
+}
+
+#[tokio::test]
+async fn passthrough_stream_finishes_on_original_provider_across_worker_cutover() {
+    let protocol = TestProtocol::Http1;
+    let (direct_provider, release_direct, observed_direct, direct_task) =
+        spawn_causal_provider(protocol).await;
+    let (worker_provider, release_worker, observed_worker, provider_task) =
+        spawn_causal_provider(protocol).await;
+    let (worker_router, worker_handle) =
+        configured_worker_router(protocol, ProviderKind::OpenAi, worker_provider);
+    let (worker_address, worker_task) = spawn_router(protocol, worker_router).await;
+    let token = route_token();
+    let (daemon_router, harness) =
+        lifecycle_daemon_router_with_activation(&token, worker_address, Some(direct_provider));
+    let (daemon_address, daemon_task) = spawn_router(protocol, daemon_router).await;
+    let client = client_for(protocol);
+
+    let response = client
+        .request(provider_request(
+            daemon_address,
+            ProviderKind::OpenAi,
+            &token,
+        ))
+        .await
+        .expect("passthrough request before worker readiness");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let mut direct_body = response.into_body();
+    read_exact_data(&mut direct_body, EVENT_A).await;
+    assert_eq!(harness.target.in_flight(), 0);
+    assert_eq!(worker_handle.in_flight(), 0);
+    observed_direct
+        .await
+        .expect("one direct provider submission");
+
+    harness
+        .state
+        .registry
+        .mark_worker_ready(
+            harness.fingerprint,
+            "lifecycle-activation",
+            Arc::clone(&harness.target),
+        )
+        .expect("publish ready worker during the direct stream");
+    let response = client
+        .request(provider_request(
+            daemon_address,
+            ProviderKind::OpenAi,
+            &token,
+        ))
+        .await
+        .expect("later request uses the worker");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let mut worker_body = response.into_body();
+    read_exact_data(&mut worker_body, EVENT_A).await;
+    observed_worker
+        .await
+        .expect("one worker provider submission");
+    assert_eq!(harness.target.in_flight(), 1);
+    assert_eq!(worker_handle.in_flight(), 1);
+
+    finish_causal_lifecycle_stream(&mut direct_body, release_direct).await;
+    assert_eq!(harness.target.in_flight(), 1);
+    finish_causal_lifecycle_stream(&mut worker_body, release_worker).await;
+    assert_eq!(harness.target.in_flight(), 0);
+    assert_eq!(worker_handle.in_flight(), 0);
+    direct_task
+        .await
+        .expect("direct provider received one request");
+    provider_task
+        .await
+        .expect("worker provider received one request");
+    daemon_task.abort();
+    worker_task.abort();
 }
 
 async fn finish_causal_lifecycle_stream(body: &mut Incoming, release_second: oneshot::Sender<()>) {
@@ -2218,18 +2312,14 @@ async fn broker_worker_disconnect_expiry_rejects_new_work_but_preserves_admitted
         loop {
             let worker_expired =
                 !lock(&harness.state.worker_sessions).contains_key(&harness.worker_id);
-            let replacement_activating = harness
+            let waiting_for_connection = harness
                 .state
                 .registry
                 .snapshot(harness.fingerprint)
                 .is_ok_and(|snapshot| {
-                    snapshot.state == crate::daemon::broker::lifecycle::RouteStateKind::Activating
+                    snapshot.state == crate::daemon::broker::lifecycle::RouteStateKind::Recovering
                 });
-            let relaunch_pending = matches!(
-                lock(&harness.state.pending_directives).get(&harness.mcp_session_id),
-                Some(BrokerDirective::LaunchWorker { .. })
-            );
-            if worker_expired && replacement_activating && relaunch_pending {
+            if worker_expired && waiting_for_connection {
                 return;
             }
             tokio::task::yield_now().await;
@@ -2245,12 +2335,9 @@ async fn broker_worker_disconnect_expiry_rejects_new_work_but_preserves_admitted
             .snapshot(harness.fingerprint)
             .expect("recovering route")
             .state,
-        crate::daemon::broker::lifecycle::RouteStateKind::Activating
+        crate::daemon::broker::lifecycle::RouteStateKind::Recovering
     );
-    assert!(matches!(
-        lock(&harness.state.pending_directives).get(&harness.mcp_session_id),
-        Some(BrokerDirective::LaunchWorker { .. })
-    ));
+    assert!(!lock(&harness.state.pending_directives).contains_key(&harness.mcp_session_id));
     assert!(
         !harness
             .state

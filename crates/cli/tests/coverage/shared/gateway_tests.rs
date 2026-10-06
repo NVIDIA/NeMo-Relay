@@ -126,6 +126,7 @@ async fn prepared_gateway_request_consumes_private_client_proof() {
                 crate::provider_auth::SourceCredentialDisposition::ProviderCredential,
             allow_environment_provider_auth: true,
         },
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -153,6 +154,7 @@ async fn prepared_gateway_request_decodes_zstd_for_observability() {
         &GatewayConfig::default(),
         request,
         environment_authorization(),
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -188,6 +190,7 @@ async fn prepared_gateway_request_decodes_chained_zstd_for_observability() {
         &GatewayConfig::default(),
         request,
         environment_authorization(),
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -231,9 +234,14 @@ async fn request_observability_decode_is_bounded_and_encoding_aware() {
         .header(header::CONTENT_ENCODING, "zstd")
         .body(Body::from(compressed))
         .unwrap();
-    let prepared = prepare_gateway_request(&config, request, environment_authorization())
-        .await
-        .unwrap();
+    let prepared = prepare_gateway_request(
+        &config,
+        request,
+        environment_authorization(),
+        "/v1/responses",
+    )
+    .await
+    .unwrap();
     assert!(prepared.request_json.is_null());
 
     let request = Request::builder()
@@ -242,9 +250,14 @@ async fn request_observability_decode_is_bounded_and_encoding_aware() {
         .header(header::CONTENT_ENCODING, "gzip")
         .body(Body::from(r#"{"model":"opaque"}"#))
         .unwrap();
-    let prepared = prepare_gateway_request(&config, request, environment_authorization())
-        .await
-        .unwrap();
+    let prepared = prepare_gateway_request(
+        &config,
+        request,
+        environment_authorization(),
+        "/v1/responses",
+    )
+    .await
+    .unwrap();
     assert!(prepared.request_json.is_null());
 
     let request = Request::builder()
@@ -253,9 +266,14 @@ async fn request_observability_decode_is_bounded_and_encoding_aware() {
         .header(header::CONTENT_ENCODING, "identity")
         .body(Body::from(r#"{"model":"gpt-test"}"#))
         .unwrap();
-    let prepared = prepare_gateway_request(&config, request, environment_authorization())
-        .await
-        .unwrap();
+    let prepared = prepare_gateway_request(
+        &config,
+        request,
+        environment_authorization(),
+        "/v1/responses",
+    )
+    .await
+    .unwrap();
     assert_eq!(
         prepared.request_json,
         json!({
@@ -276,6 +294,7 @@ async fn malformed_encoded_request_remains_a_raw_passthrough() {
         &GatewayConfig::default(),
         request,
         environment_authorization(),
+        "/v1/responses",
     )
     .await
     .unwrap();
@@ -495,6 +514,7 @@ fn provider_route_names_round_trip_through_alignment_routes() {
 #[test]
 fn provider_routes_preserve_path_query_and_choose_upstream() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai/v1/".into(),
         openai_auth_header: None,
@@ -503,6 +523,7 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
 
@@ -544,6 +565,7 @@ fn chatgpt_shaped_responses_path_is_a_responses_route() {
 #[test]
 fn openai_upstream_url_accepts_origin_or_v1_base() {
     let mut config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -552,6 +574,7 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
 
@@ -578,6 +601,7 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
 #[test]
 fn anthropic_upstream_url_accepts_origin_or_v1_base() {
     let mut config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -586,6 +610,7 @@ fn anthropic_upstream_url_accepts_origin_or_v1_base() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
 
@@ -1619,14 +1644,62 @@ fn observable_headers_omit_secrets_and_transport_headers() {
     );
     headers.insert("connection", HeaderValue::from_static("close"));
     headers.insert("x-request-id", HeaderValue::from_static("req-1"));
+    headers.append(
+        "anthropic-beta",
+        HeaderValue::from_static("compact-2026-01-12"),
+    );
+    headers.append("anthropic-beta", HeaderValue::from_static("other-beta"));
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
 
     let observed = observable_headers(&headers);
 
     assert_eq!(observed.get("x-request-id"), Some(&json!("req-1")));
+    assert_eq!(
+        observed.get("anthropic-beta"),
+        Some(&json!("compact-2026-01-12,other-beta"))
+    );
+    assert_eq!(
+        observed.get("anthropic-version"),
+        Some(&json!("2023-06-01"))
+    );
     assert!(!observed.contains_key("authorization"));
     assert!(!observed.contains_key("x-api-key"));
     assert!(!observed.contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER));
     assert!(!observed.contains_key("connection"));
+}
+
+#[test]
+fn observable_headers_preserve_ambiguous_anthropic_versions_for_policy_rejection() {
+    let mut headers = HeaderMap::new();
+    headers.append("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    headers.append(
+        "anthropic-version",
+        HeaderValue::from_static("future-version"),
+    );
+
+    assert_eq!(
+        observable_headers(&headers).get("anthropic-version"),
+        Some(&json!(["2023-06-01", "future-version"]))
+    );
+}
+
+#[test]
+fn observable_headers_omit_connection_named_anthropic_protocol_headers() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "connection",
+        HeaderValue::from_static("anthropic-beta, anthropic-version"),
+    );
+    headers.insert(
+        "anthropic-beta",
+        HeaderValue::from_static("compact-2026-01-12"),
+    );
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+
+    let observed = observable_headers(&headers);
+
+    assert!(!observed.contains_key("anthropic-beta"));
+    assert!(!observed.contains_key("anthropic-version"));
 }
 
 #[test]
@@ -2301,6 +2374,7 @@ fn chatgpt_backend_url_omits_v1_prefix() {
 #[tokio::test]
 async fn passthrough_rejects_unsupported_provider_path_directly() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -2309,6 +2383,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
@@ -2340,6 +2415,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
 #[tokio::test]
 async fn models_rejects_non_get_requests_directly() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
@@ -2348,6 +2424,7 @@ async fn models_rejects_non_get_requests_directly() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
@@ -2743,6 +2820,7 @@ fn a_refused_named_upstream_is_rejected_rather_than_rerouted() {
 #[tokio::test]
 async fn models_refuses_an_unusable_named_upstream() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         // Nothing must reach this. If the refusal fell back to configured routing, the request
         // would be sent here instead of failing.
@@ -2753,6 +2831,7 @@ async fn models_refuses_an_unusable_named_upstream() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {

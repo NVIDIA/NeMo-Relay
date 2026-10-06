@@ -16,6 +16,9 @@ use crate::error::CliError;
 use super::{Session, SessionGates, session_gate};
 
 pub(super) const AGENT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+// Hook-driven tools do not send heartbeats while running. Allow long builds and tests to
+// finish, while retaining a finite fail-safe for children whose completion hooks never arrive.
+pub(super) const CODEX_TOOL_IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 pub(super) const AGENT_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(super) async fn close_sessions_for_shutdown(
@@ -80,6 +83,7 @@ pub(super) async fn release_closed_owner_ids(
     }
 }
 
+/// Select sessions needing whole-session or stale-child idle cleanup.
 async fn idle_session_ids(
     inner: &Arc<Mutex<HashMap<String, Session>>>,
     now: Instant,
@@ -91,7 +95,7 @@ async fn idle_session_ids(
         .iter()
         .filter_map(|(session_id, session)| {
             session
-                .is_idle_for(now, timeout)
+                .needs_idle_cleanup(now, timeout)
                 .then_some(session_id.clone())
         })
         .collect()
@@ -104,6 +108,7 @@ type ClosedIdleTurns = (
     Option<CliError>,
 );
 
+/// Close expired children independently, then close sessions whose remaining work is idle.
 async fn close_idle_turns(
     inner: &Arc<Mutex<HashMap<String, Session>>>,
     session_gates: &SessionGates,
@@ -123,7 +128,7 @@ async fn close_idle_turns(
             let mut sessions = inner.lock().await;
             sessions
                 .get(&session_id)
-                .is_some_and(|session| session.is_idle_for(now, timeout))
+                .is_some_and(|session| session.needs_idle_cleanup(now, timeout))
                 .then(|| sessions.remove(&session_id))
                 .flatten()
         }) else {
@@ -132,7 +137,14 @@ async fn close_idle_turns(
         let stack = session.scope_stack.clone();
         match TASK_SCOPE_STACK
             .scope(stack, async {
-                session.close_idle_scopes_for_reason(reason).await
+                let (mut closed, mut delivery) =
+                    session.close_stale_subagents(now, timeout).await?;
+                if session.is_idle_for(now, timeout) {
+                    let (ids, idle_delivery) = session.close_idle_scopes_for_reason(reason).await?;
+                    closed.extend(ids);
+                    delivery = idle_delivery.or(delivery);
+                }
+                Ok::<_, CliError>((closed, delivery))
             })
             .await
         {

@@ -94,12 +94,18 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
             "cacheWrite",
         ],
     );
+    let uncached_input_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &["uncached_input_tokens", "uncachedInputTokens"],
+    );
 
     if prompt_tokens.is_none()
         && completion_tokens.is_none()
         && reported_total_tokens.is_none()
         && cache_read_tokens.is_none()
         && cache_write_tokens.is_none()
+        && uncached_input_tokens.is_none()
     {
         return None;
     }
@@ -112,6 +118,7 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
         total_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        uncached_input_tokens,
         cost: None,
     })
 }

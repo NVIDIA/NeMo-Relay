@@ -176,6 +176,8 @@ For tasks, inspect the matching task and its log:
 Get-ScheduledTask -TaskName 'NeMoRelay-Daemon-User'
 Get-ScheduledTaskInfo -TaskName 'NeMoRelay-Daemon-User'
 Get-Content "$env:LOCALAPPDATA\nemo-relay-daemon\logs\daemon.err.log" -Tail 50
+Invoke-RestMethod http://127.0.0.1:47632/healthz
+Invoke-RestMethod http://127.0.0.1:47632/_nemo_relay/v1/workers/status
 Get-NetTCPConnection -LocalPort 47632 -State Listen
 ```
 

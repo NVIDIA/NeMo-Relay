@@ -17,7 +17,9 @@ use crate::config::AcgComponentConfig;
 use crate::storage::memory::InMemoryBackend;
 use crate::storage::traits::StorageBackendDyn;
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn};
+use nemo_relay::api::runtime::{
+    LlmExecutionContext, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn,
+};
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use serde_json::{Value, json};
 use tokio_stream::StreamExt;
@@ -698,7 +700,7 @@ async fn acg_component_stream_execution_intercept_rewrites_streaming_requests() 
         })
     });
 
-    let mut stream = intercept("anthropic", request, next)
+    let mut stream = intercept("anthropic", request, LlmExecutionContext::default(), next)
         .await
         .expect("stream intercept should succeed");
     let first = stream
@@ -1302,7 +1304,7 @@ async fn acg_component_execution_intercept_rewrites_non_streaming_requests() {
     );
     let next: LlmExecutionNextFn = Arc::new(|req| Box::pin(async move { Ok(req.content) }));
 
-    let result = intercept("anthropic", request, next)
+    let result = intercept("anthropic", request, LlmExecutionContext::default(), next)
         .await
         .expect("execution intercept should succeed");
 
@@ -1515,9 +1517,14 @@ async fn acg_component_execution_intercept_passes_original_request_when_translat
     );
     let next: LlmExecutionNextFn = Arc::new(|req| Box::pin(async move { Ok(req.content) }));
 
-    let result = intercept("anthropic", invalid_request.clone(), next)
-        .await
-        .expect("execution intercept should succeed");
+    let result = intercept(
+        "anthropic",
+        invalid_request.clone(),
+        LlmExecutionContext::default(),
+        next,
+    )
+    .await
+    .expect("execution intercept should succeed");
 
     assert_eq!(result, invalid_request.content);
 }
@@ -1544,9 +1551,14 @@ async fn acg_component_stream_execution_intercept_passes_original_request_when_t
         })
     });
 
-    let mut stream = intercept("anthropic", invalid_request.clone(), next)
-        .await
-        .expect("stream intercept should pass through");
+    let mut stream = intercept(
+        "anthropic",
+        invalid_request.clone(),
+        LlmExecutionContext::default(),
+        next,
+    )
+    .await
+    .expect("stream intercept should pass through");
     let first = stream
         .next()
         .await

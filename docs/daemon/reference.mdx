@@ -26,29 +26,130 @@ nemo-relay daemon \
   [--bind <127.0.0.1|0.0.0.0>] \
   [--port <PORT>] \
   [--advertise-address <URL>] \
-  [--pass-through] \
+  [--pass-through | --require-worker] \
+  [--max-tokens-per-identity <1-64>] \
   [--tls-cert <PEM>] \
   [--tls-key <PKCS8-PEM>]
 ```
 
-Provision `NEMO_RELAY_CLIENT_TOKEN` in client environments only. Start and
-keep an MCP connection active before sending LLM or hook requests, including
-in `--pass-through` mode. Unknown credentials return `401`; registered routes
-without a live MCP reference are unavailable and return `503`. Daemon restart
-requires MCP re-registration to restore these in-memory route bindings.
+Set `NEMO_RELAY_CLIENT_TOKEN` or create the per-user token file in client
+environments only. Keep an MCP connection active before sending LLM or hook
+requests, including in `--pass-through` mode. Requests without a credential
+header, or with a well-formed credential that is not bound, use pass-through
+without daemon-held provider credentials (unless the daemon runs with
+`--pass-through`). Malformed or repeated credential headers return `401`, and
+`--require-worker` rejects missing and unbound credentials with `401`.
+Registered routes without an active MCP reference also use pass-through, or
+return `503` with `--require-worker`. After a daemon
+restart, MCP must register again to restore the route bindings stored in
+memory; until then that user's requests pass through.
+
+By default, an authenticated route with an active MCP reference forwards directly
+while its worker starts or recovers. Worker startup has no time limit.
+The daemon switches new requests to the worker after these checks pass:
+
+- The worker has initialized its runtime and plugins.
+- Its control connection is authenticated.
+- Its HTTP readiness probe succeeds.
+
+Use `nemo-relay daemon --require-worker` when every request must pass through
+worker policies. This strict mode returns HTTP `503` until a worker is ready
+and has an active control connection. It also applies during recovery and
+retry delays. The flag conflicts with `--pass-through`, which disables workers.
 
 The shared `/models` and `/v1/models` GET endpoints return
-`Cache-Control: no-store`, overriding provider cache policy to prevent
-cross-credential catalog reuse. LLM streaming response headers are unchanged.
+`Cache-Control: no-store`. This overrides provider cache policy so a model
+catalog fetched with one credential is not reused for another.
+LLM streaming response headers are unchanged.
+
+### Probe Daemon Health
+
+The daemon exposes an unauthenticated process-health probe:
+
+```bash
+curl -f http://127.0.0.1:47632/healthz
+```
+
+`/healthz` returns `200` while the daemon HTTP process is serving requests.
+Its JSON response identifies the service, Relay version, process instance,
+deployment mode (`managed` or `pass_through`), and status, and includes
+`Cache-Control: no-store`. The deployment mode reports the daemon's global
+startup mode. A managed route can still use passthrough during startup or recovery.
+
+These probes do not require a route credential, and they do not report provider,
+worker, plugin, or telemetry health. Complete
+[worker-backed verification](/daemon/operations#verify-worker-backed-operation)
+before accepting a deployment.
+
+### Inspect Worker Status
+
+The daemon exposes its current assigned workers for deployment diagnostics:
+
+```bash
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers/status
+curl -f http://127.0.0.1:47632/_nemo_relay/v1/workers/<instance_uuid>/status
+```
+
+The first endpoint lists worker instance UUIDs. The second returns one aggregate
+list of worker statuses, and the third returns one worker or `404` if that worker
+is not assigned. Status includes the broker lifecycle state, MCP reference count,
+control availability, and in-flight request count. Pass-through and activating
+routes have no assigned worker and do not appear in these results.
+
+Use these endpoints to inspect current worker assignments:
+
+| Endpoint | Result |
+| --- | --- |
+| `GET /_nemo_relay/v1/workers` | Sorted list of assigned worker UUIDs. |
+| `GET /_nemo_relay/v1/workers/status` | Sorted list of all assigned worker status objects. |
+| `GET /_nemo_relay/v1/workers/<instance_uuid>/status` | One assigned worker status object, or `404` with `worker not found`. |
+
+The following example shows a managed daemon with one ready worker:
+
+```json
+{
+  "instance_id": "01a0caf5-7b26-7e82-a808-8f29eaf15db1",
+  "status": "ok",
+  "workers": [
+    {
+      "control_available": true,
+      "in_flight": 0,
+      "reference_count": 1,
+      "state": "ready",
+      "worker_id": "01a0caf5-b33f-7280-a916-7e15bbd574fa"
+    }
+  ]
+}
+```
+
+`state` is the broker's lifecycle state for the worker assignment. It can be
+`ready`, `draining`, or `recovering`. `control_available` is the broker's
+last-known control-channel state. It is not an active process probe. The
+`reference_count` is the number of MCP sessions retaining the route, and
+`in_flight` is the number of requests accepted by the broker and not yet
+released at the instant of the snapshot.
+
+An empty `workers` list means that no route currently has an assigned worker.
+The daemon can be empty, starting a worker, or using passthrough. Use `/healthz`
+to check the global deployment mode. Check lifecycle logs to find out why a
+route uses passthrough.
+
+These endpoints do not require authentication. They never include route
+credentials, fingerprints, worker endpoints, session IDs, activation IDs, or
+internal worker credentials. The values describe the broker's current state.
+These endpoints do not probe workers and include `Cache-Control: no-store`. Treat
+worker IDs and activity counts as operational metadata. Restrict access with
+the same interface binding, firewall, and reverse-proxy policy as the daemon.
 
 Worker activation still requires the broker-issued, one-time grant delivered
 through the protected inherited channel. Knowing the daemon address alone
 does not allow a worker to register or replace an existing worker.
 
 The daemon accepts only `127.0.0.1` or `0.0.0.0` for `--bind`. A daemon bound
-to `0.0.0.0` requires a concrete, reachable origin URL through
-`--advertise-address`; `0.0.0.0` itself is never an advertised or target
-address.
+to `0.0.0.0` requires a reachable origin URL through `--advertise-address`.
+Use a hostname or IP address that clients can reach. Do not advertise `0.0.0.0`
+as a target address.
 
 For a non-loopback advertised origin, expose HTTPS either on the daemon
 listener or through a trusted reverse proxy. For example, native TLS has the
@@ -63,7 +164,7 @@ nemo-relay daemon \
   --tls-key /etc/nemo-relay/tls.pk8
 ```
 
-Native TLS requires an `https` advertised URL. An `https` advertised URL may
+Native TLS requires an `https` advertised URL. An `https` advertised URL can
 also name a trusted reverse proxy that terminates TLS before forwarding to the
 daemon listener. Every non-loopback `--daemon-address` target must use HTTPS.
 If a trusted reverse proxy is in the data path, apply the
@@ -77,8 +178,10 @@ Start a daemon that never creates workers with:
 nemo-relay daemon --pass-through
 ```
 
-The daemon still authenticates the route credential. MCP registration can only
-receive `UsePassThrough`, and the daemon cannot issue an activation grant or
+The daemon still validates a presented route credential, and requests without a
+bound credential also pass through. In this mode only, configured provider
+credentials apply to those requests too. MCP registration can only receive
+`UsePassThrough`, and the daemon cannot issue an activation grant or
 accept worker registration. LLM requests use the same streaming transport
 directly to the configured provider. Hook requests return the existing no-op
 responses:
@@ -102,22 +205,49 @@ The address must be an HTTP or HTTPS origin with an explicit port. It cannot
 contain credentials, a non-root path, a query, or a fragment. Plain HTTP is
 accepted only for a loopback target.
 
-The MCP client authenticates and acquires its broker reference before it starts
-the MCP protocol. The broker, not the MCP client, chooses one directive:
+When a route credential resolves from `NEMO_RELAY_CLIENT_TOKEN` or the
+per-user token file, the MCP client authenticates and registers its route
+reference before it starts the MCP protocol. Without a credential, it serves the
+MCP protocol without registering a route and never launches a worker. The
+daemon then has no route for that session. Public requests without a credential
+use pass-through, or receive `401` when the daemon runs with `--require-worker`.
+Managed hooks without a credential answer locally and never contact the daemon. If the daemon supports safe worker cancellation, MCP
+initialization can finish while the worker starts. Worker startup failures leave
+MCP connected. With an older daemon, MCP waits for a usable route before it
+handles initialization.
+
+The broker chooses one directive to control the route:
 
 | Directive        | MCP Action                                                                    |
 | ---------------- | ----------------------------------------------------------------------------- |
 | `ReuseWorker`    | Use the worker already published for the fingerprint.                         |
-| `WaitForWorker`  | Wait while another MCP starts or drains the worker.                           |
+| `WaitForWorker`  | Wait for a broker update while another MCP starts or drains the worker.      |
 | `LaunchWorker`   | Start the current `nemo-relay` executable with the one-time activation grant. |
 | `UsePassThrough` | Keep the MCP reference while the daemon forwards the route directly.          |
 
-The MCP client never independently decides whether the route needs a worker.
-When it receives `LaunchWorker`, it starts `daemon worker` on the same machine
-and transfers the activation grant through a protected inherited standard-input
-channel. The grant is not put in command arguments, environment variables, or
-logs.
+The broker decides whether the route needs a worker. When MCP receives
+`LaunchWorker`, it starts `daemon worker` on the same machine. It sends the
+activation grant through a protected standard-input pipe. The grant gives the
+worker permission to register with the daemon. It does not appear in command
+arguments, environment variables, or logs. MCP also removes the public route
+credential from the child's environment before launch.
 
+Workers use a separate Unix session so launcher process-group cleanup does not
+stop them. On Windows, workers request breakaway from Relay's Job Objects.
+Those objects still clean up children that do not request breakaway. Activation
+fails if an external Job Object prevents the worker from leaving. The Windows
+worker inherits only its startup pipe and standard output and error handles.
+Its standard output is disconnected.
+
+Worker logs use the `[logging]` settings and configured file sinks. By default,
+stderr goes to the launcher's or harness's capture. Relay does not create worker
+log files under daemon state.
+
+Before cleaning up a child on shutdown, MCP asks the broker about its launch.
+If the broker replies `cancelled` or `superseded`, MCP terminates the child and
+waits for it to exit. With a `published` reply, the broker keeps control of the
+worker. If MCP cannot confirm the outcome, it leaves cleanup to the broker and
+the worker's control recovery policy.
 
 ## Forward Managed Hooks
 
@@ -133,7 +263,10 @@ nemo-relay daemon hook pi --daemon-address https://relay.example.com:8443 --fail
 The hook process performs the following actions:
 
 1. Reads the agent's native hook payload from standard input.
-2. Reads `NEMO_RELAY_CLIENT_TOKEN` from the environment.
+2. Resolves the route credential from `NEMO_RELAY_CLIENT_TOKEN`, then from the
+   per-user token file. Without a usable credential it does not contact the
+   daemon: it writes the agent's pass-through response and exits `0`,
+   regardless of the failure policy.
 3. Posts to the existing agent-specific hook path at the daemon root.
 4. Adds `x-nemo-relay-client-token` exactly once.
 5. Writes a successful, nonempty hook response to standard output without
@@ -146,10 +279,26 @@ the operation when delivery or evaluation fails. If neither option is present,
 the existing event-specific failure policy applies.
 
 
+## Manage the Client Token File
+
+Create the current user's route credential file when it does not exist:
+
+```text
+nemo-relay daemon token ensure [--json]
+```
+
+Run it as the user who runs the coding agent. It writes
+`<user config dir>/.client-token` (normally `~/.config/nemo-relay/.client-token`)
+with owner-only permissions, leaves an existing valid file unchanged, and never
+overwrites an invalid or unsafe file. It never prints the token. With `--json`,
+standard output is `{"status":"created"|"existing","path":"..."}`. See
+[Credential Resolution](/daemon/configuration#credential-resolution) for the
+resolution order and file safety checks.
+
 ## Run a Daemon-Attached Worker
 
-The broker normally starts the worker. Its command shape is documented for
-managed launchers and prescribed firewall, NAT-forwarding, and test scenarios:
+The broker normally asks MCP to start the worker. Use this command shape for
+managed launchers, firewall and NAT-forwarding setups, and tests:
 
 ```text
 nemo-relay daemon worker \
@@ -165,12 +314,12 @@ the named daemon before it becomes routable.
 
 Worker network settings follow these rules:
 
-- The effective default is `127.0.0.1:0`; omitting `--port` lets the operating
-  system select an available port.
+- The default is `127.0.0.1:0`. Omit `--port` to let the operating system select
+  an available port.
 - `--bind` accepts only `127.0.0.1` or `0.0.0.0`. Hostnames, IPv6 addresses,
   and other IPv4 addresses are rejected.
 - An explicitly supplied port must be in `1..=65535`. Explicit `--port 0` is
-  rejected; omit the option for automatic allocation.
+  rejected. Omit the option to let the operating system choose a port.
 - Explicit ports are for documented firewall, NAT-forwarding, and test
   deployments.
 - A loopback worker advertises `127.0.0.1:<allocated-port>` and does not accept
@@ -180,8 +329,8 @@ Worker network settings follow these rules:
 - `--daemon-address` is mandatory. A non-loopback daemon address must use
   HTTPS.
 
-Only the daemon can send data-plane requests to a worker. The worker validates
-the daemon-to-worker session credential from the request head before it reads
+Only the daemon can send model and hook requests to a worker. The worker checks
+the daemon-to-worker session credential in the request headers before it reads
 the request body.
 
 For a broker-launched worker, set the following environment variables on the
@@ -194,22 +343,26 @@ export NEMO_RELAY_WORKER_PORT='9443'
 
 `NEMO_RELAY_WORKER_ADVERTISE_ADDRESS` must be a concrete IPv4 address or
 hostname that the daemon can reach. `NEMO_RELAY_WORKER_PORT` must be in
-`1..=65535`; leave it unset for operating-system allocation. These overrides
-are intended for prescribed firewall, NAT-forwarding, and test deployments,
-and the MCP signs them into the broker registration before the daemon chooses
-the worker launch directive.
+`1..=65535`. Leave it unset to let the operating system choose a port. Use these
+settings for firewall, NAT-forwarding, or test deployments that need a fixed
+address or port. MCP signs the settings during registration. The daemon then
+chooses the worker launch directive.
 
 
 ## Understand Broker Identity and Lifecycle
 
 The daemon authenticates MCP clients and workers using signed Relay identities.
 
-Each machine-user identity has an owner-private Ed25519 key. The public-key
-digest is the route fingerprint. MCP registration also binds the digest of
-`NEMO_RELAY_CLIENT_TOKEN` to that fingerprint. The daemon indexes requests by
-the credential digest but does not persist or log the raw credential. The MCP
-client trust-on-first-use pins the daemon identity to the normalized daemon
-origin.
+Each machine-user identity has an Ed25519 key that only its owner can read.
+The public key's hash, or digest, is the route fingerprint. MCP registration
+binds the digest of the route credential to that fingerprint. One fingerprint
+can hold several credential digests (4 by default; see
+`--max-tokens-per-identity`), for example after its token file is
+replaced, and all of them select its one route and worker. A digest already
+bound to another fingerprint is rejected. The daemon uses the credential
+digest to find the route. It does not save or log the raw
+credential. The MCP client records the daemon's identity on first use and
+checks it on later connections to the same daemon origin.
 
 The broker accepts a worker only when it proves both the single-use activation
 grant and the same machine-user identity as the MCP client.
@@ -221,8 +374,8 @@ One fingerprint moves through these broker states:
 | `Empty`       | The first MCP reference receives `LaunchWorker`.                            |
 | `Activating`  | Concurrent MCP references receive `WaitForWorker`.                          |
 | `Ready`       | Requests reuse the published worker.                                        |
-| `Draining`    | New requests wait while accepted requests finish and the worker terminates. |
-| `PassThrough` | The daemon forwards authenticated requests directly to providers.           |
+| `Draining`    | Accepted requests finish. New requests use passthrough, or return `503` in strict mode. |
+| `PassThrough` | Requests go directly to providers by default, or return `503` in strict mode. |
 | `Recovering`  | One connected MCP is nominated to replace a failed worker.                  |
 
 MCP clients and workers each keep a WebSocket connection to the daemon for
@@ -230,20 +383,24 @@ registration, route updates, readiness, shutdown, and recovery. Clients derive
 `ws` or `wss` from the configured HTTP or HTTPS daemon origin. Provider and hook
 requests use HTTP, and MCP clients serve stdio locally.
 
-Connected sessions do not require lease renewals. Strictly loopback connections
-send no periodic pings. Both actual socket endpoints must be loopback; the
-configured hostname or forwarded headers do not determine locality. For
-non-loopback connections, the daemon sends a ping every 30 seconds and requires its matching pong within 10 seconds. An idle hung
-loopback process may remain undetected until an operation times out.
+Connected sessions do not need lease renewals. Loopback connections send no
+periodic pings. Both socket endpoints must use loopback addresses for this rule
+to apply. Configured hostnames and forwarded headers do not change that check.
+For other connections, the daemon sends a ping every 30 seconds. It requires
+the matching pong within 10 seconds. An idle loopback process that stops
+responding can go undetected until an operation times out.
 
-After a disconnect, clients retry immediately, then use exponential backoff
-starting at 250 milliseconds and capped at two seconds, with jitter. Each
-connection and authentication attempt has a five-second timeout,
-and the complete recovery window is 30 seconds. Failed attempts do not extend
-that window. A disconnected MCP retains its route reference during recovery;
-a separately connected worker can continue serving it. An acknowledged explicit
-release removes the reference immediately. Recovery reconciles the daemon's
-current assignment instead of blindly replaying state-changing commands.
+After a disconnect, clients retry immediately. Later delays start at
+250 milliseconds and double up to two seconds. Small random variations keep
+clients from retrying at the same time. Each connection and authentication
+attempt has a five-second timeout. The full recovery window is 30 seconds.
+Failed attempts do not extend it.
+
+A disconnected MCP keeps its route reference during recovery. A worker with
+its own active control connection can continue serving that route. An explicit
+release removes the reference as soon as the daemon acknowledges it. During
+recovery, clients check the daemon's current worker assignment before making
+changes.
 
 If a worker loses its control connection, it stops accepting new requests.
 Already accepted streams can finish while it reconnects. The daemon resumes
@@ -253,24 +410,53 @@ and the daemon revokes its generation. MCP clients also exit when their recovery
 window expires. After a daemon restart, persisted worker generations have a
 30-second recovery window before replacement workers can launch.
 
-When the last MCP reference leaves, the route enters a non-revivable drain.
-Already accepted requests have up to two minutes to finish before the worker
-terminates. A new MCP must wait for that termination, then begins a fresh
-activation. Drain intent survives a control reconnect and is acknowledged when
-applied; a draining worker is never published as ready again. If a ready worker
-fails while references remain, the broker nominates one connected MCP to relaunch it.
+When the last MCP reference leaves, the worker starts draining. It cannot
+return to service. Accepted requests have up to two minutes to finish before
+the worker exits. A new MCP can register during the drain, but a replacement
+worker must wait for the old worker to exit. New requests use passthrough during
+this wait by default, or return `503` with `--require-worker`.
 
-After MCP authentication succeeds, a worker activation, bind, registration,
-readiness, or activation-channel failure moves the whole fingerprint route to
-transient pass-through until all MCP references leave. A connection or identity
-failure before authentication instead makes the MCP process log the error and
-exit with a nonzero status.
+The worker keeps its drain instruction after a control reconnect and
+acknowledges it when applied. A draining worker never becomes ready again.
+If a ready worker fails while MCP references remain, the broker chooses one
+connected MCP to start a replacement.
+
+After worker startup fails, the daemon schedules a fresh launch grant.
+An MCP client must meet these conditions to receive it:
+
+- Its authentication has passed.
+- Its control connection is open.
+- It has not released its route reference.
+
+If the MCP that owns the launch disconnects, the daemon cancels its grant.
+Late registration or readiness messages cannot make that old attempt ready.
+If no MCP meets the conditions above, the daemon waits for a client to connect
+and authenticate before it issues another grant.
+
+Startup has no deadline and retries have no attempt limit. A slow worker keeps
+its current grant. Time spent starting alone never causes a replacement.
+If startup fails, retry delays increase from one second to two, four, and so on.
+They stop increasing at 60 seconds. After a worker becomes ready, the retry
+delay resets for future failures.
+
+The route uses passthrough during startup and recovery, or returns `503` with
+`--require-worker`. MCP exits if its own authentication fails or its control
+connection cannot recover.
+
+The daemon records startup progress with these events:
+
+- `worker_startup_pending` reports `elapsed_ms` every 60 seconds during startup.
+- `worker_added` reports `startup_elapsed_ms` when the worker joins the route.
+
+Retry and state-change logs include identifiers and fixed failure codes.
+They do not include credentials or hook payloads.
 
 ## Preserve Streaming Responses
 
-The daemon, worker, and pass-through paths use a pull-driven Hyper body from
-provider to client. They do not collect a successful LLM response before
-forwarding it. This transport preserves:
+The daemon, worker, and pass-through paths use Hyper to stream responses from
+provider to client. They forward bytes as the client reads them, without waiting
+for a successful LLM response to finish. The transport preserves these response
+details:
 
 - The response status.
 - Ordered, multivalue end-to-end headers.
@@ -280,52 +466,58 @@ forwarding it. This transport preserves:
   `[DONE]` fields.
 - Empty and non-UTF-8 data frames that the HTTP protocol accepts.
 
-HTTP implementations can split or combine DATA frames. The guarantee is the
-same ordered body bytes and immediate availability, not matching TCP packets or
-HTTP frame boundaries.
+HTTP implementations can split or combine DATA frames. Relay keeps body bytes
+in order and makes them available as they arrive. It does not preserve the
+original TCP packets or HTTP frame boundaries.
 
-The shared connection pools support HTTP/1.1 persistence and HTTP/2
-multiplexing. Delivery remains demand driven: a slow client applies bounded
-backpressure upstream, and dropping the client cancels the corresponding
-upstream work. Relay applies separate connection and response-head deadlines;
-it does not apply a total response-lifetime deadline after streaming starts.
+The shared connection pools reuse HTTP/1.1 connections and support concurrent
+HTTP/2 streams. A slow client slows delivery from the provider. If the client
+disconnects, Relay cancels the corresponding provider request. Relay limits
+connection establishment but waits for response headers without a deadline by
+default. Set `[upstream] response_timeout_secs` to a positive number to limit
+the response-header wait; `0` disables the limit. Relay does not set a total
+time limit after streaming starts.
 
-The worker also transfers provider request bodies directly to the pooled
-Hyper client when no LLM request guardrail, request interceptor, or
-request-sanitization guardrail is registered. If one of those middleware types
-needs the complete JSON request, the worker performs one bounded decode before
-provider dispatch so the middleware can make its decision. Response bodies are
-never collected for that purpose.
+A request that exceeds the daemon's configured response-header deadline returns
+`504`. This timeout does not disconnect the worker or change its route. The
+worker can still be waiting for middleware or a provider. A worker transport
+failure, response-body failure, or explicit route rejection triggers control
+recovery before worker forwarding resumes.
 
-Caller-visible stream fidelity takes precedence over response rewriting. Do
-not use daemon-worker mode with middleware that must mutate, suppress, or
-replace successful streaming response events. Any semantic observer or cache
-must consume a bounded, nonblocking side channel. Falling behind can truncate
-that observer's capture, but it must never delay or change delivery.
+The worker also sends request bodies directly through the pooled Hyper client
+when no LLM request guardrail, request interceptor, or request-sanitization
+guardrail is registered. If middleware needs the complete JSON request, the
+worker reads and decodes it within a size limit before sending it to the
+provider. It does not collect response bodies for that check.
+
+Relay preserves the stream delivered to the caller. Do not use daemon-worker
+mode with middleware that must change, hide, or replace successful streaming
+response events. Observers and caches must read a separate copy with a size
+limit. If an observer falls behind, its copy can be incomplete. It must never
+delay or change the caller's stream.
 
 The worker captures at most 4 MiB per streamed response for semantic
 observation by default. Set
 `NEMO_RELAY_DAEMON_OBSERVATION_CAPTURE_BYTES` to a positive byte count before
 starting the worker to choose another bound. This setting changes only
-side-band observability; it does not cap, buffer, or truncate caller-visible
-delivery.
+the observation copy. It does not limit, buffer, or cut off the stream delivered
+to the caller.
 
 Semantic observation has a separate 15-minute completion deadline, independent
-of the provider's 60-second response-head deadline. Exceeding the observation
-deadline marks only the captured observation as truncated; it does not stop
-caller-visible streaming.
+of the configured provider response-header wait. Exceeding the observation
+deadline marks only the observation copy as incomplete. It does not stop
+the stream delivered to the caller.
 
-The managed worker deliberately ignores per-user Relay configuration,
-per-user plugin directories, and user lifecycle state. It loads only the
-administrator-managed system configuration and plugin manifest while still
-allowing provider secrets to arrive through their documented authentication
-environment variables. This keeps the executed plugin configuration uniform
-across users as well as keeping the coding-agent artifacts byte-identical.
+The managed worker loads only the administrator's system configuration and
+plugin manifest. It ignores per-user Relay configuration, plugin directories,
+and lifecycle state. Provider secrets can still use their documented
+authentication environment variables. This keeps plugin configuration and
+coding-agent artifact bytes the same across users.
 
 ### Configure a Trusted Reverse Proxy
 
 A reverse proxy in front of the daemon becomes part of the streaming path.
-Configure it to:
+Use these settings to preserve streams and control connections through the proxy:
 
 - Allow WebSocket upgrades under `/_nemo-relay/control/`, including
   bidirectional frames after upgrade.
@@ -334,8 +526,8 @@ Configure it to:
   seconds. Set proxy idle limits above that interval with enough margin.
 - If the proxy connects to the daemon over loopback, the daemon sends no periodic
   pings on that connection. Configure the proxy to keep idle control sessions
-  open or manage keepalives across its remote connection; do not assume the daemon
-  detects that remote hop.
+  open or manage keepalives across its remote connection. The daemon does not
+  detect that remote hop through its loopback connection.
 - Disable response buffering.
 - Disable compression or other response transformations.
 - Disable cache coalescing.
@@ -355,8 +547,8 @@ just daemon-transport-benchmark-smoke
 ```
 
 The smoke check exercises OpenAI and Anthropic streaming fixtures over
-HTTP/1.1 and HTTP/2. Stream-integrity failures fail the command; its timing
-results are informational.
+HTTP/1.1 and HTTP/2. The command fails if a stream is damaged. Timing results
+are for comparison and do not determine whether the check passes.
 
 Before a sustained comparison, build the existing size-optimized release and
 an isolated `opt-level=3` candidate:
@@ -400,16 +592,19 @@ reference baselines.
 
 ## Environment Variables
 
-| Variable | Read by | Purpose |
+Relay and the harness use the following environment variables:
+
+| Variable | Read By | Purpose |
 | --- | --- | --- |
-| `NEMO_RELAY_CLIENT_TOKEN` | Managed MCP, hook forwarder, and harness | Shared credential for one machine-user route; required in the client environment. |
+| `NEMO_RELAY_CLIENT_TOKEN` | Managed MCP, hook forwarder, managed doctor, and harness | Client credential for one machine-user route. Takes precedence over the per-user `.client-token` file. |
 | `ANTHROPIC_CUSTOM_HEADERS` | Claude Code | Includes exactly one matching `x-nemo-relay-client-token` header. |
 | `NEMO_RELAY_WORKER_ADVERTISE_ADDRESS` | Managed MCP | Optional concrete worker hostname or IPv4 address reachable by the daemon. |
-| `NEMO_RELAY_WORKER_PORT` | Managed MCP | Optional assigned port from 1 through 65535; omit for automatic allocation. |
-| `NEMO_RELAY_DAEMON_OBSERVATION_CAPTURE_BYTES` | Worker observation | Positive capture limit in bytes; defaults to 4 MiB, without limiting delivered streams. |
-| `NEMO_RELAY_LOG` | Operational logger | Explicit log level, such as `info`; managed MCP and hooks skip ambient logging files. |
+| `NEMO_RELAY_WORKER_PORT` | Managed MCP | Optional fixed port from 1 through 65535. Omit it to choose a port automatically. |
+| `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY` | Daemon | Distinct route tokens one machine-user identity may hold, from 1 through 64. Defaults to 4. Used when `--max-tokens-per-identity` is not given; an invalid value stops daemon startup. See [Replace a Client Token](/daemon/configuration#replace-a-client-token). |
+| `NEMO_RELAY_DAEMON_OBSERVATION_CAPTURE_BYTES` | Worker observation | Positive capture limit in bytes. Defaults to 4 MiB and does not limit delivered streams. |
+| `NEMO_RELAY_LOG` | Operational logger | Explicit log level, such as `info`. Managed MCP and hooks do not discover logging files automatically. |
 | `NEMO_RELAY_LOG_STDERR_FORMAT` | Operational logger | Explicit stderr format, such as `jsonl`. |
-| `XDG_CONFIG_HOME` | Identity-state resolver | First choice for identity state; otherwise Relay uses `HOME/.config`, then `USERPROFILE/.config`, on every platform. Does not relocate managed system configuration. |
+| `XDG_CONFIG_HOME` | Identity-state resolver | First choice for identity state on every platform. Falls back to `HOME/.config`, then `USERPROFILE/.config`. Does not move managed system configuration. |
 
 The MCP process removes the public route token from the worker's launch environment.
 Worker activation uses the protected inherited channel, not an environment variable.

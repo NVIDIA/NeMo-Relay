@@ -8,13 +8,15 @@ use crate::api::registry::RuntimeRegistrationKind;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
+use crate::api::runtime::scope_stack::{
+    trace_context_for_managed_span, with_active_event_trace_context,
+};
 use crate::api::runtime::subscriber_dispatcher::{
     PendingPublication, dispatch_sanitized_event, dispatch_transformed_event,
     register_pending_publication,
 };
 use crate::api::runtime::{
     EventSubscriberFn, ScopeStackHandle, ToolExecutionContext, ToolExecutionNextFn,
-    with_active_event_uuid,
 };
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle, metadata_with_log_severity};
@@ -219,6 +221,82 @@ pub struct ToolCallEndParams<'a> {
     /// handle start time if the current time is not later.
     #[builder(default)]
     pub timestamp: Option<DateTime<Utc>>,
+}
+
+/// Preserve tool payload sanitization when a completion has no execution-start handle.
+/// The reserved completion mark carries observation data and runs no execution middleware.
+pub(crate) fn completion_mark_transform(
+    event: &Event,
+    scope_stack: &ScopeStackHandle,
+) -> Result<Option<crate::api::runtime::subscriber_dispatcher::EventTransformFn>> {
+    if event.name() != "tool_end_without_start" {
+        return Ok(None);
+    }
+    let data = event.data().ok_or_else(|| {
+        FlowError::InvalidArgument("tool completion marks require data.tool_name".into())
+    })?;
+    let tool_name = data
+        .get("tool_name")
+        .and_then(Json::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            FlowError::InvalidArgument(
+                "tool completion marks require a nonblank string data.tool_name".into(),
+            )
+        })?;
+    let args = data.get("arguments").cloned().unwrap_or(Json::Null);
+    let result = data.get("result").cloned().unwrap_or(Json::Null);
+    let (request_locals, response_locals) = {
+        let scope = scope_stack
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        (
+            scope.snapshot_scope_local_registries(|registries| {
+                &registries.tool_sanitize_request_guardrails
+            }),
+            scope.snapshot_scope_local_registries(|registries| {
+                &registries.tool_sanitize_response_guardrails
+            }),
+        )
+    };
+    let (requests, responses) = {
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[
+                RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+                RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+            ]);
+        (
+            state.tool_sanitize_request_entries(&request_locals.iter().collect::<Vec<_>>()),
+            state.tool_sanitize_response_entries(&response_locals.iter().collect::<Vec<_>>()),
+        )
+    };
+    Ok(Some(Box::new(move |mut event| {
+        Box::pin(async move {
+            let args = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+                &tool_name, args, &requests,
+            )
+            .await;
+            let result = if args.is_some() {
+                NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+                    &tool_name, result, &responses,
+                )
+                .await
+            } else {
+                None
+            };
+            let mut fields = event.sanitize_fields();
+            if let Some(Json::Object(data)) = fields.data.as_mut() {
+                data.insert("arguments".into(), args.unwrap_or(Json::Null));
+                data.insert("result".into(), result.unwrap_or(Json::Null));
+            }
+            event.apply_sanitize_fields(fields);
+            event
+        })
+    })))
 }
 
 /// Start a manual tool lifecycle span.
@@ -878,28 +956,44 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
     );
     let execution_name = name.clone();
     let execution_tool_call_id = handle.tool_call_id.clone();
-    let execution = with_active_event_uuid(handle.uuid, async move {
-        let execution = {
-            let scope_stack = current_scope_stack();
-            let scope_locals = scope_stack
-                .read()
-                .expect("scope stack lock poisoned")
-                .snapshot_scope_local_registries(|registries| {
-                    &registries.tool_execution_intercepts
-                });
-            let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
-            let context = global_context();
-            let state = context
-                .read()
-                .map_err(|error| FlowError::Internal(error.to_string()))?
-                .registry_snapshot(&[RuntimeRegistrationKind::ToolExecutionIntercept]);
-            let execution_context = ToolExecutionContext::new(execution_name, Json::Null)
-                .with_tool_call_id(execution_tool_call_id);
-            state.tool_build_execution_chain(&execution_context, func, &scope_local_refs)
-        };
-        execution(intercepted_args).await
-    })
-    .await;
+    let active_trace_context = match trace_context_for_managed_span(handle.uuid, handle.parent_uuid)
+    {
+        Ok(context) => context,
+        Err(error) => {
+            let end_metadata = metadata_with_otel_error(metadata, &error);
+            let _ = emit_tool_end_without_output(
+                &handle,
+                end_metadata,
+                &lifecycle_subscribers,
+                lifecycle_scope_stack,
+            );
+            completion.disarm();
+            return Err(error);
+        }
+    };
+    let execution =
+        with_active_event_trace_context(handle.uuid, Some(active_trace_context), async move {
+            let execution = {
+                let scope_stack = current_scope_stack();
+                let scope_locals = scope_stack
+                    .read()
+                    .expect("scope stack lock poisoned")
+                    .snapshot_scope_local_registries(|registries| {
+                        &registries.tool_execution_intercepts
+                    });
+                let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
+                let context = global_context();
+                let state = context
+                    .read()
+                    .map_err(|error| FlowError::Internal(error.to_string()))?
+                    .registry_snapshot(&[RuntimeRegistrationKind::ToolExecutionIntercept]);
+                let execution_context = ToolExecutionContext::new(execution_name, Json::Null)
+                    .with_tool_call_id(execution_tool_call_id);
+                state.tool_build_execution_chain(&execution_context, func, &scope_local_refs)
+            };
+            execution(intercepted_args).await
+        })
+        .await;
     match execution {
         Ok(mut outcome) => {
             let pending_marks = std::mem::take(&mut outcome.pending_marks);
@@ -991,8 +1085,22 @@ pub async fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
 /// rejection result without starting a tool span. Guardrail scopes are still
 /// emitted for the conditional checks themselves.
 pub async fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
+    tool_conditional_execution_with_event_context(name, args, None, None).await
+}
+
+/// Run the tool conditional-execution guardrail chain with trusted event context.
+///
+/// This is an internal seam for Relay-owned integrations that have already authenticated and
+/// matched an external tool invocation. Public callers should use [`tool_conditional_execution`].
+#[doc(hidden)]
+pub async fn tool_conditional_execution_with_event_context(
+    name: &str,
+    args: &Json,
+    parent_uuid: Option<Uuid>,
+    metadata: Option<Json>,
+) -> Result<()> {
     ensure_runtime_owner()?;
-    let (entries, subscribers, parent_uuid) = {
+    let (entries, subscribers, resolved_parent_uuid) = {
         let scope_stack = current_scope_stack();
         let (scope_locals, scope_subscribers) = {
             let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
@@ -1014,15 +1122,19 @@ pub async fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
             ]);
         let entries = state.tool_conditional_execution_entries(&scope_local_refs);
         let subscribers = state.collect_event_subscribers(&scope_subscribers);
-        (entries, subscribers, resolve_parent_uuid(None))
+        (
+            entries,
+            subscribers,
+            parent_uuid.or_else(|| resolve_parent_uuid(None)),
+        )
     };
     if let Some(error) = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
         name,
         args,
         &entries,
         &subscribers,
-        parent_uuid,
-        None,
+        resolved_parent_uuid,
+        metadata,
     )
     .await?
     {

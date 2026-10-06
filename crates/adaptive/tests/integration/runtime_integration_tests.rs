@@ -753,7 +753,7 @@ impl Plugin for HeaderPlugin {
             ctx.register_llm_execution_intercept(
                 "llm_exec_plugin",
                 priority,
-                Arc::new(|_name, request, next| {
+                Arc::new(|_name, request, _context, next| {
                     Box::pin(async move {
                         let mut response = next(request).await?;
                         if let Json::Object(ref mut map) = response {
@@ -766,7 +766,7 @@ impl Plugin for HeaderPlugin {
             ctx.register_llm_stream_execution_intercept(
                 "llm_stream_exec_plugin",
                 priority,
-                Arc::new(|_name, request, next| {
+                Arc::new(|_name, request, _context, next| {
                     Box::pin(async move {
                         let mut stream = next(request).await?;
                         let mut chunks = Vec::new();

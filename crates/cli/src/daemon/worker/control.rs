@@ -97,8 +97,13 @@ pub(super) async fn register(
     bootstrap: WorkerBootstrap,
     tls_root_certificate: Option<String>,
 ) -> Result<Registration, CliError> {
-    super::super::common::socket::retry(|| {
-        register_once(
+    // Startup has no deadline. Loss of the broker still obeys the control recovery window,
+    // including children whose protected bootstrap was transferred before their MCP exited.
+    let recovery_deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_millis(crate::daemon::common::control::RECOVERY_LIFETIME_MS);
+    let mut delay = std::time::Duration::from_millis(250);
+    loop {
+        match register_once(
             daemon_origin,
             identity,
             worker_id,
@@ -106,8 +111,19 @@ pub(super) async fn register(
             bootstrap.clone(),
             tls_root_certificate.clone(),
         )
-    })
-    .await
+        .await
+        {
+            Ok(registration) => return Ok(registration),
+            Err(error @ (CliError::Unauthorized(_) | CliError::Config(_))) => return Err(error),
+            Err(error) => {
+                if tokio::time::Instant::now() >= recovery_deadline {
+                    return Err(error);
+                }
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(std::time::Duration::from_secs(2));
+            }
+        }
+    }
 }
 
 async fn register_once(

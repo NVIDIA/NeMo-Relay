@@ -5399,7 +5399,7 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
-## brace-expansion - 5.0.9
+## brace-expansion - 5.0.12
 **Repository URL**: https://github.com/juliangruber/brace-expansion
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -7399,7 +7399,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.```
 
-## fast-uri - 3.1.7
+## fast-uri - 3.1.8
 **Repository URL**: https://github.com/fastify/fast-uri
 **License Type(s)**: BSD-3-Clause
 ### License: https://spdx.org/licenses/BSD-3-Clause.html
@@ -9600,7 +9600,7 @@ LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.```
 
-## ip-address - 10.7.0
+## ip-address - 10.7.2
 **Repository URL**: https://github.com/beaugunderson/ip-address
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -11356,7 +11356,7 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.```
 
-## markdown-it - 14.3.0
+## markdown-it - 14.3.2
 **Repository URL**: https://github.com/markdown-it/markdown-it
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -13087,7 +13087,7 @@ of the input file used when generating it. This code is not
 standalone and requires a support library to be linked with it. This
 support library is itself covered by the above license.```
 
-## proxy-addr - 2.0.7
+## proxy-addr - 2.0.8
 **Repository URL**: https://github.com/jshttp/proxy-addr
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html

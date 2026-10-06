@@ -73,6 +73,18 @@ pub struct FfiOpenTelemetryMetricSubscriber(
 );
 /// Opaque owned adaptive runtime handle.
 pub struct FfiAdaptiveRuntime(pub std::sync::Mutex<Option<AdaptiveRuntime>>);
+/// Opaque handle for an asynchronous resource metrics collection.
+pub struct FfiResourceMetricsCollection {
+    pub(crate) receiver:
+        std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<nemo_relay::error::Result<String>>>>,
+    pub(crate) task: tokio::task::AbortHandle,
+}
+
+impl Drop for FfiResourceMetricsCollection {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
 /// Opaque owned static and dynamic plugin host activation.
 ///
 /// The inner option allows explicit activation cleanup to be idempotent while

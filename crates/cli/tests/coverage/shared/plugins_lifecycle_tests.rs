@@ -119,9 +119,8 @@ fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
     };
     allow_unsigned_test_plugins(&mut resolved);
 
-    let touched = hydrate_scoped_registries(&mut scopes, &resolved).unwrap();
+    hydrate_scoped_registries(&mut scopes, &resolved).unwrap();
 
-    assert_eq!(touched, BTreeSet::from([1]));
     assert!(scopes[0].registry.get(plugin_id).is_some());
     let system_record = scopes[1].registry.get(plugin_id).unwrap();
     assert_eq!(
@@ -131,6 +130,152 @@ fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
     let effective = find_registered_entry(&scopes, Some(&resolved), "test", plugin_id).unwrap();
     assert_eq!(effective.scope, RegistryScope::Global);
     assert_eq!(effective.scope_index, 1);
+}
+
+#[test]
+fn unscoped_remove_detects_a_manifest_without_saved_registry_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let id = "acme.layered";
+    let user_dir = temp.path().join("user/plugin");
+    let system_dir = temp.path().join("system/plugin");
+    std::fs::create_dir_all(&user_dir).unwrap();
+    std::fs::create_dir_all(&system_dir).unwrap();
+    let user_manifest = write_dynamic_manifest(&user_dir, id);
+    let system_manifest = write_dynamic_manifest(&system_dir, id);
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&user_manifest).unwrap();
+    let mut user_registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::new();
+    user_registry
+        .add(manifest.into_record(Some(manifest_ref)).unwrap())
+        .unwrap();
+    let system_config = temp.path().join("system/plugins.toml");
+    std::fs::write(
+        &system_config,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            system_manifest.display().to_string()
+        ),
+    )
+    .unwrap();
+    let scopes = [
+        ScopedRegistry {
+            scope: RegistryScope::User,
+            plugins_toml_path: temp.path().join("user/plugins.toml"),
+            state_path: temp.path().join("user/.dynamic-plugins.json"),
+            registry: user_registry,
+        },
+        ScopedRegistry {
+            scope: RegistryScope::Global,
+            plugins_toml_path: system_config.clone(),
+            state_path: temp.path().join("system/.dynamic-plugins.json"),
+            registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        },
+    ];
+    let error = ensure_remove_scope_unambiguous(&scopes, id).unwrap_err();
+    assert!(error.to_string().contains("use --user or --global"));
+    std::fs::remove_file(&system_manifest).unwrap();
+    ensure_remove_scope_unambiguous(&scopes, id).unwrap();
+}
+
+#[test]
+fn scoped_list_applies_global_policy_without_loading_its_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("user/plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest = write_dynamic_manifest(&plugin_dir, "acme.user-only");
+    let user_config = temp.path().join("user/plugins.toml");
+    let global_config = temp.path().join("global/plugins.toml");
+    std::fs::create_dir_all(global_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &user_config,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest.display().to_string()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &global_config,
+        "[[plugins.dynamic]]\nmanifest = \"missing.toml\"\n\n[plugins.policy.defaults]\nattestation = \"signature_required\"\n",
+    )
+    .unwrap();
+    let policy_paths = vec![user_config.clone(), global_config.clone()];
+    let scopes = [
+        (RegistryScope::User, user_config),
+        (RegistryScope::Global, global_config.clone()),
+    ]
+    .into_iter()
+    .map(|(scope, plugins_toml_path)| ScopedRegistry {
+        scope,
+        state_path: plugins_toml_path
+            .parent()
+            .unwrap()
+            .join(".dynamic-plugins.json"),
+        plugins_toml_path,
+        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+    })
+    .collect();
+    let (scopes, _) =
+        hydrate_selected_scopes(scopes, ConfigurationScope::User, policy_paths, false).unwrap();
+    assert_eq!(scopes.len(), 1);
+    assert!(!scopes[0].state_path.exists());
+    assert_eq!(
+        find_record_by_id(&scopes, "acme.user-only")
+            .unwrap()
+            .unwrap()
+            .record
+            .status
+            .validation
+            .authenticity,
+        DynamicPluginCheckState::Invalid
+    );
+    assert!(
+        !global_config
+            .parent()
+            .unwrap()
+            .join(".dynamic-plugins.json")
+            .exists()
+    );
+}
+
+#[test]
+fn scoped_global_list_reads_without_writing_global_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest = write_dynamic_manifest(&plugin_dir, "acme.global-read");
+    let global_config = temp.path().join("system/plugins.toml");
+    std::fs::create_dir_all(global_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &global_config,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest.display().to_string()
+        ),
+    )
+    .unwrap();
+    let state_path = global_config
+        .parent()
+        .unwrap()
+        .join(".dynamic-plugins.json");
+    let scope = ScopedRegistry {
+        scope: RegistryScope::Global,
+        plugins_toml_path: global_config.clone(),
+        state_path: state_path.clone(),
+        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+    };
+    let (scopes, _) = hydrate_selected_scopes(
+        vec![scope],
+        ConfigurationScope::Global,
+        vec![global_config],
+        false,
+    )
+    .unwrap();
+    assert!(
+        find_record_by_id(&scopes, "acme.global-read")
+            .unwrap()
+            .is_some()
+    );
+    assert!(!state_path.exists());
 }
 
 #[test]
@@ -1914,6 +2059,115 @@ fn python_environment_entry_budget_counts_skipped_cache_entries() {
     assert!(error.contains("2-entry attestation budget"), "{error}");
 }
 
+#[cfg(unix)]
+#[test]
+fn python_environment_byte_budget_counts_internal_directory_alias_once() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let environment_path = temp.path().join("environment");
+    let site_packages = environment_path.join("lib/python3.11/site-packages");
+    std::fs::create_dir_all(&site_packages).unwrap();
+    let payload = b"installed package";
+    let installed = site_packages.join("package.bin");
+    std::fs::write(&installed, payload).unwrap();
+    symlink("lib", environment_path.join("lib64")).unwrap();
+
+    let error = environment::test_environment_tree_digest_with_budget(
+        &environment_path,
+        16,
+        payload.len() as u64,
+    )
+    .expect_err("a non-venv lib64 alias must remain inside the byte budget");
+    assert!(error.contains("byte attestation budget"), "{error}");
+
+    let pyvenv = b"home = /usr/bin\n";
+    std::fs::write(environment_path.join("pyvenv.cfg"), pyvenv).unwrap();
+    let byte_budget = (payload.len() + pyvenv.len()) as u64;
+
+    let original =
+        environment::test_environment_tree_digest_with_budget(&environment_path, 16, byte_budget)
+            .expect("lib64 -> lib must not charge installed files twice");
+
+    let physical_environment = temp.path().join("physical-environment");
+    let physical_site_packages = physical_environment.join("lib/python3.11/site-packages");
+    let physical_lib64_site_packages = physical_environment.join("lib64/python3.11/site-packages");
+    std::fs::create_dir_all(&physical_site_packages).unwrap();
+    std::fs::create_dir_all(&physical_lib64_site_packages).unwrap();
+    std::fs::write(physical_environment.join("pyvenv.cfg"), pyvenv).unwrap();
+    std::fs::write(physical_site_packages.join("package.bin"), payload).unwrap();
+    std::fs::write(physical_lib64_site_packages.join("package.bin"), payload).unwrap();
+    let physical_digest = environment::test_environment_tree_digest_with_budget(
+        &physical_environment,
+        16,
+        byte_budget + payload.len() as u64,
+    )
+    .unwrap();
+    assert_eq!(
+        original, physical_digest,
+        "the venv alias must retain its logical lib64 digest entries"
+    );
+
+    std::fs::write(&installed, b"changed package!").unwrap();
+    let changed =
+        environment::test_environment_tree_digest_with_budget(&environment_path, 16, byte_budget)
+            .unwrap();
+    assert_ne!(original, changed, "aliased content must remain attested");
+
+    symlink("lib", environment_path.join("other-alias")).unwrap();
+    let error =
+        environment::test_environment_tree_digest_with_budget(&environment_path, 32, byte_budget)
+            .expect_err("non-standard aliases must remain inside the byte budget");
+    assert!(error.contains("byte attestation budget"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn python_activation_snapshot_preserves_internal_directory_alias() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let environment_path = temp.path().join("environment");
+    let site_packages = environment_path.join("lib/python3.11/site-packages");
+    std::fs::create_dir_all(&site_packages).unwrap();
+    std::fs::write(environment_path.join("pyvenv.cfg"), b"home = /usr/bin\n").unwrap();
+    std::fs::write(site_packages.join("package.bin"), b"installed package").unwrap();
+    symlink("lib", environment_path.join("lib64")).unwrap();
+    let source_digest = "sha256:fixture-source-artifact";
+    environment::write_environment_attestation(&environment_path, source_digest).unwrap();
+
+    let snapshot_path = temp.path().join("snapshot");
+    copy_snapshot_directory(
+        &environment_path,
+        &snapshot_path,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        true,
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    assert!(
+        std::fs::symlink_metadata(snapshot_path.join("lib64"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_link(snapshot_path.join("lib64")).unwrap(),
+        Path::new("lib")
+    );
+    environment::verify_environment_attestation(&snapshot_path, source_digest).unwrap();
+
+    std::fs::write(
+        snapshot_path.join("lib/python3.11/site-packages/package.bin"),
+        b"tampered package",
+    )
+    .unwrap();
+    assert!(environment::verify_environment_attestation(&snapshot_path, source_digest).is_err());
+}
+
 #[test]
 fn python_activation_snapshot_is_attested_copied_and_tamper_evident() {
     let temp = tempfile::tempdir().unwrap();
@@ -2029,6 +2283,34 @@ fn python_activation_snapshot_is_attested_copied_and_tamper_evident() {
         DynamicPluginKind::Worker,
         Some(environment_path.to_string_lossy().as_ref()),
         &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("failed authentication"), "{error}");
+
+    // Recomputing the digest and removing the environment key must not bypass authentication.
+    std::fs::remove_file(environment_path.join(".nemo-relay-environment.key")).unwrap();
+    forged["environment_sha256"] =
+        serde_json::json!(environment::environment_tree_digest(&environment_path).unwrap());
+    forged["authentication"] = serde_json::json!(format!("hmac-sha256:{}", "00".repeat(32)));
+    std::fs::write(
+        &attestation_path,
+        serde_json::to_vec_pretty(&forged).unwrap(),
+    )
+    .unwrap();
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.python-snapshot",
+        DynamicPluginKind::Worker,
+        Some(environment_path.to_string_lossy().as_ref()),
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("failed authentication"), "{error}");
+    let error = dynamic_plugin_runtime_closure_digest(
+        manifest_path.to_string_lossy().as_ref(),
+        Some(environment_path.to_string_lossy().as_ref()),
     )
     .unwrap_err()
     .to_string();
@@ -2428,6 +2710,50 @@ fn assert_python_environment_runner_calls(
             .1
             .iter()
             .any(|arg| arg == "-e" || arg == "--editable")
+    );
+}
+
+#[test]
+fn verified_python_install_does_not_run_environment_setup_when_trust_blocks_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("python");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_python_dynamic_manifest(&plugin_dir, "acme.python-blocked");
+    let runner = FakePythonEnvironmentRunner::default();
+
+    let error = add_with_environment_runner_mode(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &GatewayOverrides::default(),
+        &runner,
+        true,
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("Python environment installation was not started")
+    );
+    assert_eq!(
+        error
+            .as_plugin_lifecycle_error_context()
+            .expect("plugin lifecycle error context")
+            .3,
+        Some("attestation_failed")
+    );
+    assert!(runner.calls().is_empty());
+    assert!(
+        find_record_by_id(
+            &load_scoped_registries(None).unwrap(),
+            "acme.python-blocked"
+        )
+        .unwrap()
+        .is_none()
     );
 }
 
@@ -3141,6 +3467,13 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
     assert!(list.contains("acme.guardrail"));
     assert!(list.contains("absent"));
     assert!(list.contains("false"));
+    let mut lines = list.lines();
+    let header = lines.next().unwrap();
+    let row = lines.next().unwrap();
+    assert_eq!(
+        header.find("SOURCE"),
+        row.rfind("  -").map(|index| index + 2)
+    );
     assert!(
         list.lines()
             .any(|line| line.contains("acme.guardrail") && line.contains(" valid "))
@@ -3177,6 +3510,28 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
         inspect_value["load"]["entrypoint"].as_str(),
         Some("plugin.py")
     );
+}
+
+#[test]
+fn scoped_list_and_remove_reject_conflicting_scope_flags() {
+    let server = GatewayOverrides::default();
+    let list_error = list_scoped(
+        PluginsListRequest {
+            all: false,
+            json: false,
+        },
+        ConfigurationScope::Invalid,
+        &server,
+    )
+    .unwrap_err();
+    assert!(list_error.to_string().contains("choose only one"));
+    let remove_error = remove_scoped(
+        PluginsRemoveRequest { id: "test".into() },
+        ConfigurationScope::Invalid,
+        &server,
+    )
+    .unwrap_err();
+    assert!(remove_error.to_string().contains("choose only one"));
 }
 
 #[test]
@@ -3468,14 +3823,28 @@ fn explicit_plugin_path_drives_plugin_command_lifecycle_scope() {
     };
 
     list(PluginsListRequest::default(), &server).unwrap();
+    inspect(
+        PluginsInspectRequest {
+            id: "acme.explicit-plugin-path".into(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
 
-    let scopes = load_scoped_registries(Some(&plugin_config_path)).unwrap();
+    let state_path = config_dir.join(".dynamic-plugins.json");
+    assert!(
+        !state_path.exists(),
+        "read-only commands must not create state"
+    );
+    let resolved = resolve_plugins_config_with_path(None, Some(&plugin_config_path)).unwrap();
+    let scopes = load_and_hydrate_scopes(Some(&plugin_config_path), &resolved).unwrap();
     let entry = find_record_by_id(&scopes, "acme.explicit-plugin-path")
         .unwrap()
         .expect("explicit plugin-path record");
     assert_eq!(entry.scope, RegistryScope::Explicit);
     assert_eq!(entry.plugins_toml_path, plugin_config_path);
-    assert_eq!(entry.state_path, config_dir.join(".dynamic-plugins.json"));
+    assert_eq!(entry.state_path, state_path);
 }
 
 #[test]
@@ -3509,6 +3878,10 @@ fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
     assert_eq!(entry.record.metadata.id, "acme.bootstrap");
     assert!(entry.record.spec.present);
     assert!(!entry.record.spec.enabled);
+    assert!(
+        !config_dir.join(".dynamic-plugins.json").exists(),
+        "read-only hydration must not create shared lifecycle state"
+    );
     let canonical_manifest_path = std::fs::canonicalize(&manifest_path).unwrap();
     assert_eq!(
         entry.record.source.manifest_ref.as_deref(),
@@ -3652,7 +4025,7 @@ fn hydrate_applies_host_policy_status_to_discovered_dynamic_plugins() {
 }
 
 #[test]
-fn hydrate_persists_updated_policy_and_error_state() {
+fn hydrate_reports_updated_policy_without_persisting_lifecycle_state() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
@@ -3670,6 +4043,8 @@ fn hydrate_persists_updated_policy_and_error_state() {
         &GatewayOverrides::default(),
     )
     .unwrap();
+    let state_path = config_dir.join(".dynamic-plugins.json");
+    let persisted_state = std::fs::read(&state_path).unwrap();
 
     std::fs::write(
         config_dir.join("plugins.toml"),
@@ -3686,24 +4061,19 @@ fn hydrate_persists_updated_policy_and_error_state() {
     .unwrap();
 
     let resolved = resolve_plugins_config(None).unwrap();
-    let _ = load_and_hydrate_scopes(None, &resolved).unwrap();
-
-    let state_path = config_dir.join(".dynamic-plugins.json");
-    let state: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
-    let record = &state["records"][0];
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.persist-blocked")
+        .unwrap()
+        .expect("in-memory hydrated record");
     assert_eq!(
-        record["metadata"]["id"],
-        serde_json::json!("acme.persist-blocked")
+        entry.record.status.validation.policy_satisfied,
+        DynamicPluginCheckState::Invalid
     );
     assert_eq!(
-        record["status"]["validation"]["policy_satisfied"],
-        serde_json::json!("invalid")
-    );
-    assert_eq!(
-        record["status"]["last_error"]["phase"],
+        serde_json::to_value(&entry.record.status).unwrap()["last_error"]["phase"],
         serde_json::json!("policy")
     );
+    assert_eq!(std::fs::read(&state_path).unwrap(), persisted_state);
 }
 
 #[test]
@@ -4091,6 +4461,14 @@ fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
         &server,
     )
     .unwrap();
+
+    let persisted_state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(config_dir.join(".dynamic-plugins.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        persisted_state["records"][0]["status"]["validation"]["policy_satisfied"], "invalid",
+        "explicit validate should persist its policy result"
+    );
 
     let resolved = resolve_plugins_config(None).unwrap();
     let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
@@ -4929,4 +5307,55 @@ fn validate_rejects_a_missing_path_target() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("does not exist"));
+}
+
+#[cfg(unix)]
+#[test]
+fn python_environment_snapshot_preserves_launchers_and_lib_alias_without_copying_caches() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("venv");
+    let destination = temp.path().join("snapshot");
+    let external_python = temp.path().join("external-python");
+    std::fs::write(&external_python, "external interpreter").unwrap();
+    std::fs::create_dir_all(source.join("bin")).unwrap();
+    std::fs::create_dir_all(source.join("lib/package/__pycache__")).unwrap();
+    std::fs::write(source.join("pyvenv.cfg"), "home = external").unwrap();
+    std::fs::write(source.join("lib/package/__init__.py"), "value = 1").unwrap();
+    std::fs::write(source.join("lib/package/compiled.pyc"), "cache").unwrap();
+    std::fs::write(source.join("lib/package/__pycache__/module.pyc"), "cache").unwrap();
+    symlink(&external_python, source.join("bin/python")).unwrap();
+    symlink("python", source.join("bin/python3")).unwrap();
+    symlink("lib", source.join("lib64")).unwrap();
+    copy_snapshot_directory(
+        &source,
+        &destination,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        true,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_link(destination.join("lib64")).unwrap(),
+        Path::new("lib")
+    );
+    assert_eq!(
+        std::fs::read_link(destination.join("bin/python")).unwrap(),
+        external_python
+    );
+    assert_eq!(
+        std::fs::read_link(destination.join("bin/python3")).unwrap(),
+        Path::new("python")
+    );
+    assert_eq!(
+        std::fs::read_to_string(destination.join("lib/package/__init__.py")).unwrap(),
+        "value = 1"
+    );
+    assert!(!destination.join("lib/package/compiled.pyc").exists());
+    assert!(!destination.join("lib/package/__pycache__").exists());
+    assert_eq!(
+        std::fs::read_to_string(external_python).unwrap(),
+        "external interpreter"
+    );
 }

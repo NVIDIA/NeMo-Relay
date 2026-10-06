@@ -14,10 +14,10 @@ use tokio::process::{Child, Command};
 
 use super::common::address::{daemon_url, explicit_daemon_origin};
 use super::common::client::{begin_handshake, control_client};
+use super::common::client_token::resolve_route_credential;
 use super::common::control::{
-    ACTIVATION_LIFETIME_MS, ActivationFailedPayload, EmptyPayload, McpRegisterRequest,
-    McpRegisterResponse, SessionRequest, WorkerActivationFailureReason, WorkerBootstrap,
-    WorkerNetworkHint, WorkerNetworkHintProof,
+    ActivationFailedPayload, EmptyPayload, McpRegisterRequest, McpRegisterResponse, SessionRequest,
+    WorkerActivationFailureReason, WorkerBootstrap, WorkerNetworkHint, WorkerNetworkHintProof,
 };
 use super::common::identity::MachineIdentity;
 use super::common::protocol::{BrokerDirective, ComponentRole, SensitiveString};
@@ -43,27 +43,46 @@ struct McpSession {
     session_id: String,
     session_token: SensitiveString,
     sequence: u64,
+    publication_cleanup: bool,
 }
 
 struct Registration {
     directive: BrokerDirective,
     session_token: SensitiveString,
+    publication_cleanup: bool,
 }
 
 pub(crate) async fn run(options: Options) -> Result<(), CliError> {
     let daemon_origin = explicit_daemon_origin(&options.daemon_address)?;
+    let Some(resolved) = resolve_route_credential() else {
+        return serve_without_route(PassThroughReason::MissingCredential).await;
+    };
+    log::debug!(
+        target: "nemo_relay.daemon.mcp",
+        event = "route_credential_resolved",
+        source = resolved.source.as_str();
+        "Resolved the managed route credential"
+    );
+    let route_credential = resolved.credential;
     let client = control_client()?;
-    let route_credential = RouteCredential::from_environment()?;
     let identity = load_or_create_machine_identity()?;
     let session_id = uuid::Uuid::now_v7().to_string();
-    let registration = register(
+    let registration = match register(
         &client,
         &daemon_origin,
         &route_credential,
         &identity,
         &session_id,
     )
-    .await?;
+    .await
+    {
+        Ok(registration) => registration,
+        Err(CliError::RouteCredentialRejected(_)) => {
+            drop(client);
+            return serve_without_route(PassThroughReason::CredentialRejected).await;
+        }
+        Err(error) => return Err(error),
+    };
     let mut lease = McpSession {
         client,
         daemon_origin,
@@ -72,26 +91,111 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
         session_id,
         session_token: registration.session_token,
         sequence: 0,
+        publication_cleanup: registration.publication_cleanup,
     };
-    make_route_ready(&mut lease, registration.directive).await?;
+    let initial = registration.directive;
+    if !lease.publication_cleanup {
+        // Older daemons cannot arbitrate shutdown racing readiness publication.
+        make_route_ready(&mut lease, initial.clone()).await?;
+    }
 
     log::info!(
         target: "nemo_relay.daemon.mcp",
         event = "daemon_mcp_ready";
         "Broker reference acquired; MCP protocol is ready"
     );
-    let result = {
-        let protocol = crate::mcp::serve_daemon_stdio();
-        let control = maintain_session(&mut lease);
-        tokio::pin!(protocol);
-        tokio::pin!(control);
-        tokio::select! {
-            result = &mut protocol => result,
-            result = &mut control => result,
+    let (shutdown, stop) = tokio::sync::watch::channel(false);
+    let mut control = tokio::spawn(async move {
+        let result = maintain_session(&mut lease, initial, stop).await;
+        release(&mut lease).await;
+        result
+    });
+    let protocol = crate::mcp::serve_daemon_stdio();
+    tokio::pin!(protocol);
+    tokio::select! {
+        result = &mut protocol => {
+            let _ = shutdown.send(true);
+            // Cooperative shutdown lets the broker arbitrate publication before child cleanup.
+            control.await.map_err(|error| CliError::Launch(format!("MCP control task failed: {error}")))??;
+            result
         }
-    };
-    release(&mut lease).await;
-    result
+        result = &mut control => {
+            let result = result.map_err(|error| CliError::Launch(format!("MCP control task failed: {error}")))?;
+            match control_end(result) {
+                ControlEnd::ServeWithoutRoute => {
+                    // A rejected re-registration (for example after a daemon restart) must not take
+                    // down an MCP server the host requires; keep serving it without a route.
+                    log_pass_through(PassThroughReason::CredentialRejectedOnReregistration);
+                    protocol.await
+                }
+                ControlEnd::Finish(result) => result,
+            }
+        }
+    }
+}
+
+/// What `run` does when the control task ends before the MCP protocol does.
+#[derive(Debug)]
+enum ControlEnd {
+    /// The daemon definitively rejected the credential; keep serving MCP without a route.
+    ServeWithoutRoute,
+    /// Return the control task's result, as before.
+    Finish(Result<(), CliError>),
+}
+
+fn control_end(result: Result<(), CliError>) -> ControlEnd {
+    match result {
+        Err(CliError::RouteCredentialRejected(_)) => ControlEnd::ServeWithoutRoute,
+        other => ControlEnd::Finish(other),
+    }
+}
+
+/// Why `daemon mcp` serves without a daemon route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PassThroughReason {
+    /// No credential resolved from the environment or the token file.
+    MissingCredential,
+    /// The daemon definitively rejected the credential at registration.
+    CredentialRejected,
+    /// The daemon definitively rejected the credential when a running MCP registered again.
+    CredentialRejectedOnReregistration,
+}
+
+/// Serves the MCP protocol without registering a route when no usable credential is available.
+///
+/// Hosts can mark this server as required, so it must stay up. With no registered route the
+/// daemon treats this user's requests as pass-through, matching `BrokerDirective::UsePassThrough`
+/// where no worker is ever launched.
+async fn serve_without_route(reason: PassThroughReason) -> Result<(), CliError> {
+    log_pass_through(reason);
+    crate::mcp::serve_daemon_stdio().await
+}
+
+fn log_pass_through(reason: PassThroughReason) {
+    match reason {
+        PassThroughReason::MissingCredential => log::warn!(
+            target: "nemo_relay.daemon.mcp",
+            event = "daemon_mcp_pass_through",
+            route_mode = "pass_through",
+            reason = "missing_credential";
+            "No NeMo Relay client credential is available; serving MCP without a daemon route"
+        ),
+        PassThroughReason::CredentialRejected => log::warn!(
+            target: "nemo_relay.daemon.mcp",
+            event = "daemon_mcp_pass_through",
+            route_mode = "pass_through",
+            reason = "credential_rejected";
+            "The daemon rejected the NeMo Relay client credential; serving MCP without a daemon route"
+        ),
+        PassThroughReason::CredentialRejectedOnReregistration => log::warn!(
+            target: "nemo_relay.daemon.mcp",
+            event = "daemon_mcp_pass_through",
+            route_mode = "pass_through",
+            reason = "credential_rejected",
+            phase = "reregistration";
+            "The daemon rejected the NeMo Relay client credential when MCP registered again; continuing to serve MCP without a daemon route"
+        ),
+    }
 }
 
 async fn register(
@@ -146,6 +250,12 @@ async fn register_once(
     Ok(Registration {
         directive: response.directive,
         session_token: response.session_token,
+        publication_cleanup: handshake
+            .proof
+            .transcript
+            .responder
+            .capabilities
+            .contains(super::common::control::ACTIVATION_CANCEL_CAPABILITY),
     })
 }
 
@@ -252,11 +362,56 @@ fn optional_environment(name: &str) -> Result<Option<String>, CliError> {
         .transpose()
 }
 
+enum WorkerChild {
+    Local(Child),
+    #[cfg(windows)]
+    Detached {
+        child: crate::process::detached::DetachedChild,
+        stdin: Option<tokio::fs::File>,
+    },
+}
+impl From<Child> for WorkerChild {
+    fn from(child: Child) -> Self {
+        Self::Local(child)
+    }
+}
+impl WorkerChild {
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        match self {
+            Self::Local(child) => child.try_wait(),
+            #[cfg(windows)]
+            Self::Detached { child, .. } => child.try_wait(),
+        }
+    }
+    fn start_kill(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Local(child) => child.start_kill(),
+            #[cfg(windows)]
+            Self::Detached { child, .. } => child.start_kill(),
+        }
+    }
+    async fn kill(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Local(child) => child.kill().await,
+            #[cfg(windows)]
+            Self::Detached { child, .. } => child.kill().await,
+        }
+    }
+    fn take_stdin(&mut self) -> Option<std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>> {
+        match self {
+            Self::Local(child) => child.stdin.take().map(|stdin| Box::pin(stdin) as _),
+            #[cfg(windows)]
+            Self::Detached { stdin, .. } => stdin.take().map(|stdin| Box::pin(stdin) as _),
+        }
+    }
+}
+
 /// A pending worker must not survive failed activation or cancellation. Readiness transfers
 /// ownership to the broker; only that success path disarms this guard.
 struct ActivationChild {
-    child: Child,
+    child: WorkerChild,
     published: bool,
+    publication_uncertain: bool,
 }
 
 struct WorkerActivationError {
@@ -275,7 +430,7 @@ impl WorkerActivationError {
 
 impl Drop for ActivationChild {
     fn drop(&mut self) {
-        if !self.published {
+        if !self.published && !self.publication_uncertain {
             let _ = self.child.start_kill();
         }
     }
@@ -291,6 +446,7 @@ fn route_activation_timed_out(started: tokio::time::Instant, directive: &BrokerD
         )
 }
 
+#[cfg(test)]
 async fn stop_pending_launch(launched: &mut PendingLaunch) -> Result<(), CliError> {
     if let Some((_, mut child, _)) = launched.take() {
         child.child.kill().await.map_err(CliError::Io)?;
@@ -298,104 +454,92 @@ async fn stop_pending_launch(launched: &mut PendingLaunch) -> Result<(), CliErro
     Ok(())
 }
 
+async fn cleanup_pending_launch(
+    lease: &mut McpSession,
+    launched: &mut PendingLaunch,
+) -> Result<(), CliError> {
+    let Some((activation_id, mut child, _)) = launched.take() else {
+        return Ok(());
+    };
+    if lease.publication_cleanup {
+        lease.sequence = lease.sequence.saturating_add(1);
+        let request = SessionRequest::new(
+            lease.session_id.clone(),
+            lease.session_token.clone(),
+            lease.sequence,
+            super::common::control::CancelActivationPayload { activation_id },
+        )?;
+        let outcome = tokio::time::timeout(
+            super::common::socket::ATTEMPT_TIMEOUT,
+            lease
+                .client
+                .request::<super::common::control::ActivationCancellation>(
+                    ControlCommand::CancelActivation(request),
+                ),
+        )
+        .await;
+        match outcome {
+            Ok(Ok(super::common::control::ActivationCancellation::Published)) => {
+                child.published = true
+            }
+            Ok(Ok(_)) => child.child.kill().await.map_err(CliError::Io)?,
+            _ => {
+                // The broker may already own this child. Its grant/control deadline owns cleanup.
+                child.publication_uncertain = true;
+            }
+        }
+    } else if !child.published {
+        child.child.kill().await.map_err(CliError::Io)?;
+    }
+    Ok(())
+}
+
 async fn make_route_ready(
     lease: &mut McpSession,
+    directive: BrokerDirective,
+) -> Result<(), CliError> {
+    supervise_route(lease, directive, None).await
+}
+
+async fn supervise_route(
+    lease: &mut McpSession,
     mut directive: BrokerDirective,
+    mut shutdown: Option<&mut tokio::sync::watch::Receiver<bool>>,
 ) -> Result<(), CliError> {
     let started = tokio::time::Instant::now();
     let mut launched: PendingLaunch = None;
     let result = async {
         loop {
-            if route_activation_timed_out(started, &directive) {
+            if !lease.publication_cleanup && route_activation_timed_out(started, &directive) {
                 return Err(CliError::Launch(
                     "timed out waiting for the broker route to become ready".into(),
                 ));
             }
             match directive {
                 BrokerDirective::ReuseWorker { .. } => {
-                    if let Some((_, child, _)) = launched.as_mut() {
-                        child.published = true;
-                    }
-                    launched.take();
+                    if !lease.publication_cleanup {
+                        if let Some((_, child, _)) = launched.as_mut() { child.published = true; }
+                        launched.take();
+                    } else { cleanup_pending_launch(lease, &mut launched).await?; }
                     return Ok(());
                 }
                 BrokerDirective::UsePassThrough => return Ok(()),
                 BrokerDirective::LaunchWorker { .. } => {
                     let bootstrap = WorkerBootstrap::from_directive(directive.clone())
                         .expect("launch directive was matched");
-                    let already_launched = launched
-                        .as_ref()
-                        .is_some_and(|(id, _, _)| id == &bootstrap.activation_id);
-                    if !already_launched {
-                        stop_pending_launch(&mut launched).await?;
-                        match launch_worker(&lease.daemon_origin, &bootstrap).await {
-                            Ok(child) => {
-                                launched = Some((
-                                    bootstrap.activation_id.clone(),
-                                    child,
-                                    tokio::time::Instant::now(),
-                                ));
-                            }
-                            Err(error) => {
-                                report_activation_failed(
-                                    lease,
-                                    &bootstrap.activation_id,
-                                    error.failure_reason,
-                                    &error.source,
-                                )
-                                .await?;
-                                directive = refresh_registration(lease).await?.directive;
-                                continue;
-                            }
-                        }
-                    }
-                    if let Some((activation_id, child, _)) = launched.as_mut()
-                        && activation_id == &bootstrap.activation_id
-                        && let Some(status) = child.child.try_wait().map_err(CliError::Io)?
+                    if let Some(next_directive) =
+                        supervise_worker_launch(lease, &bootstrap, &mut launched).await?
                     {
-                        let error = CliError::Launch(format!(
-                            "activated worker exited before readiness with {status}"
-                        ));
-                        report_activation_failed(
-                            lease,
-                            &bootstrap.activation_id,
-                            WorkerActivationFailureReason::WorkerExitedBeforeReady,
-                            &error,
-                        )
-                        .await?;
-                        directive = refresh_registration(lease).await?.directive;
-                        continue;
-                    }
-                    if launched
-                        .as_ref()
-                        .is_some_and(|(activation_id, _, started)| {
-                            activation_timed_out(
-                                &bootstrap.activation_id,
-                                activation_id,
-                                *started,
-                                tokio::time::Instant::now(),
-                            )
-                        })
-                    {
-                        let error = CliError::Launch(
-                            "activated worker did not register within 15 seconds".into(),
-                        );
-                        stop_pending_launch(&mut launched).await?;
-                        report_activation_failed(
-                            lease,
-                            &bootstrap.activation_id,
-                            WorkerActivationFailureReason::WorkerReadinessTimeout,
-                            &error,
-                        )
-                        .await?;
-                        directive = refresh_registration(lease).await?.directive;
+                        directive = next_directive;
                         continue;
                     }
                 }
                 BrokerDirective::WaitForWorker { .. } => {}
             }
+            if shutdown.as_ref().is_some_and(|stop| *stop.borrow()) { return Ok(()); }
             // The local timer supervises the child; it sends no network traffic.
             let event = tokio::select! {
+                _ = async { match shutdown.as_mut() { Some(stop) => { let _ = stop.changed().await; }, None => std::future::pending().await } } => return Ok(()),
                 event = lease.client.next() => Some(event),
                 _ = tokio::time::sleep(Duration::from_millis(100)) => None,
             };
@@ -405,8 +549,73 @@ async fn make_route_ready(
         }
     }
     .await;
-    let cleanup = stop_pending_launch(&mut launched).await;
+    let cleanup = cleanup_pending_launch(lease, &mut launched).await;
     result.and(cleanup)
+}
+
+async fn supervise_worker_launch(
+    lease: &mut McpSession,
+    bootstrap: &WorkerBootstrap,
+    launched: &mut PendingLaunch,
+) -> Result<Option<BrokerDirective>, CliError> {
+    let already_launched = launched
+        .as_ref()
+        .is_some_and(|(id, _, _)| id == &bootstrap.activation_id);
+    if !already_launched {
+        cleanup_pending_launch(lease, launched).await?;
+        match launch_worker(&lease.daemon_origin, bootstrap).await {
+            Ok(child) => {
+                *launched = Some((
+                    bootstrap.activation_id.clone(),
+                    child,
+                    tokio::time::Instant::now(),
+                ));
+            }
+            Err(error) => {
+                report_activation_failed(
+                    lease,
+                    &bootstrap.activation_id,
+                    error.failure_reason,
+                    &error.source,
+                )
+                .await?;
+                return Ok(Some(refresh_registration(lease).await?.directive));
+            }
+        }
+    }
+    if let Some((activation_id, child, _)) = launched.as_mut()
+        && activation_id == &bootstrap.activation_id
+        && let Some(status) = child.child.try_wait().map_err(CliError::Io)?
+    {
+        let error = CliError::Launch(format!(
+            "activated worker exited before readiness with {status}"
+        ));
+        report_activation_failed(
+            lease,
+            &bootstrap.activation_id,
+            WorkerActivationFailureReason::WorkerExitedBeforeReady,
+            &error,
+        )
+        .await?;
+        return Ok(Some(refresh_registration(lease).await?.directive));
+    }
+    if launched
+        .as_ref()
+        .is_some_and(|(id, _, _)| id == &bootstrap.activation_id)
+        && super::common::control::now_unix_ms() >= bootstrap.deadline_unix_ms
+    {
+        let error = CliError::Launch("activated worker exceeded its startup deadline".into());
+        cleanup_pending_launch(lease, launched).await?;
+        report_activation_failed(
+            lease,
+            &bootstrap.activation_id,
+            WorkerActivationFailureReason::WorkerReadinessTimeout,
+            &error,
+        )
+        .await?;
+        return Ok(Some(refresh_registration(lease).await?.directive));
+    }
+    Ok(None)
 }
 
 async fn next_directive(lease: &mut McpSession) -> Result<BrokerDirective, CliError> {
@@ -432,6 +641,7 @@ async fn receive_directive(
     }
 }
 
+#[cfg(test)]
 fn activation_timed_out(
     current_activation_id: &str,
     launched_activation_id: &str,
@@ -440,7 +650,7 @@ fn activation_timed_out(
 ) -> bool {
     current_activation_id == launched_activation_id
         && now.saturating_duration_since(launched_at)
-            >= Duration::from_millis(ACTIVATION_LIFETIME_MS)
+            >= Duration::from_millis(super::common::control::ACTIVATION_LIFETIME_MS)
 }
 
 async fn refresh_registration(lease: &mut McpSession) -> Result<Registration, CliError> {
@@ -462,6 +672,7 @@ async fn refresh_registration(lease: &mut McpSession) -> Result<Registration, Cl
 fn apply_registration(lease: &mut McpSession, registration: &Registration) {
     lease.session_token = registration.session_token.clone();
     lease.sequence = 0;
+    lease.publication_cleanup = registration.publication_cleanup;
 }
 
 async fn launch_worker(
@@ -480,9 +691,22 @@ async fn launch_worker(
                 error,
             )
         })?;
-    let mut command = worker_command(&executable, daemon_origin, bootstrap);
-    let child = command
-        .spawn()
+    let command = worker_command(&executable, daemon_origin, bootstrap);
+    #[cfg(not(windows))]
+    let spawn = {
+        let mut command = command;
+        command.spawn().map(WorkerChild::from)
+    };
+    #[cfg(windows)]
+    let spawn = crate::process::detached::inherited_stderr()
+        .and_then(|stderr| {
+            crate::process::detached::spawn_worker_detached(command.as_std(), &stderr)
+        })
+        .map(|(child, stdin)| WorkerChild::Detached {
+            child,
+            stdin: Some(tokio::fs::File::from_std(stdin)),
+        });
+    let child = spawn
         .map_err(|error| CliError::Launch(format!("failed to launch daemon worker: {error}")))
         .map_err(|error| {
             WorkerActivationError::new(
@@ -493,12 +717,12 @@ async fn launch_worker(
     let mut child = ActivationChild {
         child,
         published: false,
+        publication_uncertain: false,
     };
     let transfer = async {
         let mut stdin = child
             .child
-            .stdin
-            .take()
+            .take_stdin()
             .ok_or_else(|| {
                 CliError::Launch("failed to create the protected worker activation pipe".into())
             })
@@ -561,6 +785,7 @@ async fn launch_worker(
             })?;
         return Err(error);
     }
+    child.publication_uncertain = true;
     Ok(child)
 }
 
@@ -582,6 +807,8 @@ fn worker_command(
         .stderr(Stdio::inherit())
         .env_remove(ROUTE_TOKEN_ENV)
         .kill_on_drop(false);
+    #[cfg(unix)]
+    crate::process::detached::configure_detached(command.as_std_mut());
     if bootstrap.port != 0 {
         command.arg("--port").arg(bootstrap.port.to_string());
     }
@@ -620,10 +847,27 @@ async fn report_activation_failed(
         .await
 }
 
-async fn maintain_session(lease: &mut McpSession) -> Result<(), CliError> {
+async fn maintain_session(
+    lease: &mut McpSession,
+    mut directive: BrokerDirective,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<(), CliError> {
+    if !lease.publication_cleanup {
+        // Legacy startup completed before stdio began. Only a new directive can launch again.
+        directive = tokio::select! {
+            _ = shutdown.changed() => return Ok(()),
+            directive = next_directive(lease) => directive?,
+        };
+    }
     loop {
-        let directive = next_directive(lease).await?;
-        make_route_ready(lease, directive).await?;
+        supervise_route(lease, directive, Some(&mut shutdown)).await?;
+        if *shutdown.borrow() {
+            return Ok(());
+        }
+        directive = tokio::select! {
+            _ = shutdown.changed() => return Ok(()),
+            directive = next_directive(lease) => directive?,
+        };
     }
 }
 

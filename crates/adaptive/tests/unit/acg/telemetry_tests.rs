@@ -168,6 +168,7 @@ fn test_anthropic_cache_telemetry_event_reconstructs_total_prompt_tokens() {
         total_tokens: None,
         cache_read_tokens: Some(500),
         cache_write_tokens: Some(200),
+        uncached_input_tokens: None,
         cost: None,
     };
 
@@ -197,6 +198,7 @@ fn test_anthropic_cache_telemetry_event_maps_write_only_zero_read_to_cold_start(
         total_tokens: None,
         cache_read_tokens: Some(0),
         cache_write_tokens: Some(700),
+        uncached_input_tokens: None,
         cost: None,
     };
 
@@ -223,6 +225,7 @@ fn test_anthropic_cache_telemetry_event_returns_none_without_prompt_tokens() {
         total_tokens: None,
         cache_read_tokens: Some(500),
         cache_write_tokens: Some(200),
+        uncached_input_tokens: None,
         cost: None,
     };
 
@@ -246,6 +249,7 @@ fn test_openai_cache_telemetry_event_normalizes_creation_tokens_to_zero() {
         total_tokens: None,
         cache_read_tokens: Some(600),
         cache_write_tokens: Some(999),
+        uncached_input_tokens: None,
         cost: None,
     };
 
@@ -274,6 +278,7 @@ fn test_openai_cache_telemetry_event_maps_zero_read_to_unknown() {
         total_tokens: None,
         cache_read_tokens: Some(0),
         cache_write_tokens: Some(999),
+        uncached_input_tokens: None,
         cost: None,
     };
 
@@ -308,6 +313,7 @@ fn telemetry_observability_keeps_request_facts_optional_for_anthropic_unknown_mi
         total_tokens: None,
         cache_read_tokens: Some(0),
         cache_write_tokens: Some(0),
+        uncached_input_tokens: None,
         cost: None,
     };
 
@@ -346,6 +352,7 @@ fn test_from_usage_uses_prefix_mismatch_diagnosis_when_request_facts_are_availab
         total_tokens: None,
         cache_read_tokens: Some(0),
         cache_write_tokens: Some(0),
+        uncached_input_tokens: None,
         cost: None,
     };
     let request_facts = CacheRequestFacts {
@@ -415,6 +422,7 @@ fn test_cache_miss_diagnosis_prefix_mismatch_is_bounded_and_serialized() {
             total_tokens: None,
             cache_read_tokens: Some(0),
             cache_write_tokens: Some(0),
+            uncached_input_tokens: None,
             cost: None,
         },
         sample_timestamp(),
@@ -483,6 +491,7 @@ fn test_cache_miss_diagnosis_below_minimum_threshold_reports_exact_token_counts(
             total_tokens: None,
             cache_read_tokens: Some(0),
             cache_write_tokens: Some(0),
+            uncached_input_tokens: None,
             cost: None,
         },
         sample_timestamp(),
@@ -538,6 +547,7 @@ fn test_cache_miss_diagnosis_retention_expired_reports_gap_and_window() {
             total_tokens: None,
             cache_read_tokens: Some(0),
             cache_write_tokens: Some(0),
+            uncached_input_tokens: None,
             cost: None,
         },
         sample_timestamp(),
@@ -594,6 +604,7 @@ fn test_cache_miss_diagnosis_unknown_preserves_missing_facts() {
             total_tokens: None,
             cache_read_tokens: Some(0),
             cache_write_tokens: Some(0),
+            uncached_input_tokens: None,
             cost: None,
         },
         sample_timestamp(),
@@ -647,6 +658,7 @@ fn test_no_write_anthropic_cache_miss_diagnosis_uses_threshold_facts_without_loc
             total_tokens: None,
             cache_read_tokens: Some(0),
             cache_write_tokens: Some(0),
+            uncached_input_tokens: None,
             cost: None,
         },
         sample_timestamp(),
@@ -688,6 +700,7 @@ fn test_anthropic_multi_breakpoint_telemetry_event_uses_normalized_usage_totals(
             total_tokens: None,
             cache_read_tokens: Some(900),
             cache_write_tokens: Some(600),
+            uncached_input_tokens: None,
             cost: None,
         },
         sample_timestamp(),

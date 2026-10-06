@@ -36,6 +36,12 @@ pub(super) async fn wait(
 }
 
 impl ProcessTree {
+    // Borrowed from this tree's AgentJob; valid only while the tree is alive.
+    // The metrics API duplicates it synchronously before returning.
+    pub(super) fn resource_metrics_job_handle(&self) -> isize {
+        self.job.handle as isize
+    }
+
     pub(super) fn restore_terminal(&mut self) -> std::io::Result<()> {
         Ok(())
     }
@@ -72,7 +78,9 @@ impl AgentJob {
             ));
         }
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_CLOSE;
+        // Descendants remain owned unless they explicitly request breakaway (daemon workers).
+        limits.BasicLimitInformation.LimitFlags = WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_CLOSE
+            | windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_BREAKAWAY_OK;
         // SAFETY: `handle` is live and `limits` is correctly sized for the requested class.
         let configured = unsafe {
             SetInformationJobObject(

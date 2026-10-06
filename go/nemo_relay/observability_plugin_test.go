@@ -21,6 +21,9 @@ const (
 	FirstAgentName                 = "go-first-agent"
 	NestedAgentName                = "go-nested-agent"
 	SecondAgentName                = "go-second-agent"
+	testTelemetryTokenPath         = "/var/run/secrets/telemetry/token"
+	testTraceEndpoint              = "http://localhost:4318/v1/traces"
+	testRotatingTokenHeader        = "x-rotating-token"
 	testAccessKeyID                = "test-access-key"
 	testAtifEndpoint               = "https://example.com/atif"
 	testRegion                     = "us-west-2"
@@ -47,7 +50,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		Transport:       "http_post",
 		Headers:         map[string]string{"X-Test": "yes"},
 		HeaderEnv:       map[string]string{"authorization": "NEMO_RELAY_ATOF_AUTH"},
-		HeaderFile:      map[string]string{"x-rotating-token": "/var/run/secrets/telemetry/token"},
+		HeaderFile:      map[string]string{testRotatingTokenHeader: testTelemetryTokenPath},
 		TimeoutMillis:   1000,
 		FieldNamePolicy: "replace_dots",
 	}}
@@ -65,7 +68,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	httpStorage := NewObservabilityHttpStorageConfig(testAtifEndpoint)
 	httpStorage.Headers = map[string]string{testStaticHeader: "value"}
 	httpStorage.HeaderEnv = map[string]string{"authorization": "NEMO_RELAY_ATIF_HTTP_AUTH"}
-	httpStorage.HeaderFile = map[string]string{"x-rotating-token": "/var/run/secrets/telemetry/token"}
+	httpStorage.HeaderFile = map[string]string{testRotatingTokenHeader: testTelemetryTokenPath}
 	httpStorage.TimeoutMillis = 1500
 	assertS3StorageConfig(t, s3Storage)
 	assertHTTPStorageConfig(t, httpStorage)
@@ -76,10 +79,10 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	otel := NewObservabilityOpenTelemetryConfig()
 	otel.Enabled = true
 	otel.Endpoints = []ObservabilityOpenTelemetryEndpointConfig{
-		NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces"),
+		NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, testTraceEndpoint),
 	}
 	otel.Endpoints[0].HeaderEnv["authorization"] = "OTEL_AUTHORIZATION"
-	otel.Endpoints[0].HeaderFile = map[string]string{"x-rotating-token": "/var/run/secrets/telemetry/token"}
+	otel.Endpoints[0].HeaderFile = map[string]string{testRotatingTokenHeader: testTelemetryTokenPath}
 	otel.Endpoints[0].PromoteMetadataPrefixes = []string{"nv."}
 	maxQueueSize := uint64(4096)
 	maxExportBatchSize := uint64(256)
@@ -96,7 +99,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	metricEndpoint := NewObservabilityOpenTelemetrySignalEndpointConfig("https://collector.example/custom/metrics")
 	metricEndpoint.Headers["x-nv-project"] = observabilityDevProject
 	metricEndpoint.ResourceAttributes["nv.project"] = observabilityDevProject
-	metricEndpoint.HeaderFile = map[string]string{"x-rotating-token": "/var/run/secrets/telemetry/token"}
+	metricEndpoint.HeaderFile = map[string]string{testRotatingTokenHeader: testTelemetryTokenPath}
 	metrics.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(metricEndpoint)
 	otel.Logs = &logs
 	otel.Metrics = &metrics
@@ -154,7 +157,7 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	firstSink, ok := sinks[0].(map[string]any)
 	if !ok || firstSink["name"] != "archive" || firstSink["field_name_policy"] != "replace_dots" ||
 		firstSink["header_env"].(map[string]any)["authorization"] != "NEMO_RELAY_ATOF_AUTH" ||
-		firstSink["header_file"].(map[string]any)["x-rotating-token"] != "/var/run/secrets/telemetry/token" {
+		firstSink["header_file"].(map[string]any)[testRotatingTokenHeader] != testTelemetryTokenPath {
 		t.Fatalf("expected serialized ATOF stream sink settings, got %#v", sinks)
 	}
 	serialized, err := json.Marshal(wrapped)
@@ -172,7 +175,7 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	if otelEndpoints[0].(map[string]any)["header_env"].(map[string]any)["authorization"] != "OTEL_AUTHORIZATION" {
 		t.Fatalf("expected OpenTelemetry header_env in serialized config: %#v", wrapped.Config)
 	}
-	if otelEndpoints[0].(map[string]any)["header_file"].(map[string]any)["x-rotating-token"] != "/var/run/secrets/telemetry/token" {
+	if otelEndpoints[0].(map[string]any)["header_file"].(map[string]any)[testRotatingTokenHeader] != testTelemetryTokenPath {
 		t.Fatalf("expected OpenTelemetry header_file in serialized config: %#v", wrapped.Config)
 	}
 	promotePrefixes := otelEndpoints[0].(map[string]any)["promote_metadata_prefixes"].([]any)
@@ -199,7 +202,7 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	if metrics["temporality"] != "cumulative" || metrics["cardinality_limit"] != float64(2000) ||
 		metricEndpoint["endpoint"] != "https://collector.example/custom/metrics" ||
 		metricEndpoint["headers"].(map[string]any)["x-nv-project"] != observabilityDevProject ||
-		metricEndpoint["header_file"].(map[string]any)["x-rotating-token"] != "/var/run/secrets/telemetry/token" ||
+		metricEndpoint["header_file"].(map[string]any)[testRotatingTokenHeader] != testTelemetryTokenPath ||
 		metricEndpoint["resource_attributes"].(map[string]any)["nv.project"] != observabilityDevProject {
 		t.Fatalf("expected OpenTelemetry metric settings in serialized config: %#v", metrics)
 	}
@@ -248,7 +251,7 @@ func TestObservabilitySignalEndpointOmittedVersusExplicitEmpty(t *testing.T) {
 
 func TestObservabilityOpenTelemetryEndpointPreservesExplicitZeroBatchSettings(t *testing.T) {
 	zero := uint64(0)
-	config := NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+	config := NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, testTraceEndpoint)
 	config.MaxQueueSize = &zero
 	config.MaxExportBatchSize = &zero
 	config.ScheduledDelayMillis = &zero
@@ -306,7 +309,7 @@ func assertHTTPStorageConfig(t *testing.T, storage ObservabilityHttpStorageConfi
 		serialized["timeout_millis"] != float64(1500) ||
 		headers[testStaticHeader] != "value" ||
 		headerEnv["authorization"] != "NEMO_RELAY_ATIF_HTTP_AUTH" ||
-		headerFile["x-rotating-token"] != "/var/run/secrets/telemetry/token" {
+		headerFile[testRotatingTokenHeader] != testTelemetryTokenPath {
 		t.Fatalf("unexpected serialized HTTP storage config: %#v", serialized)
 	}
 }
@@ -645,4 +648,117 @@ func EmitAgentEnd(t *testing.T, Label string, Handle *ScopeHandle) {
 
 func TrajectoryFilePath(Dir string, Handle *ScopeHandle) string {
 	return filepath.Join(Dir, TrajectoryFilenamePrefix+Handle.UUID()+".json")
+}
+
+func assertResourcePromotionJSON(t *testing.T, payload []byte, prefixes []string) {
+	t.Helper()
+	var parsed map[string]json.RawMessage
+	requireNoError(t, json.Unmarshal(payload, &parsed), "decode resource promotion endpoint")
+	value, present := parsed["promote_resource_metadata_prefixes"]
+	if len(prefixes) == 0 {
+		if present {
+			t.Fatal("empty promotion prefixes must be omitted")
+		}
+	} else {
+		expected, err := json.Marshal(prefixes)
+		requireNoError(t, err, "marshal prefixes")
+		if string(value) != string(expected) {
+			t.Fatalf("prefixes = %s, want %s", value, expected)
+		}
+	}
+}
+
+func assertResourcePromotionDiagnostics(t *testing.T, report ConfigReport, invalid bool) {
+	t.Helper()
+	if invalid {
+		found := false
+		for _, diagnostic := range report.Diagnostics {
+			if diagnostic.Field != nil && *diagnostic.Field == "endpoints[0].promote_resource_metadata_prefixes" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing invalid-prefix diagnostic: %#v", report.Diagnostics)
+		}
+	} else if len(report.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
+	}
+}
+
+func TestObservabilitySignalResourcePromotion(t *testing.T) {
+	for _, signal := range []string{"logs", "metrics"} {
+		for _, tc := range []struct {
+			name     string
+			prefixes []string
+			invalid  bool
+		}{
+			{name: "omitted"},
+			{name: "empty", prefixes: []string{}},
+			{name: "valid", prefixes: []string{"deployment.", "nv.client."}},
+			{name: "invalid", prefixes: []string{"nv.*"}, invalid: true},
+		} {
+			t.Run(signal+"/"+tc.name, func(t *testing.T) {
+				endpoint := NewObservabilityOpenTelemetrySignalEndpointConfig("http://localhost:4318/v1/" + signal)
+				endpoint.PromoteResourceMetadataPrefixes = tc.prefixes
+				payload, err := json.Marshal(endpoint)
+				requireNoError(t, err, "marshal signal endpoint")
+				assertResourcePromotionJSON(t, payload, tc.prefixes)
+				config := NewObservabilityConfig()
+				config.Policy = &ConfigPolicy{UnknownField: UnsupportedBehaviorError}
+				otel := NewObservabilityOpenTelemetryConfig()
+				otel.Enabled = true
+				if signal == "logs" {
+					logs := NewObservabilityOpenTelemetryLogConfig()
+					logs.Enabled = true
+					logs.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(endpoint)
+					otel.Logs = &logs
+				} else {
+					metrics := NewObservabilityOpenTelemetryMetricConfig()
+					metrics.Enabled = true
+					metrics.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(endpoint)
+					otel.Metrics = &metrics
+				}
+				config.OpenTelemetry = &otel
+				report, err := validateTestPluginConfig(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}})
+				requireNoError(t, err, "validate resource promotion")
+				assertResourcePromotionDiagnostics(t, report, tc.invalid)
+			})
+		}
+	}
+}
+
+func TestObservabilityTraceResourcePromotion(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		prefixes []string
+		invalid  bool
+	}{
+		{name: "omitted"},
+		{name: "empty", prefixes: []string{}},
+		{name: "valid", prefixes: []string{"deployment.", "nv.client."}},
+		{name: "invalid", prefixes: []string{"nv.*"}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint := NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, testTraceEndpoint)
+			endpoint.PromoteResourceMetadataPrefixes = tc.prefixes
+			payload, err := json.Marshal(endpoint)
+			requireNoError(t, err, "marshal trace endpoint")
+			assertResourcePromotionJSON(t, payload, tc.prefixes)
+			config := NewObservabilityConfig()
+			config.Policy = &ConfigPolicy{UnknownField: UnsupportedBehaviorError}
+			otel := NewObservabilityOpenTelemetryConfig()
+			otel.Enabled = true
+			otel.Endpoints = []ObservabilityOpenTelemetryEndpointConfig{endpoint}
+			// Omitted signal endpoints exercise the trace-derived configuration path.
+			logs := NewObservabilityOpenTelemetryLogConfig()
+			logs.Enabled = true
+			metrics := NewObservabilityOpenTelemetryMetricConfig()
+			metrics.Enabled = true
+			otel.Logs, otel.Metrics = &logs, &metrics
+			config.OpenTelemetry = &otel
+			report, err := validateTestPluginConfig(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}})
+			requireNoError(t, err, "validate trace resource promotion")
+			assertResourcePromotionDiagnostics(t, report, tc.invalid)
+		})
+	}
 }

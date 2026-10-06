@@ -35,6 +35,7 @@ describe('observability plugin helpers', () => {
     assert.deepEqual(observability.openTelemetryConfig(), {
       enabled: false,
       endpoints: [],
+      file_sinks: [],
     });
     assert.deepEqual(
       observability.openTelemetryEndpoint({
@@ -115,6 +116,7 @@ describe('observability plugin helpers', () => {
     assert.deepEqual(observability.openTelemetryConfig({ enabled: true, logs, metrics }), {
       enabled: true,
       endpoints: [],
+      file_sinks: [],
       logs,
       metrics,
     });
@@ -123,6 +125,46 @@ describe('observability plugin helpers', () => {
     assert.throws(() => observability.openTelemetrySignalEndpoint(), /config is required/);
     assert.throws(() => observability.openTelemetrySignalEndpoint({ endpoint: ' ' }), /nonblank/);
   });
+
+  for (const signal of ['logs', 'metrics']) {
+    for (const prefixes of [undefined, [], ['deployment.', 'nv.client.'], ['nv.*']]) {
+      it(`serializes and validates ${signal} resource promotion ${JSON.stringify(prefixes)}`, () => {
+        const endpoint = observability.openTelemetrySignalEndpoint({
+          endpoint: `http://localhost:4318/v1/${signal}`,
+          ...(prefixes === undefined ? {} : { promote_resource_metadata_prefixes: prefixes }),
+        });
+        // Exercise the JSON wire format, including omission of undefined fields.
+        const payload = JSON.stringify(endpoint);
+        const serialized = JSON.parse(payload);
+        assert.deepEqual(serialized.promote_resource_metadata_prefixes, prefixes);
+        const section =
+          signal === 'logs'
+            ? observability.openTelemetryLogConfig({ enabled: true, endpoints: [endpoint] })
+            : observability.openTelemetryMetricConfig({ enabled: true, endpoints: [endpoint] });
+        const report = pluginHost.validate({
+          version: 1,
+          components: [
+            observability.ComponentSpec({
+              version: 4,
+              policy: { unknown_field: 'error' },
+              opentelemetry: observability.openTelemetryConfig({ enabled: true, [signal]: section }),
+            }),
+          ],
+        });
+        if (prefixes?.[0] === 'nv.*') {
+          assert.ok(
+            report.diagnostics.some(
+              (diagnostic) =>
+                diagnostic.component === `opentelemetry.${signal}` &&
+                diagnostic.field === 'endpoints[0].promote_resource_metadata_prefixes',
+            ),
+          );
+        } else {
+          assert.deepEqual(report.diagnostics, []);
+        }
+      });
+    }
+  }
 
   it('initializes a version 4 log and metric configuration without exporting signals', async () => {
     const config = {
@@ -344,5 +386,57 @@ describe('observability plugin helpers', () => {
     assert.match(secondPayload, /node-second-agent/);
     assert.doesNotMatch(secondPayload, /node-first-agent/);
     assert.doesNotMatch(secondPayload, /node-nested-agent/);
+  });
+});
+
+describe('opentelemetry file sinks', () => {
+  it('normalizes a file sink and validates its fields', () => {
+    const directory = tempDir('otlp-file-sink');
+    const sink = observability.openTelemetryFileSink({ output_directory: directory });
+
+    assert.equal(sink.type, 'full');
+    assert.equal(sink.format, 'json_lines');
+    assert.equal(sink.mode, 'overwrite');
+    assert.equal(sink.output_directory, directory);
+    // A file sink has no network destination to configure.
+    assert.equal(sink.endpoint, undefined);
+    assert.equal(sink.transport, undefined);
+
+    assert.throws(() => observability.openTelemetryFileSink(), /config is required/);
+    assert.throws(() => observability.openTelemetryFileSink({ output_directory: ' ' }), /nonblank/);
+    assert.throws(
+      () => observability.openTelemetryFileSink({ output_directory: directory, format: 'yaml' }),
+      /"json_lines" or "proto"/,
+    );
+    assert.throws(
+      () => observability.openTelemetryFileSink({ output_directory: directory, mode: 'truncate' }),
+      /"append" or "overwrite"/,
+    );
+  });
+
+  it('writes a trace file for a file-sink-only section', async () => {
+    const directory = tempDir('otlp-file-sink-write');
+    const config = {
+      version: 4,
+      opentelemetry: observability.openTelemetryConfig({
+        enabled: true,
+        file_sinks: [
+          observability.openTelemetryFileSink({
+            output_directory: directory,
+            filename: 'node-trace.jsonl',
+          }),
+        ],
+      }),
+    };
+
+    await pluginHost.initialize({
+      version: 1,
+      components: [observability.ComponentSpec(config)],
+    });
+    try {
+      assert.deepEqual(readdirSync(directory), ['node-trace.jsonl']);
+    } finally {
+      await pluginHost.close();
+    }
   });
 });

@@ -109,6 +109,9 @@ pub(crate) enum CliError {
     PayloadTooLarge(String),
     #[error("unauthorized gateway client: {0}")]
     Unauthorized(String),
+    /// The daemon definitively rejected the route credential; retrying cannot succeed.
+    #[error("route credential rejected: {0}")]
+    RouteCredentialRejected(String),
     #[error("gateway upstream error: {0}")]
     Upstream(#[from] reqwest::Error),
     #[error("{0}")]
@@ -170,6 +173,7 @@ impl CliError {
             Self::InvalidPayload(_) => "invalid_payload",
             Self::PayloadTooLarge(_) => "payload_too_large",
             Self::Unauthorized(_) => "unauthorized",
+            Self::RouteCredentialRejected(_) => "route_credential_rejected",
             Self::Upstream(_) => "upstream",
             Self::ProviderFailure(_) => "provider_failure",
             Self::Http(_) => "http",
@@ -247,7 +251,9 @@ impl IntoResponse for CliError {
 fn response_status(error: &CliError) -> StatusCode {
     match error {
         CliError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
-        CliError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+        CliError::Unauthorized(_) | CliError::RouteCredentialRejected(_) => {
+            StatusCode::UNAUTHORIZED
+        }
         CliError::InvalidPayload(_) => StatusCode::BAD_REQUEST,
         CliError::Upstream(_) => StatusCode::BAD_GATEWAY,
         CliError::ProviderFailure(failure) => failure

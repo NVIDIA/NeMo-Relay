@@ -27,8 +27,14 @@ Public data types:
     EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
     LlmCodecIdentity: Typed discriminator for the active LLM codec.
-    LlmSanitizeRequestContext: Per-call context supplied to an LLM request sanitizer.
-    LlmSanitizeResponseContext: Per-call context supplied to an LLM response sanitizer.
+    LlmRequestContext: Request codec context supplied to an LLM execution
+        intercept.
+    LlmResponseContext: Response codec context supplied to an LLM execution
+        intercept.
+    LlmSanitizeRequestContext: Request codec context supplied to a sanitizer.
+    LlmSanitizeResponseContext: Response codec context supplied to a sanitizer.
+    LlmExecutionContext: Invocation-scoped codec context supplied to an LLM
+        execution intercept.
     WorkerRequestCodec: Invocation-scoped async proxy for an active request codec.
     WorkerResponseCodec: Invocation-scoped async proxy for an active response codec.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
@@ -70,8 +76,9 @@ Public callback aliases:
     LlmSanitizeResponseCallback: LLM response sanitizer callback.
     LlmConditionalCallback: LLM execution guardrail callback.
     LlmRequestCallback: LLM request intercept callback.
-    LlmExecutionCallback: Unary LLM execution intercept callback.
-    LlmStreamExecutionCallback: Streaming LLM execution intercept callback.
+    LlmExecutionCallback: Unary LLM execution intercept callback with codec context.
+    LlmStreamExecutionCallback: Streaming LLM execution intercept callback with
+        request codec context.
 
 Public authoring types:
     WorkerPlugin: Base validation and registration contract for a plugin.
@@ -101,6 +108,7 @@ from ._api import (
     LlmCodecIdentity,
     LlmConditionalCallback,
     LlmExecutionCallback,
+    LlmExecutionContext,
     LlmNext,
     LlmOptimizationContribution,
     LlmOptimizationDataSchema,
@@ -111,7 +119,9 @@ from ._api import (
     LlmOptimizationTokens,
     LlmRequest,
     LlmRequestCallback,
+    LlmRequestContext,
     LlmRequestInterceptOutcome,
+    LlmResponseContext,
     LlmSanitizeRequestCallback,
     LlmSanitizeRequestContext,
     LlmSanitizeResponseCallback,
@@ -164,6 +174,7 @@ __all__ = [
     "LlmConditionalCallback",
     "LlmCodecIdentity",
     "LlmExecutionCallback",
+    "LlmExecutionContext",
     "LogSeverity",
     "MetricKind",
     "MetricMeasurement",
@@ -177,8 +188,10 @@ __all__ = [
     "LlmOptimizationTokens",
     "LlmNext",
     "LlmRequest",
+    "LlmRequestContext",
     "LlmSanitizeRequestContext",
     "LlmSanitizeResponseContext",
+    "LlmResponseContext",
     "LlmRequestCallback",
     "LlmRequestInterceptOutcome",
     "LlmSanitizeRequestCallback",

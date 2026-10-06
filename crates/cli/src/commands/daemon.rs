@@ -36,6 +36,14 @@ pub(crate) struct DaemonCommand {
     /// Route directly to configured providers and never activate a worker.
     #[arg(long)]
     pub(crate) pass_through: bool,
+    /// Reject requests until an authenticated worker is ready.
+    #[arg(long, conflicts_with = "pass_through")]
+    pub(crate) require_worker: bool,
+    /// Distinct route tokens one machine-user identity may hold at once (1 through 64,
+    /// default 4). At the limit, a new token releases the identity's least recently registered
+    /// idle token. Falls back to NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY.
+    #[arg(long, value_parser = parse_max_tokens_per_identity)]
+    pub(crate) max_tokens_per_identity: Option<usize>,
     #[command(subcommand)]
     pub(crate) command: Option<DaemonSubcommand>,
 }
@@ -50,6 +58,30 @@ pub(crate) enum DaemonSubcommand {
     Worker(DaemonWorkerCommand),
     /// Create an immutable administrator-managed integration bundle.
     ManagedBundle(DaemonManagedBundleCommand),
+    /// Manage this user's daemon client route token file.
+    Token(DaemonTokenCommand),
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct DaemonTokenCommand {
+    #[command(subcommand)]
+    pub(crate) command: DaemonTokenSubcommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum DaemonTokenSubcommand {
+    /// Create this user's client token file if it does not already exist.
+    #[command(
+        long_about = "Create this user's owner-private daemon client token file if it does not already exist. Run as the user who runs the coding agent, not as root. The file is <user config dir>/.client-token (normally ~/.config/nemo-relay/.client-token; XDG_CONFIG_HOME is honored). Managed hooks, the managed MCP server, and doctor use it when NEMO_RELAY_CLIENT_TOKEN is not set. An existing valid file is left unchanged; an invalid or unsafe file is never overwritten. The token value is never printed."
+    )]
+    Ensure(DaemonTokenEnsureCommand),
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct DaemonTokenEnsureCommand {
+    /// Print `{"status":"created"|"existing","path":"..."}` instead of a human-readable line.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -152,6 +184,11 @@ pub(crate) async fn execute(
                 port: command.port,
                 advertise_address: command.advertise_address,
                 pass_through: command.pass_through,
+                require_worker: command.require_worker,
+                max_tokens_per_identity: resolve_max_tokens_per_identity(
+                    command.max_tokens_per_identity,
+                    std::env::var(MAX_TOKENS_PER_IDENTITY_ENV).ok().as_deref(),
+                )?,
                 gateway: server.to_runtime(),
                 tls_cert: command.tls_cert,
                 tls_key: command.tls_key,
@@ -207,9 +244,44 @@ pub(crate) async fn execute(
             let sha256 = daemon::managed::write_new_bundle(&command.output, &spec)?;
             println!("{sha256}");
         }
+        Some(DaemonSubcommand::Token(DaemonTokenCommand {
+            command: DaemonTokenSubcommand::Ensure(command),
+        })) => {
+            let path = daemon::common::client_token::client_token_path().ok_or_else(|| {
+                CliError::Config(
+                    "cannot determine the per-user NeMo Relay config directory; set HOME or XDG_CONFIG_HOME"
+                        .into(),
+                )
+            })?;
+            let status = daemon::common::client_token::ensure_client_token(&path)?;
+            println!("{}", render_token_ensure(status, &path, command.json)?);
+        }
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+fn render_token_ensure(
+    status: daemon::common::client_token::EnsureStatus,
+    path: &std::path::Path,
+    json: bool,
+) -> Result<String, CliError> {
+    if json {
+        return serde_json::to_string(&serde_json::json!({
+            "status": status.as_str(),
+            "path": path.display().to_string(),
+        }))
+        .map_err(|error| CliError::Config(format!("failed to encode token status: {error}")));
+    }
+    Ok(match status {
+        daemon::common::client_token::EnsureStatus::Created => {
+            format!("Created NeMo Relay client token file {}", path.display())
+        }
+        daemon::common::client_token::EnsureStatus::Existing => format!(
+            "NeMo Relay client token file {} already exists",
+            path.display()
+        ),
+    })
 }
 
 fn parse_bind_address(value: &str) -> Result<Ipv4Addr, String> {
@@ -220,6 +292,32 @@ fn parse_bind_address(value: &str) -> Result<Ipv4Addr, String> {
         Ok(address)
     } else {
         Err("bind address must be 127.0.0.1 or 0.0.0.0".into())
+    }
+}
+
+/// Environment fallback for `--max-tokens-per-identity`, read only when serving the daemon so a
+/// malformed value cannot break the `mcp`, `hook`, or `worker` subcommands.
+const MAX_TOKENS_PER_IDENTITY_ENV: &str = "NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY";
+
+fn parse_max_tokens_per_identity(value: &str) -> Result<usize, String> {
+    let limit = daemon::broker::registry::MAX_TOKENS_PER_IDENTITY_LIMIT;
+    match value.trim().parse::<usize>() {
+        Ok(tokens) if (1..=limit).contains(&tokens) => Ok(tokens),
+        _ => Err(format!(
+            "the per-identity token limit must be an integer from 1 through {limit}"
+        )),
+    }
+}
+
+fn resolve_max_tokens_per_identity(
+    flag: Option<usize>,
+    environment: Option<&str>,
+) -> Result<usize, CliError> {
+    match (flag, environment) {
+        (Some(tokens), _) => Ok(tokens),
+        (None, Some(value)) => parse_max_tokens_per_identity(value)
+            .map_err(|error| CliError::Config(format!("{MAX_TOKENS_PER_IDENTITY_ENV}: {error}"))),
+        (None, None) => Ok(daemon::broker::registry::DEFAULT_MAX_TOKENS_PER_IDENTITY),
     }
 }
 

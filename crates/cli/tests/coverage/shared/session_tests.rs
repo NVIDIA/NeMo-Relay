@@ -8,7 +8,9 @@ use nemo_relay::api::registry::{
     deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
 };
 use nemo_relay::api::runtime::EventSubscriberFn;
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber, scope_register_subscriber,
+};
 use nemo_relay::codec::resolve::{
     ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
 };
@@ -22,6 +24,7 @@ use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use super::*;
@@ -698,6 +701,7 @@ async fn hook_routing_rechecks_an_alias_removed_during_ownership_wait() {
         .expect("hook routing should succeed");
 }
 
+/// Verify shutdown waits for cancelled hook cleanup to release alignment and session guards.
 #[tokio::test]
 async fn shutdown_waits_for_cancelled_alignment_cleanup() {
     let manager = SessionManager::new(session_test_config());
@@ -718,6 +722,7 @@ async fn shutdown_waits_for_cancelled_alignment_cleanup() {
         AppliedRouteCleanup::new(
             &manager,
             cleanup,
+            Vec::new(),
             session_gate,
             manager.session_activity.begin(),
         )
@@ -1086,6 +1091,725 @@ async fn permission_requests_require_an_exact_recorded_tool_call() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn permission_requests_correlate_guardrails_and_close_rejected_tools() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-permission-tool-correlation";
+    const DENIED_TOOL: &str = "PermissionDeniedTool";
+    const ALLOWED_TOOL: &str = "PermissionAllowedTool";
+    const SUBSCRIBER: &str = "cli-permission-tool-correlation-capture";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let _ = deregister_subscriber(SUBSCRIBER);
+
+    let denied_invocations = Arc::new(AtomicUsize::new(0));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new({
+            let denied_invocations = Arc::clone(&denied_invocations);
+            move |name, _| {
+                let denied_invocations = Arc::clone(&denied_invocations);
+                Box::pin(async move {
+                    if name == DENIED_TOOL
+                        && denied_invocations.fetch_add(1, Ordering::SeqCst) % 2 == 1
+                    {
+                        Ok(Some("blocked by host permission".into()))
+                    } else {
+                        Ok(None)
+                    }
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&captured_events);
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let scope_local_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    for (session_id, agent_kind, tool_call_id, permission_tool_call_id) in [
+        (
+            "claude-permission-denied",
+            AgentKind::ClaudeCode,
+            "claude-call",
+            "",
+        ),
+        (
+            "codex-permission-denied",
+            AgentKind::Codex,
+            "codex-call",
+            "codex-call",
+        ),
+    ] {
+        let arguments = json!({"path": "README.md"});
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: tool_call_id.into(),
+                    tool_name: DENIED_TOOL.into(),
+                    subagent_id: None,
+                    arguments: arguments.clone(),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+                "client-a",
+            )
+            .await
+            .unwrap();
+
+        if agent_kind == AgentKind::ClaudeCode {
+            let sessions = manager.inner.lock().await;
+            let session = sessions.get(session_id).unwrap();
+            let scope_stack = session.scope_stack.clone();
+            let parent_uuid = session.tools[tool_call_id].handle.parent_uuid.unwrap();
+            drop(sessions);
+            let scope_local = Arc::clone(&scope_local_events);
+            with_scope_stack(scope_stack, || {
+                scope_register_subscriber(
+                    &parent_uuid,
+                    "permission-denied-tool-close",
+                    Arc::new(move |event| scope_local.lock().unwrap().push(event.clone())),
+                )
+            })
+            .unwrap();
+        }
+
+        let result = manager
+            .authorize_tool_permission(
+                &ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind,
+                    event_name: "PermissionRequest".into(),
+                    tool_call_id: permission_tool_call_id.into(),
+                    tool_name: DENIED_TOOL.into(),
+                    subagent_id: None,
+                    arguments,
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                },
+                "client-a",
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(CliError::Flow(FlowError::GuardrailRejected(_)))
+        ));
+        assert!(
+            manager
+                .inner
+                .lock()
+                .await
+                .get(session_id)
+                .is_some_and(|session| !session.tools.contains_key(tool_call_id)),
+            "a rejected permission must close the active {agent_kind:?} tool"
+        );
+    }
+
+    let allowed_session = "codex-permission-allowed";
+    let allowed_call = "codex-allowed-call";
+    let allowed_arguments = json!({"path": "CONTRIBUTING.md"});
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolStarted(ToolEvent {
+                session_id: allowed_session.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PreToolUse".into(),
+                tool_call_id: allowed_call.into(),
+                tool_name: ALLOWED_TOOL.into(),
+                subagent_id: None,
+                arguments: allowed_arguments.clone(),
+                result: Value::Null,
+                status: None,
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    manager
+        .authorize_tool_permission(
+            &ToolEvent {
+                session_id: allowed_session.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PermissionRequest".into(),
+                tool_call_id: allowed_call.into(),
+                tool_name: ALLOWED_TOOL.into(),
+                subagent_id: None,
+                arguments: allowed_arguments.clone(),
+                result: Value::Null,
+                status: None,
+                payload: json!({}),
+                metadata: json!({}),
+            },
+            "client-a",
+        )
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .inner
+            .lock()
+            .await
+            .get(allowed_session)
+            .is_some_and(|session| session.tools.contains_key(allowed_call)),
+        "an allowed permission must leave the tool active"
+    );
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolEnded(ToolEvent {
+                session_id: allowed_session.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PostToolUse".into(),
+                tool_call_id: allowed_call.into(),
+                tool_name: ALLOWED_TOOL.into(),
+                subagent_id: None,
+                arguments: allowed_arguments,
+                result: json!({"ok": true}),
+                status: Some("success".into()),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    flush_subscribers().unwrap();
+    deregister_subscriber(SUBSCRIBER).unwrap();
+    let events = captured_events.lock().unwrap();
+    for tool_call_id in ["claude-call", "codex-call", "codex-allowed-call"] {
+        let tool_events = events
+            .iter()
+            .filter(|event| event.tool_call_id() == Some(tool_call_id))
+            .collect::<Vec<_>>();
+        let tool_start = tool_events
+            .iter()
+            .find(|event| event.scope_category() == Some(ScopeCategory::Start))
+            .unwrap();
+        let permission_events = events
+            .iter()
+            .filter(|event| {
+                event.scope_type() == Some(ScopeType::Guardrail)
+                    && event.name() == GUARDRAIL
+                    && event.metadata().is_some_and(|metadata| {
+                        metadata["gen_ai.tool.call.id"] == json!(tool_call_id)
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(permission_events.len(), 2);
+        assert!(
+            permission_events
+                .iter()
+                .all(|event| event.parent_uuid() == tool_start.parent_uuid()),
+            "permission guardrail events must share the exact tool parent"
+        );
+    }
+
+    for tool_call_id in ["claude-call", "codex-call"] {
+        let denied_end = events
+            .iter()
+            .find(|event| {
+                event.tool_call_id() == Some(tool_call_id)
+                    && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .unwrap();
+        let metadata = denied_end.metadata().unwrap();
+        assert_eq!(metadata["error.type"], "guardrail_rejected");
+        assert_eq!(metadata["otel.status_code"], "ERROR");
+        assert_eq!(metadata["status"], "denied");
+    }
+    let scope_local_events = scope_local_events.lock().unwrap();
+    let scoped_permission_events = scope_local_events
+        .iter()
+        .filter(|event| {
+            event.scope_type() == Some(ScopeType::Guardrail)
+                && event.name() == GUARDRAIL
+                && event
+                    .metadata()
+                    .is_some_and(|metadata| metadata["gen_ai.tool.call.id"] == json!("claude-call"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(scoped_permission_events.len(), 2);
+    assert!(
+        [ScopeCategory::Start, ScopeCategory::End]
+            .into_iter()
+            .all(|category| scoped_permission_events
+                .iter()
+                .any(|event| event.scope_category() == Some(category)))
+    );
+    let scoped_denied_tool_ends = scope_local_events
+        .iter()
+        .filter(|event| {
+            event.tool_call_id() == Some("claude-call")
+                && event.scope_category() == Some(ScopeCategory::End)
+                && event
+                    .metadata()
+                    .is_some_and(|metadata| metadata["error.type"] == "guardrail_rejected")
+        })
+        .count();
+    assert_eq!(scoped_denied_tool_ends, 1);
+    assert!(scope_local_events.iter().all(|event| {
+        !matches!(
+            event.tool_call_id(),
+            Some("codex-call" | "codex-allowed-call")
+        ) && event.metadata().is_none_or(|metadata| {
+            !matches!(
+                metadata["gen_ai.tool.call.id"].as_str(),
+                Some("codex-call" | "codex-allowed-call")
+            )
+        })
+    }));
+    drop(scope_local_events);
+
+    let allowed_permission_end = events
+        .iter()
+        .find(|event| {
+            event.scope_type() == Some(ScopeType::Guardrail)
+                && event.scope_category() == Some(ScopeCategory::End)
+                && event
+                    .metadata()
+                    .is_some_and(|metadata| metadata["gen_ai.tool.call.id"] == json!(allowed_call))
+        })
+        .unwrap();
+    assert_eq!(allowed_permission_end.data().unwrap()["allowed"], true);
+}
+
+#[tokio::test]
+async fn close_all_waits_for_an_in_flight_permission_decision() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "cli-permission-close-all-drain";
+    const SUBSCRIBER: &str = "cli-permission-close-all-capture";
+    const TOOL: &str = "PermissionCloseAllDrain";
+    const SESSION: &str = "permission-close-all-session";
+    const TOOL_CALL: &str = "permission-close-all-tool";
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    let _ = deregister_subscriber(SUBSCRIBER);
+
+    let invocation = Arc::new(AtomicUsize::new(0));
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new({
+            let invocation = Arc::clone(&invocation);
+            move |name, _| {
+                let invocation = Arc::clone(&invocation);
+                let started_tx = Arc::clone(&started_tx);
+                let release_rx = Arc::clone(&release_rx);
+                Box::pin(async move {
+                    if name == TOOL && invocation.fetch_add(1, Ordering::SeqCst) == 1 {
+                        if let Some(started) = started_tx.lock().unwrap().take() {
+                            let _ = started.send(());
+                        }
+                        let release = { release_rx.lock().unwrap().take() };
+                        if let Some(release) = release {
+                            let _ = release.await;
+                        }
+                        return Ok(Some("blocked by host permission".into()));
+                    }
+                    Ok(None)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
+
+    let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&captured_events);
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let arguments = json!({"path": "README.md"});
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolStarted(ToolEvent {
+                session_id: SESSION.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PreToolUse".into(),
+                tool_call_id: TOOL_CALL.into(),
+                tool_name: TOOL.into(),
+                subagent_id: None,
+                arguments: arguments.clone(),
+                result: Value::Null,
+                status: None,
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap();
+
+    let authorizing_manager = manager.clone();
+    let authorizing = tokio::spawn(async move {
+        authorizing_manager
+            .authorize_tool_permission(
+                &ToolEvent {
+                    session_id: SESSION.into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PermissionRequest".into(),
+                    tool_call_id: TOOL_CALL.into(),
+                    tool_name: TOOL.into(),
+                    subagent_id: None,
+                    arguments,
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                },
+                "client-a",
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("permission guardrail should start")
+        .unwrap();
+
+    let closing_manager = manager.clone();
+    let mut closing = tokio::spawn(async move { closing_manager.close_all("test_shutdown").await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut closing)
+            .await
+            .is_err(),
+        "close_all must wait until the permission decision closes the denied tool"
+    );
+    let late_request = tokio::time::timeout(
+        Duration::from_millis(100),
+        manager.authorize_tool_permission(
+            &ToolEvent {
+                session_id: SESSION.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PermissionRequest".into(),
+                tool_call_id: TOOL_CALL.into(),
+                tool_name: TOOL.into(),
+                subagent_id: None,
+                arguments: json!({"path": "README.md"}),
+                result: Value::Null,
+                status: None,
+                payload: json!({}),
+                metadata: json!({}),
+            },
+            "client-a",
+        ),
+    )
+    .await
+    .expect("a permission request arriving during shutdown must not await the session gate");
+    assert!(matches!(
+        late_request,
+        Err(CliError::InvalidPayload(reason))
+            if reason == "permission request arrived after session shutdown began"
+    ));
+
+    release_tx.send(()).unwrap();
+    assert!(matches!(
+        authorizing.await.unwrap(),
+        Err(CliError::Flow(FlowError::GuardrailRejected(_)))
+    ));
+    closing.await.unwrap().unwrap();
+    assert!(manager.inner.lock().await.is_empty());
+
+    flush_subscribers().unwrap();
+    deregister_subscriber(SUBSCRIBER).unwrap();
+    let events = captured_events.lock().unwrap();
+    let tool_start = events
+        .iter()
+        .position(|event| {
+            event.tool_call_id() == Some(TOOL_CALL)
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap();
+    let denied_tool_ends = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| {
+            event.tool_call_id() == Some(TOOL_CALL)
+                && event.scope_category() == Some(ScopeCategory::End)
+                && event
+                    .metadata()
+                    .is_some_and(|metadata| metadata["error.type"] == "guardrail_rejected")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(denied_tool_ends.len(), 1);
+    let containing_scope = events[tool_start].parent_uuid().unwrap();
+    let containing_scope_end = events
+        .iter()
+        .position(|event| {
+            event.uuid() == containing_scope && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert!(denied_tool_ends[0].0 < containing_scope_end);
+}
+
+#[tokio::test]
+async fn invalid_permission_requests_do_not_emit_policy_marks() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const SUBSCRIBER: &str = "cli-invalid-permission-policy-mark-test";
+    let _ = deregister_subscriber(SUBSCRIBER);
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let events = Arc::clone(&captured);
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let session_id = "permission-policy-mark-invalid";
+    let arguments = json!({"outcome": "pass"});
+    let mut session = Session::new(
+        session_id.into(),
+        AgentKind::ClaudeCode,
+        SessionConfig::default(),
+    );
+    session.pending_tool_hints.push(PendingToolHint {
+        hint: ToolHint {
+            tool_call_id: Some("call-1".into()),
+            tool_name: Some("PermissionAuditTool".into()),
+            subagent_id: None,
+            arguments: arguments.clone(),
+            source: "test".into(),
+        },
+        inserted_at: Instant::now(),
+    });
+    manager
+        .inner
+        .lock()
+        .await
+        .insert(session_id.into(), session);
+    manager
+        .authenticated_owners
+        .lock()
+        .await
+        .insert(session_id.into(), "client-a".into());
+
+    let result = manager
+        .authorize_tool_permission(
+            &ToolEvent {
+                session_id: session_id.into(),
+                agent_kind: AgentKind::ClaudeCode,
+                event_name: "PermissionRequest".into(),
+                tool_call_id: "call-1".into(),
+                tool_name: "DifferentTool".into(),
+                subagent_id: None,
+                arguments,
+                result: Value::Null,
+                status: None,
+                payload: json!({"permission_mode": "default"}),
+                metadata: json!({}),
+            },
+            "client-a",
+        )
+        .await;
+    assert!(result.is_err());
+
+    flush_subscribers().unwrap();
+    assert!(captured.lock().unwrap().iter().all(|event| {
+        event.name() != "nemo_relay.permission.policy_decision"
+            || event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str)
+                != Some(session_id)
+    }));
+    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
+}
+
+#[tokio::test]
+async fn permission_requests_emit_policy_decision_marks() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
+    const SUBSCRIBER: &str = "cli-permission-policy-mark-atof-test";
+    let _ = deregister_subscriber(SUBSCRIBER);
+    register_subscriber(SUBSCRIBER, exporter.subscriber()).unwrap();
+
+    const GUARDRAIL: &str = "cli-permission-policy-mark-guardrail";
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|name, args| {
+            Box::pin(async move {
+                if name != "PermissionAuditTool" {
+                    return Ok(None);
+                }
+                match args["outcome"].as_str() {
+                    Some("reject") => Ok(Some("blocked by permission test".into())),
+                    Some("error") => {
+                        Err(FlowError::Internal("permission backend unavailable".into()))
+                    }
+                    _ => Ok(None),
+                }
+            })
+        }),
+    )
+    .unwrap();
+    let _cleanup = ToolGuardrailCleanup(GUARDRAIL);
+    let manager = SessionManager::new(session_test_config());
+
+    for (index, (outcome, policy_outcome, reason_fragment)) in [
+        ("pass", "pass", None),
+        ("reject", "reject", Some("blocked by permission test")),
+        ("error", "error", Some("permission backend unavailable")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let session_id = format!("permission-policy-mark-{index}");
+        let arguments = json!({"outcome": outcome});
+        let mut session = Session::new(
+            session_id.clone(),
+            AgentKind::ClaudeCode,
+            SessionConfig::default(),
+        );
+        session.pending_tool_hints.push(PendingToolHint {
+            hint: ToolHint {
+                tool_call_id: Some("call-1".into()),
+                tool_name: Some("PermissionAuditTool".into()),
+                subagent_id: None,
+                arguments: arguments.clone(),
+                source: "test".into(),
+            },
+            inserted_at: Instant::now(),
+        });
+        manager
+            .inner
+            .lock()
+            .await
+            .insert(session_id.clone(), session);
+        manager
+            .authenticated_owners
+            .lock()
+            .await
+            .insert(session_id.clone(), "client-a".into());
+        let payload = match index {
+            0 => json!({"permission_mode": "future-mode"}),
+            1 => json!({}),
+            _ => json!({"permission_mode": false}),
+        };
+        let metadata = match index {
+            0 => json!({
+                "hook_event_name": "PermissionRequest",
+                "session_id": "spoofed-session",
+                "agent_version": "spoofed-version",
+                "test_context": "preserved",
+            }),
+            1 => json!({}),
+            _ => Value::Null,
+        };
+        let request = ToolEvent {
+            session_id: session_id.clone(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: "PermissionRequest".into(),
+            tool_call_id: "call-1".into(),
+            tool_name: "PermissionAuditTool".into(),
+            subagent_id: None,
+            arguments,
+            result: Value::Null,
+            status: None,
+            payload,
+            metadata,
+        };
+
+        let result = manager
+            .authorize_tool_permission(&request, "client-a")
+            .await;
+        assert_eq!(result.is_ok(), outcome == "pass");
+        if outcome == "reject" {
+            assert_eq!(
+                result.unwrap_err().guardrail_rejection_reason(),
+                Some("blocked by permission test")
+            );
+        } else if outcome == "error" {
+            assert!(result.unwrap_err().guardrail_rejection_reason().is_none());
+        }
+        flush_subscribers().unwrap();
+        exporter.force_flush().unwrap();
+        let events = read_atof_events(exporter.path().expect("file sink path"));
+        let marks: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event["name"] == "nemo_relay.permission.policy_decision"
+                    && event["metadata"]["session_id"] == session_id
+            })
+            .collect();
+        assert_eq!(marks.len(), 1);
+        let mark = marks[0];
+        assert_eq!(mark["kind"], "mark");
+        assert_eq!(mark["category"], "custom");
+        assert_eq!(
+            mark["category_profile"]["subtype"],
+            "nemo_relay.permission.policy_decision"
+        );
+        assert!(mark["data"].get("decision").is_none());
+        assert_eq!(mark["data"]["decision_source"], "nemo_relay");
+        assert_eq!(mark["data"]["policy_outcome"], policy_outcome);
+        assert_eq!(mark["data"]["agent_kind"], "claude-code");
+        assert_eq!(mark["data"]["event_name"], "PermissionRequest");
+        assert_eq!(mark["data"]["tool_call_id"], "call-1");
+        assert_eq!(mark["data"]["tool_name"], "PermissionAuditTool");
+        assert_eq!(mark["metadata"]["session_id"], session_id);
+        assert_eq!(mark["metadata"]["turn_id"], "0");
+        assert_eq!(mark["metadata"]["harness"], "claude-code");
+        assert_eq!(mark["metadata"]["source"], "hook");
+        assert_eq!(mark["metadata"]["identity_quality"], "native");
+        if index == 0 {
+            assert_eq!(mark["metadata"]["hook_event_name"], "PermissionRequest");
+            assert_eq!(mark["metadata"]["test_context"], "preserved");
+            assert!(mark["metadata"].get("agent_version").is_none());
+        }
+        assert!(mark["metadata"].get("owner").is_none());
+        assert!(!mark.to_string().contains("client-a"));
+        assert_eq!(
+            mark["data"].get("harness_permission_mode"),
+            request
+                .payload
+                .get("permission_mode")
+                .filter(|value| value.as_str().is_some_and(|mode| !mode.is_empty()))
+        );
+        assert!(mark["metadata"].get("permission_mode").is_none());
+        match reason_fragment {
+            Some(fragment) => assert!(
+                mark["data"]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains(fragment)),
+                "unexpected policy reason: {}",
+                mark["data"]["reason"]
+            ),
+            None => assert!(mark["data"].get("reason").is_none()),
+        }
+    }
+
+    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
 }
 
 #[test]
@@ -1575,6 +2299,66 @@ fn scope_metadata_recovers_poisoned_scope_stack_for_instance_id() {
     );
 }
 
+#[test]
+fn agent_version_follows_launched_harness_across_session_metadata_paths() {
+    for (kind, version) in [
+        (AgentKind::ClaudeCode, "2.1.121"),
+        (AgentKind::Codex, "0.143.0"),
+    ] {
+        let config = GatewayConfig {
+            launched_agent: Some(crate::configuration::LaunchedAgent {
+                kind,
+                version: version.into(),
+            }),
+            ..GatewayConfig::default()
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-nemo-relay-session-metadata",
+            axum::http::HeaderValue::from_static(
+                r#"{"team":"test","agent_version":"header-value"}"#,
+            ),
+        );
+        let session = Session::new(
+            "session".into(),
+            kind,
+            config.session_config_from_headers(&headers),
+        );
+        let metadata = json!({"agent_version": "event-value", "custom": "kept"});
+        for result in [
+            session.scope_metadata(metadata.clone()),
+            session.event_identity_metadata(metadata.clone()),
+            session.merge_llm_identity_metadata(metadata.clone(), Some("conversation")),
+            session
+                .trusted_boundary_metadata(Some(metadata.clone()))
+                .expect("hook boundary metadata"),
+        ] {
+            assert_eq!(result["agent_version"], version);
+            assert_eq!(result["custom"], "kept");
+        }
+        assert_eq!(session.trusted_boundary_metadata(None), None);
+        assert_eq!(session.scope_metadata(Value::Null)["team"], "test");
+
+        // Neither an unrelated harness nor an unwrapped session inherits this version.
+        for (other_kind, session_config) in [
+            (
+                AgentKind::Gateway,
+                config.session_config_from_headers(&headers),
+            ),
+            (kind, SessionConfig::default()),
+        ] {
+            let other = Session::new("other".into(), other_kind, session_config);
+            for result in [
+                other.scope_metadata(metadata.clone()),
+                other.event_identity_metadata(metadata.clone()),
+                other.merge_llm_identity_metadata(metadata.clone(), None),
+            ] {
+                assert!(result.get("agent_version").is_none());
+            }
+        }
+    }
+}
+
 async fn apply_codex_payload(manager: &SessionManager, headers: &HeaderMap, payload: Value) {
     let outcome = crate::agents::shared::adapters::codex::adapt(payload, headers);
     manager.apply_events(headers, outcome.events).await.unwrap();
@@ -1723,6 +2507,7 @@ async fn has_pending_alignment(manager: &SessionManager, session_id: &str) -> bo
 #[tokio::test]
 async fn nests_agent_subagent_and_tool_lifecycle() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -1731,6 +2516,7 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -1895,6 +2681,33 @@ async fn assert_harness_tool_execution_metadata(kind: AgentKind, post_only: bool
     }
     flush_subscribers().unwrap();
     let events = captured.lock().unwrap();
+    if post_only {
+        assert_harness_tool_completion_mark(kind, &events);
+    } else {
+        assert_harness_tool_execution_pair(kind, &events);
+    }
+    drop(events);
+    assert!(deregister_subscriber(&session_id).unwrap());
+}
+
+fn assert_harness_tool_completion_mark(kind: AgentKind, events: &[Event]) {
+    let mark = events
+        .iter()
+        .find(|event| event.name() == "tool_end_without_start")
+        .unwrap();
+    assert_eq!(mark.data().unwrap()["tool_call_id"], "gen-ai-call-1");
+    assert_eq!(mark.data().unwrap()["result"]["stdout"], "/tmp");
+    assert_eq!(mark.metadata().unwrap()["start_observed"], false);
+    assert_eq!(mark.metadata().unwrap()["gen_ai.agent.name"], kind.as_str());
+    assert!(
+        events
+            .iter()
+            .all(|event| event.tool_call_id() != Some("gen-ai-call-1"))
+    );
+    assert_completion_marks_omitted_from_genai(events);
+}
+
+fn assert_harness_tool_execution_pair(kind: AgentKind, events: &[Event]) {
     let tool_events: Vec<_> = events
         .iter()
         .filter(|event| event.tool_call_id() == Some("gen-ai-call-1"))
@@ -1910,7 +2723,7 @@ async fn assert_harness_tool_execution_metadata(kind: AgentKind, post_only: bool
     assert_eq!(
         tool_events.len(),
         2,
-        "one start/end pair, including post-only hooks"
+        "one start/end pair for a matched completion"
     );
     assert_eq!(start.uuid(), end.uuid());
     assert_eq!(start.parent_uuid(), end.parent_uuid());
@@ -1932,9 +2745,7 @@ async fn assert_harness_tool_execution_metadata(kind: AgentKind, post_only: bool
         kind.as_str()
     );
     assert!(metadata.get("gen_ai.tool.description").is_none());
-    assert_harness_genai_tool_span(kind, &events);
-    drop(events);
-    assert!(deregister_subscriber(&session_id).unwrap());
+    assert_harness_genai_tool_span(kind, events);
 }
 
 fn assert_harness_genai_tool_span(kind: AgentKind, events: &[Event]) {
@@ -2962,6 +3773,7 @@ async fn new_subagent_claims_first_unhinted_llm_when_siblings_active() {
         .unwrap();
 }
 
+/// Verify transcript-derived parent identity nests a Codex child under its parent task.
 #[tokio::test]
 async fn codex_subagent_session_start_uses_transcript_parent_thread() {
     let manager = SessionManager::new(session_test_config());
@@ -3016,10 +3828,10 @@ async fn codex_subagent_session_start_uses_transcript_parent_thread() {
     assert!(sessions.get("child-thread").is_none());
     let parent = sessions.get("parent-thread").unwrap();
     assert!(parent.agent_scope.is_none());
-    let turn_uuid = active_turn_uuid(parent);
+    let task_uuid = parent.task_scope.as_ref().unwrap().uuid;
     assert_eq!(
         parent.subagents.get("child-thread").unwrap().parent_uuid,
-        Some(turn_uuid)
+        Some(task_uuid)
     );
     drop(sessions);
 
@@ -3579,6 +4391,7 @@ async fn codex_subagent_gateway_llm_routes_to_parent_subagent() {
         .unwrap();
 }
 
+/// Verify configured ATIF export finalizes a Codex task on session completion.
 #[tokio::test]
 async fn writes_atif_on_session_end_from_plugin_config() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -3586,6 +4399,7 @@ async fn writes_atif_on_session_end_from_plugin_config() {
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -3594,6 +4408,7 @@ async fn writes_atif_on_session_end_from_plugin_config() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -3643,7 +4458,7 @@ async fn writes_atif_on_session_end_from_plugin_config() {
     );
     assert_eq!(
         atif["extra"]["observed_events"][0]["name"],
-        json!("codex-turn")
+        json!("codex-task")
     );
     assert_eq!(
         atif["extra"]["nemo_relay"]["session_id"],
@@ -3653,12 +4468,15 @@ async fn writes_atif_on_session_end_from_plugin_config() {
     let session_instance_id = atif["extra"]["nemo_relay"]["session_instance_id"]
         .as_str()
         .unwrap();
+    let task_start = &atif["extra"]["observed_events"][0];
+    assert_eq!(task_start["uuid"], json!(session_instance_id));
     assert_eq!(
-        atif["extra"]["observed_events"][0]["metadata"]["session_instance_id"],
-        json!(session_instance_id)
+        task_start["metadata"]["session_instance_id"],
+        task_start["parent_uuid"]
     );
 }
 
+/// Verify Codex Stop exports completed task trajectories without a durable session-end hook.
 #[tokio::test]
 async fn codex_stop_snapshots_atif_without_session_end() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -3680,7 +4498,7 @@ async fn codex_stop_snapshots_atif_without_session_end() {
     test_close_plugin_host().unwrap();
     let atif = read_atif_for_session(&atif_dir, "codex-atif-stop");
     assert_eq!(atif["schema_version"], json!("ATIF-v1.7"));
-    assert_ne!(atif["trajectory_id"], atif["session_id"]);
+    assert_eq!(atif["trajectory_id"], atif["session_id"]);
     assert!(atif["subagent_trajectories"].is_null());
     assert_eq!(atif["final_metrics"]["total_steps"], json!(2));
 
@@ -3705,8 +4523,8 @@ async fn codex_stop_snapshots_atif_without_session_end() {
                 && event["scope_category"] == "end"
         })
         .expect("Codex Stop should close the turn scope");
-    assert_eq!(turn_start["uuid"], atif["trajectory_id"]);
-    assert_eq!(turn_end["uuid"], atif["trajectory_id"]);
+    assert_eq!(turn_start["parent_uuid"], atif["trajectory_id"]);
+    assert_eq!(turn_end["uuid"], turn_start["uuid"]);
     assert_eq!(
         turn_end["data"]["output"][0]["call_id"],
         json!("tool-call-1")
@@ -4193,7 +5011,7 @@ async fn execute_prepared_llm(manager: &SessionManager, prep: GatewayCallPrep, r
         attributes,
         metadata,
         model_name,
-        owner_subagent_id: _,
+        owner_subagent_id,
         bypass_managed_pipeline,
         session_finish,
     } = prep;
@@ -4226,7 +5044,7 @@ async fn execute_prepared_llm(manager: &SessionManager, prep: GatewayCallPrep, r
         .await
         .unwrap();
     manager
-        .finish_gateway_call(&session_id, session_finish)
+        .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
         .await;
 }
 
@@ -4241,6 +5059,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -4249,6 +5068,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -4429,6 +5249,7 @@ async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
 #[tokio::test]
 async fn handles_out_of_order_subagent_and_tool_end_events() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -4437,6 +5258,7 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -4507,6 +5329,7 @@ async fn terminal_retry_for_unknown_session_is_ignored() {
 #[tokio::test]
 async fn out_of_order_started_subagent_end_does_not_leak_scope() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -4515,6 +5338,7 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -4581,6 +5405,7 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
 #[tokio::test]
 async fn agent_end_closes_nested_active_subagents_lifo() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -4589,6 +5414,7 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -4639,6 +5465,7 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
 #[tokio::test]
 async fn llm_lifecycle_starts_implicit_gateway_session() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -4647,6 +5474,7 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -4760,7 +5588,11 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
         json!("claude_startup_probe")
     );
     manager
-        .finish_gateway_call(&prep.session_id, prep.session_finish)
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            prep.session_finish,
+        )
         .await;
 
     manager
@@ -4813,7 +5645,11 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
     assert!(manager.inner.lock().await.contains_key("probe-only"));
 
     manager
-        .finish_gateway_call(&prep.session_id, prep.session_finish)
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            prep.session_finish,
+        )
         .await;
     assert!(!manager.inner.lock().await.contains_key("probe-only"));
 
@@ -4901,7 +5737,11 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
         .unwrap();
     assert!(!prep.bypass_managed_pipeline);
     manager
-        .finish_gateway_call(&prep.session_id, prep.session_finish)
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            prep.session_finish,
+        )
         .await;
 
     manager
@@ -5101,12 +5941,12 @@ async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn()
         0,
         "orphan SubagentStop must not create a turn later closed by idle timeout: {events:#?}"
     );
-    assert!(
-        events
-            .iter()
-            .all(|event| event["kind"] != json!("orphan_mark")),
-        "uncorrelatable Claude SubagentStop should not emit a turn-scoped orphan mark: {events:#?}"
-    );
+    let marks: Vec<_> = events
+        .iter()
+        .filter(|event| event["kind"] == "orphan_mark")
+        .collect();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0]["metadata"]["start_observed"], false);
 
     let atif = read_atif_for_session(&atif_dir, "claude-orphan-stop");
     assert_eq!(atif["steps"].as_array().unwrap().len(), 2);
@@ -5124,6 +5964,7 @@ async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn()
 #[tokio::test]
 async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -5132,6 +5973,7 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -5230,7 +6072,11 @@ async fn unidentified_concurrent_gateway_calls_use_isolated_ephemeral_sessions()
     assert!(second.session_id.starts_with("gateway-isolated-"));
 
     manager
-        .finish_gateway_call(&first.session_id, first.session_finish)
+        .finish_gateway_call(
+            &first.session_id,
+            first.owner_subagent_id.as_deref(),
+            first.session_finish,
+        )
         .await;
     {
         let sessions = manager.inner.lock().await;
@@ -5241,7 +6087,11 @@ async fn unidentified_concurrent_gateway_calls_use_isolated_ephemeral_sessions()
     }
 
     manager
-        .finish_gateway_call(&second.session_id, second.session_finish)
+        .finish_gateway_call(
+            &second.session_id,
+            second.owner_subagent_id.as_deref(),
+            second.session_finish,
+        )
         .await;
     assert!(!manager.has_open_sessions().await);
     let sessions = manager.inner.lock().await;
@@ -5253,6 +6103,7 @@ async fn unidentified_concurrent_gateway_calls_use_isolated_ephemeral_sessions()
 #[tokio::test]
 async fn single_pending_llm_hint_claims_next_gateway_llm() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -5261,6 +6112,7 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -5352,6 +6204,7 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
 #[tokio::test]
 async fn multiple_llm_hints_resolve_by_generation_id() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -5360,6 +6213,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -5469,6 +6323,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
 #[tokio::test]
 async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -5477,6 +6332,7 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -5564,6 +6420,7 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
 #[tokio::test]
 async fn no_active_hint_reuses_last_llm_owner() {
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -5572,6 +6429,7 @@ async fn no_active_hint_reuses_last_llm_owner() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -6708,7 +7566,11 @@ async fn idle_timeout_waits_for_active_gateway_llm_call() {
     );
 
     manager
-        .finish_gateway_call(&prep.session_id, GatewaySessionFinish::Retain)
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            GatewaySessionFinish::Retain,
+        )
         .await;
     let closed = manager
         .close_idle_sessions_at(
@@ -7397,6 +8259,7 @@ fn merge_metadata_handles_objects_nulls_and_scalars() {
 fn session_test_config() -> GatewayConfig {
     crate::test_support::enable_operational_logs();
     GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -7405,6 +8268,7 @@ fn session_test_config() -> GatewayConfig {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     }
 }
@@ -7413,6 +8277,7 @@ fn session_test_config() -> GatewayConfig {
 async fn turn_ended_is_noop_without_active_turn_scope() {
     let temp = tempfile::tempdir().unwrap();
     let config = GatewayConfig {
+        response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
@@ -7421,6 +8286,7 @@ async fn turn_ended_is_noop_without_active_turn_scope() {
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let manager = SessionManager::new(config);
@@ -8081,4 +8947,2016 @@ async fn an_inline_shell_span_closes_even_when_its_end_never_arrives() {
     );
     drop(captured);
     deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn mcp_harness_metadata_reaches_tool_events_and_promoted_spans() {
+    for kind in [AgentKind::ClaudeCode, AgentKind::Codex] {
+        for ending in ["paired", "post-only", "failure", "permission-denied"] {
+            assert_mcp_harness_metadata(kind, ending).await;
+        }
+    }
+}
+
+async fn assert_mcp_harness_metadata(kind: AgentKind, ending: &str) {
+    let session_id = format!("mcp-{}-{ending}", kind.as_str());
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let events = Arc::clone(&captured);
+    register_filtered_session_subscriber(
+        &session_id,
+        tracked_sessions(&[&session_id]),
+        Arc::new(move |event| events.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    apply_mcp_harness_hooks(&manager, &session_id, kind, ending).await;
+    flush_subscribers().unwrap();
+    deregister_subscriber(&session_id).unwrap();
+    let events = captured.lock().unwrap();
+    if ending == "post-only" {
+        let mark = events
+            .iter()
+            .find(|event| event.name() == "tool_end_without_start")
+            .unwrap();
+        assert_eq!(mark.metadata().unwrap()["mcp.method.name"], "tools/call");
+        assert_eq!(mark.data().unwrap()["tool_call_id"], "mcp-call");
+        assert_completion_marks_omitted_from_genai(&events);
+        return;
+    }
+    let tool_events: Vec<_> = events
+        .iter()
+        .filter(|event| event.tool_call_id() == Some("mcp-call"))
+        .collect();
+    assert_eq!(tool_events.len(), 2, "{session_id}");
+    let end = tool_events
+        .iter()
+        .find(|event| event.scope_category() == Some(ScopeCategory::End))
+        .unwrap();
+    // A denied close has no completion hook, so its method may exist only
+    // on the start. Ordinary completion must expose it to metric subscribers.
+    if ending != "permission-denied" {
+        assert_eq!(end.metadata().unwrap()["mcp.method.name"], "tools/call");
+    } else {
+        assert_eq!(end.metadata().unwrap()["status"], "denied");
+        assert_eq!(end.metadata().unwrap()["error.type"], "guardrail_rejected");
+    }
+    let exporter = InMemorySpanExporterBuilder::new().build();
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
+        provider,
+        "mcp-normalization",
+        OpenTelemetryType::GenAi,
+        nemo_relay::observability::otel::OpenTelemetrySubscriberOptions {
+            promote_metadata_prefixes: vec!["mcp.method.name".into()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for event in events.iter() {
+        subscriber.subscriber()(event);
+    }
+    subscriber.force_flush().unwrap();
+    let spans = exporter.get_finished_spans().unwrap();
+    let tool = spans
+        .iter()
+        .find(|span| span.name == "execute_tool mcp__docs__search")
+        .unwrap();
+    let attrs = attr_map(&tool.attributes);
+    assert_eq!(attrs["mcp.method.name"], "tools/call");
+    assert_eq!(attrs["gen_ai.tool.call.id"], "mcp-call");
+    assert!(!attrs.contains_key("server.address"));
+    assert!(!attrs.contains_key("mcp.session.id"));
+    if ending == "permission-denied" {
+        assert!(matches!(
+            tool.status,
+            opentelemetry::trace::Status::Error { .. }
+        ));
+    }
+    subscriber.shutdown().unwrap();
+}
+
+async fn apply_mcp_harness_hooks(
+    manager: &SessionManager,
+    session_id: &str,
+    kind: AgentKind,
+    ending: &str,
+) {
+    let adapt = match kind {
+        AgentKind::ClaudeCode => crate::agents::shared::adapters::claude_code::adapt,
+        AgentKind::Codex => crate::agents::shared::adapters::codex::adapt,
+        _ => unreachable!(),
+    };
+    let headers = HeaderMap::new();
+    for hook in ["SessionStart", "PreToolUse", "PostToolUse", "SessionEnd"] {
+        if ending == "post-only" && hook == "PreToolUse" {
+            continue;
+        }
+        if ending == "permission-denied" && hook == "PostToolUse" {
+            manager
+                .inner
+                .lock()
+                .await
+                .get_mut(session_id)
+                .unwrap()
+                .close_permission_denied_tool("mcp-call")
+                .unwrap();
+            continue;
+        }
+        let hook = if ending == "failure" && hook == "PostToolUse" {
+            if kind == AgentKind::Codex {
+                "toolFailed"
+            } else {
+                "PostToolUseFailure"
+            }
+        } else {
+            hook
+        };
+        let outcome = adapt(
+            json!({
+                "session_id": session_id, "hook_event_name": hook,
+                "tool_name": "mcp__docs__search", "tool_use_id": "mcp-call",
+                "tool_input": {"query": "example"}, "tool_response": {"ok": true},
+            }),
+            &headers,
+        );
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+}
+
+fn assert_completion_marks_omitted_from_genai(events: &[Event]) {
+    let exporter = InMemorySpanExporterBuilder::new().build();
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        provider,
+        "partial-hooks",
+        OpenTelemetryType::GenAi,
+    );
+    for event in events {
+        subscriber.subscriber()(event);
+    }
+    subscriber.force_flush().unwrap();
+    assert!(
+        exporter
+            .get_finished_spans()
+            .unwrap()
+            .iter()
+            .all(|span| !span.name.ends_with("_end_without_start")
+                && !span.name.starts_with("execute_tool "))
+    );
+    subscriber.shutdown().unwrap();
+}
+
+fn orphan_tool(session: &str, id: &str) -> ToolEvent {
+    ToolEvent {
+        session_id: session.into(),
+        agent_kind: AgentKind::Codex,
+        event_name: "PostToolUse".into(),
+        tool_call_id: id.into(),
+        tool_name: "partial-test-tool".into(),
+        subagent_id: None,
+        arguments: json!({"secret": "request-secret"}),
+        result: json!({"secret": "result-secret"}),
+        status: Some("success".into()),
+        payload: json!({}),
+        metadata: json!({}),
+    }
+}
+
+#[tokio::test]
+async fn unmatched_completions_deduplicate_stable_ids_suppress_late_starts_and_leave_no_owner() {
+    let session_id = "orphan-completions";
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let capture = captured.clone();
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    let tool = orphan_tool(session_id, "call-1");
+    let mut agent = session_event(session_id, "SessionEnd");
+    agent.payload = json!({"agent_invocation_id": "agent-1", "completion": "done"});
+    let mut turn = session_event(session_id, "Stop");
+    turn.payload = json!({"turn_id": "turn-1", "completion": "done"});
+    let subagent = SubagentEvent {
+        session_id: session_id.into(),
+        agent_kind: AgentKind::Codex,
+        event_name: "SubagentStop".into(),
+        subagent_id: "subagent-1".into(),
+        payload: json!({"completion": "done"}),
+        metadata: json!({}),
+    };
+    let endings = vec![
+        NormalizedEvent::ToolEnded(tool.clone()),
+        NormalizedEvent::AgentEnded(agent.clone()),
+        NormalizedEvent::TurnEnded(turn.clone()),
+        NormalizedEvent::SubagentEnded(subagent.clone()),
+    ];
+    for _ in 0..2 {
+        manager
+            .apply_authenticated_events(&HeaderMap::new(), endings.clone(), "client-a")
+            .await
+            .unwrap();
+    }
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::ToolStarted(tool.clone()),
+                NormalizedEvent::AgentStarted(agent),
+                NormalizedEvent::TurnStarted(turn),
+                NormalizedEvent::SubagentStarted(subagent),
+            ],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    assert!(manager.inner.lock().await.is_empty());
+    assert!(manager.authenticated_owners.lock().await.is_empty());
+    flush_subscribers().unwrap();
+    {
+        let events = captured.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            4,
+            "one point-in-time mark per stable completion"
+        );
+        for event in events.iter() {
+            assert_eq!(event.scope_category(), None);
+            assert!(event.parent_uuid().is_none());
+            assert_eq!(event.metadata().unwrap()["start_observed"], false);
+            assert!(event.input().is_none());
+            assert!(event.output().is_none());
+        }
+        assert_completion_marks_omitted_from_genai(&events);
+    }
+    // Stable identifiers are local to the authenticated owner.
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolEnded(tool)],
+            "client-b",
+        )
+        .await
+        .unwrap();
+    let mut without_id = orphan_tool(session_id, "");
+    without_id.metadata = json!({"tool_call_id_generated": true});
+    let without_subagent_id = SubagentEvent {
+        session_id: session_id.into(),
+        agent_kind: AgentKind::ClaudeCode,
+        event_name: "SubagentStop".into(),
+        subagent_id: "subagent".into(),
+        payload: json!({}),
+        metadata: json!({"subagent_id_generated": true}),
+    };
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::ToolEnded(without_id.clone()),
+                NormalizedEvent::ToolEnded(without_id),
+                NormalizedEvent::SubagentEnded(without_subagent_id.clone()),
+                NormalizedEvent::SubagentEnded(without_subagent_id),
+            ],
+        )
+        .await
+        .unwrap();
+    flush_subscribers().unwrap();
+    assert_eq!(captured.lock().unwrap().len(), 9);
+    deregister_subscriber(session_id).unwrap();
+}
+
+#[tokio::test]
+async fn compound_stop_without_observed_start_emits_one_mark_and_keeps_no_session() {
+    let manager = SessionManager::new(session_test_config());
+    let payload = json!({"session_id": "compound-orphan-stop", "hook_event_name": "Stop", "generation_id": "gen-1"});
+    let outcome = crate::agents::shared::adapters::claude_code::adapt(payload, &HeaderMap::new());
+    assert!(
+        outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, NormalizedEvent::TurnEnded(_)))
+    );
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), outcome.events, "client-a")
+        .await
+        .unwrap();
+    assert!(manager.inner.lock().await.is_empty());
+    assert!(manager.authenticated_owners.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn unmatched_tool_completion_applies_tool_sanitizers_without_executing_tools() {
+    use nemo_relay::api::registry::{
+        deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+        register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
+    };
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let session_id = "orphan-sanitizers";
+    register_tool_sanitize_request_guardrail(
+        session_id,
+        1,
+        Arc::new(|name, args| {
+            Box::pin(async move {
+                Ok(if name == "partial-test-tool" {
+                    json!({"request": "redacted"})
+                } else {
+                    args
+                })
+            })
+        }),
+    )
+    .unwrap();
+    register_tool_sanitize_response_guardrail(
+        session_id,
+        1,
+        Arc::new(|name, result| {
+            Box::pin(async move {
+                Ok(if name == "partial-test-tool" {
+                    json!({"result": "redacted"})
+                } else {
+                    result
+                })
+            })
+        }),
+    )
+    .unwrap();
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let capture = captured.clone();
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolEnded(orphan_tool(
+                session_id, "call-1",
+            ))],
+        )
+        .await
+        .unwrap();
+    flush_subscribers().unwrap();
+    deregister_tool_sanitize_request_guardrail(session_id).unwrap();
+    deregister_tool_sanitize_response_guardrail(session_id).unwrap();
+    let events = captured.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].data().unwrap()["arguments"],
+        json!({"request": "redacted"})
+    );
+    assert_eq!(
+        events[0].data().unwrap()["result"],
+        json!({"result": "redacted"})
+    );
+    assert!(
+        !serde_json::to_string(&*events)
+            .unwrap()
+            .contains("request-secret")
+    );
+    deregister_subscriber(session_id).unwrap();
+}
+
+#[tokio::test]
+async fn unmatched_turn_end_closes_tools_outside_a_turn_and_allows_idle_shutdown() {
+    let session_id = "pi-unmatched-turn-cleanup";
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let capture = captured.clone();
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    for payload in [
+        json!({"hook_event_name": "session_start", "reason": "startup"}),
+        json!({"hook_event_name": "user_bash", "tool_call_id": "shell-1",
+            "tool_name": "user_bash", "input": {"command": "git status"}}),
+    ] {
+        let mut payload = payload;
+        payload["session_id"] = json!(session_id);
+        apply_pi_hook(&manager, payload).await;
+    }
+    assert!(manager.has_open_sessions().await);
+    assert!(manager.inner.lock().await[session_id].turn_scope.is_none());
+    apply_pi_hook(
+        &manager,
+        json!({"session_id": session_id, "hook_event_name": "turn_end"}),
+    )
+    .await;
+    assert!(!manager.has_open_sessions().await);
+    assert!(manager.test_contains_session(session_id).await);
+    flush_subscribers().unwrap();
+    {
+        let events = captured.lock().unwrap();
+        let tool_end = events
+            .iter()
+            .position(|event| {
+                event.name() == "user_bash" && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .unwrap();
+        let mark = events
+            .iter()
+            .position(|event| event.name() == "turn_end_without_start")
+            .unwrap();
+        assert!(tool_end < mark);
+        assert_eq!(events[mark].metadata().unwrap()["start_observed"], false);
+    }
+    manager.close_all("test_complete").await.unwrap();
+    deregister_subscriber(session_id).unwrap();
+}
+
+#[tokio::test]
+async fn identical_completion_ids_from_different_harnesses_remain_independent() {
+    let session_id = "cross-harness-completions";
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let capture = captured.clone();
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    for kind in [AgentKind::Codex, AgentKind::ClaudeCode] {
+        let mut event = session_event(session_id, "SessionEnd");
+        event.agent_kind = kind;
+        event.payload = json!({"agent_invocation_id": "same-invocation"});
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::AgentEnded(event)],
+                "owner",
+            )
+            .await
+            .unwrap();
+    }
+    flush_subscribers().unwrap();
+    assert_eq!(captured.lock().unwrap().len(), 2);
+    assert!(manager.authenticated_owners.lock().await.is_empty());
+    deregister_subscriber(session_id).unwrap();
+}
+
+/// Codex's native child hooks share the root session ID. Exercise that wire shape, including
+/// a delayed child prompt after the parent's Stop and overlapping sibling turns.
+#[tokio::test]
+async fn codex_native_delegation_exports_bounded_owned_task_traces() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    for child_count in [1, 2] {
+        let subscriber_name = "cli-codex-native-task-lineage-test";
+        let _ = deregister_subscriber(subscriber_name);
+        let (subscriber, exporter) = make_openinference_test_subscriber("codex-task-lineage");
+        subscriber.register(subscriber_name).unwrap();
+        let manager = SessionManager::new(session_test_config());
+        for name in ["SessionStart", "UserPromptSubmit"] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "native-root", "hook_event_name": name, "prompt": "inspect files"
+                }),
+            )
+            .await;
+        }
+        for index in 0..child_count {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "native-root", "hook_event_name": "SubagentStart",
+                    "agent_id": format!("native-child-{index}"), "agent_type": "explorer"
+                }),
+            )
+            .await;
+        }
+        let task_uuid = {
+            let sessions = manager.inner.lock().await;
+            let root = sessions.get("native-root").unwrap();
+            let task = root.task_scope.as_ref().unwrap();
+            assert_eq!(active_turn_scope(root).parent_uuid, Some(task.uuid));
+            for child in root.subagents.values() {
+                assert_eq!(child.parent_uuid, Some(task.uuid));
+            }
+            task.uuid
+        };
+        // A parent's turn can end before the child's first prompt. Its agent and identity survive.
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "native-root", "hook_event_name": "Stop"
+            }),
+        )
+        .await;
+        assert!(manager.has_open_sessions().await);
+        for index in 0..child_count {
+            let id = format!("native-child-{index}");
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "native-root", "hook_event_name": "UserPromptSubmit",
+                    "agent_id": id, "prompt": "read files"
+                }),
+            )
+            .await;
+            let child_turn = {
+                let sessions = manager.inner.lock().await;
+                let root = sessions.get("native-root").unwrap();
+                assert!(
+                    root.turn_scope.is_none(),
+                    "child prompt must not invent a parent turn"
+                );
+                assert_eq!(root.task_scope.as_ref().unwrap().uuid, task_uuid);
+                let turn = root.child_turns.get(&id).unwrap();
+                assert_eq!(
+                    turn.parent_uuid,
+                    Some(root.subagents.get(&id).unwrap().uuid)
+                );
+                turn.uuid
+            };
+            let child_llm = manager
+                .start_llm(
+                    &HeaderMap::new(),
+                    LlmGatewayStart {
+                        session_id: Some("native-root".into()),
+                        subagent_id: Some(id.clone()),
+                        ..llm_start()
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(child_llm.owner_subagent_id.as_deref(), Some(id.as_str()));
+            assert_eq!(child_llm.handle.parent_uuid, Some(child_turn));
+            manager
+                .end_llm(
+                    child_llm,
+                    json!({"output_text": "read README.md"}),
+                    json!({}),
+                )
+                .await
+                .unwrap();
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "native-root", "hook_event_name": "PreToolUse", "agent_id": id,
+                    "tool_call_id": format!("read-{index}"), "tool_name": "Bash",
+                    "tool_input": { "command": "cat README.md" }
+                }),
+            )
+            .await;
+            {
+                let sessions = manager.inner.lock().await;
+                let root = sessions.get("native-root").unwrap();
+                let tool = root.tools.get(&format!("read-{index}")).unwrap();
+                assert_eq!(tool.handle.parent_uuid, Some(child_turn));
+                assert_eq!(
+                    tool.handle.metadata.as_ref().unwrap()["tool_correlation_status"],
+                    "explicit"
+                );
+                assert_eq!(tool.owner_subagent_id.as_deref(), Some(id.as_str()));
+            }
+        }
+        // Superseding a parent turn must retain parallel child turns and their open tools.
+        for prompt in ["wait for children", "synthesize findings"] {
+            apply_owned_codex_hook(&manager, json!({
+                "session_id": "native-root", "hook_event_name": "UserPromptSubmit", "prompt": prompt
+            })).await;
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            let root = sessions.get("native-root").unwrap();
+            assert_eq!(root.tools.len(), child_count);
+            assert_eq!(root.child_turns.len(), child_count);
+            assert_eq!(root.task_scope.as_ref().unwrap().uuid, task_uuid);
+        }
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": "native-root", "hook_event_name": "PreToolUse", "agent_id": "native-root",
+            "tool_name": "wait_agent", "tool_call_id": "parent-wait", "tool_input": {}
+        })).await;
+        {
+            let sessions = manager.inner.lock().await;
+            let root = sessions.get("native-root").unwrap();
+            let wait = root.tools.get("parent-wait").unwrap();
+            assert_eq!(wait.owner_subagent_id, None);
+            assert_eq!(wait.handle.parent_uuid, Some(active_turn_uuid(root)));
+        }
+        // Native root identity wins over a sticky child owner while the children are still live.
+        let mut synthesis = llm_start();
+        synthesis.session_id = Some("native-root".into());
+        synthesis.request.content = json!({ "client_metadata": {
+            "x-codex-installation-id": "test-installation", "thread_id": "native-root"
+        }, "input": "synthesize findings" });
+        let synthesis = manager
+            .start_llm(&HeaderMap::new(), synthesis)
+            .await
+            .unwrap();
+        let parent_turn = {
+            let sessions = manager.inner.lock().await;
+            active_turn_uuid(sessions.get("native-root").unwrap())
+        };
+        assert_eq!(synthesis.owner_subagent_id, None);
+        assert_eq!(synthesis.handle.parent_uuid, Some(parent_turn));
+        manager
+            .end_llm(synthesis, json!({"output_text": "findings"}), json!({}))
+            .await
+            .unwrap();
+        for index in (0..child_count).rev() {
+            let id = format!("native-child-{index}");
+            // Stop must close a dropped child tool end, then its turn, leaving siblings intact.
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "native-root", "hook_event_name": "Stop", "agent_id": id
+                }),
+            )
+            .await;
+            {
+                let sessions = manager.inner.lock().await;
+                let root = sessions.get("native-root").unwrap();
+                assert_eq!(active_turn_uuid(root), parent_turn);
+                assert!(!root.child_turns.contains_key(&id));
+                assert!(root.subagents.contains_key(&id));
+                assert!(!root.tools.contains_key(&format!("read-{index}")));
+            }
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "native-root", "hook_event_name": "SubagentStop", "agent_id": id,
+                    "status": if index == 0 { "completed" } else { "failed" }
+                }),
+            )
+            .await;
+        }
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "native-root", "hook_event_name": "Stop"
+            }),
+        )
+        .await;
+        {
+            let sessions = manager.inner.lock().await;
+            let root = sessions.get("native-root").unwrap();
+            assert!(root.task_scope.is_none());
+            assert!(root.turn_scope.is_none());
+            assert!(root.child_turns.is_empty());
+            assert!(root.subagent_stacks.is_empty());
+            assert!(root.tools.is_empty());
+        }
+        assert!(!manager.has_open_sessions().await);
+        flush_subscribers().unwrap();
+        subscriber.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        let trace_ids: HashSet<_> = spans
+            .iter()
+            .map(|span| span.span_context.trace_id())
+            .collect();
+        assert_eq!(
+            trace_ids.len(),
+            1,
+            "delegated work must export one trace: {:?}",
+            spans
+                .iter()
+                .map(|s| (
+                    &s.name,
+                    s.span_context.trace_id(),
+                    s.span_context.span_id(),
+                    s.parent_span_id
+                ))
+                .collect::<Vec<_>>()
+        );
+        let span_ids: HashSet<_> = spans
+            .iter()
+            .map(|span| span.span_context.span_id())
+            .collect();
+        for span in &spans {
+            assert!(
+                span.parent_span_id == opentelemetry::trace::SpanId::INVALID
+                    || span_ids.contains(&span.parent_span_id),
+                "{} references an unexported parent",
+                span.name
+            );
+        }
+        assert_eq!(spans.iter().filter(|s| s.name == "codex-task").count(), 1);
+        assert_eq!(
+            spans.iter().filter(|s| s.name == "Bash").count(),
+            child_count
+        );
+        for span in spans.iter().filter(|span| span.name == "codex-turn") {
+            let attrs = attr_map(&span.attributes);
+            let metadata: Value = serde_json::from_str(&attrs["metadata"]).unwrap();
+            if metadata.get("subagent_id").is_some() {
+                assert_eq!(metadata["hook_event_name"], "Stop");
+            }
+        }
+        let first_trace = *trace_ids.iter().next().unwrap();
+        // An unrelated prompt on the same durable session opens a fresh task and trace.
+        for name in ["UserPromptSubmit", "Stop"] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "native-root", "hook_event_name": name, "prompt": "new task"
+                }),
+            )
+            .await;
+        }
+        flush_subscribers().unwrap();
+        subscriber.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        let tasks: Vec<_> = spans.iter().filter(|s| s.name == "codex-task").collect();
+        assert_eq!(tasks.len(), 2);
+        assert!(
+            tasks
+                .iter()
+                .any(|s| s.span_context.trace_id() != first_trace)
+        );
+        manager.close_all("test_shutdown").await.unwrap();
+        assert!(subscriber.deregister(subscriber_name).unwrap());
+    }
+}
+
+/// Adapt and apply native Codex hooks through the authenticated lineage test owner.
+async fn apply_owned_codex_hook(manager: &SessionManager, payload: Value) {
+    let outcome = crate::agents::shared::adapters::codex::adapt(payload, &HeaderMap::new());
+    manager
+        .apply_authenticated_events(&HeaderMap::new(), outcome.events, "lineage-owner")
+        .await
+        .unwrap();
+}
+
+/// Verify retained delegation closes on inactivity, shutdown, or final parent completion.
+#[tokio::test]
+async fn codex_retained_delegation_closes_on_timeout_and_shutdown() {
+    for reason in [
+        "idle_timeout",
+        "gateway_shutdown",
+        "parent_stop_after_child_end",
+    ] {
+        let manager = SessionManager::new(session_test_config());
+        for name in ["SessionStart", "UserPromptSubmit"] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "cleanup-root", "hook_event_name": name
+                }),
+            )
+            .await;
+        }
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": "cleanup-root", "hook_event_name": "SubagentStart", "agent_id": "cleanup-child"
+        })).await;
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "cleanup-root", "hook_event_name": "Stop"
+            }),
+        )
+        .await;
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": "cleanup-root", "hook_event_name": "UserPromptSubmit", "agent_id": "cleanup-child"
+        })).await;
+        let wrong_owner = crate::agents::shared::adapters::codex::adapt(
+            json!({
+                "session_id": "cleanup-root", "hook_event_name": "UserPromptSubmit", "agent_id": "cleanup-child"
+            }),
+            &HeaderMap::new(),
+        );
+        assert!(matches!(
+            manager
+                .apply_authenticated_events(&HeaderMap::new(), wrong_owner.events, "other-owner")
+                .await,
+            Err(CliError::Unauthorized(_))
+        ));
+        if reason == "idle_timeout" {
+            assert_eq!(
+                manager
+                    .close_idle_sessions_at(
+                        Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+                        AGENT_IDLE_TIMEOUT,
+                        reason
+                    )
+                    .await
+                    .unwrap(),
+                1
+            );
+            let sessions = manager.inner.lock().await;
+            let root = sessions.get("cleanup-root").unwrap();
+            assert!(root.task_scope.is_none());
+            assert!(root.subagents.is_empty());
+            assert!(root.child_turns.is_empty());
+        } else if reason == "gateway_shutdown" {
+            manager.close_all(reason).await.unwrap();
+            assert!(!manager.test_contains_session("cleanup-root").await);
+        } else {
+            apply_owned_codex_hook(&manager, json!({
+                "session_id": "cleanup-root", "hook_event_name": "SubagentStop", "agent_id": "cleanup-child"
+            })).await;
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "cleanup-root", "hook_event_name": "Stop"
+                }),
+            )
+            .await;
+            let sessions = manager.inner.lock().await;
+            assert!(sessions.get("cleanup-root").unwrap().task_scope.is_none());
+        }
+        assert!(!manager.has_open_sessions().await);
+    }
+}
+
+/// Verify authenticated sequential child aliases retain one task while awaiting parent synthesis.
+#[tokio::test]
+async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
+    let manager = SessionManager::new(session_test_config());
+    start_authenticated_codex_alias(&manager).await;
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::TurnEnded(codex_session_event(
+                "parent-thread",
+                "Stop",
+                json!({}),
+            ))],
+            "client-a",
+        )
+        .await
+        .unwrap();
+    let task_uuid = {
+        let sessions = manager.inner.lock().await;
+        let parent = sessions.get("parent-thread").unwrap();
+        assert!(parent.turn_scope.is_none());
+        parent.task_scope.as_ref().unwrap().uuid
+    };
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+    for child in ["child-thread", "next-child"] {
+        if child == "next-child" {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![NormalizedEvent::AgentStarted(SessionEvent {
+                        session_id: child.into(),
+                        agent_kind: AgentKind::Codex,
+                        event_name: "SessionStart".into(),
+                        payload: json!({ "source": {"subagent": {"thread_spawn": {
+                            "parent_thread_id": "parent-thread"
+                        }}}}),
+                        metadata: json!({}),
+                    })],
+                    "client-a",
+                )
+                .await
+                .unwrap();
+        }
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::PromptSubmitted(codex_session_event(
+                    child,
+                    "UserPromptSubmit",
+                    json!({}),
+                ))],
+                "client-a",
+            )
+            .await
+            .unwrap();
+        let turn_uuid = {
+            let sessions = manager.inner.lock().await;
+            let parent = sessions.get("parent-thread").unwrap();
+            assert!(parent.turn_scope.is_none());
+            assert_eq!(
+                parent.subagents.get(child).unwrap().parent_uuid,
+                Some(task_uuid)
+            );
+            parent.child_turns.get(child).unwrap().uuid
+        };
+        let call = manager
+            .start_llm(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some(child.into()),
+                    ..llm_start()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(call.handle.parent_uuid, Some(turn_uuid));
+        assert_eq!(call.owner_subagent_id.as_deref(), Some(child));
+        manager
+            .end_llm(call, json!({"output_text":"done"}), json!({}))
+            .await
+            .unwrap();
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::AgentEnded(codex_session_event(
+                    child,
+                    "SessionEnd",
+                    json!({}),
+                ))],
+                "client-a",
+            )
+            .await
+            .unwrap();
+        assert!(!has_alignment_alias(&manager, child).await);
+        let sessions = manager.inner.lock().await;
+        let parent = sessions.get("parent-thread").unwrap();
+        assert!(parent.child_turns.is_empty());
+        assert!(parent.subagents.is_empty());
+        assert_eq!(parent.task_scope.as_ref().unwrap().uuid, task_uuid);
+    }
+    assert!(
+        manager.has_open_sessions().await,
+        "awaiting synthesis must keep the sidecar active"
+    );
+    // A task awaiting parent synthesis is still bounded by the idle sweeper.
+    assert_eq!(
+        manager
+            .close_idle_sessions_at(
+                Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+                AGENT_IDLE_TIMEOUT,
+                "idle_timeout"
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(!manager.has_open_sessions().await);
+    let sessions = manager.inner.lock().await;
+    assert!(sessions.get("parent-thread").unwrap().task_scope.is_none());
+}
+
+/// Verify parent synthesis after all child completions exports in the original task trace.
+#[tokio::test]
+async fn codex_synthesis_prompt_after_children_finish_preserves_task_trace() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let name = "cli-codex-post-child-synthesis";
+    let _ = deregister_subscriber(name);
+    let (subscriber, exporter) = make_openinference_test_subscriber("codex-synthesis");
+    subscriber.register(name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    for event in ["SessionStart", "UserPromptSubmit"] {
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "synthesis-root", "hook_event_name": event
+            }),
+        )
+        .await;
+    }
+    for child in ["first", "second"] {
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": "synthesis-root", "hook_event_name": "SubagentStart", "agent_id": child
+        })).await;
+    }
+    let task = manager.inner.lock().await["synthesis-root"]
+        .task_scope
+        .as_ref()
+        .unwrap()
+        .uuid;
+    apply_owned_codex_hook(
+        &manager,
+        json!({
+            "session_id": "synthesis-root", "hook_event_name": "Stop"
+        }),
+    )
+    .await;
+    apply_owned_codex_hook(
+        &manager,
+        json!({
+            "session_id": "synthesis-root", "hook_event_name": "PreCompact", "agent_id": "first"
+        }),
+    )
+    .await;
+    {
+        let sessions = manager.inner.lock().await;
+        let root = &sessions["synthesis-root"];
+        assert!(root.turn_scope.is_none());
+        assert!(root.task_awaiting_synthesis);
+    }
+    for child in ["second", "first"] {
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "synthesis-root", "hook_event_name": "SubagentStop", "agent_id": child
+            }),
+        )
+        .await;
+    }
+    assert!(manager.has_open_sessions().await);
+    apply_owned_codex_hook(&manager, json!({
+        "session_id": "synthesis-root", "hook_event_name": "UserPromptSubmit", "prompt": "synthesize findings"
+    })).await;
+    {
+        let sessions = manager.inner.lock().await;
+        let root = &sessions["synthesis-root"];
+        assert_eq!(root.task_scope.as_ref().unwrap().uuid, task);
+        assert_eq!(active_turn_scope(root).parent_uuid, Some(task));
+        assert!(!root.task_awaiting_synthesis);
+    }
+    apply_owned_codex_hook(
+        &manager,
+        json!({
+            "session_id": "synthesis-root", "hook_event_name": "Stop"
+        }),
+    )
+    .await;
+    assert!(
+        manager.inner.lock().await["synthesis-root"]
+            .task_scope
+            .is_none()
+    );
+    assert!(!manager.has_open_sessions().await);
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span.name == "codex-task")
+            .count(),
+        1
+    );
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| span.span_context.trace_id())
+            .collect::<HashSet<_>>()
+            .len(),
+        1
+    );
+    assert!(subscriber.deregister(name).unwrap());
+}
+
+/// Verify abandoned tools eventually expire at sweeps and parent boundaries despite parent activity.
+#[tokio::test]
+async fn codex_abandoned_child_tools_expire_without_parent_idle() {
+    for boundary in [
+        "UserPromptSubmit",
+        "Stop",
+        "Stop_without_turn",
+        "idle_sweep",
+        "idle_sweep_without_turn",
+    ] {
+        let manager = SessionManager::new(session_test_config());
+        start_authenticated_codex_alias(&manager).await;
+        let task = manager.inner.lock().await["parent-thread"]
+            .task_scope
+            .as_ref()
+            .unwrap()
+            .uuid;
+        let tool = ToolEvent {
+            session_id: "parent-thread".into(),
+            agent_kind: AgentKind::Codex,
+            event_name: "PreToolUse".into(),
+            tool_call_id: "abandoned".into(),
+            tool_name: "Bash".into(),
+            subagent_id: Some("child-thread".into()),
+            arguments: json!({"command": "read files"}),
+            result: Value::Null,
+            status: None,
+            payload: json!({}),
+            metadata: json!({}),
+        };
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(tool)],
+                "client-a",
+            )
+            .await
+            .unwrap();
+        if boundary.ends_with("without_turn") {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![NormalizedEvent::TurnEnded(codex_session_event(
+                        "parent-thread",
+                        "Stop",
+                        json!({}),
+                    ))],
+                    "client-a",
+                )
+                .await
+                .unwrap();
+        }
+        // No PostToolUse, Stop, or SubagentStop ever arrives for this child. Advance the
+        // cleanup clock instead of subtracting an hour from a freshly booted Windows clock.
+        // Parent activity stays recent, so only the child's clock can expire its scope and tool.
+        let cleanup_at = Instant::now() + CODEX_TOOL_IDLE_TIMEOUT + Duration::from_secs(1);
+        manager
+            .inner
+            .lock()
+            .await
+            .get_mut("parent-thread")
+            .unwrap()
+            .last_activity = cleanup_at;
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(cleanup_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
+                .await
+                .unwrap(),
+            1
+        );
+        if !boundary.starts_with("idle_sweep") {
+            let event = codex_session_event(
+                "parent-thread",
+                if boundary == "Stop_without_turn" {
+                    "Stop"
+                } else {
+                    boundary
+                },
+                json!({}),
+            );
+            let event = if boundary.starts_with("Stop") {
+                NormalizedEvent::TurnEnded(event)
+            } else {
+                NormalizedEvent::PromptSubmitted(event)
+            };
+            manager
+                .apply_authenticated_events(&HeaderMap::new(), vec![event], "client-a")
+                .await
+                .unwrap();
+        }
+        assert!(!has_alignment_alias(&manager, "child-thread").await);
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions["parent-thread"];
+            assert!(root.subagents.is_empty());
+            assert!(root.subagent_activity.is_empty());
+            assert!(root.tools.is_empty());
+            assert!(root.subagent_stacks.is_empty());
+            assert!(!root.task_awaiting_synthesis);
+            if boundary == "UserPromptSubmit" {
+                assert_ne!(root.task_scope.as_ref().unwrap().uuid, task);
+            }
+        }
+        if boundary != "UserPromptSubmit" {
+            manager
+                .apply_authenticated_events(
+                    &HeaderMap::new(),
+                    vec![NormalizedEvent::PromptSubmitted(codex_session_event(
+                        "parent-thread",
+                        "UserPromptSubmit",
+                        json!({}),
+                    ))],
+                    "client-a",
+                )
+                .await
+                .unwrap();
+            assert_ne!(
+                manager.inner.lock().await["parent-thread"]
+                    .task_scope
+                    .as_ref()
+                    .unwrap()
+                    .uuid,
+                task
+            );
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+}
+
+/// Verify the longer tool timeout still bounds abandoned delegation after parent Stop.
+#[tokio::test]
+async fn codex_idle_sweeper_closes_abandoned_tools_after_parent_stop() {
+    let manager = SessionManager::new(session_test_config());
+    for event in ["UserPromptSubmit", "SubagentStart", "PreToolUse", "Stop"] {
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": "idle-root", "hook_event_name": event,
+            "agent_id": if event == "SubagentStart" || event == "PreToolUse" { "idle-child" } else { "idle-root" },
+            "tool_call_id": "abandoned", "tool_name": "Bash", "tool_input": {"command": "sleep 60"}
+        })).await;
+    }
+    assert_eq!(
+        manager
+            .close_idle_sessions_at(
+                Instant::now() + CODEX_TOOL_IDLE_TIMEOUT + Duration::from_secs(1),
+                AGENT_IDLE_TIMEOUT,
+                "idle_timeout"
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(!manager.has_open_sessions().await);
+    if let Some(root) = manager.inner.lock().await.get("idle-root") {
+        assert!(root.task_scope.is_none());
+        assert!(root.tools.is_empty());
+        assert!(root.subagents.is_empty());
+    }
+}
+
+/// Verify stale-child cleanup preserves recently active siblings and in-flight gateway requests.
+#[tokio::test]
+async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
+    for boundary in ["Stop", "idle_sweep"] {
+        let manager = SessionManager::new(session_test_config());
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "activity-root", "hook_event_name": "UserPromptSubmit"
+            }),
+        )
+        .await;
+        for child in ["stale", "live"] {
+            for event in ["SubagentStart", "UserPromptSubmit", "PreToolUse"] {
+                apply_owned_codex_hook(&manager, json!({
+                "session_id": "activity-root", "hook_event_name": event, "agent_id": child,
+                "tool_call_id": child, "tool_name": "Bash", "tool_input": {"command": "read files"}
+            })).await;
+            }
+        }
+        let task = manager.inner.lock().await["activity-root"]
+            .task_scope
+            .as_ref()
+            .unwrap()
+            .uuid;
+        let cleanup_at = Instant::now() + CODEX_TOOL_IDLE_TIMEOUT + Duration::from_secs(1);
+        // A child-owned gateway request refreshes only that child, and in-flight requests cannot
+        // lose their containing scopes to the sweeper even after a long upstream stall.
+        let prep = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some("activity-root".into()),
+                    subagent_id: Some("live".into()),
+                    ..llm_start()
+                },
+            )
+            .await
+            .unwrap();
+        let second = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some("activity-root".into()),
+                    subagent_id: Some("live".into()),
+                    ..llm_start()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(cleanup_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
+                .await
+                .unwrap(),
+            1
+        );
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions["activity-root"];
+            assert!(!root.subagents.contains_key("stale"));
+            assert!(root.subagents.contains_key("live"));
+            assert_eq!(root.active_subagent_gateway_calls["live"], 2);
+        }
+        manager
+            .record_gateway_response_hints("activity-root", Some("live".into()), json!({}))
+            .await;
+        manager
+            .finish_gateway_call(
+                &prep.session_id,
+                prep.owner_subagent_id.as_deref(),
+                prep.session_finish,
+            )
+            .await;
+        assert_eq!(
+            manager.inner.lock().await["activity-root"].active_subagent_gateway_calls["live"],
+            1
+        );
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(cleanup_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
+                .await
+                .unwrap(),
+            0
+        );
+        manager
+            .finish_gateway_call(
+                &second.session_id,
+                second.owner_subagent_id.as_deref(),
+                second.session_finish,
+            )
+            .await;
+        assert!(
+            manager.inner.lock().await["activity-root"]
+                .active_subagent_gateway_calls
+                .is_empty()
+        );
+        // Model recent parent and live-child activity at the future cleanup time. The stale
+        // sibling retains its original timestamp and expires even though the parent is active.
+        {
+            let mut sessions = manager.inner.lock().await;
+            let root = sessions.get_mut("activity-root").unwrap();
+            root.last_activity = cleanup_at;
+            root.subagent_activity.insert("live".into(), cleanup_at);
+        }
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(cleanup_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
+                .await
+                .unwrap(),
+            0
+        );
+        // The live child also survives subsequent parent closure.
+        if boundary == "Stop" {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "activity-root", "hook_event_name": "Stop"
+                }),
+            )
+            .await;
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions["activity-root"];
+            assert_eq!(root.task_scope.as_ref().unwrap().uuid, task);
+            assert!(!root.subagents.contains_key("stale"));
+            assert!(!root.tools.contains_key("stale"));
+            assert!(root.subagents.contains_key("live"));
+            assert!(root.tools.contains_key("live"));
+            assert!(root.child_turns.contains_key("live"));
+            assert_eq!(root.task_awaiting_synthesis, boundary == "Stop");
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn codex_child_marks_after_parent_stop_keep_child_parentage() {
+    for aliased in [false, true] {
+        for child_turn in [false, true] {
+            let root_id = format!("child-marks-{aliased}-{child_turn}");
+            let child_id = format!("{root_id}-child");
+            let events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+            let captured = events.clone();
+            register_filtered_session_subscriber(
+                &root_id,
+                tracked_sessions(&[&root_id, &child_id]),
+                Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+            );
+            let manager = SessionManager::new(session_test_config());
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "UserPromptSubmit"
+                }),
+            )
+            .await;
+            if aliased {
+                manager.apply_authenticated_events(&HeaderMap::new(), vec![
+                    NormalizedEvent::AgentStarted(SessionEvent {
+                        session_id: child_id.clone(),
+                        agent_kind: AgentKind::Codex,
+                        event_name: "SessionStart".into(),
+                        payload: json!({"source": {"subagent": {"thread_spawn": {"parent_thread_id": root_id}}}}),
+                        metadata: json!({}),
+                    })
+                ], "lineage-owner").await.unwrap();
+            } else {
+                apply_owned_codex_hook(&manager, json!({
+                    "session_id": root_id, "hook_event_name": "SubagentStart", "agent_id": child_id
+                })).await;
+            }
+            if child_turn {
+                apply_owned_codex_hook(
+                    &manager,
+                    json!({
+                        "session_id": if aliased { &child_id } else { &root_id },
+                        "hook_event_name": "UserPromptSubmit", "agent_id": child_id
+                    }),
+                )
+                .await;
+            }
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "Stop"
+                }),
+            )
+            .await;
+            let child_scope = manager.inner.lock().await[&root_id]
+                .child_work_scope(&child_id)
+                .unwrap()
+                .uuid;
+            for (index, name) in ["PreCompact", "Notification", "CustomHook"]
+                .into_iter()
+                .enumerate()
+            {
+                let event = SessionEvent {
+                    session_id: if aliased {
+                        child_id.clone()
+                    } else {
+                        root_id.clone()
+                    },
+                    agent_kind: AgentKind::Codex,
+                    event_name: name.into(),
+                    payload: json!({"session_id": if aliased { &child_id } else { &root_id }, "child_mark_index": index}),
+                    metadata: json!({"agent_id": child_id}),
+                };
+                let event = match index {
+                    0 => NormalizedEvent::Compaction(event),
+                    1 => NormalizedEvent::Notification(event),
+                    _ => NormalizedEvent::HookMark(event),
+                };
+                manager
+                    .apply_authenticated_events(&HeaderMap::new(), vec![event], "lineage-owner")
+                    .await
+                    .unwrap();
+                let sessions = manager.inner.lock().await;
+                let root = &sessions[&root_id];
+                assert!(root.turn_scope.is_none());
+                assert!(root.task_awaiting_synthesis);
+            }
+            flush_subscribers().unwrap();
+            {
+                let events = events.lock().unwrap();
+                let marks: Vec<_> = events
+                    .iter()
+                    .filter(|event| {
+                        event
+                            .data()
+                            .is_some_and(|data| data.get("child_mark_index").is_some())
+                    })
+                    .collect();
+                assert_eq!(marks.len(), 3);
+                for event in marks {
+                    assert_eq!(event.parent_uuid(), Some(child_scope));
+                }
+            }
+            manager.close_all("test_shutdown").await.unwrap();
+            deregister_subscriber(&root_id).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn codex_root_gateway_call_does_not_protect_stale_children() {
+    let manager = SessionManager::new(session_test_config());
+    for event in ["UserPromptSubmit", "SubagentStart", "PreToolUse"] {
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": "root-call-cleanup", "hook_event_name": event,
+            "agent_id": if event == "UserPromptSubmit" { "root-call-cleanup" } else { "stale-child" },
+            "tool_name": "Bash", "tool_call_id": "abandoned", "tool_input": {}
+        })).await;
+    }
+    let mut request = llm_start();
+    request.session_id = Some("root-call-cleanup".into());
+    request.request.content = json!({"client_metadata": {"thread_id": "root-call-cleanup"}});
+    let prep = manager
+        .prepare_gateway_call(&HeaderMap::new(), request)
+        .await
+        .unwrap();
+    assert!(prep.owner_subagent_id.is_none());
+    let parent = prep.parent.as_ref().unwrap().uuid;
+    assert_eq!(
+        manager
+            .close_idle_sessions_at(
+                Instant::now() + CODEX_TOOL_IDLE_TIMEOUT + Duration::from_secs(1),
+                AGENT_IDLE_TIMEOUT,
+                "idle_timeout"
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    {
+        let sessions = manager.inner.lock().await;
+        let root = &sessions["root-call-cleanup"];
+        assert_eq!(root.active_gateway_calls, 1);
+        assert!(root.active_subagent_gateway_calls.is_empty());
+        assert!(root.subagents.is_empty());
+        assert!(root.tools.is_empty());
+        assert_eq!(root.turn_scope.as_ref().unwrap().uuid, parent);
+    }
+    manager
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            prep.session_finish,
+        )
+        .await;
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+// A failed or cancelled model call has no response hints to refresh its child owner.
+#[tokio::test]
+async fn codex_gateway_completion_without_response_refreshes_only_owning_child() {
+    for boundary in ["Stop", "UserPromptSubmit", "idle_sweep"] {
+        let manager = SessionManager::new(session_test_config());
+        let session_id = "failed-call-root";
+        apply_owned_codex_hook(
+            &manager,
+            json!({"session_id": session_id, "hook_event_name": "UserPromptSubmit"}),
+        )
+        .await;
+        for child in ["caller", "stale-sibling"] {
+            for event in ["SubagentStart", "UserPromptSubmit"] {
+                apply_owned_codex_hook(
+                    &manager,
+                    json!({"session_id": session_id, "hook_event_name": event, "agent_id": child}),
+                )
+                .await;
+            }
+        }
+        let prep = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some(session_id.into()),
+                    subagent_id: Some("caller".into()),
+                    ..llm_start()
+                },
+            )
+            .await
+            .unwrap();
+        let child_scope;
+        let task_scope;
+        {
+            let mut sessions = manager.inner.lock().await;
+            let root = sessions.get_mut(session_id).unwrap();
+            child_scope = root.child_work_scope("caller").unwrap().uuid;
+            task_scope = root.task_scope.as_ref().unwrap().uuid;
+            // Simulate a silent two-minute request without sleeping or producing response hints.
+            for child in ["caller", "stale-sibling"] {
+                root.subagent_activity
+                    .insert(child.into(), Instant::now() - Duration::from_secs(120));
+            }
+        }
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+                .await
+                .unwrap(),
+            1,
+        );
+        manager
+            .finish_gateway_call(
+                &prep.session_id,
+                prep.owner_subagent_id.as_deref(),
+                prep.session_finish,
+            )
+            .await;
+        if boundary == "idle_sweep" {
+            assert_eq!(
+                manager
+                    .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+                    .await
+                    .unwrap(),
+                0,
+            );
+        } else {
+            apply_owned_codex_hook(
+                &manager,
+                json!({"session_id": session_id, "hook_event_name": boundary}),
+            )
+            .await;
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions[session_id];
+            assert_eq!(root.active_gateway_calls, 0);
+            assert_eq!(root.task_scope.as_ref().unwrap().uuid, task_scope);
+            assert_eq!(root.child_work_scope("caller").unwrap().uuid, child_scope);
+            assert!(!root.subagents.contains_key("stale-sibling"));
+        }
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": session_id, "hook_event_name": "PreToolUse", "agent_id": "caller",
+                "tool_call_id": "retry-tool", "tool_name": "Bash",
+                "tool_input": {"command": "retry after failed model call"}
+            }),
+        )
+        .await;
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions[session_id];
+            assert_eq!(
+                root.tools["retry-tool"].owner_subagent_id.as_deref(),
+                Some("caller")
+            );
+            assert_eq!(root.tools["retry-tool"].parent_uuid, Some(child_scope));
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+}
+
+/// Verify a silent two-minute child tool retains completion, model ownership, and one trace.
+#[tokio::test]
+async fn codex_long_child_tool_survives_idle_sweeps_and_parent_boundaries() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    for boundary in ["idle_sweep", "Stop", "UserPromptSubmit"] {
+        let name = "cli-codex-long-child-tool";
+        let _ = deregister_subscriber(name);
+        let (subscriber, exporter) = make_openinference_test_subscriber("codex-long-tool");
+        subscriber.register(name).unwrap();
+        let manager = SessionManager::new(session_test_config());
+        for event in ["SessionStart", "UserPromptSubmit"] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "long-root", "hook_event_name": event
+                }),
+            )
+            .await;
+        }
+        for event in ["SubagentStart", "UserPromptSubmit", "PreToolUse"] {
+            apply_owned_codex_hook(&manager, json!({
+                "session_id": "long-root", "hook_event_name": event, "agent_id": "long-child",
+                "tool_call_id": "compile", "tool_name": "Bash", "tool_input": {"command": "cargo test"}
+            })).await;
+        }
+        // The command has run silently for two minutes. The parent waits in a tool, so no
+        // in-flight gateway call can accidentally mask premature child expiry.
+        let (task, child_turn, tool) = {
+            let mut sessions = manager.inner.lock().await;
+            let root = sessions.get_mut("long-root").unwrap();
+            root.subagent_activity.insert(
+                "long-child".into(),
+                Instant::now() - Duration::from_secs(120),
+            );
+            assert_eq!(root.active_gateway_calls, 0);
+            assert!(root.llms.is_empty());
+            (
+                root.task_scope.as_ref().unwrap().uuid,
+                root.child_turns["long-child"].uuid,
+                root.tools["compile"].uuid,
+            )
+        };
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "long-root", "hook_event_name": "PreToolUse", "agent_id": "long-root",
+                "tool_call_id": "wait", "tool_name": "wait_agent", "tool_input": {}
+            }),
+        )
+        .await;
+        if boundary == "idle_sweep" {
+            assert_eq!(
+                manager
+                    .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+                    .await
+                    .unwrap(),
+                0
+            );
+        } else {
+            apply_owned_codex_hook(&manager, json!({
+                "session_id": "long-root", "hook_event_name": boundary, "prompt": "wait for compilation"
+            })).await;
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions["long-root"];
+            assert_eq!(root.task_scope.as_ref().unwrap().uuid, task);
+            assert_eq!(root.child_turns["long-child"].uuid, child_turn);
+            assert_eq!(root.tools["compile"].uuid, tool);
+            assert!(root.subagents.contains_key("long-child"));
+            assert!(!root.completed_subagents.contains("long-child"));
+        }
+        // The original tool receives its real completion, and subsequent model work remains
+        // owned by the child rather than reopening a parent turn through stale-owner fallback.
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": "long-root", "hook_event_name": "PostToolUse", "agent_id": "long-child",
+            "tool_call_id": "compile", "tool_name": "Bash", "tool_output": {"output": "tests passed"}, "status": "success"
+        })).await;
+        assert!(
+            !manager.inner.lock().await["long-root"]
+                .tools
+                .contains_key("compile")
+        );
+        let call = manager
+            .start_llm(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some("long-root".into()),
+                    subagent_id: Some("long-child".into()),
+                    ..llm_start()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(call.owner_subagent_id.as_deref(), Some("long-child"));
+        assert_eq!(call.handle.parent_uuid, Some(child_turn));
+        manager
+            .end_llm(call, json!({"output_text": "tests passed"}), json!({}))
+            .await
+            .unwrap();
+        for event in ["Stop", "SubagentStop"] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": "long-root", "hook_event_name": event, "agent_id": "long-child"
+                }),
+            )
+            .await;
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions["long-root"];
+            assert!(root.completed_subagents.contains("long-child"));
+            assert!(root.subagents.is_empty());
+            assert!(root.child_turns.is_empty());
+        }
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": "long-root", "hook_event_name": "Stop"
+            }),
+        )
+        .await;
+        flush_subscribers().unwrap();
+        subscriber.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.iter().filter(|span| span.name == "Bash").count(), 1);
+        let bash = spans.iter().find(|span| span.name == "Bash").unwrap();
+        let attrs = attr_map(&bash.attributes);
+        let metadata: Value = serde_json::from_str(&attrs["metadata"]).unwrap();
+        assert_eq!(
+            metadata["status"], "success",
+            "tool must not have a synthetic timeout end"
+        );
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| span.span_context.trace_id())
+                .collect::<HashSet<_>>()
+                .len(),
+            1
+        );
+        assert!(!manager.has_open_sessions().await);
+        manager.close_all("test_shutdown").await.unwrap();
+        assert!(subscriber.deregister(name).unwrap());
+    }
+}
+
+// Correlated child work must not consume the parent's reservation for a synthesis prompt.
+#[tokio::test]
+async fn codex_inferred_child_work_after_parent_stop_preserves_synthesis() {
+    for mode in [
+        "tool_hint",
+        "llm_hint",
+        "request_affinity",
+        "sticky",
+        "sole_child",
+    ] {
+        for managed in [false, true] {
+            if mode == "tool_hint" && !managed {
+                continue;
+            }
+            let manager = SessionManager::new(session_test_config());
+            let root_id = "inferred-work-root";
+            let child_id = "inferred-worker";
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "UserPromptSubmit"
+                }),
+            )
+            .await;
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "SubagentStart", "agent_id": child_id
+                }),
+            )
+            .await;
+            let request = llm_start_with_responses_task(root_id, "inspect delegated files");
+            let (task, child_scope) = {
+                let mut sessions = manager.inner.lock().await;
+                let root = sessions.get_mut(root_id).unwrap();
+                if mode == "tool_hint" {
+                    root.record_completed_llm_response(
+                        json!({"output": [{
+                            "type": "function_call", "call_id": "inferred-tool", "name": "Bash",
+                            "arguments": "{\"command\":\"cargo test\"}"
+                        }]}),
+                        Some(child_id.into()),
+                    );
+                } else if mode == "request_affinity" {
+                    root.record_llm_request_affinity(
+                        &request.provider,
+                        &request.request,
+                        Some(child_id),
+                        "explicit",
+                    );
+                } else if mode == "sticky" {
+                    root.set_last_llm_owner(Some(child_id.into()));
+                }
+                (
+                    root.task_scope.as_ref().unwrap().uuid,
+                    root.child_work_scope(child_id).unwrap().uuid,
+                )
+            };
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "Stop"
+                }),
+            )
+            .await;
+            {
+                let mut sessions = manager.inner.lock().await;
+                // The root Stop hint must not mask the ownership mechanism under test.
+                sessions.get_mut(root_id).unwrap().pending_llm_hints.clear();
+            }
+            if mode == "llm_hint" {
+                apply_owned_codex_hook(
+                    &manager,
+                    json!({
+                        "session_id": root_id, "hook_event_name": "Stop", "agent_id": child_id
+                    }),
+                )
+                .await;
+            }
+            if mode == "tool_hint" {
+                apply_owned_codex_hook(
+                    &manager,
+                    json!({
+                        "session_id": root_id, "hook_event_name": "PreToolUse",
+                        "tool_call_id": "inferred-tool", "tool_name": "Bash",
+                        "tool_input": {"command": "cargo test"}
+                    }),
+                )
+                .await;
+                let sessions = manager.inner.lock().await;
+                let tool = &sessions[root_id].tools["inferred-tool"];
+                assert_eq!(tool.owner_subagent_id.as_deref(), Some(child_id));
+                assert_eq!(tool.handle.parent_uuid, Some(child_scope));
+            } else if managed {
+                let prep = manager
+                    .prepare_gateway_call(&HeaderMap::new(), request)
+                    .await
+                    .unwrap();
+                assert_eq!(prep.owner_subagent_id.as_deref(), Some(child_id), "{mode}");
+                assert_eq!(prep.parent.as_ref().unwrap().uuid, child_scope);
+                manager
+                    .finish_gateway_call(
+                        &prep.session_id,
+                        prep.owner_subagent_id.as_deref(),
+                        prep.session_finish,
+                    )
+                    .await;
+            } else {
+                let active = manager.start_llm(&HeaderMap::new(), request).await.unwrap();
+                assert_eq!(
+                    active.owner_subagent_id.as_deref(),
+                    Some(child_id),
+                    "{mode}"
+                );
+                assert_eq!(active.handle.parent_uuid, Some(child_scope));
+                manager.end_llm(active, json!({}), json!({})).await.unwrap();
+            }
+            {
+                let sessions = manager.inner.lock().await;
+                let root = &sessions[root_id];
+                assert!(root.turn_scope.is_none(), "{mode}");
+                assert!(root.task_awaiting_synthesis, "{mode}");
+            }
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "SubagentStop", "agent_id": child_id
+                }),
+            )
+            .await;
+            apply_owned_codex_hook(&manager, json!({
+                "session_id": root_id, "hook_event_name": "UserPromptSubmit", "prompt": "synthesize"
+            })).await;
+            assert_eq!(
+                manager.inner.lock().await[root_id]
+                    .task_scope
+                    .as_ref()
+                    .unwrap()
+                    .uuid,
+                task,
+                "{mode}"
+            );
+            manager.close_all("test_shutdown").await.unwrap();
+        }
+    }
+}
+
+// A completed child cannot revive a task through delayed Stop hints, tools, prompts, or marks.
+#[tokio::test]
+async fn codex_finished_child_hooks_do_not_revive_parent_work() {
+    for task_finished in [false, true] {
+        let manager = SessionManager::new(session_test_config());
+        let root_id = "finished-hook-root";
+        let child_id = "finished-hook-child";
+        for (event, agent) in [
+            ("UserPromptSubmit", root_id),
+            ("SubagentStart", child_id),
+            ("Stop", root_id),
+            ("Stop", child_id),
+            ("SubagentStop", child_id),
+        ] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": event, "agent_id": agent
+                }),
+            )
+            .await;
+        }
+        let task = manager.inner.lock().await[root_id]
+            .task_scope
+            .as_ref()
+            .unwrap()
+            .uuid;
+        {
+            let mut sessions = manager.inner.lock().await;
+            let root = sessions.get_mut(root_id).unwrap();
+            root.record_completed_llm_response(
+                json!({"output": [{
+                    "type": "function_call", "call_id": "late-response-tool", "name": "Bash",
+                    "arguments": "{}"
+                }]}),
+                Some(child_id.into()),
+            );
+            assert!(root.pending_tool_hints.is_empty());
+        }
+        if task_finished {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "UserPromptSubmit"
+                }),
+            )
+            .await;
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": "Stop"
+                }),
+            )
+            .await;
+        }
+        let last_activity = manager
+            .inner
+            .lock()
+            .await
+            .get(root_id)
+            .map(|root| root.last_activity);
+        for event in [
+            "Stop",
+            "PreCompact",
+            "Notification",
+            "CustomHook",
+            "PreToolUse",
+            "PostToolUse",
+            "UserPromptSubmit",
+            "SubagentStop",
+        ] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": root_id, "hook_event_name": event, "agent_id": child_id,
+                    "tool_name": "Bash", "tool_call_id": "late-tool", "tool_input": {}
+                }),
+            )
+            .await;
+            let sessions = manager.inner.lock().await;
+            if task_finished {
+                assert!(!sessions.contains_key(root_id), "{event}");
+                continue;
+            }
+            let root = &sessions[root_id];
+            assert!(root.turn_scope.is_none(), "{event}");
+            assert!(root.tools.is_empty(), "{event}");
+            assert!(
+                root.pending_llm_hints
+                    .iter()
+                    .all(|pending| pending.hint.agent_id.as_deref() != Some(child_id)
+                        && pending.hint.subagent_id.as_deref() != Some(child_id))
+            );
+            assert_eq!(Some(root.last_activity), last_activity, "{event}");
+            assert_eq!(root.task_awaiting_synthesis, !task_finished, "{event}");
+            assert_eq!(
+                root.task_scope.as_ref().map(|scope| scope.uuid),
+                (!task_finished).then_some(task),
+                "{event}"
+            );
+        }
+        if !task_finished {
+            apply_owned_codex_hook(&manager, json!({
+                "session_id": root_id, "hook_event_name": "UserPromptSubmit", "prompt": "synthesize"
+            })).await;
+            assert_eq!(
+                manager.inner.lock().await[root_id]
+                    .task_scope
+                    .as_ref()
+                    .unwrap()
+                    .uuid,
+                task
+            );
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
 }

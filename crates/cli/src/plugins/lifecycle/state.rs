@@ -90,8 +90,28 @@ impl ScopedRegistry {
         ));
 
         let write_result = (|| -> Result<(), CliError> {
-            let mut file = std::fs::File::create(&temp_path)?;
+            // Keep the temporary state private until it is complete, then publish
+            // global state with the read access needed by other local users.
+            #[cfg(unix)]
+            let mut file = {
+                use std::os::unix::fs::OpenOptionsExt;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&temp_path)?
+            };
+            #[cfg(not(unix))]
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)?;
             file.write_all(&rendered)?;
+            #[cfg(unix)]
+            if self.scope == RegistryScope::Global {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
+            }
             file.sync_all()?;
             std::fs::rename(&temp_path, &self.state_path)?;
             Ok(())
@@ -108,8 +128,16 @@ impl ScopedRegistry {
 pub(super) fn load_scoped_registries(
     explicit_plugin_config: Option<&PathBuf>,
 ) -> Result<Vec<ScopedRegistry>, CliError> {
+    load_scoped_registries_matching(explicit_plugin_config, |_| true)
+}
+
+pub(super) fn load_scoped_registries_matching(
+    explicit_plugin_config: Option<&PathBuf>,
+    matches: impl Fn(RegistryScope) -> bool,
+) -> Result<Vec<ScopedRegistry>, CliError> {
     scoped_registry_layouts(explicit_plugin_config)
         .into_iter()
+        .filter(|(scope, _, _)| matches(*scope))
         .map(|(scope, plugins_toml_path, state_path)| {
             Ok(ScopedRegistry {
                 scope,

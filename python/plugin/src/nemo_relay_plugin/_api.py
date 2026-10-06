@@ -76,6 +76,7 @@ import tempfile
 import tomllib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
@@ -192,7 +193,7 @@ class RuntimeDiagnostics:
 
 @dataclass(frozen=True)
 class LlmSanitizeRequestContext:
-    """Structured per-call context provided to an LLM request sanitizer."""
+    """Request codec context shared by sanitizer and execution callbacks."""
 
     codec: LlmCodecIdentity
     _runtime: "PluginRuntime | None" = field(default=None, repr=False, compare=False)
@@ -210,7 +211,7 @@ class LlmSanitizeRequestContext:
 
 @dataclass(frozen=True)
 class LlmSanitizeResponseContext:
-    """Structured per-call context provided to an LLM response sanitizer."""
+    """Response codec context shared by sanitizer and execution callbacks."""
 
     codec: LlmCodecIdentity
     _runtime: "PluginRuntime | None" = field(default=None, repr=False, compare=False)
@@ -224,6 +225,10 @@ class LlmSanitizeResponseContext:
         if self._invocation_id is None:
             return None
         return WorkerResponseCodec(self._runtime, self._capability_id, self._invocation_id)
+
+
+LlmRequestContext: TypeAlias = LlmSanitizeRequestContext
+LlmResponseContext: TypeAlias = LlmSanitizeResponseContext
 
 
 @dataclass(frozen=True)
@@ -258,6 +263,19 @@ class WorkerResponseCodec:
         return await self._runtime._decode_llm_codec_response(self._capability_id, self._invocation_id, response)
 
 
+@dataclass(frozen=True)
+class LlmExecutionContext:
+    """Directional codec context for one LLM execution invocation.
+
+    The identities describe the codecs selected when Relay created the managed
+    invocation. Rewriting a request into another provider's wire format does
+    not select a new codec; incompatible codec operations fail.
+    """
+
+    request_codec: LlmRequestContext
+    response_codec: LlmResponseContext | None
+
+
 def _llm_codec_identity(invocation: pb.LlmInvocation) -> LlmCodecIdentity:
     """Return the codec identity from a worker invocation."""
     context = getattr(invocation, invocation.WhichOneof("sanitize_context") or "", None)
@@ -280,6 +298,53 @@ def _codec_identity(codec_kind: int, codec_id: str | None) -> LlmCodecIdentity:
 def _llm_codec_capability(invocation: pb.LlmInvocation) -> str | None:
     context = getattr(invocation, invocation.WhichOneof("sanitize_context") or "", None)
     return context.codec_capability_id if context is not None and context.HasField("codec_capability_id") else None
+
+
+def _llm_execution_context(
+    invocation: pb.LlmInvocation,
+    runtime: "PluginRuntime",
+    invocation_id: str,
+    *,
+    response_required: bool,
+) -> LlmExecutionContext:
+    if not invocation.HasField("execution_codec_context"):
+        raise WorkerSdkError("malformed LLM execution codec context: execution context is missing")
+    context = invocation.execution_codec_context
+    if not context.HasField("request"):
+        raise WorkerSdkError("malformed LLM execution codec context: request context is missing")
+    if not context.request.HasField("codec"):
+        raise WorkerSdkError("malformed LLM execution codec context: request codec identity is missing")
+
+    request_id = context.request.codec_capability_id if context.request.HasField("codec_capability_id") else None
+    request_context = LlmRequestContext(
+        codec=_codec_identity(
+            context.request.codec.kind,
+            context.request.codec.id if context.request.codec.HasField("id") else None,
+        ),
+        _runtime=runtime,
+        _capability_id=request_id,
+        _invocation_id=invocation_id,
+    )
+    response_context: LlmResponseContext | None = None
+    if context.HasField("response"):
+        if not context.response.HasField("codec"):
+            raise WorkerSdkError("malformed LLM execution codec context: response codec identity is missing")
+        response_id = context.response.codec_capability_id if context.response.HasField("codec_capability_id") else None
+        response_context = LlmResponseContext(
+            codec=_codec_identity(
+                context.response.codec.kind,
+                context.response.codec.id if context.response.codec.HasField("id") else None,
+            ),
+            _runtime=runtime,
+            _capability_id=response_id,
+            _invocation_id=invocation_id,
+        )
+    elif response_required:
+        raise WorkerSdkError("malformed LLM execution codec context: response context is missing")
+    return LlmExecutionContext(
+        request_codec=request_context,
+        response_codec=response_context,
+    )
 
 
 WORKER_PROTOCOL = "grpc-v1"
@@ -1055,9 +1120,9 @@ LlmRequestCallback: TypeAlias = Callable[
     [str, LlmRequest, AnnotatedLlmRequest | None],
     LlmRequestInterceptOutcome | Awaitable[LlmRequestInterceptOutcome],
 ]
-LlmExecutionCallback: TypeAlias = Callable[[str, LlmRequest, "LlmNext"], Json | Awaitable[Json]]
+LlmExecutionCallback: TypeAlias = Callable[[str, LlmRequest, LlmExecutionContext, "LlmNext"], Json | Awaitable[Json]]
 LlmStreamExecutionCallback: TypeAlias = Callable[
-    [str, LlmRequest, "LlmStreamNext"],
+    [str, LlmRequest, LlmExecutionContext, "LlmStreamNext"],
     Iterable[Json] | AsyncIterator[Json] | Awaitable[Iterable[Json] | AsyncIterator[Json]],
 ]
 
@@ -1486,8 +1551,9 @@ class PluginContext:
 
         Args:
             name: Component-local registration name.
-            callback: Function receiving ``(model_name, request, next_call)``
-                and returning response JSON, directly or through an awaitable.
+            callback: Function receiving ``(model_name, request, context,
+                next_call)`` and returning response JSON, directly or through
+                an awaitable.
                 It can call :meth:`LlmNext.call` zero, one, or multiple times
                 while the invocation is active.
             priority: Execution order. Lower values run first.
@@ -1506,12 +1572,13 @@ class PluginContext:
 
         Args:
             name: Component-local registration name.
-            callback: Function receiving ``(model_name, request, next_call)``.
-                Return an iterable, an async iterator, or an awaitable resolving
-                to either. Every yielded item must be JSON. Strings, byte
-                sequences, mappings, and scalar values are not valid streams.
-                The callback can call :meth:`LlmStreamNext.call` zero, one, or
-                multiple times while the invocation is active.
+            callback: Function receiving ``(model_name, request, context,
+                next_call)``. Return an iterable, an async iterator, or an
+                awaitable resolving to either. Every yielded item must be JSON.
+                Strings, byte sequences, mappings, and scalar values are not
+                valid streams. The callback can call
+                :meth:`LlmStreamNext.call` zero, one, or multiple times while
+                the invocation is active.
             priority: Execution order. Lower values run first.
 
         Streaming behavior:
@@ -1522,7 +1589,13 @@ class PluginContext:
         self._push_registration(name, pb.LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
         self._handlers.llm_stream_executions[name] = callback
 
-    def _push_registration(self, name: str, surface: int, priority: int, break_chain: bool) -> None:
+    def _push_registration(
+        self,
+        name: str,
+        surface: int,
+        priority: int,
+        break_chain: bool,
+    ) -> None:
         if any(
             registration.local_name == name and registration.surface == surface
             for registration in self._handlers.registrations
@@ -1917,6 +1990,7 @@ class PluginRuntime:
         input: Json | None = None,
         scope_stack_id: str | None = None,
         parent_scope_id: str | None = None,
+        timestamp: datetime | None = None,
     ) -> str:
         """Start a scope on a Relay host-owned stack.
 
@@ -1930,6 +2004,9 @@ class PluginRuntime:
                 the current local binding is used.
             parent_scope_id: Optional parent scope. When omitted, the parent
                 from the selected stack binding is used.
+            timestamp: Optional timezone-aware start time recorded on the
+                scope handle and start event. When omitted, Relay uses the
+                current time.
 
         Returns:
             An opaque scope handle to pass to :meth:`pop_scope`.
@@ -1937,21 +2014,25 @@ class PluginRuntime:
         Raises:
             WorkerSdkError: The scope selection is invalid or the host rejects
                 the request.
-            TypeError: A payload is not JSON-serializable.
-            ValueError: ``scope_type`` is not a supported :class:`ScopeType`.
+            TypeError: A payload is not JSON-serializable or ``timestamp`` is
+                not a :class:`datetime.datetime`.
+            ValueError: ``scope_type`` is unsupported or ``timestamp`` is
+                timezone-naive.
         """
-        response = await self._host_stub.PushScope(
-            pb.PushScopeRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
-                scope=self._scope_context(scope_stack_id, parent_scope_id),
-                name=name,
-                scope_type=_proto_scope_type(scope_type),
-                data=_optional_json_envelope(data),
-                metadata=_optional_json_envelope(metadata),
-                input=_optional_json_envelope(input),
-            )
+        request = pb.PushScopeRequest(
+            activation_id=self._activation_id,
+            auth_token=self._auth_token,
+            scope=self._scope_context(scope_stack_id, parent_scope_id),
+            name=name,
+            scope_type=_proto_scope_type(scope_type),
+            data=_optional_json_envelope(data),
+            metadata=_optional_json_envelope(metadata),
+            input=_optional_json_envelope(input),
         )
+        timestamp_unix_micros = _datetime_to_unix_micros(timestamp)
+        if timestamp_unix_micros is not None:
+            request.timestamp_unix_micros = timestamp_unix_micros
+        response = await self._host_stub.PushScope(request)
         if response.HasField("error"):
             raise _worker_error_to_sdk(response.error)
         return response.scope_handle_id
@@ -1962,6 +2043,7 @@ class PluginRuntime:
         *,
         output: Json | None = None,
         metadata: Json | None = None,
+        timestamp: datetime | None = None,
     ) -> None:
         """End a host scope by its handle identifier.
 
@@ -1970,20 +2052,26 @@ class PluginRuntime:
             output: Optional JSON semantic output attached to the scope end
                 event.
             metadata: Optional JSON metadata attached to the end event.
+            timestamp: Optional timezone-aware time recorded on the end event.
+                When omitted, Relay uses its default end time.
 
         Raises:
             WorkerSdkError: The host rejects the request.
-            TypeError: A payload is not JSON-serializable.
+            TypeError: A payload is not JSON-serializable or ``timestamp`` is
+                not a :class:`datetime.datetime`.
+            ValueError: ``timestamp`` is timezone-naive.
         """
-        response = await self._host_stub.PopScope(
-            pb.PopScopeRequest(
-                activation_id=self._activation_id,
-                auth_token=self._auth_token,
-                scope_handle_id=scope_handle_id,
-                output=_optional_json_envelope(output),
-                metadata=_optional_json_envelope(metadata),
-            )
+        request = pb.PopScopeRequest(
+            activation_id=self._activation_id,
+            auth_token=self._auth_token,
+            scope_handle_id=scope_handle_id,
+            output=_optional_json_envelope(output),
+            metadata=_optional_json_envelope(metadata),
         )
+        timestamp_unix_micros = _datetime_to_unix_micros(timestamp)
+        if timestamp_unix_micros is not None:
+            request.timestamp_unix_micros = timestamp_unix_micros
+        response = await self._host_stub.PopScope(request)
         _ack_to_result(response)
 
     @contextlib.contextmanager
@@ -2478,9 +2566,15 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             handler = self._handler(self._handlers.llm_stream_executions, request.registration_name)
             payload = _require_payload(request, "llm")
             llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
+            execution_context = _llm_execution_context(
+                payload,
+                self._runtime,
+                request.invocation_id,
+                response_required=False,
+            )
             next_call = LlmStreamNext(self._runtime, request.continuation_id)
             with _bind_invocation_scope(request):
-                stream = await _maybe_await(handler(payload.model_name, llm_request, next_call))
+                stream = await _maybe_await(handler(payload.model_name, llm_request, execution_context, next_call))
                 async for value in _as_async_iter(stream):
                     await queue.put(pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value)))
         except asyncio.CancelledError:
@@ -2653,6 +2747,12 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 self._handler(self._handlers.llm_executions, request.registration_name)(
                     payload.model_name,
                     _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA),
+                    _llm_execution_context(
+                        payload,
+                        self._runtime,
+                        request.invocation_id,
+                        response_required=True,
+                    ),
                     LlmNext(self._runtime, request.continuation_id),
                 )
             )
@@ -2798,6 +2898,18 @@ def _optional_json_envelope(value: Json | None, schema: str = JSON_SCHEMA) -> An
     if value is None:
         return None
     return _json_envelope(schema, value)
+
+
+def _datetime_to_unix_micros(value: datetime | None) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, datetime):
+        raise TypeError("timestamp must be a datetime.datetime object")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("timestamp datetime must be timezone-aware")
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    delta = value.astimezone(timezone.utc) - epoch
+    return (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
 
 
 def _data_schema_json(value: DataSchema | Mapping[str, Json] | None) -> dict[str, str] | None:
