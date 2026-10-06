@@ -98,7 +98,7 @@ since the Unix epoch. Their supported range is `1970-01-01T00:00:00Z` through
 `2554-07-21T23:34:33.709551615Z`, inclusive. The trace and log subscribers drop
 events outside this range and report an `otel.timestamp_out_of_range` runtime
 diagnostic. The scope operation still completes, and ATOF keeps the original
-timestamp.
+timestamp. On Windows, trace and log timestamps have 100-nanosecond precision.
 
 A dropped start event creates no trace span. A dropped end event does not close
 an existing span. A later valid end event can close it. A dropped mark creates

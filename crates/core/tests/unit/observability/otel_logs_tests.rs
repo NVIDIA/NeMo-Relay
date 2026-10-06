@@ -835,14 +835,10 @@ fn otlp_timestamp_range_drops_invalid_logs_and_preserves_boundaries() {
     let logs = exporter.get_emitted_logs().unwrap();
     assert_eq!(logs.len(), 2);
     assert_eq!(logs[0].record.timestamp(), Some(std::time::UNIX_EPOCH));
+    // SystemTime uses 100-nanosecond ticks on Windows. The invalid event
+    // one nanosecond above the limit must still be dropped before conversion.
     assert_eq!(
-        logs[1]
-            .record
-            .timestamp()
-            .unwrap()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-        u128::from(u64::MAX)
+        logs[1].record.timestamp(),
+        Some(std::time::UNIX_EPOCH + Duration::from_nanos(u64::MAX))
     );
 }

@@ -7704,13 +7704,11 @@ fn otlp_timestamp_range_drops_invalid_events_and_preserves_boundaries() {
         let spans = exporter.get_finished_spans().unwrap();
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start_time, UNIX_EPOCH);
+        // SystemTime uses 100-nanosecond ticks on Windows. Range validation
+        // above still checks the original timestamp at nanosecond precision.
         assert_eq!(
-            spans[0]
-                .end_time
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            u128::from(u64::MAX)
+            spans[0].end_time,
+            UNIX_EPOCH + Duration::from_nanos(u64::MAX)
         );
         assert!(spans[0].events.is_empty());
         for value in [
