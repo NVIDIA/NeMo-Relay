@@ -960,14 +960,16 @@ impl ScopeLineage {
         if let Some(context) = self.completed.get(&parent_uuid) {
             return Some(context.span_context.clone());
         }
-        if event.propagation_parent_uuid() != Some(parent_uuid) {
-            return None;
-        }
         if let Some(context) = w3c_span_context(
             event.propagation_traceparent(),
             event.propagation_tracestate(),
-        ) {
+        ) && (event.propagation_parent_uuid() == Some(parent_uuid)
+            || context.span_id() == relay_span_id(parent_uuid))
+        {
             return Some(context);
+        }
+        if event.propagation_parent_uuid() != Some(parent_uuid) {
+            return None;
         }
         event.propagation_root_uuid().map(|root_uuid| {
             SpanContext::new(

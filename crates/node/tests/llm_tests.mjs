@@ -1085,14 +1085,88 @@ describe('LLM guardrails', () => {
 // ===========================================================================
 
 describe('LLM intercepts', () => {
+  it('pre-event callbacks preserve exact imported W3C trace context', async () => {
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000721';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000722';
+    const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00';
+    const stack = lib.createScopeStackFromPropagation({
+      version: 1,
+      rootUuid,
+      parentUuid,
+      traceparent,
+      tracestate: 'vendor=value',
+    });
+    const observed = [];
+    const capture = (label) => {
+      const context = lib.capturePropagationContext();
+      observed.push([
+        label,
+        context.parentUuid,
+        context.rootUuid,
+        context.traceparent,
+        context.tracestate,
+        lib.captureTraceparent(),
+      ]);
+    };
+    registerLlmConditionalExecutionGuardrail('node_llm_imported_w3c_conditional', 10, () => {
+      capture('conditional');
+      return null;
+    });
+    registerLlmRequestIntercept('node_llm_imported_w3c_request', 10, false, ({ request, annotated }) => {
+      capture('request');
+      return { request, annotated };
+    });
+    try {
+      await lib.withScopeStack(stack, () =>
+        llmCallExecuteAsync(
+          'node_llm_imported_w3c_pre_event',
+          makeNative(),
+          async () => ({}),
+          null,
+          null,
+          null,
+          null,
+          null,
+        ),
+      );
+    } finally {
+      deregisterLlmRequestIntercept('node_llm_imported_w3c_request');
+      deregisterLlmConditionalExecutionGuardrail('node_llm_imported_w3c_conditional');
+    }
+    assert.deepEqual(observed, [
+      ['conditional', parentUuid, rootUuid, traceparent, 'vendor=value', traceparent],
+      ['request', parentUuid, rootUuid, traceparent, 'vendor=value', traceparent],
+    ]);
+  });
+
   it('execution callbacks preserve the managed propagation parent across await', async () => {
     const events = [];
     const observed = [];
+    const explicitRoot = '018f13f0-7c1a-7a80-8000-000000000799';
     registerSubscriber('node_llm_exec_propagation_parent', (event) => events.push(event));
-    registerLlmExecutionIntercept('node_llm_exec_propagation_parent', 10, async (request, next) => {
-      observed.push(['intercept-before', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
+    registerLlmExecutionIntercept('node_llm_exec_propagation_parent', 10, async (request, _context, next) => {
+      const before = lib.capturePropagationContext();
+      const rooted = lib.capturePropagationContextWithRoot(explicitRoot);
+      assert.equal(rooted.rootUuid, explicitRoot);
+      assert.equal(rooted.parentUuid, before.parentUuid);
+      assert.equal(rooted.traceparent, undefined);
+      assert.equal(rooted.tracestate, undefined);
+      observed.push([
+        'intercept-before',
+        before.parentUuid,
+        before.rootUuid,
+        lib.captureTraceparent(),
+        lib.captureRootlessPropagationContext().traceparent,
+      ]);
       await new Promise((resolve) => setImmediate(resolve));
-      observed.push(['intercept-after', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
+      const after = lib.capturePropagationContext();
+      observed.push([
+        'intercept-after',
+        after.parentUuid,
+        after.rootUuid,
+        lib.captureTraceparent(),
+        lib.captureRootlessPropagationContext().traceparent,
+      ]);
       return next(request);
     });
     try {
@@ -1100,9 +1174,23 @@ describe('LLM intercepts', () => {
         'propagation_parent_llm',
         makeNative(),
         async () => {
-          observed.push(['provider-before', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
+          const before = lib.capturePropagationContext();
+          observed.push([
+            'provider-before',
+            before.parentUuid,
+            before.rootUuid,
+            lib.captureTraceparent(),
+            lib.captureRootlessPropagationContext().traceparent,
+          ]);
           await new Promise((resolve) => setImmediate(resolve));
-          observed.push(['provider-after', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
+          const after = lib.capturePropagationContext();
+          observed.push([
+            'provider-after',
+            after.parentUuid,
+            after.rootUuid,
+            lib.captureTraceparent(),
+            lib.captureRootlessPropagationContext().traceparent,
+          ]);
           return { ok: true };
         },
         null,
@@ -1120,14 +1208,53 @@ describe('LLM intercepts', () => {
       assert.ok(start, 'expected managed LLM start event');
       const traceparent = `00-${start.uuid.replaceAll('-', '')}-${start.uuid.replaceAll('-', '').slice(-16)}-01`;
       assert.deepEqual(observed, [
-        ['intercept-before', start.uuid, traceparent],
-        ['intercept-after', start.uuid, traceparent],
-        ['provider-before', start.uuid, traceparent],
-        ['provider-after', start.uuid, traceparent],
+        ['intercept-before', start.uuid, start.uuid, traceparent, undefined],
+        ['intercept-after', start.uuid, start.uuid, traceparent, undefined],
+        ['provider-before', start.uuid, start.uuid, traceparent, undefined],
+        ['provider-after', start.uuid, start.uuid, traceparent, undefined],
       ]);
     } finally {
       deregisterLlmExecutionIntercept('node_llm_exec_propagation_parent');
       deregisterSubscriber('node_llm_exec_propagation_parent');
+    }
+  });
+
+  it('execution callbacks preserve trace context for a popped parent in the current trace', async () => {
+    const current = pushScope('node_llm_current_parent', ScopeType.Custom, null, null);
+    const external = pushScope('node_llm_external_parent', ScopeType.Custom, null, null);
+    popScope(external);
+    const events = [];
+    let providerTraceparent;
+    let callbackTraceparent;
+    registerSubscriber('node_llm_nonlocal_parent', (event) => events.push(event));
+    try {
+      await llmCallExecuteAsync(
+        'node_llm_nonlocal_parent',
+        makeNative(),
+        async (request) => {
+          providerTraceparent = request.headers.traceparent;
+          callbackTraceparent = lib.captureTraceparent();
+          return { ok: true };
+        },
+        external,
+        null,
+        null,
+        null,
+        null,
+      );
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'node_llm_nonlocal_parent' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed LLM start event');
+      assert.equal(start.parent_uuid, external.uuid);
+      const expected = `00-${current.uuid.replaceAll('-', '')}-${start.uuid.replaceAll('-', '').slice(-16)}-01`;
+      assert.equal(providerTraceparent, expected);
+      assert.equal(callbackTraceparent, providerTraceparent);
+    } finally {
+      deregisterSubscriber('node_llm_nonlocal_parent');
+      popScope(current);
     }
   });
 
@@ -1138,7 +1265,7 @@ describe('LLM intercepts', () => {
     const events = [];
     const observed = [];
     registerSubscriber('node_llm_exec_propagated_trace_root', (event) => events.push(event));
-    registerLlmExecutionIntercept('node_llm_exec_propagated_trace_root', 10, async (request, next) => {
+    registerLlmExecutionIntercept('node_llm_exec_propagated_trace_root', 10, async (request, _context, next) => {
       observed.push(lib.captureTraceparent());
       return next(request);
     });
@@ -1185,10 +1312,17 @@ describe('LLM intercepts', () => {
     const events = [];
     const observed = [];
     registerSubscriber('node_llm_exec_propagated_w3c', (event) => events.push(event));
-    registerLlmExecutionIntercept('node_llm_exec_propagated_w3c', 10, async (request, next) => {
+    registerLlmExecutionIntercept('node_llm_exec_propagated_w3c', 10, async (request, _context, next) => {
       const context = lib.capturePropagationContext();
       const rootless = lib.captureRootlessPropagationContext();
+      const explicitRoot = '018f13f0-7c1a-7a80-8000-000000000799';
+      const rooted = lib.capturePropagationContextWithRoot(explicitRoot);
+      assert.equal(rooted.rootUuid, explicitRoot);
+      assert.equal(rooted.traceparent, context.traceparent);
+      assert.equal(rooted.tracestate, context.tracestate);
       observed.push([
+        context.parentUuid,
+        context.rootUuid,
         context.traceparent,
         context.tracestate,
         lib.captureTraceparent(),
@@ -1216,10 +1350,122 @@ describe('LLM intercepts', () => {
       );
       assert.ok(start, 'expected managed LLM start event');
       const expected = `00-4bf92f3577b34da6a3ce929d0e0e4736-${start.uuid.replaceAll('-', '').slice(-16)}-00`;
-      assert.deepEqual(observed, [[expected, 'vendor=value', expected, expected, 'vendor=value']]);
+      assert.deepEqual(observed, [
+        [start.uuid, rootUuid, expected, 'vendor=value', expected, expected, 'vendor=value'],
+      ]);
     } finally {
       deregisterLlmExecutionIntercept('node_llm_exec_propagated_w3c');
       deregisterSubscriber('node_llm_exec_propagated_w3c');
+    }
+  });
+
+  it('synchronous execution callbacks preserve imported W3C trace context', async () => {
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000741';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000742';
+    const stack = lib.createScopeStackFromPropagation({
+      version: 1,
+      rootUuid,
+      parentUuid,
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00',
+      tracestate: 'vendor=value',
+    });
+    const events = [];
+    let observed;
+    registerSubscriber('node_llm_sync_propagated_w3c', (event) => events.push(event));
+    try {
+      const result = await lib.withScopeStack(stack, () =>
+        llmCallExecute('sync_propagated_w3c_llm', makeNative(), (request) => {
+          observed = {
+            context: lib.capturePropagationContext(),
+            traceparent: lib.captureTraceparent(),
+            headers: request.headers,
+          };
+          return { ok: true };
+        }),
+      );
+      assert.deepEqual(result, { ok: true });
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'sync_propagated_w3c_llm' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed LLM start event');
+      const expected = `00-4bf92f3577b34da6a3ce929d0e0e4736-${start.uuid.replaceAll('-', '').slice(-16)}-00`;
+      assert.deepEqual(observed, {
+        context: {
+          version: 1,
+          rootUuid,
+          parentUuid: start.uuid,
+          traceparent: expected,
+          tracestate: 'vendor=value',
+        },
+        traceparent: expected,
+        headers: { traceparent: expected, tracestate: 'vendor=value' },
+      });
+    } finally {
+      deregisterSubscriber('node_llm_sync_propagated_w3c');
+    }
+  });
+
+  it('withScopeStack replaces and restores managed callback propagation context', async () => {
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000731';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000732';
+    const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00';
+    const stack = lib.createScopeStackFromPropagation({
+      version: 1,
+      rootUuid,
+      parentUuid,
+      traceparent,
+      tracestate: 'vendor=value',
+    });
+    const events = [];
+    const observed = {};
+    registerSubscriber('node_llm_replace_callback_context', (event) => events.push(event));
+    registerLlmExecutionIntercept(
+      'node_llm_replace_callback_context',
+      10,
+      async (request, _context, next) => {
+        observed.before = lib.capturePropagationContext();
+        observed.replacement = lib.withScopeStack(stack, () => ({
+          context: lib.capturePropagationContext(),
+          traceparent: lib.captureTraceparent(),
+        }));
+        observed.after = lib.capturePropagationContext();
+        return next(request);
+      },
+    );
+    try {
+      await llmCallExecuteAsync(
+        'replace_callback_context_llm',
+        makeNative(),
+        async () => ({ ok: true }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'replace_callback_context_llm' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed LLM start event');
+      assert.equal(observed.before.parentUuid, start.uuid);
+      assert.deepEqual(observed.replacement, {
+        context: {
+          version: 1,
+          rootUuid,
+          parentUuid,
+          traceparent,
+          tracestate: 'vendor=value',
+        },
+        traceparent,
+      });
+      assert.equal(observed.after.parentUuid, start.uuid);
+    } finally {
+      deregisterLlmExecutionIntercept('node_llm_replace_callback_context');
+      deregisterSubscriber('node_llm_replace_callback_context');
     }
   });
 
@@ -1235,12 +1481,12 @@ describe('LLM intercepts', () => {
   });
 
   it('execution intercept', () => {
-    registerLlmExecutionIntercept('node_llm_exec_int', 10, async (native, next) => next(native));
+    registerLlmExecutionIntercept('node_llm_exec_int', 10, async (native, _context, next) => next(native));
     deregisterLlmExecutionIntercept('node_llm_exec_int');
   });
 
   it('stream execution intercept', () => {
-    registerLlmStreamExecutionIntercept('node_llm_stream_exec', 10, async (native, next) => next(native));
+    registerLlmStreamExecutionIntercept('node_llm_stream_exec', 10, async (native, _context, next) => next(native));
     deregisterLlmStreamExecutionIntercept('node_llm_stream_exec');
   });
 
@@ -1365,7 +1611,7 @@ describe('LLM intercepts', () => {
   });
 
   it('execution intercept composes with next', async () => {
-    registerLlmExecutionIntercept('node_llm_exec_repl', 10, async (native, next) => {
+    registerLlmExecutionIntercept('node_llm_exec_repl', 10, async (native, _context, next) => {
       native.content.intercepted = true;
       const result = await next(native);
       return {
@@ -1391,6 +1637,115 @@ describe('LLM intercepts', () => {
     deregisterLlmExecutionIntercept('node_llm_exec_repl');
   });
 
+  it('execution context exposes codec states, operations, and callback lifetime', async () => {
+    const codec = new lib.OpenAIChatCodec();
+    const response = {
+      id: 'chatcmpl-execution-context',
+      model: 'test-model',
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+    };
+    const observed = [];
+    let retainedCodec;
+    registerLlmExecutionIntercept('node_llm_execution_context', 10, async (request, context, next) => {
+      observed.push(context.requestCodec.codec.kind);
+      assert.notEqual(context.responseCodec, null);
+
+      if (context.requestCodec.codec.kind === 'none') {
+        assert.equal(context.requestCodec.resolveCodec(), null);
+        assert.deepEqual(context.responseCodec.codec, { kind: 'none' });
+        assert.equal(context.responseCodec.resolveCodec(), null);
+        return next(request);
+      }
+
+      assert.deepEqual(context.requestCodec.codec, { kind: 'opaque' });
+      const requestCodec = context.requestCodec.resolveCodec();
+      assert.notEqual(requestCodec, null);
+      assert.equal(requestCodec.decode(request).model, 'test-model');
+      retainedCodec = requestCodec;
+
+      assert.deepEqual(context.responseCodec.codec, { kind: 'opaque' });
+      const result = await next(request);
+      const responseCodec = context.responseCodec.resolveCodec();
+      assert.notEqual(responseCodec, null);
+      assert.equal(responseCodec.decodeResponse(result).model, 'test-model');
+      return result;
+    });
+    try {
+      const opaque = await llmCallExecute(
+        'node_llm_execution_context',
+        makeNative(),
+        () => response,
+        null,
+        null,
+        null,
+        null,
+        null,
+        codec.decode.bind(codec),
+        ({ annotated, original }) => codec.encode(annotated, original),
+        codec.decodeResponse.bind(codec),
+      );
+      const absent = await llmCallExecute(
+        'node_llm_execution_context_absent',
+        makeNative(),
+        () => response,
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(opaque, response);
+      assert.deepEqual(absent, response);
+    } finally {
+      deregisterLlmExecutionIntercept('node_llm_execution_context');
+    }
+
+    assert.deepEqual(observed, ['opaque', 'none']);
+    assert.notEqual(retainedCodec, undefined);
+    assert.throws(() => retainedCodec.decode(makeNative()), /LLM execution codec capability is no longer active/i);
+  });
+
+  it('stream execution context omits the response codec', async () => {
+    const codec = new lib.OpenAIChatCodec();
+    let observed = false;
+    let retainedCodec;
+    registerLlmStreamExecutionIntercept('node_llm_stream_execution_context', 10, async (request, context, next) => {
+      assert.deepEqual(context.requestCodec.codec, { kind: 'opaque' });
+      retainedCodec = context.requestCodec.resolveCodec();
+      assert.notEqual(retainedCodec, null);
+      assert.equal(context.responseCodec, null);
+      observed = true;
+      return next(request);
+    });
+    try {
+      const stream = await llmStreamCallExecute(
+        'node_llm_stream_execution_context',
+        makeNative(),
+        (wrapper) => {
+          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'ok' });
+          lib.endStream(wrapper.__nemo_relay_stream_id);
+        },
+        null,
+        () => ({}),
+        null,
+        null,
+        null,
+        null,
+        null,
+        codec.decode.bind(codec),
+        ({ annotated, original }) => codec.encode(annotated, original),
+        codec.decodeResponse.bind(codec),
+      );
+      assert.equal(retainedCodec.decode(makeNative()).model, 'test-model');
+      assert.deepEqual(await stream.next(), { token: 'ok' });
+      assert.equal(await stream.next(), null);
+      assert.throws(() => retainedCodec.decode(makeNative()), /LLM execution codec capability is no longer active/i);
+      assert.equal(observed, true);
+    } finally {
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_execution_context');
+    }
+  });
+
   it('execution intercept rejects a detached next call after settlement', async () => {
     let releaseLateNext;
     const lateGate = new Promise((resolve) => {
@@ -1398,7 +1753,7 @@ describe('LLM intercepts', () => {
     });
     let lateNext;
     let providerCalls = 0;
-    registerLlmExecutionIntercept('node_llm_exec_late_next', 10, async (native, next) => {
+    registerLlmExecutionIntercept('node_llm_exec_late_next', 10, async (native, _context, next) => {
       lateNext = lateGate.then(() => next(native));
       return { source: 'intercept' };
     });
@@ -1433,7 +1788,7 @@ describe('LLM intercepts', () => {
     });
     let downstream;
     let providerSideEffects = 0;
-    registerLlmExecutionIntercept('node_llm_exec_abort_started_provider', 10, async (native, next) => {
+    registerLlmExecutionIntercept('node_llm_exec_abort_started_provider', 10, async (native, _context, next) => {
       downstream = next(native);
       downstream.catch(() => undefined);
       await started;
@@ -1480,7 +1835,7 @@ describe('LLM intercepts', () => {
   });
 
   it('execution intercept rejects invalid next request payloads', async () => {
-    registerLlmExecutionIntercept('node_llm_exec_invalid_next', 10, async (_native, next) => {
+    registerLlmExecutionIntercept('node_llm_exec_invalid_next', 10, async (_native, _context, next) => {
       return next({
         headers: 1,
         content: {
@@ -1551,7 +1906,7 @@ describe('LLM intercepts', () => {
   });
 
   it('execution intercept rejects non-JSON next arguments without aborting Node', async () => {
-    registerLlmExecutionIntercept('node_llm_exec_bigint_next', 10, async (_native, next) => next(1n));
+    registerLlmExecutionIntercept('node_llm_exec_bigint_next', 10, async (_native, _context, next) => next(1n));
     try {
       await assert.rejects(
         () => llmCallExecute('bigint_next_llm', makeNative(), () => ({ ok: true })),
@@ -1563,7 +1918,7 @@ describe('LLM intercepts', () => {
   });
 
   it('stream execution intercept composes with next', async () => {
-    registerLlmStreamExecutionIntercept('node_llm_stream_exec_repl', 10, async (native, next) => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_exec_repl', 10, async (native, _context, next) => {
       native.content.intercepted = true;
       const downstream = await next(native);
       return (async function* () {
@@ -1611,7 +1966,7 @@ describe('LLM intercepts', () => {
     });
     let lateNext;
     let providerCalls = 0;
-    registerLlmStreamExecutionIntercept('node_llm_stream_late_next', 10, async (native, next) => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_late_next', 10, async (native, _context, next) => {
       lateNext = lateGate.then(() => next(native));
       return (async function* () {
         yield { source: 'intercept' };
@@ -1637,7 +1992,7 @@ describe('LLM intercepts', () => {
     const invocationStack = lib.createScopeStack();
     const invocationScope = lib.withScopeStack(invocationStack, () => lib.getHandle().uuid);
     let retainedNext;
-    registerLlmStreamExecutionIntercept('node_llm_stream_retained_next_scope', 10, async (native, next) => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_retained_next_scope', 10, async (native, _context, next) => {
       retainedNext = () => next(native);
       return (async function* () {
         for (let index = 0; index < 64; index += 1) {
@@ -1667,7 +2022,9 @@ describe('LLM intercepts', () => {
     const completion = new Promise((resolve) => {
       releaseCompletion = resolve;
     });
-    registerLlmStreamExecutionIntercept('node_llm_stream_incremental', 10, async (request, next) => next(request));
+    registerLlmStreamExecutionIntercept('node_llm_stream_incremental', 10, async (request, _context, next) =>
+      next(request),
+    );
     try {
       const stream = await llmStreamCallExecute('incremental_stream_llm', makeNative(), (wrapper) => {
         lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'first' });
@@ -1714,7 +2071,7 @@ describe('LLM intercepts', () => {
 
   it('stream execution intercept closes a transformed downstream stream early', async () => {
     let providerEnded = false;
-    registerLlmStreamExecutionIntercept('node_llm_stream_early_close', 10, async (request, next) => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_early_close', 10, async (request, _context, next) => {
       const downstream = await next(request);
       return (async function* () {
         yield* downstream;
@@ -1765,18 +2122,21 @@ describe('LLM intercepts', () => {
 
   it('stream execution intercept close waits for iterator cleanup', async () => {
     let cleaned = false;
-    registerLlmStreamExecutionIntercept('node_llm_stream_await_cleanup', 10, async (_request, _next, signal) =>
-      (async function* () {
-        try {
-          yield { token: 'first' };
-          if (!signal.aborted) {
-            await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+    registerLlmStreamExecutionIntercept(
+      'node_llm_stream_await_cleanup',
+      10,
+      async (_request, _context, _next, signal) =>
+        (async function* () {
+          try {
+            yield { token: 'first' };
+            if (!signal.aborted) {
+              await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            }
+          } finally {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            cleaned = true;
           }
-        } finally {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-          cleaned = true;
-        }
-      })(),
+        })(),
     );
     try {
       const stream = await llmStreamCallExecute('await_cleanup_stream_llm', makeNative(), () => {});
@@ -1800,19 +2160,34 @@ describe('LLM intercepts', () => {
     }
   });
 
-  it('default lazy stream preserves the managed parent context', async () => {
+  it('default lazy stream provider preserves imported W3C trace context', async () => {
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000761';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000762';
+    const stack = lib.createScopeStackFromPropagation({
+      version: 1,
+      rootUuid,
+      parentUuid,
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00',
+      tracestate: 'vendor=value',
+    });
     const events = [];
+    let observed;
     registerSubscriber('node_default_lazy_stream_context', (event) => events.push(event));
     try {
-      const stream = await llmStreamCallExecute('node_default_lazy_stream_context', makeNative(), (wrapper) => {
-        setImmediate(() => {
-          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
-            parentUuid: lib.capturePropagationContext().parentUuid,
+      const stream = await lib.withScopeStack(stack, () =>
+        llmStreamCallExecute('node_default_lazy_stream_context', makeNative(), (wrapper) => {
+          setImmediate(() => {
+            observed = {
+              context: lib.capturePropagationContext(),
+              traceparent: lib.captureTraceparent(),
+              headers: wrapper.__nemo_relay_native.headers,
+            };
+            lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'done' });
+            lib.endStream(wrapper.__nemo_relay_stream_id);
           });
-          lib.endStream(wrapper.__nemo_relay_stream_id);
-        });
-      });
-      const providerContext = await stream.next();
+        }),
+      );
+      assert.deepEqual(await stream.next(), { token: 'done' });
       assert.equal(await stream.next(), null);
       await flushSubscribers();
       const start = events.find(
@@ -1822,7 +2197,18 @@ describe('LLM intercepts', () => {
           event.category === 'llm',
       );
       assert.ok(start, 'expected managed LLM start event');
-      assert.deepEqual(providerContext, { parentUuid: start.uuid });
+      const expected = `00-4bf92f3577b34da6a3ce929d0e0e4736-${start.uuid.replaceAll('-', '').slice(-16)}-00`;
+      assert.deepEqual(observed, {
+        context: {
+          version: 1,
+          rootUuid,
+          parentUuid: start.uuid,
+          traceparent: expected,
+          tracestate: 'vendor=value',
+        },
+        traceparent: expected,
+        headers: { traceparent: expected, tracestate: 'vendor=value' },
+      });
     } finally {
       deregisterSubscriber('node_default_lazy_stream_context');
     }
@@ -1858,26 +2244,30 @@ describe('LLM intercepts', () => {
     const secondStack = lib.createScopeStack();
     const firstScope = lib.withScopeStack(firstStack, () => lib.getHandle().uuid);
     const secondScope = lib.withScopeStack(secondStack, () => lib.getHandle().uuid);
-    registerLlmStreamExecutionIntercept('node_llm_stream_next_scope_replacements', 10, async (native, next) => {
-      const [first, second] = await Promise.all([
-        lib.withScopeStack(firstStack, () =>
-          next({
-            ...native,
-            content: { ...native.content, branch: 'first' },
-          }),
-        ),
-        lib.withScopeStack(secondStack, () =>
-          next({
-            ...native,
-            content: { ...native.content, branch: 'second' },
-          }),
-        ),
-      ]);
-      return (async function* () {
-        yield* first;
-        yield* second;
-      })();
-    });
+    registerLlmStreamExecutionIntercept(
+      'node_llm_stream_next_scope_replacements',
+      10,
+      async (native, _context, next) => {
+        const [first, second] = await Promise.all([
+          lib.withScopeStack(firstStack, () =>
+            next({
+              ...native,
+              content: { ...native.content, branch: 'first' },
+            }),
+          ),
+          lib.withScopeStack(secondStack, () =>
+            next({
+              ...native,
+              content: { ...native.content, branch: 'second' },
+            }),
+          ),
+        ]);
+        return (async function* () {
+          yield* first;
+          yield* second;
+        })();
+      },
+    );
     try {
       const stream = await llmStreamCallExecute('scoped_next_stream_llm', makeNative(), (wrapper) => {
         lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
@@ -1904,7 +2294,7 @@ describe('LLM intercepts', () => {
   });
 
   it('stream execution intercept rejects non-JSON next arguments without aborting Node', async () => {
-    registerLlmStreamExecutionIntercept('node_llm_stream_bigint_next', 10, async (_native, next) => next(1n));
+    registerLlmStreamExecutionIntercept('node_llm_stream_bigint_next', 10, async (_native, _context, next) => next(1n));
     try {
       await assert.rejects(
         () =>
@@ -1928,14 +2318,14 @@ describe('LLM intercepts', () => {
       releaseBlocker = resolve;
     });
 
-    registerLlmStreamExecutionIntercept('node_llm_stream_snapshot_target', 100, async (request, next) => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_snapshot_target', 100, async (request, _context, next) => {
       const downstream = await next(request);
       return (async function* () {
         yield* downstream;
         yield { snapshotted: true };
       })();
     });
-    registerLlmStreamExecutionIntercept('node_llm_stream_snapshot_blocker', -100, async (request, next) => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_snapshot_blocker', -100, async (request, _context, next) => {
       blockerEntered();
       await release;
       return next(request);
@@ -1987,7 +2377,7 @@ describe('LLM intercepts', () => {
         headers: {},
         content: { messages: [], model: 'test-model' },
       };
-      lib.registerLlmStreamExecutionIntercept('process-exit-stream', 10, async (value, next) => next(value));
+      lib.registerLlmStreamExecutionIntercept('process-exit-stream', 10, async (value, _context, next) => next(value));
       const stream = await lib.llmStreamCallExecute(
         'process-exit-llm',
         request,
@@ -2017,7 +2407,7 @@ describe('LLM intercepts', () => {
   });
 
   it('stream execution intercept rejects invalid next request payloads', async () => {
-    registerLlmStreamExecutionIntercept('node_llm_stream_invalid_next', 10, async (_native, next) => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_invalid_next', 10, async (_native, _context, next) => {
       return next({
         headers: 1,
         content: {
@@ -2172,6 +2562,23 @@ describe('LLM intercepts', () => {
       declarations.split('context: ToolExecutionContext').length - 1,
       2,
       'global and scope-local context intercept declarations must expose the tool execution context',
+    );
+    assert.equal(
+      declarations.split('context: LlmExecutionContext').length - 1,
+      4,
+      'global and scope-local unary and streaming LLM intercept declarations must expose the execution codec context',
+    );
+    assert.match(
+      declarations,
+      /export type LlmRequestContext = LlmSanitizeRequestContext/,
+    );
+    assert.match(
+      declarations,
+      /export type LlmResponseContext = LlmSanitizeResponseContext/,
+    );
+    assert.match(
+      declarations,
+      /export interface LlmExecutionContext \{[\s\S]*?requestCodec: LlmRequestContext[\s\S]*?responseCodec: LlmResponseContext \| null/,
     );
     assert.doesNotMatch(declarations, /registerToolExecutionInterceptV2|scopeRegisterToolExecutionInterceptV2/);
   });

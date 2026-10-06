@@ -247,7 +247,7 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
         + Sync,
 >;
 
-/// Per-call codec context for LLM request sanitize guardrails.
+/// Per-call codec identity and capability for an LLM request.
 ///
 /// The context distinguishes no codec, Relay built-ins, runtime-registered
 /// codecs, and active codecs with no stable identity.
@@ -257,6 +257,12 @@ pub struct LlmSanitizeRequestContext {
     codec: LlmCodecIdentity,
     request_codec: Option<Arc<dyn LlmCodec>>,
 }
+
+/// Request codec context exposed to an LLM execution intercept.
+///
+/// This is the same context passed to request sanitizers. The alias keeps the
+/// execution API independent of sanitizer-specific naming.
+pub type LlmRequestContext = LlmSanitizeRequestContext;
 
 impl std::fmt::Debug for LlmSanitizeRequestContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -281,7 +287,7 @@ impl LlmSanitizeRequestContext {
         }
     }
 
-    /// Construct request-sanitizer context from the active request codec.
+    /// Construct request codec context from the active request codec.
     #[must_use]
     pub fn for_request_codec(codec: Option<Arc<dyn LlmCodec>>) -> Self {
         let identity = codec
@@ -308,7 +314,7 @@ impl LlmSanitizeRequestContext {
     }
 }
 
-/// Per-call codec context for LLM response sanitize guardrails.
+/// Per-call codec identity and capability for an LLM response.
 ///
 /// The context distinguishes no codec, Relay built-ins, runtime-registered
 /// codecs, and active codecs with no stable identity.
@@ -318,6 +324,12 @@ pub struct LlmSanitizeResponseContext {
     codec: LlmCodecIdentity,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
 }
+
+/// Response codec context exposed to a non-streaming LLM execution intercept.
+///
+/// This is the same context passed to response sanitizers. The alias keeps the
+/// execution API independent of sanitizer-specific naming.
+pub type LlmResponseContext = LlmSanitizeResponseContext;
 
 impl std::fmt::Debug for LlmSanitizeResponseContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -342,7 +354,7 @@ impl LlmSanitizeResponseContext {
         }
     }
 
-    /// Construct response-sanitizer context from the active response codec.
+    /// Construct response codec context from the active response codec.
     #[must_use]
     pub fn for_response_codec(codec: Option<Arc<dyn LlmResponseCodec>>) -> Self {
         let identity = codec
@@ -493,12 +505,14 @@ pub type LlmExecutionNextFn =
 /// Wrap or replace non-streaming LLM execution.
 ///
 /// A non-streaming execution intercept receives the logical provider name, the
-/// current request, and the continuation representing the rest of the chain.
+/// current request, the invocation codec context, and the continuation
+/// representing the rest of the chain.
 ///
 /// # Parameters
 /// - First argument: Logical provider or model family name.
 /// - Second argument: Current LLM request.
-/// - Third argument: Continuation for the remaining execution chain.
+/// - Third argument: Request and unary-response codec context.
+/// - Fourth argument: Continuation for the remaining execution chain.
 ///
 /// # Returns
 /// A future resolving to the provider response JSON.
@@ -510,6 +524,7 @@ pub type LlmExecutionFn = Arc<
     dyn Fn(
             &str,
             LlmRequest,
+            super::llm_execution_context::LlmExecutionContext,
             LlmExecutionNextFn,
         ) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
         + Send
@@ -668,11 +683,14 @@ pub type LlmStreamExecutionNextFn = Arc<
 ///
 /// A streaming execution intercept can observe or modify the request before
 /// invoking the continuation, and it can also replace the returned stream.
+/// Its execution context exposes the request codec but deliberately omits a
+/// response codec because Relay codecs decode complete responses, not chunks.
 ///
 /// # Parameters
 /// - First argument: Logical provider or model family name.
 /// - Second argument: Current LLM request.
-/// - Third argument: Continuation for the remaining streaming execution chain.
+/// - Third argument: Request codec context with no response direction.
+/// - Fourth argument: Continuation for the remaining streaming execution chain.
 ///
 /// # Returns
 /// A future resolving to a JSON chunk stream.
@@ -684,6 +702,7 @@ pub type LlmStreamExecutionFn = Arc<
     dyn Fn(
             &str,
             LlmRequest,
+            super::llm_execution_context::LlmExecutionContext,
             LlmStreamExecutionNextFn,
         ) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>>
         + Send

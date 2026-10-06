@@ -1833,6 +1833,7 @@ dependencies = [
  "shell-words",
  "spdlog-rs",
  "strum",
+ "sysinfo",
  "tempfile",
  "thiserror",
  "tokio",

@@ -19,6 +19,7 @@ from nemo_relay import (
     Event,
     Json,
     JsonObject,
+    LlmExecutionContext,
     LLMRequest,
     LLMRequestInterceptOutcome,
     LlmSanitizeRequestContext,
@@ -647,7 +648,9 @@ class TestScopeLocalLlmWrappers:
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
         async def stream_intercept(
+            _name: str,
             request_inner: LLMRequest,
+            _context: LlmExecutionContext,
             next_fn: Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]],
         ) -> AsyncIterator[Json]:
             if request_inner.content.get("emit_test_chunk"):
@@ -703,7 +706,7 @@ class TestScopeLocalLlmWrappers:
                 handle,
                 "sl_llm_exec_cov",
                 1,
-                lambda name, req, next_fn: {"intercepted": True},
+                lambda name, req, context, next_fn: {"intercepted": True},
             )
             assert scope_local.deregister_llm_execution(handle, "sl_llm_exec_cov") is True
 
@@ -757,7 +760,12 @@ class TestScopeLocalLlmBehavior:
     async def test_scope_local_llm_execution_intercept_can_await_next(self) -> None:
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
-        async def middleware(_name: str, req: LLMRequest, next_fn: Callable[[LLMRequest], Awaitable[Json]]) -> Json:
+        async def middleware(
+            _name: str,
+            req: LLMRequest,
+            _context: LlmExecutionContext,
+            next_fn: Callable[[LLMRequest], Awaitable[Json]],
+        ) -> Json:
             updated = LLMRequest(req.headers, {**req.content, "model": "via-scope-local"})
             result = await next_fn(updated)
             assert isinstance(result, dict)

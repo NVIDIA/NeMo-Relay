@@ -220,6 +220,11 @@ typedef struct FfiPluginContext FfiPluginContext;
 typedef struct FfiPluginHostActivation FfiPluginHostActivation;
 
 /**
+ * Opaque handle for an asynchronous resource metrics collection.
+ */
+typedef struct FfiResourceMetricsCollection FfiResourceMetricsCollection;
+
+/**
  * Opaque handle representing an active execution scope.
  */
 typedef struct FfiScopeHandle FfiScopeHandle;
@@ -299,8 +304,9 @@ typedef char *(*NemoRelayCodecEncodeFn)(void *user_data,
                                         const struct FfiLLMRequest *original_request);
 
 /**
- * Codec identity supplied to an LLM sanitizer. `codec_id` is null for
- * `None` and `Opaque`, and is valid only for the duration of the callback.
+ * Request codec context shared by LLM sanitizer and execution callbacks.
+ * `codec_id` is null for `None` and `Opaque`, and is valid only for the
+ * duration of the callback.
  */
 typedef struct NemoRelayLlmSanitizeRequestContext {
   /**
@@ -328,7 +334,7 @@ typedef struct FfiLLMRequest *(*NemoRelayLlmSanitizeRequestCb)(void *user_data,
                                                                struct NemoRelayLlmSanitizeRequestContext context);
 
 /**
- * Directional codec context supplied to an LLM response sanitizer.
+ * Response codec context shared by LLM sanitizer and execution callbacks.
  */
 typedef struct NemoRelayLlmSanitizeResponseContext {
   /**
@@ -382,6 +388,35 @@ typedef NemoRelayStatus (*NemoRelayLlmRequestInterceptCb)(void *user_data,
                                                           char **out_outcome_json);
 
 /**
+ * Request codec context exposed to an LLM execution intercept.
+ */
+typedef struct NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
+
+/**
+ * Response codec context exposed to an LLM execution intercept.
+ */
+typedef struct NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
+
+/**
+ * Directional codec context supplied to an LLM execution intercept.
+ *
+ * `request_codec` is always present. `response_codec` is non-null for unary
+ * execution and null for streaming execution, where Relay has no completed
+ * response to decode. Pointers reachable from this value are borrowed and
+ * valid only until the intercept callback returns.
+ */
+typedef struct NemoRelayLlmExecutionContext {
+  /**
+   * Active request codec identity and capability.
+   */
+  NemoRelayLlmRequestContext request_codec;
+  /**
+   * Active unary-response codec context, or null for streaming execution.
+   */
+  const NemoRelayLlmResponseContext *response_codec;
+} NemoRelayLlmExecutionContext;
+
+/**
  * Runtime-provided "next" callback for LLM execution middleware chain.
  * Takes a native JSON C string, returns a response JSON C string.
  * `next_ctx` is borrowed and valid only until the intercept callback returns;
@@ -393,10 +428,13 @@ typedef char *(*NemoRelayLlmExecNextFn)(const char *native_json, void *next_ctx)
 
 /**
  * Callback for LLM execution intercepts with middleware chain support.
- * Receives native JSON C string plus a `next` callback and its context.
+ * Receives the managed LLM call name, native JSON C string, execution context,
+ * plus a `next` callback and its context.
  */
 typedef char *(*NemoRelayLlmExecInterceptCb)(void *user_data,
+                                             const char *name,
                                              const char *native_json,
+                                             struct NemoRelayLlmExecutionContext context,
                                              NemoRelayLlmExecNextFn next_fn,
                                              void *next_ctx);
 
@@ -644,6 +682,43 @@ typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
  * Read `f64_value`.
  */
 #define NEMO_RELAY_METRIC_VALUE_TYPE_F64 3
+
+/**
+ * Start an asynchronous resource metrics collection using the active plugin.
+ *
+ * Poll the returned handle with `nemo_relay_resource_metrics_collect_poll`.
+ * Release it with `nemo_relay_resource_metrics_collect_free`, including when
+ * abandoning a pending collection.
+ *
+ * # Safety
+ * `out_collection` must point to writable pointer storage.
+ */
+NemoRelayStatus nemo_relay_resource_metrics_collect_start(struct FfiResourceMetricsCollection **out_collection);
+
+/**
+ * Check a collection without blocking. `out_done` is false while pending.
+ *
+ * Once done, this function returns the collection status and, on success, a
+ * canonical JSON string owned by the caller. Free the string with
+ * `nemo_relay_string_free`. A completed result can be retrieved only once.
+ *
+ * # Safety
+ * The collection must be live. Both output pointers must be writable.
+ * Do not free the handle while another thread is polling it.
+ */
+NemoRelayStatus nemo_relay_resource_metrics_collect_poll(struct FfiResourceMetricsCollection *collection,
+                                                         bool *out_done,
+                                                         char **out_json);
+
+/**
+ * Release a collection handle and cancel its pending wait.
+ *
+ * An OS query already running on a worker may finish after this call returns.
+ *
+ * # Safety
+ * `collection` must be null or a live handle, freed exactly once and not in use.
+ */
+void nemo_relay_resource_metrics_collect_free(struct FfiResourceMetricsCollection *collection);
 
 /**
  * Initializes the Go binding runtime and installs default operational logging.
@@ -1480,14 +1555,15 @@ NemoRelayStatus nemo_relay_deregister_llm_request_intercept(const char *name);
 
 /**
  * Register an LLM execution intercept following the middleware chain pattern.
- * The callback receives `(request, next_fn, next_ctx)` — call
+ * The callback receives `(name, request, context, next_fn, next_ctx)` — call
  * `next_fn(request, next_ctx)` to invoke the next intercept or the original
  * LLM call, or skip calling it to short-circuit.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, codec
+ *   context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -1510,14 +1586,17 @@ NemoRelayStatus nemo_relay_deregister_llm_execution_intercept(const char *name);
 
 /**
  * Register an LLM streaming execution intercept following the middleware chain
- * pattern. The callback receives `(request, next_fn, next_ctx)` — call
+ * pattern. The callback receives
+ * `(name, request, context, next_fn, next_ctx)` — call
  * `next_fn(request, next_ctx)` to invoke the next intercept or the original
- * streaming LLM call, or skip calling it to short-circuit.
+ * streaming LLM call, or skip calling it to short-circuit. The response codec
+ * in `context` is null because chunks are not complete provider responses.
  *
  * # Parameters
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, request
+ *   codec context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -2931,13 +3010,15 @@ NemoRelayStatus nemo_relay_scope_deregister_llm_request_intercept(const char *sc
 
 /**
  * Register a scope-local LLM execution intercept following the middleware
- * chain pattern.
+ * chain pattern. The callback receives
+ * `(name, request, context, next_fn, next_ctx)`.
  *
  * # Parameters
  * - `scope_uuid`: UUID of the target scope (null-terminated C string).
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, codec
+ *   context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *
@@ -2962,13 +3043,16 @@ NemoRelayStatus nemo_relay_scope_deregister_llm_execution_intercept(const char *
 
 /**
  * Register a scope-local LLM streaming execution intercept following the
- * middleware chain pattern.
+ * middleware chain pattern. The callback receives
+ * `(name, request, context, next_fn, next_ctx)`. The response codec in
+ * `context` is null.
  *
  * # Parameters
  * - `scope_uuid`: UUID of the target scope (null-terminated C string).
  * - `name`: Unique intercept name.
  * - `priority`: Execution priority (lower runs first).
- * - `exec_cb`: Middleware callback receiving request and a next function.
+ * - `exec_cb`: Middleware callback receiving the LLM name, request, request
+ *   codec context, and a next function.
  * - `exec_user_data`: Opaque pointer for the execution callback.
  * - `exec_free`: Optional destructor for `exec_user_data`.
  *

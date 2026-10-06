@@ -2689,14 +2689,16 @@ impl OtelEventProcessor {
         let Some(parent_uuid) = event.parent_uuid() else {
             return Context::new();
         };
-        if event.propagation_parent_uuid() != Some(parent_uuid) {
-            return Context::new();
-        }
         if let Some(span_context) = w3c_span_context(
             event.propagation_traceparent(),
             event.propagation_tracestate(),
-        ) {
+        ) && (event.propagation_parent_uuid() == Some(parent_uuid)
+            || span_context.span_id() == relay_span_id(parent_uuid))
+        {
             return Context::new().with_remote_span_context(span_context);
+        }
+        if event.propagation_parent_uuid() != Some(parent_uuid) {
+            return Context::new();
         }
         let Some(root_uuid) = event.propagation_root_uuid() else {
             return Context::new();
@@ -3020,19 +3022,8 @@ pub(super) fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
 }
 
 #[cfg(test)]
-mod automatic_configuration_tests {
-    use super::*;
-
-    #[test]
-    fn automatic_trace_configuration_uses_gen_ai_projection() {
-        assert_eq!(
-            OpenTelemetryConfig::from_automatic_configuration()
-                .shared
-                .otel_type,
-            OpenTelemetryType::GenAi
-        );
-    }
-}
+#[path = "../../tests/unit/observability/otel_automatic_configuration_tests.rs"]
+mod automatic_configuration_tests;
 
 #[cfg(test)]
 #[path = "../../tests/unit/observability/otel_tests.rs"]

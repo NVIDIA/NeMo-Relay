@@ -11,6 +11,8 @@ pub mod llm;
 pub mod optimization;
 /// Global and scope-local middleware registration helpers.
 pub mod registry;
+/// System resource metric acquisition and polling APIs.
+pub mod resource_metrics;
 /// Advanced runtime state, callbacks, and scope-stack helpers.
 pub mod runtime;
 /// Scope stack lifecycle and mark-event entry points.

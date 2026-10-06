@@ -4,3 +4,4 @@
 //! First-party plugin implementations for NeMo Relay Core.
 
 pub mod model_pricing;
+pub mod resource_metrics;

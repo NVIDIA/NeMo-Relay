@@ -36,6 +36,7 @@ from nemo_relay import model_pricing as model_pricing
 from nemo_relay import observability as observability
 from nemo_relay import pii_redaction as pii_redaction
 from nemo_relay import plugin as plugin
+from nemo_relay import resource_metrics as resource_metrics
 from nemo_relay import scope as scope
 from nemo_relay import scope_local as scope_local
 from nemo_relay import subscribers as subscribers
@@ -69,13 +70,22 @@ from nemo_relay._native import (
     LlmCodecIdentity as LlmCodecIdentity,
 )
 from nemo_relay._native import (
+    LlmExecutionContext as LlmExecutionContext,
+)
+from nemo_relay._native import (
     LLMHandle as LLMHandle,
 )
 from nemo_relay._native import (
     LLMRequest as LLMRequest,
 )
 from nemo_relay._native import (
+    LlmRequestContext as LlmRequestContext,
+)
+from nemo_relay._native import (
     LLMRequestInterceptOutcome as LLMRequestInterceptOutcome,
+)
+from nemo_relay._native import (
+    LlmResponseContext as LlmResponseContext,
 )
 from nemo_relay._native import (
     LlmSanitizeRequestCodec as LlmSanitizeRequestCodec,
@@ -345,25 +355,30 @@ Return:
     The complete canonical outcome passed to later middleware.
 """
 LlmExecutionIntercept: TypeAlias = Callable[
-    [str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]],
+    [str, LLMRequest, LlmExecutionContext, Callable[[LLMRequest], Awaitable[Json]]],
     Json | Awaitable[Json],
 ]
 """Execution intercept callback that wraps non-streaming LLM execution.
 
 Arguments:
-    The logical LLM name, current request, and next callable.
+    The logical LLM name, current request, execution context, and next callable.
 
 Return:
     A JSON-compatible response, either directly or as an awaitable.
 """
 LlmStreamExecutionIntercept: TypeAlias = Callable[
-    [LLMRequest, Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]],
+    [
+        str,
+        LLMRequest,
+        LlmExecutionContext,
+        Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]],
+    ],
     AsyncIterator[Json] | Awaitable[AsyncIterator[Json]],
 ]
 """Execution intercept callback that wraps streaming LLM execution.
 
 Arguments:
-    The current request and next callable.
+    The logical LLM name, current request, execution context, and next callable.
 
 Return:
     An async iterator of JSON chunks, either directly or as an awaitable.

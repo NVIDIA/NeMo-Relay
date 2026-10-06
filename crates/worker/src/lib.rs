@@ -295,7 +295,7 @@ impl ToolExecutionContext {
     }
 }
 
-/// Active codec context supplied to an LLM request sanitizer.
+/// Active codec identity and capability for an LLM request.
 #[derive(Clone)]
 pub struct LlmSanitizeRequestContext {
     /// Identity of the active codec.
@@ -305,7 +305,7 @@ pub struct LlmSanitizeRequestContext {
     invocation_id: Option<String>,
 }
 
-/// Active codec context supplied to an LLM response sanitizer.
+/// Active codec identity and capability for an LLM response.
 #[derive(Clone)]
 pub struct LlmSanitizeResponseContext {
     /// Identity of the active codec.
@@ -314,6 +314,12 @@ pub struct LlmSanitizeResponseContext {
     codec_capability_id: Option<String>,
     invocation_id: Option<String>,
 }
+
+/// Request codec context supplied to an LLM execution intercept.
+pub type LlmRequestContext = LlmSanitizeRequestContext;
+
+/// Response codec context supplied to an LLM execution intercept.
+pub type LlmResponseContext = LlmSanitizeResponseContext;
 
 impl LlmSanitizeRequestContext {
     /// Resolves the active request codec for this callback.
@@ -387,6 +393,48 @@ impl WorkerResponseCodec {
             .await
     }
 }
+
+/// Invocation-scoped codec identities and operations for an LLM execution interceptor.
+///
+/// This context identifies the codecs selected when Relay created the managed
+/// invocation. Rewriting a request into another provider's wire format does
+/// not change these identities; codec operations reject incompatible payloads.
+#[derive(Clone)]
+pub struct LlmExecutionContext {
+    request_codec: LlmRequestContext,
+    response_codec: Option<LlmResponseContext>,
+}
+
+impl std::fmt::Debug for LlmExecutionContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LlmExecutionContext")
+            .field("request_codec", &self.request_codec.codec)
+            .field(
+                "response_codec",
+                &self.response_codec.as_ref().map(|context| &context.codec),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl LlmExecutionContext {
+    /// Request codec identity and invocation-scoped operations.
+    #[must_use]
+    pub fn request_codec(&self) -> &LlmRequestContext {
+        &self.request_codec
+    }
+
+    /// Unary response codec identity and invocation-scoped decode operation.
+    ///
+    /// Streaming execution returns `None` because Relay response codecs decode
+    /// completed provider responses, not individual stream chunks.
+    #[must_use]
+    pub fn response_codec(&self) -> Option<&LlmResponseContext> {
+        self.response_codec.as_ref()
+    }
+}
+
 type LlmConditionalFn = Arc<dyn Fn(LlmRequest) -> BoxFutureResult<Option<String>> + Send + Sync>;
 type ConditionalMiddlewareFn = Arc<
     dyn Fn(BTreeSet<RuntimeRegistrationKind>, String) -> BoxFutureResult<Option<String>>
@@ -402,9 +450,14 @@ type LlmRequestFn = Arc<
         + Send
         + Sync,
 >;
-type LlmExecutionFn = Arc<dyn Fn(&str, LlmRequest, LlmNext) -> BoxFutureResult<Json> + Send + Sync>;
-type LlmStreamExecutionFn =
-    Arc<dyn Fn(&str, LlmRequest, LlmStreamNext) -> BoxFutureResult<JsonStream> + Send + Sync>;
+type LlmExecutionFn = Arc<
+    dyn Fn(&str, LlmRequest, LlmExecutionContext, LlmNext) -> BoxFutureResult<Json> + Send + Sync,
+>;
+type LlmStreamExecutionFn = Arc<
+    dyn Fn(&str, LlmRequest, LlmExecutionContext, LlmStreamNext) -> BoxFutureResult<JsonStream>
+        + Send
+        + Sync,
+>;
 
 #[derive(Default)]
 struct WorkerHandlers {
@@ -821,7 +874,7 @@ impl PluginContext {
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&str, LlmRequest, LlmNext) -> Fut + Send + Sync + 'static,
+        F: Fn(&str, LlmRequest, LlmExecutionContext, LlmNext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Json>> + Send + 'static,
     {
         self.push_registration(
@@ -832,7 +885,9 @@ impl PluginContext {
         );
         self.handlers.llm_executions.insert(
             name.into(),
-            Arc::new(move |model, request, next| Box::pin(callback(model, request, next))),
+            Arc::new(move |model, request, context, next| {
+                Box::pin(callback(model, request, context, next))
+            }),
         );
     }
 
@@ -848,7 +903,7 @@ impl PluginContext {
         priority: i32,
         callback: F,
     ) where
-        F: Fn(&str, LlmRequest, LlmStreamNext) -> Fut + Send + Sync + 'static,
+        F: Fn(&str, LlmRequest, LlmExecutionContext, LlmStreamNext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<JsonStream>> + Send + 'static,
     {
         self.push_registration(
@@ -859,7 +914,9 @@ impl PluginContext {
         );
         self.handlers.llm_stream_executions.insert(
             name.into(),
-            Arc::new(move |model, request, next| Box::pin(callback(model, request, next))),
+            Arc::new(move |model, request, context, next| {
+                Box::pin(callback(model, request, context, next))
+            }),
         );
     }
 
@@ -2014,6 +2071,9 @@ impl PluginWorker for WorkerService {
             .cloned()
             .ok_or_else(|| Status::not_found("stream execution handler not registered"))?;
         let payload = llm_payload(request.payload).map_err(status_from_sdk)?;
+        let execution_context = payload
+            .execution_context(&self.runtime, &invocation_id, false)
+            .map_err(status_from_sdk)?;
         let request_value =
             required_json::<LlmRequest>(payload.request, "llm request").map_err(status_from_sdk)?;
         let next = LlmStreamNext {
@@ -2028,7 +2088,7 @@ impl PluginWorker for WorkerService {
             TASK_SCOPE_CONTEXT
                 .scope(open_scope.clone(), async {
                     let future = with_thread_scope(&open_scope, || {
-                        handler(&model_name, request_value, next)
+                        handler(&model_name, request_value, execution_context, next)
                     });
                     future.await
                 })
@@ -2097,26 +2157,36 @@ impl PluginWorker for WorkerService {
                 let Some(item) = item else {
                     return;
                 };
-                let chunk = match item {
-                    Ok(value) => StreamChunk {
-                        item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
-                            match json_envelope(JSON_SCHEMA, &value) {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    let _ =
-                                        task_tx.send(Err(Status::internal(err.to_string()))).await;
-                                    return;
-                                }
-                            },
-                        )),
-                    },
-                    Err(err) => StreamChunk {
-                        item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
-                            sdk_error_to_worker(err),
-                        )),
-                    },
+                let (chunk, terminal) = match item {
+                    Ok(value) => (
+                        StreamChunk {
+                            item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
+                                match json_envelope(JSON_SCHEMA, &value) {
+                                    Ok(value) => value,
+                                    Err(err) => {
+                                        let _ = task_tx
+                                            .send(Err(Status::internal(err.to_string())))
+                                            .await;
+                                        return;
+                                    }
+                                },
+                            )),
+                        },
+                        false,
+                    ),
+                    Err(err) => (
+                        StreamChunk {
+                            item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
+                                sdk_error_to_worker(err),
+                            )),
+                        },
+                        true,
+                    ),
                 };
                 if task_tx.send(Ok(chunk)).await.is_err() {
+                    return;
+                }
+                if terminal {
                     return;
                 }
             }
@@ -2651,13 +2721,17 @@ impl WorkerService {
         scope: &Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let payload = llm_payload(request.payload)?;
+        let execution_context =
+            payload.execution_context(&self.runtime, &request.invocation_id, true)?;
         let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
         let handler = self.llm_execution(&request.registration_name)?;
         let next = LlmNext {
             runtime: self.runtime.clone(),
             continuation_id: request.continuation_id,
         };
-        let future = with_thread_scope(scope, || handler(&payload.model_name, request_value, next));
+        let future = with_thread_scope(scope, || {
+            handler(&payload.model_name, request_value, execution_context, next)
+        });
         Ok(json_response(future.await?))
     }
 
@@ -2844,9 +2918,56 @@ struct LlmPayload {
     annotated_request: Option<JsonEnvelope>,
     response: Option<JsonEnvelope>,
     sanitize_context: Option<nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext>,
+    execution_codec_context: Option<Box<nemo_relay_worker_proto::v1::LlmExecutionCodecContext>>,
 }
 
 impl LlmPayload {
+    fn execution_context(
+        &self,
+        runtime: &PluginRuntime,
+        invocation_id: &str,
+        response_required: bool,
+    ) -> Result<LlmExecutionContext> {
+        let context = require_execution_field(
+            self.execution_codec_context.as_ref(),
+            "execution context is missing",
+        )?;
+        let request =
+            require_execution_field(context.request.as_ref(), "request context is missing")?;
+        let request_identity =
+            require_execution_field(request.codec.as_ref(), "request codec identity is missing")?;
+        let response_codec = context
+            .response
+            .as_ref()
+            .map(|response| -> Result<LlmResponseContext> {
+                let identity = require_execution_field(
+                    response.codec.as_ref(),
+                    "response codec identity is missing",
+                )?;
+                Ok(LlmResponseContext {
+                    codec: codec_identity_from_proto(Some(identity)),
+                    runtime: Some(runtime.clone()),
+                    codec_capability_id: response.codec_capability_id.clone(),
+                    invocation_id: Some(invocation_id.to_owned()),
+                })
+            })
+            .transpose()?;
+        if response_required && response_codec.is_none() {
+            return Err(WorkerSdkError::InvalidInput(
+                "malformed LLM execution codec context: response context is missing".into(),
+            ));
+        }
+        Ok(LlmExecutionContext {
+            request_codec: LlmRequestContext {
+                codec: codec_identity_from_proto(Some(request_identity)),
+                runtime: Some(runtime.clone()),
+                codec_capability_id: request.codec_capability_id.clone(),
+                invocation_id: Some(invocation_id.to_owned()),
+            },
+            response_codec,
+        })
+    }
+
     fn sanitize_request_context(&self, invocation_id: &str) -> LlmSanitizeRequestContext {
         let codec = match self.sanitize_context.as_ref() {
             Some(nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(context)) => context.codec.as_ref(),
@@ -2929,6 +3050,12 @@ fn tool_payload(
     }
 }
 
+fn require_execution_field<T>(value: Option<T>, detail: &str) -> Result<T> {
+    value.ok_or_else(|| {
+        WorkerSdkError::InvalidInput(format!("malformed LLM execution codec context: {detail}"))
+    })
+}
+
 fn llm_payload(
     payload: Option<nemo_relay_worker_proto::v1::invoke_request::Payload>,
 ) -> Result<LlmPayload> {
@@ -2939,6 +3066,7 @@ fn llm_payload(
             annotated_request: value.annotated_request,
             response: value.response,
             sanitize_context: value.sanitize_context,
+            execution_codec_context: value.execution_codec_context,
         }),
         _ => Err(WorkerSdkError::InvalidInput("expected llm payload".into())),
     }
@@ -3581,3 +3709,6 @@ fn rustc_version_runtime() -> String {
 #[cfg(test)]
 #[path = "../tests/unit/codec_identity_tests.rs"]
 mod codec_identity_tests;
+#[cfg(test)]
+#[path = "../tests/unit/execution_context_tests.rs"]
+mod execution_context_tests;

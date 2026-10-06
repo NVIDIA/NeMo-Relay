@@ -31,7 +31,7 @@ No legacy setting is read by a replacement plugin:
   `request_defaults`, and rail selectors require new plugin configuration.
 - Remote settings such as `endpoint` and `config_id` have no automatic worker
   equivalent. The removed backend delegated full generation to a Guardrails
-  service; do not treat a remote check endpoint as the same behavior.
+  service. Do not treat a remote check endpoint as the same behavior.
 - Keep any Guardrails configuration files you still need outside the removed
   `[[components]]` entry while planning a migration.
 
@@ -41,6 +41,45 @@ the replacement is released, review its supported surfaces and migrate the old
 component settings to its new configuration. Follow releases and installation
 guidance in
 [NVIDIA NeMo Relay Plugins](https://github.com/NVIDIA/NeMo-Relay-Plugins).
+
+### Update LLM Execution Intercepts
+
+Relay 0.10 changes every non-streaming and streaming LLM execution-intercept callback.
+Update callbacks as follows:
+
+| Surface | Relay 0.9 | Relay 0.10 |
+|---|---|---|
+| Rust, Python non-streaming, typed native plugin, Rust worker, Python worker | `(name, request, next)` | `(name, request, context, next)` |
+| Python language-binding streaming | `(request, next)` | `(name, request, context, next)` |
+| Node.js, Go | `(request, next)` | `(request, context, next)` |
+| C | `(user_data, request, next, next_ctx)` | `(user_data, name, request, context, next, next_ctx)` |
+| Raw native callback | `(..., name, request, next, ...)` | `(..., name, request, context, next, ...)` |
+
+The request direction reports the selected codec and exposes decode and encode
+operations when Relay resolved one. Non-streaming execution also exposes response
+identity and decode. Streaming execution has no response codec because chunks
+are not complete provider responses.
+
+Codec access is limited to the current call. Do not cache the context or a
+resolved codec: non-streaming access expires when the callback finishes, and
+streaming request access expires when the returned stream closes.
+
+This is a source and binary compatibility break for execution-intercept users:
+
+- Recompile language-binding consumers that register an LLM execution
+  intercept and update their callback argument order.
+- Rebuild every native plugin against the 0.10 SDK. Native plugins continue to
+  declare `compat.native_api = "1"`, but must set `compat.relay` to
+  `">=0.10.0,<1.0"` or another range that excludes Relay 0.9. Relay 0.10 uses
+  internal native ABI v7 and rejects v2-v6 compiled layouts.
+- Regenerate and rebuild gRPC workers that register an LLM execution intercept.
+  The protocol remains `grpc-v1`, but those workers must also exclude Relay 0.9
+  in `compat.relay`.
+
+LLM request intercepts and conditional middleware do not change. For the full
+context and lifetime contract, refer to [Build Plugins](/build-plugins/about),
+[Native ABI Reference](/build-plugins/native/native-abi-reference), and
+[gRPC-v1 Worker Protocol](/build-plugins/workers/grpc-v1-protocol).
 
 ### Refresh Codex Provider Routing
 
@@ -340,8 +379,8 @@ When you import a context with a root, work continues in the parent's
 OpenTelemetry trace. Without a propagated root, the first local Agent scope
 creates one.
 
-To start a separate trace in the receiver, use the rootless capture API for
-your binding:
+To start a separate trace from a locally created sender scope, use the rootless
+capture API for your binding:
 
 | Binding | Rootless Capture |
 |---|---|
@@ -352,9 +391,19 @@ your binding:
 | C | `nemo_relay_capture_rootless_propagation_context_json` |
 
 A rootless context still links Relay events to their immediate parent.
-The receiver's first local Agent scope creates a new root. Use explicit root
-capture when your application supplies a stable run UUID. Authenticate the
-source of an incoming context before you trust and import it. For details, refer to
+It does not forward a W3C parent derived from the sender's local scope, so the
+receiver starts a separate OpenTelemetry trace. If the sender previously
+imported a W3C parent, rootless capture still forwards that upstream trace;
+remove `traceparent` and `tracestate` from the context when an unconditional
+trace boundary is required. The receiver's first local Agent scope creates a
+new Relay root. Use explicit root capture when your application supplies a
+stable run UUID. That UUID determines the receiver's trace unless the sender
+imported a W3C parent, which retains precedence over the supplied root.
+An explicit parent handle that is no longer on the stack uses the current
+stack's trace as a fallback. To continue a different trace, capture and import
+its propagation context rather than passing only the old scope handle.
+Authenticate the source of an incoming context before you
+trust and import it. For details, refer to
 [Scope Concepts](/about-nemo-relay/concepts/scopes).
 
 In ATIF, use `trajectory_id` as the unique ID for each exported trajectory.
@@ -396,9 +445,13 @@ The `gen_ai` output format adds the following fields after sanitization:
 
 | Field | Content |
 |---|---|
-| `gen_ai.tool.call.arguments` | Tool arguments that are JSON objects |
-| `gen_ai.tool.call.result` | Successful tool results that are JSON objects |
+| `gen_ai.tool.call.arguments` | Canonical JSON text for non-null sanitized tool arguments |
+| `gen_ai.tool.call.result` | Canonical JSON text for non-null sanitized successful tool results |
 | `gen_ai.tool.definitions` | Tool-definition identities |
+
+Arguments and successful results can be objects, arrays, strings, numbers, or
+booleans. Relay preserves each non-null sanitized value in its canonical JSON
+serialization and omits null values.
 
 Review who can access your collector and how you redact data before upgrading.
 Setting `enable_full_payloads = false` does not disable tool-content export.

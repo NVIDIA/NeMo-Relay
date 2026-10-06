@@ -1038,6 +1038,73 @@ fn test_validate_plugin_config_honors_policy_and_duplicate_singletons() {
 }
 
 #[test]
+fn test_removed_nemo_guardrails_component_is_always_rejected() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    for enabled in [true, false] {
+        for unknown_component in [
+            UnsupportedBehavior::Ignore,
+            UnsupportedBehavior::Warn,
+            UnsupportedBehavior::Error,
+        ] {
+            let report = test_validate_static_plugin_config(&PluginConfig {
+                components: vec![PluginComponentSpec {
+                    kind: "nemo_guardrails".into(),
+                    enabled,
+                    config: Default::default(),
+                }],
+                policy: ConfigPolicy {
+                    unknown_component,
+                    ..ConfigPolicy::default()
+                },
+                ..PluginConfig::default()
+            });
+
+            assert_eq!(report.diagnostics.len(), 1);
+            let diagnostic = report
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "plugin.removed_component")
+                .expect("removed Guardrails component should have a migration diagnostic");
+            assert_eq!(diagnostic.level, DiagnosticLevel::Error);
+            assert_eq!(diagnostic.component.as_deref(), Some("nemo_guardrails"));
+            assert!(
+                diagnostic
+                    .message
+                    .contains("removed in NeMo Relay >=0.10.0")
+            );
+            assert!(diagnostic.message.contains("migration-guides"));
+        }
+    }
+
+    reset_global();
+}
+
+#[test]
+fn test_dynamic_nemo_guardrails_component_is_not_treated_as_legacy_static_config() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let report = validate_plugin_config_with_static_component_count(
+        &PluginConfig {
+            components: vec![PluginComponentSpec::new("nemo_guardrails")],
+            ..PluginConfig::default()
+        },
+        0,
+    );
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "plugin.removed_component")
+    );
+
+    reset_global();
+}
+
+#[test]
 fn test_validate_plugin_config_passes_top_level_policy_to_plugins() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -1377,13 +1444,13 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
     ctx.register_llm_execution_intercept(
         "llm-exec",
         1,
-        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
     )
     .unwrap();
     ctx.register_llm_stream_execution_intercept(
         "llm-stream",
         1,
-        Arc::new(|_name, request, _next| {
+        Arc::new(|_name, request, _context, _next| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                     request.content
@@ -2344,14 +2411,16 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_execution_intercept(
         "llm-exec",
         1,
-        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_execution_intercept(
             "llm-exec",
             1,
-            Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+            Arc::new(|_name, request, _context, _next| {
+                Box::pin(async move { Ok(request.content) })
+            }),
         ),
         "llm execution intercept:",
     );
@@ -2359,7 +2428,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_stream_execution_intercept(
         "llm-stream",
         1,
-        Arc::new(|_name, request, _next| {
+        Arc::new(|_name, request, _context, _next| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                     request.content
@@ -2372,7 +2441,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         ctx.register_llm_stream_execution_intercept(
             "llm-stream",
             1,
-            Arc::new(|_name, request, _next| {
+            Arc::new(|_name, request, _context, _next| {
                 Box::pin(async move {
                     Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                         request.content
@@ -2494,13 +2563,13 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     ctx.register_llm_execution_intercept(
         "llm-exec",
         1,
-        Arc::new(|_name, request, _next| Box::pin(async move { Ok(request.content) })),
+        Arc::new(|_name, request, _context, _next| Box::pin(async move { Ok(request.content) })),
     )
     .unwrap();
     ctx.register_llm_stream_execution_intercept(
         "llm-stream",
         1,
-        Arc::new(|_name, request, _next| {
+        Arc::new(|_name, request, _context, _next| {
             Box::pin(async move {
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
                     request.content

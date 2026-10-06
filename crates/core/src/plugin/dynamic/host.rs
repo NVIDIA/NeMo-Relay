@@ -163,6 +163,7 @@ impl PluginHostActivation {
         dynamic_plugins: Vec<VerifiedDynamicPluginSpec>,
         diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
     ) -> Result<(Self, ConfigReport)> {
+        let static_component_count = config.components.len();
         let dynamic_plugin_count = dynamic_plugins.len();
         log::info!(
             target: "nemo_relay.plugin",
@@ -238,6 +239,7 @@ impl PluginHostActivation {
         let owner_id = claim.owner_id();
         let initialization = tokio::spawn(initialize_plugins_exact_for_host(
             config,
+            static_component_count,
             owner_id,
             Arc::clone(&rollback_failures),
             diagnostics,

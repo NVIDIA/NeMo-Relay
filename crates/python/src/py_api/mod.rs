@@ -17,6 +17,7 @@ use nemo_relay::api::event::DataSchema;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::registry as core_registry_api;
+use nemo_relay::api::resource_metrics as core_resource_metrics_api;
 use nemo_relay::api::runtime::subscriber_dispatcher::{
     capture_nested_publication_buffer, sync_thread_publication_buffer, with_publication_context,
     with_task_nested_publication_buffer, with_task_publication_context,
@@ -75,6 +76,18 @@ fn metric_to_py_err(error: FlowError) -> PyErr {
         }
         other => to_py_err(other),
     }
+}
+
+#[pyfunction(name = "_collect_resource_metrics")]
+fn py_collect_resource_metrics(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    safe_future_into_py(py, async {
+        let snapshot = core_resource_metrics_api::collect()
+            .await
+            .map_err(to_py_err)?;
+        let value = serde_json::to_value(snapshot)
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+        Python::attach(|py| json_to_py(py, &value))
+    })
 }
 
 fn runtime_registration_kind(kind: &str) -> PyResult<core_registry_api::RuntimeRegistrationKind> {
@@ -1716,8 +1729,8 @@ fn deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM execution intercept that can replace the LLM call.
 ///
-/// ``callable``: ``async (native: Any, next) -> Any`` — middleware intercept function.
-/// Call ``await next(native)`` to invoke the next intercept or original
+/// ``callable``: ``async (name, request, context, next) -> Any`` — middleware intercept function.
+/// Call ``await next(request)`` to invoke the next intercept or original
 /// implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
 fn register_llm_execution_intercept(
@@ -1741,9 +1754,9 @@ fn deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
 
 /// Register an LLM stream-execution intercept that can replace the streaming LLM call.
 ///
-/// ``callable``: ``async (native: Any, next) -> AsyncIterator[Any]`` —
+/// ``callable``: ``async (name, request, context, next) -> AsyncIterator[Any]`` —
 /// middleware streaming intercept function.
-/// Call ``await next(native)`` to invoke the next intercept or original
+/// Call ``await next(request)`` to invoke the next intercept or original
 /// streaming implementation; skip calling ``next`` to short-circuit.
 #[pyfunction]
 fn register_llm_stream_execution_intercept(
@@ -2329,6 +2342,7 @@ fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_shutdown_default_logging, m)?)?;
     m.add_function(wrap_pyfunction!(log, m)?)?;
+    m.add_function(wrap_pyfunction!(py_collect_resource_metrics, m)?)?;
 
     // Scope stack creation / binding / query
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;

@@ -68,7 +68,7 @@ id = "examples.rust_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.9.0,<1.0"
+relay = ">=0.10.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -91,8 +91,8 @@ runtime = "rust"
 entrypoint = "target/debug/<platform-worker-file>"
 ```
 
-The manifest requires Relay 0.9 because this worker uses the context-aware tool execution
-callback contract. The protocol identifier remains `grpc-v1`. `ToolNext::call` returns
+The manifest requires Relay 0.10 because this worker uses the context-aware tool execution
+contract and the `LlmExecutionContext` callback shape. The protocol identifier remains `grpc-v1`. `ToolNext::call` returns
 `ToolExecutionResult`, preserving an application payload and optional opaque annotation
 separately from Relay-owned pending marks. Rebuild the worker when adopting this SDK
 release.

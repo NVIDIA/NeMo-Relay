@@ -9,7 +9,7 @@
 //! All functions are annotated with `#[napi]` and their doc comments appear
 //! in the generated `index.d.ts` TypeScript definitions.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -24,13 +24,24 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::registry as core_registry_api;
+use nemo_relay::api::resource_metrics as core_resource_metrics_api;
+use nemo_relay::api::resource_metrics::{
+    AcceleratorDeviceMetrics, AcceleratorProcessMetrics, BandwidthUnit, CapacityUnit, CountUnit,
+    CpuMetrics, CpuUnit, DataUnit, DiskMetrics, DurationUnit, FilesystemCapacityMetrics,
+    GpuMetrics, MemoryMetrics, NetworkInterfaceMetrics, NetworkMetrics, NetworkTrafficMetrics,
+    ProcessMetrics, ProcessSamplingMetadata as CoreProcessSamplingMetadata,
+    ResourceLimitEventCount, ResourceLimitEventKind, ResourceLimitResource, ResourceMeasurement,
+    ResourceMeasurementScope, ResourceMetricValue,
+    ResourceMetricsSnapshot as CoreResourceMetricsSnapshot, ResourceOperatingSystem, ResourceUnit,
+    UtilizationUnit,
+};
 use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
@@ -156,6 +167,411 @@ pub fn info(message: String, target: Option<String>, fields: Option<Json>) -> na
 #[napi]
 pub fn warn(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
     log("warn".into(), message, target, fields)
+}
+
+/// Acquire a fresh resource metrics snapshot without requiring polling.
+/// Collection runs outside the JavaScript event loop.
+#[napi(ts_return_type = "Promise<ResourceMetricsSnapshot>")]
+pub fn collect_resource_metrics(env: Env) -> napi::Result<JsObject> {
+    env.execute_tokio_future(
+        async {
+            core_resource_metrics_api::collect()
+                .await
+                .map_err(|error| Error::from_reason(error.to_string()))
+        },
+        |env, snapshot| env.to_js_value(&NodeResourceMetricsSnapshot::from(snapshot)),
+    )
+}
+
+const JAVASCRIPT_MAX_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NodeResourceMetricInteger {
+    Number(f64),
+    BigInt(u64),
+}
+
+impl From<u64> for NodeResourceMetricInteger {
+    fn from(value: u64) -> Self {
+        if value <= JAVASCRIPT_MAX_SAFE_INTEGER {
+            Self::Number(value as f64)
+        } else {
+            Self::BigInt(value)
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/rust/api/resource_metric_integer_tests.rs"]
+mod node_resource_metric_integer_tests;
+
+impl Serialize for NodeResourceMetricInteger {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Number(value) => serializer.serialize_f64(*value),
+            Self::BigInt(value) => serializer.serialize_u64(*value),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct NodeIntegerResourceMeasurement<U> {
+    value: NodeResourceMetricInteger,
+    unit: U,
+}
+
+impl<U: ResourceUnit> From<ResourceMeasurement<ResourceMetricValue, U>>
+    for NodeIntegerResourceMeasurement<U>
+{
+    fn from(measurement: ResourceMeasurement<ResourceMetricValue, U>) -> Self {
+        Self {
+            value: match measurement.value {
+                ResourceMetricValue::Integer(value) => NodeResourceMetricInteger::from(value),
+                ResourceMetricValue::Decimal(value) => NodeResourceMetricInteger::Number(value),
+            },
+            unit: measurement.unit,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeResourceLimitEventCount {
+    resource: ResourceLimitResource,
+    event: ResourceLimitEventKind,
+    count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+}
+
+impl From<ResourceLimitEventCount> for NodeResourceLimitEventCount {
+    fn from(event: ResourceLimitEventCount) -> Self {
+        Self {
+            resource: event.resource,
+            event: event.event,
+            count: event.count.map(Into::into),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeAcceleratorDeviceMetrics {
+    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    device_identifier: String,
+    device_index: Option<u32>,
+    memory_used: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    compute_utilization: Option<ResourceMeasurement<f64, UtilizationUnit>>,
+}
+
+impl From<AcceleratorDeviceMetrics> for NodeAcceleratorDeviceMetrics {
+    fn from(device: AcceleratorDeviceMetrics) -> Self {
+        Self {
+            vendor: device.vendor,
+            device_identifier: device.device_identifier,
+            device_index: device.device_index,
+            memory_used: device.memory_used.map(Into::into),
+            compute_utilization: device.compute_utilization,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeAcceleratorProcessMetrics {
+    vendor: nemo_relay::api::resource_metrics::AcceleratorVendor,
+    device_identifier: String,
+    device_index: Option<u32>,
+    process_id: u32,
+    memory_used: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    compute_utilization: Option<ResourceMeasurement<f64, UtilizationUnit>>,
+}
+
+impl From<AcceleratorProcessMetrics> for NodeAcceleratorProcessMetrics {
+    fn from(process: AcceleratorProcessMetrics) -> Self {
+        Self {
+            vendor: process.vendor,
+            device_identifier: process.device_identifier,
+            device_index: process.device_index,
+            process_id: process.process_id,
+            memory_used: process.memory_used.map(Into::into),
+            compute_utilization: process.compute_utilization,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeFilesystemCapacityMetrics {
+    path: String,
+    total_capacity: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    available_capacity: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    free_capacity: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+}
+
+impl From<FilesystemCapacityMetrics> for NodeFilesystemCapacityMetrics {
+    fn from(filesystem: FilesystemCapacityMetrics) -> Self {
+        Self {
+            path: filesystem.path,
+            total_capacity: filesystem.total_capacity.map(Into::into),
+            available_capacity: filesystem.available_capacity.map(Into::into),
+            free_capacity: filesystem.free_capacity.map(Into::into),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeCpuMetrics {
+    user_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    system_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    total_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    consumption_rate: Option<ResourceMeasurement<f64, CpuUnit>>,
+    throttled_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    effective_limit: Option<ResourceMeasurement<f64, CpuUnit>>,
+    some_pressure_stall_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    full_pressure_stall_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    limit_events: Vec<NodeResourceLimitEventCount>,
+}
+
+impl From<CpuMetrics> for NodeCpuMetrics {
+    fn from(cpu: CpuMetrics) -> Self {
+        Self {
+            user_time: cpu.user_time.map(Into::into),
+            system_time: cpu.system_time.map(Into::into),
+            total_time: cpu.total_time.map(Into::into),
+            consumption_rate: cpu.consumption_rate,
+            throttled_time: cpu.throttled_time.map(Into::into),
+            effective_limit: cpu.effective_limit,
+            some_pressure_stall_time: cpu.some_pressure_stall_time.map(Into::into),
+            full_pressure_stall_time: cpu.full_pressure_stall_time.map(Into::into),
+            limit_events: cpu.limit_events.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeMemoryMetrics {
+    system_used: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    system_total: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    system_available: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    resident: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    private: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    physical_footprint: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    virtual_memory: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    peak_resident: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    limit: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    environment_accounted: Option<NodeIntegerResourceMeasurement<CapacityUnit>>,
+    some_pressure_stall_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    full_pressure_stall_time: Option<NodeIntegerResourceMeasurement<DurationUnit>>,
+    out_of_memory_event_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    limit_events: Vec<NodeResourceLimitEventCount>,
+}
+
+impl From<MemoryMetrics> for NodeMemoryMetrics {
+    fn from(memory: MemoryMetrics) -> Self {
+        Self {
+            system_used: memory.system_used.map(Into::into),
+            system_total: memory.system_total.map(Into::into),
+            system_available: memory.system_available.map(Into::into),
+            resident: memory.resident.map(Into::into),
+            private: memory.private.map(Into::into),
+            physical_footprint: memory.physical_footprint.map(Into::into),
+            virtual_memory: memory.virtual_memory.map(Into::into),
+            peak_resident: memory.peak_resident.map(Into::into),
+            limit: memory.limit.map(Into::into),
+            environment_accounted: memory.environment_accounted.map(Into::into),
+            some_pressure_stall_time: memory.some_pressure_stall_time.map(Into::into),
+            full_pressure_stall_time: memory.full_pressure_stall_time.map(Into::into),
+            out_of_memory_event_count: memory.out_of_memory_event_count.map(Into::into),
+            limit_events: memory.limit_events.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeProcessMetrics {
+    active_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    descendant_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    thread_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    lifetime_creation_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    open_file_descriptor_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    windows_handle_count: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    limit_events: Vec<NodeResourceLimitEventCount>,
+}
+
+impl From<ProcessMetrics> for NodeProcessMetrics {
+    fn from(process: ProcessMetrics) -> Self {
+        Self {
+            active_count: process.active_count.map(Into::into),
+            descendant_count: process.descendant_count.map(Into::into),
+            thread_count: process.thread_count.map(Into::into),
+            lifetime_creation_count: process.lifetime_creation_count.map(Into::into),
+            open_file_descriptor_count: process.open_file_descriptor_count.map(Into::into),
+            windows_handle_count: process.windows_handle_count.map(Into::into),
+            limit_events: process.limit_events.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeDiskMetrics {
+    read_data: Option<NodeIntegerResourceMeasurement<DataUnit>>,
+    write_data: Option<NodeIntegerResourceMeasurement<DataUnit>>,
+    read_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
+    write_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
+    read_operations: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    write_operations: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    filesystems: Vec<NodeFilesystemCapacityMetrics>,
+}
+
+impl From<DiskMetrics> for NodeDiskMetrics {
+    fn from(disk: DiskMetrics) -> Self {
+        Self {
+            read_data: disk.read_data.map(Into::into),
+            write_data: disk.write_data.map(Into::into),
+            read_throughput: disk.read_throughput,
+            write_throughput: disk.write_throughput,
+            read_operations: disk.read_operations.map(Into::into),
+            write_operations: disk.write_operations.map(Into::into),
+            filesystems: disk.filesystems.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeGpuMetrics {
+    device_metrics: Option<Vec<NodeAcceleratorDeviceMetrics>>,
+    process_metrics: Option<Vec<NodeAcceleratorProcessMetrics>>,
+}
+
+impl From<GpuMetrics> for NodeGpuMetrics {
+    fn from(gpu: GpuMetrics) -> Self {
+        Self {
+            device_metrics: gpu
+                .device_metrics
+                .map(|devices| devices.into_iter().map(Into::into).collect()),
+            process_metrics: gpu
+                .process_metrics
+                .map(|processes| processes.into_iter().map(Into::into).collect()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeNetworkTrafficMetrics {
+    received_data: Option<NodeIntegerResourceMeasurement<DataUnit>>,
+    transmitted_data: Option<NodeIntegerResourceMeasurement<DataUnit>>,
+    receive_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
+    transmit_throughput: Option<ResourceMeasurement<f64, BandwidthUnit>>,
+    received_packets: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    transmitted_packets: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    receive_errors: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+    transmit_errors: Option<NodeIntegerResourceMeasurement<CountUnit>>,
+}
+impl From<NetworkTrafficMetrics> for NodeNetworkTrafficMetrics {
+    fn from(traffic: NetworkTrafficMetrics) -> Self {
+        Self {
+            received_data: traffic.received_data.map(Into::into),
+            transmitted_data: traffic.transmitted_data.map(Into::into),
+            receive_throughput: traffic.receive_throughput,
+            transmit_throughput: traffic.transmit_throughput,
+            received_packets: traffic.received_packets.map(Into::into),
+            transmitted_packets: traffic.transmitted_packets.map(Into::into),
+            receive_errors: traffic.receive_errors.map(Into::into),
+            transmit_errors: traffic.transmit_errors.map(Into::into),
+        }
+    }
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeNetworkInterfaceMetrics {
+    name: String,
+    traffic: NodeNetworkTrafficMetrics,
+}
+impl From<NetworkInterfaceMetrics> for NodeNetworkInterfaceMetrics {
+    fn from(interface: NetworkInterfaceMetrics) -> Self {
+        Self {
+            name: interface.name,
+            traffic: interface.traffic.into(),
+        }
+    }
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeNetworkMetrics {
+    measurement_scope: ResourceMeasurementScope,
+    system: NodeNetworkTrafficMetrics,
+    interfaces: Vec<NodeNetworkInterfaceMetrics>,
+}
+impl From<NetworkMetrics> for NodeNetworkMetrics {
+    fn from(network: NetworkMetrics) -> Self {
+        Self {
+            measurement_scope: network.measurement_scope,
+            system: network.system.into(),
+            interfaces: network.interfaces.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeProcessSamplingMetadata {
+    visible_processes: NodeResourceMetricInteger,
+    sampled_processes: NodeResourceMetricInteger,
+    field_sampled_processes: BTreeMap<String, NodeResourceMetricInteger>,
+}
+
+impl From<CoreProcessSamplingMetadata> for NodeProcessSamplingMetadata {
+    fn from(metadata: CoreProcessSamplingMetadata) -> Self {
+        Self {
+            visible_processes: metadata.visible_processes.into(),
+            sampled_processes: metadata.sampled_processes.into(),
+            field_sampled_processes: metadata
+                .field_sampled_processes
+                .into_iter()
+                .map(|(field, count)| (field, count.into()))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeResourceMetricsSnapshot {
+    timestamp: DateTime<Utc>,
+    operating_system: ResourceOperatingSystem,
+    measurement_scope: ResourceMeasurementScope,
+    process_sampling: Option<NodeProcessSamplingMetadata>,
+    cpu: Option<NodeCpuMetrics>,
+    memory: Option<NodeMemoryMetrics>,
+    process: Option<NodeProcessMetrics>,
+    disk: Option<NodeDiskMetrics>,
+    gpu: Option<NodeGpuMetrics>,
+    network: Option<NodeNetworkMetrics>,
+}
+
+impl From<CoreResourceMetricsSnapshot> for NodeResourceMetricsSnapshot {
+    fn from(snapshot: CoreResourceMetricsSnapshot) -> Self {
+        Self {
+            timestamp: snapshot.timestamp,
+            operating_system: snapshot.operating_system,
+            measurement_scope: snapshot.measurement_scope,
+            process_sampling: snapshot.process_sampling.map(Into::into),
+            cpu: snapshot.cpu.map(Into::into),
+            memory: snapshot.memory.map(Into::into),
+            process: snapshot.process.map(Into::into),
+            disk: snapshot.disk.map(Into::into),
+            gpu: snapshot.gpu.map(Into::into),
+            network: snapshot.network.map(Into::into),
+        }
+    }
 }
 #[napi]
 pub fn error(message: String, target: Option<String>, fields: Option<Json>) -> napi::Result<()> {
@@ -776,55 +1192,161 @@ fn js_unknown_from_raw<T: NapiRaw>(env: &Env, value: &T) -> JsUnknown {
     unsafe { JsUnknown::from_raw_unchecked(env.raw(), value.raw()) }
 }
 
-fn json_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<Json, ErrorStrategy::Fatal>> {
-    let mut tsfn = func
-        .create_threadsafe_function::<Json, Json, _, ErrorStrategy::Fatal>(0, |ctx| {
-            Ok(vec![ctx.value])
-        })?;
-    tsfn.unref(env)?;
-    Ok(tsfn)
-}
-
-struct ScopedStreamCall {
-    request: Json,
+struct ScopedCallbackContext {
     scope_stack: CoreScopeStackHandle,
     publication_buffer: Option<PublicationBuffer>,
-    propagation_parent_uuid: String,
+    propagation_parent_uuid: Option<String>,
+    propagation_context: Option<nemo_relay::api::runtime::PropagationContext>,
 }
 
-fn scoped_stream_callback_tsfn(
+impl ScopedCallbackContext {
+    fn capture() -> Self {
+        let propagation_context = capture_propagation_context_handle().ok();
+        Self {
+            scope_stack: current_scope_stack_handle(),
+            publication_buffer: capture_nested_publication_buffer(),
+            propagation_parent_uuid: propagation_context
+                .as_ref()
+                .map(|context| context.parent_uuid.to_string()),
+            propagation_context,
+        }
+    }
+}
+
+struct ScopedJsonCall {
+    value: Json,
+    context: ScopedCallbackContext,
+}
+
+fn scoped_json_callback_tsfn_from_wrapper(
     env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<ScopedStreamCall, ErrorStrategy::Fatal>> {
-    let callback = callback_factory::wrap_scoped_stream_callback(env, func)?;
+    callback: JsFunction,
+) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
     let mut tsfn = callback.create_threadsafe_function(
         0,
-        |ctx: napi::threadsafe_function::ThreadSafeCallContext<ScopedStreamCall>| {
-            let request = unsafe {
+        |ctx: napi::threadsafe_function::ThreadSafeCallContext<ScopedJsonCall>| {
+            let value = unsafe {
                 JsUnknown::from_raw_unchecked(
                     ctx.env.raw(),
-                    Json::to_napi_value(ctx.env.raw(), ctx.value.request)?,
+                    Json::to_napi_value(ctx.env.raw(), ctx.value.value)?,
                 )
             };
             let scope_stack = ScopeStack {
-                inner: ctx.value.scope_stack,
-                publication_buffer: ctx.value.publication_buffer,
+                inner: ctx.value.context.scope_stack,
+                publication_buffer: ctx.value.context.publication_buffer,
             }
             .into_instance(ctx.env)?;
             Ok(vec![
-                request,
+                value,
                 unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), scope_stack.raw()) },
-                ctx.env
-                    .create_string(&ctx.value.propagation_parent_uuid)?
-                    .into_unknown(),
+                match ctx.value.context.propagation_parent_uuid {
+                    Some(parent_uuid) => ctx.env.create_string(&parent_uuid)?.into_unknown(),
+                    None => ctx.env.get_undefined()?.into_unknown(),
+                },
+                match ctx.value.context.propagation_context {
+                    Some(context) => unsafe {
+                        JsUnknown::from_raw_unchecked(
+                            ctx.env.raw(),
+                            PropagationContext::to_napi_value(
+                                ctx.env.raw(),
+                                propagation_context_to_napi(context),
+                            )?,
+                        )
+                    },
+                    None => ctx.env.get_undefined()?.into_unknown(),
+                },
             ])
         },
     )?;
     tsfn.unref(env)?;
     Ok(tsfn)
+}
+
+fn scoped_json_callback_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
+    scoped_json_callback_tsfn_from_wrapper(env, callback_factory::wrap_scoped_callback(env, func)?)
+}
+
+fn scoped_stream_callback_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
+    scoped_json_callback_tsfn_from_wrapper(
+        env,
+        callback_factory::wrap_scoped_stream_callback(env, func)?,
+    )
+}
+
+fn scoped_tool_execution_fn(
+    func: ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>,
+) -> ToolExecutionNextFn {
+    let func = Arc::new(func);
+    Arc::new(move |args: Json| {
+        let func = func.clone();
+        let context = ScopedCallbackContext::capture();
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let status = func.call_with_return_value(
+                ScopedJsonCall {
+                    value: args,
+                    context,
+                },
+                ThreadsafeFunctionCallMode::Blocking,
+                move |value: Option<Json>| {
+                    let _ = tx.send(callback_json(value));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "failed to queue JS tool execution callback: {status:?}",
+                )));
+            }
+            let result = rx
+                .await
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+            callable::parse_tool_execution_result(callable::unwrap_middleware_result(
+                result,
+                "JS tool execution callback failed",
+            )?)
+        })
+    })
+}
+
+fn scoped_llm_execution_fn(
+    func: ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>,
+) -> LlmExecutionNextFn {
+    let func = Arc::new(func);
+    Arc::new(move |request: LlmRequest| {
+        let func = func.clone();
+        let context = ScopedCallbackContext::capture();
+        let request = serde_json::to_value(request).unwrap_or(Json::Null);
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let status = func.call_with_return_value(
+                ScopedJsonCall {
+                    value: request,
+                    context,
+                },
+                ThreadsafeFunctionCallMode::Blocking,
+                move |value: Option<Json>| {
+                    let _ = tx.send(callback_json(value));
+                    Ok(())
+                },
+            );
+            if status != napi::Status::Ok {
+                return Err(FlowError::Internal(format!(
+                    "failed to queue JS LLM execution callback: {status:?}",
+                )));
+            }
+            let result = rx
+                .await
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+            callable::unwrap_middleware_result(result, "JS LLM execution callback failed")
+        })
+    })
 }
 
 fn middleware_tool_callback_tsfn(
@@ -1908,18 +2430,8 @@ fn node_conditional_middleware_guardrail(
 }
 
 #[cfg(test)]
-mod conditional_gate_tests {
-    use super::*;
-
-    #[test]
-    fn conditional_gate_result_wait_is_bounded() {
-        let (_tx, rx) = std::sync::mpsc::sync_channel(1);
-        let error = recv_conditional_gate_result(rx, std::time::Duration::from_millis(1))
-            .expect_err("an unresponsive callback must time out");
-
-        assert!(error.reason.contains("conditional gate callback timed out"));
-    }
-}
+#[path = "../../tests/rust/api/conditional_gate_tests.rs"]
+mod conditional_gate_tests;
 
 fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSanitizeFn> {
     // The registry and queued snapshots own the only callback references.
@@ -2204,7 +2716,7 @@ fn propagation_context_from_napi(
     Ok(context)
 }
 
-fn propagation_context_to_napi(
+pub(crate) fn propagation_context_to_napi(
     context: nemo_relay::api::runtime::PropagationContext,
 ) -> PropagationContext {
     PropagationContext {
@@ -2220,25 +2732,50 @@ fn callback_propagation_context(
     env: &Env,
     parent_uuid: uuid::Uuid,
 ) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
-    let mut context = with_effective_scope_stack(env, capture_propagation_context_handle)?
-        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    let context = callback_factory::callback_propagation_context(env)?
+        .ok_or_else(|| napi::Error::from_reason("callback propagation context is unavailable"))?;
+    let mut context = propagation_context_from_napi(context)?;
     context.parent_uuid = parent_uuid;
-    if context.traceparent.is_some() {
-        context.traceparent = Some(
-            context
-                .to_traceparent()
-                .map_err(|error| napi::Error::from_reason(error.to_string()))?,
-        );
-    } else {
-        context.root_uuid = with_effective_scope_stack(env, capture_traceparent_handle)
-            .ok()
-            .and_then(|result| result.ok())
+    let stack = effective_scope_stack(env)?;
+    let stack = stack
+        .read()
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    let has_propagated_parent = stack
+        .scopes()
+        .iter()
+        .any(|scope| stack.is_propagated_parent(scope.uuid));
+    drop(stack);
+    if !has_propagated_parent {
+        context.root_uuid = context
+            .traceparent
+            .as_deref()
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                with_effective_scope_stack(env, capture_traceparent_handle)
+                    .ok()
+                    .and_then(|result| result.ok())
+            })
             .and_then(|traceparent| {
                 traceparent
                     .get(3..35)
                     .and_then(|value| uuid::Uuid::parse_str(value).ok())
             })
             .or(Some(parent_uuid));
+    }
+    Ok(context)
+}
+
+fn rootless_callback_propagation_context(
+    env: &Env,
+    parent_uuid: uuid::Uuid,
+) -> napi::Result<nemo_relay::api::runtime::PropagationContext> {
+    let mut context = callback_propagation_context(env, parent_uuid)?;
+    context.root_uuid = None;
+    let rootless = with_effective_scope_stack(env, capture_rootless_propagation_context_handle)?
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    if rootless.traceparent.is_none() {
+        context.traceparent = None;
+        context.tracestate = None;
     }
     Ok(context)
 }
@@ -2271,9 +2808,8 @@ pub fn capture_rootless_propagation_context(env: Env) -> napi::Result<Propagatio
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        let mut context = callback_propagation_context(&env, parent_uuid)?;
-        context.root_uuid = None;
-        return Ok(propagation_context_to_napi(context));
+        return rootless_callback_propagation_context(&env, parent_uuid)
+            .map(propagation_context_to_napi);
     }
     with_effective_scope_stack(&env, capture_rootless_propagation_context_handle)?
         .map(propagation_context_to_napi)
@@ -2294,7 +2830,7 @@ pub fn capture_propagation_context_with_root(
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        let mut context = callback_propagation_context(&env, parent_uuid)?;
+        let mut context = rootless_callback_propagation_context(&env, parent_uuid)?;
         context.root_uuid = root_uuid;
         return Ok(propagation_context_to_napi(context));
     }
@@ -2311,7 +2847,11 @@ pub fn capture_traceparent(env: Env) -> napi::Result<String> {
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
-        return callback_propagation_context(&env, parent_uuid)?
+        let context = callback_propagation_context(&env, parent_uuid)?;
+        if let Some(traceparent) = context.traceparent.clone() {
+            return Ok(traceparent);
+        }
+        return context
             .to_traceparent()
             .map_err(|error| napi::Error::from_reason(error.to_string()));
     }
@@ -2328,7 +2868,7 @@ pub fn propagation_context_to_json(context: PropagationContext) -> napi::Result<
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
-/// Convert a rooted Relay propagation context to a W3C `traceparent` value.
+/// Convert a Relay propagation context to a W3C `traceparent` value.
 #[napi]
 pub fn propagation_context_to_traceparent(context: PropagationContext) -> napi::Result<String> {
     propagation_context_from_napi(context)?
@@ -2927,8 +3467,7 @@ pub fn tool_call_execute(
         .map(|h| h.inner.clone())
         .unwrap_or_else(|| effective_scope_top(&scope_stack));
     let callback = callable::safe_execution_callback(&env, &func)?;
-    let exec_fn = callable::wrap_js_tool_exec_fn(json_callback_tsfn(&env, &callback)?);
-    let default_fn: ToolExecutionNextFn = std::sync::Arc::new(move |args| exec_fn(args));
+    let default_fn = scoped_tool_execution_fn(scoped_json_callback_tsfn(&env, &callback)?);
 
     env.execute_tokio_future(
         async move {
@@ -3158,8 +3697,7 @@ pub fn llm_call_execute(
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
     let callback = callable::safe_execution_callback(&env, &func)?;
-    let exec_fn = callable::wrap_js_llm_exec_fn(json_callback_tsfn(&env, &callback)?);
-    let default_fn: LlmExecutionNextFn = std::sync::Arc::new(move |req| exec_fn(req));
+    let default_fn = scoped_llm_execution_fn(scoped_json_callback_tsfn(&env, &callback)?);
     let mut codec_references = Vec::new();
     let codec = match (codec_decode.as_ref(), codec_encode.as_ref()) {
         (Some(d), Some(e)) => {
@@ -3377,15 +3915,10 @@ pub fn llm_stream_call_execute(
     // so it knows where to send chunks.
     let func = std::sync::Arc::new(scoped_stream_callback_tsfn(&env, &func)?);
     let default_fn: LlmStreamExecutionNextFn = std::sync::Arc::new(move |req: LlmRequest| {
-        let propagation_parent_uuid = match capture_propagation_context_handle() {
-            Ok(context) => context.parent_uuid.to_string(),
-            Err(error) => return Box::pin(async move { Err(error) }),
-        };
+        let context = ScopedCallbackContext::capture();
         let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let closed = register_stream_channel(stream_id, tx);
-        let scope_stack = current_scope_stack_handle();
-        let publication_buffer = capture_nested_publication_buffer();
 
         // Serialize the LlmRequest to JSON and wrap with streamId so JS can extract both
         let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
@@ -3397,11 +3930,9 @@ pub fn llm_stream_call_execute(
         // NonBlocking: queue the call on the JS event loop and return immediately.
         // The JS function starts async iteration and pushes chunks via pushStreamChunk.
         let call_status = func.call(
-            ScopedStreamCall {
-                request: wrapper,
-                scope_stack,
-                publication_buffer,
-                propagation_parent_uuid,
+            ScopedJsonCall {
+                value: wrapper,
+                context,
             },
             ThreadsafeFunctionCallMode::NonBlocking,
         );
@@ -4142,9 +4673,9 @@ pub fn deregister_llm_request_intercept(name: String) -> Result<bool> {
 
 /// Register an LLM execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives the request and a `next` function. Call `next(request)` to
-/// invoke the next intercept or original implementation; skip calling `next` to
-/// short-circuit the chain. `next` may be called repeatedly or concurrently while
+/// The `callable` receives the request, codec context, and a `next` function. Call
+/// `next(request)` to invoke the next intercept or original implementation; skip calling
+/// `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while
 /// `callable` is pending; each call receives an isolated scope-stack branch, and
 /// unfinished or later calls reject after `callable` settles.
 #[napi]
@@ -4153,7 +4684,7 @@ pub fn register_llm_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>"
+        ts_arg_type = "(request: Json, context: LlmExecutionContext, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4181,7 +4712,9 @@ pub fn deregister_llm_execution_intercept(name: String) -> Result<bool> {
 
 /// Register a streaming LLM execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives the request and a `next` function. Call `next(request)` to
+/// The `callable` receives the request, request-codec context, and a `next` function. The
+/// response codec is `null` because streaming execution has no complete-response codec.
+/// Call `next(request)` to
 /// invoke the next intercept or original streaming implementation; in Node the
 /// returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it
 /// `next` to short-circuit the chain. `next` may be called repeatedly or concurrently
@@ -4194,7 +4727,7 @@ pub fn register_llm_stream_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
+        ts_arg_type = "(request: Json, context: LlmExecutionContext, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4794,8 +5327,8 @@ pub fn scope_deregister_llm_request_intercept(scope_uuid: String, name: String) 
 
 /// Register a scope-local LLM execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives the request and a `next` function. Call `next(request)` to
-/// invoke the next intercept or original implementation; skip calling `next` to
+/// The `callable` receives the request, codec context, and a `next` function. Call
+/// `next(request)` to invoke the next intercept or original implementation; skip calling `next` to
 /// short-circuit the chain. `next` may be called repeatedly or concurrently while
 /// `callable` is pending; each call receives an isolated scope-stack branch, and
 /// unfinished or later calls reject after `callable` settles.
@@ -4806,7 +5339,7 @@ pub fn scope_register_llm_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>"
+        ts_arg_type = "(request: Json, context: LlmExecutionContext, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4839,7 +5372,9 @@ pub fn scope_deregister_llm_execution_intercept(scope_uuid: String, name: String
 
 /// Register a scope-local streaming LLM execution intercept following the middleware chain pattern.
 ///
-/// The `callable` receives the request and a `next` function. Call `next(request)` to
+/// The `callable` receives the request, request-codec context, and a `next` function. The
+/// response codec is `null` because streaming execution has no complete-response codec.
+/// Call `next(request)` to
 /// invoke the next intercept or original streaming implementation; in Node the
 /// returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it
 /// `next` to short-circuit the chain. `next` may be called repeatedly or concurrently
@@ -4853,7 +5388,7 @@ pub fn scope_register_llm_stream_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(request: Json, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
+        ts_arg_type = "(request: Json, context: LlmExecutionContext, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -6247,80 +6782,8 @@ impl DynamicPluginCloseState {
 }
 
 #[cfg(test)]
-mod dynamic_plugin_close_state_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn close_result_is_published_before_a_retry_can_reset_completion() {
-        let activation = CorePluginHostActivation::initialize_exact(PluginConfig::default())
-            .await
-            .expect("empty plugin host must initialize");
-        let state = Arc::new(DynamicPluginCloseState::new(activation));
-        let activation = {
-            let mut status = state
-                .status
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let activation = match &mut *status {
-                DynamicPluginCloseStatus::Active(activation) => {
-                    activation.take().expect("activation must be owned")
-                }
-                DynamicPluginCloseStatus::Closing | DynamicPluginCloseStatus::Closed => {
-                    panic!("new activation must be active")
-                }
-            };
-            *status = DynamicPluginCloseStatus::Closing;
-            activation
-        };
-
-        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
-        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
-        let finish_state = Arc::clone(&state);
-        let finish = std::thread::spawn(move || {
-            finish_state.finish_with_hook(
-                Some(activation),
-                Err("first close failed".into()),
-                || {
-                    entered_tx.send(()).expect("test must observe publication");
-                    release_rx.recv().expect("test must release publication");
-                },
-            );
-        });
-
-        entered_rx
-            .recv()
-            .expect("finish must reach completion publication");
-        assert!(matches!(
-            state.status.try_lock(),
-            Err(std::sync::TryLockError::WouldBlock)
-        ));
-        release_tx
-            .send(())
-            .expect("finish thread must still be waiting");
-        finish.join().expect("finish thread must not panic");
-
-        let mut activation = {
-            let mut status = state
-                .status
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let activation = match &mut *status {
-                DynamicPluginCloseStatus::Active(activation) => activation
-                    .take()
-                    .expect("failed close must remain retryable"),
-                DynamicPluginCloseStatus::Closing | DynamicPluginCloseStatus::Closed => {
-                    panic!("failed close must restore the active state")
-                }
-            };
-            state.completion.send_replace(None);
-            *status = DynamicPluginCloseStatus::Closing;
-            activation
-        };
-        assert!(state.completion.borrow().is_none());
-
-        activation.close().expect("retry cleanup must succeed");
-    }
-}
+#[path = "../../tests/rust/api/dynamic_plugin_close_state_tests.rs"]
+mod dynamic_plugin_close_state_tests;
 
 #[napi]
 impl PluginHostActivation {

@@ -87,9 +87,10 @@ func DeregisterLlmRequest(name string) error {
 // --- LLM Execution ---
 
 // RegisterLlmExecution registers an LLM execution intercept following the
-// middleware chain pattern. execFn is called with the request and a next
-// function. Call next to continue the chain or skip it to short-circuit. This
-// is a shorthand for [nemo_relay.RegisterLlmExecutionIntercept].
+// middleware chain pattern. execFn is called with the request, codec context,
+// and a next function. Call next to continue the chain or skip it to
+// short-circuit. This is a shorthand for
+// [nemo_relay.RegisterLlmExecutionIntercept].
 func RegisterLlmExecution(name string, priority int32, execFn nemo_relay.LLMExecutionInterceptFunc) error {
 	return nemo_relay.RegisterLlmExecutionIntercept(name, priority, execFn)
 }
@@ -103,9 +104,10 @@ func DeregisterLlmExecution(name string) error {
 // --- LLM Stream Execution ---
 
 // RegisterLlmStreamExecution registers a streaming LLM execution intercept
-// following the middleware chain pattern. execFn is called with the request and
-// a next function. Call next to continue the chain or skip it to short-circuit.
-// This is a shorthand for [nemo_relay.RegisterLlmStreamExecutionIntercept].
+// following the middleware chain pattern. execFn is called with the request,
+// codec context, and a next function. Call next to continue the chain or skip
+// it to short-circuit. This is a shorthand for
+// [nemo_relay.RegisterLlmStreamExecutionIntercept].
 func RegisterLlmStreamExecution(name string, priority int32, execFn nemo_relay.LLMExecutionInterceptFunc) error {
 	return nemo_relay.RegisterLlmStreamExecutionIntercept(name, priority, execFn)
 }
