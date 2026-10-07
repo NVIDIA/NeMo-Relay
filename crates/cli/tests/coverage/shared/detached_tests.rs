@@ -8,15 +8,12 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle};
 #[test]
 fn redirected_worker_stderr_preserves_file_and_pipe_output() {
     let mut file = tempfile::tempfile().unwrap();
-    worker_stderr(file.as_raw_handle())
-        .unwrap()
-        .write_all(b"file stderr")
-        .unwrap();
+    launch_stderr_fixture(file.as_raw_handle());
     use std::io::{Read, Seek};
     file.rewind().unwrap();
     let mut output = String::new();
     file.read_to_string(&mut output).unwrap();
-    assert_eq!(output, "file stderr");
+    assert_eq!(output, "detached worker stderr");
 
     let mut read = std::ptr::null_mut();
     let mut write = std::ptr::null_mut();
@@ -34,14 +31,26 @@ fn redirected_worker_stderr_preserves_file_and_pipe_output() {
     );
     let mut reader = unsafe { std::fs::File::from_raw_handle(read) };
     let writer = unsafe { std::fs::File::from_raw_handle(write) };
-    worker_stderr(writer.as_raw_handle())
-        .unwrap()
-        .write_all(b"pipe stderr")
-        .unwrap();
+    launch_stderr_fixture(writer.as_raw_handle());
     drop(writer);
     output.clear();
     reader.read_to_string(&mut output).unwrap();
-    assert_eq!(output, "pipe stderr");
+    assert_eq!(output, "detached worker stderr");
+}
+
+fn launch_stderr_fixture(source: windows_sys::Win32::Foundation::HANDLE) {
+    let stderr = worker_stderr(source).unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "process::detached::tests::detached_worker_fixture",
+            "--nocapture",
+        ])
+        .env("NEMO_RELAY_TEST_CONSOLE_WORKER_CHILD", "1");
+    let (mut child, bootstrap) = spawn_worker_detached(&command, &stderr).unwrap();
+    drop(bootstrap);
+    assert!(child.wait().unwrap().success());
 }
 
 #[test]
@@ -49,6 +58,9 @@ fn detached_worker_fixture() {
     if std::env::var_os("NEMO_RELAY_TEST_CONSOLE_WORKER_CHILD").is_some() {
         use std::io::Read;
         std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+        std::io::stderr()
+            .write_all(b"detached worker stderr")
+            .unwrap();
     }
 }
 
@@ -65,36 +77,29 @@ fn console_worker_launcher_fixture() {
     assert_ne!(unsafe { AllocConsole() }, 0);
     // AllocConsole preserves redirected standard handles when STARTF_USESTDHANDLES was used.
     // Explicitly select the new console buffer to exercise the launcher's console stderr path.
-    let console = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("CONOUT$")
-        .unwrap();
-    // SAFETY: The console file remains live until this isolated fixture exits.
-    assert_ne!(
-        unsafe { SetStdHandle(STD_ERROR_HANDLE, console.as_raw_handle()) },
-        0
-    );
-    let mut mode = 0;
-    assert_ne!(
-        unsafe { GetConsoleMode(std::io::stderr().as_raw_handle(), &mut mode) },
-        0
-    );
-    let stderr = inherited_stderr().unwrap();
-    assert_eq!(
-        unsafe { GetConsoleMode(stderr.as_raw_handle(), &mut mode) },
-        0
-    );
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args([
-            "--exact",
-            "process::detached::tests::detached_worker_fixture",
-        ])
-        .env("NEMO_RELAY_TEST_CONSOLE_WORKER_CHILD", "1");
-    let (mut child, bootstrap) = spawn_worker_detached(&command, &stderr).unwrap();
-    drop(bootstrap);
-    assert!(child.wait().unwrap().success());
+    for readable in [true, false] {
+        let console = std::fs::OpenOptions::new()
+            .read(readable)
+            .write(true)
+            .open("CONOUT$")
+            .unwrap();
+        // SAFETY: The console file remains live throughout the launch.
+        assert_ne!(
+            unsafe { SetStdHandle(STD_ERROR_HANDLE, console.as_raw_handle()) },
+            0
+        );
+        let mut mode = 0;
+        assert_eq!(
+            unsafe { GetConsoleMode(console.as_raw_handle(), &mut mode) } != 0,
+            readable
+        );
+        let stderr = inherited_stderr().unwrap();
+        assert_eq!(
+            unsafe { GetConsoleMode(stderr.as_raw_handle(), &mut mode) },
+            0
+        );
+        launch_stderr_fixture(stderr.as_raw_handle());
+    }
     unsafe { FreeConsole() };
 }
 

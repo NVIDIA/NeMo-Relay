@@ -367,12 +367,13 @@ pub(crate) fn inherited_stderr() -> std::io::Result<std::fs::File> {
 fn worker_stderr(source: windows_sys::Win32::Foundation::HANDLE) -> std::io::Result<std::fs::File> {
     use std::os::windows::io::FromRawHandle;
     use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
-    use windows_sys::Win32::System::Console::GetConsoleMode;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_CHAR, GetFileType};
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-    let mut mode = 0;
-    // SAFETY: The source is borrowed for this call and mode is valid writable storage.
-    if unsafe { GetConsoleMode(source, &mut mode) } != 0 {
+    // GetConsoleMode requires read access and misses write-only console handles. Treat
+    // character-device stderr as disconnected; redirected files and pipes stay connected.
+    // SAFETY: The source handle is borrowed for this query.
+    if unsafe { GetFileType(source) } == FILE_TYPE_CHAR {
         // CREATE_NO_WINDOW gives the worker no access to the launcher's console. A duplicate
         // can succeed in this process without being usable by the detached child.
         return std::fs::OpenOptions::new()

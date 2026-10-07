@@ -180,7 +180,10 @@ Both `worker_launch_failed` and `worker_activation_failed` include a
 `failure_reason`. This is a short, fixed code that names the step that failed,
 such as starting the worker, sending its startup permission, or waiting for it to
 be ready. It does not include activation data or the source error text. Read
-the worker's configured logs for the full error message.
+the MCP launcher's configured logs for the `worker_launch_failed` message.
+Its error text is separate from `failure_reason` and includes the source error.
+Windows spawn error text identifies the failed operation and OS error code.
+Worker logs may not exist if process creation failed.
 `worker_communication_failed` includes a `reason` that identifies a transport
 error, invalid destination or response, response-body error, or explicit worker
 route rejection. `worker_request_failed` with `reason = "response_head_timeout"`
@@ -211,7 +214,7 @@ Use this table to choose the next check for a failure:
 | Worker reports `control_available = false` | Worker control disconnected and can still be recovering | Check worker control events. Allow up to 30 seconds for recovery before restarting the harness. |
 | MCP is ready but no plugin result appears | Pass-through, wrong plugin setup, or wrong harness provider | Find `worker_ready`, inspect client system configuration, and check effective harness routing. |
 | Python plugin environment fails authentication | Changed attestation, missing environment key, or unavailable legacy key | Reprovision the environment from the trusted plugin source. |
-| `worker_launch_failed` | A worker start or activation step failed | Check `failure_reason` and the error message first. Windows spawn errors identify the failed operation and OS error code. Then check assigned ports, executable permissions, worker logs, and daemon-to-client reachability. |
+| `worker_launch_failed` | A worker start or activation step failed | Read the event message in the MCP launcher's configured logs. Its error text includes spawn details separately from the fixed `failure_reason`; Windows errors identify the failed operation and OS error code. Worker logs may not exist after a spawn failure. Then check assigned ports, executable permissions, and daemon-to-client reachability. |
 | Remote worker advertises loopback | Wrong address override or network route | Use a concrete client IPv4 address reachable from the server. |
 | First request works but large streams stall | Buffering proxy or blocked provider path | Check the full request path and streaming requirements. Compare a direct private-network deployment. |
 | Startup fails after moving service accounts | Signing identity or state directory changed | Restore the original state and ownership. Confirm any planned identity change through a trusted channel. |
