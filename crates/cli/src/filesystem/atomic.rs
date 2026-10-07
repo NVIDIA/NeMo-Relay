@@ -302,11 +302,32 @@ fn with_private_windows_descriptor<T>(
 ) -> io::Result<T> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Authorization::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+        SDDL_REVISION_1,
     };
     use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
 
-    let descriptor_sddl = windows_wide("D:P(A;;FA;;;OW)(A;;FA;;;SY)");
+    // LocalSystem's default token owner can be Administrators. Set the actual
+    // process user explicitly so newly created private files pass the same
+    // ownership checks as existing files, without weakening those checks.
+    let owner = with_current_windows_user_sid(|sid| {
+        let mut text = std::ptr::null_mut();
+        // SAFETY: The SID remains valid in this callback; `text` is writable.
+        if unsafe { ConvertSidToStringSidW(sid, &mut text) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut length = 0;
+        // SAFETY: The API returned a valid NUL-terminated UTF-16 SID string.
+        while unsafe { *text.add(length) } != 0 {
+            length += 1;
+        }
+        // SAFETY: The preceding scan found the allocation's string length.
+        let owner = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
+        // SAFETY: ConvertSidToStringSidW allocated this string with LocalAlloc.
+        unsafe { LocalFree(text.cast()) };
+        Ok(owner)
+    })?;
+    let descriptor_sddl = windows_wide(format!("O:{owner}D:P(A;;FA;;;OW)(A;;FA;;;SY)"));
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
     // SAFETY: The SDDL string is NUL-terminated and `descriptor` points to writable storage. The
     // returned allocation is released with LocalFree below.
@@ -330,12 +351,9 @@ fn with_private_windows_descriptor<T>(
 
 #[cfg(windows)]
 fn windows_path_owned_by_current_user(path: &Path) -> io::Result<bool> {
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::Security::{
-        EqualSid, GetSecurityDescriptorOwner, GetTokenInformation, OWNER_SECURITY_INFORMATION,
-        PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
+        EqualSid, GetSecurityDescriptorOwner, OWNER_SECURITY_INFORMATION, PSID,
     };
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut descriptor = read_windows_security_descriptor(path, OWNER_SECURITY_INFORMATION)?;
     let mut owner: PSID = std::ptr::null_mut();
@@ -349,6 +367,20 @@ fn windows_path_owned_by_current_user(path: &Path) -> io::Result<bool> {
     {
         return Err(io::Error::last_os_error());
     }
+
+    with_current_windows_user_sid(|user| {
+        // SAFETY: Both SID pointers remain valid in this callback.
+        Ok(unsafe { EqualSid(owner, user) != 0 })
+    })
+}
+
+#[cfg(windows)]
+fn with_current_windows_user_sid<T>(
+    operation: impl FnOnce(windows_sys::Win32::Security::PSID) -> io::Result<T>,
+) -> io::Result<T> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut token: HANDLE = std::ptr::null_mut();
     // SAFETY: GetCurrentProcess returns a valid pseudo-handle and `token` is writable.
@@ -379,8 +411,7 @@ fn windows_path_owned_by_current_user(path: &Path) -> io::Result<bool> {
         }
         // SAFETY: GetTokenInformation initialized a TOKEN_USER at the aligned buffer address.
         let user = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() };
-        // SAFETY: Both SID pointers remain valid while their backing buffers are alive.
-        Ok(unsafe { EqualSid(owner, user.User.Sid) != 0 })
+        operation(user.User.Sid)
     })();
     // SAFETY: `token` is an owned handle returned by OpenProcessToken.
     unsafe { CloseHandle(token) };
