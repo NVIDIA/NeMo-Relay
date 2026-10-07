@@ -1336,17 +1336,13 @@ fn prepares_claude_temp_plugin() {
     let hooks: serde_json::Value =
         serde_json::from_slice(&std::fs::read(plugin_dir.join("hooks/hooks.json")).unwrap())
             .unwrap();
+    let hook_config = plugin_dir
+        .join(".nemo-relay-hook-config.json")
+        .to_string_lossy()
+        .replace('\\', "/");
     assert!(crate::hook_assertions::value_has_command_arguments(
         &hooks,
-        &[
-            "hook-forward",
-            "claude",
-            "--hook-config",
-            plugin_dir
-                .join(".nemo-relay-hook-config.json")
-                .to_str()
-                .unwrap(),
-        ],
+        &["hook-forward", "claude", "--hook-config", &hook_config],
     ));
     assert!(
         prepared

@@ -922,6 +922,15 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
         &raw_config,
         true,
     );
+    #[cfg(windows)]
+    let bash_executable = {
+        // PATH may resolve bash.exe to the Windows WSL shim instead of Git Bash.
+        let git = crate::process::resolve_executable("git").expect("Git for Windows is required");
+        git.parent().unwrap().parent().unwrap().join("bin/bash.exe")
+    };
+    #[cfg(unix)]
+    let bash_executable = Path::new("bash");
+
     for (commands, transparent_run) in [(persistent, false), (transparent, true)] {
         for (event, policy) in [
             ("SessionEnd", "--fail-open"),
@@ -929,7 +938,7 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
         ] {
             let marker = temp.path().join("stdin.txt");
             let command = commands.for_event(event);
-            let mut bash = Command::new("bash");
+            let mut bash = Command::new(bash_executable.as_os_str());
             bash.args(["-c", command])
                 .env("NEMO_RELAY_HOOK_AGENT", "claude")
                 .env("NEMO_RELAY_HOOK_CONFIG", &expected_config)
@@ -956,7 +965,8 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
             assert_eq!(
                 output.status.code(),
                 Some(23),
-                "command: {command}\nstderr: {}",
+                "command: {command}\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
             assert_eq!(std::fs::read(&marker).unwrap(), b"hook-input\n");
