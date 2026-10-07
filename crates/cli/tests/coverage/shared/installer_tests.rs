@@ -887,12 +887,14 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
     let bin = temp.path().join("Relay's $HOME `tools` & %USERPROFILE% !^");
     std::fs::create_dir(&bin).unwrap();
     let relay = bin.join("nemo-relay.exe");
+    // Keep linker output paths simple; only the hook shell should parse the difficult path.
+    let compiled_relay = temp.path().join("hook-fixture.exe");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/windows_hook_relay.rs");
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let compiled = Command::new(rustc)
         .arg(source)
         .args(["--edition", "2024", "-o"])
-        .arg(&relay)
+        .arg(&compiled_relay)
         .output()
         .unwrap();
     assert!(
@@ -900,6 +902,7 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
         "{}",
         String::from_utf8_lossy(&compiled.stderr)
     );
+    std::fs::rename(&compiled_relay, &relay).unwrap();
 
     let generation = bin.join(".nemo-relay-generation");
     let config = persistent_hook_config_path(&generation);
