@@ -211,13 +211,13 @@ jobs:
             platform: linux-musl-amd64
             runner: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            build_image: ''
+            build_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
             runtime_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
           - &package-linux-musl-arm64
             platform: linux-musl-arm64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
-            build_image: ''
+            build_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
             runtime_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
           - &package-macos-arm64
             platform: macos-arm64
@@ -298,30 +298,16 @@ jobs:
           cargo metadata --offline --filter-platform "${{ matrix.target }}" --format-version 1 > /dev/null
           printf 'NEMO_RELAY_CLI_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
-      - name: Install musl tools
-        if: ${{ startsWith(matrix.target, 'x86_64-unknown-linux-musl') || startsWith(matrix.target, 'aarch64-unknown-linux-musl') }}
-        run: |
-          set -euo pipefail
-          if [ "${{ runner.arch }}" = "ARM64" ]; then
-            for sources in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
-              if [ -f "$sources" ]; then
-                sudo sed -i 's|http://ports.ubuntu.com/ubuntu-ports|https://ports.ubuntu.com/ubuntu-ports|g' "$sources"
-              fi
-            done
-          fi
-          sudo apt-get -o Acquire::Retries=5 update
-          sudo apt-get -o Acquire::Retries=5 install -y musl-tools
-
       - name: Build CLI release binary
         if: ${{ matrix.build_image == '' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
-          set -e
+          set -euo pipefail
           # SONAR_IGNORE_START: dependencies were fetched from Cargo.lock before dynamic package metadata is applied.
           cargo build --locked --offline --release --target "${{ matrix.target }}" -p nemo-relay-cli
           # SONAR_IGNORE_END
 
-      - name: Build CLI release binary in manylinux
+      - name: Build CLI release binary in Linux build container
         if: ${{ matrix.build_image != '' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
@@ -330,12 +316,19 @@ jobs:
             --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
             --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
             --env NEMO_RELAY_RUST_VERSION="${{ steps.ci-config.outputs.rust_version }}" \
+            --env NEMO_RELAY_RUST_TARGET="${{ matrix.target }}" \
             "${{ matrix.build_image }}" \
             /bin/bash -ec '
               curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
                 sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
               export PATH="$HOME/.cargo/bin:$PATH"
-              cargo build --locked --release --target "${{ matrix.target }}" -p nemo-relay-cli
+              case "$NEMO_RELAY_RUST_TARGET" in
+                *-unknown-linux-musl)
+                  # Use musl libc and unwinder from the native musllinux toolchain.
+                  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=-crt-static"
+                  ;;
+              esac
+              cargo build --locked --release --target "$NEMO_RELAY_RUST_TARGET" -p nemo-relay-cli
             '
 
       - name: Stage CLI binary artifact

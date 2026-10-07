@@ -789,7 +789,17 @@ fn sha256_file(path: &Path) -> Result<String, CliError> {
 }
 
 fn platform() -> Result<&'static str, CliError> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
+    platform_for(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        cfg!(target_env = "musl"),
+    )
+}
+
+fn platform_for(os: &str, arch: &str, musl: bool) -> Result<&'static str, CliError> {
+    match (os, arch) {
+        ("linux", "x86_64") if musl => Ok("linux-musl-x86_64"),
+        ("linux", "aarch64") if musl => Ok("linux-musl-arm64"),
         ("linux", "x86_64") => Ok("linux-x86_64"),
         ("linux", "aarch64") => Ok("linux-arm64"),
         ("macos", "aarch64") => Ok("macos-arm64"),

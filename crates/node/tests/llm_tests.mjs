@@ -198,24 +198,32 @@ describe('LLM execute', () => {
     // bridge construction on the JavaScript thread; native polling runs on Tokio
     // threads and has separate coverage in api/llm_stack_tests.rs.
     const workerSource = `
+      const { writeSync } = require('node:fs');
+      const stage = value => writeSync(2, 'small-stack worker: ' + value + '\\n');
+      stage('JavaScript startup');
       const assert = require('node:assert/strict');
       const { parentPort } = require('node:worker_threads');
       const lib = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});
+      stage('addon loaded');
       const request = () => ({ headers: {}, content: { messages: [], model: 'test-model' } });
 
       async function main() {
+        stage('register request intercept');
         lib.registerLlmRequestIntercept('small-stack-intercept', 1, false, ({ request, annotated }) => {
           request.content.intercepted = true;
           return { request, annotated, pendingMarks: [{ name: 'small-stack-mark' }] };
         });
         try {
+          stage('request interception');
           const intercepted = await lib.llmRequestIntercepts('small-stack-request', request());
           assert.equal(intercepted.request.content.intercepted, true);
           assert.equal(intercepted.pendingMarks[0].name, 'small-stack-mark');
+          stage('synchronous execution');
           assert.deepEqual(
             await lib.llmCallExecute('small-stack-sync', request(), value => ({ ok: value.content.intercepted })),
             { ok: true },
           );
+          stage('asynchronous execution');
           assert.deepEqual(
             await lib.llmCallExecuteAsync('small-stack-async', request(), async value => {
               await Promise.resolve();
@@ -223,22 +231,26 @@ describe('LLM execute', () => {
             }),
             { ok: true },
           );
+          stage('stream execution');
           const stream = await lib.llmStreamCallExecute('small-stack-stream', request(), wrapper => {
             assert.equal(wrapper.__nemo_relay_native.content.intercepted, true);
             lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'hello' });
             lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'world' });
             lib.endStream(wrapper.__nemo_relay_stream_id);
           });
+          stage('stream polling');
           assert.deepEqual(await stream.next(), { token: 'hello' });
           assert.deepEqual(await stream.next(), { token: 'world' });
           assert.equal(await stream.next(), null);
+          stage('stream close');
           await stream.close();
         } finally {
+          stage('deregister request intercept');
           lib.deregisterLlmRequestIntercept('small-stack-intercept');
         }
       }
       main().then(
-        () => parentPort.postMessage('done'),
+        () => { stage('completed'); parentPort.postMessage('done'); },
         error => { console.error(error); process.exitCode = 1; },
       );
     `;
@@ -257,7 +269,11 @@ describe('LLM execute', () => {
         assert.equal(result, 'done');
       });
     `;
-    execFileSync(process.execPath, ['--eval', script], { timeout: 30_000, stdio: 'pipe' });
+    // Exercise startup and teardown repeatedly: native lifetime races can pass
+    // one isolated invocation even when the worker lifecycle is unsafe.
+    for (let iteration = 0; iteration < 20; iteration += 1) {
+      execFileSync(process.execPath, ['--eval', script], { timeout: 30_000, stdio: 'pipe' });
+    }
   });
 
   it('basic execute', async () => {

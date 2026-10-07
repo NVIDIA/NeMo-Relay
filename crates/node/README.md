@@ -66,6 +66,10 @@ Install the npm package in a Node.js 24 or newer project:
 npm install nemo-relay-node@0.8.0
 ```
 
+On Windows, the native runtime remains loaded until process exit, including
+when the last worker using Relay closes. Background stream finalization uses
+process-wide native executors and can outlive an individual worker.
+
 ## Getting Started
 
 Register a subscriber and emit a mark inside a scope:

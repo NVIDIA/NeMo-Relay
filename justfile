@@ -1924,6 +1924,10 @@ package-node:
     if [[ -n "$node_target" ]]; then
         build_args+=(--target "$node_target")
     fi
+    if [[ "$node_target" == *-unknown-linux-musl ]]; then
+        # Native plugins must share the Node host's dynamically linked musl libc.
+        export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=-crt-static"
+    fi
     if [[ "$node_build_strategy" == "zig" ]]; then
         # Zig is provided by the uv.lock `ziglang` entry; keep any explicit CI
         # Zig version pin aligned with that lockfile version.

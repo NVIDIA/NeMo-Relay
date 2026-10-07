@@ -258,12 +258,15 @@ The release pipeline then:
    - `package-openclaw` packs the npm OpenClaw plugin package.
    - `package-python` builds platform `nemo-relay` wheels, including
      `musllinux_1_2_x86_64` and `musllinux_1_2_aarch64` wheels.
+     Python and Node musl bindings dynamically link libc so native plugins share
+     the host runtime's musl loader; their Rust dependencies remain static.
    - `package-python-sdist` builds one platform-independent `nemo-relay` source
      distribution.
    - `package-python-plugin` builds the `nemo-relay-plugin` wheel.
    - The Rust CLI matrix builds GNU Linux binaries in manylinux containers and
-     musl Linux binaries natively, validates each in its matching container, and
-     packages each prebuilt binary as a `nemo-relay-cli-bin` wheel.
+     musl Linux binaries in musllinux containers with dynamic libc and static
+     Rust dependencies, validates each in its matching container, and packages
+     each prebuilt binary as a `nemo-relay-cli-bin` wheel.
    - The distribution release-asset job uploads the CLI binaries, `nemo-relay`
      API wheels, CLI wheels, and split Node npm packages.
      `SHA256SUMS` covers every attached distribution artifact, and raw CLI

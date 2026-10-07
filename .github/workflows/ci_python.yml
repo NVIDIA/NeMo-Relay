@@ -338,6 +338,9 @@ jobs:
 
       - name: Build musllinux wheel
         if: ${{ contains(matrix.platform, 'musl') }}
+        env:
+          # Use the host musl loader for native plugins; Rust crates stay static.
+          RUSTFLAGS: -C target-feature=-crt-static
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           maturin-version: v${{ env.NEMO_RELAY_MATURIN_VERSION }}
