@@ -618,9 +618,40 @@ fn init() {
         .expect("node pii redaction plugin component registration should succeed");
 }
 
+// Core publication executors and registry state live for the whole process.
+// A worker can be the only Node environment loading this addon, so Windows
+// must not unmap its code when that environment closes while native work lives.
+#[cfg(windows)]
+fn pin_native_module() -> napi::Result<()> {
+    use windows_sys::Win32::System::LibraryLoader::{
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
+    };
+
+    let mut module = std::ptr::null_mut();
+    // SAFETY: FROM_ADDRESS interprets this pointer as an address in our loaded
+    // module, not a UTF-16 string. The output handle points to valid local storage.
+    // PIN keeps the module mapped until process exit, matching the core lifetime.
+    let pinned = unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            pin_native_module as *const () as *const u16,
+            &mut module,
+        )
+    };
+    if pinned == 0 {
+        return Err(napi::Error::from_reason(format!(
+            "failed to retain the Node native runtime: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(not(test))]
 #[napi_derive::module_exports]
 fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::Result<()> {
+    #[cfg(windows)]
+    pin_native_module()?;
     register_node_environment().map_err(to_napi_err)?;
     if let Err(error) = env.add_env_cleanup_hook((), |_| cleanup_node_environment()) {
         cleanup_node_environment();
