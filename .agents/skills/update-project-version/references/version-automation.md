@@ -19,8 +19,9 @@ drifts.
 - `set_node_package_versions` updates the Node binding, OpenClaw plugin, PI
   extension, their workspace lockfile entries, and project-owned npm dependency
   pins.
-- `set_example_package_versions` updates exact Rust and Python SDK pins and
-  refreshes their checked lockfiles without upgrading third-party packages.
+- Rust examples inherit their package and SDK dependency versions from the
+  Cargo workspace, including when `set-cargo-version` runs during packaging.
+- `set_example_package_versions` updates Python example versions and SDK pins.
   Before the Node package is published, its checked example links the local
   workspace package so its lockfile remains installable.
 - `set_python_package_version` preserves the root package's dynamic Cargo
@@ -29,6 +30,10 @@ drifts.
 - `set_python_plugin_package_version` updates the Python worker plugin SDK.
 - `set_coding_agent_plugin_versions` updates the Claude Code and Codex plugin
   manifests under `integrations/coding-agents/`.
+
+After all manifests are updated, `set_project_version` refreshes the root Cargo
+and uv lockfiles. Python lock resolution stays offline to preserve registry
+dependency versions.
 
 Generated attribution files derive from Cargo and npm lockfiles; regenerate
 only the attribution surface whose input changed.

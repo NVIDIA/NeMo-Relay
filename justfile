@@ -618,31 +618,7 @@ def replace_one(path: str, pattern: str, replacement: str) -> None:
     else:
         print(f"{path} already set to {version}")
 
-replace_one(
-    "examples/language-binding-plugin/rust/Cargo.toml",
-    r'(nemo-relay = \{ version = ")[^"]+(".*)',
-    rf'\g<1>{version}\2',
-)
-replace_one(
-    "examples/rust-grpc-worker-plugin/Cargo.toml",
-    r'(nemo-relay-worker = \{ version = ")[^"]+(".*)',
-    rf'\g<1>{version}\2',
-)
-replace_one(
-    "examples/rust-grpc-worker-plugin/Cargo.toml",
-    r'(nemo-relay = \{ version = ")[^"]+(".*)',
-    rf'\g<1>{version}\2',
-)
-replace_one(
-    "examples/rust-native-plugin/Cargo.toml",
-    r'(nemo-relay-plugin = \{ version = ")[^"]+(".*)',
-    rf'\g<1>{version}\2',
-)
-replace_one(
-    "examples/rust-native-plugin/Cargo.toml",
-    r'(nemo-relay = \{ version = ")[^"]+(".*)',
-    rf'\g<1>{version}\2',
-)
+# Rust examples inherit their SDK dependencies from the Cargo workspace.
 replace_one(
     "examples/language-binding-plugin/python/pyproject.toml",
     r'(nemo-relay==)[^"\n]+',
