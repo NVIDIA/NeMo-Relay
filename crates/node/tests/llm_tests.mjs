@@ -269,7 +269,11 @@ describe('LLM execute', () => {
         assert.equal(result, 'done');
       });
     `;
-    execFileSync(process.execPath, ['--eval', script], { timeout: 30_000, stdio: 'pipe' });
+    // Exercise startup and teardown repeatedly: native lifetime races can pass
+    // one isolated invocation even when the worker lifecycle is unsafe.
+    for (let iteration = 0; iteration < 20; iteration += 1) {
+      execFileSync(process.execPath, ['--eval', script], { timeout: 30_000, stdio: 'pipe' });
+    }
   });
 
   it('basic execute', async () => {
