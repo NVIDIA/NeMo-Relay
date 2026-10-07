@@ -923,20 +923,23 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
         true,
     );
     #[cfg(windows)]
-    let bash_executable = {
-        // PATH may resolve bash.exe to the Windows WSL shim instead of Git Bash.
-        let git = crate::process::resolve_executable("git").expect("Git for Windows is required");
-        git.ancestors()
-            .skip(1)
-            .flat_map(|directory| {
-                [
-                    directory.join("bin/bash.exe"),
-                    directory.join("usr/bin/bash.exe"),
-                ]
-            })
-            .find(|candidate| candidate.is_file())
-            .unwrap_or_else(|| panic!("Git Bash not found beside {}", git.display()))
-    };
+    let bash_executable = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            // PATH may resolve bash.exe to the Windows WSL shim instead of Git Bash.
+            let git =
+                crate::process::resolve_executable("git").expect("Git for Windows is required");
+            git.ancestors()
+                .skip(1)
+                .flat_map(|directory| {
+                    [
+                        directory.join("bin/bash.exe"),
+                        directory.join("usr/bin/bash.exe"),
+                    ]
+                })
+                .find(|candidate| candidate.is_file())
+                .unwrap_or_else(|| panic!("Git Bash not found beside {}", git.display()))
+        });
     #[cfg(unix)]
     let bash_executable = Path::new("bash");
 

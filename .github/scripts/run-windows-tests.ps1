@@ -189,6 +189,7 @@ try {
         "UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR", "UV_PYTHON_DOWNLOADS",
         "UV_PYTHON_PREFERENCE", "UV_PYTHON", "pythonLocation", "Python_ROOT_DIR",
         "NEMO_RELAY_CI_WORKSPACE", "NEMO_RELAY_CI_WORKSPACE_TMP",
+        "CLAUDE_CODE_GIT_BASH_PATH",
         "NEMO_RELAY_RUN_REDIS_TESTS", "NEMO_RELAY_RUN_S3_TESTS"
     )
     foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
