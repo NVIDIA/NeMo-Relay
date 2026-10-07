@@ -726,7 +726,17 @@ fn codex_session_hook_trust_matches_codex_discovery_identity() {
         state.matches("trusted_hash=\"sha256:").count(),
         generated["hooks"].as_object().unwrap().len()
     );
-    assert!(state.contains("/<session-flags>/config.toml:user_prompt_submit:0:0"));
+    let source_path = if cfg!(windows) {
+        r"C:\<session-flags>\config.toml"
+    } else {
+        "/<session-flags>/config.toml"
+    };
+    let parsed: toml::Value = toml::from_str(&state).unwrap();
+    assert!(
+        parsed["hooks"]["state"]
+            .get(format!("{source_path}:user_prompt_submit:0:0"))
+            .is_some()
+    );
     assert!(
         state.contains("sha256:83a9834ee494ffbd4acc85377c579d2c954f9797a9b8832924a326a6a44b0660")
     );
@@ -743,6 +753,44 @@ fn codex_session_hook_trust_matches_codex_discovery_identity() {
             .contains("nemo-relay-plugin@nemo-relay-local:hooks/hooks.json:user_prompt_submit:0:0")
     );
     assert!(state.contains("nemo-relay-plugin@nemo-relay:hooks/hooks.json:user_prompt_submit:0:0"));
+}
+
+#[test]
+fn codex_session_hook_trust_uses_platform_discovery_paths() {
+    let generated = generated_hooks(CodingAgent::Codex, "echo relay-probe");
+    for (windows, source_path) in [
+        (false, "/<session-flags>/config.toml"),
+        (true, r"C:\<session-flags>\config.toml"),
+    ] {
+        let state = crate::agents::codex::launch::session_hook_state_override_for_platform(
+            &generated, windows,
+        )
+        .unwrap();
+        let parsed: toml::Value = toml::from_str(&state).unwrap();
+        let entries = parsed["hooks"]["state"].as_table().unwrap();
+        for event in [
+            "session_start",
+            "pre_tool_use",
+            "post_tool_use",
+            "subagent_start",
+            "subagent_stop",
+        ] {
+            let key = format!("{source_path}:{event}:0:0");
+            let entry = entries
+                .get(&key)
+                .unwrap_or_else(|| panic!("missing trust for {key}"));
+            assert_eq!(entry["enabled"].as_bool(), Some(true));
+            assert!(
+                entry["trusted_hash"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("sha256:")
+            );
+        }
+        if windows {
+            assert!(!entries.contains_key("/<session-flags>/config.toml:session_start:0:0"));
+        }
+    }
 }
 
 #[test]
@@ -1336,17 +1384,13 @@ fn prepares_claude_temp_plugin() {
     let hooks: serde_json::Value =
         serde_json::from_slice(&std::fs::read(plugin_dir.join("hooks/hooks.json")).unwrap())
             .unwrap();
+    let hook_config = plugin_dir
+        .join(".nemo-relay-hook-config.json")
+        .to_string_lossy()
+        .replace('\\', "/");
     assert!(crate::hook_assertions::value_has_command_arguments(
         &hooks,
-        &[
-            "hook-forward",
-            "claude",
-            "--hook-config",
-            plugin_dir
-                .join(".nemo-relay-hook-config.json")
-                .to_str()
-                .unwrap(),
-        ],
+        &["hook-forward", "claude", "--hook-config", &hook_config],
     ));
     assert!(
         prepared

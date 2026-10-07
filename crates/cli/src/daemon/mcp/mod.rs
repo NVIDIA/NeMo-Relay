@@ -829,7 +829,7 @@ async fn report_activation_failed(
         event = "worker_launch_failed",
         error_kind = error.log_kind(),
         failure_reason = failure_reason.as_str();
-        "MCP could not activate the broker-selected worker"
+        "MCP could not activate the broker-selected worker: {error}"
     );
     lease.sequence = lease.sequence.saturating_add(1);
     let request = SessionRequest::new(

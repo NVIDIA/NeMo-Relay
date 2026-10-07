@@ -609,7 +609,10 @@ class TestToolIntercepts:
 
 class TestToolInterceptsAsync:
     def test_loop_shutdown_cancels_pending_middleware_without_unraisable_errors(self, capsys) -> None:
+        started = asyncio.Event()
+
         async def request_intercept(_name, args):
+            started.set()
             await asyncio.Event().wait()
             return args
 
@@ -617,7 +620,9 @@ class TestToolInterceptsAsync:
             execution = asyncio.ensure_future(
                 tools.execute("shutdown_tool", {}, lambda args: ToolExecutionResult(args))
             )
-            await asyncio.sleep(0.01)
+            # Shut down only once middleware is awaiting, rather than racing
+            # native scheduling on slower runners.
+            await asyncio.wait_for(started.wait(), timeout=5)
             assert not execution.done()
 
         intercepts.register_tool_request("py_tool_shutdown_request", 1, False, request_intercept)

@@ -60,6 +60,18 @@ github_api_curl() {
     fi
 }
 
+has_glibc() {
+    if command -v getconf >/dev/null 2>&1 && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v ldd >/dev/null 2>&1; then
+        ldd_version=$(ldd --version 2>&1 || true)
+        printf '%s\n' "$ldd_version" | grep -Eq 'GLIBC|GNU libc'
+        return $?
+    fi
+    return 1
+}
+
 version="${NEMO_RELAY_VERSION:-}"
 install_dir=""
 install_dir_set=0
@@ -146,12 +158,16 @@ if [ "$is_windows_shell" -eq 1 ]; then
     binary_name="nemo-relay.exe"
     asset="nemo-relay-cli-${target}-${version}.exe"
 else
+    linux_libc=musl
+    if [ "$os" = Linux ] && has_glibc; then
+        linux_libc=gnu
+    fi
     case "${os}:${arch}" in
         Linux:x86_64|Linux:amd64)
-            target="x86_64-unknown-linux-musl"
+            target="x86_64-unknown-linux-${linux_libc}"
             ;;
         Linux:aarch64|Linux:arm64)
-            target="aarch64-unknown-linux-musl"
+            target="aarch64-unknown-linux-${linux_libc}"
             ;;
         Darwin:aarch64|Darwin:arm64)
             target="aarch64-apple-darwin"

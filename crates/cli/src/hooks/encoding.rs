@@ -57,6 +57,7 @@ pub(crate) fn persistent_hook_forward_commands(
     _generation_token: &str,
 ) -> Result<GeneratedHookCommands, String> {
     hook_commands(
+        agent,
         relay,
         &hook_config_arguments(agent, &persistent_hook_config_path(generation_file), false),
     )
@@ -69,6 +70,7 @@ pub(crate) fn transparent_hook_forward_commands(
     gateway_url: &str,
 ) -> Result<GeneratedHookCommands, String> {
     hook_commands(
+        agent,
         relay,
         &hook_config_arguments(agent, Path::new(gateway_url), true),
     )
@@ -79,7 +81,11 @@ pub(crate) fn transparent_hook_forward_commands_with_config(
     agent: CodingAgent,
     hook_config: &Path,
 ) -> Result<GeneratedHookCommands, String> {
-    hook_commands(relay, &hook_config_arguments(agent, hook_config, true))
+    hook_commands(
+        agent,
+        relay,
+        &hook_config_arguments(agent, hook_config, true),
+    )
 }
 
 #[cfg(test)]
@@ -90,6 +96,7 @@ pub(crate) fn transparent_hook_forward_commands_for_platform(
     windows: bool,
 ) -> GeneratedHookCommands {
     hook_commands_for_platform(
+        agent,
         relay,
         &hook_config_arguments(agent, Path::new(gateway_url), true),
         windows,
@@ -105,6 +112,7 @@ pub(crate) fn persistent_hook_forward_commands_for_platform(
     windows: bool,
 ) -> GeneratedHookCommands {
     hook_commands_for_platform(
+        agent,
         relay,
         &hook_config_arguments(agent, &persistent_hook_config_path(generation_file), false),
         windows,
@@ -132,34 +140,45 @@ pub(super) fn hook_config_arguments(
     arguments
 }
 
-fn hook_commands(relay: &Path, arguments: &[String]) -> Result<GeneratedHookCommands, String> {
+fn hook_commands(
+    agent: CodingAgent,
+    relay: &Path,
+    arguments: &[String],
+) -> Result<GeneratedHookCommands, String> {
     let mut commands = GeneratedHookCommands::new(
-        hook_command(relay, &with_failure_policy(arguments, "--fail-open"))?,
-        hook_command(relay, &with_failure_policy(arguments, "--fail-closed"))?,
+        hook_command(agent, relay, &with_failure_policy(arguments, "--fail-open"))?,
+        hook_command(
+            agent,
+            relay,
+            &with_failure_policy(arguments, "--fail-closed"),
+        )?,
     );
-    commands.legacy = Some(hook_command(relay, arguments)?);
+    commands.legacy = Some(hook_command(agent, relay, arguments)?);
     Ok(commands)
 }
 
 #[cfg(test)]
 fn hook_commands_for_platform(
+    agent: CodingAgent,
     relay: &Path,
     arguments: &[String],
     windows: bool,
 ) -> GeneratedHookCommands {
     let mut commands = GeneratedHookCommands::new(
         hook_command_for_platform(
+            agent,
             relay,
             &with_failure_policy(arguments, "--fail-open"),
             windows,
         ),
         hook_command_for_platform(
+            agent,
             relay,
             &with_failure_policy(arguments, "--fail-closed"),
             windows,
         ),
     );
-    commands.legacy = Some(hook_command_for_platform(relay, arguments, windows));
+    commands.legacy = Some(hook_command_for_platform(agent, relay, arguments, windows));
     commands
 }
 
@@ -171,8 +190,12 @@ fn with_failure_policy(arguments: &[String], policy: &str) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn hook_command(relay: &Path, arguments: &[String]) -> Result<String, String> {
-    let command = render_hook_command(relay, arguments, cfg!(windows));
+pub(super) fn hook_command(
+    agent: CodingAgent,
+    relay: &Path,
+    arguments: &[String],
+) -> Result<String, String> {
+    let command = render_hook_command(agent, relay, arguments, cfg!(windows));
     #[cfg(windows)]
     if command.encode_utf16().count() > MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS {
         return Err(format!(
@@ -185,14 +208,34 @@ pub(super) fn hook_command(relay: &Path, arguments: &[String]) -> Result<String,
 
 #[cfg(test)]
 pub(super) fn hook_command_for_platform(
+    agent: CodingAgent,
     relay: &Path,
     arguments: &[String],
     windows: bool,
 ) -> String {
-    render_hook_command(relay, arguments, windows)
+    render_hook_command(agent, relay, arguments, windows)
 }
 
-fn render_hook_command(relay: &Path, arguments: &[String], windows: bool) -> String {
+fn render_hook_command(
+    agent: CodingAgent,
+    relay: &Path,
+    arguments: &[String],
+    windows: bool,
+) -> String {
+    // Claude Code executes command hooks through Bash, including on Windows.
+    if windows && agent.hooks_use_bash() {
+        return std::iter::once(bash_windows_path(&relay.display().to_string()))
+            .chain(arguments.iter().enumerate().map(|(index, argument)| {
+                if index > 0 && arguments[index - 1] == "--hook-config" {
+                    bash_windows_path(argument)
+                } else {
+                    argument.clone()
+                }
+            }))
+            .map(|argument| crate::process::shell_quote_arg_for_platform(&argument, false))
+            .collect::<Vec<_>>()
+            .join(" ");
+    }
     let relay = relay_for_command(relay, windows);
     let command = std::iter::once(relay.display().to_string())
         .chain(arguments.iter().cloned())
@@ -204,6 +247,16 @@ fn render_hook_command(relay: &Path, arguments: &[String], windows: bool) -> Str
     } else {
         command
     }
+}
+
+// Verbatim drive and UNC prefixes are Windows filesystem syntax, not Bash paths.
+fn bash_windows_path(raw: &str) -> String {
+    let path = if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") {
+        format!("//{unc}")
+    } else {
+        raw.strip_prefix(r"\\?\").unwrap_or(raw).to_string()
+    };
+    path.replace('\\', "/")
 }
 
 #[cfg(windows)]
