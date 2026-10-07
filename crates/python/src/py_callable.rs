@@ -657,7 +657,7 @@ fn cancel_async_iter_task(task: &Py<PyAny>) -> FlowResult<()> {
 enum AsyncIterTaskResult {
     Item(Json),
     End,
-    Cancelled,
+    Cancelled(PyErr),
 }
 
 async fn await_async_iter_task_result(task: Py<PyAny>) -> FlowResult<AsyncIterTaskResult> {
@@ -680,7 +680,7 @@ async fn await_async_iter_task_result(task: Py<PyAny>) -> FlowResult<AsyncIterTa
             if error.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
                 Ok(AsyncIterTaskResult::End)
             } else if error.is_instance(py, &cancelled_error) {
-                Ok(AsyncIterTaskResult::Cancelled)
+                Ok(AsyncIterTaskResult::Cancelled(error))
             } else {
                 Err(python_callback_error(error))
             }
@@ -693,9 +693,7 @@ async fn await_async_iter_task(task: Py<PyAny>) -> FlowResult<Option<Json>> {
     match await_async_iter_task_result(task).await? {
         AsyncIterTaskResult::Item(value) => Ok(Some(value)),
         AsyncIterTaskResult::End => Ok(None),
-        AsyncIterTaskResult::Cancelled => Err(FlowError::Internal(
-            "async iterator task was cancelled".into(),
-        )),
+        AsyncIterTaskResult::Cancelled(error) => Err(python_callback_error(error)),
     }
 }
 
@@ -744,6 +742,21 @@ async fn send_async_iter_value(
     Ok(true)
 }
 
+async fn forward_async_iter_error(
+    error: FlowError,
+    tx: &tokio::sync::mpsc::Sender<FlowResult<Json>>,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+    async_iter: &Arc<Py<PyAny>>,
+) -> Option<FlowResult<()>> {
+    Some(
+        match send_async_iter_value(tx, Err(error), cancel, async_iter).await {
+            Ok(true) => close_async_iter(async_iter).await,
+            Ok(false) => Ok(()),
+            Err(error) => Err(error),
+        },
+    )
+}
+
 async fn forward_async_iter_result(
     next_value: FlowResult<AsyncIterTaskResult>,
     tx: &tokio::sync::mpsc::Sender<FlowResult<Json>>,
@@ -759,16 +772,10 @@ async fn forward_async_iter_result(
             }
         }
         Ok(AsyncIterTaskResult::End) => Some(Ok(())),
-        Ok(AsyncIterTaskResult::Cancelled) => Some(close_async_iter(async_iter).await.and(Err(
-            FlowError::Internal("async iterator task was cancelled".into()),
-        ))),
-        Err(error) => Some(
-            match send_async_iter_value(tx, Err(error), cancel, async_iter).await {
-                Ok(true) => close_async_iter(async_iter).await,
-                Ok(false) => Ok(()),
-                Err(error) => Err(error),
-            },
-        ),
+        Ok(AsyncIterTaskResult::Cancelled(error)) => {
+            forward_async_iter_error(python_callback_error(error), tx, cancel, async_iter).await
+        }
+        Err(error) => forward_async_iter_error(error, tx, cancel, async_iter).await,
     }
 }
 

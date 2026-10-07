@@ -496,13 +496,13 @@ async def coro_non_json():
                         .to_string()
                         .contains("await boom")
                 );
-                assert!(
+                assert!(matches!(
                     await_async_iter_value(Python::attach(|py| coro_cancel_fn.call0(py).unwrap()))
                         .await
-                        .unwrap_err()
-                        .to_string()
-                        .contains("cancelled")
-                );
+                        .unwrap_err(),
+                    FlowError::CallbackException { exception_type, .. }
+                        if exception_type == "CancelledError"
+                ));
                 assert!(
                     await_async_iter_value(Python::attach(|py| coro_non_json_fn
                         .call0(py)

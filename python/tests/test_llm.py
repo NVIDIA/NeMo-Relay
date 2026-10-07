@@ -1786,6 +1786,20 @@ class TestLLMStreaming:
         with pytest.raises(RuntimeError, match="direct __anext__ boom"):
             await anext(stream)
 
+    async def test_stream_execute_propagates_cancelled_error_raised_by_iterator(self) -> None:
+        stream = await llm.stream_execute(
+            "stream_cancelled_error_llm",
+            make_request(),
+            lambda request: _CancelledAsyncIter(),
+            lambda chunk: None,
+            lambda: {},
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await anext(stream)
+
+        current = asyncio.current_task()
+        assert current is not None and current.cancelling() == 0
+
     async def test_stream_execution_intercept_rejects_invalid_iterator(self) -> None:
         intercepts.register_llm_stream_execution(
             "py_llm_stream_bad_iter",
@@ -2038,3 +2052,11 @@ class _BrokenAsyncIter:
 
     def __anext__(self):
         raise RuntimeError("direct __anext__ boom")
+
+
+class _CancelledAsyncIter:
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise asyncio.CancelledError("iterator cancelled itself")

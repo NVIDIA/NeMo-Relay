@@ -22,15 +22,26 @@ use serde_json::Value as Json;
 ///
 /// A callback exception is re-raised as the original object, all others as `RuntimeError`.
 pub(crate) fn flow_error_to_py_err(error: FlowError) -> PyErr {
-    if let FlowError::CallbackException {
-        source: Some(source),
-        ..
-    } = &error
-        && let Some(original) = source.downcast_ref::<PyErr>()
-    {
-        return Python::attach(|py| original.clone_ref(py));
-    }
-    PyRuntimeError::new_err(error.to_string())
+    Python::attach(move |py| {
+        let original = match &error {
+            FlowError::CallbackException {
+                source: Some(source),
+                ..
+            } => source
+                .downcast_ref::<PyErr>()
+                .map(|original| original.clone_ref(py)),
+            _ => None,
+        };
+        match original {
+            Some(original) => {
+                // drop runtime error while attached so shared reference
+                // is released now instead of queued until next attach.
+                drop(error);
+                original
+            }
+            None => PyRuntimeError::new_err(error.to_string()),
+        }
+    })
 }
 
 fn validate_acyclic(

@@ -6,6 +6,7 @@
 import asyncio
 import contextvars
 import gc
+import traceback
 import warnings
 from collections import UserDict, UserList
 from collections.abc import Awaitable
@@ -292,6 +293,37 @@ class TestToolsAsync:
         assert events[1].data is None
         assert events[1].metadata["error.type"] == "internal_error"
         assert events[1].metadata["exception.type"] == "ValueError"
+
+    async def test_execute_propagates_cancelled_error_raised_by_func(self) -> None:
+        async def cancelling(_args: Json) -> Never:
+            raise asyncio.CancelledError("callback cancelled itself")
+
+        with pytest.raises(asyncio.CancelledError):
+            await tools.execute("cancelling_tool", {}, cancelling)
+
+        current = asyncio.current_task()
+        assert current is not None and current.cancelling() == 0
+
+    async def test_execute_rewraps_stop_iteration_raised_by_coroutine(self) -> None:
+        async def stopping(_args: Json) -> Never:
+            raise StopIteration("done")
+
+        with pytest.raises(RuntimeError) as error:
+            await tools.execute("stopping_tool", {}, stopping)
+
+        assert isinstance(error.value.__cause__, StopIteration)
+
+    async def test_execute_reraises_with_original_traceback_and_no_chaining(self) -> None:
+        def deep() -> Never:
+            raise ValueError("deep")
+
+        with pytest.raises(ValueError) as error:
+            await tools.execute("deep_tool", {}, lambda _args: deep())
+
+        frames = [frame.name for frame in traceback.extract_tb(error.value.__traceback__)]
+        assert "deep" in frames
+        assert error.value.__cause__ is None
+        assert error.value.__context__ is None
 
 
 class TestToolGuardrails:
@@ -592,6 +624,19 @@ class TestToolIntercepts:
             intercepts.deregister_tool_request("py_req_raise_original")
 
         assert error.value is raised[0]
+
+    def test_request_intercept_propagates_system_exit_outside_event_loop(self) -> None:
+        def exiting(_name, _args) -> Never:
+            raise SystemExit(3)
+
+        intercepts.register_tool_request("py_req_system_exit", 1, False, exiting)
+        try:
+            with pytest.raises(SystemExit) as error:
+                tools.request_intercepts("exit_tool", {})
+        finally:
+            intercepts.deregister_tool_request("py_req_system_exit")
+
+        assert error.value.code == 3
 
     def test_request_intercept_raises_on_unserializable_return(self) -> None:
         intercepts.register_tool_request(
