@@ -107,8 +107,9 @@ user `PATH`; the Unix installer does not edit shell configuration.
 | Windows | ARM64 | `aarch64-pc-windows-msvc` |
 
 Use the GNU target on glibc-based distributions such as Ubuntu, Debian, and
-RHEL. Use the musl target on Alpine Linux and other musl-based systems. The
-Unix shell installer intentionally selects the portable musl target on Linux.
+RHEL. Use the musl target on Alpine Linux and other musl-based systems.
+The musl CLI dynamically links musl 1.2 or newer to support native plugins;
+the musl loader and libc must be installed on the host.
 For package versions that publish the corresponding artifacts, `pip` and `uv`
 automatically select a target compatible with the host CPU and C library on
 supported platforms.

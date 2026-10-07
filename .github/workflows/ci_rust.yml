@@ -316,7 +316,11 @@ jobs:
         if: ${{ matrix.build_image == '' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
-          set -e
+          set -euo pipefail
+          if [[ "${{ matrix.target }}" == *-unknown-linux-musl ]]; then
+            # Native plugins require musl's dynamic loader; Rust crates stay static.
+            export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=-crt-static -C linker=musl-gcc"
+          fi
           # SONAR_IGNORE_START: dependencies were fetched from Cargo.lock before dynamic package metadata is applied.
           cargo build --locked --offline --release --target "${{ matrix.target }}" -p nemo-relay-cli
           # SONAR_IGNORE_END
@@ -337,6 +341,14 @@ jobs:
               export PATH="$HOME/.cargo/bin:$PATH"
               cargo build --locked --release --target "${{ matrix.target }}" -p nemo-relay-cli
             '
+
+      - name: Verify dynamic musl CLI linkage
+        if: ${{ contains(matrix.target, '-unknown-linux-musl') }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/nemo-relay"
+          readelf -l "$binary" | grep -E 'Requesting program interpreter: /lib/ld-musl-.*\.so\.1'
 
       - name: Stage CLI binary artifact
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}

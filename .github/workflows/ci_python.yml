@@ -338,6 +338,9 @@ jobs:
 
       - name: Build musllinux wheel
         if: ${{ contains(matrix.platform, 'musl') }}
+        env:
+          # Use the host musl loader for native plugins; Rust crates stay static.
+          RUSTFLAGS: -C target-feature=-crt-static
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           maturin-version: v${{ env.NEMO_RELAY_MATURIN_VERSION }}
@@ -361,6 +364,16 @@ jobs:
             echo "Error: expected one cp311-abi3 musllinux wheel for ${{ matrix.architecture }}, found ${#wheels[@]}" >&2
             exit 1
           fi
+
+      - name: Verify dynamic musl Python linkage
+        if: ${{ contains(matrix.platform, 'musl') }}
+        run: |
+          set -euo pipefail
+          wheel_dir="${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels"
+          check_dir="${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-linkage"
+          mkdir -p "$check_dir"
+          unzip -j "$wheel_dir"/*.whl 'nemo_relay/_native*.so' -d "$check_dir"
+          readelf -d "$check_dir"/_native*.so | grep -E 'NEEDED.*\[libc\.musl-.*\.so\.1\]'
 
       - name: Upload musllinux wheel artifact
         if: ${{ contains(matrix.platform, 'musl') }}
