@@ -3587,8 +3587,9 @@ fn claude_gateway_url_change_preserves_the_pre_relay_backup() {
 #[test]
 fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
     let relay = std::path::PathBuf::from(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe");
-    let generation =
-        std::path::PathBuf::from(r"C:\Program Files\NeMo 100%\plugin\.nemo-relay-generation");
+    let generation = std::path::PathBuf::from(
+        r"C:\Program Files\NeMo 100%\plugin ' ‘smart’\.nemo-relay-generation",
+    );
     assert_eq!(
         shell_quote_arg_for_platform(relay.to_str().unwrap(), true),
         r#""C:\Program Files\NeMo 100^%\bin\nemo-relay.exe""#
@@ -3634,13 +3635,13 @@ fn generated_windows_hook_command_executes_exact_arguments() {
     let input_marker = temp.path().join("hook-input.txt");
     let generation = temp
         .path()
-        .join("Generation & %USERPROFILE% !^ ' 中文")
+        .join("Generation & %USERPROFILE% !^ ' ‘smart’ 中文")
         .join(".nemo-relay-generation");
     let command = codex_plugin_hook_command(&relay, &generation, "test-generation")
         .unwrap()
         .for_event("PreToolUse")
         .to_owned();
-    for shell in ["powershell.exe", "pwsh.exe"] {
+    for shell in windows_codex_hook_shells() {
         let mut child = windows_codex_hook_runner(&command, shell)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -3690,7 +3691,7 @@ fn generated_windows_hook_command_propagates_the_relay_exit_code() {
         .for_event("PreToolUse")
         .to_owned();
 
-    for shell in ["powershell.exe", "pwsh.exe"] {
+    for shell in windows_codex_hook_shells() {
         for code in [2, 23] {
             let status = windows_codex_hook_runner(&command, shell)
                 .env(
@@ -3704,6 +3705,41 @@ fn generated_windows_hook_command_propagates_the_relay_exit_code() {
             assert_eq!(status.code(), Some(code), "{shell}: {command}");
         }
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn generated_windows_hook_command_fails_when_relay_is_missing() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = temp.path().join("missing relay.exe");
+    let generation = temp.path().join("generation");
+    let command = codex_plugin_hook_command(&relay, &generation, "test-generation")
+        .unwrap()
+        .for_event("PreToolUse")
+        .to_owned();
+    for shell in windows_codex_hook_shells() {
+        let output = windows_codex_hook_runner(&command, shell).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{shell}: {command}");
+        assert!(
+            !output.stderr.is_empty(),
+            "missing executable must report an error"
+        );
+    }
+}
+
+#[cfg(windows)]
+/// Always exercise Windows PowerShell; include PowerShell 7 when installed.
+fn windows_codex_hook_shells() -> Vec<&'static str> {
+    let mut shells = vec!["powershell.exe"];
+    match windows_codex_hook_runner("exit 0", "pwsh.exe").status() {
+        Ok(status) => {
+            assert!(status.success(), "PowerShell 7 failed to start: {status}");
+            shells.push("pwsh.exe");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("failed to probe PowerShell 7: {error}"),
+    }
+    shells
 }
 
 #[cfg(windows)]

@@ -242,10 +242,18 @@ fn render_hook_command(
         // then preserve the native exit code in the outer PowerShell hook runner too.
         let arguments = std::iter::once(relay_for_command(relay, windows).display().to_string())
             .chain(arguments.iter().cloned())
-            .map(|argument| format!("'{}'", argument.replace('\'', "''")))
+            .map(|argument| {
+                format!(
+                    "'{}'",
+                    argument
+                        .replace('\'', "''")
+                        .replace('‘', "‘‘")
+                        .replace('’', "’’")
+                )
+            })
             .collect::<Vec<_>>()
             .join(" ");
-        let script = format!("& {arguments}; exit $LASTEXITCODE");
+        let script = format!("$ErrorActionPreference = 'Stop'; & {arguments}; exit $LASTEXITCODE");
         let bytes = script
             .encode_utf16()
             .flat_map(u16::to_le_bytes)

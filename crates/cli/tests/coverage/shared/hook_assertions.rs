@@ -18,9 +18,9 @@ pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> 
             .collect::<Vec<_>>();
         let script = String::from_utf16(&units).ok()?;
         let arguments = script
-            .strip_prefix("& ")?
+            .strip_prefix("$ErrorActionPreference = 'Stop'; & ")?
             .strip_suffix("; exit $LASTEXITCODE")?;
-        return shell_words::split(arguments).ok();
+        return decode_powershell_literals(arguments);
     }
     let command = command
         .strip_prefix('"')
@@ -32,6 +32,35 @@ pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> 
             .map(|argument| argument.replace("^%", "%"))
             .collect()
     })
+}
+
+/// Decode the single-quoted, space-separated literals generated for PowerShell.
+fn decode_powershell_literals(arguments: &str) -> Option<Vec<String>> {
+    let mut chars = arguments.chars().peekable();
+    let mut decoded = Vec::new();
+    while chars.next() == Some('\'') {
+        let mut argument = String::new();
+        loop {
+            let ch = chars.next()?;
+            if matches!(ch, '\'' | '‘' | '’') {
+                if chars.peek() == Some(&ch) {
+                    chars.next();
+                } else if ch == '\'' {
+                    break;
+                } else {
+                    return None;
+                }
+            }
+            argument.push(ch);
+        }
+        decoded.push(argument);
+        match chars.next() {
+            None => return Some(decoded),
+            Some(' ') => {}
+            _ => return None,
+        }
+    }
+    None
 }
 
 pub(crate) fn command_has_arguments(command: &str, expected: &[&str]) -> bool {
