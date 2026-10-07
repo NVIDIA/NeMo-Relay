@@ -174,11 +174,11 @@ try {
     Assert-NoTemporaryFiles $InstallDir
 
     $TestsRun++
-    $env:NEMO_RELAY_VERSION = '0.3.0'
+    $env:NEMO_RELAY_VERSION = '0.9.0'
     Invoke-Installer -Directory $InstallDir -CaptureProcessPath
     Assert-Success
     $pinnedVersion = (& (Join-Path $InstallDir 'nemo-relay.exe') --version | Out-String)
-    Assert-Contains $pinnedVersion 'nemo-relay 0.3.0'
+    Assert-Contains $pinnedVersion 'nemo-relay 0.9.0'
     Assert-NoTemporaryFiles $InstallDir
 
     $TestsRun++
@@ -188,7 +188,7 @@ try {
     Assert-Contains $RunOutput 'could not download'
     Assert-Contains $RunOutput '999.999.999'
     $preservedVersion = (& (Join-Path $InstallDir 'nemo-relay.exe') --version | Out-String)
-    Assert-Contains $preservedVersion 'nemo-relay 0.3.0'
+    Assert-Contains $preservedVersion 'nemo-relay 0.9.0'
     Assert-NoTemporaryFiles $InstallDir
 
     Write-Output "PASS: $TestsRun PowerShell installer scenarios"
