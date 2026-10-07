@@ -639,10 +639,30 @@ class TestLLMGuardrails:
             lambda request: raise_runtime_error("boom"),
         )
         try:
-            with pytest.raises(RuntimeError, match="RuntimeError: boom"):
+            with pytest.raises(RuntimeError, match="^boom$"):
                 llm.conditional_execution(make_request())
         finally:
             guardrails.deregister_llm_conditional_execution("py_llm_cond_error")
+
+    def test_conditional_execution_raises_original_exception_outside_event_loop(self) -> None:
+        class GuardrailFailure(ValueError):
+            pass
+
+        raised: list[GuardrailFailure] = []
+
+        def failing(_name, _args) -> Never:
+            error = GuardrailFailure("boom")
+            raised.append(error)
+            raise error
+
+        guardrails.register_llm_conditional_execution("py_llm_cond_error_original", 1, failing)
+        try:
+            with pytest.raises(GuardrailFailure, match="^boom$") as error:
+                llm.conditional_execution(make_request())
+        finally:
+            guardrails.deregister_llm_conditional_execution("py_llm_cond_error_original")
+
+        assert error.value is raised[0]
 
 
 class TestLLMGuardrailsAsync:

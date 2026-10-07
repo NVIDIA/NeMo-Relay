@@ -981,7 +981,7 @@ pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
                     }
                     None => callback.bind(py).call1((name, py_args)),
                 }
-                .map_err(|e| FlowError::Internal(e.to_string()))?;
+                .map_err(python_callback_error)?;
                 split_py_object_or_future_with_locals(
                     py,
                     result.unbind(),
@@ -1028,7 +1028,7 @@ pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
                     }
                     None => callback.bind(py).call1((name, py_args)),
                 }
-                .map_err(|e| FlowError::Internal(e.to_string()))?;
+                .map_err(python_callback_error)?;
                 split_json_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
             }))
             .await
@@ -1353,7 +1353,7 @@ pub fn wrap_py_llm_exec_intercept_fn(py_fn: Py<PyAny>) -> LlmExecutionFn {
                             .bind(py)
                             .call1((&name, py_req, py_context, py_next)),
                     }
-                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                    .map_err(python_callback_error)?;
                     split_py_object_or_future_with_locals(
                         py,
                         result.unbind(),
@@ -1545,7 +1545,7 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
                     Some(context) => context.call_method1("run", (callback.bind(py), request)),
                     None => callback.bind(py).call1((request,)),
                 }
-                .map_err(|e| FlowError::Internal(e.to_string()))?;
+                .map_err(python_callback_error)?;
                 split_py_object_or_future_with_locals(
                     py,
                     result.unbind(),

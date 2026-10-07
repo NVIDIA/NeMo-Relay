@@ -755,7 +755,8 @@ def event_fail(event):
             .block_on(tool_req("demo".to_string(), json!({"x": 1})))
             .unwrap_err();
         assert!(
-            error.to_string().contains("tool boom"),
+            matches!(error, FlowError::CallbackException { .. })
+                && error.to_string().contains("tool boom"),
             "unexpected tool request intercept error: {error}"
         );
 

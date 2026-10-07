@@ -568,10 +568,30 @@ class TestToolIntercepts:
     def test_request_intercept_raises_on_exception(self) -> None:
         intercepts.register_tool_request("py_req_raise", 1, False, lambda n, a: raise_runtime_error("boom"))
         try:
-            with pytest.raises(RuntimeError, match="RuntimeError: boom"):
+            with pytest.raises(RuntimeError, match="^boom$"):
                 tools.request_intercepts("raise_tool", {"value": 1})
         finally:
             intercepts.deregister_tool_request("py_req_raise")
+
+    def test_request_intercept_raises_original_exception_outside_event_loop(self) -> None:
+        class InterceptFailure(ValueError):
+            pass
+
+        raised: list[InterceptFailure] = []
+
+        def failing(_name, _args) -> Never:
+            error = InterceptFailure("boom")
+            raised.append(error)
+            raise error
+
+        intercepts.register_tool_request("py_req_raise_original", 1, False, failing)
+        try:
+            with pytest.raises(InterceptFailure, match="^boom$") as error:
+                tools.request_intercepts("raise_tool", {"value": 1})
+        finally:
+            intercepts.deregister_tool_request("py_req_raise_original")
+
+        assert error.value is raised[0]
 
     def test_request_intercept_raises_on_unserializable_return(self) -> None:
         intercepts.register_tool_request(
@@ -1099,7 +1119,27 @@ class TestToolGuardrailsEdgeCases:
             lambda name, args: raise_runtime_error("boom"),
         )
         try:
-            with pytest.raises(RuntimeError, match="RuntimeError: boom"):
+            with pytest.raises(RuntimeError, match="$boom^"):
                 tools.conditional_execution("error_tool", {})
         finally:
             guardrails.deregister_tool_conditional_execution("py_cond_error")
+
+    def test_conditional_execution_raises_original_exception_outside_event_loop(self) -> None:
+        class GuardrailFailure(ValueError):
+            pass
+
+        raised: list[GuardrailFailure] = []
+
+        def failing(_name, _args) -> Never:
+            error = GuardrailFailure("boom")
+            raised.append(error)
+            raise error
+
+        guardrails.register_tool_conditional_execution("py_cond_error_original", 1, failing)
+        try:
+            with pytest.raises(GuardrailFailure, match="^boom$") as error:
+                tools.conditional_execution("error_tool", {})
+        finally:
+            guardrails.deregister_tool_conditional_execution("py_cond_error_original")
+
+        assert error.value is raised[0]
