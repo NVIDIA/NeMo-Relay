@@ -221,7 +221,7 @@ fn spawn_with_handle_list(
         }
         // SAFETY: The stdio files own these live handles through process creation.
         if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
-            return Err(std::io::Error::last_os_error());
+            return Err(windows_spawn_error("SetHandleInformation"));
         }
         inherited.0.push(handle);
     }
@@ -230,7 +230,9 @@ fn spawn_with_handle_list(
     // SAFETY: A null first call obtains the required allocation size.
     unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attribute_bytes) };
     if attribute_bytes == 0 {
-        return Err(std::io::Error::last_os_error());
+        return Err(windows_spawn_error(
+            "InitializeProcThreadAttributeList sizing",
+        ));
     }
     let words = attribute_bytes.div_ceil(std::mem::size_of::<usize>());
     let mut attribute_storage = vec![0_usize; words];
@@ -239,7 +241,7 @@ fn spawn_with_handle_list(
     if unsafe { InitializeProcThreadAttributeList(attribute_pointer, 1, 0, &mut attribute_bytes) }
         == 0
     {
-        return Err(std::io::Error::last_os_error());
+        return Err(windows_spawn_error("InitializeProcThreadAttributeList"));
     }
     let attribute_list = AttributeList(attribute_pointer);
     // SAFETY: `handles` remains live through CreateProcessW and contains only the intended stdio.
@@ -255,7 +257,7 @@ fn spawn_with_handle_list(
         )
     } == 0
     {
-        return Err(std::io::Error::last_os_error());
+        return Err(windows_spawn_error("UpdateProcThreadAttribute handle list"));
     }
 
     let program = wide_nul(command.get_program());
@@ -303,7 +305,7 @@ fn spawn_with_handle_list(
             &mut process,
         )
     };
-    let create_error = (created == 0).then(std::io::Error::last_os_error);
+    let create_error = (created == 0).then(|| windows_spawn_error("CreateProcessW"));
     if let Some(error) = create_error {
         return Err(error);
     }
@@ -324,7 +326,7 @@ fn spawn_with_handle_list(
             )
         };
         let error = if queried == 0 {
-            Some(std::io::Error::last_os_error())
+            Some(windows_spawn_error("IsProcessInJob worker verification"))
         } else if child_in_job != 0 {
             Some(std::io::Error::other(
                 "an enclosing Windows Job Object retained the worker after breakaway",
@@ -354,15 +356,34 @@ pub(crate) fn spawn_detached(command: &mut Command) -> std::io::Result<DetachedC
     spawn_with_handle_list(command, &stdin, &stdout, &stdout, false)
 }
 
-/// Duplicate process stderr so the worker inherits only its intended logging handle.
+/// Preserve redirected stderr; console handles cannot be used by a console-free worker.
 #[cfg(windows)]
 pub(crate) fn inherited_stderr() -> std::io::Result<std::fs::File> {
-    use std::os::windows::io::{AsRawHandle, FromRawHandle};
+    use std::os::windows::io::AsRawHandle;
+    worker_stderr(std::io::stderr().as_raw_handle())
+}
+
+#[cfg(windows)]
+fn worker_stderr(source: windows_sys::Win32::Foundation::HANDLE) -> std::io::Result<std::fs::File> {
+    use std::os::windows::io::FromRawHandle;
     use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
+    use windows_sys::Win32::System::Console::GetConsoleMode;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    let source = std::io::stderr().as_raw_handle();
+
+    let mut mode = 0;
+    // SAFETY: The source is borrowed for this call and mode is valid writable storage.
+    if unsafe { GetConsoleMode(source, &mut mode) } != 0 {
+        // CREATE_NO_WINDOW gives the worker no access to the launcher's console. A duplicate
+        // can succeed in this process without being usable by the detached child.
+        return std::fs::OpenOptions::new()
+            .write(true)
+            .open(r"\\.\NUL")
+            .map_err(|error| {
+                std::io::Error::new(error.kind(), format!("open worker stderr NUL: {error}"))
+            });
+    }
     let mut duplicate = std::ptr::null_mut();
-    // SAFETY: The process pseudo-handle and stderr handle remain live. The returned duplicate
+    // SAFETY: The process pseudo-handle and borrowed source remain live. The returned duplicate
     // has independent ownership and is whitelisted only for the child spawn.
     if unsafe {
         DuplicateHandle(
@@ -383,6 +404,13 @@ pub(crate) fn inherited_stderr() -> std::io::Result<std::fs::File> {
     Ok(unsafe { std::fs::File::from_raw_handle(duplicate) })
 }
 
+/// Capture the OS code before any cleanup changes the thread's last error.
+#[cfg(windows)]
+fn windows_spawn_error(operation: &str) -> std::io::Error {
+    let source = std::io::Error::last_os_error();
+    std::io::Error::new(source.kind(), format!("{operation}: {source}"))
+}
+
 /// Detached worker with an explicitly whitelisted bootstrap pipe and stderr handle.
 #[cfg(windows)]
 pub(crate) fn spawn_worker_detached(
@@ -400,7 +428,7 @@ pub(crate) fn spawn_worker_detached(
         windows_sys::Win32::System::Pipes::CreatePipe(&mut read, &mut write, std::ptr::null(), 0)
     } == 0
     {
-        return Err(std::io::Error::last_os_error());
+        return Err(windows_spawn_error("CreatePipe worker bootstrap"));
     }
     // SAFETY: CreatePipe returned two distinct owned handles.
     let stdin = unsafe { std::fs::File::from_raw_handle(read) };
@@ -539,3 +567,7 @@ pub(crate) fn terminate_tree(child: &mut DetachedChild) {
     }
     let _ = child.wait();
 }
+
+#[cfg(all(test, windows))]
+#[path = "../../tests/coverage/shared/detached_tests.rs"]
+mod tests;

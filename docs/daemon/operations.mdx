@@ -211,7 +211,7 @@ Use this table to choose the next check for a failure:
 | Worker reports `control_available = false` | Worker control disconnected and can still be recovering | Check worker control events. Allow up to 30 seconds for recovery before restarting the harness. |
 | MCP is ready but no plugin result appears | Pass-through, wrong plugin setup, or wrong harness provider | Find `worker_ready`, inspect client system configuration, and check effective harness routing. |
 | Python plugin environment fails authentication | Changed attestation, missing environment key, or unavailable legacy key | Reprovision the environment from the trusted plugin source. |
-| `worker_launch_failed` | A worker start or activation step failed | Check `failure_reason` first. Then check assigned ports, executable permissions, worker logs, and daemon-to-client reachability. |
+| `worker_launch_failed` | A worker start or activation step failed | Check `failure_reason` and the error message first. Windows spawn errors identify the failed operation and OS error code. Then check assigned ports, executable permissions, worker logs, and daemon-to-client reachability. |
 | Remote worker advertises loopback | Wrong address override or network route | Use a concrete client IPv4 address reachable from the server. |
 | First request works but large streams stall | Buffering proxy or blocked provider path | Check the full request path and streaming requirements. Compare a direct private-network deployment. |
 | Startup fails after moving service accounts | Signing identity or state directory changed | Restore the original state and ownership. Confirm any planned identity change through a trusted channel. |
