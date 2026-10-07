@@ -116,8 +116,7 @@ def wrap_tool_call(
         try:
             result = execute(request.override(tool_call={**request.tool_call, "args": args}))
         except GraphBubbleUp as error:
-            # Relay's native callback boundary cannot propagate arbitrary Python
-            # exceptions. Preserve the original graph bubble locally and re-raise
+            # Preserve the original graph bubble locally and re-raise
             # it after managed execution returns.
             graph_bubble = error
             result = _GRAPH_BUBBLE_RESULT
@@ -164,8 +163,8 @@ async def awrap_tool_call(
         try:
             result = await execute(request.override(tool_call={**request.tool_call, "args": args}))
         except GraphBubbleUp as error:
-            # See the synchronous wrapper: retain the original exception instead
-            # of letting the native callback boundary convert it to RuntimeError.
+            # See the synchronous wrapper: keep graph bubble out of
+            # managed call so the tool records result instead of an error.
             graph_bubble = error
             result = _GRAPH_BUBBLE_RESULT
         return nemo_relay.ToolExecutionResult(result)

@@ -139,6 +139,10 @@ pub enum FlowError {
         /// Original language exception class name.
         exception_type: String,
         /// Original binding exception when binding can carry.
+        ///
+        /// Formatting with `{:?}` or formatting the value returned
+        /// by `Error::source()` may run binding code, like acquiring the GIL.
+        /// Avoid on a thread that a GIL-holding thread is blocked waiting on.
         #[source]
         source: Option<Arc<dyn std::error::Error + Send + Sync + 'static>>,
     },

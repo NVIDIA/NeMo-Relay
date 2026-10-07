@@ -246,6 +246,10 @@ def request_intercepts(name: str, args: Json) -> Json | Awaitable[Json]:
         intercept. Outside a running event loop this is returned directly.
         Inside an event loop, await the returned value.
 
+    Raises:
+        RuntimeError: If an async intercept is registered when called outside an event loop.
+        Exception: An exception raised by an intercept.
+
     Notes:
         This runs only the request-intercept chain. It does not execute
         conditional guardrails, sanitize guardrails, or the tool callback.
@@ -275,7 +279,8 @@ def conditional_execution(name: str, args: Json) -> Awaitable[None] | None:
 
     Raises:
         RuntimeError: If a guardrail rejects the call or an asynchronous
-        guardrail is registered when called outside an event loop.
+            guardrail is registered when called outside an event loop.
+        Exception: An exception raised by a guardrail.
     """
     ensure_scope_stack()
     return _native_tool_conditional_execution(name, args)
