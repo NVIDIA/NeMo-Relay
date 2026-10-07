@@ -232,8 +232,7 @@ fn resolve_candidate(base: &Path, extensions: &[OsString]) -> Option<PathBuf> {
 /// reinterpreting host arguments through a second, hand-built shell command line.
 pub(crate) fn std_command(argv: &[String]) -> Command {
     debug_assert!(!argv.is_empty());
-    let program = resolve_executable(&argv[0]).unwrap_or_else(|| PathBuf::from(&argv[0]));
-    let mut command = Command::new(program);
+    let mut command = Command::new(command_program(&argv[0]));
     command.args(&argv[1..]);
     command
 }
@@ -241,10 +240,35 @@ pub(crate) fn std_command(argv: &[String]) -> Command {
 /// Creates an asynchronous command with the same argv behavior as [`std_command`].
 pub(crate) fn tokio_command(argv: &[String]) -> tokio::process::Command {
     debug_assert!(!argv.is_empty());
-    let program = resolve_executable(&argv[0]).unwrap_or_else(|| PathBuf::from(&argv[0]));
-    let mut command = tokio::process::Command::new(program);
+    let mut command = tokio::process::Command::new(command_program(&argv[0]));
     command.args(&argv[1..]);
     command
+}
+
+fn command_program(program: &str) -> PathBuf {
+    let path = resolve_executable(program).unwrap_or_else(|| PathBuf::from(program));
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        // Rust preserves short absolute paths when constructing a batch command line. Normalize
+        // separators for cmd.exe, including npm shims that call subroutines in their own file.
+        let path = portable_executable_path(path);
+        let encoded = path
+            .as_os_str()
+            .encode_wide()
+            .map(|unit| {
+                if unit == b'/' as u16 {
+                    b'\\' as u16
+                } else {
+                    unit
+                }
+            })
+            .collect::<Vec<_>>();
+        PathBuf::from(OsString::from_wide(&encoded))
+    }
+    #[cfg(not(windows))]
+    path
 }
 
 mod supervision;

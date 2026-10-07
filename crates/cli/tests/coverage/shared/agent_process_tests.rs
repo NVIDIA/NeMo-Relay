@@ -341,3 +341,58 @@ fn windows_command_shim_preserves_metacharacter_arguments() {
     assert!(status.success());
     assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "ok");
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_batch_version_probe_supports_forward_slash_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("npm installation");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(directory.join("version.txt"), "codex-cli 0.160.1\r\n").unwrap();
+
+    for extension in ["cmd", "bat"] {
+        let shim = directory.join(format!("codex.{extension}"));
+        // Match npm's shim bootstrap: CALL must reopen the batch file to find the subroutine,
+        // and %~dp0 must still locate the installation when the configured path uses '/'.
+        std::fs::write(
+            &shim,
+            "@echo off\r\n\
+             GOTO start\r\n\
+             :find_dp0\r\n\
+             SET dp0=%~dp0\r\n\
+             EXIT /b\r\n\
+             :start\r\n\
+             SETLOCAL\r\n\
+             CALL :find_dp0\r\n\
+             IF NOT \"%~1\"==\"--version\" EXIT /b 11\r\n\
+             endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & TYPE \"%dp0%version.txt\"\r\n",
+        )
+        .unwrap();
+
+        let native = shim.to_str().unwrap();
+        let forward = native.replace('\\', "/");
+        let mixed = format!("{}/codex.{extension}", directory.display());
+        for program in [native, &forward, &mixed] {
+            // Paths containing spaces are supplied as an argv element by the process API.
+            let probe = version_probe_argv(CodingAgent::Codex, &[program.into()]);
+            for mut command in [tokio_command(&probe), std_command(&probe).into()] {
+                command
+                    .stdin(std::process::Stdio::null())
+                    .kill_on_drop(true);
+                let output =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), command.output())
+                        .await
+                        .unwrap_or_else(|_| panic!("version probe timed out for {program:?}"))
+                        .unwrap();
+                assert!(
+                    output.status.success(),
+                    "probe failed for {program:?}: {output:?}"
+                );
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    "codex-cli 0.160.1"
+                );
+            }
+        }
+    }
+}
