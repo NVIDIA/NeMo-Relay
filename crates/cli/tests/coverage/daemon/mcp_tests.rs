@@ -517,6 +517,25 @@ fn detached_windows_worker_process_fixture() {
 }
 
 #[cfg(windows)]
+fn windows_worker_fixture_logging(path: &std::path::Path) -> nemo_relay::logging::LoggingRuntime {
+    use nemo_relay::logging::{
+        FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
+    };
+    init_logging(&LoggingConfig {
+        level: LogLevel::Info,
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.to_owned(),
+            level: LogLevel::Info,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..LoggingConfig::default()
+    })
+    .unwrap()
+}
+
+#[cfg(windows)]
 #[test]
 fn detached_windows_worker_launcher_fixture() {
     let Some(path) = std::env::var_os("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID") else {
@@ -532,6 +551,7 @@ fn detached_windows_worker_launcher_fixture() {
         .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_WORKER", "1");
     let stderr = std::fs::File::create(path.with_extension("stderr")).unwrap();
     if std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED").is_some() {
+        let logging = windows_worker_fixture_logging(&path.with_extension("jsonl"));
         let (mut child, _bootstrap) =
             crate::process::detached::spawn_worker_detached(&command, &stderr).unwrap();
         use windows_sys::Win32::Foundation::CloseHandle;
@@ -549,6 +569,7 @@ fn detached_windows_worker_launcher_fixture() {
         child.wait().unwrap();
         assert_ne!(queried, 0);
         assert_ne!(in_job, 0, "worker escaped the restrictive parent job");
+        logging.shutdown();
         std::fs::write(path, "host_scoped").unwrap();
         return;
     }
@@ -633,13 +654,20 @@ async fn restrictive_external_job_fixture() {
         unsafe { AssignProcessToJobObject(raw_job, GetCurrentProcess()) },
         0
     );
+    let path = std::path::PathBuf::from(path);
+    let logging = windows_worker_fixture_logging(&path.with_extension("failed.jsonl"));
+    // Exercise direct breakaway denial before SupervisedChild adds a nested Relay job.
+    let missing_worker = std::process::Command::new(path.with_extension("missing.exe"));
+    let stderr = std::fs::File::create(path.with_extension("failed.stderr")).unwrap();
+    assert!(crate::process::detached::spawn_worker_detached(&missing_worker, &stderr).is_err());
+    logging.shutdown();
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args([
             "--exact",
             "daemon::mcp::tests::detached_windows_worker_launcher_fixture",
         ])
-        .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID", path)
+        .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID", &path)
         .env("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -672,7 +700,26 @@ async fn worker_starts_without_escaping_restrictive_external_parent_job() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(std::fs::read_to_string(path).unwrap(), "host_scoped");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "host_scoped");
+    let records: Vec<serde_json::Value> = std::fs::read_to_string(path.with_extension("jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|record: &serde_json::Value| record["event"] == "worker_lifetime_limited")
+        .collect();
+    assert_eq!(records.len(), 1, "only the successful launch should warn");
+    assert!(matches!(
+        records[0]["fields"]["reason"].as_str(),
+        Some("windows_job_breakaway_denied" | "windows_parent_job_retained")
+    ));
+    let failed_records = std::fs::read_to_string(path.with_extension("failed.jsonl")).unwrap();
+    assert!(
+        failed_records.lines().all(|line| {
+            let record: serde_json::Value = serde_json::from_str(line).unwrap();
+            record["event"] != "worker_lifetime_limited"
+        }),
+        "failed launches must not emit a worker lifetime warning"
+    );
 }
 
 #[test]
