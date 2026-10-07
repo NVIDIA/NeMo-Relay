@@ -131,6 +131,11 @@ impl CodingAgent {
         self.descriptor().hook_events
     }
 
+    /// Claude Code runs command hooks through Bash on every supported platform.
+    pub(crate) const fn hooks_use_bash(self) -> bool {
+        matches!(self, Self::ClaudeCode)
+    }
+
     pub(crate) fn minimum_version(self) -> Version {
         let (major, minor, patch) = self.descriptor().minimum_version;
         Version::new(major, minor, patch)

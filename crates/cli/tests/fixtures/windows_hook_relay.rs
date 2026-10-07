@@ -7,13 +7,19 @@ use std::io::Read;
 fn main() {
     let hook_config = std::env::var_os("NEMO_RELAY_HOOK_CONFIG")
         .expect("NEMO_RELAY_HOOK_CONFIG is required");
-    let expected = vec![
+    let mut expected = vec![
         OsString::from("hook-forward"),
-        OsString::from("codex"),
+        std::env::var_os("NEMO_RELAY_HOOK_AGENT").unwrap_or_else(|| OsString::from("codex")),
         OsString::from("--hook-config"),
         hook_config,
-        OsString::from("--fail-closed"),
     ];
+    if std::env::var_os("NEMO_RELAY_HOOK_TRANSPARENT").is_some() {
+        expected.push(OsString::from("--transparent-run"));
+    }
+    expected.push(
+        std::env::var_os("NEMO_RELAY_HOOK_POLICY")
+            .unwrap_or_else(|| OsString::from("--fail-closed")),
+    );
     let actual = std::env::args_os().skip(1).collect::<Vec<_>>();
     if actual != expected {
         eprintln!("unexpected hook arguments: {actual:?}");

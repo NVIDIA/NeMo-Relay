@@ -833,3 +833,138 @@ fn packaged_plugin_helpers_are_present() {
         assert!(metadata.is_file(), "{} is not a file", path.display());
     }
 }
+
+#[test]
+fn claude_windows_hooks_preserve_drive_and_unc_arguments_in_bash() {
+    for (raw, expected) in [
+        (
+            r"C:\Users\Relay Tools\nemo-relay.exe",
+            "C:/Users/Relay Tools/nemo-relay.exe",
+        ),
+        (
+            r"\\?\C:\Users\Relay Tools\nemo-relay.exe",
+            "C:/Users/Relay Tools/nemo-relay.exe",
+        ),
+        (
+            r"\\?\UNC\server\share\nemo-relay.exe",
+            "//server/share/nemo-relay.exe",
+        ),
+        (
+            r"\\server\share\nemo-relay.exe",
+            "//server/share/nemo-relay.exe",
+        ),
+    ] {
+        let config = r"\\?\C:\Users\Relay's $HOME `tools` & %USERPROFILE% !^\hook.json";
+        let commands = transparent_hook_forward_commands_for_platform(
+            Path::new(raw),
+            CodingAgent::ClaudeCode,
+            config,
+            true,
+        );
+        let arguments = shell_words::split(commands.for_event("PreToolUse")).unwrap();
+        assert_eq!(
+            arguments,
+            vec![
+                expected,
+                "hook-forward",
+                "claude",
+                "--hook-config",
+                "C:/Users/Relay's $HOME `tools` & %USERPROFILE% !^/hook.json",
+                "--transparent-run",
+                "--fail-closed",
+            ]
+        );
+    }
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let temp = tempfile::tempdir().unwrap();
+    let bin = temp.path().join("Relay's $HOME `tools` & %USERPROFILE% !^");
+    std::fs::create_dir(&bin).unwrap();
+    let relay = bin.join("nemo-relay.exe");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/windows_hook_relay.rs");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let compiled = Command::new(rustc)
+        .arg(source)
+        .args(["--edition", "2024", "-o"])
+        .arg(&relay)
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+
+    let generation = bin.join(".nemo-relay-generation");
+    let config = persistent_hook_config_path(&generation);
+    let expected_config = config.display().to_string().replace('\\', "/");
+    let raw_relay = relay.display().to_string().replace('/', "\\");
+    let raw_config = format!(r"\\?\{}", config.display().to_string().replace('/', "\\"));
+    let persistent = persistent_hook_forward_commands_for_platform(
+        Path::new(&raw_relay),
+        CodingAgent::ClaudeCode,
+        &generation,
+        "generation",
+        true,
+    );
+    let transparent = transparent_hook_forward_commands_for_platform(
+        Path::new(&raw_relay),
+        CodingAgent::ClaudeCode,
+        &raw_config,
+        true,
+    );
+    for (commands, transparent_run) in [(persistent, false), (transparent, true)] {
+        for (event, policy) in [
+            ("SessionEnd", "--fail-open"),
+            ("PreToolUse", "--fail-closed"),
+        ] {
+            let marker = temp.path().join("stdin.txt");
+            let command = commands.for_event(event);
+            let mut bash = Command::new("bash");
+            bash.args(["-c", command])
+                .env("NEMO_RELAY_HOOK_AGENT", "claude")
+                .env("NEMO_RELAY_HOOK_CONFIG", &expected_config)
+                .env("NEMO_RELAY_HOOK_POLICY", policy)
+                .env("NEMO_RELAY_HOOK_INPUT_MARKER", &marker)
+                .env("NEMO_RELAY_HOOK_EMIT_OUTPUT", "1")
+                .env("NEMO_RELAY_HOOK_EXIT_CODE", "23")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            if transparent_run {
+                bash.env("NEMO_RELAY_HOOK_TRANSPARENT", "1");
+            }
+            let mut child = bash
+                .spawn()
+                .expect("Bash is required to test Claude Code command hooks");
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"hook-input\n")
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(23),
+                "command: {command}\nstderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(std::fs::read(&marker).unwrap(), b"hook-input\n");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                "hook-stdout"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr).trim(),
+                "hook-stderr"
+            );
+        }
+    }
+}
