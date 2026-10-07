@@ -9,6 +9,12 @@ SPDX-License-Identifier: Apache-2.0 */}
 This page describes the validation and documentation checks expected for repository
 changes.
 
+Rust and Python examples, plugin test fixtures, and benchmark tools are workspace
+members. Dependency versions are locked in the repository-root `Cargo.lock` and
+`uv.lock`; npm workspaces use the root `package-lock.json`. Run Python example
+commands with `uv run --package <example-package>` to select the example while
+sharing the root environment.
+
 ## Testing Rule
 
 Run tests for every language surface whose observable behavior can change. Start

@@ -28,14 +28,18 @@ outputs, verify exported traces, and understand current LLM replay fidelity.
 
 Required:
 
-- OpenClaw `2026.7.1` or newer.
+- OpenClaw `2026.9.3` (the version used to build and test this plugin).
+- Node.js `>=24.16.0 <25` or `>=26.1.0`, as required by OpenClaw.
 - The OpenClaw CLI available as `openclaw`.
 
 Optional:
 
-- Node.js and npm when installing or managing the package directly.
+- npm when installing or managing the package directly.
 - A Phoenix instance or OTLP collector when exporting OpenInference or
   OpenTelemetry spans.
+
+The workspace keeps OpenClaw at `2026.9.3` and overrides its MCP SDK dependency
+to `1.32.1` to address GHSA-6qxp-vccf-f47h.
 
 ## Install
 
