@@ -373,7 +373,7 @@ jobs:
           check_dir="${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-linkage"
           mkdir -p "$check_dir"
           unzip -j "$wheel_dir"/*.whl 'nemo_relay/_native*.so' -d "$check_dir"
-          readelf -d "$check_dir"/_native*.so | grep -E 'NEEDED.*\[libc\.musl-.*\.so\.1\]'
+          readelf -d "$check_dir"/_native*.so | grep -E 'NEEDED.*\[(libc\.so|libc\.musl-.*\.so\.1)\]'
 
       - name: Upload musllinux wheel artifact
         if: ${{ contains(matrix.platform, 'musl') }}

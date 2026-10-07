@@ -264,8 +264,9 @@ The release pipeline then:
      distribution.
    - `package-python-plugin` builds the `nemo-relay-plugin` wheel.
    - The Rust CLI matrix builds GNU Linux binaries in manylinux containers and
-     musl Linux binaries natively with dynamic libc and static Rust dependencies,
-     verifies the musl interpreter, validates each in its matching container, and
+     musl Linux binaries in musllinux containers with dynamic libc and static
+     Rust dependencies, verifies the musl interpreter, validates each in its
+     matching container, and
      packages each prebuilt binary as a `nemo-relay-cli-bin` wheel.
    - The distribution release-asset job uploads the CLI binaries, `nemo-relay`
      API wheels, CLI wheels, and split Node npm packages.
