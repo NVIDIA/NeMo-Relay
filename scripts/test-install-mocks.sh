@@ -58,6 +58,21 @@ make_mock_commands() {
     mock_commands_dir=$1
     mkdir -p "$mock_commands_dir"
 
+    cat >"${mock_commands_dir}/getconf" <<'EOF'
+#!/bin/sh
+[ "$MOCK_LIBC" = glibc ] || exit 1
+printf 'glibc 2.17\n'
+EOF
+
+    cat >"${mock_commands_dir}/ldd" <<'EOF'
+#!/bin/sh
+case "$MOCK_LIBC" in
+    glibc-ldd) printf 'ldd (GNU libc) 2.17\n' ;;
+    musl) printf 'musl libc (x86_64)\nVersion 1.2.5\n' >&2; exit 1 ;;
+    *) exit 1 ;;
+esac
+EOF
+
     cat >"${mock_commands_dir}/uname" <<'EOF'
 #!/bin/sh
 case "${1:-}" in
@@ -101,6 +116,13 @@ case "$url" in
         printf '%s  %s\n' "$MOCK_EXPECTED_CHECKSUM" "${url##*/}" >"$output"
         ;;
     *)
+        case "$url" in
+            *-unknown-linux-gnu-*)
+                if [ "$MOCK_GNU_STATUS" != 200 ]; then
+                    exit 22
+                fi
+                ;;
+        esac
         printf '#!/bin/sh\nprintf "mock nemo-relay\\n"\n' >"$output"
         ;;
 esac
@@ -132,7 +154,8 @@ case "$*" in
 esac
 EOF
 
-    chmod +x "${mock_commands_dir}/uname" "${mock_commands_dir}/curl" "${mock_commands_dir}/sha256sum" \
+    chmod +x "${mock_commands_dir}/getconf" "${mock_commands_dir}/ldd" \
+        "${mock_commands_dir}/uname" "${mock_commands_dir}/curl" "${mock_commands_dir}/sha256sum" \
         "${mock_commands_dir}/cygpath" "${mock_commands_dir}/powershell.exe"
     return 0
 }
@@ -151,6 +174,8 @@ new_case() {
 
     MOCK_UNAME_S=Linux
     MOCK_UNAME_M=x86_64
+    MOCK_LIBC=musl
+    MOCK_GNU_STATUS=200
     MOCK_API_RESPONSE='{"tag_name":"0.5.0"}'
     MOCK_EXPECTED_CHECKSUM=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     MOCK_ACTUAL_CHECKSUM=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -163,6 +188,7 @@ new_case() {
     MOCK_POWERSHELL_LOG=$powershell_log
     GH_TOKEN=$MOCK_GH_TOKEN
     export MOCK_UNAME_S MOCK_UNAME_M MOCK_API_RESPONSE
+    export MOCK_LIBC MOCK_GNU_STATUS
     export MOCK_EXPECTED_CHECKSUM MOCK_ACTUAL_CHECKSUM MOCK_CHECKSUM_MISSING MOCK_GH_TOKEN
     export GH_TOKEN NEMO_RELAY_VERSION HOME PATH MOCK_CURL_LOG MOCK_POWERSHELL_LOG
     return 0
@@ -193,6 +219,53 @@ test_linux_arm64_mapping() {
     run_installer
     assert_success
     assert_file_contains "$curl_log" "nemo-relay-cli-aarch64-unknown-linux-musl-0.5.0"
+    return 0
+}
+
+test_linux_glibc_mapping() {
+    for glibc_detection in glibc glibc-ldd; do
+        for linux_arch in x86_64 aarch64; do
+            new_case
+            MOCK_LIBC=$glibc_detection
+            MOCK_UNAME_M=$linux_arch
+            run_installer
+            assert_success
+            assert_file_contains "$curl_log" "nemo-relay-cli-${linux_arch}-unknown-linux-gnu-0.5.0.sha256"
+            if grep -F 'unknown-linux-musl' "$curl_log" >/dev/null; then
+                fail "glibc installer downloaded musl despite available GNU asset"
+            fi
+        done
+    done
+    return 0
+}
+
+test_linux_glibc_download_error_fails_closed() {
+    for gnu_status in 404 500; do
+        new_case
+        MOCK_LIBC=glibc
+        MOCK_GNU_STATUS=$gnu_status
+        run_installer
+        assert_failure
+        assert_contains "$run_output" "could not download"
+        if grep -F 'unknown-linux-musl' "$curl_log" >/dev/null; then
+            fail "GNU download error triggered musl fallback"
+        fi
+        assert_no_temporary_files "${HOME}/.local/bin"
+    done
+    return 0
+}
+
+test_linux_glibc_missing_checksum_fails_closed() {
+    new_case
+    MOCK_LIBC=glibc
+    MOCK_CHECKSUM_MISSING=1
+    run_installer
+    assert_failure
+    [ ! -e "${HOME}/.local/bin/nemo-relay" ] || fail "GNU binary installed without checksum"
+    if grep -F 'unknown-linux-musl' "$curl_log" >/dev/null; then
+        fail "missing GNU checksum triggered musl fallback"
+    fi
+    assert_no_temporary_files "${HOME}/.local/bin"
     return 0
 }
 
@@ -301,6 +374,9 @@ test_git_bash_windows_uninstall() {
 }
 
 test_linux_arm64_mapping
+test_linux_glibc_mapping
+test_linux_glibc_download_error_fails_closed
+test_linux_glibc_missing_checksum_fails_closed
 test_macos_arm64_mapping
 test_git_bash_windows_x86_64_mapping_and_path_update
 test_git_bash_windows_arm64_mapping
