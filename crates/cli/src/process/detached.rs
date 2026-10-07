@@ -283,9 +283,6 @@ fn spawn_with_handle_list(
     let mut process = PROCESS_INFORMATION::default();
     let (in_job, limits) = current_windows_job_limits();
     let (creation_flags, limited_lifetime) = windows_creation_flags(in_job, limits);
-    if prefer_breakaway && limited_lifetime {
-        log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = "windows_job_breakaway_denied"; "Worker remains scoped to the host job; host shutdown can require reactivation");
-    }
     // SAFETY: Every pointer references initialized storage that remains live for this call.
     let created = unsafe {
         CreateProcessW(
@@ -326,8 +323,13 @@ fn spawn_with_handle_list(
         let error = if queried == 0 {
             Some(windows_spawn_error("IsProcessInJob worker verification"))
         } else {
-            if child_in_job != 0 && !limited_lifetime {
-                log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = "windows_parent_job_retained"; "Worker remains scoped to an outer host job; host shutdown can require reactivation");
+            if child_in_job != 0 {
+                let reason = if limited_lifetime {
+                    "windows_job_breakaway_denied"
+                } else {
+                    "windows_parent_job_retained"
+                };
+                log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = reason; "Worker remains scoped to the host job; host shutdown can require reactivation");
             }
             None
         };
