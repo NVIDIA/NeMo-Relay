@@ -618,11 +618,13 @@ async fn resolve_py_tool_execution_intercept_outcome(
 
 fn next_async_iter_coro(async_iter: &Arc<Py<PyAny>>) -> FlowResult<Option<Py<PyAny>>> {
     Python::attach(|py| {
-        py.import("nemo_relay._event_sanitizer_context")
+        let next = py
+            .import("nemo_relay._event_sanitizer_context")
             .and_then(|module| module.getattr("async_iter_next"))
-            .and_then(|next| next.call1((async_iter.bind(py),)))
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        next.call1((async_iter.bind(py),))
             .map(|coro| Some(coro.unbind()))
-            .map_err(|error| FlowError::Internal(error.to_string()))
+            .map_err(python_callback_error)
     })
 }
 

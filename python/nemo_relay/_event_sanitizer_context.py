@@ -57,9 +57,9 @@ def loop_affine(callback: Callable[..., Any], *, sanitizer: bool = False) -> Cal
 
 
 def async_iter_next(iterator: Any) -> Coroutine[Any, Any, Any]:
-    """Validate the iterator and await its next item."""
+    """Validate the iterator then await its next item on event-loop thread."""
     if not isinstance(iterator, AsyncIterator):
-        raise TypeError(f"{type(iterator).__name__!r} must be an asynchronous iterator.")
+        raise TypeError(f"expected an asynchronous iterator, got {type(iterator).__name__!r}.")
 
     return _anext_on_event_loop(iterator)
 
