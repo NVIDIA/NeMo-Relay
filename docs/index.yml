@@ -18,11 +18,53 @@ navigation:
       - page: "Configuration / Setup Overview"
         path: ./getting-started/configuration.mdx
         slug: configuration
-      - folder: ./getting-started/quick-start
-        title: "Quick Starts"
+      - page: "Quick Starts"
+        path: ./getting-started/quick-start/index.mdx
         slug: quick-start
-        title-source: frontmatter
+      - section: "Agent Runtime Quick Starts"
+        icon: fa-solid fa-robot
+        skip-slug: true
         collapsed: open-by-default
+        contents:
+          - page: "Hermes"
+            path: ./getting-started/quick-start/hermes.mdx
+          - page: "Claude Code"
+            path: ./getting-started/quick-start/claude-code.mdx
+          - page: "Codex"
+            path: ./getting-started/quick-start/codex.mdx
+          - page: "pi"
+            path: ./getting-started/quick-start/pi.mdx
+          - page: "OpenClaw"
+            path: ./getting-started/quick-start/openclaw.mdx
+      - section: "Plugin Quick Starts"
+        icon: fa-solid fa-puzzle-piece
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - page: "Switchyard"
+            path: ./getting-started/quick-start/switchyard.mdx
+      - section: "Agent Framework Quick Starts"
+        icon: fa-solid fa-diagram-project
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - page: "LangChain"
+            path: ./getting-started/quick-start/langchain.mdx
+          - page: "LangGraph"
+            path: ./getting-started/quick-start/langgraph.mdx
+          - page: "Deep Agents"
+            path: ./getting-started/quick-start/deep-agents.mdx
+      - section: "Application API Quick Starts"
+        icon: fa-solid fa-code
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - page: "Python"
+            path: ./getting-started/quick-start/python.mdx
+          - page: "Node.js"
+            path: ./getting-started/quick-start/nodejs.mdx
+          - page: "Rust"
+            path: ./getting-started/quick-start/rust.mdx
   - folder: ./nemo-relay-cli
     title: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli
