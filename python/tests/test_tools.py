@@ -1119,7 +1119,7 @@ class TestToolGuardrailsEdgeCases:
             lambda name, args: raise_runtime_error("boom"),
         )
         try:
-            with pytest.raises(RuntimeError, match="$boom^"):
+            with pytest.raises(RuntimeError, match="^boom$"):
                 tools.conditional_execution("error_tool", {})
         finally:
             guardrails.deregister_tool_conditional_execution("py_cond_error")

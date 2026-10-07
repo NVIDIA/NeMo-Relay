@@ -650,7 +650,7 @@ class TestLLMGuardrails:
 
         raised: list[GuardrailFailure] = []
 
-        def failing(_name, _args) -> Never:
+        def failing(_request) -> Never:
             error = GuardrailFailure("boom")
             raised.append(error)
             raise error
