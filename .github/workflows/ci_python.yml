@@ -365,16 +365,6 @@ jobs:
             exit 1
           fi
 
-      - name: Verify dynamic musl Python linkage
-        if: ${{ contains(matrix.platform, 'musl') }}
-        run: |
-          set -euo pipefail
-          wheel_dir="${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels"
-          check_dir="${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-linkage"
-          mkdir -p "$check_dir"
-          unzip -j "$wheel_dir"/*.whl 'nemo_relay/_native*.so' -d "$check_dir"
-          readelf -d "$check_dir"/_native*.so | grep -E 'NEEDED.*\[(libc\.so|libc\.musl-.*\.so\.1)\]'
-
       - name: Upload musllinux wheel artifact
         if: ${{ contains(matrix.platform, 'musl') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

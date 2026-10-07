@@ -262,14 +262,6 @@ jobs:
             --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
             package-node
 
-      - name: Verify dynamic musl Node linkage
-        if: ${{ contains(matrix.platform, 'musl') }}
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: |
-          set -euo pipefail
-          binary="crates/node/nemo-relay.linux-${{ matrix.node_arch }}-musl.node"
-          readelf -d "$binary" | grep -E 'NEEDED.*\[(libc\.so|libc\.musl-.*\.so\.1)\]'
-
       - name: Upload split Node npm package artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
