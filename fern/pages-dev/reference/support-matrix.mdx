@@ -27,10 +27,10 @@ commitment. For release-specific changes and known limitations, refer to
 NeMo Relay publishes GNU and musl CLI binaries for each supported Linux
 architecture. The GNU variants are dynamically linked against glibc 2.17 or
 newer and are the performance-oriented choice for glibc-based distributions
-such as Ubuntu, Debian, and RHEL. The statically linked musl variants are
-required for musl-based distributions such as Alpine Linux and also run on
-glibc-based distributions. The Unix shell installer uses the musl variant for
-portability.
+such as Ubuntu, Debian, and RHEL. The musl variants dynamically link musl 1.2
+or newer to support loading native plugins on musl-based distributions such
+as Alpine Linux. Rust dependencies remain statically linked. Native plugins
+must match the host C library and architecture.
 
 The binaries are not tied to a distribution-specific package manager. Linux CI
 uses Ubuntu runners, and NeMo Relay does not publish distribution-specific DEB

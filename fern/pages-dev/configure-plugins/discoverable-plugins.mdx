@@ -34,8 +34,10 @@ nemo-relay plugins install "github:NVIDIA/NeMo-Relay-Plugins@<release-tag>" --us
 nemo-relay plugins list --user
 ```
 
-Relay downloads the bundle for your operating system and CPU. It checks the
-archive's `.sha256` checksum and `.json` release metadata. It also checks the
+Relay downloads the bundle for your operating system, CPU, and CLI libc target.
+On Linux, musl CLI builds select `linux-musl-x86_64` or `linux-musl-arm64`
+bundles; GNU CLI builds select `linux-x86_64` or `linux-arm64` bundles. Relay
+checks the archive's `.sha256` checksum and `.json` release metadata. It also checks the
 plugin manifest, supported Relay versions, and the runtime file's digest. If
 the checks pass, Relay registers the plugin and tries to enable it. Enabled
 plugins load when the gateway starts.
