@@ -249,6 +249,8 @@ fn render_hook_command(
                         .replace('\'', "''")
                         .replace('‘', "‘‘")
                         .replace('’', "’’")
+                        .replace('‚', "‚‚")
+                        .replace('‛', "‛‛")
                 )
             })
             .collect::<Vec<_>>()

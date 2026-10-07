@@ -3588,7 +3588,7 @@ fn claude_gateway_url_change_preserves_the_pre_relay_backup() {
 fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
     let relay = std::path::PathBuf::from(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe");
     let generation = std::path::PathBuf::from(
-        r"C:\Program Files\NeMo 100%\plugin ' ‘smart’\.nemo-relay-generation",
+        r"C:\Program Files\NeMo 100%\plugin ' ‘smart’ ‚; exit 99; ‛\.nemo-relay-generation",
     );
     assert_eq!(
         shell_quote_arg_for_platform(relay.to_str().unwrap(), true),
@@ -3635,7 +3635,7 @@ fn generated_windows_hook_command_executes_exact_arguments() {
     let input_marker = temp.path().join("hook-input.txt");
     let generation = temp
         .path()
-        .join("Generation & %USERPROFILE% !^ ' ‘smart’ 中文")
+        .join("Generation & %USERPROFILE% !^ ' ‘smart’ ‚; exit 99; ‛ 中文")
         .join(".nemo-relay-generation");
     let command = codex_plugin_hook_command(&relay, &generation, "test-generation")
         .unwrap()

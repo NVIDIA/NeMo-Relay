@@ -42,7 +42,7 @@ fn decode_powershell_literals(arguments: &str) -> Option<Vec<String>> {
         let mut argument = String::new();
         loop {
             let ch = chars.next()?;
-            if matches!(ch, '\'' | '‘' | '’') {
+            if matches!(ch, '\'' | '‘' | '’' | '‚' | '‛') {
                 if chars.peek() == Some(&ch) {
                     chars.next();
                 } else if ch == '\'' {
