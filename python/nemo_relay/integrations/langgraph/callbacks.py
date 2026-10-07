@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Protocol, TypeVar
+from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackManager
 from langchain_core.runnables import RunnableConfig
@@ -73,11 +74,17 @@ class NemoRelayCallbackHandler(LangChainNemoRelayCallbackHandler, GraphCallbackH
 
     def _emit_graph_mark(self, name: str, data: dict[str, Any]) -> None:
         try:
-            nemo_relay.scope.event(
-                name,
-                data=_prepare_lc_payloads(data),
-                metadata={"integration": "langgraph"},
-            )
+            run_id = data.get("run_id")
+            with self._lock:
+                # Streaming can deliver lifecycle callbacks outside the context
+                # that opened the graph. Use its tracked handle as the parent.
+                handle = self._scope_handles.get(UUID(run_id)) if run_id is not None else None
+                nemo_relay.scope.event(
+                    name,
+                    handle=handle,
+                    data=_prepare_lc_payloads(data),
+                    metadata={"integration": "langgraph"},
+                )
         except Exception:
             _logger.debug("NeMo Relay: LangGraph mark emission failed", exc_info=True)
 

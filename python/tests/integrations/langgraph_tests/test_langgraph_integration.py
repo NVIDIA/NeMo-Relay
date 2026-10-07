@@ -121,6 +121,66 @@ async def test_configured_graph_stream_closes_across_consumer_contexts(
     assert cast(dict, graph_events[-1].metadata)["otel.status_code"] == "OK"
 
 
+async def test_configured_graph_interrupt_marks_across_consumer_contexts(
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    """Lifecycle marks retain their graph parent when streaming changes contexts."""
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import Command, interrupt
+
+    from nemo_relay.integrations.langgraph import configure_graph
+
+    async def approve(state: State) -> State:
+        assert interrupt("Approve refund for order 1234?") == "yes"
+        return state
+
+    builder = StateGraph(cast(Any, State))
+    builder.add_node("increment", aincrement)
+    builder.add_node("approve", approve)
+    builder.add_edge(START, "increment")
+    builder.add_edge("increment", "approve")
+    builder.add_edge("approve", END)
+    graph = configure_graph(builder.compile(checkpointer=InMemorySaver()))
+    config = {"configurable": {"thread_id": str(uuid4())}}
+
+    for payload in ({"value": 1}, Command(resume="yes")):
+        stream = graph.astream(payload, config, stream_mode="updates")
+        chunks = []
+        try:
+            while True:
+                chunks.append(await asyncio.create_task(anext(stream), context=contextvars.Context()))
+        except StopAsyncIteration:
+            pass
+        finally:
+            await stream.aclose()
+        if isinstance(payload, dict):
+            assert chunks[0] == {"increment": {"value": 2}}
+            assert chunks[1]["__interrupt__"][0].value == "Approve refund for order 1234?"
+        else:
+            assert chunks == [{"approve": {"value": 2}}]
+
+    await nemo_relay.subscribers.flush_async()
+    starts = {
+        event.uuid: event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "start"
+    }
+    marks = [event for event in subscribed_events if isinstance(event, nemo_relay.MarkEvent)]
+    assert [event.name for event in marks] == ["Graph Interrupt", "Graph Resume"]
+    for mark in marks:
+        assert mark.parent_uuid in starts
+        parent = starts[mark.parent_uuid]
+        assert parent.name == "LangGraph"
+        assert parent.metadata["langchain_run_id"] == mark.data["run_id"]
+    assert marks[0].data["interrupts"][0]["value"] == "Approve refund for order 1234?"
+    assert set(starts) == {
+        event.uuid
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "end"
+    }
+
+
 def test_configure_graph_records_lifecycle_without_invocation_callbacks(
     sync_graph: CompiledStateGraph,
     subscribed_events: list[nemo_relay.Event],
