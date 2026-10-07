@@ -198,7 +198,7 @@ fn spawn_with_handle_list(
     stdin: &std::fs::File,
     stdout: &std::fs::File,
     stderr: &std::fs::File,
-    require_breakaway: bool,
+    prefer_breakaway: bool,
 ) -> std::io::Result<DetachedChild> {
     use std::ffi::c_void;
     use std::os::windows::io::AsRawHandle;
@@ -283,10 +283,8 @@ fn spawn_with_handle_list(
     let mut process = PROCESS_INFORMATION::default();
     let (in_job, limits) = current_windows_job_limits();
     let (creation_flags, limited_lifetime) = windows_creation_flags(in_job, limits);
-    if require_breakaway && limited_lifetime {
-        return Err(std::io::Error::other(
-            "the enclosing Windows Job Object forbids worker breakaway",
-        ));
+    if prefer_breakaway && limited_lifetime {
+        log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = "windows_job_breakaway_denied"; "Worker remains scoped to the host job; host shutdown can require reactivation");
     }
     // SAFETY: Every pointer references initialized storage that remains live for this call.
     let created = unsafe {
@@ -314,7 +312,7 @@ fn spawn_with_handle_list(
         thread: process.hThread,
         id: process.dwProcessId,
     };
-    if require_breakaway {
+    if prefer_breakaway {
         let mut child_in_job = 0;
         // A nested parent job can retain the child even after breakaway from the immediate job.
         // SAFETY: The process handle is owned here and the output pointer is valid.
@@ -327,11 +325,10 @@ fn spawn_with_handle_list(
         };
         let error = if queried == 0 {
             Some(windows_spawn_error("IsProcessInJob worker verification"))
-        } else if child_in_job != 0 {
-            Some(std::io::Error::other(
-                "an enclosing Windows Job Object retained the worker after breakaway",
-            ))
         } else {
+            if child_in_job != 0 && !limited_lifetime {
+                log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = "windows_parent_job_retained"; "Worker remains scoped to an outer host job; host shutdown can require reactivation");
+            }
             None
         };
         if let Some(error) = error {
@@ -412,7 +409,7 @@ fn windows_spawn_error(operation: &str) -> std::io::Error {
     std::io::Error::new(source.kind(), format!("{operation}: {source}"))
 }
 
-/// Detached worker with an explicitly whitelisted bootstrap pipe and stderr handle.
+/// Worker with whitelisted bootstrap and stderr handles; host-scoped when breakaway is blocked.
 #[cfg(windows)]
 pub(crate) fn spawn_worker_detached(
     command: &Command,
