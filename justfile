@@ -664,7 +664,8 @@ set_project_version() {
     set_coding_agent_plugin_versions "$version"
     # Resolve only after every workspace manifest has its final version.
     cargo metadata --format-version 1 >/dev/null
-    uv lock --offline
+    # Keep existing dependency pins; allow fetching build backends for dynamic metadata.
+    uv lock
 }
 
 semver_to_pep440() {

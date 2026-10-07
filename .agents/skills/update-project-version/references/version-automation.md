@@ -32,8 +32,9 @@ drifts.
   manifests under `integrations/coding-agents/`.
 
 After all manifests are updated, `set_project_version` refreshes the root Cargo
-and uv lockfiles. Python lock resolution stays offline to preserve registry
-dependency versions.
+and uv lockfiles. Python lock resolution retains existing registry dependency
+versions without requesting upgrades, while allowing network access to fetch
+build backends needed for dynamic package metadata on a cold cache.
 
 Generated attribution files derive from Cargo and npm lockfiles; regenerate
 only the attribution surface whose input changed.
