@@ -140,8 +140,10 @@ even when the server runs the completion callback in a different context.
 Successful runs emit an end event with status `OK`. Failed runs emit an end
 event with status `ERROR`.
 
-`Graph Interrupt` and `Graph Resume` marks belong to the graph scope identified
-by their run ID, including when the server delivers them in a different context.
+For tracked runs, `Graph Interrupt` and `Graph Resume` marks belong to the graph
+scope identified by their run ID, including when the server delivers them in a
+different context. When the run ID is absent or untracked, the marks use the
+current scope.
 
 For LangChain agents inside a LangGraph workflow, use `NemoRelayMiddleware` from
 this package the same way as the LangChain integration and pass the LangGraph
