@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextvars import ContextVar
 from typing import Any
 
@@ -56,9 +56,16 @@ def loop_affine(callback: Callable[..., Any], *, sanitizer: bool = False) -> Cal
     return wrapped
 
 
-async def async_iter_next(iterator: Any) -> Any:
-    """Invoke and await ``__anext__`` on the current event-loop thread."""
-    return await iterator.__anext__()
+def async_iter_next(iterator: Any) -> Coroutine[Any, Any, Any]:
+    """Validate the iterator and await its next item."""
+    if not isinstance(iterator, AsyncIterator):
+        raise TypeError(f"{type(iterator).__name__!r} must be an asynchronous iterator.")
+
+    return _anext_on_event_loop(iterator)
+
+
+async def _anext_on_event_loop(iterator: AsyncIterator[Any]) -> Any:
+    return await anext(iterator)
 
 
 async def async_iter_close(iterator: Any) -> None:

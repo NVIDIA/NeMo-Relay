@@ -378,9 +378,15 @@ class StopIter:
     def __anext__(self):
         raise StopAsyncIteration
 
+    def __aiter__(self):
+        return self
+
 class ErrorIter:
     def __anext__(self):
         raise RuntimeError("next boom")
+
+    def __aiter__(self):
+        return self
 
 class ValueIter:
     def __init__(self, value):
@@ -395,6 +401,9 @@ class ValueIter:
             return self.value
         return inner()
 
+    def __aiter__(self):
+        return self
+
 class DroppedReceiverIter:
     def __init__(self, value):
         self.value = value
@@ -404,6 +413,9 @@ class DroppedReceiverIter:
         async def inner():
             return self.value
         return inner()
+
+    def __aiter__(self):
+        return self
 
     async def aclose(self):
         self.closed = True

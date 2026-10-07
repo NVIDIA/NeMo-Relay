@@ -1739,7 +1739,7 @@ class TestLLMStreaming:
             lambda chunk: None,
             lambda: {},
         )
-        with pytest.raises(RuntimeError, match="__anext__"):
+        with pytest.raises(RuntimeError, match="must be an asynchronous iterator."):
             await anext(stream)
 
     async def test_stream_execute_handles_iterator_that_stops_in___anext__(self) -> None:
@@ -1780,7 +1780,7 @@ class TestLLMStreaming:
                 lambda chunk: None,
                 lambda: {},
             )
-            with pytest.raises(RuntimeError, match="__anext__"):
+            with pytest.raises(RuntimeError, match="must be an asynchronous iterator."):
                 await anext(stream)
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_bad_iter")
