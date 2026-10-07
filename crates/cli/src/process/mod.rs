@@ -130,7 +130,14 @@ pub(crate) fn strip_windows_verbatim_prefix(encoded: &[u16]) -> Option<Vec<u16>>
         normalized.extend_from_slice(rest);
         Some(normalized)
     } else {
-        encoded.strip_prefix(PREFIX).map(ToOwned::to_owned)
+        let rest = encoded.strip_prefix(PREFIX)?;
+        // Only drive paths remain valid after removing this prefix. Volume GUIDs and other
+        // device namespaces require it even when their executable exists.
+        matches!(rest, [drive, colon, separator, ..]
+            if u8::try_from(*drive).is_ok_and(|letter| letter.is_ascii_alphabetic())
+                && *colon == b':' as u16
+                && *separator == b'\\' as u16)
+        .then(|| rest.to_vec())
     }
 }
 
