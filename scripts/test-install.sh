@@ -74,7 +74,7 @@ test_interface_validation() {
     assert_failure
     assert_contains "$run_output" "unsupported version"
 
-    run_command env -u HOME NEMO_RELAY_VERSION=0.3.0 sh "$installer"
+    run_command env -u HOME NEMO_RELAY_VERSION=0.9.0 sh "$installer"
     assert_failure
     assert_contains "$run_output" "install directory must not be empty"
     return 0
@@ -90,10 +90,10 @@ test_live_latest_and_pinned_replacement() {
     assert_contains "$latest_version" "nemo-relay "
     assert_no_temporary_files "$live_install_dir"
 
-    run_command env NEMO_RELAY_VERSION=0.3.0 sh "$installer" --install-dir "$live_install_dir"
+    run_command env NEMO_RELAY_VERSION=0.9.0 sh "$installer" --install-dir "$live_install_dir"
     assert_success
     pinned_version=$("${live_install_dir}/nemo-relay" --version)
-    assert_contains "$pinned_version" "nemo-relay 0.3.0"
+    assert_contains "$pinned_version" "nemo-relay 0.9.0"
     assert_no_temporary_files "$live_install_dir"
     return 0
 }
@@ -101,12 +101,12 @@ test_live_latest_and_pinned_replacement() {
 test_live_asset_404_preserves_existing_binary() {
     tests_run=$((tests_run + 1))
 
-    # Depends on the prior test installing nemo-relay 0.3.0 into live_install_dir.
+    # Depends on the prior test installing nemo-relay 0.9.0 into live_install_dir.
     run_command env NEMO_RELAY_VERSION=999.999.999 sh "$installer" --install-dir "$live_install_dir"
     assert_failure
     assert_contains "$run_output" "could not download https://github.com/NVIDIA/NeMo-Relay/releases/download/999.999.999/"
     preserved_version=$("${live_install_dir}/nemo-relay" --version)
-    assert_contains "$preserved_version" "nemo-relay 0.3.0"
+    assert_contains "$preserved_version" "nemo-relay 0.9.0"
     assert_no_temporary_files "$live_install_dir"
     return 0
 }

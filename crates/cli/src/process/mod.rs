@@ -130,7 +130,14 @@ pub(crate) fn strip_windows_verbatim_prefix(encoded: &[u16]) -> Option<Vec<u16>>
         normalized.extend_from_slice(rest);
         Some(normalized)
     } else {
-        encoded.strip_prefix(PREFIX).map(ToOwned::to_owned)
+        let rest = encoded.strip_prefix(PREFIX)?;
+        // Only drive paths remain valid after removing this prefix. Volume GUIDs and other
+        // device namespaces require it even when their executable exists.
+        matches!(rest, [drive, colon, separator, ..]
+            if u8::try_from(*drive).is_ok_and(|letter| letter.is_ascii_alphabetic())
+                && *colon == b':' as u16
+                && *separator == b'\\' as u16)
+        .then(|| rest.to_vec())
     }
 }
 
@@ -232,8 +239,7 @@ fn resolve_candidate(base: &Path, extensions: &[OsString]) -> Option<PathBuf> {
 /// reinterpreting host arguments through a second, hand-built shell command line.
 pub(crate) fn std_command(argv: &[String]) -> Command {
     debug_assert!(!argv.is_empty());
-    let program = resolve_executable(&argv[0]).unwrap_or_else(|| PathBuf::from(&argv[0]));
-    let mut command = Command::new(program);
+    let mut command = Command::new(command_program(&argv[0]));
     command.args(&argv[1..]);
     command
 }
@@ -241,10 +247,35 @@ pub(crate) fn std_command(argv: &[String]) -> Command {
 /// Creates an asynchronous command with the same argv behavior as [`std_command`].
 pub(crate) fn tokio_command(argv: &[String]) -> tokio::process::Command {
     debug_assert!(!argv.is_empty());
-    let program = resolve_executable(&argv[0]).unwrap_or_else(|| PathBuf::from(&argv[0]));
-    let mut command = tokio::process::Command::new(program);
+    let mut command = tokio::process::Command::new(command_program(&argv[0]));
     command.args(&argv[1..]);
     command
+}
+
+fn command_program(program: &str) -> PathBuf {
+    let path = resolve_executable(program).unwrap_or_else(|| PathBuf::from(program));
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        // Rust preserves short absolute paths when constructing a batch command line. Normalize
+        // separators for cmd.exe, including npm shims that call subroutines in their own file.
+        let path = portable_executable_path(path);
+        let encoded = path
+            .as_os_str()
+            .encode_wide()
+            .map(|unit| {
+                if unit == b'/' as u16 {
+                    b'\\' as u16
+                } else {
+                    unit
+                }
+            })
+            .collect::<Vec<_>>();
+        PathBuf::from(OsString::from_wide(&encoded))
+    }
+    #[cfg(not(windows))]
+    path
 }
 
 mod supervision;

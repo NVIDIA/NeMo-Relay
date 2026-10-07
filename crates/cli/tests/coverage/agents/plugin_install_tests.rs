@@ -107,6 +107,14 @@ fn windows_verbatim_relay_paths_are_normalized_for_mcp_config() {
         Some(r"\\server\share\nemo-relay.exe".into())
     );
     assert_eq!(normalize(r"C:\nemo-relay.exe"), None);
+    assert_eq!(
+        normalize(r"\\?\Volume{b75e2c83-0000-0000-0000-000000000000}\path\agent.exe"),
+        None
+    );
+    assert_eq!(
+        normalize(r"\\?\GLOBALROOT\Device\HarddiskVolume1\path\agent.exe"),
+        None
+    );
 }
 
 #[test]

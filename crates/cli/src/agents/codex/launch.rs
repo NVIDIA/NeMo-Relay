@@ -151,6 +151,20 @@ fn option_takes_separate_value(argument: &str) -> bool {
 }
 
 pub(crate) fn session_hook_state_override(generated: &Value) -> Result<String, CliError> {
+    session_hook_state_override_for_platform(generated, cfg!(windows))
+}
+
+pub(crate) fn session_hook_state_override_for_platform(
+    generated: &Value,
+    windows: bool,
+) -> Result<String, CliError> {
+    // Codex discovers session flags under a synthetic absolute path, rooted at C:\ on
+    // Windows and / elsewhere. Trust keys must match that path exactly or exec skips the hooks.
+    let source_path = if windows {
+        r"C:\<session-flags>\config.toml"
+    } else {
+        "/<session-flags>/config.toml"
+    };
     let events = generated
         .get("hooks")
         .and_then(Value::as_object)
@@ -177,9 +191,7 @@ pub(crate) fn session_hook_state_override(generated: &Value) -> Result<String, C
                 })?;
             for (handler_index, handler) in handlers.iter().enumerate() {
                 let hash = command_hook_hash(&event_key, group, handler)?;
-                let key = format!(
-                    "/<session-flags>/config.toml:{event_key}:{group_index}:{handler_index}"
-                );
+                let key = format!("{source_path}:{event_key}:{group_index}:{handler_index}");
                 states.push(format!(
                     "{}={{trusted_hash={},enabled=true}}",
                     toml_string(&key),
