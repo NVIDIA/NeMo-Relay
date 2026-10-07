@@ -926,7 +926,16 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
     let bash_executable = {
         // PATH may resolve bash.exe to the Windows WSL shim instead of Git Bash.
         let git = crate::process::resolve_executable("git").expect("Git for Windows is required");
-        git.parent().unwrap().parent().unwrap().join("bin/bash.exe")
+        git.ancestors()
+            .skip(1)
+            .flat_map(|directory| {
+                [
+                    directory.join("bin/bash.exe"),
+                    directory.join("usr/bin/bash.exe"),
+                ]
+            })
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("Git Bash not found beside {}", git.display()))
     };
     #[cfg(unix)]
     let bash_executable = Path::new("bash");
@@ -952,9 +961,9 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
             if transparent_run {
                 bash.env("NEMO_RELAY_HOOK_TRANSPARENT", "1");
             }
-            let mut child = bash
-                .spawn()
-                .expect("Bash is required to test Claude Code command hooks");
+            let mut child = bash.spawn().unwrap_or_else(|error| {
+                panic!("failed to launch {}: {error}", bash_executable.display())
+            });
             child
                 .stdin
                 .take()
