@@ -211,6 +211,10 @@ The primary `nemo-relay daemon` process reads TOML logging settings only from
 settings to `[daemon.logging]`. Other Relay processes still use `[logging]`.
 CLI options and environment variables still override TOML settings.
 
+Linux musl CLI binaries now require musl 1.2 or newer on the host. Install the
+musl runtime, or use a GNU binary on a glibc-based system.
+The Unix shell installer now selects the GNU binary when it detects glibc.
+
 Managed daemon requests without a credential header, or with an unbound
 credential, now use pass-through instead of returning `401`. A daemon started
 with `--require-worker` still returns `401`. Managed hooks without any
@@ -240,6 +244,21 @@ complete upgrade path.
 
 This release includes the following fixes and behavior changes:
 
+- Python managed LLM and tool calls and intercepts now raise the original
+  callback exception instead of converting it to `RuntimeError`.
+  Streaming callbacks and iterators also preserve `asyncio.CancelledError`.
+  This change does not apply to worker plugins. Refer to
+  [Review Python Exception Handling](/reference/migration-guides#review-python-exception-handling).
+- On Windows, closing a Node.js worker no longer causes a crash when Relay
+  is still finishing a stream in the background. Relay keeps its native runtime
+  loaded until the process exits.
+- Windows Claude Code hooks use Bash-compatible paths. Codex hooks use the
+  correct session trust paths and PowerShell commands that preserve hook input,
+  output, and exit codes. Agent launches also normalize Windows executable
+  paths, including the command scripts installed by npm. Refresh persistent
+  hooks after upgrading.
+  Refer to
+  [Refresh Relay-Managed Coding-Agent Integrations](/reference/migration-guides#refresh-relay-managed-coding-agent-integrations).
 - The OpenClaw plugin keeps its runtime and exporters open during gateway
   shutdown so final tool, LLM, and session hooks can finish. Service stop
   closes remaining sessions and waits for pending events. Hooks after service
@@ -334,8 +353,12 @@ The following list covers unresolved issues from 0.9 and new limitations in
   configuration and a shared loopback gateway. Use `nemo-relay run` when a
   launch must retain project-specific configuration.
 - On Windows, a restrictive host Job Object can limit gateway reuse or prevent
-  persistent bootstrap. Managed worker startup also fails if an enclosing job
-  prevents the worker from leaving or keeps control of it after it leaves.
+  persistent bootstrap. A Job Object controls a group of processes. If it
+  prevents a managed worker from leaving the group, the worker starts inside
+  the group and emits `worker_lifetime_limited`. Closing the host can stop that
+  worker. MCP clients can then need to reactivate the route after the broker's
+  recovery grace period. Refer to
+  [Register the MCP Lifecycle Client](/daemon/reference#register-the-mcp-lifecycle-client).
   During startup, Codex can request `/models` before required MCP servers
   start. Relay retries the request.
 - Codex 0.143 does not expose `SessionEnd`, and Codex multi-agent v2 encrypts
