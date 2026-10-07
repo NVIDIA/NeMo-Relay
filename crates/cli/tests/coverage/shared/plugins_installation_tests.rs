@@ -47,6 +47,46 @@ fn release_asset_selection_detects_format_and_rejects_ambiguity() {
     assert!(select_archive_asset(&release, tag, platform).is_err());
 }
 
+#[test]
+fn linux_release_asset_selection_matches_cli_libc_and_architecture() {
+    let tag = "sample-0.1.0";
+    let mut release = Release {
+        tag_name: tag.into(),
+        is_draft: false,
+        assets: [
+            "linux-x86_64",
+            "linux-arm64",
+            "linux-musl-x86_64",
+            "linux-musl-arm64",
+        ]
+        .into_iter()
+        .map(|platform| ReleaseAsset {
+            name: format!("{tag}-{platform}.tar.gz"),
+        })
+        .collect(),
+    };
+    for (arch, musl, expected) in [
+        ("x86_64", false, "sample-0.1.0-linux-x86_64.tar.gz"),
+        ("aarch64", false, "sample-0.1.0-linux-arm64.tar.gz"),
+        ("x86_64", true, "sample-0.1.0-linux-musl-x86_64.tar.gz"),
+        ("aarch64", true, "sample-0.1.0-linux-musl-arm64.tar.gz"),
+    ] {
+        let platform = platform_for("linux", arch, musl).unwrap();
+        assert_eq!(
+            select_archive_asset(&release, tag, platform).unwrap(),
+            expected
+        );
+    }
+    release
+        .assets
+        .retain(|asset| !asset.name.contains("-musl-"));
+    for arch in ["x86_64", "aarch64"] {
+        let platform = platform_for("linux", arch, true).unwrap();
+        assert!(select_archive_asset(&release, tag, platform).is_err());
+    }
+    assert!(platform_for("linux", "riscv64", true).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn global_bundle_permissions_expose_final_bundle_but_keep_staging_private() {
