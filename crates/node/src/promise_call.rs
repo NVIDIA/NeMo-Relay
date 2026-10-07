@@ -482,6 +482,7 @@ fn build_completion_unknowns(
         completion.send_error(FlowError::CallbackException {
             message,
             exception_type,
+            source: None,
         });
         ctx.env.get_undefined()
     })?;

@@ -74,6 +74,7 @@ fn test_status_from_error_maps_variants_and_sets_message() {
             FlowError::CallbackException {
                 message: "callback boom".into(),
                 exception_type: "ValueError".into(),
+                source: None,
             },
             NemoRelayStatus::Internal,
         ),

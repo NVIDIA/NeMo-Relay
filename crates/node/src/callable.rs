@@ -261,6 +261,7 @@ pub(crate) fn unwrap_middleware_result(value: Json, error_prefix: &str) -> Resul
         Err(FlowError::CallbackException {
             message: format!("{error_prefix}: {}", result.error),
             exception_type: result.exception_type,
+            source: None,
         })
     }
 }

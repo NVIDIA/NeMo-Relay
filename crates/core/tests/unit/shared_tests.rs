@@ -188,6 +188,7 @@ fn test_metadata_with_otel_error_adds_structured_error_type() {
         &FlowError::CallbackException {
             message: "ValueError: boom".into(),
             exception_type: "ValueError".into(),
+            source: None,
         },
     )
     .unwrap();
@@ -199,6 +200,7 @@ fn test_metadata_with_otel_error_adds_structured_error_type() {
         &FlowError::CallbackException {
             message: "ValueError: boom".into(),
             exception_type: "ValueError".into(),
+            source: None,
         },
     )
     .unwrap();
