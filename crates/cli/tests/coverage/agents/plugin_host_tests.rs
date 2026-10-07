@@ -3587,8 +3587,9 @@ fn claude_gateway_url_change_preserves_the_pre_relay_backup() {
 #[test]
 fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
     let relay = std::path::PathBuf::from(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe");
-    let generation =
-        std::path::PathBuf::from(r"C:\Program Files\NeMo 100%\plugin\.nemo-relay-generation");
+    let generation = std::path::PathBuf::from(
+        r"C:\Program Files\NeMo 100%\plugin ' ‘smart’ ‚; exit 99; ‛\.nemo-relay-generation",
+    );
     assert_eq!(
         shell_quote_arg_for_platform(relay.to_str().unwrap(), true),
         r#""C:\Program Files\NeMo 100^%\bin\nemo-relay.exe""#
@@ -3625,8 +3626,6 @@ fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
 #[cfg(windows)]
 #[test]
 fn generated_windows_hook_command_executes_exact_arguments() {
-    use std::os::windows::process::CommandExt;
-
     let temp = tempfile::tempdir().unwrap();
     let bin = temp.path().join("Relay & %USERPROFILE% !^ Tools");
     std::fs::create_dir(&bin).unwrap();
@@ -3634,54 +3633,55 @@ fn generated_windows_hook_command_executes_exact_arguments() {
     compile_windows_hook_test_relay(&relay);
     let marker = temp.path().join("hook-ran.txt");
     let input_marker = temp.path().join("hook-input.txt");
-    let generation = temp.path().join("Generation & %USERPROFILE%");
+    let generation = temp
+        .path()
+        .join("Generation & %USERPROFILE% !^ ' ‘smart’ ‚; exit 99; ‛ 中文")
+        .join(".nemo-relay-generation");
     let command = codex_plugin_hook_command(&relay, &generation, "test-generation")
         .unwrap()
         .for_event("PreToolUse")
         .to_owned();
-    let mut child = std::process::Command::new("cmd.exe")
-        .arg("/C")
-        .raw_arg(format!(" {command}"))
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .env("NEMO_RELAY_HOOK_MARKER", &marker)
-        .env("NEMO_RELAY_HOOK_INPUT_MARKER", &input_marker)
-        .env(
-            "NEMO_RELAY_HOOK_CONFIG",
-            generation.with_file_name(".nemo-relay-hook-config.json"),
-        )
-        .env("NEMO_RELAY_HOOK_EMIT_OUTPUT", "1")
-        .spawn()
-        .unwrap();
-    use std::io::Write;
-    child.stdin.take().unwrap().write_all(b"ping\n").unwrap();
-    let output = child.wait_with_output().unwrap();
+    for shell in windows_codex_hook_shells() {
+        let mut child = windows_codex_hook_runner(&command, shell)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env("NEMO_RELAY_HOOK_MARKER", &marker)
+            .env("NEMO_RELAY_HOOK_INPUT_MARKER", &input_marker)
+            .env(
+                "NEMO_RELAY_HOOK_CONFIG",
+                generation.with_file_name(".nemo-relay-hook-config.json"),
+            )
+            .env("NEMO_RELAY_HOOK_EMIT_OUTPUT", "1")
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        child.stdin.take().unwrap().write_all(b"ping\n").unwrap();
+        let output = child.wait_with_output().unwrap();
 
-    assert!(
-        output.status.success(),
-        "command: {command}\nstatus: {:?}\nstdout: {}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "ok");
-    assert_eq!(std::fs::read(input_marker).unwrap(), b"ping\n");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        "hook-stdout"
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr).trim(),
-        "hook-stderr"
-    );
+        assert!(
+            output.status.success(),
+            "command: {command}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "ok");
+        assert_eq!(std::fs::read(&input_marker).unwrap(), b"ping\n");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "hook-stdout"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).trim(),
+            "hook-stderr"
+        );
+    }
 }
 
 #[cfg(windows)]
 #[test]
 fn generated_windows_hook_command_propagates_the_relay_exit_code() {
-    use std::os::windows::process::CommandExt;
-
     let temp = tempfile::tempdir().unwrap();
     let relay = temp.path().join("relay failure.exe");
     compile_windows_hook_test_relay(&relay);
@@ -3691,18 +3691,64 @@ fn generated_windows_hook_command_propagates_the_relay_exit_code() {
         .for_event("PreToolUse")
         .to_owned();
 
-    let status = std::process::Command::new("cmd.exe")
-        .arg("/C")
-        .raw_arg(format!(" {command}"))
-        .env(
-            "NEMO_RELAY_HOOK_CONFIG",
-            generation.with_file_name(".nemo-relay-hook-config.json"),
-        )
-        .env("NEMO_RELAY_HOOK_EXIT_CODE", "23")
-        .status()
-        .unwrap();
+    for shell in windows_codex_hook_shells() {
+        for code in [2, 23] {
+            let status = windows_codex_hook_runner(&command, shell)
+                .env(
+                    "NEMO_RELAY_HOOK_CONFIG",
+                    generation.with_file_name(".nemo-relay-hook-config.json"),
+                )
+                .env("NEMO_RELAY_HOOK_EXIT_CODE", code.to_string())
+                .status()
+                .unwrap();
 
-    assert_eq!(status.code(), Some(23), "{command}");
+            assert_eq!(status.code(), Some(code), "{shell}: {command}");
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn generated_windows_hook_command_fails_when_relay_is_missing() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = temp.path().join("missing relay.exe");
+    let generation = temp.path().join("generation");
+    let command = codex_plugin_hook_command(&relay, &generation, "test-generation")
+        .unwrap()
+        .for_event("PreToolUse")
+        .to_owned();
+    for shell in windows_codex_hook_shells() {
+        let output = windows_codex_hook_runner(&command, shell).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{shell}: {command}");
+        assert!(
+            !output.stderr.is_empty(),
+            "missing executable must report an error"
+        );
+    }
+}
+
+#[cfg(windows)]
+/// Always exercise Windows PowerShell; include PowerShell 7 when installed.
+fn windows_codex_hook_shells() -> Vec<&'static str> {
+    let mut shells = vec!["powershell.exe"];
+    match windows_codex_hook_runner("exit 0", "pwsh.exe").status() {
+        Ok(status) => {
+            assert!(status.success(), "PowerShell 7 failed to start: {status}");
+            shells.push("pwsh.exe");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("failed to probe PowerShell 7: {error}"),
+    }
+    shells
+}
+
+#[cfg(windows)]
+fn windows_codex_hook_runner(command: &str, shell: &str) -> std::process::Command {
+    let mut runner = std::process::Command::new(shell);
+    runner
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(command);
+    runner
 }
 
 #[cfg(windows)]
