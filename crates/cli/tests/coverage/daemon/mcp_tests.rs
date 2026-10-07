@@ -532,8 +532,24 @@ fn detached_windows_worker_launcher_fixture() {
         .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_WORKER", "1");
     let stderr = std::fs::File::create(path.with_extension("stderr")).unwrap();
     if std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED").is_some() {
-        assert!(crate::process::detached::spawn_worker_detached(&command, &stderr).is_err());
-        std::fs::write(path, "rejected").unwrap();
+        let (mut child, _bootstrap) =
+            crate::process::detached::spawn_worker_detached(&command, &stderr).unwrap();
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // Verify confinement without changing or bypassing the enclosing job's policy.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, child.id()) };
+        assert!(!process.is_null());
+        let mut in_job = 0;
+        let queried = unsafe { IsProcessInJob(process, std::ptr::null_mut(), &mut in_job) };
+        unsafe { CloseHandle(process) };
+        child.start_kill().unwrap();
+        child.wait().unwrap();
+        assert_ne!(queried, 0);
+        assert_ne!(in_job, 0, "worker escaped the restrictive parent job");
+        std::fs::write(path, "host_scoped").unwrap();
         return;
     }
     let (child, _bootstrap) =
@@ -635,7 +651,7 @@ async fn restrictive_external_job_fixture() {
 
 #[cfg(windows)]
 #[tokio::test]
-async fn worker_cannot_escape_relay_job_into_restrictive_external_parent_job() {
+async fn worker_starts_without_escaping_restrictive_external_parent_job() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("result");
     let output = tokio::time::timeout(
@@ -656,7 +672,7 @@ async fn worker_cannot_escape_relay_job_into_restrictive_external_parent_job() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(std::fs::read_to_string(path).unwrap(), "rejected");
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "host_scoped");
 }
 
 #[test]

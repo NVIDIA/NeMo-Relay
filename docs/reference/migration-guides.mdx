@@ -370,10 +370,10 @@ Retry delays increase up to 60 seconds. Active requests and streams keep
 their original destination during route changes. Refer to
 [Daemon Operations](/daemon/operations).
 
-On Windows, make sure the enclosing host Job Object lets managed workers
-leave. Startup now rejects a worker that cannot leave that job. It also rejects
-a worker still held by an outer job when jobs are nested. Adjust the host's job
-policy or launch the managed client outside the restrictive job. For process
+On Windows, managed workers request breakaway when the host Job Object permits
+it. Otherwise they start inside the host job and emit `worker_lifetime_limited`.
+This respects the host's job policy. Closing that host can stop the worker and
+require route reactivation after the broker's recovery grace period. For process
 ownership and log destinations, refer to
 [Register the MCP Lifecycle Client](/daemon/reference#register-the-mcp-lifecycle-client).
 
