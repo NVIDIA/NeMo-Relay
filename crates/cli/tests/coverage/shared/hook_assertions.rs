@@ -4,6 +4,24 @@
 use serde_json::Value;
 
 pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> {
+    if let Some(encoded) =
+        command.strip_prefix("powershell.exe -NoProfile -NonInteractive -EncodedCommand ")
+    {
+        use base64::Engine;
+        let encoded = encoded.strip_suffix("; exit $LASTEXITCODE")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .ok()?;
+        let units = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        let script = String::from_utf16(&units).ok()?;
+        let arguments = script
+            .strip_prefix("$ErrorActionPreference = 'Stop'; & ")?
+            .strip_suffix("; exit $LASTEXITCODE")?;
+        return decode_powershell_literals(arguments);
+    }
     let command = command
         .strip_prefix('"')
         .and_then(|command| command.strip_suffix('"'))
@@ -14,6 +32,35 @@ pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> 
             .map(|argument| argument.replace("^%", "%"))
             .collect()
     })
+}
+
+/// Decode the single-quoted, space-separated literals generated for PowerShell.
+fn decode_powershell_literals(arguments: &str) -> Option<Vec<String>> {
+    let mut chars = arguments.chars().peekable();
+    let mut decoded = Vec::new();
+    while chars.next() == Some('\'') {
+        let mut argument = String::new();
+        loop {
+            let ch = chars.next()?;
+            if matches!(ch, '\'' | '‘' | '’' | '‚' | '‛') {
+                if chars.peek() == Some(&ch) {
+                    chars.next();
+                } else if ch == '\'' {
+                    break;
+                } else {
+                    return None;
+                }
+            }
+            argument.push(ch);
+        }
+        decoded.push(argument);
+        match chars.next() {
+            None => return Some(decoded),
+            Some(' ') => {}
+            _ => return None,
+        }
+    }
+    None
 }
 
 pub(crate) fn command_has_arguments(command: &str, expected: &[&str]) -> bool {

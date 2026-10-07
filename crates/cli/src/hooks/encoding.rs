@@ -236,6 +236,35 @@ fn render_hook_command(
             .collect::<Vec<_>>()
             .join(" ");
     }
+    if windows && agent.hooks_use_powershell() {
+        use base64::Engine;
+        // Codex uses PowerShell for Windows session hooks. Encode literal arguments,
+        // then preserve the native exit code in the outer PowerShell hook runner too.
+        let arguments = std::iter::once(relay_for_command(relay, windows).display().to_string())
+            .chain(arguments.iter().cloned())
+            .map(|argument| {
+                format!(
+                    "'{}'",
+                    argument
+                        .replace('\'', "''")
+                        .replace('‘', "‘‘")
+                        .replace('’', "’’")
+                        .replace('‚', "‚‚")
+                        .replace('‛', "‛‛")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let script = format!("$ErrorActionPreference = 'Stop'; & {arguments}; exit $LASTEXITCODE");
+        let bytes = script
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        return format!(
+            "powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}; exit $LASTEXITCODE"
+        );
+    }
     let relay = relay_for_command(relay, windows);
     let command = std::iter::once(relay.display().to_string())
         .chain(arguments.iter().cloned())

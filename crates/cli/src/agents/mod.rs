@@ -136,6 +136,11 @@ impl CodingAgent {
         matches!(self, Self::ClaudeCode)
     }
 
+    /// Codex uses the session shell, which defaults to PowerShell on Windows.
+    pub(crate) const fn hooks_use_powershell(self) -> bool {
+        matches!(self, Self::Codex)
+    }
+
     pub(crate) fn minimum_version(self) -> Version {
         let (major, minor, patch) = self.descriptor().minimum_version;
         Version::new(major, minor, patch)
