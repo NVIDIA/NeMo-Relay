@@ -10,11 +10,28 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
+use nemo_relay::error::FlowError;
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::types::{
     PyByteArray, PyBytes, PyDict, PyFrozenSet, PyMapping, PySequence, PySet, PyString,
 };
 use pyo3::{intern, prelude::*};
 use serde_json::Value as Json;
+
+/// Convert a [`FlowError`] into Python exception the caller sees.
+///
+/// A callback exception is re-raised as the original object, all others as `RuntimeError`.
+pub(crate) fn flow_error_to_py_err(error: FlowError) -> PyErr {
+    if let FlowError::CallbackException {
+        source: Some(source),
+        ..
+    } = &error
+        && let Some(original) = source.downcast_ref::<PyErr>()
+    {
+        return Python::attach(|py| original.clone_ref(py));
+    }
+    PyRuntimeError::new_err(error.to_string())
+}
 
 fn validate_acyclic(
     value: &Bound<'_, PyAny>,

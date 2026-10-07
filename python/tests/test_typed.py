@@ -301,7 +301,7 @@ class TestTypedToolExecute:
             return SearchResult(items=[], total=0)
 
         for producer in (sync_legacy, async_legacy):
-            with pytest.raises(RuntimeError, match="typed tool callback must return ToolExecutionResult"):
+            with pytest.raises(TypeError, match="typed tool callback must return ToolExecutionResult"):
                 await typed.tool_execute(
                     "typed_legacy_result",
                     SearchArgs(query="hello"),

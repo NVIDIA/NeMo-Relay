@@ -1379,7 +1379,7 @@ def test_tool_call_propagates_ordinary_errors(
         """Fail the async tool with the same application error."""
         return handler(request)
 
-    with pytest.raises(RuntimeError, match="internal error: ValueError: ordinary tool failure"):
+    with pytest.raises(ValueError, match="^ordinary tool failure$"):
         if use_async:
             asyncio.run(nemo_relay_middleware.awrap_tool_call(tool_call_request, async_handler))
         else:

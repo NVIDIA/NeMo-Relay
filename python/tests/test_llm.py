@@ -709,7 +709,7 @@ class TestLLMIntercepts:
             lambda name, request, annotated: raise_runtime_error("boom"),
         )
         try:
-            with pytest.raises(RuntimeError, match="callable failed"):
+            with pytest.raises(RuntimeError, match="^boom$"):
                 llm.request_intercepts("raise_llm", make_request())
         finally:
             intercepts.deregister_llm_request("py_llm_req_raise")
@@ -1838,7 +1838,7 @@ class TestLLMStreaming:
             failing_middleware,
         )
         try:
-            with pytest.raises(RuntimeError, match="stream intercept boom"):
+            with pytest.raises(ValueError, match="stream intercept boom"):
                 await llm.stream_execute(
                     "stream_intercept_failure_llm",
                     make_request(),
@@ -1894,7 +1894,7 @@ class TestLLMStreaming:
             raise TypeError("async stream callback boom")
 
         try:
-            with pytest.raises(RuntimeError, match="stream callback boom"):
+            with pytest.raises(ValueError, match="stream callback boom"):
                 await llm.stream_execute(
                     "stream_callback_fail_llm",
                     make_request(),
@@ -1902,7 +1902,7 @@ class TestLLMStreaming:
                     lambda chunk: None,
                     lambda: {},
                 )
-            with pytest.raises(RuntimeError, match="async stream callback boom"):
+            with pytest.raises(TypeError, match="async stream callback boom"):
                 await llm.stream_execute(
                     "async_stream_callback_fail_llm",
                     make_request(),

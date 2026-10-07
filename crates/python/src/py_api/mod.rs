@@ -52,7 +52,9 @@ use pyo3::types::PySet;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
-use crate::convert::{json_to_py, opt_py_to_json, opt_py_to_timestamp, py_to_json};
+use crate::convert::{
+    flow_error_to_py_err, json_to_py, opt_py_to_json, opt_py_to_timestamp, py_to_json,
+};
 use crate::py_callable;
 use crate::py_types::{
     PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyGeminiGenerateContentCodec,
@@ -64,17 +66,12 @@ use crate::py_types::{
 
 pub(crate) type RustJsonStream = LlmJsonStream;
 
-/// Convert an [`FlowError`] into a Python `RuntimeError`.
-fn to_py_err(e: FlowError) -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-}
-
 fn metric_to_py_err(error: FlowError) -> PyErr {
     match error {
         FlowError::InvalidArgument(_) => {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string())
         }
-        other => to_py_err(other),
+        other => flow_error_to_py_err(other),
     }
 }
 
@@ -83,7 +80,7 @@ fn py_collect_resource_metrics(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     safe_future_into_py(py, async {
         let snapshot = core_resource_metrics_api::collect()
             .await
-            .map_err(to_py_err)?;
+            .map_err(flow_error_to_py_err)?;
         let value = serde_json::to_value(snapshot)
             .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
         Python::attach(|py| json_to_py(py, &value))
@@ -126,12 +123,13 @@ fn register_conditional_middleware_guardrail(
             })
         }),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 #[pyfunction]
 fn deregister_conditional_middleware_guardrail(name: &str) -> PyResult<bool> {
-    core_registry_api::deregister_conditional_middleware_guardrail(name).map_err(to_py_err)
+    core_registry_api::deregister_conditional_middleware_guardrail(name)
+        .map_err(flow_error_to_py_err)
 }
 
 #[pyfunction]
@@ -148,8 +146,8 @@ fn list_runtime_registrations(
                 .collect::<PyResult<BTreeSet<_>>>()
         })
         .transpose()?;
-    let registrations =
-        core_registry_api::list_runtime_registrations(kinds.as_ref()).map_err(to_py_err)?;
+    let registrations = core_registry_api::list_runtime_registrations(kinds.as_ref())
+        .map_err(flow_error_to_py_err)?;
     json_to_py(
         py,
         &serde_json::to_value(registrations)
@@ -160,7 +158,7 @@ fn list_runtime_registrations(
 #[pyfunction(name = "_shutdown_default_logging")]
 fn py_shutdown_default_logging(py: Python<'_>) -> PyResult<()> {
     py.detach(nemo_relay::logging::shutdown_default_logging)
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 #[pyfunction]
@@ -187,7 +185,7 @@ fn log(
     } else {
         format!("nemo_relay.python.{target}")
     };
-    nemo_relay::logging::emit_str(&level, &target, &message, fields).map_err(to_py_err)
+    nemo_relay::logging::emit_str(&level, &target, &message, fields).map_err(flow_error_to_py_err)
 }
 
 fn python_event_loop_running(py: Python<'_>) -> PyResult<bool> {
@@ -346,7 +344,7 @@ where
                 let future = with_task_nested_publication_buffer(publication_buffer, future);
                 block_on_sync_middleware(future)
             })
-            .map_err(to_py_err)?;
+            .map_err(flow_error_to_py_err)?;
         return convert(py, result).map(|value| value.into_bound(py));
     }
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -358,7 +356,7 @@ where
             ),
         )
         .await
-        .map_err(to_py_err)?;
+        .map_err(flow_error_to_py_err)?;
         Python::attach(|py| convert(py, result))
     })
 }
@@ -496,7 +494,7 @@ pub fn create_scope_stack() -> PyScopeStack {
 pub fn capture_propagation_context() -> PyResult<PyPropagationContext> {
     capture_propagation_context_handle()
         .map(|inner| PyPropagationContext { inner })
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Capture a context without a propagation root UUID.
@@ -504,7 +502,7 @@ pub fn capture_propagation_context() -> PyResult<PyPropagationContext> {
 pub fn capture_rootless_propagation_context() -> PyResult<PyPropagationContext> {
     capture_rootless_propagation_context_handle()
         .map(|inner| PyPropagationContext { inner })
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Capture a context with an application-supplied stable session root UUID.
@@ -518,13 +516,13 @@ pub fn capture_propagation_context_with_root(
         .map_err(|error| PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string()))?;
     capture_propagation_context_with_root_handle(root_uuid)
         .map(|inner| PyPropagationContext { inner })
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Capture the current Relay context as a W3C ``traceparent`` value.
 #[pyfunction]
 pub fn capture_traceparent() -> PyResult<String> {
-    capture_traceparent_handle().map_err(to_py_err)
+    capture_traceparent_handle().map_err(flow_error_to_py_err)
 }
 
 /// Create an isolated scope stack seeded from a received propagation context.
@@ -537,7 +535,7 @@ pub fn create_scope_stack_from_propagation(
             inner,
             publication_buffer: None,
         })
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Bind a ``ScopeStack`` to the current thread's thread-local storage.
@@ -625,7 +623,7 @@ pub fn py_scope_stack_active() -> bool {
 fn get_handle() -> PyResult<PyScopeHandle> {
     core_scope_api::get_handle()
         .map(PyScopeHandle::from)
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Push a new child scope onto the scope stack.
@@ -695,7 +693,7 @@ fn push_scope(
         )
     })
     .map(PyScopeHandle::from)
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a scope from the stack and emit an ``End`` event.
@@ -735,7 +733,7 @@ fn pop_scope(
                 .build(),
         )
     })
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Emit a ``Mark`` event under the current or specified scope.
@@ -801,7 +799,7 @@ fn event(
                 .build(),
         )
     })
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Emit one validated metric mark under the current or specified scope.
@@ -918,7 +916,7 @@ fn tool_call(
         )
     })
     .map(PyToolHandle::from)
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// End a tool call — records the result and emits an ``End`` event.
@@ -970,7 +968,7 @@ fn tool_call_end(
                 .build(),
         )
     })
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Execute a tool call through the full middleware pipeline.
@@ -1053,7 +1051,7 @@ fn tool_call_execute<'py>(
                             .build(),
                     )
                     .await
-                    .map_err(to_py_err)?;
+                    .map_err(flow_error_to_py_err)?;
                     Python::attach(|py| {
                         Py::new(py, PyToolExecutionResult::from_inner(py, result)?)
                             .map(Py::into_any)
@@ -1136,7 +1134,7 @@ fn llm_call(
         .build();
     with_python_publication_context(|| core_llm_api::llm_call(params))
         .map(PyLLMHandle::from)
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 /// End an LLM call — records the response and emits an ``End`` event.
@@ -1201,7 +1199,7 @@ fn llm_call_end(
                 .build(),
         )
     })
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Execute an LLM call through the full middleware pipeline.
@@ -1296,7 +1294,7 @@ fn llm_call_execute<'py>(
                     // point does not construct its large state on the caller's stack.
                     let result = Box::pin(core_llm_api::llm_call_execute(params))
                         .await
-                        .map_err(to_py_err)?;
+                        .map_err(flow_error_to_py_err)?;
                     Python::attach(|py| json_to_py(py, &result))
                 }),
             ),
@@ -1411,7 +1409,7 @@ fn llm_stream_call_execute<'py>(
                     // Construct and box it here when Tokio polls the bridge instead.
                     let rust_stream = Box::pin(core_llm_api::llm_stream_call_execute(params))
                         .await
-                        .map_err(to_py_err)?;
+                        .map_err(flow_error_to_py_err)?;
 
                     // Spawn a tokio task that drains the Rust stream into an mpsc channel
                     let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
@@ -1452,12 +1450,12 @@ fn register_event_metadata_injector(
         priority,
         py_callable::wrap_py_event_metadata_injector_fn(injector),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 #[pyfunction]
 fn deregister_event_metadata_injector(name: &str) -> PyResult<bool> {
-    core_registry_api::deregister_event_metadata_injector(name).map_err(to_py_err)
+    core_registry_api::deregister_event_metadata_injector(name).map_err(flow_error_to_py_err)
 }
 macro_rules! py_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
@@ -1468,12 +1466,12 @@ macro_rules! py_event_guardrail_api {
                 priority,
                 py_callable::wrap_py_event_sanitize_fn(guardrail),
             )
-            .map_err(to_py_err)
+            .map_err(flow_error_to_py_err)
         }
 
         #[pyfunction]
         fn $deregister_name(name: &str) -> PyResult<bool> {
-            $core_deregister(name).map_err(to_py_err)
+            $core_deregister(name).map_err(flow_error_to_py_err)
         }
     };
 }
@@ -1504,13 +1502,13 @@ macro_rules! py_guardrail_tool_api {
         $(#[$reg_meta])*
         #[pyfunction]
         fn $register_name(name: &str, priority: i32, guardrail: Py<PyAny>) -> PyResult<()> {
-            $core_register(name, priority, $wrapper(guardrail)).map_err(to_py_err)
+            $core_register(name, priority, $wrapper(guardrail)).map_err(flow_error_to_py_err)
         }
 
         /// Remove the previously registered guardrail by name.
         #[pyfunction]
         fn $deregister_name(name: &str) -> PyResult<bool> {
-            $core_deregister(name).map_err(to_py_err)
+            $core_deregister(name).map_err(flow_error_to_py_err)
         }
     };
 }
@@ -1552,13 +1550,14 @@ fn register_tool_conditional_execution_guardrail(
         priority,
         py_callable::wrap_py_tool_conditional_fn(guardrail),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered tool conditional-execution guardrail.
 #[pyfunction]
 fn deregister_tool_conditional_execution_guardrail(name: &str) -> PyResult<bool> {
-    core_registry_api::deregister_tool_conditional_execution_guardrail(name).map_err(to_py_err)
+    core_registry_api::deregister_tool_conditional_execution_guardrail(name)
+        .map_err(flow_error_to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1577,13 +1576,13 @@ macro_rules! py_intercept_tool_api {
             break_chain: bool,
             callable: Py<PyAny>,
         ) -> PyResult<()> {
-            $core_register(name, priority, break_chain, $wrapper(callable)).map_err(to_py_err)
+            $core_register(name, priority, break_chain, $wrapper(callable)).map_err(flow_error_to_py_err)
         }
 
         /// Remove the previously registered intercept by name.
         #[pyfunction]
         fn $deregister_name(name: &str) -> PyResult<bool> {
-            $core_deregister(name).map_err(to_py_err)
+            $core_deregister(name).map_err(flow_error_to_py_err)
         }
     };
 }
@@ -1616,13 +1615,13 @@ fn register_tool_execution_intercept(
         priority,
         py_callable::wrap_py_tool_exec_intercept_fn(callable),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered tool execution intercept.
 #[pyfunction]
 fn deregister_tool_execution_intercept(name: &str) -> PyResult<bool> {
-    core_registry_api::deregister_tool_execution_intercept(name).map_err(to_py_err)
+    core_registry_api::deregister_tool_execution_intercept(name).map_err(flow_error_to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1644,13 +1643,13 @@ fn register_llm_sanitize_request_guardrail(
         priority,
         py_callable::wrap_py_llm_sanitize_request_fn(guardrail)?,
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered LLM sanitize-request guardrail.
 #[pyfunction]
 fn deregister_llm_sanitize_request_guardrail(name: &str) -> PyResult<bool> {
-    core_registry_api::deregister_llm_sanitize_request_guardrail(name).map_err(to_py_err)
+    core_registry_api::deregister_llm_sanitize_request_guardrail(name).map_err(flow_error_to_py_err)
 }
 
 /// Register an LLM sanitize-response guardrail.
@@ -1668,13 +1667,14 @@ fn register_llm_sanitize_response_guardrail(
         priority,
         py_callable::wrap_py_llm_sanitize_response_fn(guardrail)?,
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered LLM sanitize-response guardrail.
 #[pyfunction]
 fn deregister_llm_sanitize_response_guardrail(name: &str) -> PyResult<bool> {
-    core_registry_api::deregister_llm_sanitize_response_guardrail(name).map_err(to_py_err)
+    core_registry_api::deregister_llm_sanitize_response_guardrail(name)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Register an LLM conditional-execution guardrail.
@@ -1692,13 +1692,14 @@ fn register_llm_conditional_execution_guardrail(
         priority,
         py_callable::wrap_py_llm_conditional_fn(guardrail),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered LLM conditional-execution guardrail.
 #[pyfunction]
 fn deregister_llm_conditional_execution_guardrail(name: &str) -> PyResult<bool> {
-    core_registry_api::deregister_llm_conditional_execution_guardrail(name).map_err(to_py_err)
+    core_registry_api::deregister_llm_conditional_execution_guardrail(name)
+        .map_err(flow_error_to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1723,13 +1724,13 @@ fn register_llm_request_intercept(
         break_chain,
         py_callable::wrap_py_llm_request_intercept_fn(callable),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered LLM request intercept.
 #[pyfunction]
 fn deregister_llm_request_intercept(name: &str) -> PyResult<bool> {
-    core_registry_api::deregister_llm_request_intercept(name).map_err(to_py_err)
+    core_registry_api::deregister_llm_request_intercept(name).map_err(flow_error_to_py_err)
 }
 
 /// Register an LLM execution intercept that can replace the LLM call.
@@ -1748,13 +1749,13 @@ fn register_llm_execution_intercept(
         priority,
         py_callable::wrap_py_llm_exec_intercept_fn(callable),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered LLM execution intercept.
 #[pyfunction]
 fn deregister_llm_execution_intercept(name: &str) -> PyResult<bool> {
-    core_registry_api::deregister_llm_execution_intercept(name).map_err(to_py_err)
+    core_registry_api::deregister_llm_execution_intercept(name).map_err(flow_error_to_py_err)
 }
 
 /// Register an LLM stream-execution intercept that can replace the streaming LLM call.
@@ -1774,13 +1775,13 @@ fn register_llm_stream_execution_intercept(
         priority,
         py_callable::wrap_py_llm_stream_exec_intercept_fn(callable),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered LLM stream-execution intercept.
 #[pyfunction]
 fn deregister_llm_stream_execution_intercept(name: &str) -> PyResult<bool> {
-    core_registry_api::deregister_llm_stream_execution_intercept(name).map_err(to_py_err)
+    core_registry_api::deregister_llm_stream_execution_intercept(name).map_err(flow_error_to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1897,7 +1898,7 @@ fn llm_conditional_execution<'py>(
 #[pyfunction]
 fn register_subscriber(name: &str, callback: Py<PyAny>) -> PyResult<()> {
     core_subscriber_api::register_subscriber(name, py_callable::wrap_py_event_subscriber(callback))
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered event subscriber.
@@ -1905,7 +1906,7 @@ fn register_subscriber(name: &str, callback: Py<PyAny>) -> PyResult<()> {
 /// Returns ``True`` if a subscriber with that name was found and removed.
 #[pyfunction]
 fn deregister_subscriber(name: &str) -> PyResult<bool> {
-    core_subscriber_api::deregister_subscriber(name).map_err(to_py_err)
+    core_subscriber_api::deregister_subscriber(name).map_err(flow_error_to_py_err)
 }
 
 /// Wait for queued subscriber callbacks and their transitive native publications.
@@ -1917,7 +1918,7 @@ fn deregister_subscriber(name: &str) -> PyResult<bool> {
 #[pyfunction]
 fn flush_subscribers(py: Python<'_>) -> PyResult<()> {
     py.detach(core_subscriber_api::flush_subscribers)
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Lock dispatcher resources before a process forks.
@@ -1962,13 +1963,14 @@ fn scope_register_event_metadata_injector(
         priority,
         py_callable::wrap_py_event_metadata_injector_fn(injector),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 #[pyfunction]
 fn scope_deregister_event_metadata_injector(scope_uuid: &str, name: &str) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core_registry_api::scope_deregister_event_metadata_injector(&uuid, name).map_err(to_py_err)
+    core_registry_api::scope_deregister_event_metadata_injector(&uuid, name)
+        .map_err(flow_error_to_py_err)
 }
 macro_rules! py_scope_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
@@ -1986,13 +1988,13 @@ macro_rules! py_scope_event_guardrail_api {
                 priority,
                 py_callable::wrap_py_event_sanitize_fn(guardrail),
             )
-            .map_err(to_py_err)
+            .map_err(flow_error_to_py_err)
         }
 
         #[pyfunction]
         fn $deregister_name(scope_uuid: &str, name: &str) -> PyResult<bool> {
             let uuid = parse_uuid(scope_uuid)?;
-            $core_deregister(&uuid, name).map_err(to_py_err)
+            $core_deregister(&uuid, name).map_err(flow_error_to_py_err)
         }
     };
 }
@@ -2024,14 +2026,14 @@ macro_rules! py_scope_local_guardrail_tool_api {
         #[pyfunction]
         fn $register_name(scope_uuid: &str, name: &str, priority: i32, guardrail: Py<PyAny>) -> PyResult<()> {
             let uuid = parse_uuid(scope_uuid)?;
-            $core_register(&uuid, name, priority, $wrapper(guardrail)).map_err(to_py_err)
+            $core_register(&uuid, name, priority, $wrapper(guardrail)).map_err(flow_error_to_py_err)
         }
 
         /// Remove the previously registered scope-local guardrail by name.
         #[pyfunction]
         fn $deregister_name(scope_uuid: &str, name: &str) -> PyResult<bool> {
             let uuid = parse_uuid(scope_uuid)?;
-            $core_deregister(&uuid, name).map_err(to_py_err)
+            $core_deregister(&uuid, name).map_err(flow_error_to_py_err)
         }
     };
 }
@@ -2069,7 +2071,7 @@ fn scope_register_tool_conditional_execution_guardrail(
         priority,
         py_callable::wrap_py_tool_conditional_fn(guardrail),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered scope-local tool conditional-execution guardrail.
@@ -2080,7 +2082,7 @@ fn scope_deregister_tool_conditional_execution_guardrail(
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
     core_registry_api::scope_deregister_tool_conditional_execution_guardrail(&uuid, name)
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -2101,14 +2103,14 @@ macro_rules! py_scope_local_intercept_tool_api {
             callable: Py<PyAny>,
         ) -> PyResult<()> {
             let uuid = parse_uuid(scope_uuid)?;
-            $core_register(&uuid, name, priority, break_chain, $wrapper(callable)).map_err(to_py_err)
+            $core_register(&uuid, name, priority, break_chain, $wrapper(callable)).map_err(flow_error_to_py_err)
         }
 
         /// Remove the previously registered scope-local intercept by name.
         #[pyfunction]
         fn $deregister_name(scope_uuid: &str, name: &str) -> PyResult<bool> {
             let uuid = parse_uuid(scope_uuid)?;
-            $core_deregister(&uuid, name).map_err(to_py_err)
+            $core_deregister(&uuid, name).map_err(flow_error_to_py_err)
         }
     };
 }
@@ -2137,14 +2139,15 @@ fn scope_register_tool_execution_intercept(
         priority,
         py_callable::wrap_py_tool_exec_intercept_fn(callable),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered scope-local tool execution intercept.
 #[pyfunction]
 fn scope_deregister_tool_execution_intercept(scope_uuid: &str, name: &str) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core_registry_api::scope_deregister_tool_execution_intercept(&uuid, name).map_err(to_py_err)
+    core_registry_api::scope_deregister_tool_execution_intercept(&uuid, name)
+        .map_err(flow_error_to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -2166,7 +2169,7 @@ fn scope_register_llm_sanitize_request_guardrail(
         priority,
         py_callable::wrap_py_llm_sanitize_request_fn(guardrail)?,
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered scope-local LLM sanitize-request guardrail.
@@ -2174,7 +2177,7 @@ fn scope_register_llm_sanitize_request_guardrail(
 fn scope_deregister_llm_sanitize_request_guardrail(scope_uuid: &str, name: &str) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
     core_registry_api::scope_deregister_llm_sanitize_request_guardrail(&uuid, name)
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Register a scope-local LLM sanitize-response guardrail.
@@ -2192,7 +2195,7 @@ fn scope_register_llm_sanitize_response_guardrail(
         priority,
         py_callable::wrap_py_llm_sanitize_response_fn(guardrail)?,
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered scope-local LLM sanitize-response guardrail.
@@ -2203,7 +2206,7 @@ fn scope_deregister_llm_sanitize_response_guardrail(
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
     core_registry_api::scope_deregister_llm_sanitize_response_guardrail(&uuid, name)
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Register a scope-local LLM conditional-execution guardrail.
@@ -2221,7 +2224,7 @@ fn scope_register_llm_conditional_execution_guardrail(
         priority,
         py_callable::wrap_py_llm_conditional_fn(guardrail),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered scope-local LLM conditional-execution guardrail.
@@ -2232,7 +2235,7 @@ fn scope_deregister_llm_conditional_execution_guardrail(
 ) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
     core_registry_api::scope_deregister_llm_conditional_execution_guardrail(&uuid, name)
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -2256,14 +2259,15 @@ fn scope_register_llm_request_intercept(
         break_chain,
         py_callable::wrap_py_llm_request_intercept_fn(callable),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered scope-local LLM request intercept.
 #[pyfunction]
 fn scope_deregister_llm_request_intercept(scope_uuid: &str, name: &str) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core_registry_api::scope_deregister_llm_request_intercept(&uuid, name).map_err(to_py_err)
+    core_registry_api::scope_deregister_llm_request_intercept(&uuid, name)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Register a scope-local LLM execution intercept.
@@ -2281,14 +2285,15 @@ fn scope_register_llm_execution_intercept(
         priority,
         py_callable::wrap_py_llm_exec_intercept_fn(callable),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered scope-local LLM execution intercept.
 #[pyfunction]
 fn scope_deregister_llm_execution_intercept(scope_uuid: &str, name: &str) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core_registry_api::scope_deregister_llm_execution_intercept(&uuid, name).map_err(to_py_err)
+    core_registry_api::scope_deregister_llm_execution_intercept(&uuid, name)
+        .map_err(flow_error_to_py_err)
 }
 
 /// Register a scope-local LLM stream-execution intercept.
@@ -2306,7 +2311,7 @@ fn scope_register_llm_stream_execution_intercept(
         priority,
         py_callable::wrap_py_llm_stream_exec_intercept_fn(callable),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered scope-local LLM stream-execution intercept.
@@ -2314,7 +2319,7 @@ fn scope_register_llm_stream_execution_intercept(
 fn scope_deregister_llm_stream_execution_intercept(scope_uuid: &str, name: &str) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
     core_registry_api::scope_deregister_llm_stream_execution_intercept(&uuid, name)
-        .map_err(to_py_err)
+        .map_err(flow_error_to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -2330,14 +2335,14 @@ fn scope_register_subscriber(scope_uuid: &str, name: &str, callback: Py<PyAny>) 
         name,
         py_callable::wrap_py_event_subscriber(callback),
     )
-    .map_err(to_py_err)
+    .map_err(flow_error_to_py_err)
 }
 
 /// Remove a previously registered scope-local event subscriber.
 #[pyfunction]
 fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
     let uuid = parse_uuid(scope_uuid)?;
-    core_subscriber_api::scope_deregister_subscriber(&uuid, name).map_err(to_py_err)
+    core_subscriber_api::scope_deregister_subscriber(&uuid, name).map_err(flow_error_to_py_err)
 }
 
 // ---------------------------------------------------------------------------

@@ -413,11 +413,11 @@ def test_create_tool_node_preserves_selective_error_handling(
             return await unhandled_graph.ainvoke(unhandled_input)
 
         handled_result = asyncio.run(invoke_handled())
-        with pytest.raises(RuntimeError, match="internal error"):
+        with pytest.raises(RuntimeError, match="^unhandled"):
             asyncio.run(invoke_unhandled())
     else:
         handled_result = handled_graph.invoke(handled_input)
-        with pytest.raises(RuntimeError, match="internal error"):
+        with pytest.raises(RuntimeError, match="^unhandled"):
             unhandled_graph.invoke(unhandled_input)
 
     assert handled_result["messages"][-1].status == "error"

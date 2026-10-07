@@ -193,6 +193,11 @@ def execute(
         ToolExecutionResult: The canonical result returned by ``func`` or an
         execution intercept.
 
+    Raises:
+        RuntimeError: If a guardrail rejects the call or the runtime fails.
+        Exception: An exception raised by ``func`` or an execution intercept
+            propagates to caller unchanged.
+
     Notes:
         Sanitize guardrails affect emitted event payloads only. They do not
         mutate the arguments passed to ``func`` or the value returned to the

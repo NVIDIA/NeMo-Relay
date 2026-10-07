@@ -54,7 +54,7 @@ use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 
-use crate::convert::{json_to_py, py_to_json};
+use crate::convert::{flow_error_to_py_err, json_to_py, py_to_json};
 use crate::py_types::{
     PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
     PyLlmExecutionContext, PyLlmSanitizeRequestContext, PyLlmSanitizeResponseContext, PyScopeStack,
@@ -75,6 +75,7 @@ fn python_callback_error(error: PyErr) -> FlowError {
     FlowError::CallbackException {
         message: error.to_string(),
         exception_type,
+        source: Some(Arc::new(error)),
     }
 }
 
@@ -1115,7 +1116,7 @@ fn isolated_python_continuation_context(
         Some(scope_stack) => context.isolated_with_scope_stack(&scope_stack),
         None => context.isolated(),
     };
-    context.map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    context.map_err(flow_error_to_py_err)
 }
 
 /// Python-callable wrapper for the Rust `ToolExecutionNextFn`.
@@ -1143,7 +1144,7 @@ impl PyToolNextFn {
             let result = context
                 .invoke(move || next(json_args))
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(flow_error_to_py_err)?;
             Python::attach(|py| PyToolExecutionResult::from_inner(py, result))
         })
     }
@@ -1166,7 +1167,7 @@ impl PyLlmNextFn {
             let result = context
                 .invoke(move || next(request.inner))
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(flow_error_to_py_err)?;
             Python::attach(|py| json_to_py(py, &result))
         })
     }
@@ -1189,7 +1190,7 @@ impl PyLlmStreamNextFn {
             let rust_stream = context
                 .invoke(move || next(request.inner))
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(flow_error_to_py_err)?;
 
             // Drain into mpsc channel and return PyLlmStream
             let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(32);
@@ -1612,9 +1613,7 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
                         }
                         None => callback.bind(py).call1((name, py_req, py_ann)),
                     }
-                    .map_err(|e| {
-                        FlowError::Internal(format!("LLM request intercept callable failed: {e}"))
-                    })?;
+                    .map_err(python_callback_error)?;
 
                     split_py_object_or_future_with_locals(
                         py,

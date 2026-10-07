@@ -259,16 +259,21 @@ class TestToolsAsync:
         events = []
         subscribers.register("py_tool_exec_failure_sub", lambda e: events.append(e))
 
-        def failing(_args: Json) -> Never:
-            raise ValueError("boom")
+        raised: list[ValueError] = []
 
-        with pytest.raises(RuntimeError, match="boom"):
+        def failing(_args: Json) -> Never:
+            error = ValueError("boom")
+            raised.append(error)
+            raise error
+
+        with pytest.raises(ValueError, match="boom") as error:
             await tools.execute(
                 "failing_tool",
                 {"x": 1},
                 failing,
                 tool_call_id="managed-failure-123",
             )
+        assert error.value is raised[0]
 
         try:
             await subscribers.flush_async()
@@ -482,6 +487,35 @@ class TestToolIntercepts:
             lambda context, next_call: ToolExecutionInterceptOutcome({"intercepted": True}),
         )
         assert intercepts.deregister_tool_execution("py_exec_int")
+
+    async def test_execution_intercept_next_raises_original_exception(self) -> None:
+        class ToolFailure(ValueError):
+            pass
+
+        raised: list[ToolFailure] = []
+        seen: list[BaseException] = []
+
+        def failing(_args: Json) -> Never:
+            error = ToolFailure("boom")
+            raised.append(error)
+            raise error
+
+        async def observing_intercept(context, next_call):
+            try:
+                return await next_call(context.args)
+            except ToolFailure as error:
+                seen.append(error)
+                raise
+
+        intercepts.register_tool_execution("py_exec_next_raise", 1, observing_intercept)
+        try:
+            with pytest.raises(ToolFailure, match="boom") as error:
+                await tools.execute("next_raise_tool", {"x": 1}, failing)
+        finally:
+            assert intercepts.deregister_tool_execution("py_exec_next_raise")
+
+        assert seen == raised
+        assert error.value is raised[0]
 
     async def test_execution_intercept_receives_tool_call_id(self) -> None:
         seen = {}

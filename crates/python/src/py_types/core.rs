@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 
+use crate::convert::flow_error_to_py_err;
+
 use super::codecs::{PyLlmSanitizeRequestCodec, PyLlmSanitizeResponseCodec};
 use super::{
     AnnotatedLLMRequest, Bound, CoreScopeType, FlowResult, LlmAttributes, LlmCodecIdentity,
@@ -174,9 +176,7 @@ impl PyLlmStream {
                     "stream exhausted",
                 )),
                 Some(Ok(value)) => Python::attach(|py| json_to_py(py, &value)),
-                Some(Err(e)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    e.to_string(),
-                )),
+                Some(Err(e)) => Err(flow_error_to_py_err(e)),
             }
         })
     }

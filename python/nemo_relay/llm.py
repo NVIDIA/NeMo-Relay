@@ -240,6 +240,11 @@ def execute(
         Json: The raw JSON-compatible value returned by ``func`` or by an
         execution intercept.
 
+    Raises:
+        RuntimeError: If a guardrail rejects the call or the runtime fails.
+        Exception: An exception raised by ``func`` or an execution intercept
+            propagates to caller unchanged.
+
     Notes:
         ``codec`` enables annotated request intercepts. ``response_codec``
         decodes the raw response for observability only and does not change the

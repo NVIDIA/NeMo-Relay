@@ -1142,9 +1142,9 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
 }
 
 #[test]
-fn to_py_err_and_forward_stream_to_channel_cover_private_helpers() {
+fn flow_error_to_py_err_and_forward_stream_to_channel_cover_private_helpers() {
     let _python = crate::test_support::init_python_test();
-    let err = to_py_err(nemo_relay::error::FlowError::Internal("boom".into()));
+    let err = flow_error_to_py_err(nemo_relay::error::FlowError::Internal("boom".into()));
     assert!(err.to_string().contains("boom"));
 
     let runtime = tokio::runtime::Runtime::new().unwrap();

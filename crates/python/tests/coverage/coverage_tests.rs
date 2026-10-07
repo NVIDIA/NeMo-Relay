@@ -26,6 +26,7 @@ use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
     LlmExecutionContext, LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
+use nemo_relay::error::FlowError;
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
@@ -741,13 +742,12 @@ def event_fail(event):
 
         let llm_req =
             wrap_py_llm_request_intercept_fn(module.getattr("llm_req_bad").unwrap().unbind());
-        assert!(
+        assert!(matches!(
             runtime
                 .block_on(llm_req("demo".to_string(), request.clone(), None))
-                .unwrap_err()
-                .to_string()
-                .contains("intercept callable failed")
-        );
+                .unwrap_err(),
+            FlowError::CallbackException { exception_type, ..} if exception_type == "TypeError"
+        ));
 
         let tool_req =
             wrap_py_tool_request_intercept_fn(module.getattr("tool_fail").unwrap().unbind());
