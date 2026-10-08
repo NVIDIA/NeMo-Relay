@@ -270,8 +270,10 @@ This release includes the following fixes and behavior changes:
   directories on Windows. It also limits access to that user and `SYSTEM`.
   This fixes startup for a new daemon running as `LocalSystem` when Windows
   would otherwise assign ownership to `Administrators`. The change also
-  covers client-token and bootstrap state directories. Existing directories
-  keep their ownership and permissions. Relay still rejects daemon state
+  covers client-token directories and directories that store the bootstrap
+  key (`fingerprint-hmac.key`). Directory creation leaves existing directories
+  unchanged. Daemon and bootstrap key setup can still limit access to those
+  directories. Their owners stay the same. Relay still rejects daemon state
   owned by another user or group.
 - The OpenClaw plugin keeps its runtime and exporters open during gateway
   shutdown so final tool, LLM, and session hooks can finish. Service stop
