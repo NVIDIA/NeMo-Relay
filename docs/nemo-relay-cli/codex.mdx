@@ -32,6 +32,45 @@ hooks can still require review. This behavior is tracked upstream as
 
 </Warning>
 
+## ChatGPT Voice Calls
+
+ChatGPT voice call setup uses a different request format from the public API.
+Codex selects that format from its call-creation URL.
+
+For persistent installs, Relay checks the sign-in mode in `auth.json` next to
+`config.toml`. It also honors `forced_login_method`. For ChatGPT sign-in, it sets
+`experimental_realtime_webrtc_call_base_url` to the local Relay URL ending in
+`/backend-api/codex`. This lets Codex send JSON to `/realtime/calls`. Relay forwards
+that JSON without changing it. API-key installs keep the public API format.
+Relay preserves any call-creation URL you set yourself.
+
+For `nemo-relay codex`, Relay applies this setting only to the launched process.
+An installer-generated voice URL follows the temporary gateway. Explicit URLs
+in your settings, selected profile, or command-line options take priority.
+Relay leaves the saved configuration unchanged.
+
+For a personal persistent install, update Relay, run
+`nemo-relay install codex --force`, and restart Codex Desktop to apply the new
+setting. Replacing the binary alone does not update
+Codex's saved configuration.
+
+If your credentials are stored only in a keyring, Relay cannot read the sign-in
+mode from `auth.json`. For ChatGPT sign-in, set this option at the top level of
+your user-level Codex configuration. Replace the address if your gateway uses
+a different port.
+
+```toml
+experimental_realtime_webrtc_call_base_url = "http://127.0.0.1:47632/backend-api/codex"
+```
+
+For a managed daemon deployment, apply the manual setting described in
+[Managed Codex Configuration](/daemon/configuration#codex). The personal-install
+command does not update a managed deployment.
+
+WebRTC sidebands keep Codex's separate destination settings. The default sideband
+can connect directly to OpenAI. This call-creation setting does not route the
+audio through Relay.
+
 ## Multi-Agent Delegation Traces
 
 In Codex multi-agent v2, the Responses service encrypts the `message` argument

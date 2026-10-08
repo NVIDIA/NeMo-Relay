@@ -701,6 +701,130 @@ fn cli_gateway_start_honors_explicit_logging_without_config() {
 }
 
 #[test]
+fn cli_gateway_logs_unmatched_routes_at_error_level() {
+    let temp = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+
+    let mut gateway = Command::new(gateway_bin())
+        .args([
+            "--bind",
+            &address.to_string(),
+            "--log-level",
+            "error",
+            "--log-stderr-format",
+            "jsonl",
+            "gateway",
+            "start",
+        ])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while TcpStream::connect(address).is_err() {
+        if gateway.try_wait().unwrap().is_some() || Instant::now() >= deadline {
+            let _ = gateway.kill();
+            let output = gateway.wait_with_output().unwrap();
+            panic!(
+                "gateway did not start: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    for (method, path, status) in [
+        ("GET", "/unknown?token=query-secret", "404"),
+        ("POST", "/healthz", "405"),
+        ("GET", "/reset/reset-token-secret", "404"),
+        (
+            "GET",
+            "/v1/nemo-relay/capability-secret/unknown?key=query-secret",
+            "405",
+        ),
+        (
+            "GET",
+            "/v1/nemo-relay/capability-secret?key=query-secret",
+            "404",
+        ),
+        ("GET", "/v1/nemo-relay//capability-secret/unknown", "405"),
+        ("GET", "/V1/nemo-relay/capability-secret/unknown", "404"),
+        ("GET", "/v1/NEMO-RELAY/capability-secret/unknown", "404"),
+        ("GET", "/v1//nemo-relay/capability-secret/unknown", "404"),
+        ("GET", "/v1/nemo%2Drelay/capability-secret/unknown", "404"),
+        (
+            "GET",
+            "/%76%31/%6Eemo-relay/capability-secret/unknown",
+            "404",
+        ),
+        ("GET", "/v1%2Fnemo-relay/capability-secret/unknown", "404"),
+    ] {
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write!(stream, "{method} {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nContent-Length: 0\r\nAuthorization: Bearer header-secret\r\n\r\n").unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {status}")),
+            "{method} {path}: {response}"
+        );
+    }
+
+    let output = Command::new(gateway_bin())
+        .args(["--bind", &address.to_string(), "gateway", "stop"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = wait_child_with_output(gateway);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let records: Vec<serde_json::Value> = stderr
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter(|record: &serde_json::Value| record["event"] == "route_unmatched")
+        .collect();
+    assert_eq!(records.len(), 12, "{stderr}");
+    for record in &records {
+        assert_eq!(
+            record["level"].as_str().unwrap().to_ascii_lowercase(),
+            "error"
+        );
+        assert_eq!(record["fields"]["boundary"], "gateway");
+    }
+    for record in &records[..3] {
+        assert_eq!(record["fields"]["path"], "/<redacted>");
+    }
+    assert_eq!(records[1]["fields"]["method"], "POST");
+    for record in &records[3..] {
+        assert_eq!(record["fields"]["path"], "/v1/nemo-relay/<redacted>");
+    }
+    for secret in [
+        "query-secret",
+        "capability-secret",
+        "header-secret",
+        "reset-token-secret",
+    ] {
+        assert!(!stderr.contains(secret), "{stderr}");
+    }
+}
+
+#[test]
 fn cli_gateway_stop_refuses_a_foreign_loopback_listener() {
     let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = foreign.local_addr().unwrap();

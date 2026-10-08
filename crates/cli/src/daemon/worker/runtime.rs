@@ -483,6 +483,15 @@ async fn serve_tls(
     }
 }
 
+#[cfg(test)]
+pub(crate) async fn test_serve_tls(
+    listener: TcpListener,
+    app: Router,
+    config: Arc<rustls::ServerConfig>,
+) {
+    serve_tls(listener, app, config).await.unwrap();
+}
+
 fn router(state: Arc<WorkerState>) -> Router {
     let control = Router::new()
         .route(WORKER_PROBE_PATH, get(readiness_probe))
@@ -490,6 +499,14 @@ fn router(state: Arc<WorkerState>) -> Router {
     Router::new()
         .merge(control)
         .fallback(proxy)
+        .method_not_allowed_fallback(|request: Request<Body>| async move {
+            crate::operational::unmatched_route(
+                "worker",
+                request.method(),
+                request.uri(),
+                StatusCode::METHOD_NOT_ALLOWED,
+            )
+        })
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             authenticate_daemon_request,
@@ -613,9 +630,17 @@ fn drain_timeout_ms(request: &WorkerDrainRequest) -> u64 {
 
 async fn proxy(State(state): State<Arc<WorkerState>>, request: Request<Body>) -> Response<Body> {
     let Some(route) = PublicRoute::from_path(request.uri().path()) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return crate::operational::unmatched_route(
+            "worker",
+            request.method(),
+            request.uri(),
+            StatusCode::NOT_FOUND,
+        )
+        .into_response();
     };
-    let middleware = if matches!(route, PublicRoute::Provider(_)) {
+    let websocket = crate::gateway::websocket::supported_path(request.uri().path())
+        && crate::gateway::websocket::is_websocket(&request);
+    let middleware = if !websocket && matches!(route, PublicRoute::Provider(_)) {
         match state
             .managed
             .as_ref()
@@ -656,6 +681,9 @@ async fn proxy(State(state): State<Arc<WorkerState>>, request: Request<Body>) ->
             response
         }
         PublicRoute::Provider(provider) => {
+            if websocket {
+                return forward_to_provider(Arc::clone(&state), request, provider, in_flight).await;
+            }
             if let Some(managed) = state.managed.as_ref() {
                 let response = managed
                     .proxy_provider_with_requirements(
@@ -726,6 +754,23 @@ async fn forward_to_provider(
     }
     if allow_environment_provider_auth {
         inject_provider_auth(request.headers_mut(), route, &state.config);
+    }
+    if crate::gateway::websocket::is_websocket(&request) {
+        let client = match super::super::common::transport::pooled_websocket_client() {
+            Ok(client) => client,
+            Err(error) => return message(StatusCode::BAD_GATEWAY, &error.to_string()),
+        };
+        let shutdown_state = Arc::clone(&state);
+        return crate::gateway::websocket::forward(
+            &client,
+            request,
+            &destination,
+            None,
+            in_flight,
+            &state.config,
+            async move { shutdown_state.wait_until_stopped().await },
+        )
+        .await;
     }
     let destination = match destination.parse::<Uri>() {
         Ok(destination) => destination,

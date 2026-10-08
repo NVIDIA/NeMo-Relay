@@ -41,6 +41,7 @@ pub(crate) struct WorkerTarget {
     endpoint: String,
     session_token: SensitiveString,
     client: Arc<PooledClient>,
+    websocket_client: Option<PooledClient>,
     in_flight: AtomicUsize,
     control_available: AtomicBool,
 }
@@ -85,9 +86,19 @@ impl WorkerTarget {
             endpoint,
             session_token,
             client,
+            websocket_client: None,
             in_flight: AtomicUsize::new(0),
             control_available: AtomicBool::new(true),
         })
+    }
+
+    pub(crate) fn with_websocket_client(mut self, client: PooledClient) -> Self {
+        self.websocket_client = Some(client);
+        self
+    }
+
+    pub(crate) fn websocket_client(&self) -> Option<&PooledClient> {
+        self.websocket_client.as_ref()
     }
 
     pub(crate) fn control_available(&self) -> bool {
