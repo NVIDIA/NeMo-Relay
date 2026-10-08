@@ -733,6 +733,13 @@ async fn websocket_proxy_preserves_upstream_close_and_disconnects() {
 #[tokio::test]
 async fn websocket_accepts_protocol_from_second_header() {
     let app = Router::new().fallback(|request: Request<Body>| async move {
+        let protocols = request
+            .headers()
+            .get_all(header::SEC_WEBSOCKET_PROTOCOL)
+            .iter()
+            .flat_map(|value| value.to_str().unwrap().split(',').map(str::trim))
+            .collect::<Vec<_>>();
+        assert_eq!(protocols, ["other", "voice"]);
         let key = request.headers()[header::SEC_WEBSOCKET_KEY].as_bytes();
         Response::builder()
             .status(StatusCode::SWITCHING_PROTOCOLS)
@@ -777,4 +784,5 @@ async fn websocket_accepts_protocol_from_second_header() {
     .await;
     task.abort();
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_eq!(response.headers()[header::SEC_WEBSOCKET_PROTOCOL], "voice");
 }
