@@ -56,6 +56,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
+## Goal
+
 Route one OpenAI-compatible request through Switchyard inside NeMo Relay, then
 confirm the response and routing event in a local ATOF file.
 
@@ -67,22 +69,28 @@ confirm the response and routing event in a local ATOF file.
 - Access to the public [NeMo Relay Plugins releases](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases)
 - Inference access: an [NVIDIA API key](https://build.nvidia.com/settings/api-keys) for this example, or credentials for your own endpoint
 
+<Warning>
 This guide pins Switchyard plugin `0.3.0` and NeMo Relay `0.9.2`, the host
 version recorded in the published bundle's build metadata. On Linux, use a
 glibc-based distribution and Relay's GNU binary: the static musl binary cannot
 load this native plugin. The plugin is a
 native library loaded into the Relay process; use a bundle from a source you
 trust.
+</Warning>
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 Use a fresh project directory and reserve local port `4040` for this test.
 
+<Note icon="circle-info">
 Relay does not require the model used below. The routing example selects a
 public [build.nvidia.com model](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground).
 For another provider, update the target model, both endpoint URLs, and the
 credential environment variable together.
+</Note>
 
-## 1. Install
+<Steps toc={true}>
+
+## Install
 
 Install Relay and download the bundle for your platform. The checksum check
 must succeed before you extract it.
@@ -155,11 +163,13 @@ Expand-Archive $archive -DestinationPath .
 </Tab>
 </Tabs>
 
+<Note icon="circle-info">
 The archive extracts to `switchyard-plugin/`. Keep this directory in place
 while Relay uses the plugin. The Unix commands also keep Relay in the project's
 `bin/` directory, without replacing your existing installation.
+</Note>
 
-## 2. Configure
+## Configure
 
 Save this file as `config.toml` in `relay-switchyard-quickstart`:
 
@@ -224,6 +234,7 @@ target = "default"
 attestation = "integrity_only"
 ```
 
+<Warning>
 The checksum and `integrity_only` policy check artifact integrity, not independent
 publisher authenticity: the archive and checksum come from the same source.
 Only load a bundle whose publisher you trust. The example uses a server-owned
@@ -231,8 +242,9 @@ API key: the native plugin does not
 support forwarding each caller's credential to the provider. Protect
 `logs/events.jsonl`; Relay events may contain request or response data even
 with full payload export disabled.
+</Warning>
 
-## 3. Run
+## Run
 
 In a gateway terminal, enter `relay-switchyard-quickstart`, set your API key,
 enable the configured plugin, and validate it:
@@ -300,7 +312,7 @@ $response | ConvertTo-Json -Depth 50 | Set-Content response.json -Encoding utf8
 </Tab>
 </Tabs>
 
-## 4. Verify
+## Verify
 
 Success prints `RELAY_QUICKSTART_RESPONSE_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
 
@@ -353,10 +365,14 @@ RELAY_QUICKSTART_RESPONSE_OK
 RELAY_QUICKSTART_EVENTS_OK
 ```
 
+</details>
+
+<Note icon="circle-info">
 This is a live provider test; it does not assert identical model wording,
 timestamps, token counts, or event UUIDs.
+</Note>
 
-</details>
+</Steps>
 
 ## For More Details
 

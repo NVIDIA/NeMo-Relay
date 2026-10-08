@@ -59,6 +59,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
+## Goal
+
 Run one local Claude Code session through NeMo Relay and write its turn, model,
 and tool lifecycle to a local ATOF event file.
 
@@ -71,6 +73,7 @@ and tool lifecycle to a local ATOF event file.
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 
+<Note icon="circle-info">
 Use Claude Code's configured model; Relay does not select or require one.
 For example, authenticate with `claude auth login`, or set `ANTHROPIC_API_KEY`
 for API-key access. A custom gateway must provide the Anthropic Messages API;
@@ -80,8 +83,11 @@ the run. Also add an `[upstream]` section with
 Relay replaces `ANTHROPIC_BASE_URL` with its local gateway address. Use your
 provider's API root, without the `/v1/messages` route.
 Refer to [Claude Code authentication](https://code.claude.com/docs/en/authentication).
+</Note>
 
-## 1. Install
+<Steps toc={true}>
+
+## Install
 
 Install the pinned NeMo Relay CLI release:
 
@@ -103,7 +109,7 @@ irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.0/install.ps1 | iex
 </Tab>
 </Tabs>
 
-## 2. Configure
+## Configure
 
 Start in a new working directory and permit the agent to write files there.
 
@@ -144,10 +150,12 @@ filename = "events.jsonl"
 mode = "overwrite"
 ```
 
+<Warning>
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
+</Warning>
 
-## 3. Run
+## Run
 
 From the directory containing both files, run the common validation prompt:
 
@@ -167,17 +175,23 @@ nemo-relay --config (Join-Path $PWD "config.toml") claude -- -p "Use the Write t
 </Tab>
 </Tabs>
 
+<Warning>
 The [allowed-tools option](https://code.claude.com/docs/en/headless#auto-approve-tools)
 approves the Write tool for this invocation, so it can create the marker without
 a permission prompt. Run this only in your disposable trusted directory.
+</Warning>
 
+<Tip>
 To choose a model for this invocation, add Claude Code's `--model` option after
 `--`, for example `--model sonnet`. Use a model or alias your provider supports.
+</Tip>
 
+<Note icon="circle-info">
 Relay starts a temporary local gateway and injects Claude Code hooks for this
 run. It does not modify your persistent Claude Code plugin configuration.
+</Note>
 
-## 4. Verify
+## Verify
 
 Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
 
@@ -245,11 +259,17 @@ RELAY_QUICKSTART_TOOL_OK
 RELAY_QUICKSTART_EVENTS_OK
 ```
 
-These markers confirm the tool-created file and matching start/end records for
-custom turn, tool, and LLM work. The agent's final reply should include
-`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
-
 </details>
+
+The agent's final reply should include `RELAY_QUICKSTART_RESPONSE_OK`;
+its surrounding wording can vary.
+
+<Note icon="circle-info">
+The verification markers confirm the tool-created file and matching start/end
+records for custom turn, tool, and LLM work.
+</Note>
+
+</Steps>
 
 ## For More Details
 

@@ -61,6 +61,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
+## Goal
+
 Run one local pi task through NeMo Relay and write its agent, model, and tool
 lifecycle to a local ATOF event file.
 
@@ -76,17 +78,23 @@ that exact version.
 - A configured pi model with inference access: a provider API key or a supported authenticated session
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 
+<Note icon="circle-info">
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 pi itself supports Node.js 22.19 or newer; this guide uses Node.js 24.
+</Note>
 
+<Note icon="circle-info">
 Relay does not require a particular model or an OpenAI account. The pinned pi
 release supports NVIDIA NIM through `NVIDIA_API_KEY`, as well as other providers.
 For an NVIDIA example, choose an available model from
 [build.nvidia.com](https://build.nvidia.com/explore/discover) in pi's model selector.
 Use a provider speaking OpenAI Chat Completions, OpenAI Responses, or Anthropic
 Messages; Gemini and Vertex APIs are not supported by this Relay gateway.
+</Note>
 
-## 1. Install
+<Steps toc={true}>
+
+## Install
 
 Install the pinned pi and NeMo Relay releases:
 
@@ -121,10 +129,12 @@ nemo-relay install pi
 nemo-relay doctor pi
 ```
 
+<Note icon="circle-info">
 A local gateway reachability warning can occur before step 3 starts the temporary
 gateway. Resolve any other installation or extension-loading problems before continuing.
+</Note>
 
-## 2. Configure
+## Configure
 
 Start in a new working directory and permit the agent to write files there.
 
@@ -147,9 +157,11 @@ $env:NVIDIA_API_KEY = 'your-nvidia-api-key'
 </Tab>
 </Tabs>
 
+<Note icon="circle-info">
 If your provider is already authenticated, skip the key example. For another
 provider, use its own credential rather than `NVIDIA_API_KEY`. Use the key issued
 for your endpoint; keys are not interchangeable between inference services.
+</Note>
 
 Save this file as `config.toml` in the directory where you will run the agent:
 
@@ -188,10 +200,12 @@ filename = "events.jsonl"
 mode = "overwrite"
 ```
 
+<Warning>
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
+</Warning>
 
-## 3. Run
+## Run
 
 From the directory containing both files, run the common validation prompt:
 
@@ -211,19 +225,23 @@ nemo-relay --config (Join-Path $PWD "config.toml") pi -- -p "Use a file-writing 
 </Tab>
 </Tabs>
 
+<Tip>
 pi uses its configured model. To select another model for this invocation,
 add `--model PROVIDER/MODEL_ID` after `--`, using the full reference shown by
 `pi --list-models`; these are pi options, not
 Relay requirements. Relay starts a temporary local gateway and loads the
 installed extension for this run.
+</Tip>
 
+<Note icon="circle-info">
 For a custom endpoint, use a distinct provider name in pi's
 [custom model configuration](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md).
 This avoids ambiguity when a model ID itself begins with a built-in provider
 name. A 403 can indicate that the selected model is not allowed by your key;
 confirm the endpoint and exact model ID before changing credentials.
+</Note>
 
-## 4. Verify
+## Verify
 
 Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
 
@@ -289,11 +307,17 @@ RELAY_QUICKSTART_TOOL_OK
 RELAY_QUICKSTART_EVENTS_OK
 ```
 
-These markers confirm the tool-created file and matching start/end records for
-agent, tool, and LLM work. The agent's final reply should include
-`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
-
 </details>
+
+The agent's final reply should include `RELAY_QUICKSTART_RESPONSE_OK`;
+its surrounding wording can vary.
+
+<Note icon="circle-info">
+The verification markers confirm the tool-created file and matching start/end
+records for agent, tool, and LLM work.
+</Note>
+
+</Steps>
 
 ## For More Details
 

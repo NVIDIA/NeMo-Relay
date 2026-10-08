@@ -56,6 +56,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
+## Goal
+
 Run one Deep Agents workflow and write its agent, model, and tool lifecycle to
 a local ATOF event file.
 
@@ -65,7 +67,9 @@ a local ATOF event file.
 - `uv`
 - Inference access: an [NVIDIA API key](https://build.nvidia.com/settings/api-keys) for this example, or credentials for your own provider
 
-## 1. Install
+<Steps toc={true}>
+
+## Install
 
 Create a project and install the pinned NeMo Relay release with the Deep
 Agents and NVIDIA model provider extras. In an existing `uv` project, skip
@@ -97,18 +101,22 @@ $env:NVIDIA_API_KEY = "your-api-key"
 </Tab>
 </Tabs>
 
+<Note icon="circle-info">
 Relay does not impose a model choice. This copyable example selects the public
 [`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground)
 model through the NVIDIA provider. To use another model or provider, replace
 the example's `model` argument and configure that provider's credentials.
 The NVIDIA provider reads `NVIDIA_API_KEY`. In the LangChain string, the first `nvidia:`
 selects the provider; the remaining `nvidia/...` value is the model ID.
+</Note>
 
+<Note icon="circle-info">
 The provider may warn that this model is "not known to support tools" when its
 capability catalog lags the endpoint. This warning is advisory; the run must
 still produce the actual tool result and all three success lines below.
+</Note>
 
-## 2. Configure
+## Configure
 
 Save the following configuration as `plugins.toml` in your project directory:
 
@@ -139,10 +147,12 @@ filename = "events.jsonl"
 mode = "overwrite"
 ```
 
+<Warning>
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
+</Warning>
 
-## 3. Run
+## Run
 
 Save this file as `quickstart.py` beside `plugins.toml`:
 
@@ -248,7 +258,7 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-## 4. Verify
+## Verify
 
 The program checks the tool result, final assistant response, and paired ATOF
 agent, tool, and LLM records before printing these success markers:
@@ -260,8 +270,12 @@ RELAY_QUICKSTART_RESPONSE_OK
 RELAY_QUICKSTART_EVENTS_OK
 ```
 
+<Note icon="circle-info">
 The model can use different wording around the response marker. These checks
 validate a live provider call; they do not make the model deterministic.
+</Note>
+
+</Steps>
 
 ## For More Details
 

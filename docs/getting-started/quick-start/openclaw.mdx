@@ -74,6 +74,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
+## Goal
+
 Observe one gateway-backed OpenClaw agent turn and write its session, model, and
 tool lifecycle to a local ATOF event file.
 
@@ -85,10 +87,12 @@ mode does not fix the lifecycle issue. Keep the paired tool and LLM checks in
 step 4.
 </Warning>
 
+<Note icon="circle-info">
 The append-mode path was verified with Relay `0.9.1`, OpenClaw `2026.9.8`, and
 a custom OpenAI-compatible provider on Ubuntu 22.04. The PowerShell commands
 have not been live-tested. The install command follows this docs checkout's
 Relay version; that newer combination has not yet had the same live test.
+</Note>
 
 For NVIDIA inference on this tested combination, use a custom provider ID such
 as `relay-nvidia`, rather than the built-in `nvidia` provider ID. In your
@@ -97,10 +101,12 @@ disposable OpenClaw configuration, copy the existing provider's `baseUrl`,
 `relay-nvidia/<your-existing-model-id>` for the test agent. Keep the same endpoint,
 credentials, and model; Relay does not require a different model. This uses
 OpenClaw's supported [custom-provider configuration](https://docs.openclaw.ai/gateway/config-tools/custom-providers).
+<Warning>
 Fresh runs using the built-in `nvidia` path completed the task but exported only
 session events, so they failed the tool and LLM checks. The custom-provider path
 passed those checks. This is a compatibility workaround, not a fix for the
 underlying missing-hook behavior.
+</Warning>
 
 ## Prerequisites
 
@@ -119,7 +125,9 @@ particular model. For an NVIDIA example, configure an available
 [NVIDIA API key](https://build.nvidia.com/settings/api-keys) in OpenClaw before
 installing the Relay plugin.
 
-## 1. Install
+<Steps toc={true}>
+
+## Install
 
 Install the pinned NeMo Relay plugin. OpenClaw registers the plugin ID
 and adds it to an existing `plugins.allow` list automatically:
@@ -129,20 +137,26 @@ and adds it to an existing `plugins.allow` list automatically:
 openclaw plugins install npm:nemo-relay-openclaw@0.10.0 --pin --accept-capabilities
 ```
 
+<Note icon="circle-info">
 The plugin requires OpenClaw capability consent. The explicit flag grants and
 records that consent for the install. If OpenClaw asks you to confirm the package
 source, review and accept it separately; capability consent does not suppress
 that confirmation.
+</Note>
 
+<Note icon="circle-info">
 The npm package is named `nemo-relay-openclaw`; its OpenClaw plugin ID is
 `nemo-relay`.
+</Note>
 
-## 2. Configure
+## Configure
 
+<Warning>
 Use a disposable test agent and gateway configuration; this guide changes plugin
 configuration and restarts the gateway. Do not run automated tests against your
 normal shared gateway. Use a new, empty log directory for each run and an agent
 workspace without `relay-check.txt`, so previous results cannot satisfy step 4.
+</Warning>
 
 First, run `openclaw config file` to confirm which configuration file OpenClaw
 will update. Then save the following partial configuration as
@@ -205,10 +219,12 @@ writable absolute directory. On Windows, use forward slashes, for example
 }
 ```
 
+<Warning>
 This starting configuration records lifecycle metadata while excluding prompt,
 response, tool-argument, and tool-result content from OpenClaw's replay layer.
 Other event fields can still contain sensitive application data. Protect the
 output file and review the full capture controls before enabling richer payloads.
+</Warning>
 
 Validate and apply the patch through OpenClaw instead of editing the complete
 configuration file:
@@ -221,10 +237,12 @@ openclaw gateway restart
 openclaw plugins inspect nemo-relay --runtime --json
 ```
 
+<Note icon="circle-info">
 Installing plugin code requires a gateway restart. A managed gateway can
 restart automatically; the explicit command is safe when you want to ensure
 the new package is loaded. Ordinary plugin configuration changes use OpenClaw's
 normal configuration reload behavior.
+</Note>
 
 For a foreground gateway (for example, on a headless test instance without a
 gateway service), run `openclaw gateway run` in a second terminal instead of
@@ -232,7 +250,7 @@ gateway service), run `openclaw gateway run` in a second terminal instead of
 run the agent. Use the same OpenClaw profile and provider credentials in both
 terminals.
 
-## 3. Run
+## Run
 
 Run `openclaw agents list` to find your test agent ID and workspace. Replace
 `YOUR_AGENT_ID` below with that ID. The marker file is created in the agent
@@ -251,12 +269,16 @@ and flush the event file. Do not run this against a shared gateway:
 openclaw gateway stop
 ```
 
-Wait for the stop command to finish successfully before verifying. The gateway
-remains stopped after this test; start it again when you want to resume use.
+Wait for the stop command to finish successfully before verifying.
 For a foreground gateway, press **Ctrl+C** in its terminal instead of running
 `gateway stop`, and wait for that process to exit before verifying.
 
-## 4. Verify
+<Note icon="circle-info">
+The gateway remains stopped after this test; start it again when you want to
+resume use.
+</Note>
+
+## Verify
 
 Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
 
@@ -325,11 +347,17 @@ RELAY_QUICKSTART_TOOL_OK
 RELAY_QUICKSTART_EVENTS_OK
 ```
 
-These markers confirm the tool-created file and matching start/end records for
-agent, tool, and LLM work. The agent's final reply should include
-`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
-
 </details>
+
+The agent's final reply should include `RELAY_QUICKSTART_RESPONSE_OK`;
+its surrounding wording can vary.
+
+<Note icon="circle-info">
+The verification markers confirm the tool-created file and matching start/end
+records for agent, tool, and LLM work.
+</Note>
+
+</Steps>
 
 ## For More Details
 

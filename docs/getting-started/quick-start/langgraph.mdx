@@ -48,6 +48,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
+## Goal
+
 Run one credential-free LangGraph workflow and write its lifecycle to a local
 ATOF event file.
 
@@ -56,7 +58,9 @@ ATOF event file.
 - Python 3.11 or newer
 - `uv`
 
-## 1. Install
+<Steps toc={true}>
+
+## Install
 
 Create a project and install the pinned NeMo Relay release with the LangGraph
 extra. In an existing `uv` project, skip `uv init`.
@@ -69,7 +73,7 @@ uv init
 uv add "nemo-relay[langgraph]==0.10.0"
 ```
 
-## 2. Configure
+## Configure
 
 Save the following configuration as `plugins.toml` in your project directory:
 
@@ -100,10 +104,12 @@ filename = "events.jsonl"
 mode = "overwrite"
 ```
 
+<Warning>
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
+</Warning>
 
-## 3. Run
+## Run
 
 Save this file as `quickstart.py` beside `plugins.toml`:
 
@@ -185,7 +191,7 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-## 4. Verify
+## Verify
 
 The program parses every JSONL record and checks that the `emit_marker` graph
 node has matching start and end records before printing, in order:
@@ -197,9 +203,12 @@ RELAY_QUICKSTART_RESPONSE_OK
 RELAY_QUICKSTART_EVENTS_OK
 ```
 
-The event file contains the LangGraph workflow lifecycle. This deterministic
-path needs no model credentials; add a model and tool node after the basic
-integration works.
+<Tip>
+This deterministic path needs no model credentials. After it works, add a model
+and tool node to observe a full agent workflow.
+</Tip>
+
+</Steps>
 
 ## For More Details
 

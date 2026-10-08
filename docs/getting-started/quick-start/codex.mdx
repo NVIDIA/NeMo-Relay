@@ -61,12 +61,16 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
+## Goal
+
 Run one local Codex CLI task through NeMo Relay and write its turn, model, and
 tool lifecycle to a local ATOF event file.
 
+<Note icon="circle-info">
 This path observes local Codex processes. Cloud or remote Codex tasks are only
 partially observable because their provider traffic does not cross the local
 Relay gateway.
+</Note>
 
 ## Prerequisites
 
@@ -78,6 +82,7 @@ Relay gateway.
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 
+<Note icon="circle-info">
 Use Codex's configured model; Relay does not select or require one. For example,
 authenticate with `codex login`, or set `OPENAI_API_KEY` for an API-key-backed
 Relay-wrapped run. Relay replaces Codex's model provider with its gateway
@@ -88,8 +93,11 @@ the run. Also add an `[upstream]` section with
 `openai_base_url = "https://YOUR_GATEWAY/v1"` to the Relay `config.toml` below;
 Codex's custom base URL is not carried over when Relay replaces its provider.
 Refer to [Codex authentication](https://developers.openai.com/codex/auth).
+</Note>
 
-## 1. Install
+<Steps toc={true}>
+
+## Install
 
 Install the pinned NeMo Relay CLI release:
 
@@ -111,7 +119,7 @@ irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.0/install.ps1 | iex
 </Tab>
 </Tabs>
 
-## 2. Configure
+## Configure
 
 Create a disposable Git repository and permit Codex to write files there:
 
@@ -161,10 +169,12 @@ filename = "events.jsonl"
 mode = "overwrite"
 ```
 
+<Warning>
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
+</Warning>
 
-## 3. Run
+## Run
 
 From the directory containing both files, run the common validation prompt:
 
@@ -184,18 +194,24 @@ nemo-relay --config (Join-Path $PWD "config.toml") codex -- exec --sandbox works
 </Tab>
 </Tabs>
 
+<Note icon="circle-info">
 The [workspace-write sandbox](https://learn.chatgpt.com/docs/non-interactive-mode#permissions-and-safety)
 permits the marker file in your working directory; it does not disable sandboxing.
+</Note>
 
+<Tip>
 To choose a model for this invocation, use
 `nemo-relay --config "$PWD/config.toml" codex -- --model MODEL_ID exec --sandbox workspace-write "YOUR_PROMPT"`.
 Replace `MODEL_ID` with an ID your provider supports. Put this Codex option
 before `exec`, preserving the prompt and sandbox from the command above.
+</Tip>
 
+<Note icon="circle-info">
 Relay starts a temporary local gateway and injects Codex hooks for this run. It
 does not modify your persistent Codex plugin configuration.
+</Note>
 
-## 4. Verify
+## Verify
 
 Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
 
@@ -263,11 +279,17 @@ RELAY_QUICKSTART_TOOL_OK
 RELAY_QUICKSTART_EVENTS_OK
 ```
 
-These markers confirm the tool-created file and matching start/end records for
-custom turn, tool, and LLM work. The agent's final reply should include
-`RELAY_QUICKSTART_RESPONSE_OK`; its surrounding wording can vary.
-
 </details>
+
+The agent's final reply should include `RELAY_QUICKSTART_RESPONSE_OK`;
+its surrounding wording can vary.
+
+<Note icon="circle-info">
+The verification markers confirm the tool-created file and matching start/end
+records for custom turn, tool, and LLM work.
+</Note>
+
+</Steps>
 
 ## For More Details
 
