@@ -218,6 +218,19 @@ fn decode_worker_tls_root(root_certificate: &str) -> Result<Vec<u8>, CliError> {
 }
 
 fn pooled_worker_tls_client_from_der(der: Vec<u8>) -> Result<PooledClient, CliError> {
+    worker_tls_client_from_der(der, false)
+}
+
+pub(crate) fn worker_websocket_client(root: Option<&str>) -> Result<PooledClient, CliError> {
+    match root {
+        Some(root) => worker_tls_client_from_der(decode_worker_tls_root(root)?, true),
+        None => {
+            super::transport::pooled_websocket_client().map_err(|e| CliError::Launch(e.to_string()))
+        }
+    }
+}
+
+fn worker_tls_client_from_der(der: Vec<u8>, http1_only: bool) -> Result<PooledClient, CliError> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut roots = rustls::RootCertStore::empty();
     roots
@@ -234,9 +247,12 @@ fn pooled_worker_tls_client_from_der(der: Vec<u8>) -> Result<PooledClient, CliEr
     let connector = HttpsConnectorBuilder::new()
         .with_tls_config(client_config)
         .https_only()
-        .enable_http1()
-        .enable_http2()
-        .wrap_connector(http);
+        .enable_http1();
+    let connector = if http1_only {
+        connector.wrap_connector(http)
+    } else {
+        connector.enable_http2().wrap_connector(http)
+    };
     let builder = pooled_builder();
     Ok(builder.build(connector))
 }

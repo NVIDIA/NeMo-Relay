@@ -376,6 +376,10 @@ Managed Codex routes now forward ChatGPT OAuth to the native ChatGPT Codex
 backend when no administrator OpenAI credential is configured. If the daemon
 has `openai_auth_header` or `OPENAI_API_KEY`, Relay replaces the incoming OAuth
 credential and uses the administrator's configured OpenAI-compatible upstream.
+ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
+They keep the caller's ChatGPT credential and use the native ChatGPT backend
+even when a replacement credential is configured. Review this exception if
+your deployment relies on administrator credentials to select the upstream.
 Review those settings to choose the intended provider and credential source.
 Refer to [Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
 

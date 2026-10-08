@@ -6573,3 +6573,329 @@ async fn a_named_upstream_redirect_is_not_followed() {
 
     redirector.abort();
 }
+
+#[tokio::test]
+async fn unmanaged_provider_routes_preserve_wire_bodies_and_response_headers() {
+    async fn echo(request: Request<Body>) -> Response<Body> {
+        assert_eq!(request.uri().query(), Some("model=voice"));
+        assert_eq!(
+            request.headers()["authorization"],
+            "Bearer caller-voice-key"
+        );
+        let upstream_path = request.uri().path().to_string();
+        let content_type = request.headers()["content-type"].clone();
+        let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        Response::builder()
+            .status(StatusCode::CREATED)
+            .header("content-type", content_type)
+            .header("location", "/v1/live/rtc_test")
+            .header("x-upstream-path", upstream_path)
+            .body(Body::from(body))
+            .unwrap()
+    }
+    let provider = Router::new()
+        .route("/v1/live", post(echo))
+        .route("/v1/realtime/calls", post(echo))
+        .route("/v1/responses/compact", post(echo));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let provider_task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    let mut config = test_config();
+    config.openai_base_url = format!("http://{address}/v1");
+    let state = AppState::new(config);
+    let app = router_with_state(state.clone());
+    for (path, upstream_path) in [
+        ("/live", "/v1/live"),
+        ("/v1/live", "/v1/live"),
+        ("/realtime/calls", "/v1/realtime/calls"),
+        ("/v1/realtime/calls", "/v1/realtime/calls"),
+        ("/backend-api/codex/realtime/calls", "/v1/realtime/calls"),
+        ("/responses/compact", "/v1/responses/compact"),
+        ("/v1/responses/compact", "/v1/responses/compact"),
+        (
+            "/backend-api/codex/responses/compact",
+            "/v1/responses/compact",
+        ),
+    ] {
+        for (content_type, body) in [
+            ("application/sdp", "v=0\r\no=voice offer\r\n"),
+            (
+                "multipart/form-data; boundary=voice",
+                "--voice\r\nContent-Disposition: form-data; name=\"sdp\"\r\n\r\nv=0\r\n--voice--\r\n",
+            ),
+            (
+                "application/json",
+                "{ \"sdp\": \"v=0\\r\\n\", \"session\": {} }",
+            ),
+        ] {
+            if path.ends_with("/compact") && content_type != "application/json" {
+                continue;
+            }
+            let body = if path.ends_with("/compact") {
+                "{ \"model\": \"gpt-test\", \"input\": [], \"encrypted_content\": \"opaque\" }"
+            } else {
+                body
+            };
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post(format!("{path}?model=voice"))
+                        .header("content-type", content_type)
+                        .header("authorization", "Bearer caller-voice-key")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            assert_eq!(response.headers()["content-type"], content_type);
+            assert_eq!(response.headers()["x-upstream-path"], upstream_path);
+            assert_eq!(response.headers()["location"], "/v1/live/rtc_test");
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                body
+            );
+        }
+    }
+    assert!(!state.sessions.has_open_sessions().await);
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn sideband_capability_routes_authenticate_and_attach_existing_sessions() {
+    use crate::gateway::websocket::tests::{
+        exercise_sideband, exercise_unmanaged_http, provider, serve,
+    };
+    let (upstream, provider_task, active) = provider().await;
+    let key = BootstrapChallengeKey::from_bytes(b"sideband capability");
+    let mut config = test_config();
+    config.openai_base_url = upstream;
+    let (origin, task) = serve(router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("sideband-fingerprint".into()),
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    )))
+    .await;
+    let capability_origin = format!("{origin}/v1/nemo-relay/{}", key.client_token());
+    exercise_unmanaged_http(&capability_origin, None, &[""]).await;
+    exercise_sideband(&capability_origin, None, &active, &[""]).await;
+    let url = format!(
+        "{}/v1/nemo-relay/invalid/live/sessions/live_0/attach",
+        origin.replacen("http", "ws", 1)
+    );
+    let error = tokio_tungstenite::connect_async(url).await.unwrap_err();
+    let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+        panic!("{error}");
+    };
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    task.abort();
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn websocket_named_upstream_requires_proxy_auth_and_preserves_provider_credentials() {
+    use crate::gateway::websocket::tests::{provider, serve};
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let (upstream, provider_task, active) = provider().await;
+    let mut config = test_config();
+    config.openai_base_url = "http://127.0.0.1:1".into();
+    config.openai_auth_header = Some("Bearer must-not-replace-caller".into());
+    let (origin, task) = serve(router_for_launched_session(config, "nrp_websocket")).await;
+    for credential in [None, Some("wrong-token"), Some("nrp_websocket")] {
+        let mut request = format!("{}/v1/live?model=voice", origin.replacen("http", "ws", 1))
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER,
+            upstream.parse().unwrap(),
+        );
+        request
+            .headers_mut()
+            .insert("authorization", "Bearer caller-voice-key".parse().unwrap());
+        if let Some(credential) = credential {
+            request.headers_mut().insert(
+                crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+                credential.parse().unwrap(),
+            );
+        }
+        let result = tokio_tungstenite::connect_async(request).await;
+        if credential == Some("nrp_websocket") {
+            let (mut socket, _) = result.unwrap();
+            assert_eq!(
+                socket.next().await.unwrap().unwrap(),
+                tokio_tungstenite::tungstenite::Message::Binary(vec![0, 1, 255].into())
+            );
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    "named".into(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                socket.next().await.unwrap().unwrap(),
+                tokio_tungstenite::tungstenite::Message::Text("named".into())
+            );
+            drop(socket);
+        } else {
+            let error = result.unwrap_err();
+            let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+                panic!("{error}");
+            };
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(active.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
+    }
+    task.abort();
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn unmanaged_routes_preserve_streaming_and_error_responses_without_sessions() {
+    use crate::gateway::websocket::tests::serve;
+    let provider = Router::new().fallback(|request: Request<Body>| async move {
+        assert!(
+            request
+                .headers()
+                .keys()
+                .all(|name| !name.as_str().starts_with("x-nemo-relay-"))
+        );
+        let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let streaming = body.as_ref() == br#"{"stream":true}"#;
+        Response::builder()
+            .status(if streaming {
+                StatusCode::OK
+            } else {
+                StatusCode::TOO_MANY_REQUESTS
+            })
+            .header("retry-after", "5")
+            .header(
+                "content-type",
+                if streaming {
+                    "text/event-stream"
+                } else {
+                    "application/octet-stream"
+                },
+            )
+            .body(if streaming {
+                Body::from_stream(futures_util::stream::iter([
+                    Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"data: opaque\n\n")),
+                    Ok(bytes::Bytes::from_static(b"data: [DONE]\n\n")),
+                ]))
+            } else {
+                Body::from(vec![0, 255, 1])
+            })
+            .unwrap()
+    });
+    let (upstream, provider_task) = serve(provider).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream;
+    let state = AppState::new(config);
+    let app = router_with_state(state.clone());
+    for path in [
+        "/v1/live",
+        "/v1/live/sessions",
+        "/v1/realtime/calls",
+        "/v1/responses/compact",
+        "/v1/images/edits",
+        "/v1/memories/trace_summarize",
+        "/v1/alpha/search",
+    ] {
+        for streaming in [false, true] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post(path)
+                        .header("authorization", "Bearer caller-key")
+                        .header("content-type", "application/json")
+                        .header("x-nemo-relay-private", "must-not-leak")
+                        .body(Body::from(if streaming {
+                            r#"{"stream":true}"#
+                        } else {
+                            "{}"
+                        }))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if streaming {
+                    StatusCode::OK
+                } else {
+                    StatusCode::TOO_MANY_REQUESTS
+                },
+                "{path}"
+            );
+            assert_eq!(response.headers()["retry-after"], "5");
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(
+                bytes.as_ref(),
+                if streaming {
+                    b"data: opaque\n\ndata: [DONE]\n\n".as_slice()
+                } else {
+                    &[0, 255, 1]
+                },
+                "{path}"
+            );
+        }
+    }
+    assert!(!state.sessions.has_open_sessions().await);
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn websocket_tunnel_blocks_idle_shutdown_until_disconnect() {
+    use crate::gateway::websocket::tests::{provider, serve};
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let (upstream, provider_task, _) = provider().await;
+    let mut config = test_config();
+    config.openai_base_url = upstream;
+    let state = AppState::new(config);
+    let (origin, task) = serve(router_with_state(state.clone())).await;
+    let mut request = format!("{}/v1/live?model=voice", origin.replacen("http", "ws", 1))
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        header::AUTHORIZATION,
+        "Bearer caller-voice-key".parse().unwrap(),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    socket.next().await.unwrap().unwrap();
+    assert_eq!(state.active_websockets.load(Ordering::Acquire), 1);
+    assert!(!state.sessions.has_open_sessions().await);
+    let timeout = Duration::from_secs(1);
+    *state.last_activity.lock().unwrap() = std::time::Instant::now() - timeout - timeout;
+    let idle = tokio::spawn(idle_shutdown_future(state.clone(), timeout));
+    tokio::time::sleep(timeout + Duration::from_millis(100)).await;
+    assert!(
+        !idle.is_finished(),
+        "an open tunnel must prevent idle shutdown"
+    );
+    drop(socket);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while state.active_websockets.load(Ordering::Acquire) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        !idle_shutdown_ready(&state.last_activity, timeout, state.has_open_activity()).await,
+        "closing a tunnel must start a fresh idle period"
+    );
+    tokio::time::timeout(Duration::from_secs(3), idle)
+        .await
+        .unwrap()
+        .unwrap();
+    task.abort();
+    provider_task.abort();
+}

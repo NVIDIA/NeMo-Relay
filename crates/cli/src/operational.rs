@@ -108,6 +108,43 @@ impl OperationalContext {
     }
 }
 
+/// Reports a Relay routing miss without logging query parameters or capability credentials.
+pub(crate) fn unmatched_route(
+    boundary: &'static str,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    status: axum::http::StatusCode,
+) -> axum::http::StatusCode {
+    // Decode before classifying so encoded namespace letters and slashes cannot hide a token.
+    let decoded_path = percent_encoding::percent_decode_str(uri.path()).decode_utf8_lossy();
+    let mut segments = decoded_path
+        .split('/')
+        .filter(|segment| !segment.is_empty());
+    let capability_namespace = segments
+        .next()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("v1"))
+        && segments
+            .next()
+            .is_some_and(|segment| segment.eq_ignore_ascii_case("nemo-relay"));
+    // Any unmatched path may contain a credential. Keep only the capability namespace
+    // classification and never retain caller-supplied path segments.
+    let path = if capability_namespace {
+        "/v1/nemo-relay/<redacted>"
+    } else {
+        "/<redacted>"
+    };
+    log::error!(
+        target: "nemo_relay.operational",
+        event = "route_unmatched",
+        boundary,
+        method = method.as_str(),
+        path,
+        status = status.as_u16();
+        "Request did not match a supported Relay route"
+    );
+    status
+}
+
 /// Emits one fixed-schema record while omitting `session_id` until Relay has selected one.
 /// Event names are literals at every call site so the record contract cannot drift at runtime.
 macro_rules! operational_log {

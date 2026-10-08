@@ -9,6 +9,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -59,10 +60,21 @@ pub(crate) struct AppState {
     pub(crate) http_no_redirect: Client,
     pub(crate) sessions: SessionManager,
     pub(crate) last_activity: Arc<Mutex<Instant>>,
+    pub(crate) active_websockets: Arc<AtomicUsize>,
     pub(crate) bootstrap_shutdown: Option<BootstrapShutdown>,
     pub(crate) instance_id: String,
     pub(crate) bootstrap_tls: Option<Arc<rustls::ServerConfig>>,
     pub(crate) local_address: Option<SocketAddr>,
+}
+
+/// Keeps an unmanaged tunnel active without creating an LLM session or event.
+pub(crate) struct WebSocketActivity(AppState);
+
+impl Drop for WebSocketActivity {
+    fn drop(&mut self) {
+        self.0.touch();
+        self.0.active_websockets.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[derive(Clone)]
@@ -298,7 +310,7 @@ async fn serve_listener_with_dynamic_inner(
     state.local_address = Some(listener.local_addr()?);
     let instance_id = state.instance_id.clone();
     let sessions = state.sessions.clone();
-    let last_activity = state.last_activity.clone();
+    let idle_state = state.clone();
     let app = router_with_state(state);
     let local_address = listener.local_addr()?;
     if let Some(identity) = managed_bootstrap.as_ref() {
@@ -323,11 +335,7 @@ async fn serve_listener_with_dynamic_inner(
     let idle_shutdown: Option<ShutdownFuture> =
         if matches!(&shutdown_mode, None | Some(ShutdownMode::ProcessSignal)) {
             plugin_idle_timeout()?.map(|timeout| {
-                Box::pin(idle_shutdown_future(
-                    last_activity,
-                    sessions.clone(),
-                    timeout,
-                )) as ShutdownFuture
+                Box::pin(idle_shutdown_future(idle_state, timeout)) as ShutdownFuture
             })
         } else {
             None
@@ -530,6 +538,7 @@ impl AppState {
             http_no_redirect,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
+            active_websockets: Arc::new(AtomicUsize::new(0)),
             bootstrap_shutdown,
             instance_id: uuid::Uuid::now_v7().to_string(),
             bootstrap_tls: None,
@@ -541,6 +550,16 @@ impl AppState {
         if let Ok(mut last_activity) = self.last_activity.lock() {
             *last_activity = Instant::now();
         }
+    }
+
+    pub(crate) fn hold_websocket(&self) -> WebSocketActivity {
+        self.active_websockets.fetch_add(1, Ordering::AcqRel);
+        WebSocketActivity(self.clone())
+    }
+
+    async fn has_open_activity(&self) -> bool {
+        self.active_websockets.load(Ordering::Acquire) != 0
+            || self.sessions.has_open_sessions().await
     }
 
     /// Authenticate an invocation-owned transparent client before interceptors can rewrite its
@@ -710,19 +729,127 @@ fn router_with_state(state: AppState) -> Router {
         .route("/v1/responses", post(gateway::passthrough))
         .route("/backend-api/codex/responses", post(gateway::passthrough))
         .route("/v1/chat/completions", post(gateway::passthrough))
-        .route("/v1/images/generations", post(gateway::images_generations))
+        .route("/responses/compact", post(gateway::unmanaged_passthrough))
+        .route(
+            "/v1/responses/compact",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/backend-api/codex/responses/compact",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route("/realtime/calls", post(gateway::unmanaged_passthrough))
+        .route("/v1/realtime/calls", post(gateway::unmanaged_passthrough))
+        .route(
+            "/backend-api/codex/realtime/calls",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route("/images/edits", post(gateway::unmanaged_passthrough))
+        .route("/v1/images/edits", post(gateway::unmanaged_passthrough))
+        .route(
+            "/v1/nemo-relay/{capability}/images/edits",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/memories/trace_summarize",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/memories/trace_summarize",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/memories/trace_summarize",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route("/alpha/search", post(gateway::unmanaged_passthrough))
+        .route("/v1/alpha/search", post(gateway::unmanaged_passthrough))
+        .route(
+            "/v1/nemo-relay/{capability}/alpha/search",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route("/live/{call_id}", get(gateway::websocket_passthrough))
+        .route("/v1/live/{call_id}", get(gateway::websocket_passthrough))
+        .route(
+            "/v1/nemo-relay/{capability}/live/{call_id}",
+            get(gateway::websocket_passthrough),
+        )
+        .route("/live/sessions", post(gateway::unmanaged_passthrough))
+        .route("/v1/live/sessions", post(gateway::unmanaged_passthrough))
+        .route(
+            "/live/sessions/{session_id}/attach",
+            get(gateway::websocket_passthrough),
+        )
+        .route(
+            "/v1/live/sessions/{session_id}/attach",
+            get(gateway::websocket_passthrough),
+        )
+        .route("/realtime", get(gateway::websocket_passthrough))
+        .route("/v1/realtime", get(gateway::websocket_passthrough))
+        .route(
+            "/live",
+            post(gateway::unmanaged_passthrough).get(gateway::websocket_passthrough),
+        )
+        .route(
+            "/v1/live",
+            post(gateway::unmanaged_passthrough).get(gateway::websocket_passthrough),
+        )
+        .route(
+            "/v1/images/generations",
+            post(gateway::unmanaged_passthrough),
+        )
         .route("/v1/messages", post(gateway::passthrough))
         .route("/v1/messages/count_tokens", post(gateway::passthrough))
         .route("/v1/models", get(gateway::models))
         .route(
             "/v1/nemo-relay/{capability}/images/generations",
-            post(gateway::images_generations),
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/live",
+            post(gateway::unmanaged_passthrough).get(gateway::websocket_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/responses/compact",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/realtime/calls",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/realtime",
+            get(gateway::websocket_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/live/sessions",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/live/sessions/{session_id}/attach",
+            get(gateway::websocket_passthrough),
         )
         .route("/v1/nemo-relay/{capability}/models", get(gateway::models))
         .route(
             "/v1/nemo-relay/{capability}/{*provider_path}",
             post(gateway::passthrough),
         )
+        .method_not_allowed_fallback(|request: Request<Body>| async move {
+            crate::operational::unmatched_route(
+                "gateway",
+                request.method(),
+                request.uri(),
+                StatusCode::METHOD_NOT_ALLOWED,
+            )
+        })
+        .fallback(|request: Request<Body>| async move {
+            crate::operational::unmatched_route(
+                "gateway",
+                request.method(),
+                request.uri(),
+                StatusCode::NOT_FOUND,
+            )
+        })
         .layer(middleware::from_fn(responses_websocket_fallback))
         .layer(DefaultBodyLimit::max(max_hook_payload_bytes))
         .with_state(state)
@@ -953,17 +1080,13 @@ fn plugin_idle_timeout() -> Result<Option<Duration>, CliError> {
     Ok(Some(Duration::from_secs(seconds)))
 }
 
-async fn idle_shutdown_future(
-    last_activity: Arc<Mutex<Instant>>,
-    sessions: SessionManager,
-    timeout: Duration,
-) {
+async fn idle_shutdown_future(state: AppState, timeout: Duration) {
     let tick = timeout
         .min(Duration::from_secs(5))
         .max(Duration::from_secs(1));
     loop {
         tokio::time::sleep(tick).await;
-        if idle_shutdown_ready(&last_activity, timeout, sessions.has_open_sessions()).await {
+        if idle_shutdown_ready(&state.last_activity, timeout, state.has_open_activity()).await {
             break;
         }
     }

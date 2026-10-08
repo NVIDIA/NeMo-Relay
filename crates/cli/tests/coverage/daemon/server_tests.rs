@@ -4093,3 +4093,356 @@ async fn recovery_probe_failure_preserves_a_newer_generation_and_cleans_up_its_o
         server.abort();
     }
 }
+
+#[tokio::test]
+async fn unmanaged_provider_routes_preserve_wire_bodies_and_response_headers() {
+    async fn echo(request: Request<Body>) -> Response<Body> {
+        assert_eq!(request.uri().query(), Some("model=voice"));
+        assert_eq!(
+            request.headers()["authorization"],
+            "Bearer caller-voice-key"
+        );
+        let upstream_path = request.uri().path().to_string();
+        let content_type = request.headers()["content-type"].clone();
+        let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        Response::builder()
+            .status(StatusCode::CREATED)
+            .header("content-type", content_type)
+            .header("location", "/v1/live/rtc_test")
+            .header("x-upstream-path", upstream_path)
+            .body(Body::from(body))
+            .unwrap()
+    }
+    let provider = Router::new()
+        .route("/v1/live", post(echo))
+        .route("/v1/realtime/calls", post(echo))
+        .route("/v1/responses/compact", post(echo));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let provider_task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    let app = router(test_daemon_state(
+        false,
+        "",
+        GatewayConfig {
+            openai_base_url: format!("http://{address}/v1"),
+            ..GatewayConfig::default()
+        },
+    ));
+    for (path, upstream_path) in [
+        ("/live", "/v1/live"),
+        ("/v1/live", "/v1/live"),
+        ("/realtime/calls", "/v1/realtime/calls"),
+        ("/v1/realtime/calls", "/v1/realtime/calls"),
+        ("/backend-api/codex/realtime/calls", "/v1/realtime/calls"),
+        ("/responses/compact", "/v1/responses/compact"),
+        ("/v1/responses/compact", "/v1/responses/compact"),
+        (
+            "/backend-api/codex/responses/compact",
+            "/v1/responses/compact",
+        ),
+    ] {
+        for (content_type, body) in [
+            ("application/sdp", "v=0\r\no=voice offer\r\n"),
+            (
+                "multipart/form-data; boundary=voice",
+                "--voice\r\nContent-Disposition: form-data; name=\"sdp\"\r\n\r\nv=0\r\n--voice--\r\n",
+            ),
+            (
+                "application/json",
+                "{ \"sdp\": \"v=0\\r\\n\", \"session\": {} }",
+            ),
+        ] {
+            if path.ends_with("/compact") && content_type != "application/json" {
+                continue;
+            }
+            let body = if path.ends_with("/compact") {
+                "{ \"model\": \"gpt-test\", \"input\": [], \"encrypted_content\": \"opaque\" }"
+            } else {
+                body
+            };
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post(format!("{path}?model=voice"))
+                        .header("content-type", content_type)
+                        .header("authorization", "Bearer caller-voice-key")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            assert_eq!(response.headers()["content-type"], content_type);
+            assert_eq!(response.headers()["x-upstream-path"], upstream_path);
+            assert_eq!(response.headers()["location"], "/v1/live/rtc_test");
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                body
+            );
+        }
+    }
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn daemon_websocket_proxy_preserves_frames_and_worker_ownership() {
+    use crate::gateway::websocket::tests::{exercise, provider, serve};
+    let (upstream, provider_task, active) = provider().await;
+    for mode in [0, 1, 2] {
+        let through_worker = mode != 0;
+        let config = GatewayConfig {
+            openai_base_url: upstream.clone(),
+            ..GatewayConfig::default()
+        };
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x73_u8; 32]);
+        let state = test_daemon_state(false, &token, config.clone());
+        let mut worker_task = None;
+        let mut target = None;
+        let mut worker_handle = None;
+        if through_worker {
+            let (worker, handle) = crate::daemon::worker::test_router(
+                config,
+                pooled_client().unwrap(),
+                b"websocket-worker-token",
+            );
+            worker_handle = Some(handle);
+            let tls = (mode == 2).then(|| {
+                crate::daemon::common::worker_tls::WorkerTlsIdentity::generate("127.0.0.1").unwrap()
+            });
+            let (endpoint, task) = if let Some(tls) = tls.as_ref() {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let endpoint = format!("https://{}", listener.local_addr().unwrap());
+                (
+                    endpoint,
+                    tokio::spawn(crate::daemon::worker::test_serve_tls(
+                        listener,
+                        worker,
+                        tls.server_config(),
+                    )),
+                )
+            } else {
+                serve(worker).await
+            };
+            worker_task = Some(task);
+            let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
+            let launch = fresh_launch(WorkerNetworkHint::new("127.0.0.1", None).unwrap()).unwrap();
+            let activation_id = launch.activation_id.clone();
+            state
+                .registry
+                .register_mcp(
+                    McpRegistration {
+                        fingerprint,
+                        token_digest: RouteCredential::parse(token.clone()).unwrap().digest(),
+                        session_id: McpSessionId::new("websocket-mcp").unwrap(),
+                        lease_expires_at_unix_ms: u64::MAX,
+                    },
+                    launch,
+                )
+                .unwrap();
+            let worker = Arc::new(
+                WorkerTarget::with_client(
+                    "websocket-worker",
+                    endpoint,
+                    SensitiveString::new("websocket-worker-token").unwrap(),
+                    if let Some(tls) = tls.as_ref() {
+                        crate::daemon::common::worker_tls::pooled_worker_tls_client(
+                            tls.root_certificate(),
+                        )
+                        .unwrap()
+                    } else {
+                        pooled_client().unwrap()
+                    },
+                )
+                .unwrap()
+                .with_websocket_client(
+                    crate::daemon::common::worker_tls::worker_websocket_client(
+                        tls.as_ref().map(|tls| tls.root_certificate()),
+                    )
+                    .unwrap(),
+                ),
+            );
+            state
+                .registry
+                .mark_worker_ready(fingerprint, &activation_id, worker.clone())
+                .unwrap();
+            target = Some(worker);
+        }
+        let (origin, task) = serve(router(state)).await;
+        exercise(&origin, through_worker.then_some(token.as_str()), &active).await;
+        if let Some(target) = target {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while target.in_flight() != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        if let Some(handle) = worker_handle {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while handle.in_flight() != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        task.abort();
+        if let Some(task) = worker_task {
+            task.abort();
+        }
+    }
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn unmatched_routes_log_each_boundary_without_reporting_upstream_404s() {
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_UNMATCHED_LOG_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = tokio::time::timeout(
+            Duration::from_secs(20),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "daemon::broker::server::tests::unmatched_routes_log_each_boundary_without_reporting_upstream_404s", "--nocapture"])
+                .env(CHILD_ENV, "1")
+                .kill_on_drop(true)
+                .output(),
+        ).await.unwrap().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    use nemo_relay::logging::{
+        FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let log_path = directory.path().join("unmatched.jsonl");
+    let logging = init_logging(&LoggingConfig {
+        level: LogLevel::Error,
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: log_path.clone(),
+            level: LogLevel::Error,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..LoggingConfig::default()
+    })
+    .unwrap();
+    let (upstream, provider_task) = crate::gateway::websocket::tests::serve(
+        Router::new().fallback(|| async { (StatusCode::NOT_FOUND, "upstream missing") }),
+    )
+    .await;
+    let config = GatewayConfig {
+        openai_base_url: upstream,
+        ..GatewayConfig::default()
+    };
+    let daemon = router(test_daemon_state(false, "", config.clone()));
+    let (worker, _) = crate::daemon::worker::test_router(
+        config.clone(),
+        pooled_client().unwrap(),
+        b"log-worker-token",
+    );
+    for (app, boundary, method_path) in [
+        (
+            daemon.clone(),
+            "daemon",
+            vec![
+                (
+                    "GET",
+                    "/reset/reset-token-secret?secret=query-secret",
+                    StatusCode::NOT_FOUND,
+                ),
+                ("POST", "/healthz", StatusCode::METHOD_NOT_ALLOWED),
+                ("GET", "/v1/live", StatusCode::METHOD_NOT_ALLOWED),
+            ],
+        ),
+        (
+            worker.clone(),
+            "worker",
+            vec![
+                (
+                    "GET",
+                    "/reset/reset-token-secret?secret=query-secret",
+                    StatusCode::NOT_FOUND,
+                ),
+                (
+                    "POST",
+                    crate::daemon::common::control::WORKER_PROBE_PATH,
+                    StatusCode::METHOD_NOT_ALLOWED,
+                ),
+            ],
+        ),
+    ] {
+        for (method, path, expected) in method_path {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("authorization", "Bearer header-secret");
+            if boundary == "worker" {
+                request = request.header(
+                    crate::daemon::common::control::WORKER_TOKEN_HEADER,
+                    "log-worker-token",
+                );
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{boundary}: {path}");
+        }
+    }
+    for (app, worker_token) in [(daemon, false), (worker, true)] {
+        let mut request = Request::post("/v1/alpha/search")
+            .header("authorization", "Bearer caller-key")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        if worker_token {
+            request.headers_mut().insert(
+                crate::daemon::common::control::WORKER_TOKEN_HEADER,
+                "log-worker-token".parse().unwrap(),
+            );
+        }
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "upstream missing"
+        );
+    }
+    logging.shutdown();
+    let content = std::fs::read_to_string(log_path).unwrap();
+    let records: Vec<serde_json::Value> = content
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|record| record["event"] == "route_unmatched")
+        .collect();
+    assert_eq!(records.len(), 5, "{content}");
+    for (boundary, count) in [("daemon", 3), ("worker", 2)] {
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["fields"]["boundary"] == boundary)
+                .count(),
+            count
+        );
+    }
+    for record in &records {
+        assert_eq!(record["fields"]["path"], "/<redacted>");
+        assert_eq!(
+            record["level"].as_str().unwrap().to_ascii_lowercase(),
+            "error"
+        );
+    }
+    for secret in ["query-secret", "header-secret", "reset-token-secret"] {
+        assert!(!content.contains(secret), "{content}");
+    }
+    provider_task.abort();
+}

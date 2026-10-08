@@ -2396,6 +2396,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         http_no_redirect: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
+        active_websockets: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         bootstrap_shutdown: None,
         instance_id: "test-instance".into(),
         bootstrap_tls: None,
@@ -2437,6 +2438,7 @@ async fn models_rejects_non_get_requests_directly() {
         http_no_redirect: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
+        active_websockets: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         bootstrap_shutdown: None,
         instance_id: "test-instance".into(),
         bootstrap_tls: None,
@@ -2846,6 +2848,7 @@ async fn models_refuses_an_unusable_named_upstream() {
         http_no_redirect: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
+        active_websockets: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         bootstrap_shutdown: None,
         instance_id: "test-instance".into(),
         bootstrap_tls: None,
@@ -2872,4 +2875,172 @@ async fn models_refuses_an_unusable_named_upstream() {
         matches!(error, crate::error::CliError::InvalidPayload(_)),
         "a named destination that cannot be used must fail the request: {error}"
     );
+}
+
+#[test]
+fn unmanaged_provider_routes_use_codex_auth_routing_and_preserve_query() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer at-codex-voice"),
+    );
+    for (route, path, expected) in [
+        (
+            ProviderRoute::OpenAiImagesEdits,
+            "/images/edits?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/images/edits?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiImagesEdits,
+            "/v1/images/edits?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/images/edits?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiMemoriesSummarize,
+            "/memories/trace_summarize?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/memories/trace_summarize?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiMemoriesSummarize,
+            "/v1/memories/trace_summarize?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/memories/trace_summarize?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiStandaloneSearch,
+            "/alpha/search?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/alpha/search?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiStandaloneSearch,
+            "/v1/alpha/search?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/alpha/search?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiRealtimeCalls,
+            "/realtime/calls?model=voice",
+            "https://chatgpt.com/backend-api/codex/realtime/calls?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiRealtimeCalls,
+            "/v1/realtime/calls?model=voice",
+            "https://chatgpt.com/backend-api/codex/realtime/calls?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiRealtimeCalls,
+            "/backend-api/codex/realtime/calls?model=voice",
+            "https://chatgpt.com/backend-api/codex/realtime/calls?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiResponsesCompact,
+            "/responses/compact?model=voice",
+            "https://chatgpt.com/backend-api/codex/responses/compact?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiResponsesCompact,
+            "/v1/responses/compact?model=voice",
+            "https://chatgpt.com/backend-api/codex/responses/compact?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiResponsesCompact,
+            "/backend-api/codex/responses/compact?model=voice",
+            "https://chatgpt.com/backend-api/codex/responses/compact?model=voice",
+        ),
+    ] {
+        assert_eq!(
+            gateway_upstream_url_override_with_openai_key_state(route, &headers, path, false,)
+                .as_deref(),
+            Some(expected),
+        );
+        assert_eq!(
+            gateway_upstream_url_override_with_openai_key_state(route, &headers, path, true,),
+            path.starts_with("/backend-api/codex/realtime/calls")
+                .then(|| expected.to_owned()),
+        );
+    }
+}
+
+#[tokio::test]
+async fn backend_voice_call_preserves_chatgpt_auth_despite_configured_api_replacement() {
+    let config = GatewayConfig {
+        openai_auth_header: Some("Bearer api-replacement".into()),
+        ..GatewayConfig::default()
+    };
+    let path = "/backend-api/codex/realtime/calls";
+    let body = r#"{"sdp":"offer","session":{"type":"realtime"}}"#;
+    let request = Request::post(format!("{path}?architecture=avas"))
+        .header("authorization", "Bearer at-chatgpt-voice")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let prepared = prepare_gateway_request(&config, request, environment_authorization(), path)
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.upstream_url,
+        "https://chatgpt.com/backend-api/codex/realtime/calls?architecture=avas"
+    );
+    assert_eq!(prepared.headers["authorization"], "Bearer at-chatgpt-voice");
+    assert_eq!(prepared.body_bytes.as_ref(), body.as_bytes());
+    assert!(!prepared.authorization.allow_environment_provider_auth);
+    let forwarded =
+        daemon_provider_forward_headers_with_access(&prepared.headers, path, &config, true)
+            .unwrap();
+    assert_eq!(forwarded["authorization"], "Bearer at-chatgpt-voice");
+}
+
+#[tokio::test]
+async fn voice_connections_preserve_configured_upstream_and_chatgpt_credentials() {
+    for base in [
+        "https://api.openai.com/v1",
+        "https://voice.example/proxy/v1",
+    ] {
+        for replacement in [None, Some("Bearer administrator-key".to_string())] {
+            let config = GatewayConfig {
+                openai_base_url: base.to_owned(),
+                openai_auth_header: replacement,
+                ..GatewayConfig::default()
+            };
+            for path in [
+                "/v1/live",
+                "/live",
+                "/v1/live/rtc_test",
+                "/v1/live/sessions",
+                "/v1/live/sessions/live_test/attach",
+                "/v1/realtime",
+                "/realtime",
+            ] {
+                let query = "intent=quicksilver&call_id=rtc_test";
+                let request = Request::get(format!("{path}?{query}"))
+                    .header("authorization", "Bearer at-chatgpt-voice")
+                    .body(Body::empty())
+                    .unwrap();
+                let prepared =
+                    prepare_gateway_request(&config, request, environment_authorization(), path)
+                        .await
+                        .unwrap();
+                let suffix = path.strip_prefix("/v1").unwrap_or(path);
+                let expected = format!("{base}{suffix}?{query}");
+                assert_eq!(prepared.upstream_url, expected);
+                assert_eq!(prepared.headers["authorization"], "Bearer at-chatgpt-voice");
+                let daemon_url = daemon_provider_upstream_url_with_access(
+                    &prepared.headers,
+                    &format!("{path}?{query}"),
+                    &config,
+                    true,
+                    true,
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(daemon_url, expected);
+                let headers = daemon_provider_forward_headers_with_access(
+                    &prepared.headers,
+                    path,
+                    &config,
+                    true,
+                )
+                .unwrap();
+                assert_eq!(headers["authorization"], "Bearer at-chatgpt-voice");
+            }
+        }
+    }
 }

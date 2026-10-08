@@ -2773,3 +2773,60 @@ async fn supervised_resource_metrics_selects_the_owned_child_and_restores_target
     drop(launch);
     host.close().unwrap();
 }
+
+#[test]
+fn transparent_codex_launch_injects_voice_url_without_overriding_cli_or_profiles() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let _env = EnvScope::set(&[("CODEX_HOME", Some(dir.path().as_os_str()))]);
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "forced_login_method = \"chatgpt\"\n[profiles.custom]\nexperimental_realtime_webrtc_call_base_url = \"https://voice.example/custom\"\n").unwrap();
+    let resolved = ResolvedConfig::default();
+    let generated =
+        "experimental_realtime_webrtc_call_base_url=\"http://127.0.0.1:47999/backend-api/codex\"";
+    for (argv, inject) in [
+        (vec!["codex", "exec", "prompt"], true),
+        (vec!["codex", "--profile", "custom"], false),
+        (vec!["codex", "--profile=custom"], false),
+        (
+            vec![
+                "codex",
+                "-c",
+                "experimental_realtime_webrtc_call_base_url=\"https://voice.example/cli\"",
+            ],
+            false,
+        ),
+        (
+            vec![
+                "codex",
+                "--config=experimental_realtime_webrtc_call_base_url=\"https://voice.example/cli\"",
+            ],
+            false,
+        ),
+        (vec!["codex", "-c", "forced_login_method=\"api\""], false),
+        (
+            vec![
+                "codex",
+                "exec",
+                "--",
+                "experimental_realtime_webrtc_call_base_url=prompt",
+            ],
+            true,
+        ),
+    ] {
+        let prepared = PreparedAgentLaunch::new(
+            CodingAgent::Codex,
+            argv.into_iter().map(str::to_string).collect(),
+            "http://127.0.0.1:47999",
+            &resolved,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            prepared.argv.iter().any(|arg| arg == generated),
+            inject,
+            "{:?}",
+            prepared.argv
+        );
+    }
+}
