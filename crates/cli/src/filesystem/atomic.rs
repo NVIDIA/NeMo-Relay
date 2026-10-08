@@ -196,7 +196,28 @@ pub(super) fn create_private_windows_dir(path: &Path) -> io::Result<()> {
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
 
-    let path = windows_wide(path.as_os_str());
+    // Like Rust's directory creator, normalize before adding a verbatim prefix when
+    // approaching CreateDirectoryW's legacy 248-code-unit limit. This also resolves
+    // relative paths and normalizes separators without requiring the target to exist.
+    let absolute = std::path::absolute(path)?;
+    let mut path = windows_wide(absolute.as_os_str());
+    if path.len() >= 248 {
+        use std::path::{Component, Prefix};
+
+        let (prefix, skip) = match absolute.components().next() {
+            Some(Component::Prefix(component)) => match component.kind() {
+                Prefix::Disk(_) => (r"\\?\", 0),
+                Prefix::UNC(_, _) => (r"\\?\UNC\", 2),
+                Prefix::DeviceNS(_) => (r"\\?\", 4),
+                _ => ("", 0),
+            },
+            _ => ("", 0),
+        };
+        path = prefix
+            .encode_utf16()
+            .chain(path[skip..].iter().copied())
+            .collect();
+    }
     with_private_windows_descriptor(|descriptor| {
         let attributes = SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,

@@ -216,6 +216,29 @@ fn private_directories_have_explicit_ownership_without_inheriting_parent_access(
 
 #[cfg(windows)]
 #[test]
+fn private_directory_creation_supports_long_paths() {
+    use std::os::windows::ffi::OsStrExt;
+
+    let directory = tempdir().unwrap();
+    // Use an ordinary absolute path so the helper, rather than the test, must add
+    // the verbatim prefix. Each component remains below the filesystem limit.
+    let mut path = crate::process::portable_executable_path(directory.path().to_path_buf());
+    while path.as_os_str().encode_wide().count() <= 260 {
+        path.push("long-private-state-component");
+    }
+    create_private_dir_all(&path).unwrap();
+    assert!(windows_path_is_private(&std::fs::canonicalize(&path).unwrap()).unwrap());
+    let single = path.join("single");
+    create_private_dir(&single).unwrap();
+    assert!(windows_path_is_private(&std::fs::canonicalize(&single).unwrap()).unwrap());
+    assert_eq!(
+        create_private_dir(&single).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+}
+
+#[cfg(windows)]
+#[test]
 fn private_directory_creation_leaves_existing_access_unchanged() {
     let directory = tempdir().unwrap();
     set_windows_dacl(directory.path(), "D:P(A;;FA;;;WD)");
