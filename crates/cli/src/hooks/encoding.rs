@@ -81,6 +81,10 @@ pub(crate) fn transparent_hook_forward_commands_with_config(
     agent: CodingAgent,
     hook_config: &Path,
 ) -> Result<GeneratedHookCommands, String> {
+    #[cfg(windows)]
+    if agent.hooks_use_powershell() {
+        return transparent_powershell_hook_scripts(agent, relay, hook_config);
+    }
     hook_commands(
         agent,
         relay,
@@ -216,6 +220,50 @@ pub(super) fn hook_command_for_platform(
     render_hook_command(agent, relay, arguments, windows)
 }
 
+fn powershell_hook_script(relay: &Path, arguments: &[String]) -> String {
+    let arguments = std::iter::once(relay_for_command(relay, true).display().to_string())
+        .chain(arguments.iter().cloned())
+        .map(|argument| powershell_literal(&argument))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("$ErrorActionPreference = 'Stop'; & {arguments}; exit $LASTEXITCODE")
+}
+
+/// Keep the repeated session-hook overrides below cmd.exe's 8191-character limit.
+/// The scripts live beside the process-private hook configuration and are cleaned up with it.
+#[cfg(windows)]
+fn transparent_powershell_hook_scripts(
+    agent: CodingAgent,
+    relay: &Path,
+    hook_config: &Path,
+) -> Result<GeneratedHookCommands, String> {
+    let arguments = hook_config_arguments(agent, hook_config, true);
+    let mut commands = Vec::new();
+    for policy in ["--fail-open", "--fail-closed"] {
+        let path = hook_config.with_file_name(format!("{policy}.ps1"));
+        let script = powershell_hook_script(relay, &with_failure_policy(&arguments, policy));
+        // Windows PowerShell needs a BOM to read non-ASCII paths as UTF-8.
+        crate::filesystem::atomic_write_private(&path, format!("\u{feff}{script}").as_bytes())?;
+        commands.push(format!(
+            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {}; exit $LASTEXITCODE",
+            powershell_literal(&path.display().to_string()),
+        ));
+    }
+    Ok(GeneratedHookCommands::new(&commands[0], &commands[1]))
+}
+
+fn powershell_literal(argument: &str) -> String {
+    format!(
+        "'{}'",
+        argument
+            .replace('\'', "''")
+            .replace('‘', "‘‘")
+            .replace('’', "’’")
+            .replace('‚', "‚‚")
+            .replace('‛', "‛‛")
+    )
+}
+
 fn render_hook_command(
     agent: CodingAgent,
     relay: &Path,
@@ -240,22 +288,7 @@ fn render_hook_command(
         use base64::Engine;
         // Codex uses PowerShell for Windows session hooks. Encode literal arguments,
         // then preserve the native exit code in the outer PowerShell hook runner too.
-        let arguments = std::iter::once(relay_for_command(relay, windows).display().to_string())
-            .chain(arguments.iter().cloned())
-            .map(|argument| {
-                format!(
-                    "'{}'",
-                    argument
-                        .replace('\'', "''")
-                        .replace('‘', "‘‘")
-                        .replace('’', "’’")
-                        .replace('‚', "‚‚")
-                        .replace('‛', "‛‛")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        let script = format!("$ErrorActionPreference = 'Stop'; & {arguments}; exit $LASTEXITCODE");
+        let script = powershell_hook_script(relay, arguments);
         let bytes = script
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
