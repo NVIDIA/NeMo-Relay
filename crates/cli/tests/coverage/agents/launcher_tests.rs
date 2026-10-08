@@ -369,6 +369,115 @@ fn prepares_codex_config_overrides() {
     prepared.restore().unwrap();
 }
 
+#[cfg(windows)]
+#[test]
+fn codex_hook_scripts_preserve_stdin_arguments_and_exit_status() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("hook 'é’ directory");
+    std::fs::create_dir(&directory).unwrap();
+    let relay = directory.join("relay.cmd");
+    std::fs::write(&relay, "@echo off\r\n@echo %*\r\n@more\r\n@exit /b 7\r\n").unwrap();
+    let config = directory.join("config.json");
+    let commands = crate::hooks::transparent_hook_forward_commands_with_config(
+        &relay,
+        CodingAgent::Codex,
+        &config,
+    )
+    .unwrap();
+    for (event, policy) in [("Stop", "--fail-open"), ("PreToolUse", "--fail-closed")] {
+        let mut child = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                commands.for_event(event),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"{\"probe\":true}\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(7), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(policy), "{stdout}");
+        assert!(stdout.contains("--transparent-run"), "{stdout}");
+        assert!(stdout.contains("config.json"), "{stdout}");
+        assert!(stdout.contains("{\"probe\":true}"), "{stdout}");
+    }
+    std::fs::remove_file(&relay).unwrap();
+    for (event, succeeds) in [("Stop", true), ("PreToolUse", false)] {
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                commands.for_event(event),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), succeeds, "{output:?}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn codex_hook_scripts_reject_overlong_commands_before_writing() {
+    let config = std::path::PathBuf::from("x".repeat(8_000)).join("config.json");
+    let error = crate::hooks::transparent_hook_forward_commands_with_config(
+        std::path::Path::new("relay.exe"),
+        CodingAgent::Codex,
+        &config,
+    )
+    .unwrap_err();
+    assert!(error.contains("safety limit"), "{error}");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn codex_batch_launch_accepts_full_hook_configuration() {
+    let temp = tempfile::tempdir().unwrap();
+    let shim = temp.path().join("codex.cmd");
+    std::fs::write(&shim, "@echo off\r\n@echo launched\r\n").unwrap();
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Codex,
+        vec![
+            shim.display().to_string().replace('\\', "/"),
+            "exec".into(),
+            "ping".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &ResolvedConfig::default(),
+        false,
+    )
+    .unwrap();
+    let output = crate::process::tokio_command(&prepared.argv)
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success(), "batch launch failed: {output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "launched");
+    for policy in ["--fail-open", "--fail-closed"] {
+        let script =
+            std::fs::read_to_string(prepared.temp_dirs[0].join(format!("{policy}.ps1"))).unwrap();
+        assert!(script.contains(policy));
+        assert!(script.contains("--transparent-run"));
+        assert!(script.contains("exit $LASTEXITCODE"));
+    }
+    let root = prepared.temp_dirs[0].clone();
+    prepared.restore().unwrap();
+    assert!(!root.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn transparent_hook_directories_load_under_permissive_umasks() {

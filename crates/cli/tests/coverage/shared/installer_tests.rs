@@ -11,6 +11,14 @@ use serde_json::Value;
 use crate::agents::CodingAgent;
 
 #[test]
+fn windows_hook_command_limit_counts_utf16_units() {
+    let command = "😀".repeat(4_000);
+    assert!(super::encoding::validate_windows_hook_command(&command).is_ok());
+    let error = super::encoding::validate_windows_hook_command(&format!("{command}a")).unwrap_err();
+    assert!(error.contains("8001 characters"), "{error}");
+}
+
+#[test]
 fn null_hook_configuration_normalizes_to_an_empty_object() {
     assert_eq!(
         super::merging::hook_config_root(serde_json::Value::Null).unwrap(),

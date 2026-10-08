@@ -190,6 +190,76 @@ fn create_private_windows_file(path: &Path) -> io::Result<File> {
     with_private_windows_descriptor(|descriptor| create_windows_file(path, descriptor))
 }
 
+/// Creates a directory with the process user as owner and a protected owner/System DACL.
+#[cfg(windows)]
+pub(super) fn create_private_windows_dir(path: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
+
+    // Like Rust's directory creator, normalize before adding a verbatim prefix when
+    // approaching CreateDirectoryW's legacy 248-code-unit limit. This also resolves
+    // relative paths and normalizes separators without requiring the target to exist.
+    let absolute = std::path::absolute(path)?;
+    let mut path = windows_wide(absolute.as_os_str());
+    if path.len() >= 248 {
+        use std::path::{Component, Prefix};
+
+        let (prefix, skip) = match absolute.components().next() {
+            Some(Component::Prefix(component)) => match component.kind() {
+                Prefix::Disk(_) => (r"\\?\", 0),
+                Prefix::UNC(_, _) => (r"\\?\UNC\", 2),
+                Prefix::DeviceNS(_) => (r"\\?\", 4),
+                _ => ("", 0),
+            },
+            _ => ("", 0),
+        };
+        path = prefix
+            .encode_utf16()
+            .chain(path[skip..].iter().copied())
+            .collect();
+    }
+    with_private_windows_descriptor(|descriptor| {
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor,
+            bInheritHandle: 0,
+        };
+        // SAFETY: The path, attributes, and security descriptor remain valid for the call.
+        if unsafe { CreateDirectoryW(path.as_ptr(), &attributes) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    })
+}
+
+/// Creates missing directories privately, leaving existing ancestors unchanged.
+#[cfg(windows)]
+pub(super) fn create_private_windows_dir_all(path: &Path) -> io::Result<()> {
+    if path.as_os_str().is_empty() {
+        return Ok(());
+    }
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => return Ok(()),
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} is not a directory", path.display()),
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    if let Some(parent) = path.parent() {
+        create_private_windows_dir_all(parent)?;
+    }
+    match create_private_windows_dir(path) {
+        // Another creator may have won the race. Callers still validate the owner and DACL
+        // before using existing private state; this helper never takes ownership of it.
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        result => result,
+    }
+}
+
 /// Opens or creates a secret-bearing file without inheriting a broad Windows DACL.
 ///
 /// The protected owner/System descriptor is applied by `CreateFileW` when the file is created and
@@ -308,7 +378,7 @@ fn with_private_windows_descriptor<T>(
     use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
 
     // LocalSystem's default token owner can be Administrators. Set the actual
-    // process user explicitly so newly created private files pass the same
+    // process user explicitly so newly created private files and directories pass the same
     // ownership checks as existing files, without weakening those checks.
     let owner = with_current_windows_user_sid(|sid| {
         let mut text = std::ptr::null_mut();

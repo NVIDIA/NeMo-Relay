@@ -17,9 +17,17 @@ pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> 
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect::<Vec<_>>();
         let script = String::from_utf16(&units).ok()?;
-        let arguments = script
-            .strip_prefix("$ErrorActionPreference = 'Stop'; & ")?
-            .strip_suffix("; exit $LASTEXITCODE")?;
+        let invocation = script.strip_prefix("$ErrorActionPreference = 'Stop'; ")?;
+        let arguments = invocation
+            .strip_prefix("try { & ")
+            .and_then(|invocation| {
+                invocation.strip_suffix("; exit $LASTEXITCODE } catch { exit 0 }")
+            })
+            .or_else(|| {
+                invocation
+                    .strip_prefix("& ")?
+                    .strip_suffix("; exit $LASTEXITCODE")
+            })?;
         return decode_powershell_literals(arguments);
     }
     let command = command
