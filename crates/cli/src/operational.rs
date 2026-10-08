@@ -126,12 +126,12 @@ pub(crate) fn unmatched_route(
         && segments
             .next()
             .is_some_and(|segment| segment.eq_ignore_ascii_case("nemo-relay"));
-    // The remaining segments are untrusted. A misplaced slash can move the credential into
-    // what looks like a provider path, so hide the whole suffix for capability-like routes.
+    // Any unmatched path may contain a credential. Keep only the capability namespace
+    // classification and never retain caller-supplied path segments.
     let path = if capability_namespace {
         "/v1/nemo-relay/<redacted>"
     } else {
-        uri.path()
+        "/<redacted>"
     };
     log::error!(
         target: "nemo_relay.operational",

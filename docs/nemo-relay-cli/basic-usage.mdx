@@ -141,10 +141,12 @@ for details about the provider's sideband lifecycle.
 
 When a request does not match a supported Relay path or method, Relay logs a
 `route_unmatched` record at error level. The record identifies the gateway,
-daemon, or worker that handled the request. It includes the HTTP method, path,
-and response status. It excludes query strings, headers, and bodies.
-Relay hides capability tokens in logged paths. An upstream 404 response does
-not produce this record.
+daemon, or worker that handled the request. It includes the HTTP method and
+response status.
+The path is `/<redacted>`, or `/v1/nemo-relay/<redacted>` for requests in the
+capability namespace. Relay does not log caller-supplied path segments, query
+strings, headers, or bodies. An upstream 404 response does not produce this
+record.
 
 ## Transparent Run
 

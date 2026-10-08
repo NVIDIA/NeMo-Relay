@@ -4353,7 +4353,11 @@ async fn unmatched_routes_log_each_boundary_without_reporting_upstream_404s() {
             daemon.clone(),
             "daemon",
             vec![
-                ("GET", "/unknown?secret=query-secret", StatusCode::NOT_FOUND),
+                (
+                    "GET",
+                    "/reset/reset-token-secret?secret=query-secret",
+                    StatusCode::NOT_FOUND,
+                ),
                 ("POST", "/healthz", StatusCode::METHOD_NOT_ALLOWED),
                 ("GET", "/v1/live", StatusCode::METHOD_NOT_ALLOWED),
             ],
@@ -4362,7 +4366,11 @@ async fn unmatched_routes_log_each_boundary_without_reporting_upstream_404s() {
             worker.clone(),
             "worker",
             vec![
-                ("GET", "/unknown?secret=query-secret", StatusCode::NOT_FOUND),
+                (
+                    "GET",
+                    "/reset/reset-token-secret?secret=query-secret",
+                    StatusCode::NOT_FOUND,
+                ),
                 (
                     "POST",
                     crate::daemon::common::control::WORKER_PROBE_PATH,
@@ -4427,12 +4435,13 @@ async fn unmatched_routes_log_each_boundary_without_reporting_upstream_404s() {
         );
     }
     for record in &records {
+        assert_eq!(record["fields"]["path"], "/<redacted>");
         assert_eq!(
             record["level"].as_str().unwrap().to_ascii_lowercase(),
             "error"
         );
     }
-    for secret in ["query-secret", "header-secret"] {
+    for secret in ["query-secret", "header-secret", "reset-token-secret"] {
         assert!(!content.contains(secret), "{content}");
     }
     provider_task.abort();

@@ -742,6 +742,7 @@ fn cli_gateway_logs_unmatched_routes_at_error_level() {
     for (method, path, status) in [
         ("GET", "/unknown?token=query-secret", "404"),
         ("POST", "/healthz", "405"),
+        ("GET", "/reset/reset-token-secret", "404"),
         (
             "GET",
             "/v1/nemo-relay/capability-secret/unknown?key=query-secret",
@@ -798,7 +799,7 @@ fn cli_gateway_logs_unmatched_routes_at_error_level() {
         .filter_map(|line| serde_json::from_str(line).ok())
         .filter(|record: &serde_json::Value| record["event"] == "route_unmatched")
         .collect();
-    assert_eq!(records.len(), 11, "{stderr}");
+    assert_eq!(records.len(), 12, "{stderr}");
     for record in &records {
         assert_eq!(
             record["level"].as_str().unwrap().to_ascii_lowercase(),
@@ -806,14 +807,19 @@ fn cli_gateway_logs_unmatched_routes_at_error_level() {
         );
         assert_eq!(record["fields"]["boundary"], "gateway");
     }
-    assert_eq!(records[0]["fields"]["path"], "/unknown");
+    for record in &records[..3] {
+        assert_eq!(record["fields"]["path"], "/<redacted>");
+    }
     assert_eq!(records[1]["fields"]["method"], "POST");
-    assert_eq!(records[2]["fields"]["path"], "/v1/nemo-relay/<redacted>");
-    assert_eq!(records[3]["fields"]["path"], "/v1/nemo-relay/<redacted>");
-    for record in &records[2..] {
+    for record in &records[3..] {
         assert_eq!(record["fields"]["path"], "/v1/nemo-relay/<redacted>");
     }
-    for secret in ["query-secret", "capability-secret", "header-secret"] {
+    for secret in [
+        "query-secret",
+        "capability-secret",
+        "header-secret",
+        "reset-token-secret",
+    ] {
         assert!(!stderr.contains(secret), "{stderr}");
     }
 }
