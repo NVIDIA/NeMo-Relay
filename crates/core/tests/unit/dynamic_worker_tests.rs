@@ -2259,6 +2259,117 @@ async fn streaming_execution_can_wait_for_slow_response_headers() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worker_tool_lifecycle_subscriber_marks_keep_the_observed_tool_parent() {
+    let host_state = Arc::new(Mutex::new(None::<Arc<WorkerHostRuntimeState>>));
+    let handler_state = host_state.clone();
+    let (callback, _shutdown, _cancel) = fake_callback_service_with_handlers(
+        move |request| {
+            let state = handler_state.lock().unwrap().as_ref().unwrap().clone();
+            Box::pin(async move {
+                let event = match request.payload.unwrap() {
+                    invoke_request_payload::Payload::Event(event) => {
+                        nemo_relay_worker_proto::decode_json_envelope::<Event>(&event).unwrap()
+                    }
+                    _ => panic!("expected lifecycle event"),
+                };
+                let mark_name = match event.scope_category().unwrap() {
+                    ScopeCategory::Start => "nv.agent.tool.start",
+                    ScopeCategory::End => "nv.agent.tool.end",
+                };
+                let ack = WorkerHostRuntimeService { state }
+                    .emit_mark(Request::new(EmitMarkRequest {
+                        activation_id: ACTIVATION_ID.into(),
+                        auth_token: AUTH_TOKEN.into(),
+                        scope: request.scope,
+                        name: mark_name.into(),
+                        ..EmitMarkRequest::default()
+                    }))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert!(ack.ok);
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            })
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    *host_state.lock().unwrap() = Some(callback.host_state.clone());
+    let callback = Arc::new(callback);
+    let marks = Arc::new(Mutex::new(Vec::new()));
+    let recorded = marks.clone();
+    let tool_uuid = tokio::task::spawn_blocking(move || {
+        crate::api::runtime::with_scope_stack(crate::api::runtime::create_scope_stack(), || {
+            let root = crate::api::runtime::task_scope_top().uuid;
+            crate::api::subscriber::scope_register_subscriber(
+                &root,
+                "worker-tool-logs",
+                Arc::new(move |event| {
+                    if event.scope_type() == Some(ScopeType::Tool) {
+                        callback.invoke_subscriber("tool-logs", event).unwrap();
+                    }
+                }),
+            )
+            .unwrap();
+            crate::api::subscriber::scope_register_subscriber(
+                &root,
+                "worker-tool-log-capture",
+                Arc::new(move |event| {
+                    if matches!(event.name(), "nv.agent.tool.start" | "nv.agent.tool.end") {
+                        recorded.lock().unwrap().push(event.clone());
+                    }
+                }),
+            )
+            .unwrap();
+            let turn = push_scope(
+                PushScopeParams::builder()
+                    .name("turn")
+                    .scope_type(ScopeType::Agent)
+                    .build(),
+            )
+            .unwrap();
+            let tool = crate::api::tool::tool_call(
+                crate::api::tool::ToolCallParams::builder()
+                    .name("Bash")
+                    .args(json!({"command": "true"}))
+                    .build(),
+            )
+            .unwrap();
+            crate::api::tool::tool_call_end(
+                crate::api::tool::ToolCallEndParams::builder()
+                    .handle(&tool)
+                    .execution_result(json!({"exit_code": 0}).into())
+                    .build(),
+            )
+            .unwrap();
+            pop_scope(PopScopeParams::builder().handle_uuid(&turn.uuid).build()).unwrap();
+            crate::api::subscriber::flush_subscribers().unwrap();
+            tool.uuid
+        })
+    })
+    .await
+    .unwrap();
+    let marks = marks.lock().unwrap();
+    assert_eq!(marks.len(), 2);
+    for mark in marks.iter() {
+        assert_eq!(mark.parent_uuid(), Some(tool_uuid));
+    }
+    assert!(
+        host_state
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .scope_stacks
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
     enable_operational_logs();

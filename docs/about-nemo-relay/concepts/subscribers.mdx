@@ -151,6 +151,13 @@ serialize it for their target backend.
 Native subscribers are invoked by one process-wide worker thread in FIFO event
 order and subscriber snapshot order.
 
+While delivering a tool scope start or end event, Relay binds subscriber callbacks
+to that tool's context. Marks emitted by those callbacks therefore reference the
+tool scope, including when delivery happens after the tool has closed. OTLP log
+records use the tool's span ID and retain its trace ID. This context also follows
+callbacks into dynamic plugin workers. An explicitly supplied parent scope takes
+precedence, and Relay restores the previous context after delivery.
+
 <Warning>
 Subscriber callbacks are not re-entrant. Do not invoke a NeMo Relay API that
 runs middleware, flushes subscriber delivery, waits on an exporter, or clears
