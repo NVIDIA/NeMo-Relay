@@ -31,6 +31,7 @@ mod convert;
 pub mod py_adaptive;
 #[doc(hidden)]
 pub mod py_api;
+mod py_async;
 mod py_callable;
 mod py_context;
 #[doc(hidden)]

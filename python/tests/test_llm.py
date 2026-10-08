@@ -1476,6 +1476,62 @@ class TestLLMInterceptsAsync:
 
 
 class TestLLMStreaming:
+    @pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="local polling requires native stack bounds")
+    @pytest.mark.parametrize("layers", [0, 2])
+    async def test_stream_chunks_stay_on_event_loop_and_isolate_collector_mutations(self, layers: int) -> None:
+        loop = asyncio.get_running_loop()
+        loop_thread = threading.get_ident()
+        original = {"token": "hello", "nested": {"value": 1}}
+        collected = []
+        finalized = []
+
+        async def provider(_request):
+            for _ in range(100):
+                await asyncio.sleep(0)
+                yield original
+
+        def middleware(_name, request, _context, next_call):
+            async def wrapped():
+                upstream = await next_call(request)
+                try:
+                    async for chunk in upstream:
+                        assert asyncio.get_running_loop() is loop
+                        yield chunk
+                finally:
+                    await upstream.aclose()
+
+            return wrapped()
+
+        def collect(chunk):
+            assert threading.get_ident() == loop_thread
+            assert asyncio.get_running_loop() is loop
+            chunk["nested"]["value"] = 2
+            collected.append(chunk)
+
+        def finalize():
+            finalized.append(True)
+            return {"chunks": collected}
+
+        names = [f"py_stream_local_loop_{index}" for index in range(layers)]
+        for name in names:
+            intercepts.register_llm_stream_execution(name, 1, middleware)
+        try:
+            stream = await llm.stream_execute("local_loop_stream", make_request(), provider, collect, finalize)
+            try:
+                chunks = [chunk async for chunk in stream]
+            finally:
+                await stream.aclose()
+        finally:
+            for name in names:
+                intercepts.deregister_llm_stream_execution(name)
+
+        assert chunks == [original] * 100
+        assert original == {"token": "hello", "nested": {"value": 1}}
+        assert len(collected) == 100
+        assert all(chunk["nested"]["value"] == 2 for chunk in collected)
+        assert all(chunk is not observed for chunk, observed in zip(chunks, collected, strict=True))
+        assert finalized == [True]
+
     def test_execute_on_small_thread_stack(self) -> None:
         """Check small-stack LLM calls and isolation between synchronous callers."""
         # musl defaults to 128 KiB thread stacks. Isolate a native stack
