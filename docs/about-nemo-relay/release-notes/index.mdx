@@ -268,8 +268,9 @@ This release includes the following fixes and behavior changes:
   hooks after upgrading.
   Refer to
   [Refresh Relay-Managed Coding-Agent Integrations](/reference/migration-guides#refresh-relay-managed-coding-agent-integrations).
-- Windows Codex launches use shorter hook commands. This avoids command-length
-  errors in batch launchers, including those installed by `npm`.
+- On Windows, transparent Codex launches through `nemo-relay run` use shorter
+  PowerShell `-File` hook commands. This avoids command-length errors in batch
+  launchers, including those installed by `npm`.
 - Relay now waits up to 10 seconds for an agent's version check, instead of
   5 seconds. This gives slower agents more time to start on all supported
   platforms.
