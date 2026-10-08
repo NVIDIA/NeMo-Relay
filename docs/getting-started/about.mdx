@@ -8,9 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 NeMo Relay observes and controls agent work at the boundary where it runs.
 Choose the path that matches the agent runtime, framework, or application you
-already use. The [Quick Starts](/getting-started/quick-start) page lists working
-examples that install a verified release, enable built-in observability, run
-one workflow, and check the local event output.
+already use.
 
 ## Choose Where Relay Attaches
 
@@ -26,24 +24,13 @@ Use the boundary that owns the model request or tool execution:
 Each path has its own requirements. You do not need a Rust compiler, a source
 checkout, or repository development tools to install a published CLI binary.
 
-## Featured External Plugins
+## Try Relay Now
 
-Try [Switchyard](/getting-started/quick-start/switchyard) to route model requests
-through a featured external Relay plugin.
-
-## Go Beyond the First Run
-
-- [Installation Overview](/getting-started/installation): Compare packages,
-  supported platforms, and alternative installers.
-- [Configuration / Setup Overview](/getting-started/configuration): Configure
-  runtime behavior and plugins in more detail.
-- [Development Setup](/contribute/development-setup): Build from source or
-  contribute to the repository.
-- [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer) and
-  [Concepts](/about-nemo-relay/concepts): Understand the runtime model.
-- [Integrate into Frameworks](/integrate-into-frameworks/about): Build custom
-  framework integrations.
-- [Build Plugins](/build-plugins/about): Package reusable Relay behavior.
+<CardGroup cols={1}>
+<Card title="Quick Starts" icon="fa-solid fa-bolt" href="/getting-started/quick-start">
+Install a verified release, enable observability, run one workflow, and check its output.
+</Card>
+</CardGroup>
 
 ## Using an AI Coding Assistant
 
@@ -87,3 +74,31 @@ They do not replace installing NeMo Relay packages, configuring runtime
 plugins, or validating emitted events.
 </Card>
 </CardGroup>
+
+## Go Beyond the First Run
+
+After a working first run, choose an advanced path to build reusable behavior
+or operate Relay as a long-running service:
+
+<CardGroup cols={2}>
+<Card title="Build a Plugin" icon="fa-solid fa-puzzle-piece" href="/build-plugins/about">
+Create reusable behavior that observes or controls agent work.
+</Card>
+
+<Card title="Deploy a Daemon" icon="fa-solid fa-server" href="/daemon/about">
+Run Relay as a managed service for local users or remote clients.
+</Card>
+</CardGroup>
+
+For deeper guidance, refer to:
+
+- [Installation Overview](/getting-started/installation): Compare packages,
+  supported platforms, and alternative installers.
+- [Configuration / Setup Overview](/getting-started/configuration): Configure
+  runtime behavior and plugins in more detail.
+- [Development Setup](/contribute/development-setup): Build from source or
+  contribute to the repository.
+- [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer) and
+  [Concepts](/about-nemo-relay/concepts): Understand the runtime model.
+- [Integrate into Frameworks](/integrate-into-frameworks/about): Build custom
+  framework integrations.

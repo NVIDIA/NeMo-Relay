@@ -18,53 +18,63 @@ navigation:
       - page: "Configuration / Setup Overview"
         path: ./getting-started/configuration.mdx
         slug: configuration
-      - page: "Quick Starts"
+      - section: "Quick Starts"
         path: ./getting-started/quick-start/index.mdx
         slug: quick-start
-      - section: "Agent Runtime Quick Starts"
-        icon: fa-solid fa-robot
-        skip-slug: true
         collapsed: open-by-default
         contents:
-          - page: "Hermes"
-            path: ./getting-started/quick-start/hermes.mdx
-          - page: "Claude Code"
-            path: ./getting-started/quick-start/claude-code.mdx
-          - page: "Codex"
-            path: ./getting-started/quick-start/codex.mdx
-          - page: "pi"
-            path: ./getting-started/quick-start/pi.mdx
-          - page: "OpenClaw"
-            path: ./getting-started/quick-start/openclaw.mdx
-      - section: "Plugin Quick Starts"
-        icon: fa-solid fa-puzzle-piece
-        skip-slug: true
-        collapsed: open-by-default
-        contents:
-          - page: "Switchyard"
-            path: ./getting-started/quick-start/switchyard.mdx
-      - section: "Agent Framework Quick Starts"
-        icon: fa-solid fa-diagram-project
-        skip-slug: true
-        collapsed: open-by-default
-        contents:
-          - page: "LangChain"
-            path: ./getting-started/quick-start/langchain.mdx
-          - page: "LangGraph"
-            path: ./getting-started/quick-start/langgraph.mdx
-          - page: "Deep Agents"
-            path: ./getting-started/quick-start/deep-agents.mdx
-      - section: "Application API Quick Starts"
-        icon: fa-solid fa-code
-        skip-slug: true
-        collapsed: open-by-default
-        contents:
-          - page: "Python"
-            path: ./getting-started/quick-start/python.mdx
-          - page: "Node.js"
-            path: ./getting-started/quick-start/nodejs.mdx
-          - page: "Rust"
-            path: ./getting-started/quick-start/rust.mdx
+          - section: "Agent Runtimes"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Hermes"
+                icon: fa-solid fa-terminal
+                path: ./getting-started/quick-start/hermes.mdx
+              - page: "Claude Code"
+                icon: fa-brands fa-claude
+                path: ./getting-started/quick-start/claude-code.mdx
+              - page: "Codex"
+                icon: fa-brands fa-openai
+                path: ./getting-started/quick-start/codex.mdx
+              - page: "pi"
+                icon: fa-solid fa-pi
+                path: ./getting-started/quick-start/pi.mdx
+              - page: "OpenClaw"
+                icon: fa-solid fa-paw
+                path: ./getting-started/quick-start/openclaw.mdx
+          - section: "Featured Plugins"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Switchyard"
+                icon: ../fern/assets/NVIDIA_symbol.svg
+                path: ./getting-started/quick-start/switchyard.mdx
+          - section: "Agent Frameworks"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "LangChain"
+                icon: fa-solid fa-link
+                path: ./getting-started/quick-start/langchain.mdx
+              - page: "LangGraph"
+                icon: fa-solid fa-diagram-project
+                path: ./getting-started/quick-start/langgraph.mdx
+              - page: "Deep Agents"
+                icon: fa-solid fa-layer-group
+                path: ./getting-started/quick-start/deep-agents.mdx
+          - section: "Application APIs"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Python"
+                icon: fa-brands fa-python
+                path: ./getting-started/quick-start/python.mdx
+              - page: "Node.js"
+                icon: fa-brands fa-node-js
+                path: ./getting-started/quick-start/nodejs.mdx
+              - page: "Rust"
+                icon: fa-brands fa-rust
+                path: ./getting-started/quick-start/rust.mdx
   - folder: ./nemo-relay-cli
     title: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli

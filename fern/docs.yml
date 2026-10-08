@@ -18,12 +18,6 @@ announcement:
   message: "🔔 NVIDIA NeMo Relay is <strong>beta software</strong>. APIs and behavior may change with each release."
 
 redirects:
-# Keep published-package prerequisite links useful after removing the
-# development-focused page from Getting Started navigation.
-- source: /nemo/relay/getting-started/prerequisites
-  destination: /nemo/relay/getting-started/installation
-- source: /nemo/relay/dev/getting-started/prerequisites
-  destination: /nemo/relay/dev/getting-started/installation
 # Concept relocations
 - source: /nemo/relay/about-nemo-relay/concepts/framework-integrations
   destination: /nemo/relay/integrate-into-frameworks/about

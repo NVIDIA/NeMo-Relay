@@ -14,10 +14,12 @@ Relay integration.
 
 ## Inference Access
 
+<Note icon="circle-info">
 Relay does not require or select a particular model. Agent-runtime guides use
 the model configured in your agent. Framework and routing examples name a
 model so you can copy and run them; those selections are examples, not Relay
 requirements.
+</Note>
 
 Live guides require an inference-provider API key or a supported authenticated
 session with access to the model you choose. Public
@@ -34,33 +36,33 @@ make remote inference requests.
 Use these paths when an agent runtime owns the model and tool lifecycle.
 
 <CardGroup cols={2}>
-<Card title="Hermes" icon="terminal" href="/getting-started/quick-start/hermes">
+<Card title="Hermes" icon="fa-solid fa-terminal" href="/getting-started/quick-start/hermes">
 Enable Hermes' native Relay integration and observe one agent turn.
 </Card>
 
-<Card title="Claude Code" icon="terminal" href="/getting-started/quick-start/claude-code">
+<Card title="Claude Code" icon="fa-brands fa-claude" href="/getting-started/quick-start/claude-code">
 Launch one Claude Code session through Relay's transparent wrapper.
 </Card>
 
-<Card title="Codex" icon="terminal" href="/getting-started/quick-start/codex">
+<Card title="Codex" icon="fa-brands fa-openai" href="/getting-started/quick-start/codex">
 Launch one Codex CLI task through Relay's transparent wrapper.
 </Card>
 
-<Card title="pi" icon="terminal" href="/getting-started/quick-start/pi">
+<Card title="pi" icon="fa-solid fa-pi" href="/getting-started/quick-start/pi">
 Install the proof-of-concept extension and observe one pi task.
 </Card>
 
-<Card title="OpenClaw" icon="terminal" href="/getting-started/quick-start/openclaw">
+<Card title="OpenClaw" icon="fa-solid fa-paw" href="/getting-started/quick-start/openclaw">
 Install the native plugin and observe one gateway-backed agent turn.
 </Card>
 </CardGroup>
 
-## Routing Plugin
+## Featured Plugin
 
 Use this path when Relay should route a model request through Switchyard.
 
 <CardGroup cols={2}>
-<Card title="Switchyard" icon="route" href="/getting-started/quick-start/switchyard">
+<Card title="Switchyard" icon="../../../fern/assets/NVIDIA_symbol.svg" href="/getting-started/quick-start/switchyard">
 Load the released native plugin, route one model request, and verify the routing event.
 </Card>
 </CardGroup>
@@ -71,15 +73,15 @@ Use these paths when a Python framework owns callbacks, scheduling, or tool
 execution.
 
 <CardGroup cols={3}>
-<Card title="LangChain" icon="regular link" href="/getting-started/quick-start/langchain">
+<Card title="LangChain" icon="fa-solid fa-link" href="/getting-started/quick-start/langchain">
 Run one tool-using agent with Relay middleware and callbacks.
 </Card>
 
-<Card title="LangGraph" icon="regular diagram-project" href="/getting-started/quick-start/langgraph">
+<Card title="LangGraph" icon="fa-solid fa-diagram-project" href="/getting-started/quick-start/langgraph">
 Run one credential-free graph with Relay callbacks.
 </Card>
 
-<Card title="Deep Agents" icon="regular layer-group" href="/getting-started/quick-start/deep-agents">
+<Card title="Deep Agents" icon="fa-solid fa-layer-group" href="/getting-started/quick-start/deep-agents">
 Run one Deep Agents workflow with Relay's maintained integration.
 </Card>
 </CardGroup>
@@ -89,15 +91,15 @@ Run one Deep Agents workflow with Relay's maintained integration.
 Use these paths when your application directly owns the tool or model call.
 
 <CardGroup cols={3}>
-<Card title="Python" icon="brands python" href="/getting-started/quick-start/python">
+<Card title="Python" icon="fa-brands fa-python" href="/getting-started/quick-start/python">
 Instrument one Python scope, tool call, and model call.
 </Card>
 
-<Card title="Node.js" icon="brands node-js" href="/getting-started/quick-start/nodejs">
+<Card title="Node.js" icon="fa-brands fa-node-js" href="/getting-started/quick-start/nodejs">
 Instrument one Node.js scope, tool call, and model call.
 </Card>
 
-<Card title="Rust" icon="brands rust" href="/getting-started/quick-start/rust">
+<Card title="Rust" icon="fa-brands fa-rust" href="/getting-started/quick-start/rust">
 Instrument one Rust scope, tool call, and model call.
 </Card>
 </CardGroup>
