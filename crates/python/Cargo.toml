@@ -34,6 +34,9 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 chrono = "0.4"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 nemo-relay = { workspace = true, features = ["__test-plugin-host"] }
 tempfile = "3"

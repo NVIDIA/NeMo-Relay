@@ -168,7 +168,7 @@ impl PyLlmStream {
     pub(crate) fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let receiver = Arc::clone(&self.receiver);
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mut guard = receiver.lock().await;
             let next_item = guard.recv().await;
             match next_item {
@@ -189,7 +189,7 @@ impl PyLlmStream {
         let mut closed = self.closed.clone();
         let receiver = Arc::clone(&self.receiver);
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             cancel.send_replace(true);
             while closed.borrow().is_none() {
                 closed.changed().await.map_err(|_| {

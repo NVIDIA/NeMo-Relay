@@ -44,6 +44,18 @@ async def await_result(result: Awaitable[Any]) -> Any:
     return await result
 
 
+async def drive_stream_future(driver: Any) -> Any:
+    """Poll a native streaming future locally, awaiting only pending work."""
+    try:
+        while True:
+            ready, result = driver.poll()
+            if ready:
+                return result
+            await result
+    finally:
+        driver.cancel()
+
+
 def loop_affine(callback: Callable[..., Any], *, sanitizer: bool = False) -> Callable[..., Awaitable[Any]]:
     """Defer a callback's synchronous prelude to the awaiting event-loop task."""
 
