@@ -8,6 +8,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
@@ -73,11 +74,13 @@ pub(crate) fn on_event_loop(py: Python<'_>, event_loop: &Bound<'_, PyAny>) -> bo
 #[pyclass]
 struct FutureWake {
     waiter: Py<PyAny>,
+    queued: Arc<AtomicBool>,
 }
 
 #[pymethods]
 impl FutureWake {
     fn __call__(&self, py: Python<'_>) -> PyResult<()> {
+        self.queued.store(false, Ordering::Release);
         let waiter = self.waiter.bind(py);
         if !waiter.call_method0("done")?.is_truthy()? {
             waiter.call_method1("set_result", (py.None(),))?;
@@ -89,6 +92,7 @@ impl FutureWake {
 struct EventLoopWake {
     event_loop: Py<PyAny>,
     callback: Py<FutureWake>,
+    queued: Arc<AtomicBool>,
 }
 
 impl Wake for EventLoopWake {
@@ -97,16 +101,26 @@ impl Wake for EventLoopWake {
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
+        // Coalesce before attaching to Python so duplicate native wakes avoid
+        // both GIL acquisition and scheduling. Each poll owns a fresh flag.
+        if self.queued.swap(true, Ordering::AcqRel) {
+            return;
+        }
         Python::attach(|py| {
             let event_loop = self.event_loop.bind(py);
-            if on_event_loop(py, event_loop) {
-                let _ = self.callback.borrow(py).__call__(py);
-            } else if !event_loop
-                .call_method0("is_closed")
-                .and_then(|closed| closed.is_truthy())
-                .unwrap_or(true)
-            {
-                let _ = event_loop.call_method1("call_soon_threadsafe", (self.callback.bind(py),));
+            let delivered = if on_event_loop(py, event_loop) {
+                self.callback.borrow(py).__call__(py).is_ok()
+            } else {
+                !event_loop
+                    .call_method0("is_closed")
+                    .and_then(|closed| closed.is_truthy())
+                    .unwrap_or(true)
+                    && event_loop
+                        .call_method1("call_soon_threadsafe", (self.callback.bind(py),))
+                        .is_ok()
+            };
+            if !delivered {
+                self.queued.store(false, Ordering::Release);
             }
         });
     }
@@ -133,14 +147,17 @@ impl EventLoopFuture {
             .bind(py)
             .call_method0("create_future")?
             .unbind();
+        let queued = Arc::new(AtomicBool::new(false));
         let waker = Waker::from(Arc::new(EventLoopWake {
             event_loop: self.event_loop.clone_ref(py),
             callback: Py::new(
                 py,
                 FutureWake {
                     waiter: waiter.clone_ref(py),
+                    queued: Arc::clone(&queued),
                 },
             )?,
+            queued,
         }));
         let mut context = Context::from_waker(&waker);
         let runtime = pyo3_async_runtimes::tokio::get_runtime();
