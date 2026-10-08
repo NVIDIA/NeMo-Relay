@@ -536,7 +536,9 @@ fn create_private_directory(path: &Path) -> Result<(), CliError> {
             )));
         }
         Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::create_dir_all(path)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::filesystem::create_private_dir_all(path)?;
+        }
         Err(error) => return Err(CliError::Io(error)),
     }
     #[cfg(unix)]

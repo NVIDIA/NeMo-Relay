@@ -3,6 +3,37 @@
 
 use super::*;
 
+#[cfg(windows)]
+#[test]
+fn fresh_windows_daemon_state_is_private_and_survives_restart() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let config = directory.path().join("nemo-relay");
+    let daemon = config.join("daemon");
+    let identity = daemon.join("identity.pk8");
+    load_or_create_identity(&identity).expect("create identity in fresh state");
+    let path = daemon.join(ACTIVE_WORKER_GENERATIONS_FILENAME);
+    let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
+    let generations = ActiveWorkerGenerations::load_for_test(path.clone()).unwrap();
+    generations
+        .publish(fingerprint, "generation", None)
+        .unwrap();
+    drop(generations);
+
+    for path in [
+        &config,
+        &daemon,
+        &identity,
+        &identity.with_extension("lock"),
+    ] {
+        assert!(crate::filesystem::windows_path_is_private(path).unwrap());
+    }
+    load_or_create_identity(&identity).expect("reload identity");
+    let reloaded = ActiveWorkerGenerations::load_for_test(path.clone()).unwrap();
+    assert!(reloaded.matches(fingerprint, "generation").unwrap());
+    assert!(crate::filesystem::windows_path_is_private(&path).unwrap());
+    assert!(crate::filesystem::windows_path_is_private(&path.with_extension("lock")).unwrap());
+}
+
 #[test]
 fn route_credential_is_exactly_256_bits() {
     let value = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7_u8; 32]);

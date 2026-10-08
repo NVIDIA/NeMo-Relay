@@ -8,17 +8,37 @@ pub(crate) mod bounded;
 mod locks;
 mod snapshots;
 
-/// Creates a new Relay-owned directory without granting group or other access on Unix.
+/// Creates a new Relay-owned directory with private access at creation time.
 pub(crate) fn create_private_dir(path: &std::path::Path) -> std::io::Result<()> {
-    let builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    let builder = {
-        use std::os::unix::fs::DirBuilderExt;
-        let mut builder = builder;
-        builder.mode(0o700);
-        builder
-    };
-    builder.create(path)
+    #[cfg(windows)]
+    {
+        atomic::create_private_windows_dir(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        let builder = {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
+            builder.mode(0o700);
+            builder
+        };
+        builder.create(path)
+    }
+}
+
+/// Creates missing state directories with explicit private ownership on Windows.
+/// Existing paths are left unchanged and must be validated by the caller.
+pub(crate) fn create_private_dir_all(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        atomic::create_private_windows_dir_all(path)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::create_dir_all(path)
+    }
 }
 
 #[cfg(test)]

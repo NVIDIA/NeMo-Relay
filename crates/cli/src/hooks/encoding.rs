@@ -81,6 +81,10 @@ pub(crate) fn transparent_hook_forward_commands_with_config(
     agent: CodingAgent,
     hook_config: &Path,
 ) -> Result<GeneratedHookCommands, String> {
+    #[cfg(windows)]
+    if agent.hooks_use_powershell() {
+        return transparent_powershell_hook_scripts(agent, relay, hook_config);
+    }
     hook_commands(
         agent,
         relay,
@@ -197,13 +201,19 @@ pub(super) fn hook_command(
 ) -> Result<String, String> {
     let command = render_hook_command(agent, relay, arguments, cfg!(windows));
     #[cfg(windows)]
-    if command.encode_utf16().count() > MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS {
+    validate_windows_hook_command(&command)?;
+    Ok(command)
+}
+
+#[cfg(any(windows, test))]
+pub(super) fn validate_windows_hook_command(command: &str) -> Result<(), String> {
+    let length = command.encode_utf16().count();
+    if length > MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS {
         return Err(format!(
-            "generated Windows coding-agent hook command is {} characters and exceeds the {MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS}-character safety limit; shorten the Relay or hook configuration path",
-            command.encode_utf16().count()
+            "generated Windows coding-agent hook command is {length} characters and exceeds the {MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS}-character safety limit; shorten the Relay or hook configuration path"
         ));
     }
-    Ok(command)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -214,6 +224,60 @@ pub(super) fn hook_command_for_platform(
     windows: bool,
 ) -> String {
     render_hook_command(agent, relay, arguments, windows)
+}
+
+fn powershell_hook_script(relay: &Path, arguments: &[String]) -> String {
+    let fail_open = arguments
+        .last()
+        .is_some_and(|argument| argument == "--fail-open");
+    let arguments = std::iter::once(relay_for_command(relay, true).display().to_string())
+        .chain(arguments.iter().cloned())
+        .map(|argument| powershell_literal(&argument))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let invocation = if fail_open {
+        format!("try {{ & {arguments}; exit $LASTEXITCODE }} catch {{ exit 0 }}")
+    } else {
+        format!("& {arguments}; exit $LASTEXITCODE")
+    };
+    format!("$ErrorActionPreference = 'Stop'; {invocation}")
+}
+
+/// Keep the repeated session-hook overrides below cmd.exe's 8191-character limit.
+/// The scripts live beside the process-private hook configuration and are cleaned up with it.
+#[cfg(windows)]
+fn transparent_powershell_hook_scripts(
+    agent: CodingAgent,
+    relay: &Path,
+    hook_config: &Path,
+) -> Result<GeneratedHookCommands, String> {
+    let arguments = hook_config_arguments(agent, hook_config, true);
+    let mut commands = Vec::new();
+    for policy in ["--fail-open", "--fail-closed"] {
+        let path = hook_config.with_file_name(format!("{policy}.ps1"));
+        let command = format!(
+            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {}; exit $LASTEXITCODE",
+            powershell_literal(&path.display().to_string()),
+        );
+        validate_windows_hook_command(&command)?;
+        let script = powershell_hook_script(relay, &with_failure_policy(&arguments, policy));
+        // Windows PowerShell needs a BOM to read non-ASCII paths as UTF-8.
+        crate::filesystem::atomic_write_private(&path, format!("\u{feff}{script}").as_bytes())?;
+        commands.push(command);
+    }
+    Ok(GeneratedHookCommands::new(&commands[0], &commands[1]))
+}
+
+fn powershell_literal(argument: &str) -> String {
+    format!(
+        "'{}'",
+        argument
+            .replace('\'', "''")
+            .replace('‘', "‘‘")
+            .replace('’', "’’")
+            .replace('‚', "‚‚")
+            .replace('‛', "‛‛")
+    )
 }
 
 fn render_hook_command(
@@ -240,22 +304,7 @@ fn render_hook_command(
         use base64::Engine;
         // Codex uses PowerShell for Windows session hooks. Encode literal arguments,
         // then preserve the native exit code in the outer PowerShell hook runner too.
-        let arguments = std::iter::once(relay_for_command(relay, windows).display().to_string())
-            .chain(arguments.iter().cloned())
-            .map(|argument| {
-                format!(
-                    "'{}'",
-                    argument
-                        .replace('\'', "''")
-                        .replace('‘', "‘‘")
-                        .replace('’', "’’")
-                        .replace('‚', "‚‚")
-                        .replace('‛', "‛‛")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        let script = format!("$ErrorActionPreference = 'Stop'; & {arguments}; exit $LASTEXITCODE");
+        let script = powershell_hook_script(relay, arguments);
         let bytes = script
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
@@ -303,7 +352,7 @@ fn relay_for_command(relay: &Path, _windows: bool) -> std::path::PathBuf {
 }
 
 // `cmd.exe` accepts at most 8,191 characters. Leave room for `/C` and host-added text.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 const MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS: usize = 8_000;
 
 fn grouped_hooks(events: &[&str], commands: &GeneratedHookCommands) -> Value {

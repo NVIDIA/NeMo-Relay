@@ -234,7 +234,7 @@ impl SafeFutureCompleter {
     }
 }
 
-fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+pub(crate) fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
     if let Some(message) = panic.downcast_ref::<&str>() {
         message
     } else if let Some(message) = panic.downcast_ref::<String>() {
@@ -1384,55 +1384,60 @@ fn llm_stream_call_execute<'py>(
     let stream_publication_context = publication_context.clone();
     let publication_buffer = capture_nested_publication_buffer();
     let stream_publication_buffer = publication_buffer.clone();
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        with_task_nested_publication_buffer(
-            publication_buffer,
-            with_task_publication_context(
-                publication_context,
-                TASK_SCOPE_STACK.scope(scope_stack, async move {
-                    let params = core_llm_api::LlmStreamCallExecuteParams::builder()
-                        .name(name)
-                        .request(request.inner)
-                        .func(default_fn)
-                        .collector(collector_fn)
-                        .finalizer(finalizer_fn)
-                        .parent(parent_handle)
-                        .attributes(attrs)
-                        .data_opt(data_json)
-                        .metadata_opt(metadata_json)
-                        .model_name_opt(model_name)
-                        .codec_opt(codec_arc)
-                        .response_codec_opt(response_codec_arc)
-                        .build();
-                    // Keep the large core future out of the bridge future constructed
-                    // on Python's thread (musl thread stacks can be only 128 KiB).
-                    // Construct and box it here when Tokio polls the bridge instead.
-                    let rust_stream = Box::pin(core_llm_api::llm_stream_call_execute(params))
-                        .await
-                        .map_err(flow_error_to_py_err)?;
+    pyo3_async_runtimes::tokio::future_into_py(
+        py,
+        Box::pin(async move {
+            with_task_nested_publication_buffer(
+                publication_buffer,
+                with_task_publication_context(
+                    publication_context,
+                    TASK_SCOPE_STACK.scope(scope_stack, async move {
+                        let params = core_llm_api::LlmStreamCallExecuteParams::builder()
+                            .name(name)
+                            .request(request.inner)
+                            .func(default_fn)
+                            .collector(collector_fn)
+                            .finalizer(finalizer_fn)
+                            .parent(parent_handle)
+                            .attributes(attrs)
+                            .data_opt(data_json)
+                            .metadata_opt(metadata_json)
+                            .model_name_opt(model_name)
+                            .codec_opt(codec_arc)
+                            .response_codec_opt(response_codec_arc)
+                            .build();
+                        // Keep the large core future out of the bridge future constructed
+                        // on Python's thread (musl thread stacks can be only 128 KiB).
+                        // Construct and box it here when Tokio polls the bridge instead.
+                        let rust_stream = Box::pin(core_llm_api::llm_stream_call_execute(params))
+                            .await
+                            .map_err(flow_error_to_py_err)?;
 
-                    // Spawn a tokio task that drains the Rust stream into an mpsc channel
-                    let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
-                    let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
-                    let (closed, closed_rx) = tokio::sync::watch::channel(None);
-                    tokio::spawn(with_task_nested_publication_buffer(
-                        stream_publication_buffer,
-                        with_task_publication_context(
-                            stream_publication_context,
-                            forward_stream_to_channel(rust_stream, tx, cancel_rx, closed),
-                        ),
-                    ));
+                        // Spawn a tokio task that drains the Rust stream into an mpsc channel
+                        let (tx, rx) =
+                            tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
+                        let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                        let (closed, closed_rx) = tokio::sync::watch::channel(None);
+                        py_callable::spawn_stream_pump(with_task_nested_publication_buffer(
+                            stream_publication_buffer,
+                            with_task_publication_context(
+                                stream_publication_context,
+                                forward_stream_to_channel(rust_stream, tx, cancel_rx, closed),
+                            ),
+                        ))
+                        .await?;
 
-                    Ok(PyLlmStream {
-                        receiver: Arc::new(tokio::sync::Mutex::new(rx)),
-                        cancel,
-                        closed: closed_rx,
-                    })
-                }),
-            ),
-        )
-        .await
-    })
+                        Ok(PyLlmStream {
+                            receiver: Arc::new(tokio::sync::Mutex::new(rx)),
+                            cancel,
+                            closed: closed_rx,
+                        })
+                    }),
+                ),
+            )
+            .await
+        }),
+    )
 }
 
 // ---------------------------------------------------------------------------

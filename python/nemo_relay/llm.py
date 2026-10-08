@@ -339,7 +339,11 @@ def stream_execute(
             or request or stream-execution intercept.
 
     Notes:
-        ``collector`` observes the post-intercept chunk values. ``finalizer``
+        ``collector`` observes a separate copy of each post-intercept chunk;
+        mutating that copy does not change the yielded value. Chunk processing
+        runs on the originating event loop when native stack bounds permit it,
+        with native runtime polling retained for small or unknown caller
+        stacks. ``finalizer``
         runs once at natural stream completion or explicit close and should
         return a representation of the full response, not the final chunk. If
         the caller stops consuming early, call ``await stream.aclose()`` to
