@@ -409,9 +409,12 @@ class TestLLMGuardrails:
         with pytest.raises(RuntimeError, match="LLM execution codec capability is no longer active"):
             retained_codec.decode(make_request())
 
-    async def test_stream_execution_context_has_no_response_codec(self) -> None:
+    @pytest.mark.parametrize("close_early", [False, True])
+    async def test_stream_execution_context_has_no_response_codec(self, close_early: bool) -> None:
         observed = False
         retained_codec = None
+        producer_pending = asyncio.Event()
+        finish_producer = asyncio.Event()
 
         async def execution_intercept(name, request, context, next_call):
             nonlocal observed, retained_codec
@@ -425,9 +428,14 @@ class TestLLMGuardrails:
 
         async def provider(_request):
             yield {"token": "ok"}
+            # The bridge prefetches: keep native EOF behind an explicit gate so
+            # the active-codec assertion cannot race producer completion.
+            producer_pending.set()
+            await finish_producer.wait()
 
         codec = OpenAIChatCodec()
         intercepts.register_llm_stream_execution("py_llm_stream_execution_context", 1, execution_intercept)
+        stream = None
         try:
             stream = await llm.stream_execute(
                 "py_llm_stream_execution_context",
@@ -438,12 +446,22 @@ class TestLLMGuardrails:
                 codec=codec,
                 response_codec=codec,
             )
+            await asyncio.wait_for(producer_pending.wait(), timeout=2)
             assert retained_codec is not None
             assert retained_codec.decode(make_request()).model == "test-model"
-            assert [chunk async for chunk in stream] == [{"token": "ok"}]
+            assert await anext(stream) == {"token": "ok"}
+            assert retained_codec.decode(make_request()).model == "test-model"
+            if close_early:
+                await asyncio.wait_for(stream.aclose(), timeout=2)
+            else:
+                finish_producer.set()
+            assert [chunk async for chunk in stream] == []
             with pytest.raises(RuntimeError, match="LLM execution codec capability is no longer active"):
                 retained_codec.decode(make_request())
         finally:
+            finish_producer.set()
+            if stream is not None:
+                await stream.aclose()
             intercepts.deregister_llm_stream_execution("py_llm_stream_execution_context")
 
         assert observed
