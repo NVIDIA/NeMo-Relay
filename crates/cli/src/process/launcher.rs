@@ -397,7 +397,7 @@ async fn validate_agent_version(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(5), command.output())
+    let output = tokio::time::timeout(Duration::from_secs(10), command.output())
         .await
         .map_err(|_| {
             CliError::Launch(format!(
