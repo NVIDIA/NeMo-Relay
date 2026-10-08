@@ -45,19 +45,108 @@ payloads, user identity, and subagent metadata in NeMo Relay event metadata.
 
 ## Gateway Routes
 
-Route all coding-agent LLM traffic through the gateway when full LLM lifecycle
-observability is required.
+The gateway supports these provider routes. Some routes record LLM lifecycle
+events. The passthrough routes described below forward requests without those
+events. Relay preserves provider JSON and forwards streaming responses as streams.
+For managed LLM routes, it records LLM start and end events under the active
+session scope. It removes headers used for the current network connection and
+private Relay authentication and routing headers before forwarding requests.
 
 - `POST /v1/responses`
 - `POST /v1/chat/completions`
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
+- `POST /v1/live` (also available as `/live`)
+- `POST /v1/live/sessions` (also available as `/live/sessions`)
+- `POST /v1/images/edits` (also available as `/images/edits`)
+- `POST /v1/memories/trace_summarize` (also available as `/memories/trace_summarize`)
+- `POST /v1/alpha/search` (also available as `/alpha/search`)
+- `POST /v1/realtime/calls` (also available as `/realtime/calls`)
+- `POST /v1/responses/compact` (also available as `/responses/compact`)
+- `GET /v1/live` and `GET /v1/realtime` with a WebSocket upgrade (also available
+  as `/live` and `/realtime`)
 
-The gateway forwards raw provider JSON without rewriting OpenAI or Anthropic
-payload schemas. It removes only hop-by-hop transport headers, forwards
-streaming responses as streams, and emits NeMo Relay LLM start and end events
-under the active session scope.
+### Passthrough Requests
+
+Voice call setup, Responses compaction, image editing, memory summarization, and
+experimental standalone search use passthrough mode. Relay forwards these
+requests without recording LLM lifecycle events or changing their contents.
+It preserves request bodies, including multipart data and Session Description
+Protocol (SDP) offers. For voice calls, it also preserves the upstream SDP answer
+and `Location` header.
+
+Live and Realtime WebSockets use passthrough mode in the standalone gateway and
+daemon. Relay checks the caller's credentials and connects to the upstream before
+accepting the client's connection. It removes private Relay headers and forwards
+WebSocket frames in both directions. The daemon keeps the selected worker assigned
+until the connection closes. It closes active connections when the worker's drain
+deadline expires.
+
+### WebRTC Sidebands
+
+A sideband is a WebSocket connection used to send session events and commands.
+WebRTC carries the primary audio. Your application runs tools and sends session
+updates.
+
+Use the following routes to create a call or session and attach its sideband.
+These examples use a local gateway at `127.0.0.1:8000`.
+
+- **Realtime:** Create a call with `POST /v1/realtime/calls`. Read the call ID from
+  the upstream `Location` header. Connect to
+  `ws://127.0.0.1:8000/v1/realtime?call_id=CALL_ID`.
+- **Codex Live:** Create a call with `POST /v1/live` or
+  `POST /v1/realtime/calls`, using the format required by the upstream provider.
+  Read the call ID from the upstream `Location` header. Connect to
+  `ws://127.0.0.1:8000/v1/live/CALL_ID`. Relay preserves query parameters,
+  including `intent` and `architecture`.
+- **Live:** Create a session with `POST /v1/live/sessions`. Read `session.id` from
+  the response. Connect to
+  `ws://127.0.0.1:8000/v1/live/sessions/SESSION_ID/attach`.
+
+Keep the returned ID unchanged. Use the credentials required by the upstream
+and the same Relay route credential for creation and attachment. Codex can use
+separate destinations for ChatGPT call creation and the OpenAI sideband.
+Live and Realtime connections use Relay's configured OpenAI upstream and keep
+the caller's provider credential.
+
+Live attach also supports `/live/sessions/SESSION_ID/attach`. Codex Live also
+supports `/live/CALL_ID`. In the standalone gateway, each HTTP passthrough route
+listed above and each sideband route supports the capability prefix
+`/v1/nemo-relay/CAPABILITY`. For example, use
+`/v1/nemo-relay/CAPABILITY/live/CALL_ID` to attach a Codex Live sideband.
+
+To send a Codex WebRTC sideband through Relay, set
+`experimental_realtime_ws_base_url` to the Relay base URL in your user-level
+Codex settings. Codex can choose its sideband URL separately from its model
+provider URL. Relay does not set this option for you.
+
+Relay forwards voice requests in the format it receives. Codex chooses ChatGPT's
+JSON call format when its call-creation base URL contains `/backend-api`.
+A local Relay URL without that path selects the public API format instead.
+For personal persistent installs with ChatGPT sign-in, Relay sets a separate
+call-creation URL ending in `/backend-api/codex`. It preserves an explicit
+call-creation URL that you already set.
+
+For a managed daemon deployment, set
+`experimental_realtime_webrtc_call_base_url` manually to the Relay URL ending
+in `/backend-api/codex`. Keep the model provider's `/v1` URL. Refer to
+[Managed Codex Configuration](/daemon/configuration#codex) for the setting
+and configuration locations.
+
+Refer to [OpenAI server-side controls](https://developers.openai.com/api/docs/guides/voice-server-controls)
+for details about the provider's sideband lifecycle.
+
+### Unmatched Routes
+
+When a request does not match a supported Relay path or method, Relay logs a
+`route_unmatched` record at error level. The record identifies the gateway,
+daemon, or worker that handled the request. It includes the HTTP method and
+response status.
+The path is `/<redacted>`, or `/v1/nemo-relay/<redacted>` for requests in the
+capability namespace. Relay does not log caller-supplied path segments, query
+strings, headers, or bodies. An upstream 404 response does not produce this
+record.
 
 ## Transparent Run
 
@@ -276,6 +365,15 @@ follows:
 | --- | --- |
 | `/responses`, `/v1/responses` | `openai_base_url` |
 | `/chat/completions`, `/v1/chat/completions` | `openai_base_url` |
+| `/responses/compact`, `/v1/responses/compact` | `openai_base_url` |
+| `/realtime/calls`, `/v1/realtime/calls` | `openai_base_url` |
+| `/live`, `/v1/live`, `/live/sessions`, `/v1/live/sessions` | `openai_base_url` |
+| `/realtime`, `/v1/realtime` | `openai_base_url` |
+| `/live/CALL_ID`, `/v1/live/CALL_ID` | `openai_base_url` |
+| `/live/sessions/SESSION_ID/attach`, `/v1/live/sessions/SESSION_ID/attach` | `openai_base_url` |
+| `/images/edits`, `/v1/images/edits` | `openai_base_url` |
+| `/memories/trace_summarize`, `/v1/memories/trace_summarize` | `openai_base_url` |
+| `/alpha/search`, `/v1/alpha/search` | `openai_base_url` |
 | `/models`, `/v1/models` | `openai_base_url` |
 | `/v1/messages`, `/v1/messages/count_tokens` | `anthropic_base_url` |
 
@@ -327,6 +425,13 @@ applies the replacement, and forwards the request to the configured
 `openai_base_url`. Without a replacement, Relay preserves the ChatGPT credential
 and routes the request to the Codex ChatGPT backend instead of
 `openai_base_url`.
+
+ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
+They keep the caller's ChatGPT credential and use the native ChatGPT backend
+even when a replacement credential is configured. Sideband attachment routes
+still follow the replacement rules above. Refer to
+[Known Issues in 0.10.0](/about-nemo-relay/release-notes#known-issues-in-0100)
+before routing a ChatGPT voice sideband through Relay with a replacement key.
 
 ### Operational Logging
 
