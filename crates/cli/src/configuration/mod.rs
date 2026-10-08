@@ -1077,7 +1077,7 @@ fn load_or_create_bootstrap_hmac_key_at_with_timeout(
             path.display()
         ))
     })?;
-    fs::create_dir_all(parent).map_err(|error| {
+    crate::filesystem::create_private_dir_all(parent).map_err(|error| {
         CliError::Config(format!(
             "failed to create bootstrap state directory {}: {error}",
             parent.display()

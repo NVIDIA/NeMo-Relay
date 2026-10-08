@@ -184,6 +184,72 @@ fn ordinary_atomic_write_preserves_existing_permissions() {
 
 #[cfg(windows)]
 #[test]
+fn private_directories_have_explicit_ownership_without_inheriting_parent_access() {
+    let directory = tempdir().unwrap();
+    set_windows_dacl(directory.path(), "D:P(A;;FA;;;WD)");
+    let original_parent = windows_sddl(directory.path());
+    let config = directory.path().join("nemo-relay");
+    let daemon = config.join("daemon");
+
+    create_private_dir_all(&daemon).unwrap();
+    for path in [&config, &daemon] {
+        // Checks the actual owner against TokenUser as well as the protected DACL.
+        // Run under LocalSystem too: its default token owner may be Administrators.
+        assert!(windows_path_is_private(path).unwrap(), "{}", path.display());
+    }
+    create_private_dir_all(&daemon).unwrap();
+    assert_eq!(windows_sddl(directory.path()), original_parent);
+
+    let single = directory.path().join("single");
+    create_private_dir(&single).unwrap();
+    assert!(windows_path_is_private(&single).unwrap());
+    assert_eq!(
+        create_private_dir(&single).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+
+    let file = directory.path().join("file");
+    std::fs::write(&file, b"unchanged").unwrap();
+    assert!(create_private_dir_all(&file.join("child")).is_err());
+    assert_eq!(std::fs::read(&file).unwrap(), b"unchanged");
+}
+
+#[cfg(windows)]
+#[test]
+fn private_directory_creation_supports_long_paths() {
+    use std::os::windows::ffi::OsStrExt;
+
+    let directory = tempdir().unwrap();
+    // Use an ordinary absolute path so the helper, rather than the test, must add
+    // the verbatim prefix. Each component remains below the filesystem limit.
+    let mut path = crate::process::portable_executable_path(directory.path().to_path_buf());
+    while path.as_os_str().encode_wide().count() <= 260 {
+        path.push("long-private-state-component");
+    }
+    create_private_dir_all(&path).unwrap();
+    assert!(windows_path_is_private(&std::fs::canonicalize(&path).unwrap()).unwrap());
+    let single = path.join("single");
+    create_private_dir(&single).unwrap();
+    assert!(windows_path_is_private(&std::fs::canonicalize(&single).unwrap()).unwrap());
+    assert_eq!(
+        create_private_dir(&single).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn private_directory_creation_leaves_existing_access_unchanged() {
+    let directory = tempdir().unwrap();
+    set_windows_dacl(directory.path(), "D:P(A;;FA;;;WD)");
+    let original = windows_sddl(directory.path());
+    create_private_dir_all(directory.path()).unwrap();
+    assert_eq!(windows_sddl(directory.path()), original);
+    assert!(!windows_path_is_private(directory.path()).unwrap());
+}
+
+#[cfg(windows)]
+#[test]
 fn private_atomic_write_does_not_inherit_a_broad_parent_dacl() {
     let directory = tempdir().unwrap();
     set_windows_dacl(directory.path(), "D:P(A;;FA;;;WD)");
