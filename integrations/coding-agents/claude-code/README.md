@@ -161,11 +161,16 @@ ownership. Inspect `llm_correlation_status`, `llm_correlation_source`, and
 active turn because the hook and gateway payloads did not prove a subagent
 owner.
 
-Late `SubagentStop` hooks with no matching `SubagentStart` are diagnostic-only.
-When there is no active turn, Relay logs the missing subagent and suppresses the
-hook from ATOF, OpenInference, and ATIF so it cannot create a null turn. When an
-unknown subagent end arrives during an active turn, Relay may emit a
-`subagent_end_without_start` mark under that turn.
+Claude Code also fires `SubagentStop` for internal agents, including prompt
+suggestions, while `SubagentStart` covers agents spawned through the Agent tool
+(see the [Claude Code hook reference](https://code.claude.com/docs/en/hooks#subagentstop)).
+An internal stop carries the session's own agent type, which is empty for an
+unnamed session. When an unmatched stop has that type, Relay exports it as a
+`claude_agent_stop_unclassified` mark and logs a warning. The mark preserves
+the hook data because the type alone cannot rule out a real subagent whose
+start was missed. Other unmatched stops retain the
+`subagent_end_without_start` mark. An unmatched stop does not open a new turn
+when none is active.
 
 Hook events are only available when Claude Code loads this plugin. A standalone
 gateway observes Anthropic LLM traffic, but it cannot recover missing prompt,
