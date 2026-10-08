@@ -192,14 +192,15 @@ calls still use the host's current time. Refer to
 
 ### Review Python Exception Handling
 
-Python managed LLM and tool calls and intercepts now raise the original
+In Python, managed LLM and tool calls and intercepts now raise the original
 callback exception. The exception keeps its type, attributes,
 and traceback, which shows where the error occurred. If your error handlers
 catch only `RuntimeError` for callback failures, update them to catch the
 exceptions that your callbacks raise. Runtime failures and guardrail rejections
 still raise `RuntimeError`. This change does not apply to worker plugins.
 
-Async callbacks and stream iterators also preserve `asyncio.CancelledError`.
+Callbacks and stream iteration preserve `asyncio.CancelledError`. If the
+iterator raises it during `aclose()` cleanup, Relay reports `RuntimeError`.
 Handle cancellation separately from ordinary exceptions when needed. A
 streaming callback that returns an object that is not an async iterator raises
 `TypeError`.

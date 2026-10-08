@@ -244,9 +244,10 @@ complete upgrade path.
 
 This release includes the following fixes and behavior changes:
 
-- Python managed LLM and tool calls and intercepts now raise the original
+- In Python, managed LLM and tool calls and intercepts now raise the original
   callback exception instead of converting it to `RuntimeError`.
-  Streaming callbacks and iterators also preserve `asyncio.CancelledError`.
+  Callbacks and stream iteration preserve `asyncio.CancelledError`. If the
+  iterator raises it during `aclose()` cleanup, Relay reports `RuntimeError`.
   This change does not apply to worker plugins. Refer to
   [Review Python Exception Handling](/reference/migration-guides#review-python-exception-handling).
 - On Windows, closing a Node.js worker no longer causes a crash when Relay
