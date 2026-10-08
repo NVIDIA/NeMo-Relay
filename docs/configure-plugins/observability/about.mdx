@@ -194,12 +194,19 @@ traffic switches from passthrough to a worker while an operation is running.
 If the worker has a matching start, it ends the existing lifecycle. Otherwise,
 it emits a mark that records completion at one point in time.
 
-Relay uses four mark names for endings without a matching start:
+Relay uses four general mark names for endings without a matching start:
 
 - `agent_end_without_start`
 - `turn_end_without_start`
 - `subagent_end_without_start`
 - `tool_end_without_start`
+
+Claude Code also uses `claude_agent_stop_unclassified` when an unmatched
+`SubagentStop` has the session's agent type. Claude's
+[SubagentStop input documentation](https://code.claude.com/docs/en/hooks#subagentstop-input)
+explains that internal agents can emit these stops. The type match does not
+prove the stop came from an internal agent; see
+[Unmatched Subagent Stops](/nemo-relay-cli/claude-code#unmatched-subagent-stops).
 
 Each mark includes the available completion data and identifiers. It sets
 `start_observed=false` and leaves out unknown start times and run durations.
