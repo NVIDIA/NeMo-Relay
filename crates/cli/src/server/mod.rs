@@ -710,19 +710,127 @@ fn router_with_state(state: AppState) -> Router {
         .route("/v1/responses", post(gateway::passthrough))
         .route("/backend-api/codex/responses", post(gateway::passthrough))
         .route("/v1/chat/completions", post(gateway::passthrough))
-        .route("/v1/images/generations", post(gateway::images_generations))
+        .route("/responses/compact", post(gateway::unmanaged_passthrough))
+        .route(
+            "/v1/responses/compact",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/backend-api/codex/responses/compact",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route("/realtime/calls", post(gateway::unmanaged_passthrough))
+        .route("/v1/realtime/calls", post(gateway::unmanaged_passthrough))
+        .route(
+            "/backend-api/codex/realtime/calls",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route("/images/edits", post(gateway::unmanaged_passthrough))
+        .route("/v1/images/edits", post(gateway::unmanaged_passthrough))
+        .route(
+            "/v1/nemo-relay/{capability}/images/edits",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/memories/trace_summarize",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/memories/trace_summarize",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/memories/trace_summarize",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route("/alpha/search", post(gateway::unmanaged_passthrough))
+        .route("/v1/alpha/search", post(gateway::unmanaged_passthrough))
+        .route(
+            "/v1/nemo-relay/{capability}/alpha/search",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route("/live/{call_id}", get(gateway::websocket_passthrough))
+        .route("/v1/live/{call_id}", get(gateway::websocket_passthrough))
+        .route(
+            "/v1/nemo-relay/{capability}/live/{call_id}",
+            get(gateway::websocket_passthrough),
+        )
+        .route("/live/sessions", post(gateway::unmanaged_passthrough))
+        .route("/v1/live/sessions", post(gateway::unmanaged_passthrough))
+        .route(
+            "/live/sessions/{session_id}/attach",
+            get(gateway::websocket_passthrough),
+        )
+        .route(
+            "/v1/live/sessions/{session_id}/attach",
+            get(gateway::websocket_passthrough),
+        )
+        .route("/realtime", get(gateway::websocket_passthrough))
+        .route("/v1/realtime", get(gateway::websocket_passthrough))
+        .route(
+            "/live",
+            post(gateway::unmanaged_passthrough).get(gateway::websocket_passthrough),
+        )
+        .route(
+            "/v1/live",
+            post(gateway::unmanaged_passthrough).get(gateway::websocket_passthrough),
+        )
+        .route(
+            "/v1/images/generations",
+            post(gateway::unmanaged_passthrough),
+        )
         .route("/v1/messages", post(gateway::passthrough))
         .route("/v1/messages/count_tokens", post(gateway::passthrough))
         .route("/v1/models", get(gateway::models))
         .route(
             "/v1/nemo-relay/{capability}/images/generations",
-            post(gateway::images_generations),
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/live",
+            post(gateway::unmanaged_passthrough).get(gateway::websocket_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/responses/compact",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/realtime/calls",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/realtime",
+            get(gateway::websocket_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/live/sessions",
+            post(gateway::unmanaged_passthrough),
+        )
+        .route(
+            "/v1/nemo-relay/{capability}/live/sessions/{session_id}/attach",
+            get(gateway::websocket_passthrough),
         )
         .route("/v1/nemo-relay/{capability}/models", get(gateway::models))
         .route(
             "/v1/nemo-relay/{capability}/{*provider_path}",
             post(gateway::passthrough),
         )
+        .method_not_allowed_fallback(|request: Request<Body>| async move {
+            crate::operational::unmatched_route(
+                "gateway",
+                request.method(),
+                request.uri(),
+                StatusCode::METHOD_NOT_ALLOWED,
+            )
+        })
+        .fallback(|request: Request<Body>| async move {
+            crate::operational::unmatched_route(
+                "gateway",
+                request.method(),
+                request.uri(),
+                StatusCode::NOT_FOUND,
+            )
+        })
         .layer(middleware::from_fn(responses_websocket_fallback))
         .layer(DefaultBodyLimit::max(max_hook_payload_bytes))
         .with_state(state)

@@ -49,6 +49,12 @@ pub(super) async fn prepare_gateway_request(
     let (mut parts, body) = request.into_parts();
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
     let provider = ProviderRoute::from_path(provider_path).ok_or_else(|| {
+        crate::operational::unmatched_route(
+            "gateway",
+            &parts.method,
+            &parts.uri,
+            axum::http::StatusCode::BAD_REQUEST,
+        );
         CliError::InvalidPayload(format!("unsupported gateway path {provider_path}"))
     })?;
     let body_bytes = axum::body::to_bytes(body, config.max_passthrough_body_bytes)
@@ -74,6 +80,8 @@ pub(super) async fn prepare_gateway_request(
         authorization.allow_environment_provider_auth,
         config,
     );
+    let chatgpt_call =
+        provider_path == "/backend-api/codex/realtime/calls" && agent_override.is_some();
     let upstream_url = match agent_override {
         Some(url) => url,
         None => match super::routes::client_named_upstream_url(
@@ -97,7 +105,7 @@ pub(super) async fn prepare_gateway_request(
             }
         },
     };
-    if named_by_client {
+    if named_by_client || chatgpt_call {
         // A client-named destination gets only the credentials the client itself sent.
         //
         // Naming a destination must not also be a way to *obtain* one. Environment and

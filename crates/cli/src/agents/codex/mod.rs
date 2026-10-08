@@ -40,6 +40,12 @@ pub(super) fn parse_version(raw: &str) -> Option<Version> {
     Version::parse(raw.strip_prefix("codex-cli ")?).ok()
 }
 
+pub(super) fn backend_gateway_url(gateway_url: &str) -> String {
+    let gateway_url = gateway_url.trim_end_matches('/');
+    let gateway_url = gateway_url.strip_suffix("/v1").unwrap_or(gateway_url);
+    format!("{gateway_url}/backend-api/codex")
+}
+
 pub(super) fn versioned_gateway_url(gateway_url: &str) -> String {
     let gateway_url = gateway_url.trim_end_matches('/');
     if gateway_url.ends_with("/v1") {

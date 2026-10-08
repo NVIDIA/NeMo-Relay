@@ -218,7 +218,7 @@ pub(crate) fn pooled_client() -> Result<PooledClient, TransportError> {
     // The workspace enables more than one rustls backend through unrelated integrations. Select
     // Relay's direct `ring` dependency before rustls tries to infer a process-wide provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let connector = pooled_connector()?;
+    let connector = pooled_connector(false)?;
     let builder = pooled_builder();
     Ok(builder.build(connector))
 }
@@ -252,25 +252,34 @@ pub(crate) fn pooled_h2c_client() -> PooledHttpClient {
 /// Loopback workers selected by this client must support HTTP/2 without an Upgrade exchange.
 pub(crate) fn pooled_worker_h2c_client() -> Result<PooledClient, TransportError> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let connector = pooled_connector()?;
+    let connector = pooled_connector(false)?;
     let mut builder = pooled_builder();
     builder.http2_only(true);
     Ok(builder.build(connector))
 }
 
-fn pooled_connector() -> Result<HttpsConnector<HttpConnector>, TransportError> {
+/// HTTP/1-only transport for RFC 6455 upgrade handshakes.
+pub(crate) fn pooled_websocket_client() -> Result<PooledClient, TransportError> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    Ok(pooled_builder().build(pooled_connector(true)?))
+}
+
+fn pooled_connector(http1_only: bool) -> Result<HttpsConnector<HttpConnector>, TransportError> {
     let mut http = HttpConnector::new();
     http.enforce_http(false);
     http.set_nodelay(true);
     http.set_connect_timeout(Some(CONNECT_TIMEOUT));
 
-    Ok(HttpsConnectorBuilder::new()
+    let builder = HttpsConnectorBuilder::new()
         .with_native_roots()
         .map_err(TransportError::NativeRoots)?
         .https_or_http()
-        .enable_http1()
-        .enable_http2()
-        .wrap_connector(http))
+        .enable_http1();
+    Ok(if http1_only {
+        builder.wrap_connector(http)
+    } else {
+        builder.enable_http2().wrap_connector(http)
+    })
 }
 
 pub(crate) fn pooled_builder() -> hyper_util::client::legacy::Builder {

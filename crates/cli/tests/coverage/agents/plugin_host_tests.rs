@@ -5011,3 +5011,130 @@ enabled = false
     );
     assert!(codex_provider_header(&doc, BOOTSTRAP_CLIENT_TOKEN_HEADER).is_some());
 }
+
+#[test]
+fn codex_chatgpt_voice_install_sets_backend_call_url_and_uninstall_restores_config() {
+    for (auth, expected) in [
+        (json!({"auth_mode":"chatgpt", "tokens":{}}), true),
+        (json!({"tokens":{}, "OPENAI_API_KEY":null}), true),
+        (
+            json!({"auth_mode":"apikey", "OPENAI_API_KEY":"test-key"}),
+            false,
+        ),
+        (json!({"auth_mode":"apikey", "tokens":{}}), false),
+        (json!({}), false),
+    ] {
+        let dir = tempdir().unwrap();
+        let _home = HomeScope::enter(dir.path());
+        let path = dir.path().join(".codex/config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            path.parent().unwrap().join("auth.json"),
+            serde_json::to_vec(&auth).unwrap(),
+        )
+        .unwrap();
+        fs::write(&path, "model = \"test-model\"\n").unwrap();
+        for _ in 0..2 {
+            install_codex_config(&path, DEFAULT_URL).unwrap();
+            let doc = fs::read_to_string(&path)
+                .unwrap()
+                .parse::<DocumentMut>()
+                .unwrap();
+            assert_eq!(
+                doc.get("experimental_realtime_webrtc_call_base_url")
+                    .and_then(Item::as_str),
+                expected.then_some("http://127.0.0.1:47632/backend-api/codex"),
+                "{auth:?}"
+            );
+            assert_eq!(
+                doc["openai_base_url"].as_str(),
+                Some("http://127.0.0.1:47632/v1")
+            );
+        }
+        uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+        let doc = fs::read_to_string(&path)
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        assert!(!doc.contains_key("experimental_realtime_webrtc_call_base_url"));
+        assert_eq!(doc["model"].as_str(), Some("test-model"));
+    }
+}
+
+#[test]
+fn codex_chatgpt_voice_install_preserves_explicit_and_edited_call_urls() {
+    for explicit in [false, true] {
+        let dir = tempdir().unwrap();
+        let _home = HomeScope::enter(dir.path());
+        let path = dir.path().join(".codex/config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            path.parent().unwrap().join("auth.json"),
+            r#"{"auth_mode":"chatgpt"}"#,
+        )
+        .unwrap();
+        fs::write(&path, if explicit { "experimental_realtime_webrtc_call_base_url = \"https://voice.example/backend-api/codex\"\n" } else { "model = \"test-model\"\n" }).unwrap();
+        install_codex_config(&path, DEFAULT_URL).unwrap();
+        let mut doc = fs::read_to_string(&path)
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        if !explicit {
+            doc["experimental_realtime_webrtc_call_base_url"] =
+                toml_edit::value("https://voice.example/backend-api/codex");
+            fs::write(&path, doc.to_string()).unwrap();
+        }
+        install_codex_config(&path, DEFAULT_URL).unwrap();
+        uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+        let doc = fs::read_to_string(&path)
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        assert_eq!(
+            doc["experimental_realtime_webrtc_call_base_url"].as_str(),
+            Some("https://voice.example/backend-api/codex")
+        );
+    }
+}
+
+#[test]
+fn codex_chatgpt_voice_reinstall_tracks_auth_changes_and_forced_login() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model = \"test-model\"\n").unwrap();
+    let auth_path = path.parent().unwrap().join("auth.json");
+    fs::write(&auth_path, r#"{"auth_mode":"chatgpt"}"#).unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    fs::write(
+        &auth_path,
+        r#"{"auth_mode":"apikey","OPENAI_API_KEY":"test-key"}"#,
+    )
+    .unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut doc = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert!(!doc.contains_key("experimental_realtime_webrtc_call_base_url"));
+    doc["forced_login_method"] = toml_edit::value("chatgpt");
+    fs::write(&path, doc.to_string()).unwrap();
+    fs::remove_file(auth_path).unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let doc = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        doc["experimental_realtime_webrtc_call_base_url"].as_str(),
+        Some("http://127.0.0.1:47632/backend-api/codex")
+    );
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let doc = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert!(!doc.contains_key("experimental_realtime_webrtc_call_base_url"));
+    assert_eq!(doc["forced_login_method"].as_str(), Some("chatgpt"));
+}

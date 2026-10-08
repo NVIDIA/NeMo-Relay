@@ -2873,3 +2873,139 @@ async fn models_refuses_an_unusable_named_upstream() {
         "a named destination that cannot be used must fail the request: {error}"
     );
 }
+
+#[test]
+fn unmanaged_provider_routes_use_codex_auth_routing_and_preserve_query() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer at-codex-voice"),
+    );
+    for (route, path, expected) in [
+        (
+            ProviderRoute::OpenAiImagesEdits,
+            "/images/edits?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/images/edits?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiImagesEdits,
+            "/v1/images/edits?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/images/edits?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiMemoriesSummarize,
+            "/memories/trace_summarize?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/memories/trace_summarize?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiMemoriesSummarize,
+            "/v1/memories/trace_summarize?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/memories/trace_summarize?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiStandaloneSearch,
+            "/alpha/search?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/alpha/search?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiStandaloneSearch,
+            "/v1/alpha/search?trace=opaque%2Fquery",
+            "https://chatgpt.com/backend-api/codex/alpha/search?trace=opaque%2Fquery",
+        ),
+        (
+            ProviderRoute::OpenAiLive,
+            "/v1/live/rtc_test?intent=quicksilver",
+            "https://chatgpt.com/backend-api/codex/live/rtc_test?intent=quicksilver",
+        ),
+        (
+            ProviderRoute::OpenAiLive,
+            "/live?model=voice",
+            "https://chatgpt.com/backend-api/codex/live?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiLive,
+            "/v1/live?model=voice",
+            "https://chatgpt.com/backend-api/codex/live?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiLive,
+            "/v1/live/sessions/live_test/attach?graceful_close=true",
+            "https://chatgpt.com/backend-api/codex/live/sessions/live_test/attach?graceful_close=true",
+        ),
+        (
+            ProviderRoute::OpenAiRealtime,
+            "/v1/realtime?call_id=rtc_test",
+            "https://chatgpt.com/backend-api/codex/realtime?call_id=rtc_test",
+        ),
+        (
+            ProviderRoute::OpenAiRealtimeCalls,
+            "/realtime/calls?model=voice",
+            "https://chatgpt.com/backend-api/codex/realtime/calls?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiRealtimeCalls,
+            "/v1/realtime/calls?model=voice",
+            "https://chatgpt.com/backend-api/codex/realtime/calls?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiRealtimeCalls,
+            "/backend-api/codex/realtime/calls?model=voice",
+            "https://chatgpt.com/backend-api/codex/realtime/calls?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiResponsesCompact,
+            "/responses/compact?model=voice",
+            "https://chatgpt.com/backend-api/codex/responses/compact?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiResponsesCompact,
+            "/v1/responses/compact?model=voice",
+            "https://chatgpt.com/backend-api/codex/responses/compact?model=voice",
+        ),
+        (
+            ProviderRoute::OpenAiResponsesCompact,
+            "/backend-api/codex/responses/compact?model=voice",
+            "https://chatgpt.com/backend-api/codex/responses/compact?model=voice",
+        ),
+    ] {
+        assert_eq!(
+            gateway_upstream_url_override_with_openai_key_state(route, &headers, path, false,)
+                .as_deref(),
+            Some(expected),
+        );
+        assert_eq!(
+            gateway_upstream_url_override_with_openai_key_state(route, &headers, path, true,),
+            path.starts_with("/backend-api/codex/realtime/calls")
+                .then(|| expected.to_owned()),
+        );
+    }
+}
+
+#[tokio::test]
+async fn backend_voice_call_preserves_chatgpt_auth_despite_configured_api_replacement() {
+    let config = GatewayConfig {
+        openai_auth_header: Some("Bearer api-replacement".into()),
+        ..GatewayConfig::default()
+    };
+    let path = "/backend-api/codex/realtime/calls";
+    let body = r#"{"sdp":"offer","session":{"type":"realtime"}}"#;
+    let request = Request::post(format!("{path}?architecture=avas"))
+        .header("authorization", "Bearer at-chatgpt-voice")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let prepared = prepare_gateway_request(&config, request, environment_authorization(), path)
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.upstream_url,
+        "https://chatgpt.com/backend-api/codex/realtime/calls?architecture=avas"
+    );
+    assert_eq!(prepared.headers["authorization"], "Bearer at-chatgpt-voice");
+    assert_eq!(prepared.body_bytes.as_ref(), body.as_bytes());
+    assert!(!prepared.authorization.allow_environment_provider_auth);
+    let forwarded =
+        daemon_provider_forward_headers_with_access(&prepared.headers, path, &config, true)
+            .unwrap();
+    assert_eq!(forwarded["authorization"], "Bearer at-chatgpt-voice");
+}

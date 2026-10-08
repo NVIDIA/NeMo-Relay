@@ -914,3 +914,91 @@ async fn monitor_control_rejects_work_and_exits_after_recovery_deadline() {
     assert!(!state.accepting.load(Ordering::Acquire));
     assert!(state.exiting.load(Ordering::Acquire));
 }
+
+#[tokio::test]
+async fn websocket_proxy_authentication_and_drain_release_worker_admission() {
+    use crate::gateway::websocket::tests::{provider, serve};
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let (upstream, provider_task, active) = provider().await;
+    let state = state_with_config(GatewayConfig {
+        openai_base_url: upstream,
+        ..GatewayConfig::default()
+    });
+    let (origin, task) = serve(router(state.clone())).await;
+    let url = format!("{}/v1/live?model=voice", origin.replacen("http", "ws", 1));
+    let error = tokio_tungstenite::connect_async(&url).await.unwrap_err();
+    let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+        panic!("{error}");
+    };
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(active.load(Ordering::SeqCst), 0);
+    let mut request = url.into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert(WORKER_TOKEN_HEADER, HeaderValue::from_static("data-secret"));
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer caller-voice-key"),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    socket.next().await.unwrap().unwrap();
+    assert_eq!(state.in_flight.load(Ordering::SeqCst), 1);
+    state.begin_drain(0);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while state.in_flight.load(Ordering::SeqCst) != 0 || active.load(Ordering::SeqCst) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    task.abort();
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn websocket_drain_cancels_a_pending_upstream_handshake() {
+    use crate::gateway::websocket::tests::serve;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let started = Arc::new(Notify::new());
+    let app = axum::Router::new().fallback({
+        let started = Arc::clone(&started);
+        move || {
+            let started = Arc::clone(&started);
+            async move {
+                started.notify_one();
+                std::future::pending::<StatusCode>().await
+            }
+        }
+    });
+    let (upstream, provider_task) = serve(app).await;
+    let state = state_with_config(GatewayConfig {
+        openai_base_url: upstream,
+        ..GatewayConfig::default()
+    });
+    let (origin, task) = serve(router(Arc::clone(&state))).await;
+    let mut request = format!("{}/v1/live", origin.replacen("http", "ws", 1))
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert(WORKER_TOKEN_HEADER, HeaderValue::from_static("data-secret"));
+    let connection = tokio::spawn(tokio_tungstenite::connect_async(request));
+    tokio::time::timeout(Duration::from_secs(2), started.notified())
+        .await
+        .unwrap();
+    assert_eq!(state.in_flight.load(Ordering::SeqCst), 1);
+    state.begin_drain(0);
+    let error = tokio::time::timeout(Duration::from_secs(2), connection)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+        panic!("{error}");
+    };
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(state.in_flight.load(Ordering::SeqCst), 0);
+    task.abort();
+    provider_task.abort();
+}

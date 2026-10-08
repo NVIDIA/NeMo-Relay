@@ -140,7 +140,14 @@ fn is_openai_route(route: GatewayRouteKind) -> bool {
         route,
         GatewayRouteKind::OpenAiResponses
             | GatewayRouteKind::OpenAiChatCompletions
+            | GatewayRouteKind::OpenAiResponsesCompact
+            | GatewayRouteKind::OpenAiRealtime
+            | GatewayRouteKind::OpenAiRealtimeCalls
+            | GatewayRouteKind::OpenAiLive
             | GatewayRouteKind::OpenAiImagesGenerations
+            | GatewayRouteKind::OpenAiImagesEdits
+            | GatewayRouteKind::OpenAiMemoriesSummarize
+            | GatewayRouteKind::OpenAiStandaloneSearch
             | GatewayRouteKind::OpenAiModels
     )
 }

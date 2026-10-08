@@ -603,6 +603,29 @@ the `[model_providers.nemo-relay-managed-v1]` table once. Keep authentication an
 unrelated configuration. Do not append duplicate TOML tables. If `CODEX_HOME` is
 already configured, use that configuration location instead.
 
+For ChatGPT voice calls, add this setting to your user-level Codex configuration
+or `/etc/codex/managed_config.toml`. Put it at the top level, before any TOML
+table headers. Use your daemon's address if it differs from this local example.
+
+```toml
+experimental_realtime_webrtc_call_base_url = "http://127.0.0.1:47632/backend-api/codex"
+```
+
+This URL makes Codex send ChatGPT's JSON call request to `/realtime/calls`.
+The updated daemon forwards that request through the selected worker.
+Keep the managed provider's existing `/v1` base URL. API-key sessions use the
+public API format and do not need this ChatGPT setting.
+
+Restart Codex Desktop after changing its configuration. The default WebRTC
+sideband can connect directly to OpenAI. The audio also travels directly.
+For this setup, you do not need to set `experimental_realtime_ws_base_url`.
+
+Keep this setting in the source configuration used by your deployment tools
+so they preserve it during updates. Do not edit the immutable
+`codex/settings-v1/config.toml` bundle artifact. Updating the binary or running
+managed refresh does not add this setting. The personal-install
+command `nemo-relay install codex --force` does not update a managed deployment.
+
 Enable hooks in that effective configuration:
 
 ```toml
@@ -728,6 +751,13 @@ the OAuth credential and sends the request to the native ChatGPT Codex backend.
 When `openai_auth_header` or `OPENAI_API_KEY` is configured for the daemon, Relay
 removes the ChatGPT OAuth credential, injects that replacement credential, and
 uses the administrator's configured OpenAI-compatible upstream instead.
+
+ChatGPT voice call creation is an exception. Requests to
+`POST /backend-api/codex/realtime/calls` keep the caller's ChatGPT credential
+and use the native ChatGPT backend even when a replacement OpenAI credential
+is configured. This preserves ChatGPT's JSON call format. The exception does
+not apply to sideband attachment routes. Refer to
+[Known Issues in 0.10.0](/about-nemo-relay/release-notes#known-issues-in-0100).
 
 The daemon also accepts Codex's ChatGPT-shaped
 `POST /backend-api/codex/responses` path and canonicalizes it to the ordinary

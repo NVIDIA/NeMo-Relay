@@ -9,7 +9,14 @@ use super::*;
 pub(super) enum ProviderRoute {
     OpenAiResponses,
     OpenAiChatCompletions,
+    OpenAiResponsesCompact,
+    OpenAiRealtime,
+    OpenAiRealtimeCalls,
+    OpenAiLive,
     OpenAiImagesGenerations,
+    OpenAiImagesEdits,
+    OpenAiMemoriesSummarize,
+    OpenAiStandaloneSearch,
     OpenAiModels,
     AnthropicMessages,
     AnthropicCountTokens,
@@ -56,7 +63,21 @@ impl ProviderRoute {
             "/backend-api/codex/responses" => Some(Self::OpenAiResponses),
             "/chat/completions" => Some(Self::OpenAiChatCompletions),
             "/v1/chat/completions" => Some(Self::OpenAiChatCompletions),
+            "/responses/compact"
+            | "/v1/responses/compact"
+            | "/backend-api/codex/responses/compact" => Some(Self::OpenAiResponsesCompact),
+            "/realtime" | "/v1/realtime" => Some(Self::OpenAiRealtime),
+            "/realtime/calls" | "/v1/realtime/calls" | "/backend-api/codex/realtime/calls" => {
+                Some(Self::OpenAiRealtimeCalls)
+            }
+            "/live" | "/v1/live" | "/live/sessions" | "/v1/live/sessions" => Some(Self::OpenAiLive),
+            path if super::websocket::live_sideband_path(path) => Some(Self::OpenAiLive),
             "/v1/images/generations" => Some(Self::OpenAiImagesGenerations),
+            "/images/edits" | "/v1/images/edits" => Some(Self::OpenAiImagesEdits),
+            "/memories/trace_summarize" | "/v1/memories/trace_summarize" => {
+                Some(Self::OpenAiMemoriesSummarize)
+            }
+            "/alpha/search" | "/v1/alpha/search" => Some(Self::OpenAiStandaloneSearch),
             "/models" => Some(Self::OpenAiModels),
             "/v1/models" => Some(Self::OpenAiModels),
             "/v1/messages" => Some(Self::AnthropicMessages),
@@ -95,7 +116,16 @@ impl ProviderRoute {
             Self::OpenAiResponses => Some(ProviderSurface::OpenAIResponses),
             Self::OpenAiChatCompletions => Some(ProviderSurface::OpenAIChat),
             Self::AnthropicMessages => Some(ProviderSurface::AnthropicMessages),
-            Self::AnthropicCountTokens | Self::OpenAiImagesGenerations | Self::OpenAiModels => None,
+            Self::AnthropicCountTokens
+            | Self::OpenAiResponsesCompact
+            | Self::OpenAiRealtime
+            | Self::OpenAiRealtimeCalls
+            | Self::OpenAiLive
+            | Self::OpenAiImagesGenerations
+            | Self::OpenAiImagesEdits
+            | Self::OpenAiMemoriesSummarize
+            | Self::OpenAiStandaloneSearch
+            | Self::OpenAiModels => None,
         }
     }
 
@@ -117,7 +147,14 @@ impl ProviderRoute {
         let base = match self {
             Self::OpenAiResponses
             | Self::OpenAiChatCompletions
+            | Self::OpenAiResponsesCompact
+            | Self::OpenAiRealtime
+            | Self::OpenAiRealtimeCalls
+            | Self::OpenAiLive
             | Self::OpenAiImagesGenerations
+            | Self::OpenAiImagesEdits
+            | Self::OpenAiMemoriesSummarize
+            | Self::OpenAiStandaloneSearch
             | Self::OpenAiModels => config.openai_base_url.as_str(),
             Self::AnthropicMessages | Self::AnthropicCountTokens => {
                 config.anthropic_base_url.as_str()
@@ -147,7 +184,12 @@ impl ProviderRoute {
     }
 
     fn canonical_path_and_query(self, path_and_query: &str) -> String {
-        if self == Self::OpenAiResponses
+        if self == Self::OpenAiRealtimeCalls
+            && let Some(suffix) = path_and_query.strip_prefix("/backend-api/codex/realtime/calls")
+        {
+            return format!("/realtime/calls{suffix}");
+        }
+        if matches!(self, Self::OpenAiResponses | Self::OpenAiResponsesCompact)
             && let Some(suffix) = path_and_query.strip_prefix("/backend-api/codex/responses")
         {
             return format!("/responses{suffix}");
@@ -162,7 +204,14 @@ impl ProviderRoute {
         match self {
             Self::OpenAiResponses => GatewayRouteKind::OpenAiResponses,
             Self::OpenAiChatCompletions => GatewayRouteKind::OpenAiChatCompletions,
+            Self::OpenAiResponsesCompact => GatewayRouteKind::OpenAiResponsesCompact,
+            Self::OpenAiRealtime => GatewayRouteKind::OpenAiRealtime,
+            Self::OpenAiRealtimeCalls => GatewayRouteKind::OpenAiRealtimeCalls,
+            Self::OpenAiLive => GatewayRouteKind::OpenAiLive,
             Self::OpenAiImagesGenerations => GatewayRouteKind::OpenAiImagesGenerations,
+            Self::OpenAiImagesEdits => GatewayRouteKind::OpenAiImagesEdits,
+            Self::OpenAiMemoriesSummarize => GatewayRouteKind::OpenAiMemoriesSummarize,
+            Self::OpenAiStandaloneSearch => GatewayRouteKind::OpenAiStandaloneSearch,
             Self::OpenAiModels => GatewayRouteKind::OpenAiModels,
             Self::AnthropicMessages => GatewayRouteKind::AnthropicMessages,
             Self::AnthropicCountTokens => GatewayRouteKind::AnthropicCountTokens,
@@ -178,7 +227,14 @@ fn configured_auth_header<'a>(
     match route {
         ProviderRoute::OpenAiResponses
         | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiResponsesCompact
+        | ProviderRoute::OpenAiRealtime
+        | ProviderRoute::OpenAiRealtimeCalls
+        | ProviderRoute::OpenAiLive
         | ProviderRoute::OpenAiImagesGenerations
+        | ProviderRoute::OpenAiImagesEdits
+        | ProviderRoute::OpenAiMemoriesSummarize
+        | ProviderRoute::OpenAiStandaloneSearch
         | ProviderRoute::OpenAiModels => openai_auth_header,
         ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
             anthropic_auth_header
@@ -263,6 +319,9 @@ pub(super) fn gateway_upstream_url_override_with_openai_key_state(
     path_and_query: &str,
     has_openai_replacement_key: bool,
 ) -> Option<String> {
+    // An explicit Codex backend call URL preserves ChatGPT's request format and credentials.
+    let has_openai_replacement_key = has_openai_replacement_key
+        && !path_and_query.starts_with("/backend-api/codex/realtime/calls");
     let path_and_query = route.canonical_path_and_query(path_and_query);
     alignment::gateway_upstream_url_override(
         headers,
@@ -317,7 +376,14 @@ fn has_openai_replacement_auth(
             route,
             ProviderRoute::OpenAiResponses
                 | ProviderRoute::OpenAiChatCompletions
+                | ProviderRoute::OpenAiResponsesCompact
+                | ProviderRoute::OpenAiRealtime
+                | ProviderRoute::OpenAiRealtimeCalls
+                | ProviderRoute::OpenAiLive
                 | ProviderRoute::OpenAiImagesGenerations
+                | ProviderRoute::OpenAiImagesEdits
+                | ProviderRoute::OpenAiMemoriesSummarize
+                | ProviderRoute::OpenAiStandaloneSearch
                 | ProviderRoute::OpenAiModels
         )
         && (configured_auth_header.is_some() || env_var_is_nonempty("OPENAI_API_KEY"))

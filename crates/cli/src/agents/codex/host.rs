@@ -873,6 +873,13 @@ fn install_codex_config_inner(path: &Path, gateway_url: &str) -> Result<(), Stri
     super::environment::install(path, &client_token)?;
     install_codex_tool_environment_exclusion(&mut doc)?;
     doc["openai_base_url"] = value(&openai_base_url);
+    if has_managed_proof {
+        let backup_doc = read_codex_backup_doc(path)?.unwrap_or_default();
+        restore_codex_realtime_call_base_url(&mut doc, &backup_doc, &gateway_url, true);
+    }
+    if !doc.contains_key(CODEX_REALTIME_CALL_BASE_URL) && codex_uses_chatgpt_auth(path, &doc) {
+        doc[CODEX_REALTIME_CALL_BASE_URL] = value(super::backend_gateway_url(&gateway_url));
+    }
     if doc
         .get("model_provider")
         .and_then(Item::as_value)
@@ -906,6 +913,53 @@ fn install_codex_config_inner(path: &Path, gateway_url: &str) -> Result<(), Stri
     Ok(())
 }
 
+const CODEX_REALTIME_CALL_BASE_URL: &str = "experimental_realtime_webrtc_call_base_url";
+
+// Only inspect the auth mode. Never copy credentials into generated configuration or logs.
+fn codex_uses_chatgpt_auth(config_path: &Path, doc: &DocumentMut) -> bool {
+    match doc.get("forced_login_method").and_then(Item::as_str) {
+        Some("chatgpt") => return true,
+        Some("api") => return false,
+        _ => {}
+    }
+    let Some(directory) = config_path.parent() else {
+        return false;
+    };
+    let Ok(bytes) = fs::read(directory.join("auth.json")) else {
+        return false;
+    };
+    let Ok(auth) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    match auth.get("auth_mode").and_then(serde_json::Value::as_str) {
+        Some("chatgpt" | "chatgptAuthTokens" | "personalAccessToken") => true,
+        Some(_) => false,
+        None => {
+            auth.get("tokens").is_some_and(serde_json::Value::is_object)
+                && auth
+                    .get("OPENAI_API_KEY")
+                    .is_none_or(serde_json::Value::is_null)
+        }
+    }
+}
+
+fn restore_codex_realtime_call_base_url(
+    doc: &mut DocumentMut,
+    backup: &DocumentMut,
+    gateway_url: &str,
+    has_managed_proof: bool,
+) {
+    if has_managed_proof
+        && top_level_item_is_str(
+            doc,
+            CODEX_REALTIME_CALL_BASE_URL,
+            &super::backend_gateway_url(gateway_url),
+        )
+    {
+        restore_top_level_item(doc, backup, CODEX_REALTIME_CALL_BASE_URL);
+    }
+}
+
 /// Refresh the uninstall baseline without carrying installer-owned fields forward.
 ///
 /// A user can edit one field of an installed config before a forced reinstall. The current file
@@ -931,6 +985,7 @@ fn refresh_codex_config_backup(
     let mut baseline = current.clone();
     let preserved_provider = codex_extended_provider_without_proof(&baseline, gateway_url);
     let provider_is_managed = codex_provider_item_is_managed(&baseline, gateway_url);
+    restore_codex_realtime_call_base_url(&mut baseline, previous, gateway_url, has_managed_proof);
     restore_plain_codex_base_url(path, &mut baseline, previous, gateway_url, Some(challenge));
     restore_managed_openai_base_url(&mut baseline, previous, gateway_url, Some(challenge));
     restore_codex_config_from_backup(&mut baseline, previous, provider_is_managed, false);
@@ -1052,6 +1107,12 @@ fn sanitize_codex_backup_doc(
         return backup;
     }
 
+    restore_codex_realtime_call_base_url(
+        &mut backup,
+        &DocumentMut::new(),
+        gateway_url,
+        has_managed_proof,
+    );
     if provider_is_managed {
         let preserved_provider = codex_extended_provider_without_proof(&backup, gateway_url);
         remove_managed_openai_base_url(&mut backup, gateway_url, challenge);
@@ -1298,6 +1359,19 @@ fn uninstall_codex_config_inner(
     let preserved_provider = codex_extended_provider_without_proof(&doc, &gateway_url);
     let provider_is_managed = codex_provider_item_is_managed(&doc, &gateway_url);
     let empty_backup = DocumentMut::new();
+    let has_managed_proof = codex_provider_client_token(&doc).is_some_and(|token| {
+        challenge
+            .as_ref()
+            .is_some_and(|key| key.verify_client_token(token))
+    }) || challenge
+        .as_ref()
+        .is_some_and(|key| super::environment::has_proof(path, key));
+    restore_codex_realtime_call_base_url(
+        &mut doc,
+        backup_doc.as_ref().unwrap_or(&empty_backup),
+        &gateway_url,
+        has_managed_proof,
+    );
     restore_plain_codex_base_url(
         path,
         &mut doc,

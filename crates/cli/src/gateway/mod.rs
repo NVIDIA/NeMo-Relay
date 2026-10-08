@@ -6,6 +6,7 @@ mod request;
 mod response;
 mod routes;
 pub(crate) mod tls;
+pub(crate) mod websocket;
 
 use request::*;
 use response::*;
@@ -149,7 +150,7 @@ pub(crate) fn daemon_provider_forward_headers_with_access(
     Some(strip_replaceable_agent_auth_headers(
         headers,
         provider,
-        allow_provider_auth,
+        allow_provider_auth && path != "/backend-api/codex/realtime/calls",
         provider.configured_auth_header(config),
     ))
 }
@@ -229,11 +230,56 @@ pub(crate) async fn passthrough(
     run_managed_gateway(state, prepared, prep, operational).await
 }
 
-/// Transparently proxies OpenAI image-generation requests without emitting LLM events.
+/// Upgrades an authorized provider WebSocket without entering the managed LLM pipeline.
+pub(crate) async fn websocket_passthrough(
+    State(state): State<AppState>,
+    mut request: Request<Body>,
+) -> Result<Response<Body>, CliError> {
+    state.touch();
+    let path = request.uri().path().to_owned();
+    let (authorization, path) = state.authorize_provider_request(request.headers_mut(), &path)?;
+    if !websocket::supported_path(&path) {
+        return Err(CliError::InvalidPayload(
+            "unsupported WebSocket path".into(),
+        ));
+    }
+    let extensions = std::mem::take(request.extensions_mut());
+    let prepared = prepare_gateway_request(&state.config, request, authorization, &path).await?;
+    let client = crate::daemon::common::transport::pooled_websocket_client()
+        .map_err(|e| CliError::Launch(e.to_string()))?;
+    let headers = inject_provider_auth(
+        state
+            .http
+            .get(&prepared.upstream_url)
+            .headers(prepared.headers.clone()),
+        prepared.provider,
+        &prepared.headers,
+        prepared.authorization.allow_environment_provider_auth,
+        prepared.provider.configured_auth_header(&state.config),
+    )
+    .build()?
+    .headers()
+    .clone();
+    let mut request = Request::new(Body::empty());
+    *request.method_mut() = prepared.method;
+    *request.headers_mut() = headers;
+    *request.extensions_mut() = extensions;
+    Ok(websocket::forward(
+        &client,
+        request,
+        &prepared.upstream_url,
+        None,
+        (),
+        &state.config,
+        std::future::pending(),
+    )
+    .await)
+}
+
+/// Transparently proxies compaction, image generation, and voice call setup without emitting LLM events.
 ///
-/// Relay has no image-generation codec, so preserving the upstream response exactly is safer than
-/// forcing this distinct API shape through the managed text-generation pipeline.
-pub(crate) async fn images_generations(
+/// These APIs do not use the managed text-generation request and response schemas.
+pub(crate) async fn unmanaged_passthrough(
     State(state): State<AppState>,
     mut request: Request<Body>,
 ) -> Result<Response<Body>, CliError> {
@@ -352,9 +398,10 @@ async fn run_managed_gateway(
 
 async fn run_unmanaged_gateway(
     state: AppState,
-    prepared: PreparedGatewayRequest,
+    mut prepared: PreparedGatewayRequest,
     operational: Option<OperationalContext>,
 ) -> Result<Response<Body>, CliError> {
+    websocket::strip_private_headers(&mut prepared.headers, false);
     if prepared.streaming {
         return passthrough_streaming(state, prepared, operational).await;
     }
@@ -1441,7 +1488,14 @@ where
     let (env_var, header_name) = match route {
         ProviderRoute::OpenAiResponses
         | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiResponsesCompact
+        | ProviderRoute::OpenAiRealtime
+        | ProviderRoute::OpenAiRealtimeCalls
+        | ProviderRoute::OpenAiLive
         | ProviderRoute::OpenAiImagesGenerations
+        | ProviderRoute::OpenAiImagesEdits
+        | ProviderRoute::OpenAiMemoriesSummarize
+        | ProviderRoute::OpenAiStandaloneSearch
         | ProviderRoute::OpenAiModels => ("OPENAI_API_KEY", http::header::AUTHORIZATION.as_str()),
         ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
             ("ANTHROPIC_API_KEY", "x-api-key")
@@ -1459,7 +1513,14 @@ where
     let header_value = match route {
         ProviderRoute::OpenAiResponses
         | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiResponsesCompact
+        | ProviderRoute::OpenAiRealtime
+        | ProviderRoute::OpenAiRealtimeCalls
+        | ProviderRoute::OpenAiLive
         | ProviderRoute::OpenAiImagesGenerations
+        | ProviderRoute::OpenAiImagesEdits
+        | ProviderRoute::OpenAiMemoriesSummarize
+        | ProviderRoute::OpenAiStandaloneSearch
         | ProviderRoute::OpenAiModels => format!("Bearer {value}"),
         ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => value,
     };

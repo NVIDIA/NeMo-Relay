@@ -274,6 +274,14 @@ fn router(state: Arc<DaemonState>) -> Router {
         )
         .merge(control)
         .fallback(public_proxy)
+        .method_not_allowed_fallback(|request: Request<Body>| async move {
+            crate::operational::unmatched_route(
+                "daemon",
+                request.method(),
+                request.uri(),
+                StatusCode::METHOD_NOT_ALLOWED,
+            )
+        })
         .with_state(state)
 }
 
@@ -1217,13 +1225,19 @@ fn stage_worker(
         Ok(client) => client,
         Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
     };
+    let websocket_client = match crate::daemon::common::worker_tls::worker_websocket_client(
+        tls_root_certificate.as_deref(),
+    ) {
+        Ok(client) => client,
+        Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
+    };
     let target = match WorkerTarget::with_shared_client(
         worker_id.clone(),
         endpoint,
         data_secret.clone(),
         worker_client,
     ) {
-        Ok(target) => Arc::new(target),
+        Ok(target) => Arc::new(target.with_websocket_client(websocket_client)),
         Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
     };
     worker_sessions.insert(
@@ -1593,7 +1607,13 @@ async fn public_proxy_inner(
     mut request: Request<Body>,
 ) -> Response<Body> {
     let Some(route) = PublicRoute::from_path(request.uri().path()) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return crate::operational::unmatched_route(
+            "daemon",
+            request.method(),
+            request.uri(),
+            StatusCode::NOT_FOUND,
+        )
+        .into_response();
     };
     let credential = match public_credential(request.headers()) {
         Ok(credential) => credential,
@@ -1611,8 +1631,16 @@ async fn public_proxy_inner(
     if responses_websocket_probe(&request) {
         return StatusCode::UPGRADE_REQUIRED.into_response();
     }
-    if !public_method_allowed(request.method(), request.uri().path()) {
-        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    let websocket = crate::gateway::websocket::supported_path(request.uri().path())
+        && crate::gateway::websocket::is_websocket(&request);
+    if !websocket && !public_method_allowed(request.method(), request.uri().path()) {
+        return crate::operational::unmatched_route(
+            "daemon",
+            request.method(),
+            request.uri(),
+            StatusCode::METHOD_NOT_ALLOWED,
+        )
+        .into_response();
     }
     let (target, access) = match credential {
         None => {
@@ -1704,6 +1732,9 @@ fn responses_websocket_probe(request: &Request<Body>) -> bool {
 }
 
 fn public_method_allowed(method: &Method, path: &str) -> bool {
+    if crate::gateway::websocket::live_sideband_path(path) {
+        return false; // Attach routes require a WebSocket upgrade, handled before this check.
+    }
     if matches!(path, "/models" | "/v1/models") {
         method == Method::GET
     } else {
@@ -1852,6 +1883,22 @@ async fn forward_to_provider(
     if allow_environment_provider_auth {
         inject_provider_auth(request.headers_mut(), route, &state.config);
     }
+    if crate::gateway::websocket::is_websocket(&request) {
+        let client = match crate::daemon::common::transport::pooled_websocket_client() {
+            Ok(client) => client,
+            Err(error) => return control_error(StatusCode::BAD_GATEWAY, error),
+        };
+        return crate::gateway::websocket::forward(
+            &client,
+            request,
+            &destination,
+            None,
+            (),
+            &state.config,
+            std::future::pending(),
+        )
+        .await;
+    }
     let outcome = forward(
         &state.upstream,
         request,
@@ -1922,6 +1969,25 @@ async fn forward_to_worker(
         path_and_query
     );
     let token = worker.session_token().to_owned();
+    if crate::gateway::websocket::is_websocket(&request) {
+        let client = match worker.target().websocket_client() {
+            Some(client) => client.clone(),
+            None => match crate::daemon::common::transport::pooled_websocket_client() {
+                Ok(client) => client,
+                Err(error) => return control_error(StatusCode::BAD_GATEWAY, error),
+            },
+        };
+        return crate::gateway::websocket::forward(
+            &client,
+            request,
+            &destination,
+            Some((HeaderName::from_static(WORKER_TOKEN_HEADER), token)),
+            worker,
+            &state.config,
+            std::future::pending(),
+        )
+        .await;
+    }
     let client = worker.target().client().clone();
     let mut outcome = forward(
         &client,
