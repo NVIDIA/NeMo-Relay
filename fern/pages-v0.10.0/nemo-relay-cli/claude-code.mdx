@@ -12,6 +12,10 @@ the supported integration target. The Claude application, Claude web, and Claude
 desktop sessions are unsupported unless they expose the same local hook and
 gateway controls as Claude Code.
 
+On Windows, Relay generates Bash-compatible hook commands for Claude Code,
+using forward-slash executable and configuration paths. After upgrading Relay,
+run `nemo-relay integrations refresh` to regenerate persistently installed hooks.
+
 ## Transparent Run
 
 Use the wrapper for no-install local observability:

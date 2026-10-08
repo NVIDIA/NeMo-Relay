@@ -106,9 +106,15 @@ user `PATH`; the Unix installer does not edit shell configuration.
 | Windows | x86_64 | `x86_64-pc-windows-msvc` |
 | Windows | ARM64 | `aarch64-pc-windows-msvc` |
 
-Use the GNU target on glibc-based distributions such as Ubuntu, Debian, and
-RHEL. Use the musl target on Alpine Linux and other musl-based systems. The
-Unix shell installer intentionally selects the portable musl target on Linux.
+Use the GNU target on glibc-based distributions such as Ubuntu, Debian, and RHEL.
+
+Use the musl target on Alpine Linux and other musl-based systems.
+The musl CLI dynamically links musl 1.2 or newer to support native plugins;
+the musl loader and libc must be installed on the host.
+
+The Unix shell installer detects glibc and selects the GNU binary built in manylinux.
+Otherwise, it selects the musl binary built in musllinux.
+
 For package versions that publish the corresponding artifacts, `pip` and `uv`
 automatically select a target compatible with the host CPU and C library on
 supported platforms.
@@ -260,7 +266,7 @@ cargo binstall nemo-relay-cli
 ```
 
 For source installation and unsupported-platform guidance, refer to the
-[CLI README](https://github.com/NVIDIA/NeMo-Relay/blob/0.10.0-rc.3/crates/cli/README.md#installation-options).
+[CLI README](https://github.com/NVIDIA/NeMo-Relay/blob/0.10.0-rc.4/crates/cli/README.md#installation-options).
 
 ## Python
 

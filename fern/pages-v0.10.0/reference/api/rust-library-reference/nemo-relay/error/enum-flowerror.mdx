@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum FlowError &#123;\n    AlreadyExists(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    NotFound(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidArgument(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    ScopeStackEmpty,\n    GuardrailRejected(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Upstream(<a href=\"struct-upstreamfailure\">UpstreamFailure</a>),\n    Internal(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    CallbackException &#123;\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        exception_type: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum FlowError &#123;\n    AlreadyExists(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    NotFound(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidArgument(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    ScopeStackEmpty,\n    GuardrailRejected(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Upstream(<a href=\"struct-upstreamfailure\">UpstreamFailure</a>),\n    Internal(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    CallbackException &#123;\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        exception_type: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        source: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static&gt;&gt;,\n    &#125;,\n&#125;"}} /></pre>
 
 The error type for all NeMo Relay runtime operations.
 
@@ -84,6 +84,12 @@ Original binding-rendered exception message.
 ### `exception_type: String`
 
 Original language exception class name.
+
+### `source: Option<Arc<dyn Error + Send + Sync + 'static>>`
+
+Original binding exception when binding can carry.
+
+Formatting with `{:?}` or formatting the value returned by `Error::source()` may run binding code, like acquiring the GIL. Avoid on a thread that a GIL-holding thread is blocked waiting on.
 
 ## Trait Implementations
 

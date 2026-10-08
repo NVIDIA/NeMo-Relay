@@ -235,13 +235,20 @@ credential from the child's environment before launch.
 Workers use a separate Unix session so launcher process-group cleanup does not
 stop them. On Windows, workers request breakaway from Relay's Job Objects.
 Those objects still clean up children that do not request breakaway. Activation
-fails if an external Job Object prevents the worker from leaving. The Windows
+continues inside the host job if an external Job Object prevents breakaway.
+Relay emits `worker_lifetime_limited` in that case. Closing the host can stop
+the worker, so surviving or newly started MCP clients may need to reactivate
+the route after the broker's recovery grace period. The Windows
 worker inherits only its startup pipe and standard output and error handles.
 Its standard output is disconnected.
 
 Worker logs use the `[logging]` settings and configured file sinks. By default,
-stderr goes to the launcher's or harness's capture. Relay does not create worker
-log files under daemon state.
+stderr goes to the launcher's or harness's capture. On Windows, redirected file
+and pipe handles remain connected. Character-device stderr, including read/write
+and write-only console handles, is disconnected because the detached worker has
+no console. Configure a file sink to retain worker logs
+when launching from a Windows console. Relay does not create worker log files
+under daemon state.
 
 Before cleaning up a child on shutdown, MCP asks the broker about its launch.
 If the broker replies `cancelled` or `superseded`, MCP terminates the child and
