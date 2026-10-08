@@ -30,4 +30,4 @@ Returns [`FlowError::AlreadyExists`](/reference/api/rust-library-reference/nemo-
 
 ## Notes
 
-Global subscribers remain active across scopes until explicitly removed. Native event-producing APIs enqueue subscriber work and return without waiting for callbacks.
+Global subscribers remain active across scopes until explicitly removed. Native event-producing APIs enqueue subscriber work and return without waiting for callbacks. During tool scope start/end delivery, derived marks inherit the observed tool scope as their parent, including after the tool closes. An explicit mark parent takes precedence over this callback context.
