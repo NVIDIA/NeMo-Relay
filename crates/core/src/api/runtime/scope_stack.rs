@@ -1128,6 +1128,41 @@ pub(crate) async fn with_active_event_trace_context<T>(
     with_anchored_active_event(active_event, trace_context, future).await
 }
 
+/// Bind a synchronous tool lifecycle subscriber to the observed tool scope.
+/// The event may already be closed, so anchor it to the delivery snapshot rather
+/// than changing the live scope stack or reopening the tool.
+pub(crate) fn with_thread_active_event_trace_context<T>(
+    uuid: Uuid,
+    trace_context: Option<W3cTraceContext>,
+    callback: impl FnOnce() -> T,
+) -> T {
+    struct RestoreActiveEvent {
+        event: Option<AnchoredActiveEvent>,
+        trace_context: Option<W3cTraceContext>,
+    }
+
+    impl Drop for RestoreActiveEvent {
+        fn drop(&mut self) {
+            THREAD_ACTIVE_EVENT.with(|event| *event.borrow_mut() = self.event.take());
+            THREAD_ACTIVE_EVENT_TRACE_CONTEXT
+                .with(|context| *context.borrow_mut() = self.trace_context.take());
+        }
+    }
+
+    let (scope_stack, anchor_scope_uuid) = scope_stack_identity_and_anchor();
+    let event = AnchoredActiveEvent {
+        event_uuid: uuid,
+        scope_stack,
+        anchor_scope_uuid,
+    };
+    let _restore = RestoreActiveEvent {
+        event: THREAD_ACTIVE_EVENT.with(|current| current.replace(Some(event))),
+        trace_context: THREAD_ACTIVE_EVENT_TRACE_CONTEXT
+            .with(|current| current.replace(trace_context)),
+    };
+    callback()
+}
+
 pub(crate) async fn with_anchored_active_event<T>(
     active_event: AnchoredActiveEvent,
     trace_context: Option<W3cTraceContext>,

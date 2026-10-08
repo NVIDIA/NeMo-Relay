@@ -150,7 +150,8 @@ mod native {
     use crate::api::runtime::scope_stack::current_scope_stack;
     use crate::api::runtime::scope_stack::{
         ScopeStackHandle, capture_thread_scope_stack, restore_thread_scope_stack,
-        set_thread_scope_stack, snapshot_scope_stack,
+        set_thread_scope_stack, snapshot_scope_stack, trace_context_for_managed_span,
+        with_thread_active_event_trace_context,
     };
     use crate::error::FlowError;
 
@@ -1116,14 +1117,26 @@ mod native {
             publication_context,
         );
         if let Some(event) = event {
-            for subscriber in subscribers {
-                if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
-                    log::error!(
-                        target: "nemo_relay.runtime",
-                        event = "subscriber_callback_panicked";
-                        "Event subscriber callback panicked"
-                    );
+            let deliver = || {
+                for subscriber in subscribers {
+                    if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
+                        log::error!(
+                            target: "nemo_relay.runtime",
+                            event = "subscriber_callback_panicked";
+                            "Event subscriber callback panicked"
+                        );
+                    }
                 }
+            };
+            if event.scope_type() == Some(crate::api::scope::ScopeType::Tool) {
+                // Tool start/end snapshots can contain only the enclosing turn.
+                // Derived marks must use the observed tool, including after it
+                // closes. Continuation capture carries this binding to workers.
+                let trace_context =
+                    trace_context_for_managed_span(event.uuid(), event.parent_uuid()).ok();
+                with_thread_active_event_trace_context(event.uuid(), trace_context, deliver);
+            } else {
+                deliver();
             }
         }
         restore_thread_scope_stack(previous_scope_stack);
