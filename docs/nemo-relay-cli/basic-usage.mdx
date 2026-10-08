@@ -122,10 +122,8 @@ Relay forwards voice requests in the format it receives. Codex chooses ChatGPT's
 JSON call format when its call-creation base URL contains `/backend-api`.
 A local Relay URL without that path selects the public API format instead.
 For personal persistent installs with ChatGPT sign-in, Relay sets a separate
-call-creation URL ending in `/backend-api/codex`. It preserves an explicit call-creation URL
-that you already set. The tests check the request format and forwarding behavior.
-A live voice session has been verified with Codex Desktop, ChatGPT sign-in,
-and a managed Relay daemon.
+call-creation URL ending in `/backend-api/codex`. It preserves an explicit
+call-creation URL that you already set.
 
 For a managed daemon deployment, set
 `experimental_realtime_webrtc_call_base_url` manually to the Relay URL ending

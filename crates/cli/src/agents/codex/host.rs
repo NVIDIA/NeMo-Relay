@@ -949,12 +949,20 @@ fn restore_codex_realtime_call_base_url(
     gateway_url: &str,
     has_managed_proof: bool,
 ) {
+    let previous_call_url = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get("nemo-relay-openai"))
+        .and_then(Item::as_table)
+        .and_then(|provider| provider.get("base_url"))
+        .and_then(Item::as_str)
+        .map(super::backend_gateway_url);
+    let current_call_url = doc.get(CODEX_REALTIME_CALL_BASE_URL).and_then(Item::as_str);
     if has_managed_proof
-        && top_level_item_is_str(
-            doc,
-            CODEX_REALTIME_CALL_BASE_URL,
-            &super::backend_gateway_url(gateway_url),
-        )
+        && current_call_url.is_some_and(|url| {
+            url == super::backend_gateway_url(gateway_url)
+                || previous_call_url.as_deref() == Some(url)
+        })
     {
         restore_top_level_item(doc, backup, CODEX_REALTIME_CALL_BASE_URL);
     }

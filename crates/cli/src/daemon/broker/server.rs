@@ -1206,6 +1206,12 @@ fn stage_worker(
         Ok(secret) => secret,
         Err(error) => return control_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
+    let websocket_client = match crate::daemon::common::worker_tls::worker_websocket_client(
+        tls_root_certificate.as_deref(),
+    ) {
+        Ok(client) => client,
+        Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
+    };
     let mut worker_sessions = lock(&state.worker_sessions);
     if !reserve_worker_session_slot(
         &mut worker_sessions,
@@ -1222,12 +1228,6 @@ fn stage_worker(
     // the session lock through the synchronous client construction makes the collision check and
     // insertion atomic, without holding it across connection acquisition or network I/O.
     let worker_client = match state.worker_clients.client(tls_root_certificate.as_deref()) {
-        Ok(client) => client,
-        Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
-    };
-    let websocket_client = match crate::daemon::common::worker_tls::worker_websocket_client(
-        tls_root_certificate.as_deref(),
-    ) {
         Ok(client) => client,
         Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
     };

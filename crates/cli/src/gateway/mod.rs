@@ -269,7 +269,7 @@ pub(crate) async fn websocket_passthrough(
         request,
         &prepared.upstream_url,
         None,
-        (),
+        state.hold_websocket(),
         &state.config,
         std::future::pending(),
     )

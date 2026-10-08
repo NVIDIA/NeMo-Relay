@@ -752,6 +752,10 @@ fn cli_gateway_logs_unmatched_routes_at_error_level() {
             "/v1/nemo-relay/capability-secret?key=query-secret",
             "404",
         ),
+        ("GET", "/v1/nemo-relay//capability-secret/unknown", "405"),
+        ("GET", "/V1/nemo-relay/capability-secret/unknown", "404"),
+        ("GET", "/v1/NEMO-RELAY/capability-secret/unknown", "404"),
+        ("GET", "/v1//nemo-relay/capability-secret/unknown", "404"),
     ] {
         let mut stream = TcpStream::connect(address).unwrap();
         stream
@@ -762,7 +766,7 @@ fn cli_gateway_logs_unmatched_routes_at_error_level() {
         stream.read_to_string(&mut response).unwrap();
         assert!(
             response.starts_with(&format!("HTTP/1.1 {status}")),
-            "{response}"
+            "{method} {path}: {response}"
         );
     }
 
@@ -787,7 +791,7 @@ fn cli_gateway_logs_unmatched_routes_at_error_level() {
         .filter_map(|line| serde_json::from_str(line).ok())
         .filter(|record: &serde_json::Value| record["event"] == "route_unmatched")
         .collect();
-    assert_eq!(records.len(), 4, "{stderr}");
+    assert_eq!(records.len(), 8, "{stderr}");
     for record in &records {
         assert_eq!(
             record["level"].as_str().unwrap().to_ascii_lowercase(),
@@ -797,11 +801,11 @@ fn cli_gateway_logs_unmatched_routes_at_error_level() {
     }
     assert_eq!(records[0]["fields"]["path"], "/unknown");
     assert_eq!(records[1]["fields"]["method"], "POST");
-    assert_eq!(
-        records[2]["fields"]["path"],
-        "/v1/nemo-relay/<redacted>/unknown"
-    );
+    assert_eq!(records[2]["fields"]["path"], "/v1/nemo-relay/<redacted>");
     assert_eq!(records[3]["fields"]["path"], "/v1/nemo-relay/<redacted>");
+    for record in &records[2..] {
+        assert_eq!(record["fields"]["path"], "/v1/nemo-relay/<redacted>");
+    }
     for secret in ["query-secret", "capability-secret", "header-secret"] {
         assert!(!stderr.contains(secret), "{stderr}");
     }

@@ -1114,3 +1114,41 @@ async fn pooled_http1_keeps_128_concurrent_streams_isolated() {
     relay_task.abort();
     provider_task.abort();
 }
+
+#[tokio::test]
+async fn websocket_clients_share_the_connection_pool() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let destination = format!("http://{}/", listener.local_addr().unwrap());
+    let connections = Arc::new(AtomicUsize::new(0));
+    let accepted = Arc::clone(&connections);
+    let server = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            accepted.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let service = service_fn(|_| async {
+                    Ok::<_, Infallible>(Response::new(Empty::<Bytes>::new()))
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    for _ in 0..2 {
+        let client = pooled_websocket_client().unwrap();
+        let request = Request::get(&destination)
+            .body(box_body(Empty::<Bytes>::new()))
+            .unwrap();
+        client
+            .request(request)
+            .await
+            .unwrap()
+            .into_body()
+            .collect()
+            .await
+            .unwrap();
+    }
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    server.abort();
+}

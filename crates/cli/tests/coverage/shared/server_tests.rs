@@ -6850,3 +6850,52 @@ async fn unmanaged_routes_preserve_streaming_and_error_responses_without_session
     assert!(!state.sessions.has_open_sessions().await);
     provider_task.abort();
 }
+
+#[tokio::test]
+async fn websocket_tunnel_blocks_idle_shutdown_until_disconnect() {
+    use crate::gateway::websocket::tests::{provider, serve};
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let (upstream, provider_task, _) = provider().await;
+    let mut config = test_config();
+    config.openai_base_url = upstream;
+    let state = AppState::new(config);
+    let (origin, task) = serve(router_with_state(state.clone())).await;
+    let mut request = format!("{}/v1/live?model=voice", origin.replacen("http", "ws", 1))
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        header::AUTHORIZATION,
+        "Bearer caller-voice-key".parse().unwrap(),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    socket.next().await.unwrap().unwrap();
+    assert_eq!(state.active_websockets.load(Ordering::Acquire), 1);
+    assert!(!state.sessions.has_open_sessions().await);
+    let timeout = Duration::from_secs(1);
+    *state.last_activity.lock().unwrap() = std::time::Instant::now() - timeout - timeout;
+    let idle = tokio::spawn(idle_shutdown_future(state.clone(), timeout));
+    tokio::time::sleep(timeout + Duration::from_millis(100)).await;
+    assert!(
+        !idle.is_finished(),
+        "an open tunnel must prevent idle shutdown"
+    );
+    drop(socket);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while state.active_websockets.load(Ordering::Acquire) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        !idle_shutdown_ready(&state.last_activity, timeout, state.has_open_activity()).await,
+        "closing a tunnel must start a fresh idle period"
+    );
+    tokio::time::timeout(Duration::from_secs(3), idle)
+        .await
+        .unwrap()
+        .unwrap();
+    task.abort();
+    provider_task.abort();
+}

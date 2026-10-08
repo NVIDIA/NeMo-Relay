@@ -5138,3 +5138,56 @@ fn codex_chatgpt_voice_reinstall_tracks_auth_changes_and_forced_login() {
     assert!(!doc.contains_key("experimental_realtime_webrtc_call_base_url"));
     assert_eq!(doc["forced_login_method"].as_str(), Some("chatgpt"));
 }
+
+#[test]
+fn codex_chatgpt_voice_reinstall_moves_generated_url_without_changing_overrides() {
+    for explicit in [false, true] {
+        let dir = tempdir().unwrap();
+        let _home = HomeScope::enter(dir.path());
+        let path = dir.path().join(".codex/config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = if explicit {
+            "forced_login_method = \"chatgpt\"\nexperimental_realtime_webrtc_call_base_url = \"https://voice.example/backend-api/codex\"\n"
+        } else {
+            "forced_login_method = \"chatgpt\"\n"
+        };
+        fs::write(&path, original).unwrap();
+        install_codex_config(&path, DEFAULT_URL).unwrap();
+        let next_gateway = "http://127.0.0.1:47999";
+        install_codex_config(&path, next_gateway).unwrap();
+        let doc = fs::read_to_string(&path)
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        let expected = if explicit {
+            "https://voice.example/backend-api/codex"
+        } else {
+            "http://127.0.0.1:47999/backend-api/codex"
+        };
+        assert_eq!(
+            doc["experimental_realtime_webrtc_call_base_url"].as_str(),
+            Some(expected)
+        );
+        let backup = fs::read_to_string(backup_path(&path))
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        assert_eq!(
+            backup
+                .get("experimental_realtime_webrtc_call_base_url")
+                .and_then(Item::as_str),
+            explicit.then_some(expected)
+        );
+        uninstall_codex_config(&path, next_gateway, false).unwrap();
+        let restored = fs::read_to_string(&path)
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        assert_eq!(
+            restored
+                .get("experimental_realtime_webrtc_call_base_url")
+                .and_then(Item::as_str),
+            explicit.then_some(expected)
+        );
+    }
+}

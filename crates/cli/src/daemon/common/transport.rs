@@ -10,6 +10,7 @@
 
 use std::error::Error;
 use std::pin::Pin;
+use std::sync::{Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -258,10 +259,21 @@ pub(crate) fn pooled_worker_h2c_client() -> Result<PooledClient, TransportError>
     Ok(builder.build(connector))
 }
 
-/// HTTP/1-only transport for RFC 6455 upgrade handshakes.
+/// Shares one HTTP/1-only pool and TLS root snapshot for RFC 6455 handshakes.
 pub(crate) fn pooled_websocket_client() -> Result<PooledClient, TransportError> {
+    static CLIENT: OnceLock<PooledClient> = OnceLock::new();
+    static INITIALIZE: Mutex<()> = Mutex::new(());
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    // Serialize successful initialization without caching a transient root-loading failure.
+    let _initializing = INITIALIZE.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
     let _ = rustls::crypto::ring::default_provider().install_default();
-    Ok(pooled_builder().build(pooled_connector(true)?))
+    let client = pooled_builder().build(pooled_connector(true)?);
+    Ok(CLIENT.get_or_init(|| client).clone())
 }
 
 fn pooled_connector(http1_only: bool) -> Result<HttpsConnector<HttpConnector>, TransportError> {

@@ -115,20 +115,26 @@ pub(crate) fn unmatched_route(
     uri: &axum::http::Uri,
     status: axum::http::StatusCode,
 ) -> axum::http::StatusCode {
-    let path = uri.path();
-    let path = match path.strip_prefix("/v1/nemo-relay/") {
-        Some(rest) => match rest.split_once('/') {
-            Some((_, suffix)) => format!("/v1/nemo-relay/<redacted>/{suffix}"),
-            None => "/v1/nemo-relay/<redacted>".to_owned(),
-        },
-        None => path.to_owned(),
+    let mut segments = uri.path().split('/').filter(|segment| !segment.is_empty());
+    let capability_namespace = segments
+        .next()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("v1"))
+        && segments
+            .next()
+            .is_some_and(|segment| segment.eq_ignore_ascii_case("nemo-relay"));
+    // The remaining segments are untrusted. A misplaced slash can move the credential into
+    // what looks like a provider path, so hide the whole suffix for capability-like routes.
+    let path = if capability_namespace {
+        "/v1/nemo-relay/<redacted>"
+    } else {
+        uri.path()
     };
     log::error!(
         target: "nemo_relay.operational",
         event = "route_unmatched",
         boundary,
         method = method.as_str(),
-        path = path.as_str(),
+        path,
         status = status.as_u16();
         "Request did not match a supported Relay route"
     );
