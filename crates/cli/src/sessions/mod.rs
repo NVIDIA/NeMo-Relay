@@ -2960,6 +2960,43 @@ impl Session {
             return Ok(None);
         }
         if !self.subagents.contains_key(&event.subagent_id) {
+            // Claude emits SubagentStop for internal agents such as prompt
+            // suggestions, but SubagentStart covers Agent-tool subagents.
+            // Matching the session type suggests internal work, but cannot
+            // prove it when a genuine SubagentStart was missed.
+            let session_agent_type = self
+                .session_metadata
+                .get("agent_type")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let internal_claude_stop = self.agent_kind == AgentKind::ClaudeCode
+                && event.event_name == "SubagentStop"
+                && event
+                    .payload
+                    .get("agent_type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|agent_type| agent_type == session_agent_type);
+            if internal_claude_stop {
+                log::warn!(
+                    target: "nemo_relay.session",
+                    event = "claude_agent_stop_unclassified",
+                    session_id = event.session_id.as_str(),
+                    subagent_id = event.subagent_id.as_str();
+                    "Claude agent stop matched the session type but had no observed start"
+                );
+                self.completion_mark(
+                    "claude_agent_stop_unclassified",
+                    event.payload,
+                    merge_metadata(
+                        event.metadata,
+                        json!({
+                            "subagent_id": event.subagent_id,
+                            "agent_type_matches_session": true
+                        }),
+                    ),
+                )?;
+                return Ok(None);
+            }
             log::warn!(
                 target: "nemo_relay.session",
                 event = "session_correlation_failed",

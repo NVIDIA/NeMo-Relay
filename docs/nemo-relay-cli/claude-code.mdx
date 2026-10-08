@@ -289,13 +289,23 @@ turn and adds correlation metadata instead of guessing. Inspect
 `tool_correlation_status`, `tool_correlation_source`, and
 `tool_correlation_subagent_id`.
 
-Late `SubagentStop` hooks can arrive after Claude Code has already closed the
-turn, especially when Claude reports background stop-hook state. If the
-subagent id has no matching `SubagentStart` and there is no active turn, Relay
-logs the missing subagent and suppresses the hook from exported observability so
-it does not create a synthetic null turn. If an unknown subagent end arrives
-while a turn is active, Relay may emit a `subagent_end_without_start` diagnostic
-mark under that turn.
+## Unmatched Subagent Stops
+
+Claude Code's [SubagentStart hook](https://code.claude.com/docs/en/hooks#subagentstart)
+runs for Agent tool launches, resumed subagents, and teammate messages. Its
+[SubagentStop input documentation](https://code.claude.com/docs/en/hooks#subagentstop-input)
+also describes stops for Claude's internal agents, including prompt suggestions
+and `/btw` side questions. For these stops, `agent_type` is the session agent's
+name, or an empty string when the session has no named agent. An unmatched stop
+therefore does not, by itself, establish that a start hook was lost.
+
+When an unmatched Claude `SubagentStop` has the session's agent type, Relay
+records a `claude_agent_stop_unclassified` mark with the hook payload and
+`start_observed=false`. A matching type suggests internal activity but cannot
+rule out a real subagent whose start was missed. Other unmatched stops retain
+the `subagent_end_without_start` mark. Neither mark opens a new turn, including
+when the stop arrives after the turn has closed. To find all unmatched Claude
+stops in OpenTelemetry logs, include both mark names in `nemo_relay.mark.name`.
 
 ## Hook Limitations
 

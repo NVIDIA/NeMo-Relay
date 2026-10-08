@@ -5962,6 +5962,164 @@ async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn()
 }
 
 #[tokio::test]
+async fn claude_internal_agent_stops_keep_unclassified_marks() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-claude-internal-agent-stop-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_marks = Arc::new(StdMutex::new(Vec::<Value>::new()));
+    let captured = captured_marks.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let metadata = event.metadata().cloned().unwrap_or(Value::Null);
+            if matches!(
+                metadata.get("session_id").and_then(Value::as_str),
+                Some("claude-untyped-stop" | "claude-named-stop")
+            ) && matches!(
+                event.name(),
+                "subagent_end_without_start" | "claude_agent_stop_unclassified"
+            ) {
+                captured.lock().unwrap().push(json!({
+                    "name": event.name(),
+                    "metadata": metadata,
+                    "data": event.data().cloned().unwrap_or(Value::Null)
+                }));
+            }
+        }),
+    )
+    .unwrap();
+
+    let stop = |session_id: &str, id: &str, agent_type: &str, last_message: Option<&str>| {
+        NormalizedEvent::SubagentEnded(SubagentEvent {
+            session_id: session_id.into(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: "SubagentStop".into(),
+            subagent_id: id.into(),
+            payload: json!({
+                "hook_event_name": "SubagentStop",
+                "agent_id": id,
+                "agent_type": agent_type,
+                "agent_transcript_path": format!("agent-{id}.jsonl"),
+                "last_assistant_message": last_message
+            }),
+            metadata: json!({ "agent_id": id, "agent_type": agent_type }),
+        })
+    };
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("claude-untyped-stop", "SessionStart")),
+                NormalizedEvent::PromptSubmitted(SessionEvent {
+                    session_id: "claude-untyped-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "UserPromptSubmit".into(),
+                    payload: json!({ "prompt": "inspect a subagent" }),
+                    metadata: json!({}),
+                }),
+                stop(
+                    "claude-untyped-stop",
+                    "internal-fork",
+                    "",
+                    Some("suggest next prompt"),
+                ),
+                stop(
+                    "claude-untyped-stop",
+                    "missing-worker",
+                    "general-purpose",
+                    Some("finished task"),
+                ),
+                stop("claude-untyped-stop", "internal-no-message", "", None),
+                NormalizedEvent::TurnEnded(SessionEvent {
+                    session_id: "claude-untyped-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "Stop".into(),
+                    payload: json!({ "last_assistant_message": "done" }),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::AgentEnded(session_event("claude-untyped-stop", "SessionEnd")),
+            ],
+        )
+        .await
+        .unwrap();
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "claude-named-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SessionStart".into(),
+                    payload: json!({ "agent_type": "reviewer" }),
+                    metadata: json!({ "agent_type": "reviewer" }),
+                }),
+                NormalizedEvent::PromptSubmitted(SessionEvent {
+                    session_id: "claude-named-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "UserPromptSubmit".into(),
+                    payload: json!({ "prompt": "inspect a subagent" }),
+                    metadata: json!({}),
+                }),
+                stop(
+                    "claude-named-stop",
+                    "internal-named",
+                    "reviewer",
+                    Some("suggestion"),
+                ),
+                stop(
+                    "claude-named-stop",
+                    "missing-explore",
+                    "Explore",
+                    Some("finished task"),
+                ),
+                NormalizedEvent::TurnEnded(SessionEvent {
+                    session_id: "claude-named-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "Stop".into(),
+                    payload: json!({ "last_assistant_message": "done" }),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::AgentEnded(session_event("claude-named-stop", "SessionEnd")),
+            ],
+        )
+        .await
+        .unwrap();
+
+    flush_subscribers().unwrap();
+    let marks = captured_marks.lock().unwrap().clone();
+    let summaries = marks
+        .iter()
+        .map(|mark| json!([mark["metadata"]["subagent_id"], mark["name"]]))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summaries,
+        vec![
+            json!(["internal-fork", "claude_agent_stop_unclassified"]),
+            json!(["missing-worker", "subagent_end_without_start"]),
+            json!(["internal-no-message", "claude_agent_stop_unclassified"]),
+            json!(["internal-named", "claude_agent_stop_unclassified"]),
+            json!(["missing-explore", "subagent_end_without_start"]),
+        ]
+    );
+    assert_eq!(
+        marks[0]["data"],
+        json!({
+            "hook_event_name": "SubagentStop",
+            "agent_id": "internal-fork",
+            "agent_type": "",
+            "agent_transcript_path": "agent-internal-fork.jsonl",
+            "last_assistant_message": "suggest next prompt"
+        })
+    );
+    assert_eq!(marks[0]["metadata"]["start_observed"], false);
+    assert_eq!(marks[0]["metadata"]["agent_type_matches_session"], true);
+    assert_eq!(marks[3]["data"]["agent_type"], "reviewer");
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
 async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() {
     let config = GatewayConfig {
         response_timeout_secs: 0,
