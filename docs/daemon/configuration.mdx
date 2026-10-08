@@ -755,9 +755,11 @@ uses the administrator's configured OpenAI-compatible upstream instead.
 ChatGPT voice call creation is an exception. Requests to
 `POST /backend-api/codex/realtime/calls` keep the caller's ChatGPT credential
 and use the native ChatGPT backend even when a replacement OpenAI credential
-is configured. This preserves ChatGPT's JSON call format. The exception does
-not apply to sideband attachment routes. Refer to
-[Known Issues in 0.10.0](/about-nemo-relay/release-notes#known-issues-in-0100).
+is configured. This preserves ChatGPT's JSON call format.
+
+Live and Realtime connections use the configured OpenAI upstream and keep the
+caller's provider credential. By default, that upstream is `api.openai.com`, which matches Codex's WebRTC sideband destination.
+Relay does not replace a ChatGPT sideband credential with an administrator key.
 
 The daemon also accepts Codex's ChatGPT-shaped
 `POST /backend-api/codex/responses` path and canonicalizes it to the ordinary

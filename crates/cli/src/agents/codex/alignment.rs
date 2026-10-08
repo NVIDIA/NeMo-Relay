@@ -96,7 +96,7 @@ pub(crate) fn chatgpt_upstream_url_if_needed(
     path_and_query: &str,
     has_replacement_key: bool,
 ) -> Option<String> {
-    (is_openai_route(route) && has_chatgpt_auth_token(headers) && !has_replacement_key)
+    (is_chatgpt_backend_route(route) && has_chatgpt_auth_token(headers) && !has_replacement_key)
         .then(|| chatgpt_upstream_url(path_and_query))
 }
 
@@ -107,7 +107,7 @@ pub(crate) fn strip_chatgpt_auth_for_openai_route(
     route: GatewayRouteKind,
     has_replacement_key: bool,
 ) -> HeaderMap {
-    if !is_openai_route(route) || !has_replacement_key {
+    if !is_chatgpt_backend_route(route) || !has_replacement_key {
         return headers.clone();
     }
     let mut out = headers.clone();
@@ -133,17 +133,15 @@ fn has_chatgpt_auth_token(headers: &HeaderMap) -> bool {
         .is_some_and(|value| value.starts_with("Bearer eyJ") || value.starts_with("Bearer at-"))
 }
 
-// The ChatGPT auth transport fallback applies only to OpenAI-family routes. Anthropic routes use
-// a different auth scheme and should never be redirected through Codex's ChatGPT backend.
-fn is_openai_route(route: GatewayRouteKind) -> bool {
+// ChatGPT model requests use the backend. Live and Realtime connections retain the configured
+// OpenAI API destination and caller credential, including when an administrator key is available.
+fn is_chatgpt_backend_route(route: GatewayRouteKind) -> bool {
     matches!(
         route,
         GatewayRouteKind::OpenAiResponses
             | GatewayRouteKind::OpenAiChatCompletions
             | GatewayRouteKind::OpenAiResponsesCompact
-            | GatewayRouteKind::OpenAiRealtime
             | GatewayRouteKind::OpenAiRealtimeCalls
-            | GatewayRouteKind::OpenAiLive
             | GatewayRouteKind::OpenAiImagesGenerations
             | GatewayRouteKind::OpenAiImagesEdits
             | GatewayRouteKind::OpenAiMemoriesSummarize

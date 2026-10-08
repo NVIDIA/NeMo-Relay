@@ -5191,3 +5191,71 @@ fn codex_chatgpt_voice_reinstall_moves_generated_url_without_changing_overrides(
         );
     }
 }
+
+#[test]
+fn transparent_codex_voice_tracks_gateway_and_preserves_explicit_urls() {
+    use crate::agents::codex::host::transparent_realtime_call_url;
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let temporary_gateway = "http://127.0.0.1:47999";
+    let expected = Some("http://127.0.0.1:47999/backend-api/codex".to_string());
+    fs::write(&path, "forced_login_method = \"chatgpt\"\n").unwrap();
+    let empty = DocumentMut::new();
+    assert_eq!(
+        transparent_realtime_call_url(temporary_gateway, None, &empty).unwrap(),
+        expected
+    );
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let saved = fs::read(&path).unwrap();
+    assert_eq!(
+        transparent_realtime_call_url(temporary_gateway, None, &empty).unwrap(),
+        expected
+    );
+    assert_eq!(fs::read(&path).unwrap(), saved);
+    let api = "forced_login_method = \"api\""
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        transparent_realtime_call_url(temporary_gateway, None, &api).unwrap(),
+        Some("http://127.0.0.1:47999/v1".to_string())
+    );
+    let cli = "experimental_realtime_webrtc_call_base_url = \"https://voice.example/custom\""
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        transparent_realtime_call_url(temporary_gateway, None, &cli).unwrap(),
+        None
+    );
+    let mut doc = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    doc["experimental_realtime_webrtc_call_base_url"] =
+        toml_edit::value("https://voice.example/custom");
+    fs::write(&path, doc.to_string()).unwrap();
+    assert_eq!(
+        transparent_realtime_call_url(temporary_gateway, None, &empty).unwrap(),
+        None
+    );
+    fs::write(
+        &path,
+        "forced_login_method = \"api\"\n[profiles.voice]\nforced_login_method = \"chatgpt\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        transparent_realtime_call_url(temporary_gateway, Some("voice"), &empty).unwrap(),
+        expected
+    );
+    fs::write(&path, "forced_login_method = \"chatgpt\"\n[profiles.voice]\nexperimental_realtime_webrtc_call_base_url = \"https://voice.example/custom\"\n").unwrap();
+    assert_eq!(
+        transparent_realtime_call_url(temporary_gateway, Some("voice"), &empty).unwrap(),
+        None
+    );
+    fs::write(&path, "forced_login_method = \"api\"\n").unwrap();
+    assert_eq!(
+        transparent_realtime_call_url(temporary_gateway, None, &empty).unwrap(),
+        None
+    );
+}

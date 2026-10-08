@@ -756,6 +756,13 @@ fn cli_gateway_logs_unmatched_routes_at_error_level() {
         ("GET", "/V1/nemo-relay/capability-secret/unknown", "404"),
         ("GET", "/v1/NEMO-RELAY/capability-secret/unknown", "404"),
         ("GET", "/v1//nemo-relay/capability-secret/unknown", "404"),
+        ("GET", "/v1/nemo%2Drelay/capability-secret/unknown", "404"),
+        (
+            "GET",
+            "/%76%31/%6Eemo-relay/capability-secret/unknown",
+            "404",
+        ),
+        ("GET", "/v1%2Fnemo-relay/capability-secret/unknown", "404"),
     ] {
         let mut stream = TcpStream::connect(address).unwrap();
         stream
@@ -791,7 +798,7 @@ fn cli_gateway_logs_unmatched_routes_at_error_level() {
         .filter_map(|line| serde_json::from_str(line).ok())
         .filter(|record: &serde_json::Value| record["event"] == "route_unmatched")
         .collect();
-    assert_eq!(records.len(), 8, "{stderr}");
+    assert_eq!(records.len(), 11, "{stderr}");
     for record in &records {
         assert_eq!(
             record["level"].as_str().unwrap().to_ascii_lowercase(),

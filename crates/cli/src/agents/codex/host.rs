@@ -943,6 +943,58 @@ fn codex_uses_chatgpt_auth(config_path: &Path, doc: &DocumentMut) -> bool {
     }
 }
 
+/// Selects a process-local voice URL while leaving saved settings and explicit URLs intact.
+pub(crate) fn transparent_realtime_call_url(
+    gateway_url: &str,
+    profile: Option<&str>,
+    overrides: &DocumentMut,
+) -> Result<Option<String>, String> {
+    if overrides.contains_key(CODEX_REALTIME_CALL_BASE_URL) {
+        return Ok(None);
+    }
+    let path = codex_home_dir()?.join("config.toml");
+    let raw = read_optional_text(&path)?;
+    let mut doc = raw
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("invalid TOML in {}: {error}", path.display()))?;
+    let profile = profile.or_else(|| doc.get("profile").and_then(Item::as_str));
+    let settings = profile
+        .and_then(|name| doc.get("profiles")?.get(name))
+        .cloned();
+    if let Some(settings) = settings {
+        // Profile-level voice settings are user overrides, not installer-owned fields.
+        if settings.get(CODEX_REALTIME_CALL_BASE_URL).is_some() {
+            return Ok(None);
+        }
+        if let Some(mode) = settings.get("forced_login_method") {
+            doc["forced_login_method"] = mode.clone();
+        }
+    }
+    if let Some(mode) = overrides.get("forced_login_method") {
+        doc["forced_login_method"] = mode.clone();
+    }
+    if doc.contains_key(CODEX_REALTIME_CALL_BASE_URL) {
+        let proof = BootstrapChallengeKey::load_existing()
+            .map_err(|error| error.to_string())?
+            .is_some_and(|key| {
+                codex_provider_client_token(&doc)
+                    .is_some_and(|token| key.verify_client_token(token))
+                    || super::environment::has_proof(&path, &key)
+            });
+        restore_codex_realtime_call_base_url(&mut doc, &DocumentMut::new(), gateway_url, proof);
+        if doc.contains_key(CODEX_REALTIME_CALL_BASE_URL) {
+            return Ok(None);
+        }
+        // An installer-owned URL follows the temporary gateway, including after an auth change.
+        return Ok(Some(if codex_uses_chatgpt_auth(&path, &doc) {
+            super::backend_gateway_url(gateway_url)
+        } else {
+            super::versioned_gateway_url(gateway_url)
+        }));
+    }
+    Ok(codex_uses_chatgpt_auth(&path, &doc).then(|| super::backend_gateway_url(gateway_url)))
+}
+
 fn restore_codex_realtime_call_base_url(
     doc: &mut DocumentMut,
     backup: &DocumentMut,

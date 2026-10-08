@@ -49,6 +49,12 @@ pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Re
         "--config".to_string(),
         gateway_provider_config(gateway_url),
     ];
+    if let Some(call_config) =
+        realtime_call_config(gateway_url, &launch.argv[launch.host_index + 1..])?
+    {
+        args.push("--config".to_string());
+        args.push(call_config);
+    }
     for (event, groups) in hook_groups["hooks"].as_object().into_iter().flatten() {
         args.push("--config".to_string());
         args.push(format!("hooks.{event}={}", hook_groups_toml(groups)));
@@ -57,6 +63,51 @@ pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Re
     args.push(session_hook_state_override(&hook_groups)?);
     insert_config_in_command_scope(&mut launch.argv, launch.host_index, args);
     Ok(())
+}
+
+fn realtime_call_config(gateway_url: &str, argv: &[String]) -> Result<Option<String>, CliError> {
+    let mut overrides = toml_edit::DocumentMut::new();
+    let mut profile = None;
+    let mut args = argv.iter();
+    while let Some(argument) = args.next() {
+        if argument == "--" {
+            break;
+        }
+        let config = if matches!(argument.as_str(), "--config" | "-c") {
+            args.next().map(String::as_str)
+        } else {
+            argument
+                .strip_prefix("--config=")
+                .or_else(|| argument.strip_prefix("-c="))
+        };
+        if let Some(config) = config {
+            if let Ok(doc) = config.parse::<toml_edit::DocumentMut>() {
+                for (key, item) in doc.iter() {
+                    overrides[key] = item.clone();
+                }
+            }
+        } else if matches!(argument.as_str(), "--profile" | "-p") {
+            profile = args.next().map(String::as_str);
+        } else if let Some(value) = argument
+            .strip_prefix("--profile=")
+            .or_else(|| argument.strip_prefix("-p="))
+        {
+            profile = Some(value);
+        } else if option_takes_separate_value(argument) {
+            args.next();
+        }
+    }
+    let profile = profile.or_else(|| overrides.get("profile").and_then(toml_edit::Item::as_str));
+    super::host::transparent_realtime_call_url(gateway_url, profile, &overrides)
+        .map(|url| {
+            url.map(|url| {
+                format!(
+                    "experimental_realtime_webrtc_call_base_url={}",
+                    toml_string(&url)
+                )
+            })
+        })
+        .map_err(CliError::Launch)
 }
 
 fn insert_config_in_command_scope(

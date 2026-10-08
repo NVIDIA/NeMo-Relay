@@ -104,8 +104,11 @@ These examples use a local gateway at `127.0.0.1:8000`.
   the response. Connect to
   `ws://127.0.0.1:8000/v1/live/sessions/SESSION_ID/attach`.
 
-Keep the returned ID unchanged. Use the same upstream provider, project
-credentials, and Relay route credential for creation and attachment.
+Keep the returned ID unchanged. Use the credentials required by the upstream
+and the same Relay route credential for creation and attachment. Codex can use
+separate destinations for ChatGPT call creation and the OpenAI sideband.
+Live and Realtime connections use Relay's configured OpenAI upstream and keep
+the caller's provider credential.
 
 Live attach also supports `/live/sessions/SESSION_ID/attach`. Codex Live also
 supports `/live/CALL_ID`. In the standalone gateway, each HTTP passthrough route

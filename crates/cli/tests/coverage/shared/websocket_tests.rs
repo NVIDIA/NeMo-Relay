@@ -729,3 +729,52 @@ async fn websocket_proxy_preserves_upstream_close_and_disconnects() {
     task.abort();
     provider_task.abort();
 }
+
+#[tokio::test]
+async fn websocket_accepts_protocol_from_second_header() {
+    let app = Router::new().fallback(|request: Request<Body>| async move {
+        let key = request.headers()[header::SEC_WEBSOCKET_KEY].as_bytes();
+        Response::builder()
+            .status(StatusCode::SWITCHING_PROTOCOLS)
+            .header(header::CONNECTION, "Upgrade")
+            .header(header::UPGRADE, "websocket")
+            .header(
+                header::SEC_WEBSOCKET_ACCEPT,
+                tokio_tungstenite::tungstenite::handshake::derive_accept_key(key),
+            )
+            .header(header::SEC_WEBSOCKET_PROTOCOL, "voice")
+            .body(Body::empty())
+            .unwrap()
+    });
+    let (origin, task) = serve(app).await;
+    let mut request = Request::builder()
+        .method("GET")
+        .uri("/v1/live")
+        .header(header::CONNECTION, "Upgrade")
+        .header(header::UPGRADE, "websocket")
+        .header(header::SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
+        .header(header::SEC_WEBSOCKET_VERSION, "13")
+        .body(Body::empty())
+        .unwrap();
+    request.headers_mut().append(
+        header::SEC_WEBSOCKET_PROTOCOL,
+        HeaderValue::from_static("other"),
+    );
+    request.headers_mut().append(
+        header::SEC_WEBSOCKET_PROTOCOL,
+        HeaderValue::from_static("voice"),
+    );
+    let client = crate::daemon::common::transport::pooled_websocket_client().unwrap();
+    let response = crate::gateway::websocket::forward(
+        &client,
+        request,
+        &format!("{origin}/v1/live"),
+        None,
+        (),
+        &GatewayConfig::default(),
+        std::future::pending(),
+    )
+    .await;
+    task.abort();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+}

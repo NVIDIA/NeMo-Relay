@@ -44,6 +44,11 @@ For persistent installs, Relay checks the sign-in mode in `auth.json` next to
 that JSON without changing it. API-key installs keep the public API format.
 Relay preserves any call-creation URL you set yourself.
 
+For `nemo-relay codex`, Relay applies this setting only to the launched process.
+An installer-generated voice URL follows the temporary gateway. Explicit URLs
+in your settings, selected profile, or command-line options take priority.
+Relay leaves the saved configuration unchanged.
+
 For a personal persistent install, update Relay, run
 `nemo-relay install codex --force`, and restart Codex Desktop to apply the new
 setting. Replacing the binary alone does not update

@@ -115,7 +115,11 @@ pub(crate) fn unmatched_route(
     uri: &axum::http::Uri,
     status: axum::http::StatusCode,
 ) -> axum::http::StatusCode {
-    let mut segments = uri.path().split('/').filter(|segment| !segment.is_empty());
+    // Decode before classifying so encoded namespace letters and slashes cannot hide a token.
+    let decoded_path = percent_encoding::percent_decode_str(uri.path()).decode_utf8_lossy();
+    let mut segments = decoded_path
+        .split('/')
+        .filter(|segment| !segment.is_empty());
     let capability_namespace = segments
         .next()
         .is_some_and(|segment| segment.eq_ignore_ascii_case("v1"))

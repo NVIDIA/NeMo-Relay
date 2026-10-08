@@ -98,8 +98,10 @@ pub(crate) async fn forward<H: Send + 'static>(
     let key = key.expect("validated key");
     let protocols = request
         .headers()
-        .get(header::SEC_WEBSOCKET_PROTOCOL)
-        .cloned();
+        .get_all(header::SEC_WEBSOCKET_PROTOCOL)
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
     let downstream = hyper::upgrade::on(&mut request);
     request.headers_mut().remove(header::UPGRADE);
     // Routing credentials are consumed at each hop; only the next hop's worker credential may
@@ -162,10 +164,11 @@ pub(crate) async fn forward<H: Send + 'static>(
             .get(header::SEC_WEBSOCKET_PROTOCOL)
             .is_some_and(|selected| {
                 selected.to_str().map_or(true, |selected| {
-                    protocols
-                        .as_ref()
-                        .and_then(|p| p.to_str().ok())
-                        .is_none_or(|offered| !offered.split(',').any(|p| p.trim() == selected))
+                    !protocols.iter().any(|offered| {
+                        offered
+                            .to_str()
+                            .is_ok_and(|offered| offered.split(',').any(|p| p.trim() == selected))
+                    })
                 })
             })
     {
