@@ -94,7 +94,11 @@ This release adds the following features:
 - Managed Codex deployments route ChatGPT OAuth requests to the native ChatGPT
   Codex backend when no administrator OpenAI credential is configured. With an
   administrator credential, Relay replaces the incoming OAuth credential and
-  sends the request to the configured OpenAI-compatible upstream. Refer to
+  sends the request to the configured OpenAI-compatible upstream. ChatGPT voice
+  calls to `POST /backend-api/codex/realtime/calls` keep the caller's ChatGPT
+  credential and use the native ChatGPT backend even when an administrator
+  configures a replacement key.
+  Refer to
   [Daemon Configuration](/daemon/configuration#codex-responses-compatibility).
 - System-installed Python worker plugins can pass validation for different
   daemon users without rewriting shared lifecycle state at startup. This state
@@ -358,6 +362,15 @@ This release includes the following fixes and behavior changes:
 The following list covers unresolved issues from 0.9 and new limitations in
 0.10.0:
 
+- ChatGPT voice sidebands are separate connections used to control a voice
+  call. Routing them through Relay can fail when Relay has a replacement
+  OpenAI credential. Call creation at
+  `POST /backend-api/codex/realtime/calls` keeps the caller's ChatGPT credential
+  and uses the ChatGPT backend. Attachment at `/live/CALL_ID` or
+  `/v1/live/CALL_ID` instead uses the replacement credential and configured API
+  upstream, which cannot find that ChatGPT call. Connect the sideband directly
+  to OpenAI for this setup. Codex Desktop's default direct sideband avoids
+  this issue. Refer to [Codex](/nemo-relay-cli/codex).
 - OTLP collectors can return a successful response while rejecting individual
   spans, log records, or metric data points. Relay does not report these partial
   successes in runtime diagnostics, and flush or shutdown can still succeed.
