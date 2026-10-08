@@ -414,6 +414,32 @@ fn codex_hook_scripts_preserve_stdin_arguments_and_exit_status() {
         assert!(stdout.contains("config.json"), "{stdout}");
         assert!(stdout.contains("{\"probe\":true}"), "{stdout}");
     }
+    std::fs::remove_file(&relay).unwrap();
+    for (event, succeeds) in [("Stop", true), ("PreToolUse", false)] {
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                commands.for_event(event),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), succeeds, "{output:?}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn codex_hook_scripts_reject_overlong_commands_before_writing() {
+    let config = std::path::PathBuf::from("x".repeat(8_000)).join("config.json");
+    let error = crate::hooks::transparent_hook_forward_commands_with_config(
+        std::path::Path::new("relay.exe"),
+        CodingAgent::Codex,
+        &config,
+    )
+    .unwrap_err();
+    assert!(error.contains("safety limit"), "{error}");
 }
 
 #[cfg(windows)]
