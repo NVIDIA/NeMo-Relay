@@ -418,7 +418,7 @@ fn ensure_parent_directory(parent: &Path) -> Result<(), CliError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(CliError::Io(error)),
     }
-    fs::create_dir_all(parent)?;
+    crate::filesystem::create_private_dir_all(parent)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
