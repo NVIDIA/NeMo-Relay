@@ -15,7 +15,6 @@ workspace = true
 
 [features]
 default = [
-    "guardrails-remote",
     "object-store",
 ]
 atof-streaming = [
@@ -30,8 +29,6 @@ schema = ["dep:schemars", "nemo-relay-types/schema"]
 __skip-implicit-config = []
 # Private compatibility-free test harness for migrating legacy lifecycle tests.
 __test-plugin-host = []
-# Deprecated with the built-in NeMo Guardrails integration; scheduled for removal in 0.9.
-guardrails-remote = []
 object-store = [
     "dep:object_store",
     "tokio/net",

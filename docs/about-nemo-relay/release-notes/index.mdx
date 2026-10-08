@@ -172,6 +172,22 @@ instead of being forwarded.
 Malformed or repeated credential headers still return `401`. Refer to
 [Requests Without a Bound Credential](/daemon/configuration#requests-without-a-bound-credential).
 
+### Compatibility and Migration
+
+<Warning title="Built-In NeMo Guardrails Component Removed">
+
+The deprecated built-in `nemo_guardrails` component has been removed. Delete
+legacy component entries before upgrading, including disabled entries. The
+local and remote backends, public Rust configuration types, CLI editor support,
+and `guardrails-remote` Cargo feature are no longer available.
+
+</Warning>
+
+Future first-party NeMo Guardrails integration will be distributed separately
+as a dynamic plugin and will not reuse the removed component configuration.
+Refer to the
+[Migration Guides](/reference/migration-guides#remove-the-built-in-nemo-guardrails-component).
+
 ### LLM Execution Codec Context
 
 Relay now passes a codec context to every large language model (LLM) execution
@@ -398,11 +414,6 @@ The following list covers unresolved issues from 0.9 and new limitations in
 - The Node.js binding and package workflows require Node.js 24 or later.
 - OpenClaw provides telemetry through public hooks. Its security and
   optimization coverage is partial because Relay does not manage its execution.
-- The built-in `nemo_guardrails` plugin remains deprecated but is still
-  available in 0.10.0. No replacement is included. The remote backend
-  depends on its configured service's availability, latency, and policy behavior.
-  The local backend requires Python 3.11 or later and `nemoguardrails==0.22.0`.
-  Refer to [NeMo Guardrails](/configure-plugins/nemo-guardrails/about).
 - The personally identifiable information (PII) redaction plugin supports its
   local backend based on fixed rules. Local-model backend configuration is
   reserved for future work.

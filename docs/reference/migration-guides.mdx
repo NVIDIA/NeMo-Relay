@@ -13,6 +13,37 @@ releases. Apply them when upgrading directly from 0.9.0.
 
 ## Upgrade to NeMo Relay 0.10.0
 
+### Remove the Built-In NeMo Guardrails Component
+
+<Warning title="Breaking Change">
+
+NeMo Relay 0.10 removes the deprecated built-in `nemo_guardrails` component,
+including its local and remote backends, public Rust configuration types, CLI
+editor support, and `guardrails-remote` Cargo feature.
+
+</Warning>
+
+Remove every legacy `[[components]]` entry with
+`kind = "nemo_guardrails"`, including disabled entries. Relay rejects these
+entries with migration guidance instead of silently ignoring them.
+
+No legacy setting is read by a replacement plugin:
+
+- Local settings such as `config_path`, `config_yaml`, `colang_content`,
+  `request_defaults`, and rail selectors require new plugin configuration.
+- Remote settings such as `endpoint` and `config_id` have no automatic worker
+  equivalent. The removed backend delegated full generation to a Guardrails
+  service. Do not treat a remote check endpoint as the same behavior.
+- Keep any Guardrails configuration files you still need outside the removed
+  `[[components]]` entry while planning a migration.
+
+Future first-party NeMo Guardrails integration will use Relay's separately
+packaged dynamic-plugin model. It is not a drop-in configuration change. When
+the replacement is released, review its supported surfaces and migrate the old
+component settings to its new configuration. Follow releases and installation
+guidance in
+[NVIDIA NeMo Relay Plugins](https://github.com/NVIDIA/NeMo-Relay-Plugins).
+
 ### Update Packages and Plugin SDKs
 
 Update the Relay CLI, application bindings, and plugin SDK dependencies to

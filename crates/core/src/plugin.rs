@@ -135,6 +135,9 @@ pub(crate) const ATIF_RUNTIME_DELIVERY_FAILURE_MARKER: &str = "ATIF runtime deli
 pub(crate) const OTEL_RUNTIME_DELIVERY_FAILURE_MARKER: &str =
     "OpenTelemetry runtime delivery failures";
 
+const REMOVED_NEMO_GUARDRAILS_COMPONENT_KIND: &str = "nemo_guardrails";
+const REMOVED_NEMO_GUARDRAILS_COMPONENT_MESSAGE: &str = "the built-in NeMo Guardrails integration was removed in NeMo Relay >=0.10.0; remove this `[[components]]` entry and refer to the migration guide: https://docs.nvidia.com/nemo/relay/reference/migration-guides#remove-the-built-in-nemo-guardrails-component";
+
 /// Canonical plugin configuration document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1165,10 +1168,6 @@ fn register_plugin_with_owner(
 ///
 /// Built-in plugins are available to validation and initialization without a
 /// binding or application-specific registration call.
-#[allow(
-    deprecated,
-    reason = "the host must register the built-in Guardrails plugin until its scheduled removal"
-)]
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
     let all_registered = {
         let guard = PLUGIN_HANDLERS.read().map_err(|err| {
@@ -1176,7 +1175,6 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
         })?;
         [
             crate::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND,
-            crate::plugins::nemo_guardrails::component::NEMO_GUARDRAILS_PLUGIN_KIND,
             crate::plugins::model_pricing::PRICING_PLUGIN_KIND,
             crate::plugins::resource_metrics::RESOURCE_METRICS_PLUGIN_KIND,
         ]
@@ -1195,7 +1193,6 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
     // call so a removed built-in is restored, a replacement is rejected, and
     // a corrected ownership conflict can be retried without restarting Relay.
     crate::observability::plugin_component::register_observability_component()?;
-    crate::plugins::nemo_guardrails::component::register_nemo_guardrails_component()?;
     crate::plugins::model_pricing::register_pricing_component()?;
     crate::plugins::resource_metrics::register_resource_metrics_component()
 }
@@ -1323,6 +1320,13 @@ fn lookup_registered_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
 /// kinds, and plugin-provided validation hooks.
 #[doc(hidden)]
 pub fn validate_static_plugin_config(config: &PluginConfig) -> ConfigReport {
+    validate_plugin_config_with_static_component_count(config, config.components.len())
+}
+
+fn validate_plugin_config_with_static_component_count(
+    config: &PluginConfig,
+    static_component_count: usize,
+) -> ConfigReport {
     let mut report = ConfigReport::default();
     if let Err(error) = ensure_builtin_plugins_registered() {
         report.diagnostics.push(ConfigDiagnostic {
@@ -1348,7 +1352,19 @@ pub fn validate_static_plugin_config(config: &PluginConfig) -> ConfigReport {
 
     validate_plugin_multiplicity(&mut report, config);
 
-    for component in &config.components {
+    for (index, component) in config.components.iter().enumerate() {
+        if index < static_component_count
+            && component.kind == REMOVED_NEMO_GUARDRAILS_COMPONENT_KIND
+        {
+            report.diagnostics.push(ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "plugin.removed_component".to_string(),
+                component: Some(component.kind.clone()),
+                field: None,
+                message: REMOVED_NEMO_GUARDRAILS_COMPONENT_MESSAGE.to_string(),
+            });
+            continue;
+        }
         let Some(plugin) = lookup_registered_plugin(&component.kind) else {
             push_policy_diag(
                 &mut report.diagnostics,
@@ -1641,16 +1657,24 @@ fn plugin_mutation_executor() -> Result<&'static PluginMutationSender> {
 
 pub(crate) async fn initialize_plugins_exact_for_host(
     config: PluginConfig,
+    static_component_count: usize,
     owner_id: u64,
     rollback_failures: Arc<Mutex<Vec<String>>>,
     diagnostics: Vec<ConfigDiagnostic>,
 ) -> Result<ConfigReport> {
     verify_plugin_host_owner(owner_id)?;
-    initialize_plugins_exact_inner(config, Some(rollback_failures), diagnostics).await
+    initialize_plugins_exact_inner(
+        config,
+        static_component_count,
+        Some(rollback_failures),
+        diagnostics,
+    )
+    .await
 }
 
 async fn initialize_plugins_exact_inner(
     config: PluginConfig,
+    static_component_count: usize,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     diagnostics: Vec<ConfigDiagnostic>,
 ) -> Result<ConfigReport> {
@@ -1669,9 +1693,10 @@ async fn initialize_plugins_exact_inner(
         diagnostics,
         ..ConfigReport::default()
     };
-    report
-        .diagnostics
-        .extend(validate_static_plugin_config(&config).diagnostics);
+    report.diagnostics.extend(
+        validate_plugin_config_with_static_component_count(&config, static_component_count)
+            .diagnostics,
+    );
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));
     }

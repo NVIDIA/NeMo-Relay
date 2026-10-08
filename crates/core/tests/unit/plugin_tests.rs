@@ -1044,6 +1044,73 @@ fn test_validate_plugin_config_honors_policy_and_duplicate_singletons() {
 }
 
 #[test]
+fn test_removed_nemo_guardrails_component_is_always_rejected() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    for enabled in [true, false] {
+        for unknown_component in [
+            UnsupportedBehavior::Ignore,
+            UnsupportedBehavior::Warn,
+            UnsupportedBehavior::Error,
+        ] {
+            let report = test_validate_static_plugin_config(&PluginConfig {
+                components: vec![PluginComponentSpec {
+                    kind: "nemo_guardrails".into(),
+                    enabled,
+                    config: Default::default(),
+                }],
+                policy: ConfigPolicy {
+                    unknown_component,
+                    ..ConfigPolicy::default()
+                },
+                ..PluginConfig::default()
+            });
+
+            assert_eq!(report.diagnostics.len(), 1);
+            let diagnostic = report
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "plugin.removed_component")
+                .expect("removed Guardrails component should have a migration diagnostic");
+            assert_eq!(diagnostic.level, DiagnosticLevel::Error);
+            assert_eq!(diagnostic.component.as_deref(), Some("nemo_guardrails"));
+            assert!(
+                diagnostic
+                    .message
+                    .contains("removed in NeMo Relay >=0.10.0")
+            );
+            assert!(diagnostic.message.contains("migration-guides"));
+        }
+    }
+
+    reset_global();
+}
+
+#[test]
+fn test_dynamic_nemo_guardrails_component_is_not_treated_as_legacy_static_config() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let report = validate_plugin_config_with_static_component_count(
+        &PluginConfig {
+            components: vec![PluginComponentSpec::new("nemo_guardrails")],
+            ..PluginConfig::default()
+        },
+        0,
+    );
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "plugin.removed_component")
+    );
+
+    reset_global();
+}
+
+#[test]
 fn test_validate_plugin_config_passes_top_level_policy_to_plugins() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -3090,9 +3157,11 @@ fn replacing_plugin_configuration_removes_old_callbacks_and_installs_new_ones() 
         components: vec![PluginComponentSpec::new("test.plugin")],
         ..PluginConfig::default()
     };
+    let original_component_count = original.components.len();
     runtime
         .block_on(initialize_plugins_exact_inner(
             original.clone(),
+            original_component_count,
             None,
             vec![],
         ))
@@ -3107,6 +3176,7 @@ fn replacing_plugin_configuration_removes_old_callbacks_and_installs_new_ones() 
     runtime
         .block_on(initialize_plugins_exact_inner(
             PluginConfig::default(),
+            0,
             None,
             vec![],
         ))
@@ -3120,7 +3190,12 @@ fn replacing_plugin_configuration_removes_old_callbacks_and_installs_new_ones() 
     );
 
     runtime
-        .block_on(initialize_plugins_exact_inner(original, None, vec![]))
+        .block_on(initialize_plugins_exact_inner(
+            original,
+            original_component_count,
+            None,
+            vec![],
+        ))
         .unwrap();
     assert_eq!(list_runtime_registrations(None).unwrap(), before);
     clear_plugin_configuration_inner().result.unwrap();
@@ -3157,8 +3232,14 @@ fn failed_plugin_replacement_restores_callbacks_and_runtime_diagnostics() {
     original
         .components
         .push(PluginComponentSpec::new("test.plugin"));
+    let original_component_count = original.components.len();
     let initial_report = runtime
-        .block_on(initialize_plugins_exact_inner(original, None, vec![]))
+        .block_on(initialize_plugins_exact_inner(
+            original,
+            original_component_count,
+            None,
+            vec![],
+        ))
         .unwrap();
     assert!(
         initial_report
@@ -3192,6 +3273,7 @@ fn failed_plugin_replacement_restores_callbacks_and_runtime_diagnostics() {
                 components: vec![PluginComponentSpec::new("partial.fail.plugin")],
                 ..PluginConfig::default()
             },
+            1,
             Some(failures.clone()),
             vec![],
         ))
@@ -3247,8 +3329,14 @@ fn failed_plugin_replacement_reports_failure_to_restore_the_previous_configurati
         .enable_all()
         .build()
         .unwrap();
+    let component_count = config.components.len();
     let error = runtime
-        .block_on(initialize_plugins_exact_inner(config, None, vec![]))
+        .block_on(initialize_plugins_exact_inner(
+            config,
+            component_count,
+            None,
+            vec![],
+        ))
         .unwrap_err();
     assert!(matches!(error, PluginError::RegistrationFailed(_)));
     assert!(
@@ -3293,6 +3381,7 @@ fn replacement_teardown_failure_preserves_diagnostics_and_records_unremoved_call
     let error = runtime
         .block_on(initialize_plugins_exact_inner(
             PluginConfig::default(),
+            0,
             Some(failures.clone()),
             vec![],
         ))

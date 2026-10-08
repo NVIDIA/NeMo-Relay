@@ -185,8 +185,8 @@ in how their component kind becomes available to the host:
 
 ## Built-In Plugin Components
 
-The core runtime registers the `observability`, `nemo_guardrails`, and
-`pricing` components before lookup, validation, and initialization. The CLI and
+The core runtime registers the `observability` and `pricing` components before
+lookup, validation, and initialization. The CLI and
 the Python and Node.js bindings also register `adaptive` and `pii_redaction`.
 Direct Rust applications must register Adaptive and PII Redaction from their
 component crates before validating or initializing either kind:
@@ -223,20 +223,6 @@ from the plugin namespace instead of exposed in public config.
 
 Detailed observability plugin configuration belongs in
 [Observability Configuration](/configure-plugins/observability/configuration).
-
-### NeMo Guardrails
-
-The core crate also ships a built-in `nemo_guardrails` plugin component. The
-built-in integration is deprecated and scheduled for removal in NeMo Relay
-0.9. There is no replacement in NeMo Relay 0.8; any replacement will target 0.9
-or later. Do not use the built-in component for new deployments.
-
-The current user-facing paths are the remote backend for Guardrails-service
-integration and the Python-backed local backend that runs `nemoguardrails`
-through a subprocess worker.
-
-Detailed Guardrails plugin configuration belongs in
-[NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration).
 
 ### PII Redaction
 

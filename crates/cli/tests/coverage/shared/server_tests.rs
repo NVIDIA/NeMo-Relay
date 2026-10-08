@@ -2677,6 +2677,28 @@ fn register_and_validate_plugin_components_rejects_legacy_switchyard_components(
 }
 
 #[test]
+fn register_and_validate_plugin_components_rejects_legacy_nemo_guardrails_components() {
+    for enabled in [true, false] {
+        let config = PluginConfig {
+            components: vec![PluginComponentSpec {
+                kind: "nemo_guardrails".into(),
+                enabled,
+                config: Map::new(),
+            }],
+            ..PluginConfig::default()
+        };
+
+        let errors = register_and_validate_plugin_components(&config);
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, PluginComponentSetupError::RemovedNemoGuardrails)),
+            "legacy NeMo Guardrails components must be rejected when enabled is {enabled}"
+        );
+    }
+}
+
+#[test]
 fn plugin_component_setup_errors_render_every_diagnostic_variant() {
     let adaptive = PluginComponentSetupError::Adaptive("adaptive failure".into());
     assert_eq!(adaptive.check_name(), "Adaptive plugin");
@@ -2706,6 +2728,16 @@ fn plugin_component_setup_errors_render_every_diagnostic_variant() {
             .contains("removed in NeMo Relay >=0.8.0")
     );
     assert!(switchyard.to_string().contains("migration guide"));
+
+    let guardrails = PluginComponentSetupError::RemovedNemoGuardrails;
+    assert_eq!(guardrails.check_name(), "NeMo Guardrails migration");
+    assert_eq!(guardrails.diagnostic_details(), guardrails.to_string());
+    assert!(
+        guardrails
+            .to_string()
+            .contains("removed in NeMo Relay >=0.10.0")
+    );
+    assert!(guardrails.to_string().contains("migration guide"));
 }
 
 fn dynamic_component_without_manifest(
@@ -2754,6 +2786,20 @@ async fn plugin_host_activation_covers_empty_invalid_and_missing_manifest_paths(
     let dynamic_switchyard = dynamic_switchyard.to_string();
     assert!(dynamic_switchyard.contains("has no manifest_ref"));
     assert!(!dynamic_switchyard.contains("removed in NeMo Relay 0.8"));
+
+    let dynamic_guardrails = activate_server_plugins(
+        None,
+        vec![dynamic_component_without_manifest(
+            "nemo_guardrails",
+            DynamicPluginKind::Worker,
+        )],
+    )
+    .await
+    .err()
+    .expect("dynamic NeMo Guardrails plugin without a manifest should reach dynamic activation");
+    let dynamic_guardrails = dynamic_guardrails.to_string();
+    assert!(dynamic_guardrails.contains("has no manifest_ref"));
+    assert!(!dynamic_guardrails.contains("removed in NeMo Relay 0.10"));
 
     let worker = activate_server_plugins(
         None,

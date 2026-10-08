@@ -100,9 +100,13 @@ redirects:
 - source: /nemo/relay/adaptive-plugin/adaptive-hints
   destination: /nemo/relay/configure-plugins/adaptive/adaptive-hints
 - source: /nemo/relay/nemo-guardrails-plugin/about
-  destination: /nemo/relay/configure-plugins/nemo-guardrails/about
+  destination: /nemo/relay/reference/migration-guides
 - source: /nemo/relay/nemo-guardrails-plugin/configuration
-  destination: /nemo/relay/configure-plugins/nemo-guardrails/configuration
+  destination: /nemo/relay/reference/migration-guides
+- source: /nemo/relay/configure-plugins/nemo-guardrails/about
+  destination: /nemo/relay/reference/migration-guides
+- source: /nemo/relay/configure-plugins/nemo-guardrails/configuration
+  destination: /nemo/relay/reference/migration-guides
 - source: /nemo/relay/pii-redaction-plugin/about
   destination: /nemo/relay/configure-plugins/pii-redaction/about
 - source: /nemo/relay/pii-redaction-plugin/configuration
@@ -110,7 +114,7 @@ redirects:
 
 # Legacy release documentation
 - source: /nemo/relay/v0.3.0/build-plugins/nemoguardrails
-  destination: /nemo/relay/configure-plugins/nemo-guardrails/about
+  destination: /nemo/relay/reference/migration-guides
 
 # Build plugin guides
 - source: /nemo/relay/build-plugins/basic-guide

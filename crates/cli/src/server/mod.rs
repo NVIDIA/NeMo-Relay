@@ -999,6 +999,7 @@ pub(crate) struct ServerPluginActivation {
 }
 
 const REMOVED_SWITCHYARD_MESSAGE: &str = "the built-in Switchyard service integration was removed in NeMo Relay >=0.8.0; remove this `[[components]]` entry and refer to the NeMo Relay migration guides for current Switchyard migration information: https://docs.nvidia.com/nemo/relay/reference/migration-guides";
+const REMOVED_NEMO_GUARDRAILS_MESSAGE: &str = "the built-in NeMo Guardrails integration was removed in NeMo Relay >=0.10.0; remove this `[[components]]` entry and refer to the migration guide: https://docs.nvidia.com/nemo/relay/reference/migration-guides#remove-the-built-in-nemo-guardrails-component";
 
 impl ServerPluginActivation {
     pub(crate) fn clear(mut self) -> Result<(), CliError> {
@@ -1012,6 +1013,7 @@ impl ServerPluginActivation {
 pub(crate) enum PluginComponentSetupError {
     Adaptive(String),
     PiiRedaction(String),
+    RemovedNemoGuardrails,
     RemovedSwitchyard,
 }
 
@@ -1020,6 +1022,7 @@ impl PluginComponentSetupError {
         match self {
             Self::Adaptive(_) => "Adaptive plugin",
             Self::PiiRedaction(_) => "PII redaction plugin",
+            Self::RemovedNemoGuardrails => "NeMo Guardrails migration",
             Self::RemovedSwitchyard => "Switchyard migration",
         }
     }
@@ -1029,6 +1032,7 @@ impl PluginComponentSetupError {
             Self::Adaptive(error) | Self::PiiRedaction(error) => {
                 format!("registration failed: {error}")
             }
+            Self::RemovedNemoGuardrails => REMOVED_NEMO_GUARDRAILS_MESSAGE.into(),
             Self::RemovedSwitchyard => REMOVED_SWITCHYARD_MESSAGE.into(),
         }
     }
@@ -1046,6 +1050,7 @@ impl std::fmt::Display for PluginComponentSetupError {
                     "PII redaction plugin registration failed: {error}"
                 )
             }
+            Self::RemovedNemoGuardrails => formatter.write_str(REMOVED_NEMO_GUARDRAILS_MESSAGE),
             Self::RemovedSwitchyard => formatter.write_str(REMOVED_SWITCHYARD_MESSAGE),
         }
     }
@@ -1067,6 +1072,13 @@ pub(crate) fn register_and_validate_plugin_components(
         .any(|component| component.kind == "switchyard")
     {
         errors.push(PluginComponentSetupError::RemovedSwitchyard);
+    }
+    if plugin_config
+        .components
+        .iter()
+        .any(|component| component.kind == "nemo_guardrails")
+    {
+        errors.push(PluginComponentSetupError::RemovedNemoGuardrails);
     }
     errors
 }
