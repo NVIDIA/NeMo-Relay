@@ -28,6 +28,9 @@ use crate::error::{FlowError, Result};
 /// Global subscribers remain active across scopes until explicitly removed.
 /// Native event-producing APIs enqueue subscriber work and return without
 /// waiting for callbacks.
+/// During tool scope start/end delivery, derived marks inherit the observed
+/// tool scope as their parent, including after the tool closes. An explicit
+/// mark parent takes precedence over this callback context.
 pub fn register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
     ensure_runtime_owner()?;
     let context = global_context();
