@@ -67,11 +67,14 @@ repos:
         pass_filenames: false
 
   # Documentation — external link validation
-  - repo: https://github.com/lycheeverse/lychee.git
-    rev: lychee-v0.23.0
+  - repo: local
     hooks:
       - id: lychee
         name: docs markdown linkcheck
+        entry: lychee
+        language: rust
+        additional_dependencies:
+          - cli:lychee:0.23.0
         args:
           - --no-progress
           - --include-fragments
