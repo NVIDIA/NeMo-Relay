@@ -162,8 +162,9 @@ active turn because the hook and gateway payloads did not prove a subagent
 owner.
 
 Claude Code also fires `SubagentStop` for internal agents, including prompt
-suggestions, while `SubagentStart` covers agents spawned through the Agent tool
-(see the [Claude Code hook reference](https://code.claude.com/docs/en/hooks#subagentstop)).
+suggestions; see [SubagentStop input](https://code.claude.com/docs/en/hooks#subagentstop-input).
+[SubagentStart](https://code.claude.com/docs/en/hooks#subagentstart) covers
+Agent tool launches, resumed subagents, and teammate messages.
 An internal stop carries the session's own agent type, which is empty for an
 unnamed session. When an unmatched stop has that type, Relay exports it as a
 `claude_agent_stop_unclassified` mark and logs a warning. The mark preserves
