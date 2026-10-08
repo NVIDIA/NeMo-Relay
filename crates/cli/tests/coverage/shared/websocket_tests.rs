@@ -641,18 +641,20 @@ async fn websocket_proxy_reports_connect_failures_and_handshake_timeouts() {
     drop(listener);
     let stalled = Router::new().fallback(|| async { std::future::pending::<StatusCode>().await });
     let (upstream, provider_task) = serve(stalled).await;
-    for (upstream, expected) in [
-        (unavailable, StatusCode::BAD_GATEWAY),
-        (upstream, StatusCode::GATEWAY_TIMEOUT),
+    // Windows can take longer than one second to report a refused TCP connection.
+    // Keep that failure separate from the deliberately short handshake timeout.
+    for (upstream, expected, response_timeout_secs) in [
+        (unavailable, StatusCode::BAD_GATEWAY, 10),
+        (upstream, StatusCode::GATEWAY_TIMEOUT, 1),
     ] {
         let (origin, task) = serve(crate::server::router(GatewayConfig {
             openai_base_url: upstream,
-            response_timeout_secs: 1,
+            response_timeout_secs,
             ..GatewayConfig::default()
         }))
         .await;
         let error = tokio::time::timeout(
-            Duration::from_secs(5),
+            Duration::from_secs(response_timeout_secs + 5),
             tokio_tungstenite::connect_async(format!(
                 "{}/v1/live",
                 origin.replacen("http", "ws", 1)
