@@ -244,6 +244,10 @@ complete upgrade path.
 
 This release includes the following fixes and behavior changes:
 
+- Python LLM streaming reduces scheduling overhead between the Python event
+  loop and Relay's native runtime. Stream processing runs on the originating
+  event loop when native stack bounds permit it. Small or unknown caller
+  stacks retain native runtime polling.
 - In Python, managed LLM and tool calls and intercepts now raise the original
   callback exception instead of converting it to `RuntimeError`.
   Callbacks and stream iteration preserve `asyncio.CancelledError`. If the
@@ -260,6 +264,14 @@ This release includes the following fixes and behavior changes:
   hooks after upgrading.
   Refer to
   [Refresh Relay-Managed Coding-Agent Integrations](/reference/migration-guides#refresh-relay-managed-coding-agent-integrations).
+- Windows Codex launches use shorter hook commands to avoid exceeding the
+  command-length limit of batch launchers, including those installed by npm.
+- Newly created Windows private directories explicitly belong to the process
+  user and have protected access lists. This fixes fresh daemon startup under
+  LocalSystem when the default token owner is Administrators. The change also
+  applies to client-token and bootstrap state directories. Existing directories
+  retain their ownership and permissions; Relay still rejects daemon state
+  owned by another principal.
 - The OpenClaw plugin keeps its runtime and exporters open during gateway
   shutdown so final tool, LLM, and session hooks can finish. Service stop
   closes remaining sessions and waits for pending events. Hooks after service
