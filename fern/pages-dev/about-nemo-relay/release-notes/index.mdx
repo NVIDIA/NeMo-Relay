@@ -1,7 +1,7 @@
 ---
 title: "Release Notes for NVIDIA NeMo Relay"
 sidebar-title: "Release Notes"
-description: "Review highlights, compatibility updates, fixed known issues, and current known issues for NVIDIA NeMo Relay 0.10."
+description: "Review highlights, compatibility updates, fixed known issues, and current known issues for NVIDIA NeMo Relay 0.11."
 template-library-version: "1.0.0"
 position: 6
 ---
@@ -28,340 +28,25 @@ Relay](/about-nemo-relay/overview).
 For the full release history, including individual pull requests, refer to
 [GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
 
-## Release 0.10.0
+## Release 0.11.0
 
-NeMo Relay 0.10.0 includes the changes since 0.9.0. These notes also cover fixes
-from the 0.9 patch releases.
+{/* Add 0.11.0 release details here. */}
 
 ### Highlights
 
-This release adds the following features:
-
-- Python applications can use `configure_graph()` to add Relay lifecycle
-  callbacks to agents served through `langgraph dev` or `langgraph up`.
-  Use it with `NemoRelayMiddleware` to record model and tool calls under the
-  graph and node scopes. Refer to
-  [Served LangChain Agents](/supported-integrations/langgraph#served-langchain-agents).
-- The built-in `resource_metrics` plugin collects CPU, memory, process, disk,
-  network, and GPU measurements on Linux, macOS, and Windows. Applications can
-  request a set of current measurements or turn on polling for regular samples.
-  Polling emits metric marks in Relay's ATOF event format and OpenTelemetry.
-  It is off by default. Available measurements depend on the platform and
-  driver. Refer to
-  [Resource Metrics](/configure-plugins/resource-metrics).
-- Standard OpenTelemetry Protocol (OTLP) endpoint environment variables can
-  now enable `gen_ai` traces, logs, and metrics automatically. Relay can also
-  export to endpoints in its configuration. Review the rules for keeping
-  authentication headers separate in
-  [Automatic OpenTelemetry Configuration](/configure-plugins/observability/opentelemetry#automatic-opentelemetry-configuration).
-- OpenTelemetry trace file sinks write spans as OTLP JSON Lines or
-  length-delimited protobuf. File sinks can run alongside collector endpoints.
-  Refer to [Trace File Sinks](/configure-plugins/observability/opentelemetry#trace-file-sinks).
-- `nemo-relay plugins install` downloads a dynamic plugin bundle from a specific
-  GitHub release tag. It checks the release metadata and file integrity, then
-  registers the bundle in user or system configuration.
-  `nemo-relay plugins uninstall` removes a managed bundle and its Python
-  environment. Installation uses the existing trust policy. Refer to
-  [Discoverable Plugins](/configure-plugins/discoverable-plugins).
-- Response caching now supports validated Anthropic paused-threshold and
-  on-demand compaction responses and continuations. Compaction summarizes older
-  conversation content to reduce its size. Unsupported or malformed
-  compaction traffic still runs live. Requests that can produce different
-  results still follow the cache's existing rules. Refer to
-  [LLM Eligibility and Limits](/configure-plugins/adaptive/response-cache#llm-eligibility-and-limits).
-- Python and Node.js applications, Rust native plugins, and Rust and Python
-  workers can send structured records to Relay's operational logs.
-  Refer to [Operational Logging](/reference/operational-logging).
-- Native and worker plugin SDKs can open and close scopes using captured
-  timestamps when replaying earlier work. Refer to
-  [Native Runtime Events and Scopes](/build-plugins/native/runtime-events-and-scopes)
-  and [Worker Runtime Events and Scopes](/build-plugins/workers/runtime-events-and-scopes).
-- The `gen_ai` OpenTelemetry projection maps Relay events to GenAI attributes.
-  It adds request, response, usage, reasoning, embedding, and tool attributes
-  based on available source data. Managed streaming requests report time to
-  first chunk through `gen_ai.response.time_to_first_chunk` and
-  the matching metric histogram. Relay also records the version of the Claude
-  Code or Codex executable it wraps. Tool spans include the resolved
-  conversation ID. They preserve every JSON tool argument and successful
-  result except `null`, after sanitizers process the content. Refer to
-  [OpenTelemetry](/configure-plugins/observability/opentelemetry).
-- OpenTelemetry log and metric endpoints can promote selected root-scope
-  metadata into resource attributes with `promote_resource_metadata_prefixes`.
-  Log and metric endpoints derived from a trace endpoint inherit its setting.
-  Choose values from a small, controlled set to limit the number of resources.
-  Relay uses the configured base resource if it reaches its limits on resource
-  tracking or export pipelines.
-- Managed Codex deployments route ChatGPT OAuth requests to the native ChatGPT
-  Codex backend when no administrator OpenAI credential is configured. With an
-  administrator credential, Relay replaces the incoming OAuth credential and
-  sends the request to the configured OpenAI-compatible upstream. ChatGPT voice
-  calls to `POST /backend-api/codex/realtime/calls` keep the caller's ChatGPT
-  credential and use the native ChatGPT backend even when an administrator
-  configures a replacement key.
-  Refer to
-  [Daemon Configuration](/daemon/configuration#codex-responses-compatibility).
-- System-installed Python worker plugins can pass validation for different
-  daemon users without rewriting shared lifecycle state at startup. This state
-  records the plugin's installation and validation status. Each user needs
-  read access to the configuration, manifest, lifecycle state, and managed
-  environment. Newly provisioned environments store their verification key
-  with the environment. Older environments require the original installer's
-  bootstrap key. Refer to
-  [Discoverable Plugins](/configure-plugins/discoverable-plugins).
-
-### Managed Daemon Startup and Recovery
-
-Model Context Protocol (MCP) initialization now finishes after the client
-authenticates and registers. The worker starts in the background.
-Authenticated requests use passthrough, which forwards requests without worker
-plugins. Requests switch to the worker after its runtime, plugins, control
-connection, and HTTP readiness checks pass. If every request must use worker
-policies, run `nemo-relay daemon --require-worker`. The daemon then returns HTTP
-`503` while the worker is unavailable.
-
-Workers now keep running after the launcher cleans up. Recovery selects
-connected MCP clients that have authenticated. Startup has no deadline.
-Relay logs progress every 60 seconds and retries failed starts with delays of
-up to 60 seconds. Each request and stream keeps its original destination when
-new traffic switches to a ready worker. Refer to
-[Daemon Operations](/daemon/operations).
-
-The daemon provides `GET /healthz` to report process health and deployment
-mode. Read-only worker routes report assigned worker IDs and the broker's last
-known status. A healthy daemon can still have no assigned workers. Refer to
-[Probe Daemon Health](/daemon/reference#probe-daemon-health) for access and
-response fields.
-
-### Managed Daemon Client Credentials
-
-Managed hooks, the managed MCP server, and `nemo-relay doctor --managed-bundle`
-can now read the route credential from a per-user token file. These clients
-use `NEMO_RELAY_CLIENT_TOKEN` first and fall back to
-`<user config dir>/.client-token`. Environment changes made after login, such
-as `launchctl setenv`, never reach processes that were already running. The
-file covers those processes, for example a terminal opened before login setup
-finished.
-
-`nemo-relay daemon token ensure` creates that file once from the operating
-system's random source and publishes it atomically. It rejects unsafe files and
-directories rather than repairing them, refuses to run as root, and never
-prints the token. Refer to
-[Create the Per-User Token File](/daemon/configuration#create-the-per-user-token-file)
-and [Credential Resolution](/daemon/configuration#credential-resolution).
-
-A missing credential now skips telemetry and guardrails instead of breaking the
-coding agent:
-
-- A hook without a credential returns its pass-through response locally.
-- The MCP server without a credential keeps running without registering a
-  route.
-- The daemon sends public requests that have no credential header, an
-  unbound credential, or a bound credential whose route has no live MCP
-  session, through pass-through.
-- A new token for the same machine identity, for example after the token file
-  is replaced, joins that identity's existing route and worker. Old and new
-  tokens stay bound together. An identity holds up to four tokens
-  by default (`--max-tokens-per-identity` or
-  `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY`).
-- If the daemon rejects a token at MCP registration, for example because it is
-  bound to another identity or exceeds the per-identity limit, the MCP server
-  keeps serving without a route. Requests with that token pass through until
-  a new MCP session binds it. With `--require-worker`, those requests receive
-  `401` instead.
-
-Such requests never receive daemon-held provider credentials. The exception is
-a daemon started with `--pass-through`. A request that names its own upstream,
-as the managed Pi extension does, receives `503` without a bound credential
-instead of being forwarded.
-Malformed or repeated credential headers still return `401`. Refer to
-[Requests Without a Bound Credential](/daemon/configuration#requests-without-a-bound-credential).
-
-### LLM Execution Codec Context
-
-Relay now passes a codec context to every large language model (LLM) execution
-interceptor. A codec converts data between a provider's format and Relay's
-common format. The context gives policies access to Relay's selected request
-and completed-response codecs. Policies can inspect or rewrite the final
-provider request and decode a completed response. They no longer need to
-import or copy Relay's codec code. Streaming interceptors receive request
-codec access only.
-
-**Breaking change:** Callback signatures change across Rust, Python, Node.js,
-Go, C, native plugins, and Rust and Python gRPC workers. Python streaming
-binding callbacks and public C callbacks also gain the logical LLM name.
-Rebuild every native plugin for version 7 of the internal application binary
-interface (ABI). Update callback signatures and rebuild workers that register
-an LLM execution intercept. Plugin compatibility labels remain
-`native_api = "1"` and `grpc-v1`. Affected plugin manifests must use a Relay
-version range that begins at 0.10 or otherwise excludes 0.9. Refer to the
-[Migration Guides](/reference/migration-guides) for callback shapes and upgrade
-steps.
+{/* Add 0.11.0 release details here. */}
 
 ### Compatibility and Migration
 
-<Warning title="Upgrade Actions Required">
-
-Observability configuration now requires `version = 4`. Remote trace endpoints
-still require HTTPS, and OTLP/HTTP log and metric exporters now reject
-redirects even without configured headers. Existing OTLP environment variables
-can activate additional exporters. Review them before launching Relay.
-
-Older Python worker environments without a verification key stored in the
-environment require the original installer's bootstrap key. Recreate the
-environment from its trusted plugin source if the original key is unavailable.
-
-The primary `nemo-relay daemon` process reads TOML logging settings only from
-`[daemon.logging]`. It no longer falls back to `[logging]`. Move daemon service
-settings to `[daemon.logging]`. Other Relay processes still use `[logging]`.
-CLI options and environment variables still override TOML settings.
-
-Linux musl CLI binaries now require musl 1.2 or newer on the host. Install the
-musl runtime, or use a GNU binary on a glibc-based system.
-The Unix shell installer now selects the GNU binary when it detects glibc.
-
-Managed daemon requests without a credential header, or with an unbound
-credential, now use pass-through instead of returning `401`. A daemon started
-with `--require-worker` still returns `401`. Managed hooks without any
-resolvable credential now pass through and exit `0`, including hooks marked
-`--fail-closed`. Guardrail hooks therefore enforce only when a credential
-resolves. Run `nemo-relay daemon token ensure` for each user, and monitor
-`public_request_pass_through` daemon events with `reason = "missing_credential"`,
-`reason = "unbound_credential"`, or `reason = "no_live_session"`.
-
-</Warning>
-
-Rust code that lists every field in a struct literal must also add the new
-observability, propagation, event, and usage fields. These include
-`OpenTelemetrySignalEndpointConfig.promote_resource_metadata_prefixes`.
-Go code that lists configuration values without field names must use field
-names. Refresh personal Codex integrations and restart Codex to use routing
-that preserves its built-in OpenAI provider identity.
-
-Update collector queries and dashboards from
-`gen_ai.usage.cache_creation.input_tokens` to
-`gen_ai.usage.cache_write.input_tokens`. Metrics no longer include
-`nemo_relay.session.instance_id`, so matching measurements can combine across
-sessions. Refer to the [Migration Guides](/reference/migration-guides) for the
-complete upgrade path.
+{/* Add 0.11.0 release details here. */}
 
 ### Fixes and Other Changes
 
-This release includes the following fixes and behavior changes:
+{/* Add 0.11.0 release details here. */}
 
-- Python LLM streaming now spends less time moving work between Python and
-  Relay's native runtime. Relay processes chunks on the original Python event
-  loop when it can confirm that enough stack space is available. Otherwise,
-  it uses the native runtime.
-- In Python, managed LLM and tool calls and intercepts now raise the original
-  callback exception instead of converting it to `RuntimeError`.
-  Callbacks and stream iteration preserve `asyncio.CancelledError`. If the
-  iterator raises it during `aclose()` cleanup, Relay reports `RuntimeError`.
-  This change does not apply to worker plugins. Refer to
-  [Review Python Exception Handling](/reference/migration-guides#review-python-exception-handling).
-- On Windows, closing a Node.js worker no longer causes a crash when Relay
-  is still finishing a stream in the background. Relay keeps its native runtime
-  loaded until the process exits.
-- Windows Claude Code hooks use Bash-compatible paths. Codex hooks use the
-  correct session trust paths and PowerShell commands that preserve hook input,
-  output, and exit codes. Agent launches also normalize Windows executable
-  paths, including the command scripts installed by npm. Refresh persistent
-  hooks after upgrading.
-  Refer to
-  [Refresh Relay-Managed Coding-Agent Integrations](/reference/migration-guides#refresh-relay-managed-coding-agent-integrations).
-- On Windows, transparent Codex launches through `nemo-relay run` use shorter
-  PowerShell `-File` hook commands. This avoids command-length errors in batch
-  launchers, including those installed by `npm`.
-- Relay now waits up to 10 seconds for an agent's version check, instead of
-  5 seconds. This gives slower agents more time to start on all supported
-  platforms.
-- Relay now sets the current process user as the owner of new private
-  directories on Windows. It also limits access to that user and `SYSTEM`.
-  This fixes startup for a new daemon running as `LocalSystem` when Windows
-  would otherwise assign ownership to `Administrators`. The change also
-  covers client-token directories and directories that store the bootstrap
-  key (`fingerprint-hmac.key`). Directory creation leaves existing directories
-  unchanged. Daemon and bootstrap key setup can still limit access to those
-  directories. Their owners stay the same. Relay still rejects daemon state
-  owned by another user or group.
-- The OpenClaw plugin keeps its runtime and exporters open during gateway
-  shutdown so final tool, LLM, and session hooks can finish. Service stop
-  closes remaining sessions and waits for pending events. Hooks after service
-  stop cannot restart Relay or overwrite saved telemetry.
-- Codex parent turns and delegated agents share a `codex-task` scope. Child
-  model and tool calls keep their parent links even when the parent turn ends
-  first. Each task produces a separate ATIF trajectory and trace. Refer to the
-  [Migration Guides](/reference/migration-guides#update-codex-trajectory-consumers)
-  for file lookup changes.
-- LangChain tool calls preserve LangGraph interrupts so agents can pause for
-  human approval and resume. LangChain and LangGraph callbacks close scopes
-  on the stack where they started, even when completion runs in a different
-  context.
-- Dynamic plugins with compatible `compat.relay` ranges can load on Relay
-  prerelease builds. Ranges without a prerelease suffix use the host's release
-  version for compatibility checks.
-- Operational logging identifies the file sink when its queue drops records
-  or flush requests. Repeated warnings are limited to avoid flooding standard
-  error.
-- Persistent Codex routing preserves the built-in `openai` provider identity.
-  Sessions stay in the same provider history, and image generation uses Relay.
-  New installs use a plain gateway URL with managed
-  authentication in `$CODEX_HOME/.env`.
-- Matched Claude Code and Codex permission requests emit
-  `nemo_relay.permission.policy_decision` marks with Relay's policy outcome.
-  A `pass` records only that Relay did not block the request. It does not prove
-  user approval or tool execution. Permission guardrail events also carry the
-  matched `gen_ai.tool.call.id` and tool parent. Rejection closes the active
-  tool span with `error.type = "guardrail_rejected"`.
-- Codex permission requests without a tool-call ID are accepted when exactly
-  one active tool in the same session matches the request's name and arguments.
-  Matching ignores the approval description that Codex adds to built-in tool
-  requests, and denials use Codex's expected hook response format.
-- Claude Code and Codex hooks for qualified `mcp__<server>__<tool>` calls add
-  `mcp.method.name = "tools/call"` event metadata unless a method is already
-  supplied. This identifies a requested operation. It does not prove that the
-  MCP server received or completed it. Refer to
-  [OpenTelemetry](/configure-plugins/observability/opentelemetry).
-- Completion hooks without a matching start are kept as point-in-time marks
-  after sanitizers process them. Relay does not add missing start times,
-  parents, or durations. ATOF records these marks. ATIF and the `gen_ai`
-  projection omit them.
-- Native and worker callbacks preserve their invocation's scope context across
-  asynchronous work and keep it separate from unrelated callbacks.
-- Anthropic decoding preserves provider response metadata and compaction usage,
-  including provider-reported uncached input tokens when available. Relay omits
-  model-based cost estimates for Anthropic usage that combines multiple models.
-- Gateways that start at the same time now create shared TLS identity files
-  one at a time. Linux Python worker environments preserve `lib64` aliases.
-- Scope-stack forks, managed LLM and tool execution callbacks, and subscribers
-  registered later now preserve the exact OpenTelemetry parent context.
-  Managed LLM `traceparent` headers stay aligned with exported spans.
-- `PropagationContext.to_traceparent()` now returns an imported W3C
-  `traceparent` unchanged, including its original trace and span IDs.
-- OpenTelemetry spans whose parent was not observed by an exporter now join
-  the outer trace instead of starting a separate trace.
-- OpenTelemetry logs and traces use the same observed-event root when a local
-  parent was not exported. Log exporters count pending records separately for
-  each resource's provider. This avoids false `otel.logs_dropped` shutdown
-  errors when resource metadata creates multiple providers.
-- Rootless propagation from a local Relay scope still starts a separate
-  OpenTelemetry trace. Rootless capture keeps a previously imported W3C
-  parent. Remove its `traceparent` and `tracestate` fields to force a new trace
-  in that case.
-- Capture with an explicit root still uses that root for the receiver's trace.
-  If the sender imported a W3C parent, Relay uses that parent instead.
-- Scopes and managed calls whose parent was popped reuse the current stack's
-  trace. They no longer derive a new trace ID from the scope or managed call.
-- Invalid Relay identifiers no longer prevent later valid OpenTelemetry events
-  from exporting.
-- The optional LangChain NVIDIA integration requires
-  `langchain-nvidia-ai-endpoints>=1.4.2,<2.0.0`. Python development constraints
-  require patched `anyio` and `soupsieve` releases. Development dependency
-  updates also include patched npm packages.
+## Known Issues in 0.11.0
 
-## Known Issues in 0.10.0
-
-The following list covers unresolved issues from 0.9 and new limitations in
-0.10.0:
+The following known issues and limitations apply to NeMo Relay 0.11.0:
 
 - ChatGPT voice sidebands are separate connections used to control a voice
   call. Routing them through Relay can fail when Relay has a replacement
@@ -431,7 +116,7 @@ The following list covers unresolved issues from 0.9 and new limitations in
 - OpenClaw provides telemetry through public hooks. Its security and
   optimization coverage is partial because Relay does not manage its execution.
 - The built-in `nemo_guardrails` plugin remains deprecated but is still
-  available in 0.10.0. No replacement is included. The remote backend
+  available in 0.11.0. No replacement is included. The remote backend
   depends on its configured service's availability, latency, and policy behavior.
   The local backend requires Python 3.11 or later and `nemoguardrails==0.22.0`.
   Refer to [NeMo Guardrails](/configure-plugins/nemo-guardrails/about).
