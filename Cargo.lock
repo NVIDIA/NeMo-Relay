@@ -1812,7 +1812,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -1865,7 +1865,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-adaptive"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "log",
@@ -1886,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-cli"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-stream",
  "axum",
@@ -1947,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-daemon-transport-benchmark"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1973,7 +1973,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-ffi"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "cbindgen",
  "chrono",
@@ -1992,7 +1992,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-language-binding-plugin-example"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures",
  "nemo-relay",
@@ -2003,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-node"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "napi",
@@ -2022,7 +2022,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-pii-redaction"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures",
  "log",
@@ -2041,7 +2041,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-plugin"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures",
  "nemo-relay-types",
@@ -2053,7 +2053,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-plugin-fixture"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures",
  "nemo-relay-plugin",
@@ -2063,7 +2063,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-python"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "libc",
@@ -2083,7 +2083,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-rust-grpc-worker-plugin-example"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures-util",
  "nemo-relay",
@@ -2099,7 +2099,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-rust-native-plugin-example"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures",
  "nemo-relay",
@@ -2114,7 +2114,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-types"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bitflags",
  "chrono",
@@ -2127,7 +2127,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-worker"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "futures-util",
  "hyper-util",
@@ -2144,7 +2144,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-worker-plugin-fixture"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "nemo-relay-worker",
  "serde_json",
@@ -2154,7 +2154,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-worker-proto"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "prost",
  "prost-build",

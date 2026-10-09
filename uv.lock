@@ -1619,12 +1619,12 @@ test = [
 
 [[package]]
 name = "nemo-relay-cli-bin"
-version = "0.10.0"
+version = "0.11.0"
 source = { directory = "python/cli-bin" }
 
 [[package]]
 name = "nemo-relay-plugin"
-version = "0.10.0"
+version = "0.11.0"
 source = { editable = "python/plugin" }
 dependencies = [
     { name = "grpcio" },
@@ -1639,7 +1639,7 @@ requires-dist = [
 
 [[package]]
 name = "nemo-relay-python-grpc-worker-example"
-version = "0.10.0"
+version = "0.11.0"
 source = { editable = "examples/python-grpc-worker-plugin" }
 dependencies = [
     { name = "nemo-relay-plugin" },
@@ -1662,7 +1662,7 @@ test = [
 
 [[package]]
 name = "nemo-relay-python-language-binding-plugin-example"
-version = "0.10.0"
+version = "0.11.0"
 source = { virtual = "examples/language-binding-plugin/python" }
 dependencies = [
     { name = "nemo-relay" },
