@@ -218,6 +218,15 @@ slash-command expansions as `skill.load.inferred`; Claude Code does not
 identify whether an expansion came from a skill or a legacy custom command.
 The normal `Skill` pre-tool hook emits an observed `skill.load` mark.
 
+The `hook_event_name` metadata field of a `compaction` mark is `PreCompact` or
+`PostCompact`. A `PreCompact` hook can block the compaction by exiting with
+code 2 or returning `"decision": "block"`, so count or react to compactions
+only on `PostCompact` marks. Either mark makes the owning agent
+[fresh](/about-nemo-relay/concepts/events#input-and-output-payloads). Freshness
+only makes the next LLM start retain complete request history, so a mark from a
+blocked compaction drops no history. The `PostCompact` mark records the length
+of `compact_summary` as `compact_summary_chars` instead of the summary text.
+
 The wrapper requires Claude Code 2.1.121 or newer. Earlier versions do not
 support every required hook event, and `nemo-relay doctor` reports the version
 mismatch.
