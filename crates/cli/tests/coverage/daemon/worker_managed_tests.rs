@@ -626,6 +626,40 @@ fn managed_worker_canonicalizes_chatgpt_responses_before_alignment() {
 }
 
 #[test]
+fn managed_worker_routes_chatgpt_responses_to_the_configured_chatgpt_base() {
+    let _environment = EnvScope::set(&[("OPENAI_API_KEY", None)]);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer at-managed-chatgpt-token"),
+    );
+    let prepared = PreparedProviderRequest {
+        method: Method::POST,
+        version: http::Version::HTTP_11,
+        headers,
+        path: "/backend-api/codex/responses".into(),
+        path_and_query: "/backend-api/codex/responses?client=codex".into(),
+        body: Bytes::from_static(br#"{"model":"test","stream":true}"#),
+        request_json: json!({"model": "test", "stream": true}),
+        streaming: true,
+    };
+    let config = GatewayConfig {
+        chatgpt_codex_base_url: Some("https://llm-proxy.example/chatgpt/".into()),
+        ..GatewayConfig::default()
+    };
+
+    let destination = effective_destination(&prepared, ProviderRoute::OpenAi, None, &config)
+        .expect("ChatGPT destination");
+
+    assert_eq!(
+        destination,
+        "https://llm-proxy.example/chatgpt/responses?client=codex"
+            .parse::<Uri>()
+            .unwrap()
+    );
+}
+
+#[test]
 fn managed_worker_does_not_infer_upstream_authority_from_generic_bearer_tokens() {
     let _environment = EnvScope::set(&[("OPENAI_API_KEY", None)]);
     let mut headers = HeaderMap::new();

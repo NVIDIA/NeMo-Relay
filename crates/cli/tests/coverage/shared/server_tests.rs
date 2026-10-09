@@ -344,6 +344,7 @@ fn test_config() -> GatewayConfig {
         openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
         anthropic_auth_header: None,
+        chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,

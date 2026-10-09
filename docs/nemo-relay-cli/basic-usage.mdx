@@ -348,6 +348,7 @@ compatible requests to a proxy, enterprise endpoint, or another provider host:
 [upstream]
 openai_base_url = "https://api.openai.com/v1"
 anthropic_base_url = "https://api.anthropic.com"
+chatgpt_codex_base_url = "https://chatgpt.com/backend-api/codex"
 ```
 
 Provider waits have no deadline by default so long compaction can finish. Caller
@@ -424,12 +425,16 @@ nonempty `OPENAI_API_KEY` is available, Relay removes the ChatGPT credential,
 applies the replacement, and forwards the request to the configured
 `openai_base_url`. Without a replacement, Relay preserves the ChatGPT credential
 and routes the request to the Codex ChatGPT backend instead of
-`openai_base_url`.
+`openai_base_url`. Set `chatgpt_codex_base_url` under `[upstream]` to replace
+that backend, which defaults to `https://chatgpt.com/backend-api/codex`. Relay
+forwards the caller's ChatGPT credential to this URL, so use only an endpoint
+you trust with those credentials.
 
 ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
-They keep the caller's ChatGPT credential and use the native ChatGPT backend
-even when a replacement credential is configured. Sideband attachment routes
-still follow the replacement rules above. Refer to
+They keep the caller's ChatGPT credential and use the ChatGPT backend
+(`chatgpt_codex_base_url` when set) even when a replacement credential is
+configured. Sideband attachment routes still follow the replacement rules
+above. Refer to
 [Known Issues in 0.10.0](/about-nemo-relay/release-notes#known-issues-in-0100)
 before routing a ChatGPT voice sideband through Relay with a replacement key.
 

@@ -409,6 +409,7 @@ response_timeout_secs = 180
 openai_auth_header = "Bearer admin-file-openai"
 anthropic_base_url = "https://admin.example/anthropic"
 anthropic_auth_header = "Basic admin-file-anthropic"
+chatgpt_codex_base_url = "https://admin.example/chatgpt"
 "#,
     )
     .unwrap();
@@ -458,6 +459,10 @@ anthropic_auth_header = "Basic admin-file-anthropic"
     assert_eq!(
         managed.resolved.gateway.anthropic_base_url,
         "https://admin.example/anthropic"
+    );
+    assert_eq!(
+        managed.resolved.gateway.chatgpt_codex_base_url.as_deref(),
+        Some("https://admin.example/chatgpt")
     );
     assert_eq!(
         managed.resolved.gateway.openai_auth_header.as_deref(),
@@ -613,6 +618,7 @@ fn config() -> GatewayConfig {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -3131,7 +3137,7 @@ fn persistent_server_resolution_excludes_project_config_and_fingerprints_credent
 }
 
 #[test]
-fn persistent_fingerprint_tracks_provider_auth_headers_and_response_timeout() {
+fn persistent_fingerprint_tracks_upstream_settings() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let xdg = temp.path().join("xdg");
@@ -3181,6 +3187,16 @@ fn persistent_fingerprint_tracks_provider_auth_headers_and_response_timeout() {
         .bootstrap_fingerprint
         .unwrap();
     assert_ne!(anthropic_changed, timeout_changed);
+    std::fs::write(
+        &config_path,
+        "[upstream]\nopenai_auth_header = \"Bearer two\"\nanthropic_auth_header = \"Basic two\"\nresponse_timeout_secs = 90\nchatgpt_codex_base_url = \"https://chatgpt-proxy.example\"\n",
+    )
+    .unwrap();
+    let chatgpt_base_changed = resolve_persistent_server_config(&GatewayOverrides::default())
+        .unwrap()
+        .bootstrap_fingerprint
+        .unwrap();
+    assert_ne!(timeout_changed, chatgpt_base_changed);
 }
 
 #[test]

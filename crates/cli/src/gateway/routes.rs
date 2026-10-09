@@ -255,7 +255,8 @@ pub(super) fn normalize_v1_path_for_base(base: &str, path_and_query: &str) -> St
 
 // Gives alignment adapters a chance to choose an agent-native upstream before default provider
 // routing runs. Today this supports Codex ChatGPT auth; future harness fallbacks should stay in
-// alignment rather than adding provider-shaped checks here.
+// alignment rather than adding provider-shaped checks here. The one exception is rebasing the
+// Codex ChatGPT backend onto `chatgpt_codex_base_url`, because only the gateway holds config.
 pub(super) fn gateway_upstream_url_override(
     route: ProviderRoute,
     headers: &HeaderMap,
@@ -273,6 +274,15 @@ pub(super) fn gateway_upstream_url_override(
             route.configured_auth_header(config),
         ),
     )
+    .map(|url| {
+        match (
+            &config.chatgpt_codex_base_url,
+            url.strip_prefix(alignment::codex::CHATGPT_CODEX_BASE_URL),
+        ) {
+            (Some(base), Some(path)) => format!("{}{path}", base.trim_end_matches('/')),
+            _ => url,
+        }
+    })
 }
 
 // The upstream this request names for itself, composed with the request path.

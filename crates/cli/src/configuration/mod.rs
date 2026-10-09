@@ -76,6 +76,7 @@ struct FileUpstreamConfig {
     openai_auth_header: Option<String>,
     anthropic_base_url: Option<String>,
     anthropic_auth_header: Option<String>,
+    chatgpt_codex_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -321,6 +322,7 @@ fn persistent_bootstrap_fingerprint(
         "openai_auth_header": gateway.openai_auth_header,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
+        "chatgpt_codex_base_url": gateway.chatgpt_codex_base_url,
         "response_timeout_secs": gateway.response_timeout_secs,
         "metadata": gateway.metadata,
         "plugin_config": gateway.plugin_config,
@@ -1653,6 +1655,7 @@ fn apply_file_upstream_config(
         openai_auth_header,
         anthropic_base_url,
         anthropic_auth_header,
+        chatgpt_codex_base_url,
     } = upstream;
     if let Some(value) = response_timeout_secs {
         gateway.response_timeout_secs = value;
@@ -1678,6 +1681,9 @@ fn apply_file_upstream_config(
             "upstream.anthropic_auth_header",
             value,
         )?);
+    }
+    if let Some(value) = chatgpt_codex_base_url {
+        gateway.chatgpt_codex_base_url = Some(value);
     }
     Ok(())
 }
