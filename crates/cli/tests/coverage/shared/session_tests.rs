@@ -9409,6 +9409,66 @@ async fn compound_stop_without_observed_start_emits_one_mark_and_keeps_no_sessio
     assert!(manager.authenticated_owners.lock().await.is_empty());
 }
 
+// Claude Code sends `compact_summary` on `PostCompact`. Codex does not today, but its hooks use
+// the same compaction classifier, so the Codex case feeds a synthetic payload to cover that path.
+#[tokio::test]
+async fn post_compact_mark_omits_summary_text_and_keeps_its_length() {
+    const SUMMARY: &str = "The user asked to rename the billing module and update its callers.";
+    for (kind, session_id) in [
+        (AgentKind::ClaudeCode, "claude-post-compact-summary"),
+        (AgentKind::Codex, "codex-post-compact-summary"),
+    ] {
+        let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+        let captured = Arc::clone(&captured_events);
+        register_filtered_session_subscriber(
+            session_id,
+            tracked_sessions(&[session_id]),
+            Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+        );
+        let adapt = match kind {
+            AgentKind::ClaudeCode => crate::agents::shared::adapters::claude_code::adapt,
+            AgentKind::Codex => crate::agents::shared::adapters::codex::adapt,
+            _ => unreachable!(),
+        };
+        let headers = HeaderMap::new();
+        let outcome = adapt(
+            json!({
+                "session_id": session_id,
+                "hook_event_name": "PostCompact",
+                "trigger": "manual",
+                "compact_summary": SUMMARY
+            }),
+            &headers,
+        );
+        let manager = SessionManager::new(session_test_config());
+        manager
+            .apply_authenticated_events(&headers, outcome.events, "client-a")
+            .await
+            .unwrap();
+        manager.close_all("test_shutdown").await.unwrap();
+        flush_subscribers().unwrap();
+
+        let events = captured_events.lock().unwrap();
+        let mark = events
+            .iter()
+            .find(|event| event.scope_category().is_none() && event.name() == "compaction")
+            .unwrap_or_else(|| panic!("{kind:?} PostCompact must emit a compaction mark"));
+        let data = mark.data().unwrap();
+        assert!(
+            !data.to_string().contains(SUMMARY),
+            "{kind:?} compaction mark must not carry the summary text: {data}"
+        );
+        assert!(data.get("compact_summary").is_none());
+        assert_eq!(
+            data["compact_summary_chars"],
+            json!(SUMMARY.chars().count())
+        );
+        assert_eq!(data["trigger"], json!("manual"));
+        drop(events);
+        assert!(deregister_subscriber(session_id).unwrap());
+    }
+}
+
 #[tokio::test]
 async fn unmatched_tool_completion_applies_tool_sanitizers_without_executing_tools() {
     use nemo_relay::api::registry::{
