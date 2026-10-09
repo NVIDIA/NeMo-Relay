@@ -9,7 +9,7 @@ This project is the complete native plugin used by the authoring guide. Its
 configuration, observation, request policy, execution wrappers, and runtime
 helpers live in separate source modules. Together they register the subscriber,
 all three event sanitizers, five tool surfaces, and six LLM surfaces exposed by
-the current typed 0.10.0 SDK.
+the current typed 0.11.0 SDK.
 
 Relay 0.10 uses native ABI v7. Every LLM execution callback receives codec context
 before its continuation; streaming execution exposes request codec operations but no
