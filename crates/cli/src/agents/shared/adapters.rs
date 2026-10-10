@@ -701,35 +701,6 @@ fn common_session_event_with_fallback(
     }
 }
 
-/// Create a compaction event without the `PostCompact` summary text.
-///
-/// The summary restates the compacted conversation. The default configuration
-/// exports mark data unchanged, and removing the text otherwise requires a
-/// custom mark sanitizer. OpenTelemetry `mark_exclude_names` only keeps listed
-/// marks out of tool projection and leaves their data in place. The text is
-/// therefore dropped here and only its length is kept in
-/// `compact_summary_chars`.
-fn compaction_event_with_fallback(
-    payload: &Value,
-    headers: &HeaderMap,
-    kind: AgentKind,
-    extractor: &dyn AgentPayloadExtractor,
-    fallback_session_id: &str,
-) -> SessionEvent {
-    let mut event =
-        common_session_event_with_fallback(payload, headers, kind, extractor, fallback_session_id);
-    if let Some(object) = event.payload.as_object_mut()
-        && let Some(summary) = object.remove("compact_summary")
-        && let Some(summary) = summary.as_str()
-    {
-        object.insert(
-            "compact_summary_chars".into(),
-            json!(summary.chars().count()),
-        );
-    }
-    event
-}
-
 /// Create a subagent event from an agent hook payload.
 ///
 /// Sparse payloads fall back through the selected extractor and then to a
@@ -1103,7 +1074,7 @@ fn classify_primary(
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::Compaction(compaction_event_with_fallback(
+        NormalizedEvent::Compaction(common_session_event_with_fallback(
             payload,
             headers,
             rules.kind,
@@ -1123,7 +1094,7 @@ fn classify_primary(
                 ))
             }
             "precompact" | "postcompact" | COMPACTION_EVENT_NAME => {
-                NormalizedEvent::Compaction(compaction_event_with_fallback(
+                NormalizedEvent::Compaction(common_session_event_with_fallback(
                     payload,
                     headers,
                     rules.kind,

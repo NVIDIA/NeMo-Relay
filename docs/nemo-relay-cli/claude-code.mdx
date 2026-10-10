@@ -224,8 +224,7 @@ code 2 or returning `"decision": "block"`, so count or react to compactions
 only on `PostCompact` marks. Either mark makes the owning agent
 [fresh](/about-nemo-relay/concepts/events#input-and-output-payloads). Freshness
 only makes the next LLM start retain complete request history, so a mark from a
-blocked compaction drops no history. The `PostCompact` mark records the length
-of `compact_summary` as `compact_summary_chars` instead of the summary text.
+blocked compaction drops no history.
 
 The wrapper requires Claude Code 2.1.121 or newer. Earlier versions do not
 support every required hook event, and `nemo-relay doctor` reports the version
