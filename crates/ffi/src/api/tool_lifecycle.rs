@@ -5,8 +5,8 @@ use super::{
     Arc, FfiScopeHandle, FfiToolHandle, NemoRelayFreeFn, NemoRelayStatus, NemoRelayToolExecCb,
     TASK_SCOPE_STACK, ToolAttributes, ToolExecutionNextFn, c_char, c_str_to_json,
     c_str_to_opt_json, c_str_to_string, clear_last_error, core_tool_api, current_scope_stack,
-    json_to_c_string, set_last_error, status_from_error, tokio_runtime,
-    unix_micros_to_opt_timestamp, wrap_tool_exec_fn,
+    json_to_c_string, set_last_error, status_from_error, unix_micros_to_opt_timestamp,
+    wrap_tool_exec_fn,
 };
 
 // ---------------------------------------------------------------------------
@@ -332,7 +332,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_v2(
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
     let scope_stack = current_scope_stack();
-    let result = tokio_runtime().block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
+    let result = super::block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
         core_tool_api::tool_call_execute(
             core_tool_api::ToolCallExecuteParams::builder()
                 .name(name)

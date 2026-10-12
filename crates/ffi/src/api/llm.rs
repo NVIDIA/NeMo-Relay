@@ -548,7 +548,7 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
     let default_fn: LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
     let scope_stack = current_scope_stack();
-    let result = tokio_runtime().block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
+    let result = super::block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
         core_llm_api::llm_call_execute(
             core_llm_api::LlmCallExecuteParams::builder()
                 .name(parsed.name)
@@ -710,7 +710,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     };
 
     let scope_stack = current_scope_stack();
-    let result = tokio_runtime().block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
+    let result = super::block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
         core_llm_api::llm_stream_call_execute(
             core_llm_api::LlmStreamCallExecuteParams::builder()
                 .name(parsed.name)
@@ -769,7 +769,7 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
         return NemoRelayStatus::NullPointer;
     }
     let stream = unsafe { &*stream };
-    let result = tokio_runtime().block_on(async {
+    let result = super::block_on(async {
         stream.cancel.send_replace(true);
         let mut closed = stream.closed.clone();
         while closed.borrow().is_none() {
@@ -810,7 +810,7 @@ pub unsafe extern "C" fn nemo_relay_stream_next(
         return -1;
     }
     let stream = unsafe { &*stream };
-    let result = tokio_runtime().block_on(async {
+    let result = super::block_on(async {
         let mut guard = stream.receiver.lock().await;
         guard.recv().await
     });

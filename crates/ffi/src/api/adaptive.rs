@@ -18,8 +18,6 @@ use crate::convert::{c_str_to_json, json_to_c_string};
 use crate::error::{NemoRelayStatus, clear_last_error, set_last_error};
 use crate::types::{FfiAdaptiveRuntime, FfiScopeHandle};
 
-use super::tokio_runtime;
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CacheTelemetryOptions {
@@ -167,7 +165,7 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_create(
         Ok(config) => config,
         Err(status) => return status,
     };
-    match tokio_runtime().block_on(AdaptiveRuntime::new(config)) {
+    match super::block_on(AdaptiveRuntime::new(config)) {
         Ok(runtime) => {
             unsafe {
                 *out = Box::into_raw(Box::new(FfiAdaptiveRuntime(std::sync::Mutex::new(Some(
@@ -193,12 +191,10 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_register(
 ) -> NemoRelayStatus {
     clear_last_error();
     match with_runtime_mut(runtime, |runtime| {
-        tokio_runtime()
-            .block_on(runtime.register())
-            .map_err(|error| {
-                set_last_error(&error.to_string());
-                NemoRelayStatus::Internal
-            })
+        super::block_on(runtime.register()).map_err(|error| {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::Internal
+        })
     }) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(status) => status,
@@ -242,7 +238,7 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_shutdown(
         set_last_error("adaptive runtime already shut down");
         return NemoRelayStatus::InvalidArg;
     };
-    match tokio_runtime().block_on(runtime.shutdown()) {
+    match super::block_on(runtime.shutdown()) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(error) => {
             set_last_error(&error.to_string());

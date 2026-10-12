@@ -211,6 +211,32 @@ fn tokio_runtime() -> &'static Runtime {
     })
 }
 
+/// Block on the shared runtime from a foreign thread, a runtime worker, or an
+/// embedder's current-thread runtime.
+pub(crate) fn block_on<F>(future: F) -> F::Output
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Err(_) => tokio_runtime().block_on(future),
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| tokio_runtime().block_on(future))
+        }
+        Ok(_) => {
+            let scope_stack = current_scope_stack();
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(move || {
+                        with_scope_stack(scope_stack, || tokio_runtime().block_on(future))
+                    })
+                    .join()
+            })
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+        }
+    }
+}
+
 /// Prevents a closed Unix worker socket from terminating the embedding process.
 ///
 /// Rust executables configure `SIGPIPE` during startup, but this crate is also
@@ -310,34 +336,6 @@ pub unsafe extern "C" fn nemo_relay_log(
     }
 }
 
-fn block_on_sync_ffi<T, F>(future: F) -> FlowResult<T>
-where
-    T: Send,
-    F: Future<Output = FlowResult<T>> + Send,
-{
-    // These legacy helpers remain synchronous for source compatibility. When
-    // called from Tokio, the caller thread waits while Relay polls the chain on
-    // its runtime. Middleware must not depend on work driven exclusively by
-    // that blocked caller thread.
-    if tokio::runtime::Handle::try_current().is_ok() {
-        let effective_scope_stack = current_scope_stack();
-        return std::thread::scope(|scope| {
-            scope
-                .spawn(move || {
-                    with_scope_stack(effective_scope_stack, || tokio_runtime().block_on(future))
-                })
-                .join()
-        })
-        .map_err(|_| {
-            FlowError::Internal(
-                "synchronous FFI middleware helper thread panicked while awaiting middleware"
-                    .into(),
-            )
-        })?;
-    }
-    tokio_runtime().block_on(future)
-}
-
 // ---------------------------------------------------------------------------
 // Standalone middleware chains
 // ---------------------------------------------------------------------------
@@ -383,7 +381,7 @@ pub unsafe extern "C" fn nemo_relay_tool_request_intercepts(
         Some(a) => a,
         None => return NemoRelayStatus::InvalidJson,
     };
-    match block_on_sync_ffi(core_tool_api::tool_request_intercepts(&name, args)) {
+    match block_on(core_tool_api::tool_request_intercepts(&name, args)) {
         Ok(result) => {
             unsafe { *out = json_to_c_string(&result) };
             NemoRelayStatus::Ok
@@ -424,7 +422,7 @@ pub unsafe extern "C" fn nemo_relay_tool_conditional_execution(
         Some(a) => a,
         None => return NemoRelayStatus::InvalidJson,
     };
-    match block_on_sync_ffi(core_tool_api::tool_conditional_execution(&name, &args)) {
+    match block_on(core_tool_api::tool_conditional_execution(&name, &args)) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
@@ -481,7 +479,7 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercepts(
             return NemoRelayStatus::InvalidJson;
         }
     };
-    match block_on_sync_ffi(core_llm_api::llm_request_intercepts(name_str, request)) {
+    match block_on(core_llm_api::llm_request_intercepts(name_str, request)) {
         Ok(transformed) => {
             let result_json = serde_json::to_value(&transformed).unwrap_or(serde_json::Value::Null);
             unsafe { *out = json_to_c_string(&result_json) };
@@ -647,7 +645,7 @@ pub unsafe extern "C" fn nemo_relay_llm_conditional_execution(
             return NemoRelayStatus::InvalidJson;
         }
     };
-    match block_on_sync_ffi(core_llm_api::llm_conditional_execution(&request)) {
+    match block_on(core_llm_api::llm_conditional_execution(&request)) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
