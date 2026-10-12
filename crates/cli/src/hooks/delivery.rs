@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::io::Read;
-use std::time::Duration;
 
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
@@ -20,9 +19,7 @@ use super::response::{
     HookDeliveryOutcome, handle_hook_forward_response_with_context,
     handle_verified_hook_forward_response_with_context,
 };
-use super::{GatewayMode, HookForwardRequest};
-
-const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
+use super::{GatewayMode, HOOK_FORWARD_TIMEOUT, HookForwardRequest};
 
 pub(crate) async fn hook_forward(mut command: HookForwardRequest) -> Result<(), CliError> {
     let operational = OperationalContext::new();
@@ -192,7 +189,9 @@ fn handle_hook_error(
             error_kind = error.log_kind();
             "Hook delivery failed"
         );
-        Err(error)
+        Err(CliError::HookDelivery {
+            source: Box::new(error),
+        })
     } else {
         log::warn!(
             target: "nemo_relay.hook",
@@ -311,7 +310,7 @@ async fn send_verified_hook_forward_request_with_context(
 
 // Sends the hook payload with gateway-specific headers translated from CLI flags. The reqwest
 // transport result is returned separately so response handling can preserve fail-open semantics.
-async fn send_hook_forward_request(
+pub(super) async fn send_hook_forward_request(
     command: &HookForwardRequest,
     url: &str,
     input: String,

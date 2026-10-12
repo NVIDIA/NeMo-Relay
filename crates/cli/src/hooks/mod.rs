@@ -3,6 +3,9 @@
 
 //! Hook delivery, command encoding, generated definitions, and configuration merging.
 
+// Match the native agent hook budget across gateway and daemon/worker delivery.
+pub(crate) const HOOK_FORWARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 mod config;
 mod delivery;
 mod destination;

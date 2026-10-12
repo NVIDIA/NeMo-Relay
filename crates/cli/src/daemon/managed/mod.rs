@@ -667,7 +667,7 @@ fn hook_bytes(
             };
             group.insert(
                 "hooks".into(),
-                json!([{ "type": "command", "command": command, "timeout": 30 }]),
+                json!([{ "type": "command", "command": command, "timeout": crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs() }]),
             );
             (
                 (*event).to_string(),

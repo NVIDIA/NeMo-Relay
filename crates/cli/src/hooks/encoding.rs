@@ -365,7 +365,7 @@ fn grouped_hooks(events: &[&str], commands: &GeneratedHookCommands) -> Value {
             }
             group.insert(
                 "hooks".into(),
-                json!([{"type": "command", "command": commands.for_event(event), "timeout": 30}]),
+                json!([{"type": "command", "command": commands.for_event(event), "timeout": crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs()}]),
             );
             (
                 (*event).to_string(),

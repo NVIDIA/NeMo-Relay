@@ -4,7 +4,6 @@
 //! Managed hook forwarding through an explicitly selected daemon.
 
 use std::io::{Read, Write};
-use std::time::Duration;
 
 use futures_util::StreamExt;
 use reqwest::header::{CONTENT_TYPE, HeaderValue};
@@ -15,12 +14,11 @@ use crate::daemon::common::client_token::resolve_route_credential;
 use crate::daemon::common::routes::PublicRoute;
 use crate::daemon::common::state::{ROUTE_TOKEN_ENV, RouteCredential};
 use crate::error::CliError;
-use crate::hooks::HookFailurePolicy;
+use crate::hooks::{HOOK_FORWARD_TIMEOUT, HookFailurePolicy};
 use crate::operational::{self, OperationalContext};
 
 pub(crate) const CLIENT_TOKEN_ENV: &str = ROUTE_TOKEN_ENV;
 const CLIENT_TOKEN_HEADER: &str = crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;
-const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]

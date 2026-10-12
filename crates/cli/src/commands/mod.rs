@@ -42,7 +42,9 @@ pub(crate) async fn run(bootstrap_shutdown_token: Option<String>) -> ExitCode {
     match dispatch(bootstrap_shutdown_token).await {
         Ok(code) => code,
         Err(error) => {
-            let exit_code = if error.guardrail_rejection_reason().is_some() {
+            let exit_code = if matches!(error, error::CliError::HookDelivery { .. })
+                || error.guardrail_rejection_reason().is_some()
+            {
                 ExitCode::from(2)
             } else {
                 ExitCode::FAILURE
