@@ -2183,7 +2183,7 @@ describe('LLM intercepts', () => {
       stream = await llmStreamCallExecute('invalid_chunk_cleanup_stream_llm', makeNative(), () => {});
       await assert.rejects(() => stream.next(), /unsupported bigint value/i);
       assert.equal(cleaned, true);
-      await assert.rejects(() => stream.close(), /unsupported bigint value/i);
+      await stream.close();
     } finally {
       await stream?.close().catch(() => {});
       deregisterLlmStreamExecutionIntercept('node_llm_stream_invalid_chunk_cleanup');
@@ -2334,6 +2334,30 @@ describe('LLM intercepts', () => {
     );
   });
 
+  it('default stream provider errors mid-stream reject next and record the exception type', async () => {
+    const events = [];
+    registerSubscriber('node_provider_midstream_error', (event) => events.push(event));
+    let stream;
+    try {
+      stream = await llmStreamCallExecute('provider_midstream_error_llm', makeNative(), async function* () {
+        yield { token: 'first' };
+        throw new RangeError('mid-stream boom');
+      });
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      await assert.rejects(() => stream.next(), /mid-stream boom/);
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find(
+        (event) => event.name === 'provider_midstream_error_llm' && event.scope_category === 'end',
+      );
+      assert.equal(end.metadata['otel.status_code'], 'ERROR');
+      assert.equal(end.metadata['exception.type'], 'RangeError');
+    } finally {
+      await stream?.close().catch(() => {});
+      deregisterSubscriber('node_provider_midstream_error');
+    }
+  });
+
   it('default stream provider receives an abort signal when the consumer closes early', async () => {
     let aborted = false;
     let cleaned = false;
@@ -2356,6 +2380,59 @@ describe('LLM intercepts', () => {
     await stream.close();
     assert.equal(aborted, true);
     assert.equal(cleaned, true);
+  });
+
+  it('close surfaces a provider error once when next has not delivered it', async () => {
+    const stream = await llmStreamCallExecute('provider_error_close_first_llm', makeNative(), async function* () {
+      yield { token: 'first' };
+      throw new RangeError('close-first boom');
+    });
+    assert.deepEqual(await stream.next(), { token: 'first' });
+    await assert.rejects(() => stream.close(), /close-first boom/);
+    await assert.rejects(() => stream.close(), /close-first boom/);
+  });
+
+  it('close surfaces producer cleanup errors after an early close', async () => {
+    const stream = await llmStreamCallExecute(
+      'provider_cleanup_error_llm',
+      makeNative(),
+      async function* (_request, signal) {
+        try {
+          yield { token: 'first' };
+          await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        } finally {
+          throw new Error('cleanup boom');
+        }
+      },
+    );
+    assert.deepEqual(await stream.next(), { token: 'first' });
+    await assert.rejects(() => stream.close(), /cleanup boom/);
+  });
+
+  it('close reports a buffered collector error ahead of a producer cleanup failure', async () => {
+    let collected;
+    const collectorCalled = new Promise((resolve) => {
+      collected = resolve;
+    });
+    const stream = await llmStreamCallExecute(
+      'collector_then_cleanup_error_llm',
+      makeNative(),
+      async function* (_request, signal) {
+        try {
+          yield { token: 'first' };
+          await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        } finally {
+          throw new Error('cleanup boom');
+        }
+      },
+      () => {
+        collected();
+        throw new RangeError('collector boom');
+      },
+      () => ({}),
+    );
+    await collectorCalled;
+    await assert.rejects(() => stream.close(), /collector boom; stream cleanup also failed: .*cleanup boom/);
   });
 
   it('collector errors terminate the stream with the collector error', async () => {

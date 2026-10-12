@@ -303,13 +303,22 @@ impl LlmStreamInner for JsCallbackStream {
         this.cancellation.cancel();
         this.receiver.close();
         let mut closed = this.closed.clone();
+        let completion = this.completion.clone();
         Box::pin(async move {
-            while closed.borrow().is_none() {
-                closed.changed().await.map_err(|_| {
-                    FlowError::Internal("JavaScript stream cleanup ended early".into())
-                })?;
+            let cleanup_ok = closed
+                .wait_for(Option::is_some)
+                .await
+                .map_err(|_| FlowError::Internal("JavaScript stream cleanup ended early".into()))?
+                .as_ref()
+                .is_some_and(Result::is_ok);
+            if cleanup_ok {
+                return Ok(());
             }
-            closed.borrow().clone().expect("close state checked above")
+            // `None` means `poll_next` already delivered the error through `next()`.
+            match completion.terminal_error.lock().unwrap().take() {
+                Some(error) => Err(error),
+                None => Ok(()),
+            }
         })
     }
 }

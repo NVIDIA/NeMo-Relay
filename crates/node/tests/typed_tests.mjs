@@ -839,6 +839,27 @@ describe('typedLlmStreamExecute', () => {
     assert.equal(await stream.next(), null);
   });
 
+  it('propagates iterator errors to the consumer instead of ending the stream', async () => {
+    const passthrough = new JsonPassthrough();
+    async function* failingSource() {
+      yield { token: 'first' };
+      throw new RangeError('typed source boom');
+    }
+
+    const stream = await typedLlmStreamExecute(
+      'stream_iterator_error',
+      makeNative(),
+      failingSource,
+      () => {},
+      () => null,
+      passthrough,
+      passthrough,
+    );
+    assert.deepEqual(await stream.next(), { token: 'first' });
+    await assert.rejects(() => stream.next(), /typed source boom/);
+    await stream.close();
+  });
+
   it('rejects the call when the producer rejects or returns a non-iterable', async () => {
     const passthrough = new JsonPassthrough();
     await assert.rejects(

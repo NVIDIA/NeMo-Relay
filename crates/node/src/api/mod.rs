@@ -1052,25 +1052,25 @@ async fn forward_stream_to_channel(
     mut cancel: tokio::sync::watch::Receiver<bool>,
     closed: tokio::sync::watch::Sender<Option<std::result::Result<(), String>>>,
 ) {
+    // Reserve before pulling so a cancel never consumes a chunk or error it cannot deliver.
     loop {
-        if *cancel.borrow() {
-            break;
-        }
+        let permit = tokio::select! {
+            biased;
+            _ = cancel.changed() => break,
+            permit = tx.reserve() => match permit {
+                Ok(permit) => permit,
+                Err(_) => break,
+            },
+        };
         let item = tokio::select! {
+            biased;
             _ = cancel.changed() => break,
             item = stream.next() => item,
         };
         let Some(item) = item else {
             break;
         };
-        tokio::select! {
-            _ = cancel.changed() => break,
-            result = tx.send(item) => {
-                if result.is_err() {
-                    break;
-                }
-            }
-        }
+        permit.send(item);
     }
     closed.send_replace(Some(
         stream.close().await.map_err(|error| error.to_string()),
@@ -1092,6 +1092,7 @@ pub(crate) fn llm_stream_from_rust_stream(rust_stream: RustJsonStream) -> LlmStr
         cancel,
         closed: closed_rx,
         codec_references: Vec::new(),
+        close_result: tokio::sync::Mutex::new(None),
     }
 }
 
@@ -3882,6 +3883,7 @@ pub fn llm_stream_call_execute(
                                 cancel,
                                 closed: closed_rx,
                                 codec_references,
+                                close_result: tokio::sync::Mutex::new(None),
                             })
                         })
                         .await
