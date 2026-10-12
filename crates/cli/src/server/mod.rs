@@ -519,7 +519,28 @@ impl AppState {
     ) -> Self {
         let sessions = SessionManager::new(config.clone());
         sessions.start_idle_sweeper();
-        let http = gateway_http_client(config.response_timeout(), false);
+        let idle_read_timeout = config.response_timeout();
+        let mut state = Self::with_sessions_and_timeout(config, sessions, idle_read_timeout);
+        state.bootstrap_fingerprint = bootstrap_fingerprint;
+        state.bootstrap_challenge_key = bootstrap_challenge_key;
+        state.require_provider_client_token = require_provider_client_token;
+        state.bootstrap_shutdown = bootstrap_shutdown;
+        state.transparent_proxy_credential = transparent_proxy_credential;
+        state
+    }
+
+    /// Shares the daemon worker's sessions with the managed provider execution pipeline.
+    pub(crate) fn with_sessions(config: GatewayConfig, sessions: SessionManager) -> Self {
+        // Daemon delivery bounds response setup separately and never times out a live body.
+        Self::with_sessions_and_timeout(config, sessions, None)
+    }
+
+    fn with_sessions_and_timeout(
+        config: GatewayConfig,
+        sessions: SessionManager,
+        idle_read_timeout: Option<Duration>,
+    ) -> Self {
+        let http = gateway_http_client(idle_read_timeout, false);
         // A second client for destinations the caller named, which must not follow redirects.
         //
         // Validation applies to the URL that was named; a redirect names a different one, and
@@ -527,19 +548,19 @@ impl AppState {
         // here either -- it covers `Authorization` across origins, and provider keys travel in
         // `x-api-key` and friends, which are ordinary headers to it. So a validated `https`
         // endpoint could 307 a caller's provider key to any host, including over plain http.
-        let http_no_redirect = gateway_http_client(config.response_timeout(), true);
+        let http_no_redirect = gateway_http_client(idle_read_timeout, true);
         Self {
             config,
-            bootstrap_fingerprint,
-            bootstrap_challenge_key,
-            require_provider_client_token,
-            transparent_proxy_credential,
+            bootstrap_fingerprint: None,
+            bootstrap_challenge_key: None,
+            require_provider_client_token: false,
+            transparent_proxy_credential: None,
             http,
             http_no_redirect,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             active_websockets: Arc::new(AtomicUsize::new(0)),
-            bootstrap_shutdown,
+            bootstrap_shutdown: None,
             instance_id: uuid::Uuid::now_v7().to_string(),
             bootstrap_tls: None,
             local_address: None,

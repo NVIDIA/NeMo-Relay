@@ -179,6 +179,53 @@ const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
 const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 64 * 1024;
 const CAPTURED_UPSTREAM_FAILURE_PREFIX: &str = "nemo-relay-gateway-upstream-attempt:";
 
+/// Runs an authenticated daemon request through the same execution chain as the gateway.
+/// The worker strips hop credentials and untrusted dispatch controls before calling this.
+pub(crate) async fn daemon_execute(
+    state: AppState,
+    request: Request<Body>,
+    operational: OperationalContext,
+) -> Result<Response<Body>, CliError> {
+    let path = request.uri().path().to_owned();
+    let authorization = crate::provider_auth::ProviderRequestAuthorization {
+        source_credential:
+            crate::provider_auth::SourceCredentialDisposition::RelayProxyCredential {
+                provider_credential_present: crate::provider_auth::has_provider_credential(
+                    request.headers(),
+                ),
+            },
+        allow_environment_provider_auth: daemon_allows_environment_provider_auth(request.headers()),
+    };
+    let mut prepared =
+        prepare_gateway_request(&state.config, request, authorization, &path).await?;
+    let start = take_llm_gateway_start(&mut prepared);
+    let prep = state
+        .sessions
+        .prepare_gateway_call(&prepared.headers, start)
+        .await?;
+    // Balance daemon session accounting if the caller disconnects before response headers.
+    // After setup, streaming delivery owns its own guard; unary/error paths finish the call.
+    let mut guard = GatewayCallGuard::new(
+        state.sessions.clone(),
+        prep.session_id.clone(),
+        prep.owner_subagent_id.clone(),
+        Arc::new(Mutex::new(None)),
+        prep.session_finish,
+        operational.clone(),
+    );
+    let response_timeout = state.config.response_timeout();
+    let execution = run_managed_gateway(state, prepared, prep, operational);
+    let result = match response_timeout {
+        Some(timeout) => match tokio::time::timeout(timeout, execution).await {
+            Ok(result) => result,
+            Err(_) => return Err(CliError::Launch("provider response-head timeout".into())),
+        },
+        None => execution.await,
+    };
+    guard.sessions.take();
+    result
+}
+
 /// Proxies supported LLM API requests through NeMo Relay's managed execution pipeline.
 ///
 /// The gateway buffers the inbound body once, opens a managed LLM call against the resolved

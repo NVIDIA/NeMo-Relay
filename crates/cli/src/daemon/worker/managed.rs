@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Managed worker execution that keeps response delivery on the raw frame path.
+//! Managed worker execution with raw forwarding or JSON middleware delivery.
 
 use std::collections::BTreeSet;
 use std::error::Error as _;
@@ -97,7 +97,7 @@ impl Drop for GatewayCallCleanup {
 /// Observation is off-path and has its own budget for long-running completions.
 const OBSERVATION_COMPLETION_TIMEOUT: Duration = Duration::from_secs(900);
 const OBSERVATION_QUEUE_FRAMES: usize = 32;
-const DEFAULT_OBSERVATION_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
+const DEFAULT_OBSERVATION_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
 const OBSERVATION_CAPTURE_BYTES_ENV: &str = "NEMO_RELAY_DAEMON_OBSERVATION_CAPTURE_BYTES";
 const OBSERVATION_ACTIVE: u8 = 0;
 const OBSERVATION_COMPLETE: u8 = 1;
@@ -114,6 +114,7 @@ const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
 #[derive(Clone, Copy)]
 pub(super) struct ProviderMiddlewareRequirements {
     request_body_decode_required: bool,
+    managed_execution_required: bool,
 }
 
 /// Runtime-owned plugin activation, hook sessions, and response observation.
@@ -123,6 +124,7 @@ pub(super) struct ManagedRuntime {
     owner: String,
     observation_capture_bytes: usize,
     activation: Mutex<Option<ServerPluginActivation>>,
+    gateway: crate::server::AppState,
 }
 
 impl ManagedRuntime {
@@ -143,25 +145,19 @@ impl ManagedRuntime {
         }
         let sessions = SessionManager::new(config.clone());
         sessions.start_idle_sweeper();
+        let gateway = crate::server::AppState::with_sessions(config.clone(), sessions.clone());
         Ok(Self {
             config,
             sessions,
             owner,
             observation_capture_bytes,
             activation: Mutex::new(activation),
+            gateway,
         })
     }
 
-    /// Rechecks the transport contract before a provider body is polled. Plugin activation is
-    /// normally static, but this also fails closed if a component installs middleware later.
-    #[cfg(test)]
-    pub(super) fn ensure_streaming_transport_compatible(&self) -> Result<(), CliError> {
-        self.provider_middleware_requirements().map(|_| ())
-    }
-
-    /// Snapshots the middleware contract once for an incoming provider request.
-    /// This keeps late registration fail-closed while avoiding separate global
-    /// registry enumeration for raw-delivery compatibility and body decoding.
+    /// Snapshots registered middleware before consuming an incoming provider request.
+    /// Call-changing middleware selects managed execution instead of raw forwarding.
     pub(super) fn provider_middleware_requirements(
         &self,
     ) -> Result<ProviderMiddlewareRequirements, CliError> {
@@ -377,6 +373,13 @@ impl ManagedRuntime {
             return dispatch_unmanaged(upstream, request, route, &self.config).await;
         };
         let operational = OperationalContext::take_from_headers(request.headers_mut());
+        if middleware.managed_execution_required {
+            strip_worker_headers(request.headers_mut());
+            strip_untrusted_dispatch_headers(request.headers_mut());
+            return crate::gateway::daemon_execute(self.gateway.clone(), request, operational)
+                .await
+                .map(|response| response.map(box_body));
+        }
         if !middleware.request_body_decode_required {
             strip_worker_headers(request.headers_mut());
             strip_untrusted_dispatch_headers(request.headers_mut());
@@ -1204,15 +1207,11 @@ fn provider_middleware_requirements() -> Result<ProviderMiddlewareRequirements, 
         RuntimeRegistrationKind::LlmStreamExecutionIntercept,
     ]);
     let registrations = list_runtime_registrations(Some(&kinds)).map_err(CliError::from)?;
-    let incompatible = incompatible_registration_names(&registrations);
-    if !incompatible.is_empty() {
-        return Err(CliError::Config(format!(
-            "daemon worker raw delivery is incompatible with LLM execution middleware: {}",
-            incompatible.join(", ")
-        )));
-    }
+    let managed_execution_required = registrations.iter().any(registration_requires_execution);
     Ok(ProviderMiddlewareRequirements {
-        request_body_decode_required: registrations.iter().any(registration_reads_request_body),
+        request_body_decode_required: managed_execution_required
+            || registrations.iter().any(registration_reads_request_body),
+        managed_execution_required,
     })
 }
 
@@ -1230,23 +1229,14 @@ fn registration_reads_request_body(registration: &RuntimeRegistrationIdentity) -
     )
 }
 
-#[cfg(test)]
-fn reject_incompatible_execution_middleware() -> Result<(), CliError> {
-    provider_middleware_requirements().map(|_| ())
-}
-
-fn incompatible_registration_names(registrations: &[RuntimeRegistrationIdentity]) -> Vec<String> {
-    registrations
-        .iter()
-        .filter(|registration| {
-            matches!(
-                registration.kind,
-                RuntimeRegistrationKind::LlmExecutionIntercept
-                    | RuntimeRegistrationKind::LlmStreamExecutionIntercept
-            )
-        })
-        .map(|registration| registration.effective_name.clone())
-        .collect()
+fn registration_requires_execution(registration: &RuntimeRegistrationIdentity) -> bool {
+    matches!(
+        registration.kind,
+        RuntimeRegistrationKind::LlmRequestIntercept
+            | RuntimeRegistrationKind::LlmConditionalExecutionGuardrail
+            | RuntimeRegistrationKind::LlmExecutionIntercept
+            | RuntimeRegistrationKind::LlmStreamExecutionIntercept
+    )
 }
 
 fn finish_llm_after_dispatch_failure(

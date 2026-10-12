@@ -16,7 +16,8 @@ use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::registry::{RuntimeRegistrationOwner, RuntimeRegistrationOwnerKind};
 use nemo_relay::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
-    register_llm_execution_intercept, register_llm_request_intercept,
+    deregister_llm_stream_execution_intercept, register_llm_execution_intercept,
+    register_llm_request_intercept, register_llm_stream_execution_intercept,
 };
 
 use crate::daemon::common::transport::pooled_client;
@@ -354,7 +355,7 @@ async fn daemon_hop_cannot_supply_worker_local_dispatch_overrides() {
 }
 
 #[test]
-fn execution_middleware_is_explicitly_incompatible_with_raw_delivery() {
+fn execution_middleware_selects_managed_response_delivery() {
     let owner = RuntimeRegistrationOwner {
         kind: RuntimeRegistrationOwnerKind::GlobalApi,
         plugin_kind: None,
@@ -385,10 +386,9 @@ fn execution_middleware_is_explicitly_incompatible_with_raw_delivery() {
         },
     ];
 
-    assert_eq!(
-        incompatible_registration_names(&registrations),
-        ["plugin.buffered", "plugin.streaming"]
-    );
+    assert!(registration_requires_execution(&registrations[0]));
+    assert!(registration_requires_execution(&registrations[1]));
+    assert!(registration_requires_execution(&registrations[2]));
 }
 
 #[test]
@@ -1135,9 +1135,12 @@ async fn managed_runtime_forwards_all_managed_hook_shapes_and_closes_cleanly() {
         );
     }
 
-    runtime
-        .ensure_streaming_transport_compatible()
-        .expect("no incompatible middleware");
+    assert!(
+        !runtime
+            .provider_middleware_requirements()
+            .unwrap()
+            .managed_execution_required
+    );
     runtime.close().await.expect("close managed runtime");
 }
 
@@ -1537,34 +1540,551 @@ struct ExecutionInterceptRegistration(&'static str);
 impl Drop for ExecutionInterceptRegistration {
     fn drop(&mut self) {
         let _ = deregister_llm_execution_intercept(self.0);
+        let _ = deregister_llm_stream_execution_intercept(self.0);
+    }
+}
+
+struct LlmGuardrailRegistration(&'static str);
+
+impl Drop for LlmGuardrailRegistration {
+    fn drop(&mut self) {
+        use nemo_relay::api::registry::*;
+        let _ = deregister_llm_conditional_execution_guardrail(self.0);
+        let _ = deregister_llm_sanitize_request_guardrail(self.0);
+        let _ = deregister_llm_sanitize_response_guardrail(self.0);
+        let _ = nemo_relay::api::subscriber::deregister_subscriber(self.0);
     }
 }
 
 #[tokio::test]
-async fn managed_runtime_rejects_response_mutating_execution_middleware() {
+async fn managed_runtime_accepts_execution_middleware_and_replaces_response() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    const INTERCEPT: &str = "daemon-worker-incompatible-execution-coverage";
-    let _ = deregister_llm_execution_intercept(INTERCEPT);
+    const INTERCEPT: &str = "daemon-worker-execution-replacement";
     let _registration = ExecutionInterceptRegistration(INTERCEPT);
     register_llm_execution_intercept(
         INTERCEPT,
         1,
-        Arc::new(|_name, _request, _context, _next| Box::pin(async { Ok(json!({})) })),
+        Arc::new(|_name, _request, context, _next| {
+            assert!(context.response_codec().is_some());
+            Box::pin(async { Ok(json!({"id": "replacement", "output": []})) })
+        }),
     )
-    .expect("register execution middleware");
-
-    let result =
-        ManagedRuntime::initialize(GatewayConfig::default(), Vec::new(), "machine-owner".into())
-            .await;
-    let error = match result {
-        Ok(_) => panic!("raw worker delivery must reject execution middleware"),
-        Err(error) => error,
-    };
-    assert!(error.to_string().contains(INTERCEPT));
+    .unwrap();
+    // No provider is listening: an intercept can complete the call without dispatch.
+    let runtime = ManagedRuntime::initialize(
+        GatewayConfig {
+            openai_base_url: "http://127.0.0.1:1".into(),
+            ..GatewayConfig::default()
+        },
+        Vec::new(),
+        "machine-owner".into(),
+    )
+    .await
+    .unwrap();
+    let requirements = runtime.provider_middleware_requirements().unwrap();
+    assert!(requirements.request_body_decode_required);
+    assert!(requirements.managed_execution_required);
+    let response = runtime
+        .proxy_provider(
+            pooled_client().unwrap(),
+            Request::post("/v1/responses")
+                .body(Body::from(r#"{"model":"test","input":"hello"}"#))
+                .unwrap(),
+            ProviderRoute::OpenAi,
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["id"],
+        "replacement"
+    );
+    runtime.close().await.unwrap();
 }
 
 #[tokio::test]
-async fn managed_runtime_applies_request_middleware_before_raw_provider_delivery() {
+async fn managed_runtime_executes_unary_and_stream_middleware_before_delivery() {
+    use futures_util::StreamExt;
+    use nemo_relay::api::event::PendingMarkSpec;
+    use nemo_relay::api::registry::{
+        register_llm_conditional_execution_guardrail, register_llm_sanitize_request_guardrail,
+        register_llm_sanitize_response_guardrail,
+    };
+    use nemo_relay::api::runtime::LlmJsonStream;
+    use nemo_relay::api::subscriber::{flush_subscribers, register_subscriber};
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const INTERCEPT: &str = "daemon-worker-execution-transform";
+    const REQUEST: &str = "daemon-worker-execution-request";
+    let _registration = ExecutionInterceptRegistration(INTERCEPT);
+    let _request_registration = RequestInterceptRegistration(REQUEST);
+    let _guardrail_registration = LlmGuardrailRegistration(INTERCEPT);
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+    register_subscriber(
+        INTERCEPT,
+        Arc::new({
+            let recorded = recorded.clone();
+            move |event| recorded.lock().unwrap().push(event.clone())
+        }),
+    )
+    .unwrap();
+    let policy_calls = Arc::new(AtomicUsize::new(0));
+    register_llm_conditional_execution_guardrail(
+        INTERCEPT,
+        1,
+        Arc::new({
+            let calls = policy_calls.clone();
+            move |_| {
+                calls.fetch_add(1, AtomicOrdering::Relaxed);
+                Box::pin(async { Ok(None) })
+            }
+        }),
+    )
+    .unwrap();
+    register_llm_sanitize_request_guardrail(
+        INTERCEPT,
+        1,
+        Arc::new(|mut request, _| {
+            Box::pin(async move {
+                request.content["messages"][0]["content"] = json!("recorded request");
+                Ok(Some(request))
+            })
+        }),
+    )
+    .unwrap();
+    register_llm_sanitize_response_guardrail(
+        INTERCEPT,
+        1,
+        Arc::new(|mut response, _| {
+            Box::pin(async move {
+                response["choices"][0]["message"]["content"] = json!("recorded response");
+                Ok(Some(response))
+            })
+        }),
+    )
+    .unwrap();
+    register_llm_request_intercept(
+        REQUEST,
+        1,
+        false,
+        Arc::new(|_, mut request, annotated| {
+            request
+                .headers
+                .insert("x-request-intercept".into(), json!("applied"));
+            Box::pin(async move {
+                Ok(
+                    LlmRequestInterceptOutcome::new(request, annotated).with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("daemon.request.intercept.mark")
+                            .build(),
+                    ),
+                )
+            })
+        }),
+    )
+    .unwrap();
+    register_llm_execution_intercept(
+        INTERCEPT,
+        1,
+        Arc::new(|_, request, _, next| {
+            Box::pin(async move {
+                let mut result = next(request).await?;
+                result["choices"][0]["message"]["content"] = json!("unary middleware");
+                Ok(result)
+            })
+        }),
+    )
+    .unwrap();
+    register_llm_stream_execution_intercept(
+        INTERCEPT,
+        1,
+        Arc::new(|_, request, context, next| {
+            assert!(context.response_codec().is_none());
+            Box::pin(async move {
+                let stream = next(request).await?;
+                Ok(LlmJsonStream::new(stream.map(|item| {
+                    item.map(|mut chunk| {
+                        chunk["choices"][0]["delta"]["content"] = json!("stream middleware");
+                        chunk
+                    })
+                })))
+            })
+        }),
+    )
+    .unwrap();
+    let release = Arc::new(Notify::new());
+    let app = Router::new().route("/v1/chat/completions", post({
+        let release = release.clone();
+        move |request: Request<Body>| {
+            let release = release.clone();
+            async move {
+                assert_eq!(request.headers()["x-request-intercept"], "applied");
+                assert!(!request.headers().contains_key(WORKER_TOKEN_HEADER));
+                assert!(!request.headers().contains_key(INTERNAL_DISPATCH_URL_HEADER));
+                let body = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap();
+                let request: Value = serde_json::from_slice(&body).unwrap();
+                // Observability sanitizers must not rewrite the provider's input.
+                assert_eq!(request["messages"][0]["content"], "hello");
+                if request["stream"] == true {
+                    let stream = async_stream::stream! {
+                        yield Ok::<_, Infallible>(Bytes::from_static(
+                            b"data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"provider\"}}]}\n\n"));
+                        release.notified().await;
+                        yield Ok(Bytes::from_static(b"data: [DONE]\n\n"));
+                    };
+                    Response::builder().header(CONTENT_TYPE, "text/event-stream")
+                        .body(Body::from_stream(stream)).unwrap()
+                } else {
+                    Response::builder().header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(json!({"id":"test", "object":"chat.completion", "model":"test",
+                            "choices":[{"index":0,"message":{"role":"assistant","content":"provider"},"finish_reason":"stop"}]
+                        }).to_string())).unwrap()
+                }
+            }
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let runtime = ManagedRuntime::initialize(
+        GatewayConfig {
+            openai_base_url: format!("http://{address}"),
+            response_timeout_secs: 1,
+            ..GatewayConfig::default()
+        },
+        Vec::new(),
+        "machine-owner".into(),
+    )
+    .await
+    .unwrap();
+    for streaming in [false, true] {
+        let response = runtime.proxy_provider(
+            pooled_client().unwrap(),
+            Request::post("/v1/chat/completions")
+                .header(WORKER_TOKEN_HEADER, "hop-secret")
+                .header(INTERNAL_DISPATCH_URL_HEADER, "http://untrusted.invalid")
+                .body(Body::from(json!({"model":"test","messages":[{"role":"user","content":"hello"}],"stream":streaming}).to_string())).unwrap(),
+            ProviderRoute::OpenAi,
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        if streaming {
+            let mut body = response.into_body();
+            // The first transformed chunk arrives while the provider is still streaming.
+            let first = tokio::time::timeout(Duration::from_secs(5), body.frame())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .into_data()
+                .unwrap();
+            assert!(String::from_utf8_lossy(&first).contains("stream middleware"));
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(2)).await;
+            release.notify_one();
+            let rest = body.collect().await.unwrap().to_bytes();
+            assert!(String::from_utf8_lossy(&rest).contains("data: [DONE]"));
+            tokio::time::resume();
+        } else {
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let result: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                result["choices"][0]["message"]["content"],
+                "unary middleware"
+            );
+        }
+    }
+    assert_eq!(policy_calls.load(AtomicOrdering::Relaxed), 2);
+    flush_subscribers().unwrap();
+    {
+        let events = recorded.lock().unwrap();
+        assert!(events.iter().any(|event| {
+            event
+                .data()
+                .is_some_and(|data| data["content"]["messages"][0]["content"] == "recorded request")
+        }));
+        assert!(events.iter().any(|event| {
+            event
+                .data()
+                .is_some_and(|data| data["choices"][0]["message"]["content"] == "recorded response")
+        }));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.name() == "daemon.request.intercept.mark")
+                .count(),
+            2
+        );
+    }
+    runtime.close().await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn managed_runtime_conditional_execution_blocks_before_intercepts_or_provider() {
+    use nemo_relay::api::registry::register_llm_conditional_execution_guardrail;
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const GUARDRAIL: &str = "daemon-worker-conditional-block";
+    let _registration = LlmGuardrailRegistration(GUARDRAIL);
+    let _request_registration = RequestInterceptRegistration(GUARDRAIL);
+    let intercept_calls = Arc::new(AtomicUsize::new(0));
+    register_llm_request_intercept(
+        GUARDRAIL,
+        1,
+        false,
+        Arc::new({
+            let calls = intercept_calls.clone();
+            move |_, request, annotated| {
+                calls.fetch_add(1, AtomicOrdering::Relaxed);
+                Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
+            }
+        }),
+    )
+    .unwrap();
+    register_llm_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|_| Box::pin(async { Ok(Some("blocked by worker policy".into())) })),
+    )
+    .unwrap();
+    let runtime = ManagedRuntime::initialize(
+        GatewayConfig {
+            openai_base_url: "http://127.0.0.1:1".into(),
+            ..GatewayConfig::default()
+        },
+        Vec::new(),
+        "machine-owner".into(),
+    )
+    .await
+    .unwrap();
+    for streaming in [false, true] {
+        let error = runtime.proxy_provider(pooled_client().unwrap(),
+            Request::post("/v1/chat/completions")
+                .body(Body::from(json!({"model":"test","messages":[{"role":"user","content":"hello"}],"stream":streaming}).to_string())).unwrap(),
+            ProviderRoute::OpenAi,
+        ).await.unwrap_err();
+        assert!(error.to_string().contains("blocked by worker policy"));
+    }
+    assert_eq!(intercept_calls.load(AtomicOrdering::Relaxed), 0);
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn managed_runtime_execution_cancellation_releases_session() {
+    use nemo_relay::api::runtime::LlmJsonStream;
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const INTERCEPT: &str = "daemon-worker-execution-cancellation";
+    let _registration = ExecutionInterceptRegistration(INTERCEPT);
+    let started = Arc::new(Notify::new());
+    register_llm_execution_intercept(
+        INTERCEPT,
+        1,
+        Arc::new({
+            let started = started.clone();
+            move |_, _, _, _| {
+                let started = started.clone();
+                Box::pin(async move {
+                    started.notify_one();
+                    std::future::pending().await
+                })
+            }
+        }),
+    )
+    .unwrap();
+    register_llm_stream_execution_intercept(
+        INTERCEPT,
+        1,
+        Arc::new(|_, _, _, _| {
+            Box::pin(async { Ok(LlmJsonStream::new(futures_util::stream::pending())) })
+        }),
+    )
+    .unwrap();
+    let runtime = Arc::new(
+        ManagedRuntime::initialize(GatewayConfig::default(), Vec::new(), "machine-owner".into())
+            .await
+            .unwrap(),
+    );
+    let request = |streaming| {
+        Request::post("/v1/chat/completions")
+        .body(Body::from(json!({"model":"test","messages":[{"role":"user","content":"hello"}],"stream":streaming}).to_string())).unwrap()
+    };
+    let task = tokio::spawn({
+        let runtime = runtime.clone();
+        let request = request(false);
+        async move {
+            runtime
+                .proxy_provider(pooled_client().unwrap(), request, ProviderRoute::OpenAi)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+    assert!(runtime.sessions.has_open_sessions().await);
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while runtime.sessions.has_open_sessions().await {
+            runtime
+                .sessions
+                .close_idle_sessions_at(
+                    std::time::Instant::now(),
+                    Duration::ZERO,
+                    "cancelled_execution_test_call",
+                )
+                .await
+                .unwrap();
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let response = runtime
+        .proxy_provider(
+            pooled_client().unwrap(),
+            request(true),
+            ProviderRoute::OpenAi,
+        )
+        .await
+        .unwrap();
+    assert!(runtime.sessions.has_open_sessions().await);
+    drop(response);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while runtime.sessions.has_open_sessions().await {
+            runtime
+                .sessions
+                .close_idle_sessions_at(
+                    std::time::Instant::now(),
+                    Duration::ZERO,
+                    "cancelled_execution_test_call",
+                )
+                .await
+                .unwrap();
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn managed_runtime_execution_response_setup_honors_deadline() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const INTERCEPT: &str = "daemon-worker-execution-timeout";
+    let _registration = ExecutionInterceptRegistration(INTERCEPT);
+    register_llm_execution_intercept(
+        INTERCEPT,
+        1,
+        Arc::new(|_, _, _, _| Box::pin(std::future::pending())),
+    )
+    .unwrap();
+    let runtime = ManagedRuntime::initialize(
+        GatewayConfig {
+            response_timeout_secs: 1,
+            ..GatewayConfig::default()
+        },
+        Vec::new(),
+        "machine-owner".into(),
+    )
+    .await
+    .unwrap();
+    tokio::time::pause();
+    let result = runtime
+        .proxy_provider(
+            pooled_client().unwrap(),
+            Request::post("/v1/responses")
+                .body(Body::from(r#"{"model":"test","input":"hello"}"#))
+                .unwrap(),
+            ProviderRoute::OpenAi,
+        )
+        .await;
+    tokio::time::resume();
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("response-head timeout")
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while runtime.sessions.has_open_sessions().await {
+            runtime
+                .sessions
+                .close_idle_sessions_at(
+                    std::time::Instant::now(),
+                    Duration::ZERO,
+                    "timed_out_execution_test_call",
+                )
+                .await
+                .unwrap();
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn managed_runtime_execution_preserves_selected_provider_error() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const INTERCEPT: &str = "daemon-worker-execution-error";
+    let _registration = ExecutionInterceptRegistration(INTERCEPT);
+    register_llm_execution_intercept(
+        INTERCEPT,
+        1,
+        Arc::new(|_, request, _, next| Box::pin(async move { next(request).await })),
+    )
+    .unwrap();
+    let app = Router::new().route(
+        "/v1/responses",
+        post(|| async {
+            Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .header("retry-after", "3")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from("{\"error\":\"busy\"}\n"))
+                .unwrap()
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let runtime = ManagedRuntime::initialize(
+        GatewayConfig {
+            openai_base_url: format!("http://{address}"),
+            ..GatewayConfig::default()
+        },
+        Vec::new(),
+        "machine-owner".into(),
+    )
+    .await
+    .unwrap();
+    let response = runtime
+        .proxy_provider(
+            pooled_client().unwrap(),
+            Request::post("/v1/responses")
+                .body(Body::from(r#"{"model":"test","input":"hello"}"#))
+                .unwrap(),
+            ProviderRoute::OpenAi,
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()["retry-after"], "3");
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        "{\"error\":\"busy\"}\n"
+    );
+    runtime.close().await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn managed_runtime_applies_request_middleware_before_provider_delivery() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const INTERCEPT: &str = "daemon-worker-managed-request-coverage";
     let _ = deregister_llm_request_intercept(INTERCEPT);
@@ -1573,11 +2093,17 @@ async fn managed_runtime_applies_request_middleware_before_raw_provider_delivery
         INTERCEPT,
         1,
         false,
-        Arc::new(|_name, mut request, annotated| {
+        Arc::new(|_name, mut request, mut annotated| {
             request
                 .headers
                 .insert("x-worker-intercept".into(), json!("applied"));
-            request.content["input"] = json!("rewritten by middleware");
+            annotated.as_mut().unwrap().messages =
+                vec![nemo_relay::codec::request::Message::User {
+                    content: nemo_relay::codec::request::MessageContent::Text(
+                        "rewritten by middleware".into(),
+                    ),
+                    name: None,
+                }];
             Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
@@ -1598,7 +2124,7 @@ async fn managed_runtime_applies_request_middleware_before_raw_provider_delivery
                     Response::builder()
                         .status(StatusCode::OK)
                         .header(CONTENT_TYPE, "text/event-stream")
-                        .body(Body::from("data: raw provider result\n\n"))
+                        .body(Body::from("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"test\",\"output\":[]}}\n\n"))
                         .expect("provider response")
                 },
             ),
@@ -1634,14 +2160,13 @@ async fn managed_runtime_applies_request_middleware_before_raw_provider_delivery
         )
         .await
         .expect("managed provider dispatch");
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let mut decoder = SseEventDecoder::new();
+    let events = decoder.push_bytes_results(&body);
+    assert_eq!(events.len(), 1);
     assert_eq!(
-        response
-            .into_body()
-            .collect()
-            .await
-            .expect("provider response body")
-            .to_bytes(),
-        "data: raw provider result\n\n"
+        events[0].as_ref().unwrap().data,
+        json!({"type":"response.completed","response":{"id":"test","output":[]}})
     );
     let (headers, body) = captured
         .lock()
@@ -1649,9 +2174,10 @@ async fn managed_runtime_applies_request_middleware_before_raw_provider_delivery
         .take()
         .expect("provider saw request");
     assert_eq!(headers["x-worker-intercept"], "applied");
-    assert_eq!(
-        serde_json::from_slice::<Value>(&body).expect("rewritten request JSON")["input"],
-        "rewritten by middleware"
+    assert!(
+        serde_json::from_slice::<Value>(&body).unwrap()["input"]
+            .to_string()
+            .contains("rewritten by middleware")
     );
     runtime.close().await.expect("close managed runtime");
     provider.abort();
@@ -1667,8 +2193,8 @@ async fn managed_runtime_rejects_request_middleware_that_changes_stream_mode() {
         INTERCEPT,
         1,
         false,
-        Arc::new(|_name, mut request, annotated| {
-            request.content["stream"] = json!(false);
+        Arc::new(|_name, request, mut annotated| {
+            annotated.as_mut().unwrap().stream = Some(false);
             Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
@@ -1691,7 +2217,7 @@ async fn managed_runtime_rejects_request_middleware_that_changes_stream_mode() {
         )
         .await
         .expect_err("stream-mode mutation must fail closed");
-    assert!(error.to_string().contains(STREAM_MODE_MUTATION_ERROR));
+    assert!(error.to_string().contains("cannot change stream mode"));
     runtime.close().await.expect("close managed runtime");
 }
 
@@ -1732,7 +2258,11 @@ async fn managed_helper_error_and_metadata_paths_are_explicit() {
     insert_metadata(&mut metadata, "key", json!("value"));
     assert_eq!(metadata, json!({"key": "value"}));
     assert!(!request_body_decode_required().expect("empty middleware registry"));
-    assert!(reject_incompatible_execution_middleware().is_ok());
+    assert!(
+        !provider_middleware_requirements()
+            .unwrap()
+            .managed_execution_required
+    );
 }
 
 #[test]
