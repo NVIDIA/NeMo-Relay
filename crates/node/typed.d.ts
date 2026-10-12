@@ -214,21 +214,23 @@ export interface TypedLlmStreamExecuteOptions {
  * @param name - Model/provider name.
  * @param request - The LLM request object ({headers, content}).
  * @param func - Async iterable producer for typed stream chunks; receives the request and an `AbortSignal`.
- * @param collector - Callback invoked with each decoded typed chunk.
- * @param finalizer - Callback that returns the final typed aggregate response.
+ * @param collector - Callback invoked with each decoded typed chunk; may return a Promise.
+ * @param finalizer - Callback that returns the final typed aggregate response, directly or through a Promise.
  * @param chunkCodec - Codec for stream chunk serialization/deserialization.
  * @param responseCodec - Codec for final response serialization/deserialization.
  * @param options - Optional scope handle, attributes, data, metadata, modelName.
  * @returns A promise resolving to the native `LlmStream` handle.
- * @remarks Consumers that stop reading early must await `stream.close()`, which
- * aborts the signal and waits for producer cleanup.
+ * @remarks If `collector` throws or rejects, the stream fails with that error.
+ * If `finalizer` throws or rejects, the aggregate is `null`. Consumers that stop
+ * reading early must await `stream.close()`, which aborts the signal and waits
+ * for producer cleanup.
  */
 export declare function typedLlmStreamExecute<TRequest extends LlmRequestShape, TChunk, TResponse>(
   name: string,
   request: TRequest,
   func: (request: TRequest, signal: AbortSignal) => AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>,
-  collector: (chunk: TChunk) => void,
-  finalizer: () => TResponse,
+  collector: (chunk: TChunk) => void | Promise<void>,
+  finalizer: () => TResponse | Promise<TResponse>,
   chunkCodec: Codec<TChunk>,
   responseCodec: Codec<TResponse>,
   options?: TypedLlmStreamExecuteOptions,

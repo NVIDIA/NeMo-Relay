@@ -211,8 +211,8 @@ async function typedLlmExecute(name, request, func, responseJsonCodec, options) 
  * @param {string} name - Model/provider name.
  * @param {*} request - The LLM request object ({headers, content}).
  * @param {function(*, AbortSignal): AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>} func - The streaming LLM implementation.
- * @param {function(TChunk): void} collector - Called with each typed chunk after intercepts.
- * @param {function(): TResponse} finalizer - Called once when the stream is exhausted or closed early.
+ * @param {function(TChunk): void | Promise<void>} collector - Called with each typed chunk after intercepts.
+ * @param {function(): TResponse | Promise<TResponse>} finalizer - Called once when the stream is exhausted or closed early.
  * @param {Codec<TChunk>} chunkJsonCodec - Codec for serializing/deserializing chunks.
  * @param {Codec<TResponse>} responseJsonCodec - Codec for serializing/deserializing the final response.
  * @param {object} [options] - Optional parameters.
@@ -245,7 +245,7 @@ async function typedLlmStreamExecute(name, request, func, collector, finalizer, 
     return encodeChunks(source, chunkJsonCodec);
   };
   const jsonCollector = (jsonChunk) => collector(chunkJsonCodec.fromJson(jsonChunk));
-  const jsonFinalizer = () => collectCodecReturn(responseJsonCodec.toJson(finalizer()));
+  const jsonFinalizer = async () => collectCodecReturn(responseJsonCodec.toJson(await finalizer()));
 
   return lib.llmStreamCallExecute(
     name,

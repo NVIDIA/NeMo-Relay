@@ -2358,6 +2358,172 @@ describe('LLM intercepts', () => {
     assert.equal(cleaned, true);
   });
 
+  it('collector errors terminate the stream with the collector error', async () => {
+    const events = [];
+    registerSubscriber('node_collector_error', (event) => events.push(event));
+    let stream;
+    try {
+      stream = await llmStreamCallExecute(
+        'collector_error_stream_llm',
+        makeNative(),
+        async function* () {
+          yield { token: 'first' };
+          yield { token: 'second' };
+        },
+        () => {
+          throw new RangeError('collector boom');
+        },
+        () => ({}),
+      );
+      await assert.rejects(() => stream.next(), /collector boom/);
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find((event) => event.name === 'collector_error_stream_llm' && event.scope_category === 'end');
+      assert.equal(end.metadata['otel.status_code'], 'ERROR');
+      assert.equal(end.metadata['exception.type'], 'RangeError');
+    } finally {
+      await stream?.close().catch(() => {});
+      deregisterSubscriber('node_collector_error');
+    }
+  });
+
+  it('finalizer errors are recorded and yield a null aggregated response', async () => {
+    clearLastCallbackError();
+    const events = [];
+    registerSubscriber('node_finalizer_error', (event) => events.push(event));
+    try {
+      const stream = await llmStreamCallExecute(
+        'finalizer_error_stream_llm',
+        makeNative(),
+        async function* () {
+          yield { token: 'only' };
+        },
+        null,
+        () => {
+          throw new Error('finalizer boom');
+        },
+      );
+      assert.deepEqual(await stream.next(), { token: 'only' });
+      assert.equal(await stream.next(), null);
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find((event) => event.name === 'finalizer_error_stream_llm' && event.scope_category === 'end');
+      assert.equal(end.data, null);
+      assert.match(getLastCallbackError() ?? '', /JS finalizer callback failed: finalizer boom/);
+    } finally {
+      clearLastCallbackError();
+      deregisterSubscriber('node_finalizer_error');
+    }
+  });
+
+  it('async collector rejections terminate the stream with the collector error', async () => {
+    const events = [];
+    registerSubscriber('node_async_collector_error', (event) => events.push(event));
+    let stream;
+    try {
+      stream = await llmStreamCallExecute(
+        'async_collector_error_stream_llm',
+        makeNative(),
+        async function* () {
+          yield { token: 'first' };
+          yield { token: 'second' };
+        },
+        async () => {
+          await new Promise((resolve) => setImmediate(resolve));
+          throw new RangeError('async collector boom');
+        },
+        () => ({}),
+      );
+      await assert.rejects(() => stream.next(), /async collector boom/);
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find(
+        (event) => event.name === 'async_collector_error_stream_llm' && event.scope_category === 'end',
+      );
+      assert.equal(end.metadata['otel.status_code'], 'ERROR');
+      assert.equal(end.metadata['exception.type'], 'RangeError');
+    } finally {
+      await stream?.close().catch(() => {});
+      deregisterSubscriber('node_async_collector_error');
+    }
+  });
+
+  it('async collectors and finalizers settle before the stream continues', async () => {
+    const events = [];
+    const collected = [];
+    let releaseSecond;
+    const secondGate = new Promise((resolve) => {
+      releaseSecond = resolve;
+    });
+    registerSubscriber('node_async_collector_finalizer', (event) => events.push(event));
+    try {
+      const stream = await llmStreamCallExecute(
+        'async_collector_finalizer_stream_llm',
+        makeNative(),
+        async function* () {
+          yield { token: 'first' };
+          yield { token: 'second' };
+        },
+        async (chunk) => {
+          await new Promise((resolve) => setImmediate(resolve));
+          if (chunk.token === 'second') {
+            await secondGate;
+          }
+          collected.push(chunk.token);
+        },
+        async () => {
+          await new Promise((resolve) => setImmediate(resolve));
+          return { text: collected.join(' ') };
+        },
+      );
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      assert.deepEqual(collected, ['first']);
+      releaseSecond();
+      assert.deepEqual(await stream.next(), { token: 'second' });
+      assert.deepEqual(collected, ['first', 'second']);
+      assert.equal(await stream.next(), null);
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find(
+        (event) => event.name === 'async_collector_finalizer_stream_llm' && event.scope_category === 'end',
+      );
+      assert.deepEqual(end.data, { text: 'first second' });
+    } finally {
+      deregisterSubscriber('node_async_collector_finalizer');
+    }
+  });
+
+  it('async finalizer rejections are recorded and yield a null aggregated response', async () => {
+    clearLastCallbackError();
+    const events = [];
+    registerSubscriber('node_async_finalizer_error', (event) => events.push(event));
+    try {
+      const stream = await llmStreamCallExecute(
+        'async_finalizer_error_stream_llm',
+        makeNative(),
+        async function* () {
+          yield { token: 'only' };
+        },
+        null,
+        async () => {
+          throw new Error('async finalizer boom');
+        },
+      );
+      assert.deepEqual(await stream.next(), { token: 'only' });
+      assert.equal(await stream.next(), null);
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find(
+        (event) => event.name === 'async_finalizer_error_stream_llm' && event.scope_category === 'end',
+      );
+      assert.equal(end.data, null);
+      assert.match(getLastCallbackError() ?? '', /JS finalizer callback failed: async finalizer boom/);
+    } finally {
+      clearLastCallbackError();
+      deregisterSubscriber('node_async_finalizer_error');
+    }
+  });
+
   it('stream execution next honors concurrent per-call scope-stack replacements', async () => {
     const firstStack = lib.createScopeStack();
     const secondStack = lib.createScopeStack();
@@ -2516,6 +2682,84 @@ describe('LLM intercepts', () => {
     });
   });
 
+  it('awaiting collectors and finalizers do not starve the runtime', () => {
+    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const script = `
+      import { availableParallelism } from 'node:os';
+      import { createRequire } from 'node:module';
+      const require = createRequire(import.meta.url);
+      const lib = require(${modulePath});
+      const request = {
+        headers: {},
+        content: { messages: [], model: 'test-model' },
+      };
+      const count = availableParallelism() * 2;
+      const streams = await Promise.all(
+        Array.from({ length: count }, (_, index) =>
+          lib.llmStreamCallExecute(
+            \`starvation-\${index}\`,
+            request,
+            async function* () {
+              yield { token: 'first' };
+              yield { token: 'second' };
+            },
+            async () => {
+              await lib.flushSubscribers();
+            },
+            async () => {
+              await lib.llmCallExecuteAsync(\`starvation-inner-\${index}\`, request, async () => ({}));
+              return {};
+            },
+          ),
+        ),
+      );
+      await Promise.all(
+        streams.map(async (stream) => {
+          while ((await stream.next()) !== null) {}
+          await stream.close();
+        }),
+      );
+    `;
+
+    execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
+      stdio: 'inherit',
+      timeout: 10_000,
+    });
+  });
+
+  it('abandoned streams with a collector and finalizer do not keep Node alive', () => {
+    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const script = `
+      import { createRequire } from 'node:module';
+      const require = createRequire(import.meta.url);
+      const lib = require(${modulePath});
+      const request = {
+        headers: {},
+        content: { messages: [], model: 'test-model' },
+      };
+      const stream = await lib.llmStreamCallExecute(
+        'process-exit-abandoned-llm',
+        request,
+        async function* () {
+          yield { token: 'first' };
+          await new Promise(() => {});
+        },
+        () => {},
+        () => ({}),
+      );
+      globalThis.retainedStream = stream;
+      const first = await stream.next();
+      if (first?.token !== 'first') {
+        throw new Error('expected the first chunk before abandoning the stream');
+      }
+    `;
+
+    execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
+      stdio: 'inherit',
+      timeout: 5_000,
+    });
+  });
+
   it('stream execution intercept rejects invalid next request payloads', async () => {
     registerLlmStreamExecutionIntercept('node_llm_stream_invalid_next', 10, async (_native, _context, next) => {
       return next({
@@ -2627,6 +2871,8 @@ describe('LLM intercepts', () => {
       declarations,
       /llmStreamCallExecute\([^\n]*func: \(request: Json, signal: AbortSignal\) => AsyncIterable<Json> \| Promise<AsyncIterable<Json>>/,
     );
+    assert.match(declarations, /llmStreamCallExecute\([^\n]*collector\?: \(chunk: Json\) => void \| Promise<void>/);
+    assert.match(declarations, /llmStreamCallExecute\([^\n]*finalizer\?: \(\) => Json \| Promise<Json>/);
   });
 
   it('generated middleware declarations expose Promise-aware callback types', () => {

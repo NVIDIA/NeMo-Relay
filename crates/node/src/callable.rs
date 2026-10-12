@@ -690,13 +690,6 @@ pub fn wrap_js_event_metadata_injector_promise_fn(
     })
 }
 
-fn recv_json_or_null(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Json {
-    rx.recv().unwrap_or_else(|e| {
-        record_callback_error(format!("{error_prefix}: {e}"));
-        Json::Null
-    })
-}
-
 fn recv_json_result(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Result<Json> {
     rx.recv()
         .map_err(|e| FlowError::Internal(format!("{error_prefix}: {e}")))
@@ -1269,55 +1262,124 @@ pub fn wrap_js_llm_exec_fn(
     })
 }
 
-/// Wrap a JS function `(chunk: object) => void` as a collector callback.
+pub(crate) struct JsCollectorCall {
+    chunk: Json,
+    complete: std::sync::mpsc::SyncSender<Json>,
+}
+
+pub(crate) struct JsFinalizerCall {
+    complete: std::sync::mpsc::SyncSender<Json>,
+}
+
+fn completion_envelope_callback(
+    env: &Env,
+    name: &str,
+    complete: std::sync::mpsc::SyncSender<Json>,
+) -> napi::Result<JsUnknown> {
+    let callback = env.create_function_from_closure(name, move |ctx| {
+        let envelope = ctx.get::<Json>(0).unwrap_or_else(|error| {
+            serde_json::json!({
+                "ok": false,
+                "error": format!("completion envelope is not JSON-compatible: {error}"),
+            })
+        });
+        let _ = complete.send(envelope);
+        ctx.env.get_undefined()
+    })?;
+    // SAFETY: `callback` is a live handle just created in this same `env`.
+    Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), callback.raw()) })
+}
+
+pub(crate) fn js_collector_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<JsCollectorCall, ErrorStrategy::Fatal>> {
+    let mut tsfn = callback_factory::wrap_collector_callback(env, func)?
+        .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<JsCollectorCall>| {
+            let JsCollectorCall { chunk, complete } = ctx.value;
+            let chunk = json_to_js_unknown(&ctx.env, chunk)?;
+            let complete = completion_envelope_callback(
+                &ctx.env,
+                "__nemo_relay_collector_complete",
+                complete,
+            )?;
+            Ok(vec![chunk, complete])
+        })?;
+    // An abandoned stream must not keep the Node event loop alive.
+    tsfn.unref(env)?;
+    Ok(tsfn)
+}
+
+pub(crate) fn js_finalizer_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<JsFinalizerCall, ErrorStrategy::Fatal>> {
+    let mut tsfn = callback_factory::wrap_finalizer_callback(env, func)?
+        .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<JsFinalizerCall>| {
+            let complete = completion_envelope_callback(
+                &ctx.env,
+                "__nemo_relay_finalizer_complete",
+                ctx.value.complete,
+            )?;
+            Ok(vec![complete])
+        })?;
+    // An abandoned stream must not keep the Node event loop alive.
+    tsfn.unref(env)?;
+    Ok(tsfn)
+}
+
+fn queue_js_stream_callback<T: 'static>(
+    func: &ThreadsafeFunction<T, ErrorStrategy::Fatal>,
+    call: T,
+    name: &str,
+) -> Result<()> {
+    let status = func.call(call, ThreadsafeFunctionCallMode::Blocking);
+    if status == napi::Status::Ok {
+        return Ok(());
+    }
+    let message = format!("nemo_relay: failed to queue JS {name} callback: {status:?}");
+    record_callback_error(message.clone());
+    Err(FlowError::Internal(message))
+}
+
+/// Wrap a JS collector `(chunk: object) => void | Promise<void>` for a streaming LLM call.
 ///
-/// The collector is called with each intercepted chunk during a streaming LLM response.
-/// It is used to accumulate chunks on the JavaScript side for aggregation.
-/// If the JS function throws, the error is currently swallowed and treated as
-/// `Ok(())` because `ErrorStrategy::Fatal` aborts the process on JS exceptions.
-/// For practical purposes, a non-throwing collector always returns `Ok(())`.
+/// If the collector throws or rejects, the stream terminates with that error.
 pub fn wrap_js_collector_fn(
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    func: ThreadsafeFunction<JsCollectorCall, ErrorStrategy::Fatal>,
 ) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
     Box::new(move |chunk: Json| {
-        let status = func.call(chunk, ThreadsafeFunctionCallMode::Blocking);
-        if status == napi::Status::Ok {
-            Ok(())
-        } else {
-            let message = format!("nemo_relay: failed to queue JS collector callback: {status:?}");
-            record_callback_error(message.clone());
-            Err(FlowError::Internal(message))
-        }
+        let (complete, rx) = std::sync::mpsc::sync_channel(1);
+        queue_js_stream_callback(&func, JsCollectorCall { chunk, complete }, "collector")?;
+        // The collector may await Relay APIs on this runtime, so do not park the worker.
+        tokio::task::block_in_place(|| {
+            recv_middleware_json_result(rx, "JS collector callback failed")
+        })
+        .map(|_| ())
     })
 }
 
-/// Wrap a JS function `() => object` as a finalizer callback.
+/// Wrap a JS finalizer `() => object | Promise<object>` for a streaming LLM call.
 ///
-/// The finalizer is called exactly once when the stream is exhausted.
-/// It takes no arguments and must return a JSON value representing the
-/// aggregated response.
+/// If the finalizer throws, rejects, or returns a non-JSON value, the aggregated
+/// response is `null`.
 pub fn wrap_js_finalizer_fn(
-    func: ThreadsafeFunction<(), ErrorStrategy::Fatal>,
+    func: ThreadsafeFunction<JsFinalizerCall, ErrorStrategy::Fatal>,
 ) -> Box<dyn FnOnce() -> Json + Send> {
     Box::new(move || {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let status = func.call_with_return_value(
-            (),
-            ThreadsafeFunctionCallMode::Blocking,
-            move |val: Option<Json>| {
-                let _ = tx.send(callback_json(val));
-                Ok(())
-            },
-        );
-        if status != napi::Status::Ok {
-            record_callback_error(format!(
-                "nemo_relay: failed to queue JS finalizer callback: {status:?}"
-            ));
+        let (complete, rx) = std::sync::mpsc::sync_channel(1);
+        if queue_js_stream_callback(&func, JsFinalizerCall { complete }, "finalizer").is_err() {
             return Json::Null;
         }
-        // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
-        // errors through the type system. Log the error so failures are not silent.
-        recv_json_or_null(rx, "nemo_relay: JS finalizer callback failed")
+        // Also runs from the core wrapper's `Drop`. `block_in_place` runs inline outside a runtime
+        // and panics only on a `current_thread` runtime; the napi tokio runtime is multi-threaded.
+        tokio::task::block_in_place(|| {
+            recv_middleware_json_or_value(
+                rx,
+                "nemo_relay: JS finalizer callback failed",
+                Json::Null,
+            )
+        })
     })
 }
 

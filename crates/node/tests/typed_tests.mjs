@@ -871,6 +871,40 @@ describe('typedLlmStreamExecute', () => {
     );
   });
 
+  it('awaits async collectors and finalizers', async () => {
+    const passthrough = new JsonPassthrough();
+    const events = [];
+    const collected = [];
+    registerSubscriber('typed_async_collector_finalizer_sub', (event) => events.push(event));
+    try {
+      const stream = await typedLlmStreamExecute(
+        'typed_async_collector_finalizer_llm',
+        makeNative(),
+        async function* () {
+          yield { token: 'first' };
+        },
+        async (chunk) => {
+          await new Promise((resolve) => setImmediate(resolve));
+          collected.push(chunk.token);
+        },
+        async () => ({ text: collected.join('') }),
+        passthrough,
+        passthrough,
+      );
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      assert.deepEqual(collected, ['first']);
+      assert.equal(await stream.next(), null);
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find(
+        (event) => event.scope_category === 'end' && event.name === 'typed_async_collector_finalizer_llm',
+      );
+      assert.deepEqual(end.data, { text: 'first' });
+    } finally {
+      deregisterSubscriber('typed_async_collector_finalizer_sub');
+    }
+  });
+
   it('stream with envelopeCodec for chunks and response', async () => {
     const native = makeNative();
 

@@ -2922,11 +2922,9 @@ pub fn test_closed_llm_response_callback(
 
 /// Internal test helper: invoke a closed JS collector wrapper and surface the queue failure.
 #[napi(js_name = "__testClosedCollectorCallback")]
-pub fn test_closed_collector_callback(
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-    chunk: Json,
-) -> Result<()> {
+pub fn test_closed_collector_callback(env: Env, callback: JsFunction, chunk: Json) -> Result<()> {
     clear_recorded_callback_error();
+    let callback = callable::js_collector_tsfn(&env, &callback)?;
     let _ = callback.clone().abort();
     let mut wrapped = callable::wrap_js_collector_fn(callback);
     wrapped(chunk).map_err(to_napi_err)
@@ -2934,13 +2932,12 @@ pub fn test_closed_collector_callback(
 
 /// Internal test helper: invoke a closed JS finalizer wrapper and return the fallback value.
 #[napi(js_name = "__testClosedFinalizerCallback")]
-pub fn test_closed_finalizer_callback(
-    callback: ThreadsafeFunction<(), ErrorStrategy::Fatal>,
-) -> Json {
+pub fn test_closed_finalizer_callback(env: Env, callback: JsFunction) -> Result<Json> {
     clear_recorded_callback_error();
+    let callback = callable::js_finalizer_tsfn(&env, &callback)?;
     let _ = callback.clone().abort();
     let wrapped = callable::wrap_js_finalizer_fn(callback);
-    wrapped()
+    Ok(wrapped())
 }
 
 /// Internal test helper: exercise PromiseAwareFn queue and conversion failures.
@@ -3773,7 +3770,9 @@ pub fn llm_call_execute_async(
 /// The optional `collector` callback is invoked with each intercepted chunk as JSON,
 /// allowing the caller to accumulate chunks for aggregation. The optional `finalizer`
 /// callback is invoked once when the stream is exhausted or closed early and
-/// must return a JSON value representing the aggregated response. Consumers that
+/// must return a JSON value representing the aggregated response. Both may return a
+/// Promise. If the collector throws or rejects, the stream fails with that error. If
+/// the finalizer throws or rejects, the aggregated response is `null`. Consumers that
 /// stop reading early must await `stream.close()`, which aborts the signal and waits
 /// for producer cleanup.
 #[allow(clippy::too_many_arguments)]
@@ -3786,8 +3785,8 @@ pub fn llm_stream_call_execute(
         ts_arg_type = "(request: Json, signal: AbortSignal) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
     )]
     func: JsFunction,
-    collector: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
-    finalizer: Option<ThreadsafeFunction<(), ErrorStrategy::Fatal>>,
+    #[napi(ts_arg_type = "(chunk: Json) => void | Promise<void>")] collector: Option<JsFunction>,
+    #[napi(ts_arg_type = "() => Json | Promise<Json>")] finalizer: Option<JsFunction>,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
@@ -3807,12 +3806,12 @@ pub fn llm_stream_call_execute(
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
 
     let wrapped_collector: Box<dyn FnMut(Json) -> FlowResult<()> + Send> = match collector {
-        Some(cb) => callable::wrap_js_collector_fn(cb),
+        Some(cb) => callable::wrap_js_collector_fn(callable::js_collector_tsfn(&env, &cb)?),
         None => Box::new(|_: Json| Ok(())),
     };
 
     let wrapped_finalizer: Box<dyn FnOnce() -> Json + Send> = match finalizer {
-        Some(cb) => callable::wrap_js_finalizer_fn(cb),
+        Some(cb) => callable::wrap_js_finalizer_fn(callable::js_finalizer_tsfn(&env, &cb)?),
         None => Box::new(|| Json::Null),
     };
 
