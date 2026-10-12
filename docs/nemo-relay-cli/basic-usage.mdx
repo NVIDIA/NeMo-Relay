@@ -712,6 +712,13 @@ Manually authored commands fail open when neither policy flag is present.
 `NEMO_RELAY_FAIL_CLOSED=1` changes that default for compatibility, while an
 explicit flag takes precedence over the environment.
 
+Fail-closed delivery failures return exit code `2`, including connection errors,
+timeouts, and HTTP errors such as a daemon's `503` response when a required
+worker is unavailable. This applies to gateway hooks and managed daemon hooks,
+including hooks routed through a daemon worker. Fail-open delivery failures
+return exit code `0`; structured guardrail rejections return exit code `2` under
+either policy.
+
 These flags control delivery and metadata:
 
 - `--gateway-url <url>` selects the Relay gateway that receives the payload.

@@ -1379,14 +1379,14 @@ fn write_fake_hook_response(stream: &mut impl Write, hook_delay: Option<Duration
 #[test]
 fn cli_codex_hook_rejects_compatible_json_without_bootstrap_proof() {
     let (output, requests) = run_fake_bootstrap_listener(FakeBootstrapProof::Missing);
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
     assert!(requests.iter().all(|request| !request.starts_with("POST ")));
 }
 
 #[test]
 fn cli_codex_hook_rejects_an_invalid_bootstrap_proof() {
     let (output, requests) = run_fake_bootstrap_listener(FakeBootstrapProof::Wrong);
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
     assert!(requests.iter().all(|request| !request.starts_with("POST ")));
 }
 
@@ -1474,7 +1474,7 @@ fn cli_codex_hook_launch_resolution_error_respects_forwarding_policy() {
     for fail_closed in [false, true] {
         let output =
             run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, b"{}", true);
-        assert_eq!(output.status.success(), !fail_closed);
+        assert_eq!(output.status.code(), Some(if fail_closed { 2 } else { 0 }));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS"));
         assert!(output.stdout.is_empty());
@@ -5564,7 +5564,7 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
     let output = child.wait_with_output().unwrap();
     let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
 
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
     assert!(request.contains("POST /hooks/codex HTTP/1.1"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("HTTP 503"));
 }
@@ -5593,20 +5593,51 @@ fn cli_hook_forward_exits_two_for_guardrail_rejection() {
 }
 
 #[test]
-fn cli_hook_forward_reports_transport_failure_when_fail_closed() {
-    let mut child = Command::new(gateway_bin())
-        .args(["hook-forward", "codex", "--fail-closed"])
-        .env("NEMO_RELAY_GATEWAY_URL", "http://127.0.0.1:1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.take().unwrap().write_all(b"{}").unwrap();
-    let output = child.wait_with_output().unwrap();
-
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("hook forward failed"));
+fn cli_hook_delivery_transport_failures_respect_policy_in_gateway_and_daemon_modes() {
+    let temp = tempfile::tempdir().unwrap();
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x71_u8; 32]);
+    for daemon in [false, true] {
+        for agent in ["codex", "claude"] {
+            for fail_closed in [false, true] {
+                let mut command = Command::new(gateway_bin());
+                if daemon {
+                    command.args([
+                        "daemon",
+                        "hook",
+                        agent,
+                        "--daemon-address",
+                        "http://127.0.0.1:1",
+                    ]);
+                } else {
+                    command.args(["hook-forward", agent]);
+                }
+                let mut child = command
+                    .arg(if fail_closed {
+                        "--fail-closed"
+                    } else {
+                        "--fail-open"
+                    })
+                    .env("XDG_CONFIG_HOME", temp.path())
+                    .env("NEMO_RELAY_CLIENT_TOKEN", &token)
+                    .env("NEMO_RELAY_GATEWAY_URL", "http://127.0.0.1:1")
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                child.stdin.take().unwrap().write_all(b"{}").unwrap();
+                let output = child.wait_with_output().unwrap();
+                assert_eq!(
+                    output.status.code(),
+                    Some(if fail_closed { 2 } else { 0 }),
+                    "daemon={daemon} agent={agent}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(output.stdout.is_empty());
+                assert!(String::from_utf8_lossy(&output.stderr).contains("hook"));
+            }
+        }
+    }
 }
 
 #[test]
@@ -5629,7 +5660,7 @@ fn cli_hook_forward_bounds_responses_under_both_failure_policies() {
         child.stdin.take().unwrap().write_all(b"{}").unwrap();
         let output = child.wait_with_output().unwrap();
 
-        assert_eq!(output.status.success(), !fail_closed);
+        assert_eq!(output.status.code(), Some(if fail_closed { 2 } else { 0 }));
         assert!(output.stdout.is_empty());
         assert!(
             String::from_utf8_lossy(&output.stderr)
@@ -6345,6 +6376,46 @@ fn cli_daemon_mcp_initializes_while_activation_fails_and_honors_strict_routing()
             }),
             "{response}"
         );
+        for agent in ["codex", "claude", "pi"] {
+            for policy in [None, Some("--fail-open"), Some("--fail-closed")] {
+                let mut command = Command::new(gateway_bin());
+                command
+                    .env("XDG_CONFIG_HOME", &config_home)
+                    .env("NEMO_RELAY_CLIENT_TOKEN", &token)
+                    .env_remove("NEMO_RELAY_FAIL_CLOSED")
+                    .args([
+                        "daemon",
+                        "hook",
+                        agent,
+                        "--daemon-address",
+                        &format!("http://{address}"),
+                    ])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                if let Some(policy) = policy {
+                    command.arg(policy);
+                }
+                let mut hook = command.spawn().unwrap();
+                hook.stdin
+                    .take()
+                    .unwrap()
+                    .write_all(br#"{"hook_event_name":"PreToolUse"}"#)
+                    .unwrap();
+                let output = wait_child_with_output(hook);
+                let blocks = strict && policy != Some("--fail-open");
+                assert_eq!(
+                    output.status.code(),
+                    Some(if blocks { 2 } else { 0 }),
+                    "strict={strict} agent={agent} policy={policy:?}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                if strict {
+                    assert!(output.stdout.is_empty());
+                    assert!(String::from_utf8_lossy(&output.stderr).contains("HTTP 503"));
+                }
+            }
+        }
         drop(mcp.child_mut().stdin.take());
         assert!(
             wait_child_with_output_timeout(mcp.release(), Duration::from_secs(10))

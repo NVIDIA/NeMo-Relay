@@ -460,6 +460,52 @@ fn hook_response_statuses_preserve_guardrail_rejections_and_fail_closed_errors()
     assert!(error.contains("HTTP 502"), "{error}");
 }
 
+#[tokio::test]
+async fn hook_response_timeouts_respect_failure_policy() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = axum::Router::new().route(
+        "/hook",
+        axum::routing::post(|| async {
+            std::future::pending::<()>().await;
+            "{}"
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_millis(25))
+        .build()
+        .unwrap();
+    for fail_closed in [false, true] {
+        let error = client
+            .post(format!("http://{address}/hook"))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(error.is_timeout(), "{error}");
+        let outcome = super::response::handle_hook_forward_response_with_context(
+            Err(error),
+            fail_closed,
+            &crate::operational::OperationalContext::new(),
+        )
+        .await;
+        if fail_closed {
+            assert!(matches!(
+                outcome.unwrap_err(),
+                crate::error::CliError::HookDelivery { .. }
+            ));
+        } else {
+            assert_eq!(
+                outcome.unwrap(),
+                super::response::HookDeliveryOutcome::FailedOpen
+            );
+        }
+    }
+    server.abort();
+    let _ = server.await;
+}
+
 #[test]
 fn merge_hooks_is_idempotent_and_preserves_existing_entries() {
     let existing = json!({
