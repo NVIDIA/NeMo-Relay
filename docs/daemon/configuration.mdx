@@ -395,8 +395,8 @@ than four tokens at the same time; idle tokens are released automatically.
 
 ### Requests Without a Bound Credential
 
-A missing credential means telemetry and guardrails are skipped for that
-request; the coding agent keeps working:
+On the daemon's public HTTP routes, a missing credential means telemetry and
+guardrails are skipped for that request; the coding agent keeps working:
 
 - A public request with no `x-nemo-relay-client-token` header, or with a
   well-formed credential that no MCP session has bound (for example, after a
@@ -426,8 +426,14 @@ request; the coding agent keeps working:
   rate-limited, without the credential.
 
 On the client side, `nemo-relay daemon hook` with no resolvable credential does
-not contact the daemon. It writes the same pass-through response and exits `0`,
-regardless of `--fail-open` or `--fail-closed`, and logs a warning.
+not contact the daemon. It honors the same hook failure policy in daemon and
+daemon-worker deployments: `--fail-closed` reports a delivery failure, writes no
+allow response, and exits nonzero. Without an explicit flag, policy events such
+as `PreToolUse` and `pre_tool_call`, or `NEMO_RELAY_FAIL_CLOSED=1`, also fail
+closed. `--fail-open` overrides the default policy; fail-open hooks write the
+same pass-through response, exit `0`, and log a warning. Restore the credential
+through `NEMO_RELAY_CLIENT_TOKEN` or the client token file before retrying a
+fail-closed hook.
 `nemo-relay daemon mcp` with no resolvable credential keeps serving the MCP
 protocol without registering a route, so hosts that require the server keep
 running. It does the same, without retrying, when the daemon rejects its

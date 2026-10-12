@@ -272,8 +272,9 @@ The hook process performs the following actions:
 1. Reads the agent's native hook payload from standard input.
 2. Resolves the route credential from `NEMO_RELAY_CLIENT_TOKEN`, then from the
    per-user token file. Without a usable credential it does not contact the
-   daemon: it writes the agent's pass-through response and exits `0`,
-   regardless of the failure policy.
+   daemon: a fail-open hook writes the agent's pass-through response and exits
+   `0`. A fail-closed hook reports a delivery failure, writes no allow response,
+   and exits `2`.
 3. Posts to the existing agent-specific hook path at the daemon root.
 4. Adds `x-nemo-relay-client-token` exactly once.
 5. Writes a successful, nonempty hook response to standard output without

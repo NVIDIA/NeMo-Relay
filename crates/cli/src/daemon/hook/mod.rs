@@ -30,8 +30,8 @@ pub(crate) struct Options {
 
 /// Reads one native hook payload, sends it to the daemon, and relays the response to stdout.
 ///
-/// Without a usable route credential the daemon is not contacted: the hook emits the daemon's own
-/// pass-through response for the agent and succeeds, regardless of the failure policy.
+/// Without a usable route credential the daemon is not contacted: fail-closed hooks report a
+/// delivery failure, while fail-open hooks emit the daemon's pass-through response for the agent.
 pub(crate) async fn run(options: Options) -> Result<(), CliError> {
     let credential = resolve_route_credential().map(|resolved| resolved.credential);
     run_with(
@@ -52,7 +52,20 @@ async fn run_with(
     let operational = OperationalContext::new();
     operational::hook_started(&operational, "daemon_hook_forward");
     let payload = read_hook_payload_with_context(input, &operational);
+    let fail_closed = effective_fail_closed(options.failure_policy, payload.as_deref().ok());
     let Some(credential) = credential else {
+        if fail_closed {
+            let error = CliError::Unauthorized(format!(
+                "No NeMo Relay client credential is available; set {CLIENT_TOKEN_ENV} or run `nemo-relay daemon token ensure`"
+            ));
+            operational::hook_failed(
+                &operational,
+                "daemon_hook_forward",
+                error.log_kind(),
+                fail_closed,
+            );
+            return handle_delivery_failure(error, fail_closed);
+        }
         log::warn!(
             target: "nemo_relay.hook",
             event = "daemon_hook_pass_through",
@@ -64,7 +77,6 @@ async fn run_with(
         operational::hook_completed(&operational, "daemon_hook_forward", "pass_through");
         return Ok(());
     };
-    let fail_closed = effective_fail_closed(options.failure_policy, payload.as_deref().ok());
     let result: Result<(), CliError> = async {
         let token = route_token_header(&credential)?;
         let payload = payload?;
