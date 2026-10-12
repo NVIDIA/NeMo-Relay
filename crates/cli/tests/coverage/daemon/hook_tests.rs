@@ -286,7 +286,7 @@ async fn non_guardrail_http_failures_and_oversized_responses_are_rejected() {
 }
 
 #[tokio::test]
-async fn missing_credential_passes_through_without_contacting_the_daemon_even_fail_closed() {
+async fn missing_credential_honors_failure_policy_without_contacting_the_daemon() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let daemon_address = format!("http://{}", listener.local_addr().unwrap());
@@ -295,25 +295,56 @@ async fn missing_credential_passes_through_without_contacting_the_daemon_even_fa
         (CodingAgent::Codex, &b"{}"[..]),
         (CodingAgent::Pi, &b"{}"[..]),
     ] {
-        for failure_policy in [
-            HookFailurePolicy::FailClosed,
-            HookFailurePolicy::FailOpen,
-            HookFailurePolicy::Default,
+        for (failure_policy, payload, blocks) in [
+            (HookFailurePolicy::FailClosed, &b"{}"[..], true),
+            (
+                HookFailurePolicy::FailClosed,
+                &br#"{"hook_event_name":"PostToolUse"}"#[..],
+                true,
+            ),
+            (
+                HookFailurePolicy::FailOpen,
+                &br#"{"hook_event_name":"PreToolUse"}"#[..],
+                false,
+            ),
+            (
+                HookFailurePolicy::Default,
+                &br#"{"hook_event_name":"PreToolUse"}"#[..],
+                true,
+            ),
+            (
+                HookFailurePolicy::Default,
+                &br#"{"event":"pre_tool_call"}"#[..],
+                true,
+            ),
+            (
+                HookFailurePolicy::Default,
+                &br#"{"type":"tool_call"}"#[..],
+                true,
+            ),
+            (HookFailurePolicy::FailClosed, &b"not-json"[..], true),
         ] {
             let mut output = Vec::new();
-            run_with(
+            let result = run_with(
                 Options {
                     agent,
                     daemon_address: daemon_address.clone(),
                     failure_policy,
                 },
-                &br#"{"hook_event_name":"PreToolUse"}"#[..],
+                payload,
                 None,
                 &mut output,
             )
-            .await
-            .expect("missing credential passes through");
-            assert_eq!(output, expected, "{agent:?} {failure_policy:?}");
+            .await;
+            if blocks {
+                let error = result.expect_err("missing credential must fail closed");
+                assert!(matches!(error, CliError::HookDelivery { .. }), "{error}");
+                assert!(error.to_string().contains("client credential"), "{error}");
+                assert!(output.is_empty(), "{agent:?} {failure_policy:?}");
+            } else {
+                result.expect("explicit fail-open passes through");
+                assert_eq!(output, expected, "{agent:?} {failure_policy:?}");
+            }
         }
     }
     assert_eq!(

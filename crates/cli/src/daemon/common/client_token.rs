@@ -135,7 +135,7 @@ pub(crate) fn client_token_path() -> Option<PathBuf> {
 /// Resolves the route credential: a valid environment value, else a safe valid token file.
 ///
 /// Invalid or unsafe sources are skipped with one redacted warning per process rather than
-/// failing, so a caller with no usable credential can fall back to pass-through behavior.
+/// failing, so callers apply their own missing-credential policy.
 pub(crate) fn resolve_route_credential() -> Option<ResolvedCredential> {
     resolve_route_credential_from(
         std::env::var_os(ROUTE_TOKEN_ENV),
