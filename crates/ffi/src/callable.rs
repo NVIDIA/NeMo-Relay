@@ -110,7 +110,7 @@ pub fn wrap_conditional_middleware_guardrail_fn(
         let result_ptr = unsafe { cb(ud.ptr, c_kinds, c_name.as_ptr()) };
         unsafe { nemo_relay_string_free_internal(c_kinds) };
         if result_ptr.is_null() {
-            return None;
+            return last_error_message();
         }
         let result = ptr_to_opt_string(result_ptr);
         unsafe { nemo_relay_string_free_internal(result_ptr) };
@@ -1215,14 +1215,18 @@ pub fn wrap_event_sanitize_fn(
     Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
         let ud = ud.clone();
         Box::pin(async move {
+            clear_last_error();
             let ffi_event = FfiEvent((*event).clone());
             let fields_json =
                 json_to_c_string(&serde_json::to_value(&fields).unwrap_or(Json::Null));
             let result_ptr = unsafe { cb(ud.ptr, &ffi_event, fields_json) };
             unsafe { nemo_relay_string_free_internal(fields_json) };
-            let result = serde_json::from_value(ptr_to_json(result_ptr)).map_err(|error| {
-                FlowError::Internal(format!("invalid event sanitizer result: {error}"))
-            });
+            let result = json_result_from_ptr(result_ptr, "event sanitizer callback failed")
+                .and_then(|value| {
+                    serde_json::from_value(value).map_err(|error| {
+                        FlowError::Internal(format!("invalid event sanitizer result: {error}"))
+                    })
+                });
             unsafe { nemo_relay_string_free_internal(result_ptr) };
             result
         })

@@ -457,6 +457,15 @@ unsafe extern "C" fn null_event_sanitize_cb(
     std::ptr::null_mut()
 }
 
+unsafe extern "C" fn failing_event_sanitize_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+    _fields_json: *const c_char,
+) -> *mut c_char {
+    set_last_error("sanitizer boom");
+    std::ptr::null_mut()
+}
+
 fn make_request() -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::new(),
@@ -927,14 +936,21 @@ fn assert_event_callbacks() {
         resolve(invalid(Arc::new(event.clone()), original_fields.clone()))
             .unwrap_err()
             .to_string()
-            .contains("invalid event sanitizer result")
+            .contains("event sanitizer callback failed: invalid JSON")
     );
     let null = wrap_event_sanitize_fn(null_event_sanitize_cb, std::ptr::null_mut(), None);
-    assert!(
-        resolve(null(Arc::new(event), original_fields.clone()))
+    assert_eq!(
+        resolve(null(Arc::new(event.clone()), original_fields.clone()))
             .unwrap_err()
-            .to_string()
-            .contains("invalid event sanitizer result")
+            .to_string(),
+        "internal error: event sanitizer callback failed"
+    );
+    let failing = wrap_event_sanitize_fn(failing_event_sanitize_cb, std::ptr::null_mut(), None);
+    assert_eq!(
+        resolve(failing(Arc::new(event), original_fields.clone()))
+            .unwrap_err()
+            .to_string(),
+        "internal error: sanitizer boom"
     );
 
     let handle = LlmHandle::builder()
