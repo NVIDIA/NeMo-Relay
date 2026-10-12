@@ -2486,7 +2486,7 @@ describe('LLM intercepts', () => {
     }
   });
 
-  it('finalizer errors are recorded and yield a null aggregated response', async () => {
+  it('finalizer errors are thrown by close and yield a null aggregated response', async () => {
     clearLastCallbackError();
     const events = [];
     registerSubscriber('node_finalizer_error', (event) => events.push(event));
@@ -2504,7 +2504,8 @@ describe('LLM intercepts', () => {
       );
       assert.deepEqual(await stream.next(), { token: 'only' });
       assert.equal(await stream.next(), null);
-      await stream.close();
+      await assert.rejects(() => stream.close(), /JS finalizer callback failed: finalizer boom/);
+      await assert.rejects(() => stream.close(), /JS finalizer callback failed: finalizer boom/);
       await flushSubscribers();
       const end = events.find((event) => event.name === 'finalizer_error_stream_llm' && event.scope_category === 'end');
       assert.equal(end.data, null);
@@ -2592,7 +2593,7 @@ describe('LLM intercepts', () => {
     }
   });
 
-  it('async finalizer rejections are recorded and yield a null aggregated response', async () => {
+  it('async finalizer rejections are thrown by close and yield a null aggregated response', async () => {
     clearLastCallbackError();
     const events = [];
     registerSubscriber('node_async_finalizer_error', (event) => events.push(event));
@@ -2610,7 +2611,8 @@ describe('LLM intercepts', () => {
       );
       assert.deepEqual(await stream.next(), { token: 'only' });
       assert.equal(await stream.next(), null);
-      await stream.close();
+      await assert.rejects(() => stream.close(), /JS finalizer callback failed: async finalizer boom/);
+      await assert.rejects(() => stream.close(), /JS finalizer callback failed: async finalizer boom/);
       await flushSubscribers();
       const end = events.find(
         (event) => event.name === 'async_finalizer_error_stream_llm' && event.scope_category === 'end',

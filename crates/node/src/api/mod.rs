@@ -1092,6 +1092,7 @@ pub(crate) fn llm_stream_from_rust_stream(rust_stream: RustJsonStream) -> LlmStr
         cancel,
         closed: closed_rx,
         codec_references: Vec::new(),
+        finalizer_error: Default::default(),
         close_result: tokio::sync::Mutex::new(None),
     }
 }
@@ -2937,7 +2938,7 @@ pub fn test_closed_finalizer_callback(env: Env, callback: JsFunction) -> Result<
     clear_recorded_callback_error();
     let callback = callable::js_finalizer_tsfn(&env, &callback)?;
     let _ = callback.clone().abort();
-    let wrapped = callable::wrap_js_finalizer_fn(callback);
+    let wrapped = callable::wrap_js_finalizer_fn(callback, Default::default());
     Ok(wrapped())
 }
 
@@ -3811,8 +3812,12 @@ pub fn llm_stream_call_execute(
         None => Box::new(|_: Json| Ok(())),
     };
 
+    let finalizer_error = callable::FinalizerError::default();
     let wrapped_finalizer: Box<dyn FnOnce() -> Json + Send> = match finalizer {
-        Some(cb) => callable::wrap_js_finalizer_fn(callable::js_finalizer_tsfn(&env, &cb)?),
+        Some(cb) => callable::wrap_js_finalizer_fn(
+            callable::js_finalizer_tsfn(&env, &cb)?,
+            finalizer_error.clone(),
+        ),
         None => Box::new(|| Json::Null),
     };
 
@@ -3883,6 +3888,7 @@ pub fn llm_stream_call_execute(
                                 cancel,
                                 closed: closed_rx,
                                 codec_references,
+                                finalizer_error,
                                 close_result: tokio::sync::Mutex::new(None),
                             })
                         })

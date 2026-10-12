@@ -14,6 +14,7 @@ use serde_json::Value as Json;
 use std::sync::Arc;
 
 use crate::api::PersistentJsFunction;
+use crate::callable::FinalizerError;
 
 /// An async iterator over chunks from a streaming LLM response.
 ///
@@ -25,6 +26,7 @@ pub struct LlmStream {
     pub(crate) cancel: tokio::sync::watch::Sender<bool>,
     pub(crate) closed: tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>>,
     pub(crate) codec_references: Vec<Arc<PersistentJsFunction>>,
+    pub(crate) finalizer_error: FinalizerError,
     pub(crate) close_result: tokio::sync::Mutex<Option<std::result::Result<(), String>>>,
 }
 
@@ -47,8 +49,9 @@ impl LlmStream {
 
     /// Stop the producer and wait for its cleanup to complete.
     ///
-    /// Throws a producer error that `next()` has not yet thrown, then any
-    /// cleanup error. Further calls return the same result.
+    /// Throws a producer error that `next()` has not yet thrown, then a
+    /// finalizer failure, then any cleanup error. Further calls return the
+    /// same result.
     #[napi]
     pub async fn close(&self) -> Result<()> {
         let mut close_result = self.close_result.lock().await;
@@ -74,7 +77,16 @@ impl LlmStream {
                 undelivered_error.get_or_insert(error);
             }
         }
-        let result = combine_close_errors(undelivered_error.map(|error| error.to_string()), result);
+        let finalizer_error = self
+            .finalizer_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let result = combine_close_errors([
+            undelivered_error.map(|error| error.to_string()),
+            finalizer_error,
+            result.err(),
+        ]);
         *close_result = Some(result.clone());
         result.map_err(napi::Error::from_reason)
     }
@@ -86,15 +98,12 @@ impl Drop for LlmStream {
     }
 }
 
-fn combine_close_errors(
-    stream_error: Option<String>,
-    cleanup: std::result::Result<(), String>,
-) -> std::result::Result<(), String> {
-    match (stream_error, cleanup) {
-        (None, cleanup) => cleanup,
-        (Some(error), Ok(())) => Err(error),
-        (Some(error), Err(cleanup)) => {
-            Err(format!("{error}; stream cleanup also failed: {cleanup}"))
-        }
-    }
+fn combine_close_errors(errors: [Option<String>; 3]) -> std::result::Result<(), String> {
+    let mut errors = errors.into_iter().flatten();
+    let Some(first) = errors.next() else {
+        return Ok(());
+    };
+    Err(errors.fold(first, |acc, next| {
+        format!("{acc}; stream cleanup also failed: {next}")
+    }))
 }

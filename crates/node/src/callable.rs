@@ -276,20 +276,6 @@ fn recv_middleware_json_result(
     unwrap_middleware_result(value, error_prefix)
 }
 
-fn recv_middleware_json_or_value(
-    rx: std::sync::mpsc::Receiver<Json>,
-    error_prefix: &str,
-    fallback: Json,
-) -> Json {
-    match recv_middleware_json_result(rx, error_prefix) {
-        Ok(value) => value,
-        Err(error) => {
-            record_callback_error(error.to_string());
-            fallback
-        }
-    }
-}
-
 fn recv_middleware_option_string_result(
     rx: std::sync::mpsc::Receiver<Json>,
     error_prefix: &str,
@@ -1359,26 +1345,34 @@ pub fn wrap_js_collector_fn(
     })
 }
 
+/// Finalizer failure shared with the stream handle so `close()` can report it.
+pub(crate) type FinalizerError = Arc<std::sync::Mutex<Option<String>>>;
+
 /// Wrap a JS finalizer `() => object | Promise<object>` for a streaming LLM call.
 ///
 /// If the finalizer throws, rejects, or returns a non-JSON value, the aggregated
-/// response is `null`.
+/// response is `null` and the failure is stored in `error`.
 pub fn wrap_js_finalizer_fn(
     func: ThreadsafeFunction<JsFinalizerCall, ErrorStrategy::Fatal>,
+    error: FinalizerError,
 ) -> Box<dyn FnOnce() -> Json + Send> {
     Box::new(move || {
         let (complete, rx) = std::sync::mpsc::sync_channel(1);
-        if queue_js_stream_callback(&func, JsFinalizerCall { complete }, "finalizer").is_err() {
-            return Json::Null;
-        }
         // Also runs from the core wrapper's `Drop`. `block_in_place` runs inline outside a runtime
         // and panics only on a `current_thread` runtime; the napi tokio runtime is multi-threaded.
-        tokio::task::block_in_place(|| {
-            recv_middleware_json_or_value(
-                rx,
-                "nemo_relay: JS finalizer callback failed",
-                Json::Null,
-            )
+        let result = queue_js_stream_callback(&func, JsFinalizerCall { complete }, "finalizer")
+            .and_then(|()| {
+                tokio::task::block_in_place(|| {
+                    recv_middleware_json_result(rx, "nemo_relay: JS finalizer callback failed")
+                })
+            });
+        result.unwrap_or_else(|failure| {
+            let message = failure.to_string();
+            record_callback_error(message.clone());
+            *error
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(message);
+            Json::Null
         })
     })
 }

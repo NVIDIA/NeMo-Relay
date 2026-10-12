@@ -221,9 +221,9 @@ export interface TypedLlmStreamExecuteOptions {
  * @param options - Optional scope handle, attributes, data, metadata, modelName.
  * @returns A promise resolving to the native `LlmStream` handle.
  * @remarks If `collector` throws or rejects, the stream fails with that error.
- * If `finalizer` throws or rejects, the aggregate is `null`. Consumers that stop
- * reading early must await `stream.close()`, which aborts the signal and waits
- * for producer cleanup.
+ * If `finalizer` throws or rejects, the aggregate is `null` and `stream.close()`
+ * throws the failure. Consumers that stop reading early must await
+ * `stream.close()`, which aborts the signal and waits for producer cleanup.
  */
 export declare function typedLlmStreamExecute<TRequest extends LlmRequestShape, TChunk, TResponse>(
   name: string,
