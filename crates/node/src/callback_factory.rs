@@ -237,18 +237,25 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         }
         resolve();
         const iterator = value[Symbol.asyncIterator]();
-        let exhausted = false;
+        // Like `for await`, a finished or failed `next()` leaves nothing for `return()` to clean up.
+        let finished = false;
         try {
           while (!controller.signal.aborted) {
-            const item = await iterator.next();
+            let item;
+            try {
+              item = await iterator.next();
+            } catch (error) {
+              finished = true;
+              throw error;
+            }
             if (item.done) {
-              exhausted = true;
+              finished = true;
               break;
             }
             await streamPush(jsonValue(item.value === undefined ? null : item.value));
           }
         } finally {
-          if (!exhausted && typeof iterator.return === 'function') {
+          if (!finished && typeof iterator.return === 'function') {
             await iterator.return();
           }
         }

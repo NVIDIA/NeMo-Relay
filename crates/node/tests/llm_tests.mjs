@@ -2358,6 +2358,28 @@ describe('LLM intercepts', () => {
     }
   });
 
+  it('default stream provider errors are not replaced by a failing iterator return', async () => {
+    let returned = false;
+    const stream = await llmStreamCallExecute('provider_next_and_return_error_llm', makeNative(), () => ({
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      next() {
+        return Promise.reject(new RangeError('next boom'));
+      },
+      return() {
+        returned = true;
+        return Promise.reject(new Error('return boom'));
+      },
+    }));
+    try {
+      await assert.rejects(() => stream.next(), /next boom/);
+      assert.equal(returned, false);
+    } finally {
+      await stream.close().catch(() => {});
+    }
+  });
+
   it('default stream provider receives an abort signal when the consumer closes early', async () => {
     let aborted = false;
     let cleaned = false;
