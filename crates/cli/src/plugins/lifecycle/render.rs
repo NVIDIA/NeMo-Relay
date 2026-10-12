@@ -260,7 +260,7 @@ impl fmt::Display for PluginInspectView<'_> {
             self.manifest_ref,
             self.host_config,
         );
-        let yaml = serde_yaml::to_string(&view).map_err(|_| fmt::Error)?;
+        let yaml = serde_saphyr::to_string(&view).map_err(|_| fmt::Error)?;
         write!(f, "{}", yaml.trim_end())
     }
 }

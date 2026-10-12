@@ -60,7 +60,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+serde-saphyr = "1.3"
 sha2 = "0.11"
 strum = { version = "0.27", features = ["derive"] }
 subtle = "2"

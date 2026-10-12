@@ -3493,7 +3493,7 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
         host_config: host_config_by_id.get("acme.guardrail"),
     }
     .to_string();
-    let inspect_value: serde_yaml::Value = serde_yaml::from_str(&inspect).unwrap();
+    let inspect_value: serde_json::Value = serde_saphyr::from_str(&inspect).unwrap();
     assert_eq!(
         inspect_value["metadata"]["id"].as_str(),
         Some("acme.guardrail")
@@ -4921,7 +4921,7 @@ fn inspect_redacts_host_config_values() {
     }
     .to_string();
     assert!(!inspect_output.contains("secret-token"));
-    let inspect_output: serde_yaml::Value = serde_yaml::from_str(&inspect_output).unwrap();
+    let inspect_output: serde_json::Value = serde_saphyr::from_str(&inspect_output).unwrap();
     assert_eq!(
         inspect_output["host_config"]["api_key"].as_str(),
         Some("<redacted>")
@@ -5001,14 +5001,14 @@ fn inspect_distinguishes_empty_host_config_from_missing_host_config() {
         host_config: host_config_by_id.get("acme.empty-config"),
     }
     .to_string();
-    let inspect_output: serde_yaml::Value = serde_yaml::from_str(&inspect_output).unwrap();
+    let inspect_output: serde_json::Value = serde_saphyr::from_str(&inspect_output).unwrap();
     assert_eq!(
         inspect_output["host_config_status"].as_str(),
         Some("present")
     );
     assert_eq!(
         inspect_output["host_config"]
-            .as_mapping()
+            .as_object()
             .expect("empty host config should render as an object")
             .len(),
         0
