@@ -1252,7 +1252,9 @@ fn run_fake_bootstrap_listener_with_options(
         .unwrap()
         .write_all(b"{\"session_id\":\"challenge\",\"hook_event_name\":\"SessionStart\"}")
         .unwrap();
-    let output = wait_child_with_output(child);
+    let timeout =
+        hook_delay.unwrap_or_default() + Duration::from_secs(CHILD_PROCESS_TIMEOUT_SECONDS);
+    let output = wait_child_with_output_timeout(child, timeout);
     stopped.store(true, Ordering::Relaxed);
     server.join().unwrap();
     let requests = Arc::try_unwrap(requests).unwrap().into_inner().unwrap();
@@ -1406,10 +1408,34 @@ fn cli_codex_hook_reuses_a_listener_with_a_valid_bootstrap_proof() {
 }
 
 #[test]
-fn cli_codex_hook_does_not_retry_an_ambiguous_response_timeout() {
+fn cli_codex_hook_waits_for_a_slow_guardrail_response() {
     let (output, requests) = run_fake_bootstrap_listener_with_hook_delay(
         FakeBootstrapProof::Valid,
         Some(Duration::from_millis(2_500)),
+    );
+    assert!(
+        output.status.success(),
+        "slow hook failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        r#"{"continue":true}"#
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.starts_with("POST /hooks/codex "))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn cli_codex_hook_does_not_retry_an_ambiguous_response_timeout() {
+    let (output, requests) = run_fake_bootstrap_listener_with_hook_delay(
+        FakeBootstrapProof::Valid,
+        Some(Duration::from_secs(31)),
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);

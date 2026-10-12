@@ -708,6 +708,13 @@ evaluate them without making observability-only hooks a runtime dependency.
 Rerun `nemo-relay install <agent> --force` after upgrading to replace legacy
 generated hooks.
 
+Hook forwarding uses a 30-second request timeout in gateway and daemon modes,
+including delivery to daemon workers. Generated Claude Code and Codex hook
+configs use the same 30-second limit. This allows LLM judge guardrails to take
+longer than two seconds; configure their evaluation timeouts to leave room for
+hook transport within that limit. Delivery timeouts follow the hook's failure
+policy, and timed-out requests are not retried.
+
 Manually authored commands fail open when neither policy flag is present.
 `NEMO_RELAY_FAIL_CLOSED=1` changes that default for compatibility, while an
 explicit flag takes precedence over the environment.

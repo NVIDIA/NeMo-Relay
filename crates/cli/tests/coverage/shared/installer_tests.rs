@@ -333,6 +333,40 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn gateway_hook_transport_waits_for_slow_responses_with_either_failure_policy() {
+    let _plugin_guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let _bootstrap_home = BootstrapConfigHome::enter(&temp.path().join("xdg"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = axum::Router::new().route(
+        "/hooks/claude-code",
+        axum::routing::post(|| async {
+            tokio::time::sleep(Duration::from_millis(2_500)).await;
+            r#"{"continue":true}"#
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for policy in [HookFailurePolicy::FailClosed, HookFailurePolicy::FailOpen] {
+        let mut command = hook_request(CodingAgent::ClaudeCode);
+        command.failure_policy = policy;
+        let response = super::delivery::send_hook_forward_request(
+            &command,
+            &format!("http://{address}/hooks/claude-code"),
+            r#"{"hook_event_name":"PreToolUse"}"#.into(),
+            &crate::operational::OperationalContext::new(),
+        )
+        .await
+        .unwrap()
+        .expect("gateway must allow guardrail evaluation longer than two seconds");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), r#"{"continue":true}"#);
+    }
+    server.abort();
+    let _ = server.await;
+}
+
 #[test]
 fn hook_payload_reader_normalizes_blank_input_and_accepts_the_exact_limit() {
     assert_eq!(read_hook_payload_from(" \n\t".as_bytes(), 3).unwrap(), "{}");
