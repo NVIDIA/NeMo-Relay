@@ -26,6 +26,10 @@ demonstrations.
 | Unary LLM execution | Async callback with `LlmNext`. | Async closure with cloneable `LlmNext`. | Provider-response JSON. |
 | Stream LLM execution | Async generator or async callback returning an async iterator. | Async closure returning a `JsonStream`. | Chunks produced lazily until completion, error, or cancellation. |
 
+Daemon workers support all LLM middleware types for calls with and without
+streaming. Refer to [LLM Middleware](/daemon/reference#llm-middleware) for
+supported provider APIs and response behavior.
+
 The Event metadata injector, subscriber, three event sanitizers, five tool registrations,
 and six LLM registrations make 16 surfaces. Registration names are component-local;
 [priority and `break_chain`](/build-plugins/fundamentals/plugin-context) are sent in

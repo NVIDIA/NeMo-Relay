@@ -460,10 +460,9 @@ They do not include credentials or hook payloads.
 
 ## Preserve Streaming Responses
 
-The daemon, worker, and pass-through paths use Hyper to stream responses from
-provider to client. They forward bytes as the client reads them, without waiting
-for a successful LLM response to finish. The transport preserves these response
-details:
+By default, Relay sends provider responses to the client as they arrive. It
+preserves the following details unless you configure
+[LLM middleware](#llm-middleware):
 
 - The response status.
 - Ordered, multivalue end-to-end headers.
@@ -491,20 +490,44 @@ worker can still be waiting for middleware or a provider. A worker transport
 failure, response-body failure, or explicit route rejection triggers control
 recovery before worker forwarding resumes.
 
-The worker also sends request bodies directly through the pooled Hyper client
-when no LLM request guardrail, request interceptor, or request-sanitization
-guardrail is registered. If middleware needs the complete JSON request, the
-worker reads and decodes it within a size limit before sending it to the
-provider. It does not collect response bodies for that check.
+Middleware that needs a complete request must read it within the configured
+request body size limit.
 
-Relay preserves the stream delivered to the caller. Do not use daemon-worker
-mode with middleware that must change, hide, or replace successful streaming
-response events. Observers and caches must read a separate copy with a size
-limit. If an observer falls behind, its copy can be incomplete. It must never
-delay or change the caller's stream.
+### LLM Middleware
 
-The worker captures at most 4 MiB per streamed response for semantic
-observation by default. Set
+Daemon workers support all LLM middleware types for OpenAI Chat Completions,
+OpenAI Responses, and Anthropic Messages. This includes calls with and without
+streaming:
+
+- Request intercepts can change a request before Relay sends it to the provider.
+- Conditional execution guardrails can block a call before it reaches the provider.
+- Execution intercepts can change or replace a response, including streaming responses.
+- Request and response sanitizers control the data recorded for observability.
+  They do not change what the provider or client receives.
+
+Agent startup checks, WebSocket connections, and other provider APIs bypass
+LLM middleware.
+
+When you configure request intercepts, execution intercepts, or conditional
+execution guardrails, these response changes apply:
+
+- Successful calls return HTTP `200`. Relay does not keep the provider's original
+  success headers or HTTP trailers.
+- Streaming responses still arrive in parts. Relay does not keep the original
+  formatting, stream comments, heartbeats, event IDs, or retry hints.
+- Provider HTTP errors keep their status, supported headers, and body.
+
+The response-header timeout also includes time spent in middleware. For calls
+without streaming, it includes the wait for the full response. It does not limit
+how long a stream can run after Relay sends its response headers.
+
+Without request intercepts, execution intercepts, or conditional execution
+guardrails, Relay forwards responses unchanged. Observers read
+a separate copy with a size limit. If an observer falls behind, its copy can be
+incomplete. It must never delay or change the client's response.
+
+For responses forwarded unchanged, the worker copies at most 16 MiB per streamed
+response for observability. Set
 `NEMO_RELAY_DAEMON_OBSERVATION_CAPTURE_BYTES` to a positive byte count before
 starting the worker to choose another bound. This setting changes only
 the observation copy. It does not limit, buffer, or cut off the stream delivered
@@ -608,7 +631,7 @@ Relay and the harness use the following environment variables:
 | `NEMO_RELAY_WORKER_ADVERTISE_ADDRESS` | Managed MCP | Optional concrete worker hostname or IPv4 address reachable by the daemon. |
 | `NEMO_RELAY_WORKER_PORT` | Managed MCP | Optional fixed port from 1 through 65535. Omit it to choose a port automatically. |
 | `NEMO_RELAY_DAEMON_MAX_TOKENS_PER_IDENTITY` | Daemon | Distinct route tokens one machine-user identity may hold, from 1 through 64. Defaults to 4. Used when `--max-tokens-per-identity` is not given; an invalid value stops daemon startup. See [Replace a Client Token](/daemon/configuration#replace-a-client-token). |
-| `NEMO_RELAY_DAEMON_OBSERVATION_CAPTURE_BYTES` | Worker observation | Positive capture limit in bytes. Defaults to 4 MiB and does not limit delivered streams. |
+| `NEMO_RELAY_DAEMON_OBSERVATION_CAPTURE_BYTES` | Worker observation | Positive capture limit in bytes. Defaults to 16 MiB and does not limit delivered streams. |
 | `NEMO_RELAY_LOG` | Operational logger | Explicit log level, such as `info`. Managed MCP and hooks do not discover logging files automatically. |
 | `NEMO_RELAY_LOG_STDERR_FORMAT` | Operational logger | Explicit stderr format, such as `jsonl`. |
 | `XDG_CONFIG_HOME` | Identity-state resolver | First choice for identity state on every platform. Falls back to `HOME/.config`, then `USERPROFILE/.config`. Does not move managed system configuration. |
