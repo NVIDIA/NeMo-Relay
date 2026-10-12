@@ -788,3 +788,28 @@ class TestBuiltinCodecImports:
         assert not hasattr(nemo_relay, "OpenAIResponsesCodec")
         assert not hasattr(nemo_relay, "AnthropicMessagesCodec")
         assert not hasattr(nemo_relay, "GeminiGenerateContentCodec")
+
+
+def test_multiple_tool_result_edits_and_insertion() -> None:
+    codec = OpenAIChatCodec()
+    original = LLMRequest(
+        {},
+        {
+            "messages": [
+                {"role": "tool", "tool_call_id": "a", "content": "old"},
+                {"role": "tool", "tool_call_id": "b", "content": "old"},
+            ]
+        },
+    )
+    annotated = codec.decode(original)
+    annotated.messages = [
+        {"role": "tool", "tool_call_id": "b", "content": "blocked"},
+        {"role": "tool", "tool_call_id": "a", "content": "blocked"},
+        {"role": "tool", "tool_call_id": "c", "content": "inserted"},
+    ]
+    encoded = codec.encode(annotated, original)
+    assert encoded.content["messages"] == [
+        {"role": "tool", "tool_call_id": "b", "content": "blocked"},
+        {"role": "tool", "tool_call_id": "a", "content": "blocked"},
+        {"role": "tool", "tool_call_id": "c", "content": "inserted"},
+    ]

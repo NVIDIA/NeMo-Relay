@@ -6167,3 +6167,261 @@ fn test_decode_system_instruction_non_text_part_errors() {
         "systemInstruction with non-text native parts must error"
     );
 }
+
+#[test]
+fn gemini_multiple_assistant_edits_keep_call_signatures() {
+    let codec = GeminiGenerateContentCodec;
+    let original = make_request(json!({"contents": [
+        {"role": "model", "parts": [
+            {"text": "first"},
+            {"functionCall": {"id": "a", "name": "lookup", "args": {}}, "thoughtSignature": "sig_A"},
+            {"functionCall": {"id": "b", "name": "search", "args": {}}, "thoughtSignature": "sig_B"}
+        ]},
+        {"role": "user", "parts": [{"text": "continue"}]},
+        {"role": "model", "parts": [
+            {"text": "second"},
+            {"functionCall": {"id": "c", "name": "lookup", "args": {}}, "thoughtSignature": "sig_C"}
+        ]}
+    ]}));
+    // A single edited turn can also replace one call without losing the
+    // surviving call's signature or assigning it to the replacement call.
+    let mut single_edit = codec.decode(&original).unwrap();
+    let Message::Assistant {
+        tool_calls: Some(calls),
+        ..
+    } = &mut single_edit.messages[0]
+    else {
+        panic!("expected assistant calls");
+    };
+    calls[1].id = "replacement".into();
+    calls[1].function.name = "new_call".into();
+    let encoded = codec.encode(&single_edit, &original).unwrap();
+    assert_eq!(
+        encoded.content["contents"][0]["parts"][1]["thoughtSignature"],
+        "sig_A"
+    );
+    assert!(
+        encoded.content["contents"][0]["parts"][2]
+            .get("thoughtSignature")
+            .is_none()
+    );
+
+    for reorder in [false, true] {
+        let mut annotated = codec.decode(&original).unwrap();
+        for index in [0, 2] {
+            let Message::Assistant {
+                content,
+                tool_calls,
+                ..
+            } = &mut annotated.messages[index]
+            else {
+                panic!("expected assistant turn");
+            };
+            *content = Some(MessageContent::Text(format!("edited {index}")));
+            if reorder {
+                tool_calls.as_mut().unwrap().reverse();
+            }
+        }
+        if reorder {
+            annotated.messages.swap(0, 2);
+        }
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        for (index, expected_calls) in if reorder {
+            [
+                (0, vec![("c", "sig_C")]),
+                (2, vec![("b", "sig_B"), ("a", "sig_A")]),
+            ]
+        } else {
+            [
+                (0, vec![("a", "sig_A"), ("b", "sig_B")]),
+                (2, vec![("c", "sig_C")]),
+            ]
+        } {
+            let calls = encoded.content["contents"][index]["parts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|part| part.get("functionCall").is_some())
+                .map(|part| {
+                    (
+                        part["functionCall"]["id"].as_str().unwrap(),
+                        part["thoughtSignature"].as_str().unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(calls, expected_calls);
+        }
+        assert_eq!(codec.decode(&encoded).unwrap().messages, annotated.messages);
+    }
+}
+
+#[test]
+fn gemini_changed_call_lists_keep_surviving_signatures_with_other_edits() {
+    let codec = GeminiGenerateContentCodec;
+    let original = make_request(json!({"contents": [
+        {"role": "user", "parts": [{"text": "before"}]},
+        {"role": "model", "parts": [
+            {"functionCall": {"id": "a", "name": "lookup", "args": {}}, "thoughtSignature": "sig_A", "vendor": "A"},
+            {"functionCall": {"id": "b", "name": "search", "args": {}}, "thoughtSignature": "sig_B", "vendor": "B"}
+        ]}
+    ]}));
+    for operation in ["remove", "insert", "replace"] {
+        let mut annotated = codec.decode(&original).unwrap();
+        let Message::User { content, .. } = &mut annotated.messages[0] else {
+            panic!("expected user")
+        };
+        *content = MessageContent::Text("after".into());
+        let Message::Assistant {
+            tool_calls: Some(calls),
+            ..
+        } = &mut annotated.messages[1]
+        else {
+            panic!("expected calls")
+        };
+        match operation {
+            "remove" => {
+                calls.pop();
+            }
+            "insert" => {
+                let mut inserted = calls[1].clone();
+                inserted.id = "new".into();
+                calls.push(inserted);
+            }
+            "replace" => {
+                calls[1].id = "new".into();
+            }
+            _ => unreachable!(),
+        }
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        let parts = encoded.content["contents"][1]["parts"].as_array().unwrap();
+        for part in parts
+            .iter()
+            .filter(|part| part.get("functionCall").is_some())
+        {
+            match part["functionCall"]["id"].as_str().unwrap() {
+                "a" => {
+                    assert_eq!(part["thoughtSignature"], "sig_A", "{operation}: {part}");
+                    assert_eq!(part["vendor"], "A");
+                }
+                "b" => assert_eq!(part["thoughtSignature"], "sig_B"),
+                "new" => {
+                    assert!(part.get("thoughtSignature").is_none());
+                    assert!(part.get("vendor").is_none());
+                }
+                _ => panic!("unexpected call"),
+            }
+        }
+        assert_eq!(codec.decode(&encoded).unwrap().messages, annotated.messages);
+    }
+}
+
+#[test]
+fn gemini_split_and_merged_turns_keep_surviving_call_signatures() {
+    let codec = GeminiGenerateContentCodec;
+    for split in [false, true] {
+        let original = make_request(if split {
+            json!({"contents": [
+                {"role": "model", "parts": [
+                    {"functionCall": {"id": "a", "name": "lookup", "args": {}}, "thoughtSignature": "sig_A"},
+                    {"functionCall": {"id": "b", "name": "search", "args": {}}, "thoughtSignature": "sig_B"}
+                ]},
+                {"role": "user", "parts": [{"text": "before"}]}
+            ]})
+        } else {
+            json!({"contents": [
+                {"role": "model", "parts": [{"functionCall": {"id": "a", "name": "lookup", "args": {}}, "thoughtSignature": "sig_A"}]},
+                {"role": "user", "parts": [{"text": "before"}]},
+                {"role": "model", "parts": [{"functionCall": {"id": "b", "name": "search", "args": {}}, "thoughtSignature": "sig_B"}]}
+            ]})
+        });
+        let mut annotated = codec.decode(&original).unwrap();
+        let Message::User { content, .. } = &mut annotated.messages[1] else {
+            panic!("expected user")
+        };
+        *content = MessageContent::Text("after".into());
+        if split {
+            let mut second = annotated.messages[0].clone();
+            let Message::Assistant {
+                tool_calls: Some(calls),
+                ..
+            } = &mut annotated.messages[0]
+            else {
+                panic!("expected calls")
+            };
+            calls.truncate(1);
+            let Message::Assistant {
+                tool_calls: Some(calls),
+                ..
+            } = &mut second
+            else {
+                panic!("expected calls")
+            };
+            calls.remove(0);
+            annotated.messages.push(second);
+        } else {
+            let Message::Assistant {
+                tool_calls: Some(second),
+                ..
+            } = annotated.messages.pop().unwrap()
+            else {
+                panic!("expected calls")
+            };
+            let Message::Assistant {
+                tool_calls: Some(first),
+                ..
+            } = &mut annotated.messages[0]
+            else {
+                panic!("expected calls")
+            };
+            first.extend(second);
+        }
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        let calls = encoded.content["contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|content| content["parts"].as_array().unwrap())
+            .filter(|part| part.get("functionCall").is_some())
+            .map(|part| {
+                (
+                    part["functionCall"]["id"].as_str().unwrap(),
+                    part["thoughtSignature"].as_str().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls, vec![("a", "sig_A"), ("b", "sig_B")]);
+        assert_eq!(codec.decode(&encoded).unwrap().messages, annotated.messages);
+    }
+}
+
+#[test]
+fn gemini_legacy_surviving_call_keeps_signature_without_adding_id() {
+    let codec = GeminiGenerateContentCodec;
+    let original = make_request(json!({"contents": [
+        {"role": "user", "parts": [{"text": "before"}]},
+        {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {}}, "thoughtSignature": "sig_lookup"}]}
+    ]}));
+    let mut annotated = codec.decode(&original).unwrap();
+    let Message::User { content, .. } = &mut annotated.messages[0] else {
+        panic!("expected user")
+    };
+    *content = MessageContent::Text("after".into());
+    let Message::Assistant {
+        tool_calls: Some(calls),
+        ..
+    } = &mut annotated.messages[1]
+    else {
+        panic!("expected calls")
+    };
+    let mut inserted = calls[0].clone();
+    inserted.id = "new".into();
+    inserted.function.name = "new_call".into();
+    calls.push(inserted);
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let parts = encoded.content["contents"][1]["parts"].as_array().unwrap();
+    assert_eq!(parts[0]["thoughtSignature"], "sig_lookup");
+    assert!(parts[0]["functionCall"].get("id").is_none());
+    assert_eq!(parts[1]["functionCall"]["id"], "new");
+    assert!(parts[1].get("thoughtSignature").is_none());
+    assert_eq!(codec.decode(&encoded).unwrap().messages, annotated.messages);
+}

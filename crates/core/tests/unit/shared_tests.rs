@@ -611,3 +611,50 @@ async fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
     .unwrap();
     reset_global();
 }
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Serializes access to global runtime state.
+async fn request_intercept_can_block_two_tool_results() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_llm_request_intercept(
+        "shared-multiple-results",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Box::pin(async move {
+                let mut annotated = annotated.unwrap();
+                for message in &mut annotated.messages {
+                    if let Message::Tool { content, .. } = message {
+                        *content = MessageContent::Text("blocked".into());
+                    }
+                }
+                Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            })
+        }),
+    )
+    .unwrap();
+    let original = LlmRequest {
+        headers: Map::new(),
+        content: json!({"messages": [
+            {"role": "tool", "tool_call_id": "a", "content": "old"},
+            {"role": "tool", "tool_call_id": "b", "content": "old"}
+        ]}),
+    };
+    let (encoded, _, _, _) = run_request_intercepts_with_codec(
+        "shared",
+        original,
+        Some(Arc::new(crate::codec::openai_chat::OpenAIChatCodec)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        encoded.content["messages"],
+        json!([
+            {"role": "tool", "tool_call_id": "a", "content": "blocked"},
+            {"role": "tool", "tool_call_id": "b", "content": "blocked"}
+        ])
+    );
+    deregister_llm_request_intercept("shared-multiple-results").unwrap();
+    reset_global();
+}

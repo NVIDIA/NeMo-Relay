@@ -829,7 +829,7 @@ fn baseline_patching_handles_insert_delete_and_duplicate_reorders() {
 }
 
 #[test]
-fn baseline_patching_rejects_multiple_reordered_and_edited_items_without_provenance() {
+fn baseline_patching_accepts_multiple_replacements_without_provenance() {
     let original = json!([
         {"type": "text", "text": "a", "provider_marker": "A"},
         {"type": "text", "text": "b", "provider_marker": "B"}
@@ -843,11 +843,9 @@ fn baseline_patching_rejects_multiple_reordered_and_edited_items_without_provena
         {"type": "text", "text": "a-edited"}
     ]);
 
-    let error = super::patch_changed_json(&original, &baseline, &edited).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("multiple edited array items without stable identities")
+    assert_eq!(
+        super::patch_changed_json(&original, &baseline, &edited).unwrap(),
+        edited
     );
 }
 
@@ -1080,4 +1078,240 @@ fn test_oci_request_hint_never_overrides_strong_signals() {
         hinted.api_specific,
         Some(super::request::ApiSpecificRequest::OCIGenAI { .. })
     ));
+}
+
+#[test]
+fn container_edits_preserve_matches_and_replace_unmatched_values() {
+    let original = json!({"items": [
+        {"role": "tool", "tool_call_id": "a", "content": "old", "vendor": "A"},
+        {"role": "tool", "tool_call_id": "b", "content": "old", "vendor": "B"},
+        {"role": "tool", "tool_call_id": "c", "content": "old", "vendor": "C"}
+    ], "mapping": {"a": 1, "b": 2, "vendor": true}, "untouched": null});
+    let baseline = json!({"items": [
+        {"role": "tool", "tool_call_id": "a", "content": "old"},
+        {"role": "tool", "tool_call_id": "b", "content": "old"},
+        {"role": "tool", "tool_call_id": "c", "content": "old"}
+    ], "mapping": {"a": 1, "b": 2}, "untouched": null});
+    let edited = json!({"items": [
+        {"role": "tool", "tool_call_id": "c", "content": "blocked"},
+        {"role": "tool", "tool_call_id": "b", "content": "blocked"},
+        {"role": "tool", "tool_call_id": "d", "content": "new"}
+    ], "mapping": {"a": [1, 2], "c": null}, "untouched": null});
+    assert_eq!(
+        super::patch_changed_json(&original, &baseline, &edited).unwrap(),
+        json!({
+            "items": [
+                {"role": "tool", "tool_call_id": "c", "content": "blocked", "vendor": "C"},
+                {"role": "tool", "tool_call_id": "b", "content": "blocked", "vendor": "B"},
+                {"role": "tool", "tool_call_id": "d", "content": "new"}
+            ], "mapping": {"a": [1, 2], "c": null, "vendor": true}, "untouched": null
+        })
+    );
+    for replacement in [
+        json!([]),
+        json!([null, {"id": "arbitrary"}, [1, 2]]),
+        json!(null),
+    ] {
+        assert_eq!(
+            super::patch_changed_json(&original["items"], &baseline["items"], &replacement)
+                .unwrap(),
+            replacement
+        );
+    }
+}
+
+#[test]
+fn duplicate_or_changed_tool_ids_do_not_inherit_unrelated_fields() {
+    let original = json!([
+        {"role": "tool", "tool_call_id": "a", "content": "old", "vendor": "A"},
+        {"role": "tool", "tool_call_id": "a", "content": "old", "vendor": "B"}
+    ]);
+    let baseline = json!([
+        {"role": "tool", "tool_call_id": "a", "content": "old"},
+        {"role": "tool", "tool_call_id": "a", "content": "old"}
+    ]);
+    for edited in [
+        json!([
+            {"role": "tool", "tool_call_id": "a", "content": "one"},
+            {"role": "tool", "tool_call_id": "a", "content": "two"}
+        ]),
+        json!([{ "role": "tool", "tool_call_id": "new", "content": "new" }]),
+    ] {
+        assert_eq!(
+            super::patch_changed_json(&original, &baseline, &edited).unwrap(),
+            edited
+        );
+    }
+}
+
+#[test]
+fn all_builtin_codecs_accept_multiple_message_replacements() {
+    use super::traits::LlmCodec;
+    let cases: Vec<(Box<dyn LlmCodec>, Json)> = vec![
+        (
+            Box::new(super::openai_chat::OpenAIChatCodec),
+            json!({"model": "test", "messages": [
+                {"role": "user", "content": "a", "vendor": "A"}, {"role": "user", "content": "b", "vendor": "B"}
+            ]}),
+        ),
+        (
+            Box::new(super::openai_responses::OpenAIResponsesCodec),
+            json!({"model": "test", "input": [
+                {"role": "user", "content": "a", "vendor": "A"}, {"role": "user", "content": "b", "vendor": "B"}
+            ]}),
+        ),
+        (
+            Box::new(super::anthropic::AnthropicMessagesCodec),
+            json!({"model": "test", "max_tokens": 10, "messages": [
+                {"role": "user", "content": "a", "vendor": "A"}, {"role": "user", "content": "b", "vendor": "B"}
+            ]}),
+        ),
+        (
+            Box::new(super::gemini_generate_content::GeminiGenerateContentCodec),
+            json!({"contents": [
+                {"role": "user", "parts": [{"text": "a"}], "vendor": "A"},
+                {"role": "user", "parts": [{"text": "b"}], "vendor": "B"}
+            ]}),
+        ),
+        (
+            Box::new(super::oci_genai::OCIGenAIChatCodec),
+            json!({"apiFormat": "GENERIC", "messages": [
+                {"role": "USER", "content": [{"type": "TEXT", "text": "a"}], "vendor": "A"},
+                {"role": "USER", "content": [{"type": "TEXT", "text": "b"}], "vendor": "B"}
+            ]}),
+        ),
+        (
+            Box::new(super::oci_genai::OCIGenAIChatCodec),
+            json!({"apiFormat": "COHERE", "chatHistory": [
+            {"role": "USER", "message": "a", "vendor": "A"}, {"role": "USER", "message": "b", "vendor": "B"}
+        ], "message": "current"}),
+        ),
+    ];
+    for (codec, content) in cases {
+        let original = req(content);
+        let mut annotated = codec.decode(&original).unwrap();
+        let baseline = annotated.messages.clone();
+        annotated.messages = ["new one", "new two", "inserted"]
+            .into_iter()
+            .map(|text| Message::User {
+                content: MessageContent::Text(text.into()),
+                name: None,
+            })
+            .collect();
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        assert_eq!(codec.decode(&encoded).unwrap().messages, annotated.messages);
+        assert!(!encoded.content.to_string().contains("vendor"));
+        // Exact matches retain their original fields after reordering.
+        annotated.messages = baseline.clone();
+        annotated.messages.swap(0, 1);
+        let reordered = codec.encode(&annotated, &original).unwrap();
+        assert_eq!(
+            codec.decode(&reordered).unwrap().messages,
+            annotated.messages
+        );
+        assert!(reordered.content.to_string().contains("vendor"));
+    }
+}
+
+#[test]
+fn multiple_identified_results_keep_provider_fields_after_reordering() {
+    use super::traits::LlmCodec;
+    let cases: Vec<(Box<dyn LlmCodec>, Json)> = vec![
+        (
+            Box::new(super::openai_chat::OpenAIChatCodec),
+            json!({"messages": [
+                {"role": "tool", "tool_call_id": "a", "content": "old", "vendor": "A"},
+                {"role": "tool", "tool_call_id": "b", "content": "old", "vendor": "B"}
+            ]}),
+        ),
+        (
+            Box::new(super::openai_responses::OpenAIResponsesCodec),
+            json!({"input": [
+                {"type": "function_call_output", "call_id": "a", "output": "old", "vendor": "A"},
+                {"type": "function_call_output", "call_id": "b", "output": "old", "vendor": "B"}
+            ]}),
+        ),
+        (
+            Box::new(super::gemini_generate_content::GeminiGenerateContentCodec),
+            json!({"contents": [
+                {"role": "user", "vendor_wrapper": true, "parts": [
+                    {"functionResponse": {"id": "a", "name": "first", "response": {"old": true}, "vendor": "A"}, "vendor_part": "A"},
+                    {"functionResponse": {"id": "b", "name": "second", "response": {"old": true}, "vendor": "B"}, "vendor_part": "B"}
+                ]}
+            ]}),
+        ),
+    ];
+    for (codec, content) in cases {
+        let original = req(content);
+        let mut annotated = codec.decode(&original).unwrap();
+        for message in &mut annotated.messages {
+            match message {
+                Message::Tool { content, .. } => *content = MessageContent::Text("blocked".into()),
+                Message::ToolResultItem { output, .. } => *output = json!("blocked"),
+                Message::ProviderNative { value, .. } => value["content"] = json!("blocked"),
+                other => panic!("unexpected result: {other:?}"),
+            }
+        }
+        annotated.messages.swap(0, 1);
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        let text = encoded.content.to_string();
+        assert!(text.contains("\"vendor\":\"A\""), "{text}");
+        assert!(text.contains("\"vendor\":\"B\""), "{text}");
+        let decoded = codec.decode(&encoded).unwrap();
+        let id = |message: &Message| match message {
+            Message::Tool { tool_call_id, .. } => tool_call_id.clone(),
+            Message::ToolResultItem { call_id, .. } => call_id.clone(),
+            Message::ProviderNative { value, .. } => {
+                value["tool_call_id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected result"),
+        };
+        assert_eq!(
+            decoded.messages.iter().map(id).collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
+        if original.content.get("contents").is_some() {
+            assert_eq!(encoded.content["contents"][0]["vendor_wrapper"], true);
+            assert_eq!(
+                encoded.content["contents"][0]["parts"][0]["vendor_part"],
+                "B"
+            );
+        }
+    }
+}
+
+#[test]
+fn anthropic_multiple_nested_result_edits_keep_fields() {
+    use super::request::ContentPart;
+    use super::traits::LlmCodec;
+    let codec = super::anthropic::AnthropicMessagesCodec;
+    let original = req(json!({"model": "test", "max_tokens": 10, "messages": [
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "a", "content": "old", "vendor": "A"},
+            {"type": "tool_result", "tool_use_id": "b", "content": "old", "vendor": "B"}
+        ]}
+    ]}));
+    let mut annotated = codec.decode(&original).unwrap();
+    let Message::User {
+        content: MessageContent::Parts(parts),
+        ..
+    } = &mut annotated.messages[0]
+    else {
+        panic!("expected parts")
+    };
+    for part in parts.iter_mut() {
+        let ContentPart::ToolResult { content, .. } = part else {
+            panic!("expected tool result")
+        };
+        *content = json!("blocked");
+    }
+    parts.swap(0, 1);
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(
+        encoded.content["messages"][0]["content"],
+        json!([
+            {"type": "tool_result", "tool_use_id": "b", "content": "blocked", "vendor": "B"},
+            {"type": "tool_result", "tool_use_id": "a", "content": "blocked", "vendor": "A"}
+        ])
+    );
 }

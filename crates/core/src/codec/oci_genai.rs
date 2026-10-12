@@ -571,17 +571,9 @@ fn patch_generic_messages(
         .and_then(Json::as_array)
         .cloned()
         .unwrap_or_default();
-    let patched = edited
-        .iter()
-        .enumerate()
-        .map(|(index, message)| {
-            let unchanged = baseline.get(index) == Some(message);
-            match raw_messages.get(index) {
-                Some(raw) if unchanged => Ok(raw.clone()),
-                _ => encode_generic_message(message, api_format),
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let patched = super::encode_changed_items(edited, baseline, Some(&raw_messages), |message| {
+        encode_generic_message(message, api_format)
+    })?;
     insert_json(chat_request, "messages", Json::Array(patched));
     Ok(())
 }
@@ -662,14 +654,26 @@ fn cohere_text(content: &MessageContent) -> Result<String> {
     }
 }
 
-/// Rebuild the COHERE `preambleOverride`/`chatHistory`/`message` fields from
-/// edited messages. COHERE turns are plain strings, so edits rebuild the
-/// modeled fields rather than patching individual turns.
+/// Encode the COHERE `preambleOverride`/`chatHistory`/`message` fields from
+/// edited messages. History turns use baseline alignment to preserve unmodeled
+/// fields on unchanged or matched entries.
 fn encode_cohere_messages(
     chat_request: &mut serde_json::Map<String, Json>,
     messages: &[Message],
+    baseline: &[Message],
 ) -> Result<()> {
     let mut remaining = messages;
+    let mut baseline_history = baseline;
+    if chat_request
+        .get("preambleOverride")
+        .and_then(Json::as_str)
+        .is_some_and(|preamble| !preamble.is_empty())
+    {
+        baseline_history = &baseline_history[1..];
+    }
+    if chat_request.get("message").and_then(Json::as_str).is_some() {
+        baseline_history = &baseline_history[..baseline_history.len().saturating_sub(1)];
+    }
 
     if let Some(Message::System { content, .. }) = remaining.first() {
         insert_json(
@@ -695,10 +699,15 @@ fn encode_cohere_messages(
     let current = cohere_text(content)?;
     remaining = &remaining[..remaining.len() - 1];
 
-    let history = remaining
-        .iter()
-        .map(encode_cohere_turn)
-        .collect::<Result<Vec<_>>>()?;
+    let history = super::encode_changed_items(
+        remaining,
+        baseline_history,
+        chat_request
+            .get("chatHistory")
+            .and_then(Json::as_array)
+            .map(Vec::as_slice),
+        encode_cohere_turn,
+    )?;
 
     chat_request.insert("message".into(), Json::String(current));
     if !history.is_empty() || chat_request.contains_key("chatHistory") {
@@ -1110,7 +1119,7 @@ impl LlmCodec for OCIGenAIChatCodec {
 
         if annotated.messages != baseline.messages {
             if api_format == "COHERE" {
-                encode_cohere_messages(&mut chat_request, &annotated.messages)?;
+                encode_cohere_messages(&mut chat_request, &annotated.messages, &baseline.messages)?;
             } else {
                 patch_generic_messages(
                     &mut chat_request,
@@ -1133,10 +1142,15 @@ impl LlmCodec for OCIGenAIChatCodec {
                 .tools
                 .as_deref()
                 .map(|tools| {
-                    tools
-                        .iter()
-                        .map(encode_oci_tool)
-                        .collect::<Result<Vec<_>>>()
+                    super::encode_changed_items(
+                        tools,
+                        baseline.tools.as_deref().unwrap_or(&[]),
+                        chat_request
+                            .get("tools")
+                            .and_then(Json::as_array)
+                            .map(Vec::as_slice),
+                        encode_oci_tool,
+                    )
                 })
                 .transpose()?
                 .map(Json::Array);

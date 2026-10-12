@@ -1676,56 +1676,73 @@ fn rebuild_gemini_system_parts(orig_parts: &[Json], text: String) -> Vec<Json> {
 
 #[derive(Debug)]
 struct GeminiGenerateContentMessageAlignment {
-    prefix_len: usize,
-    ann_gap_end: usize,
-    base_gap_end: usize,
-    ann_gap_len: usize,
-    base_gap_len: usize,
+    indices: Vec<Option<usize>>,
 }
 
 impl GeminiGenerateContentMessageAlignment {
-    fn new(ann_non_sys: &[&Json], base_non_sys: &[&Json]) -> Self {
-        let prefix_len = ann_non_sys
+    fn new(ann_non_sys: &[&Json], base_non_sys: &[&Json]) -> Result<Self> {
+        let mut indices = super::align_changed_items(ann_non_sys, base_non_sys)?;
+        // Assistant turns own call signatures. Match their complete call-ID
+        // sets after shared alignment, preserving its existing single-edit
+        // positional behavior even when that edit adds or removes calls.
+        let edited_ids = ann_non_sys
             .iter()
-            .zip(base_non_sys.iter())
-            .take_while(|(a, b)| a == b)
-            .count();
-        let max_suffix = ann_non_sys
-            .len()
-            .saturating_sub(prefix_len)
-            .min(base_non_sys.len().saturating_sub(prefix_len));
-        let suffix_len = ann_non_sys[ann_non_sys.len().saturating_sub(max_suffix)..]
+            .map(|message| gemini_assistant_call_ids(message))
+            .collect::<Vec<_>>();
+        let baseline_ids = base_non_sys
             .iter()
-            .rev()
-            .zip(
-                base_non_sys[base_non_sys.len().saturating_sub(max_suffix)..]
+            .map(|message| gemini_assistant_call_ids(message))
+            .collect::<Vec<_>>();
+        for (index, identity) in edited_ids.iter().enumerate() {
+            let Some(identity) = identity else { continue };
+            if indices[index].is_some()
+                || edited_ids
                     .iter()
-                    .rev(),
-            )
-            .take_while(|(a, b)| a == b)
-            .count();
-        let ann_gap_end = ann_non_sys.len().saturating_sub(suffix_len);
-        let base_gap_end = base_non_sys.len().saturating_sub(suffix_len);
-        Self {
-            prefix_len,
-            ann_gap_end,
-            base_gap_end,
-            ann_gap_len: ann_gap_end.saturating_sub(prefix_len),
-            base_gap_len: base_gap_end.saturating_sub(prefix_len),
+                    .filter(|ids| ids.as_ref() == Some(identity))
+                    .count()
+                    != 1
+                || baseline_ids
+                    .iter()
+                    .filter(|ids| ids.as_ref() == Some(identity))
+                    .count()
+                    != 1
+            {
+                continue;
+            }
+            if let Some(base_index) = baseline_ids
+                .iter()
+                .position(|ids| ids.as_ref() == Some(identity))
+                && !indices.contains(&Some(base_index))
+            {
+                indices[index] = Some(base_index);
+            }
         }
+        Ok(Self { indices })
     }
 
     fn base_idx_for(&self, i: usize) -> Option<usize> {
-        if i < self.prefix_len {
-            Some(i)
-        } else if i >= self.ann_gap_end {
-            Some(self.base_gap_end + (i - self.ann_gap_end))
-        } else if self.ann_gap_len == self.base_gap_len {
-            Some(self.prefix_len + (i - self.prefix_len))
-        } else {
-            None
-        }
+        self.indices.get(i).copied().flatten()
     }
+}
+
+fn gemini_assistant_call_ids(message: &Json) -> Option<Vec<&str>> {
+    if message.get("role").and_then(Json::as_str) != Some("assistant") {
+        return None;
+    }
+    let mut ids = message
+        .get("tool_calls")?
+        .as_array()?
+        .iter()
+        .map(|call| call.get("id")?.as_str().filter(|id| !id.is_empty()))
+        .collect::<Option<Vec<_>>>()?;
+    if ids.is_empty() {
+        return None;
+    }
+    ids.sort_unstable();
+    if ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return None;
+    }
+    Some(ids)
 }
 
 fn gemini_content_idx_of_base_msg(
@@ -1814,6 +1831,9 @@ fn gemini_run_is_unchanged(
     let run_len = run_end - start;
     run_len == expected_len
         && (start..run_end).all(|j| {
+            alignment.base_idx_for(j) == alignment.base_idx_for(start).map(|base| base + j - start)
+        })
+        && (start..run_end).all(|j| {
             alignment
                 .base_idx_for(j)
                 .and_then(|bidx| base_non_sys.get(bidx))
@@ -1852,7 +1872,7 @@ fn patch_gemini_non_system_contents(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let alignment = GeminiGenerateContentMessageAlignment::new(ann_non_sys, base_non_sys);
+    let alignment = GeminiGenerateContentMessageAlignment::new(ann_non_sys, base_non_sys)?;
     let content_idx_of_base_msg =
         gemini_content_idx_of_base_msg(&orig_contents, base_non_sys.len())?;
     let content_msg_count =
@@ -1869,7 +1889,15 @@ fn patch_gemini_non_system_contents(
         };
         let orig_cidx = content_idx_of_base_msg[base_idx];
         if processed_cidxs.contains(&orig_cidx) {
-            push_fresh_gemini_content(&mut new_contents, ann_non_sys[i], &call_id_to_name)?;
+            if let Some(original) = orig_contents.get(orig_cidx)
+                && let Some(item) = patch_changed_gemini_content(
+                    original,
+                    &ann_non_sys[i..i + 1],
+                    &call_id_to_name,
+                )?
+            {
+                new_contents.push(item);
+            }
             i += 1;
             continue;
         }
@@ -1907,8 +1935,74 @@ fn patch_gemini_non_system_contents(
 
         i = run_end;
     }
+    preserve_gemini_function_call_fields(&mut new_contents, &orig_contents);
     obj.insert("contents".into(), Json::Array(new_contents));
     Ok(())
+}
+
+// A changed call list can leave its turn unmatched. Preserve the original
+// call part's metadata by unique effective call ID even across split/merged
+// turns, without borrowing fields from unrelated or ambiguous calls.
+fn preserve_gemini_function_call_fields(contents: &mut [Json], original: &[Json]) {
+    let mut original_parts: HashMap<&str, Option<&Json>> = HashMap::new();
+    for part in original
+        .iter()
+        .filter_map(|content| content.get("parts").and_then(Json::as_array))
+        .flatten()
+    {
+        if let Some(id) = gemini_function_call_part_id(part) {
+            original_parts
+                .entry(id)
+                .and_modify(|part| *part = None)
+                .or_insert(Some(part));
+        }
+    }
+    let mut edited_counts = HashMap::<String, usize>::new();
+    for part in contents
+        .iter()
+        .filter_map(|content| content.get("parts").and_then(Json::as_array))
+        .flatten()
+    {
+        if let Some(id) = gemini_function_call_part_id(part) {
+            *edited_counts.entry(id.to_string()).or_default() += 1;
+        }
+    }
+    for content in contents {
+        let Some(parts) = content.get_mut("parts").and_then(Json::as_array_mut) else {
+            continue;
+        };
+        for part in parts {
+            let Some(id) = gemini_function_call_part_id(part) else {
+                continue;
+            };
+            if edited_counts.get(id) != Some(&1) {
+                continue;
+            }
+            let Some(Some(original_part)) = original_parts.get(id) else {
+                continue;
+            };
+            let mut patched = original_part.as_object().cloned().unwrap_or_default();
+            patched.extend(part.as_object().cloned().unwrap_or_default());
+            // Name-based IDs are normalized from legacy idless calls. Retain
+            // the original wire shape when that same call survives.
+            if original_part["functionCall"].get("id").is_none()
+                && let Some(call) = patched
+                    .get_mut("functionCall")
+                    .and_then(Json::as_object_mut)
+                && call.get("id") == call.get("name")
+            {
+                call.remove("id");
+            }
+            *part = Json::Object(patched);
+        }
+    }
+}
+
+fn gemini_function_call_part_id(part: &Json) -> Option<&str> {
+    let call = part.get("functionCall")?;
+    call.get("id")
+        .and_then(Json::as_str)
+        .or_else(|| call.get("name").and_then(Json::as_str))
 }
 
 /// Rebuild a Gemini `contents` item for a position that changed from baseline.
@@ -1970,11 +2064,16 @@ fn patch_changed_gemini_content(
         }
     };
 
-    if ann_role == "tool" {
-        return patch_gemini_tool_response_content(orig_parts, ann_msgs, call_id_to_name);
-    }
-
-    patch_gemini_visible_content(orig_parts, msg_obj, gemini_role)
+    let patched = if ann_role == "tool" {
+        patch_gemini_tool_response_content(orig_parts, ann_msgs, call_id_to_name)?
+    } else {
+        patch_gemini_visible_content(orig_parts, msg_obj, gemini_role)?
+    };
+    Ok(patched.map(|value| {
+        let mut content = orig_obj.clone();
+        content.extend(value.as_object().cloned().unwrap_or_default());
+        Json::Object(content)
+    }))
 }
 
 fn gemini_function_response_updates<'a>(
@@ -2033,46 +2132,45 @@ fn patch_gemini_tool_response_content(
     call_id_to_name: &HashMap<String, String>,
 ) -> Result<Option<Json>> {
     let (mut updates, update_order) = gemini_function_response_updates(ann_msgs)?;
-    let known_ids: std::collections::HashSet<&str> = updates.keys().copied().collect();
     let mut new_parts = Vec::new();
-
-    for orig_part in orig_parts {
-        let Some(fr) = orig_part.get("functionResponse") else {
-            new_parts.push(orig_part.clone());
-            continue;
-        };
-        let Some(call_id) = function_response_call_id(fr) else {
-            new_parts.push(orig_part.clone());
-            continue;
-        };
-        if !known_ids.contains(call_id) {
-            continue;
-        }
-        if let Some(payload) = updates.remove(call_id) {
-            let name = fr.get("name").and_then(Json::as_str).unwrap_or(call_id);
-            new_parts.push(build_gemini_function_response_part(
-                call_id,
-                name,
-                payload,
-                Some(fr),
-            ));
-        } else {
-            new_parts.push(orig_part.clone());
-        }
-    }
-
     for call_id in update_order {
         let Some(payload) = updates.remove(call_id) else {
             continue;
         };
-        let fn_name = call_id_to_name
-            .get(call_id)
-            .map(String::as_str)
+        let original_part = orig_parts.iter().find(|part| {
+            part.get("functionResponse")
+                .and_then(function_response_call_id)
+                == Some(call_id)
+        });
+        let original_fr = original_part.and_then(|part| part.get("functionResponse"));
+        let name = original_fr
+            .and_then(|fr| fr.get("name"))
+            .and_then(Json::as_str)
+            .or_else(|| call_id_to_name.get(call_id).map(String::as_str))
             .unwrap_or(call_id);
-        new_parts.push(build_gemini_function_response_part(
-            call_id, fn_name, payload, None,
-        ));
+        let mut part = original_part
+            .and_then(Json::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let rebuilt = build_gemini_function_response_part(call_id, name, payload, original_fr);
+        part.extend(rebuilt.as_object().cloned().unwrap_or_default());
+        new_parts.push(Json::Object(part));
     }
+
+    // Keep non-response parts in their original slots while response slots
+    // follow the edited call order. Removed responses consume no new value.
+    let mut responses = new_parts.into_iter();
+    let mut new_parts = Vec::new();
+    for part in orig_parts {
+        if part.get("functionResponse").is_some() {
+            if let Some(response) = responses.next() {
+                new_parts.push(response);
+            }
+        } else {
+            new_parts.push(part.clone());
+        }
+    }
+    new_parts.extend(responses);
 
     Ok(Some(
         serde_json::json!({"role": "user", "parts": new_parts}),

@@ -2153,3 +2153,75 @@ fn edited_oci_requests_reject_messages_from_other_provider_surfaces() {
         assert!(error.to_string().contains("cannot be encoded"), "{error}");
     }
 }
+
+#[test]
+fn cohere_empty_preamble_keeps_history_alignment() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(json!({
+        "apiFormat": "COHERE",
+        "preambleOverride": "",
+        "chatHistory": [
+            {"role": "USER", "message": "A", "vendor": "A"},
+            {"role": "CHATBOT", "message": "B", "vendor": "B"}
+        ],
+        "message": "current"
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    assert_eq!(annotated.messages.len(), 3);
+    let Message::User { content, .. } = &mut annotated.messages[0] else {
+        panic!("expected first history turn");
+    };
+    *content = MessageContent::Text("edited A".into());
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(
+        encoded.content["chatHistory"],
+        json!([
+            {"role": "USER", "message": "edited A", "vendor": "A"},
+            {"role": "CHATBOT", "message": "B", "vendor": "B"}
+        ])
+    );
+    assert_eq!(codec.decode(&encoded).unwrap().messages, annotated.messages);
+}
+
+#[test]
+fn oci_call_replacements_do_not_inherit_provider_fields() {
+    let codec = OCIGenAIChatCodec;
+    for api_format in ["GENERIC", "COHEREV2"] {
+        let mut original_call = if api_format == "COHEREV2" {
+            json!({"type": "FUNCTION", "id": "a", "function": {"name": "lookup", "arguments": "{}"}})
+        } else {
+            json!({"type": "FUNCTION", "id": "a", "name": "lookup", "arguments": "{}"})
+        };
+        original_call["provider_marker"] = json!({"owner": "a"});
+        let original = make_request(json!({
+            "apiFormat": api_format,
+            "messages": [{"role": "ASSISTANT", "content": [], "toolCalls": [original_call]}]
+        }));
+        for replace in [false, true] {
+            let mut annotated = codec.decode(&original).unwrap();
+            let Message::Assistant {
+                tool_calls: Some(calls),
+                ..
+            } = &mut annotated.messages[0]
+            else {
+                panic!("expected assistant call");
+            };
+            calls[0].function.arguments = "{\"query\":\"edited\"}".into();
+            if replace {
+                calls[0].id = "b".into();
+            }
+            let encoded = codec.encode(&annotated, &original).unwrap();
+            let call = &encoded.content["messages"][0]["toolCalls"][0];
+            assert_eq!(call["id"], if replace { "b" } else { "a" });
+            if replace {
+                assert!(
+                    call.get("provider_marker").is_none(),
+                    "replacement inherited fields: {call}"
+                );
+            } else {
+                assert_eq!(call["provider_marker"], json!({"owner": "a"}));
+            }
+            assert_eq!(codec.decode(&encoded).unwrap().messages, annotated.messages);
+        }
+    }
+}

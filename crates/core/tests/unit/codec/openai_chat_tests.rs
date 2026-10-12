@@ -1500,7 +1500,7 @@ fn chat_reordered_content_parts_keep_nested_provider_fields_with_their_items() {
 }
 
 #[test]
-fn chat_reordered_and_edited_content_parts_are_rejected_without_provenance() {
+fn chat_reordered_and_edited_content_parts_are_replaced_without_provenance() {
     let codec = OpenAIChatCodec;
     let original = make_request(json!({
         "model": "gpt-4.1",
@@ -1534,11 +1534,13 @@ fn chat_reordered_and_edited_content_parts_are_rejected_without_provenance() {
         image_url.url = url.into();
     }
 
-    let error = codec.encode(&annotated, &original).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("multiple edited array items without stable identities")
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(
+        encoded.content["messages"][0]["content"],
+        json!([
+            {"type": "image_url", "image_url": {"url": "b-edited"}},
+            {"type": "image_url", "image_url": {"url": "a-edited"}}
+        ])
     );
 }
 
