@@ -441,14 +441,16 @@ func (codec *LLMRequestSanitizeCodec) Decode(request LLMRequestDTO) (json.RawMes
 	defer C.free(unsafe.Pointer(cHeaders))
 	cContent := C.CString(string(request.Content))
 	defer C.free(unsafe.Pointer(cContent))
-	cRequest := C.nemo_relay_llm_request_new(cHeaders, cContent)
-	if cRequest == nil {
-		return nil, lastError()
+	cRequest, err := callPointer(func() *C.FfiLLMRequest { return C.nemo_relay_llm_request_new(cHeaders, cContent) })
+	if err != nil {
+		return nil, err
 	}
 	defer C.nemo_relay_llm_request_free(cRequest)
-	out := C.nemo_relay_llm_sanitize_request_codec_decode((*C.FfiLlmSanitizeRequestCodec)(ptr), cRequest)
-	if out == nil {
-		return nil, lastError()
+	out, err := callPointer(func() *C.char {
+		return C.nemo_relay_llm_sanitize_request_codec_decode((*C.FfiLlmSanitizeRequestCodec)(ptr), cRequest)
+	})
+	if err != nil {
+		return nil, err
 	}
 	defer C.nemo_relay_string_free(out)
 	return json.RawMessage(C.GoString(out)), nil
@@ -468,16 +470,18 @@ func (codec *LLMRequestSanitizeCodec) Encode(annotated json.RawMessage, original
 	defer C.free(unsafe.Pointer(cHeaders))
 	cContent := C.CString(string(original.Content))
 	defer C.free(unsafe.Pointer(cContent))
-	cOriginal := C.nemo_relay_llm_request_new(cHeaders, cContent)
-	if cOriginal == nil {
-		return LLMRequestDTO{}, lastError()
+	cOriginal, err := callPointer(func() *C.FfiLLMRequest { return C.nemo_relay_llm_request_new(cHeaders, cContent) })
+	if err != nil {
+		return LLMRequestDTO{}, err
 	}
 	defer C.nemo_relay_llm_request_free(cOriginal)
 	cAnnotated := C.CString(string(annotated))
 	defer C.free(unsafe.Pointer(cAnnotated))
-	out := C.nemo_relay_llm_sanitize_request_codec_encode((*C.FfiLlmSanitizeRequestCodec)(ptr), cAnnotated, cOriginal)
-	if out == nil {
-		return LLMRequestDTO{}, lastError()
+	out, err := callPointer(func() *C.FfiLLMRequest {
+		return C.nemo_relay_llm_sanitize_request_codec_encode((*C.FfiLlmSanitizeRequestCodec)(ptr), cAnnotated, cOriginal)
+	})
+	if err != nil {
+		return LLMRequestDTO{}, err
 	}
 	defer C.nemo_relay_llm_request_free(out)
 	headers := C.nemo_relay_llm_request_headers(out)
@@ -499,9 +503,11 @@ func (codec *LLMResponseSanitizeCodec) Decode(response json.RawMessage) (json.Ra
 	defer release()
 	cResponse := C.CString(string(response))
 	defer C.free(unsafe.Pointer(cResponse))
-	out := C.nemo_relay_llm_sanitize_response_codec_decode((*C.FfiLlmSanitizeResponseCodec)(ptr), cResponse)
-	if out == nil {
-		return nil, lastError()
+	out, err := callPointer(func() *C.char {
+		return C.nemo_relay_llm_sanitize_response_codec_decode((*C.FfiLlmSanitizeResponseCodec)(ptr), cResponse)
+	})
+	if err != nil {
+		return nil, err
 	}
 	defer C.nemo_relay_string_free(out)
 	return json.RawMessage(C.GoString(out)), nil
@@ -640,18 +646,18 @@ func codecEncodeCStringForTest(codec *CodecFunc, annotated json.RawMessage, requ
 }
 
 func codecDecodeResultForTest(codec *CodecFunc, request *LLMRequest) (json.RawMessage, error) {
-	result := codecDecodeCStringForTest(codec, request)
-	if result == nil {
-		return nil, lastError()
+	result, err := callPointer(func() *C.char { return codecDecodeCStringForTest(codec, request) })
+	if err != nil {
+		return nil, err
 	}
 	defer C.free(unsafe.Pointer(result))
 	return json.RawMessage(C.GoString(result)), nil
 }
 
 func codecEncodeResultForTest(codec *CodecFunc, annotated json.RawMessage, request *LLMRequest) (json.RawMessage, error) {
-	result := codecEncodeCStringForTest(codec, annotated, request)
-	if result == nil {
-		return nil, lastError()
+	result, err := callPointer(func() *C.char { return codecEncodeCStringForTest(codec, annotated, request) })
+	if err != nil {
+		return nil, err
 	}
 	defer C.free(unsafe.Pointer(result))
 	return json.RawMessage(C.GoString(result)), nil
@@ -675,19 +681,16 @@ func pluginRegisterStatusForTest(plugin Plugin, raw json.RawMessage, ctx *Plugin
 }
 
 func pluginValidateResultForTest(plugin Plugin, raw json.RawMessage) (json.RawMessage, error) {
-	result := pluginValidateCStringForTest(plugin, raw)
-	if result == nil {
-		return nil, lastError()
+	result, err := callPointer(func() *C.char { return pluginValidateCStringForTest(plugin, raw) })
+	if err != nil {
+		return nil, err
 	}
 	defer C.free(unsafe.Pointer(result))
 	return json.RawMessage(C.GoString(result)), nil
 }
 
 func pluginRegisterErrorForTest(plugin Plugin, raw json.RawMessage, ctx *PluginContext) error {
-	if pluginRegisterStatusForTest(plugin, raw, ctx) != 0 {
-		return lastError()
-	}
-	return nil
+	return callStatus(func() C.int32_t { return pluginRegisterStatusForTest(plugin, raw, ctx) })
 }
 
 // ---------------------------------------------------------------------------
@@ -974,9 +977,9 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, contextJSON *C.char,
 	goNext := func(args json.RawMessage) (ToolExecutionResult, error) {
 		cArgs := C.CString(string(args))
 		defer C.free(unsafe.Pointer(cArgs))
-		result := C.callToolExecNext(nextFn, cArgs, nextCtx)
-		if result == nil {
-			return ToolExecutionResult{}, lastError()
+		result, err := callPointer(func() *C.char { return C.callToolExecNext(nextFn, cArgs, nextCtx) })
+		if err != nil {
+			return ToolExecutionResult{}, err
 		}
 		defer C.nemo_relay_string_free(result)
 		return decodeToolExecutionResult([]byte(C.GoString(result)))
@@ -1019,9 +1022,9 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, name *C.char, nativeJ
 		cJSON := C.CString(string(reqJSON))
 		defer C.free(unsafe.Pointer(cJSON))
 
-		result := C.callLlmExecNext(nextFn, cJSON, nextCtx)
-		if result == nil {
-			return nil, lastError()
+		result, err := callPointer(func() *C.char { return C.callLlmExecNext(nextFn, cJSON, nextCtx) })
+		if err != nil {
+			return nil, err
 		}
 		defer C.nemo_relay_string_free(result)
 		return json.RawMessage(C.GoString(result)), nil

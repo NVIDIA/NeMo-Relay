@@ -110,16 +110,14 @@ func drainLlmStream(t *testing.T, stream *LlmStream) {
 func assertCheckedValueFailureCoverage(t *testing.T) {
 	t.Helper()
 
-	setLastErrorMessage("forced checkedValue failure")
-	_, err := checkedValue(5, 1)
+	_, err := checkedValue(errors.New("forced checkedValue failure"), 1)
 	assertErrorContains(t, err, "forced checkedValue failure", "checkedValue")
 }
 
 func assertCheckedJSONStringFailureCoverage(t *testing.T) {
 	t.Helper()
 
-	setLastErrorMessage("forced checkedJSONString failure")
-	_, err := checkedJSONString(5, func() string { return "{}" }, noOpCheckedJSONStringFree)
+	_, err := checkedJSONString(errors.New("forced checkedJSONString failure"), func() string { return "{}" }, noOpCheckedJSONStringFree)
 	assertErrorContains(t, err, "forced checkedJSONString failure", "checkedJSONString")
 }
 

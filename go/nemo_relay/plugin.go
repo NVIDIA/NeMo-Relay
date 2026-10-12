@@ -92,8 +92,8 @@ import (
 
 const errPluginContextClosed = "plugin context is closed"
 
-func checkedJSONString(status int32, raw func() string, free func()) (string, error) {
-	if err := checkStatus(C.int32_t(status)); err != nil {
+func checkedJSONString(err error, raw func() string, free func()) (string, error) {
+	if err != nil {
 		return "", err
 	}
 	defer free()
@@ -113,8 +113,7 @@ var (
 		defer runtime.UnlockOSThread()
 		var activation *C.FfiPluginHostActivation
 		var report *C.char
-		status := C.nemo_relay_plugin_initialize(cConfig, cAdditional, &activation, &report)
-		if err := checkStatus(status); err != nil {
+		if err := callStatus(func() C.int32_t { return C.nemo_relay_plugin_initialize(cConfig, cAdditional, &activation, &report) }); err != nil {
 			cleanupPartialPluginHostActivation(activation, report)
 			return nil, "", err
 		}
@@ -134,8 +133,7 @@ var (
 			defer C.free(unsafe.Pointer(additional))
 		}
 		var report *C.char
-		status := C.nemo_relay_plugin_validate(config, additional, &report)
-		return checkedJSONString(int32(status), func() string { return C.GoString(report) }, func() {
+		return checkedJSONString(callStatus(func() C.int32_t { return C.nemo_relay_plugin_validate(config, additional, &report) }), func() string { return C.GoString(report) }, func() {
 			C.nemo_relay_string_free(report)
 		})
 	}
@@ -143,22 +141,23 @@ var (
 		config := C.CString(configJSON)
 		defer C.free(unsafe.Pointer(config))
 		var report *C.char
-		status := C.nemo_relay_plugin_validate_exact(config, &report)
-		return checkedJSONString(int32(status), func() string { return C.GoString(report) }, func() {
+		return checkedJSONString(callStatus(func() C.int32_t { return C.nemo_relay_plugin_validate_exact(config, &report) }), func() string { return C.GoString(report) }, func() {
 			C.nemo_relay_string_free(report)
 		})
 	}
 	pluginHostActivationReportJSON = func(ptr unsafe.Pointer) (string, error) {
 		var report *C.char
-		status := C.nemo_relay_plugin_host_activation_report_json((*C.FfiPluginHostActivation)(ptr), &report)
-		return checkedJSONString(int32(status), func() string { return C.GoString(report) }, func() {
+		return checkedJSONString(callStatus(func() C.int32_t {
+			return C.nemo_relay_plugin_host_activation_report_json((*C.FfiPluginHostActivation)(ptr), &report)
+		}), func() string { return C.GoString(report) }, func() {
 			C.nemo_relay_string_free(report)
 		})
 	}
 	pluginHostActivationIsActive = func(ptr unsafe.Pointer) (bool, error) {
 		var active C.bool
-		status := C.nemo_relay_plugin_host_activation_is_active((*C.FfiPluginHostActivation)(ptr), &active)
-		if err := checkStatus(status); err != nil {
+		if err := callStatus(func() C.int32_t {
+			return C.nemo_relay_plugin_host_activation_is_active((*C.FfiPluginHostActivation)(ptr), &active)
+		}); err != nil {
 			return false, err
 		}
 		return bool(active), nil
@@ -166,8 +165,7 @@ var (
 	clearPluginHostActivation = func(ptr unsafe.Pointer) error {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		status := C.nemo_relay_plugin_host_activation_close((*C.FfiPluginHostActivation)(ptr))
-		return checkStatus(status)
+		return callStatus(func() C.int32_t { return C.nemo_relay_plugin_host_activation_close((*C.FfiPluginHostActivation)(ptr)) })
 	}
 	freePluginHostActivation = func(ptr unsafe.Pointer) {
 		activation := (*C.FfiPluginHostActivation)(ptr)
@@ -175,8 +173,7 @@ var (
 	}
 	listPluginKindsJSON = func() (string, error) {
 		var out *C.char
-		status := C.nemo_relay_list_plugin_kinds_json(&out)
-		return checkedJSONString(int32(status), func() string { return C.GoString(out) }, func() {
+		return checkedJSONString(callStatus(func() C.int32_t { return C.nemo_relay_list_plugin_kinds_json(&out) }), func() string { return C.GoString(out) }, func() {
 			C.nemo_relay_string_free(out)
 		})
 	}
@@ -587,14 +584,15 @@ func RegisterPlugin(pluginKind string, plugin Plugin) error {
 	cPluginKind := C.CString(pluginKind)
 	defer C.free(unsafe.Pointer(cPluginKind))
 	userData := registerClosure(plugin)
-	status := C.nemo_relay_register_plugin(
-		cPluginKind,
-		(C.NemoRelayPluginValidateCb)(C.goPluginValidateTrampoline),
-		(C.NemoRelayPluginRegisterCb)(C.goPluginRegisterTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	)
-	return checkStatus(status)
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_register_plugin(
+			cPluginKind,
+			(C.NemoRelayPluginValidateCb)(C.goPluginValidateTrampoline),
+			(C.NemoRelayPluginRegisterCb)(C.goPluginRegisterTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // DeregisterPlugin removes a previously registered plugin kind.
@@ -604,7 +602,7 @@ func RegisterPlugin(pluginKind string, plugin Plugin) error {
 func DeregisterPlugin(pluginKind string) error {
 	cPluginKind := C.CString(pluginKind)
 	defer C.free(unsafe.Pointer(cPluginKind))
-	return checkStatus(C.nemo_relay_deregister_plugin(cPluginKind))
+	return callStatus(func() C.int32_t { return C.nemo_relay_deregister_plugin(cPluginKind) })
 }
 
 // RegisterSubscriber registers an infallible event subscriber for this
@@ -617,13 +615,15 @@ func (ctx *PluginContext) RegisterSubscriber(name string, fn EventSubscriberFunc
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_subscriber(
-		ctx.ptr,
-		cName,
-		(C.NemoRelayEventSubscriberFn)(C.goEventSubscriberTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_subscriber(
+			ctx.ptr,
+			cName,
+			(C.NemoRelayEventSubscriberFn)(C.goEventSubscriberTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterEventMetadataInjector registers an event metadata injector for this
@@ -639,14 +639,16 @@ func (ctx *PluginContext) RegisterEventMetadataInjector(name string, priority in
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_event_metadata_injector(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		(C.NemoRelayEventMetadataInjectorFn)(C.goEventMetadataInjectorTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_event_metadata_injector(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			(C.NemoRelayEventMetadataInjectorFn)(C.goEventMetadataInjectorTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 func (ctx *PluginContext) registerEventSanitizer(name string, priority int32, fn EventSanitizeFunc, surface int) error {
@@ -658,16 +660,16 @@ func (ctx *PluginContext) registerEventSanitizer(name string, priority int32, fn
 	userData := registerClosure(fn)
 	callback := C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline)
 	free := C.NemoRelayFreeFn(C.goFreeTrampoline)
-	var status C.int32_t
-	switch surface {
-	case 0:
-		status = C.nemo_relay_plugin_context_register_mark_sanitize_guardrail(ctx.ptr, cName, C.int32_t(priority), callback, userData, free)
-	case 1:
-		status = C.nemo_relay_plugin_context_register_scope_sanitize_start_guardrail(ctx.ptr, cName, C.int32_t(priority), callback, userData, free)
-	default:
-		status = C.nemo_relay_plugin_context_register_scope_sanitize_end_guardrail(ctx.ptr, cName, C.int32_t(priority), callback, userData, free)
-	}
-	return checkStatus(status)
+	return callStatus(func() C.int32_t {
+		switch surface {
+		case 0:
+			return C.nemo_relay_plugin_context_register_mark_sanitize_guardrail(ctx.ptr, cName, C.int32_t(priority), callback, userData, free)
+		case 1:
+			return C.nemo_relay_plugin_context_register_scope_sanitize_start_guardrail(ctx.ptr, cName, C.int32_t(priority), callback, userData, free)
+		default:
+			return C.nemo_relay_plugin_context_register_scope_sanitize_end_guardrail(ctx.ptr, cName, C.int32_t(priority), callback, userData, free)
+		}
+	})
 }
 
 // RegisterMarkSanitizeGuardrail registers a mark event sanitizer for this component.
@@ -693,14 +695,16 @@ func (ctx *PluginContext) RegisterToolSanitizeRequestGuardrail(name string, prio
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_tool_sanitize_request_guardrail(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		(C.NemoRelayToolSanitizeFn)(C.goToolSanitizeTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_tool_sanitize_request_guardrail(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			(C.NemoRelayToolSanitizeFn)(C.goToolSanitizeTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterToolSanitizeResponseGuardrail registers a tool sanitize-response guardrail for this component.
@@ -711,14 +715,16 @@ func (ctx *PluginContext) RegisterToolSanitizeResponseGuardrail(name string, pri
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_tool_sanitize_response_guardrail(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		(C.NemoRelayToolSanitizeFn)(C.goToolSanitizeTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_tool_sanitize_response_guardrail(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			(C.NemoRelayToolSanitizeFn)(C.goToolSanitizeTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterToolConditionalExecutionGuardrail registers a tool conditional-execution guardrail for this component.
@@ -729,14 +735,16 @@ func (ctx *PluginContext) RegisterToolConditionalExecutionGuardrail(name string,
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_tool_conditional_execution_guardrail(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		(C.NemoRelayToolConditionalFn)(C.goToolConditionalTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_tool_conditional_execution_guardrail(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			(C.NemoRelayToolConditionalFn)(C.goToolConditionalTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterLlmSanitizeRequestGuardrail registers an LLM sanitize-request guardrail for this component.
@@ -747,14 +755,16 @@ func (ctx *PluginContext) RegisterLlmSanitizeRequestGuardrail(name string, prior
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_llm_sanitize_request_guardrail(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		(C.NemoRelayLlmSanitizeRequestCb)(C.goLlmRequestTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_llm_sanitize_request_guardrail(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			(C.NemoRelayLlmSanitizeRequestCb)(C.goLlmRequestTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterLlmSanitizeResponseGuardrail registers an LLM sanitize-response guardrail for this component.
@@ -765,14 +775,16 @@ func (ctx *PluginContext) RegisterLlmSanitizeResponseGuardrail(name string, prio
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_llm_sanitize_response_guardrail(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		(C.NemoRelayLlmSanitizeResponseCb)(C.goLlmResponseTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_llm_sanitize_response_guardrail(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			(C.NemoRelayLlmSanitizeResponseCb)(C.goLlmResponseTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterLlmConditionalExecutionGuardrail registers an LLM conditional-execution guardrail for this component.
@@ -783,14 +795,16 @@ func (ctx *PluginContext) RegisterLlmConditionalExecutionGuardrail(name string, 
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_llm_conditional_execution_guardrail(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		(C.NemoRelayLlmConditionalCb)(C.goLlmConditionalTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_llm_conditional_execution_guardrail(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			(C.NemoRelayLlmConditionalCb)(C.goLlmConditionalTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterLlmRequestIntercept registers an LLM request intercept for this component.
@@ -804,15 +818,17 @@ func (ctx *PluginContext) RegisterLlmRequestIntercept(name string, priority int3
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_llm_request_intercept(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		C._Bool(breakChain),
-		(C.NemoRelayLlmRequestInterceptCb)(C.goLlmRequestInterceptTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_llm_request_intercept(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			C._Bool(breakChain),
+			(C.NemoRelayLlmRequestInterceptCb)(C.goLlmRequestInterceptTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterToolRequestIntercept registers a tool request intercept for this component.
@@ -826,15 +842,17 @@ func (ctx *PluginContext) RegisterToolRequestIntercept(name string, priority int
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_tool_request_intercept(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		C._Bool(breakChain),
-		(C.NemoRelayToolSanitizeFn)(C.goToolSanitizeTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_tool_request_intercept(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			C._Bool(breakChain),
+			(C.NemoRelayToolSanitizeFn)(C.goToolSanitizeTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterLlmExecutionIntercept registers an LLM execution intercept for this component.
@@ -845,14 +863,16 @@ func (ctx *PluginContext) RegisterLlmExecutionIntercept(name string, priority in
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_llm_execution_intercept(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		(C.NemoRelayLlmExecInterceptCb)(C.goLlmExecInterceptTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_llm_execution_intercept(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			(C.NemoRelayLlmExecInterceptCb)(C.goLlmExecInterceptTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterLlmStreamExecutionIntercept registers a streaming LLM execution intercept for this component.
@@ -863,14 +883,16 @@ func (ctx *PluginContext) RegisterLlmStreamExecutionIntercept(name string, prior
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_llm_stream_execution_intercept(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		(C.NemoRelayLlmExecInterceptCb)(C.goLlmExecInterceptTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_llm_stream_execution_intercept(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			(C.NemoRelayLlmExecInterceptCb)(C.goLlmExecInterceptTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 // RegisterToolExecutionIntercept registers a tool execution intercept for this component.
@@ -881,14 +903,16 @@ func (ctx *PluginContext) RegisterToolExecutionIntercept(name string, priority i
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)
-	return checkStatus(C.nemo_relay_plugin_context_register_tool_execution_intercept(
-		ctx.ptr,
-		cName,
-		C.int32_t(priority),
-		(C.NemoRelayToolExecInterceptCb)(C.goToolExecInterceptTrampoline),
-		userData,
-		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
-	))
+	return callStatus(func() C.int32_t {
+		return C.nemo_relay_plugin_context_register_tool_execution_intercept(
+			ctx.ptr,
+			cName,
+			C.int32_t(priority),
+			(C.NemoRelayToolExecInterceptCb)(C.goToolExecInterceptTrampoline),
+			userData,
+			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+		)
+	})
 }
 
 func pluginConfigCString(config PluginConfig) (*C.char, error) {

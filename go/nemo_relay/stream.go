@@ -150,6 +150,8 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 	}
 	s.mu.Unlock()
 	defer s.finishNext()
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	var chunk *C.char
 	switch rc := C.nemo_relay_stream_next(ptr, &chunk); rc {
@@ -220,10 +222,7 @@ func (s *LlmStream) Close() error {
 }
 
 func (s *LlmStream) closeNative(ptr *C.FfiStream) {
-	var err error
-	if C.nemo_relay_stream_close(ptr) != 0 {
-		err = lastError()
-	}
+	err := callStatus(func() C.int32_t { return C.nemo_relay_stream_close(ptr) })
 	s.mu.Lock()
 	for s.inFlight > 0 {
 		idle := s.idle
