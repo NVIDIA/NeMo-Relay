@@ -1708,6 +1708,19 @@ pub fn wrap_js_llm_exec_intercept_fn(func: Arc<PromiseAwareFn>) -> LlmExecutionF
     )
 }
 
+/// Wrap a JS `(request: object, signal: AbortSignal) => AsyncIterable` streaming LLM provider.
+pub fn wrap_js_llm_stream_fn(func: Arc<PromiseAwareFn>) -> LlmStreamExecutionNextFn {
+    Arc::new(move |request: LlmRequest| {
+        let func = func.clone();
+        Box::pin(async move {
+            let request = serde_json::to_value(&request).map_err(|error| {
+                FlowError::Internal(format!("failed to serialize LlmRequest: {error}"))
+            })?;
+            func.call_stream(request).await
+        })
+    })
+}
+
 /// Wrap a JS function `(request, context, next) => result` for LLM stream execution intercept.
 ///
 /// The JS callback receives the `LlmRequest` serialized as a plain JSON object

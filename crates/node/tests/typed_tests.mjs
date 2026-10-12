@@ -839,6 +839,38 @@ describe('typedLlmStreamExecute', () => {
     assert.equal(await stream.next(), null);
   });
 
+  it('rejects the call when the producer rejects or returns a non-iterable', async () => {
+    const passthrough = new JsonPassthrough();
+    await assert.rejects(
+      () =>
+        typedLlmStreamExecute(
+          'stream_producer_rejects',
+          makeNative(),
+          async () => {
+            throw new Error('typed producer rejected');
+          },
+          () => {},
+          () => null,
+          passthrough,
+          passthrough,
+        ),
+      /typed producer rejected/,
+    );
+    await assert.rejects(
+      () =>
+        typedLlmStreamExecute(
+          'stream_producer_non_iterable',
+          makeNative(),
+          () => ({ invalid: true }),
+          () => {},
+          () => null,
+          passthrough,
+          passthrough,
+        ),
+      /must return an AsyncIterable/i,
+    );
+  });
+
   it('stream with envelopeCodec for chunks and response', async () => {
     const native = makeNative();
 

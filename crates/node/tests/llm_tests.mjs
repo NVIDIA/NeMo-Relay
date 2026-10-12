@@ -232,11 +232,10 @@ describe('LLM execute', () => {
             { ok: true },
           );
           stage('stream execution');
-          const stream = await lib.llmStreamCallExecute('small-stack-stream', request(), wrapper => {
-            assert.equal(wrapper.__nemo_relay_native.content.intercepted, true);
-            lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'hello' });
-            lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'world' });
-            lib.endStream(wrapper.__nemo_relay_stream_id);
+          const stream = await lib.llmStreamCallExecute('small-stack-stream', request(), async function* (intercepted) {
+            assert.equal(intercepted.content.intercepted, true);
+            yield { token: 'hello' };
+            yield { token: 'world' };
           });
           stage('stream polling');
           assert.deepEqual(await stream.next(), { token: 'hello' });
@@ -629,9 +628,8 @@ describe('LLM guardrails', () => {
       const stream = await llmStreamCallExecute(
         'streaming_resolved_sanitizer_codec',
         makeNative(),
-        (wrapper) => {
-          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { delta: 'secret' });
-          lib.endStream(wrapper.__nemo_relay_stream_id);
+        async function* () {
+          yield { delta: 'secret' };
         },
         null,
         () => response,
@@ -680,9 +678,8 @@ describe('LLM guardrails', () => {
         return llmStreamCallExecute(
           'stream_response_scope',
           makeNative(),
-          (wrapper) => {
-            lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'done' });
-            lib.endStream(wrapper.__nemo_relay_stream_id);
+          async function* () {
+            yield { token: 'done' };
           },
           null,
           () => ({ done: true }),
@@ -721,9 +718,8 @@ describe('LLM guardrails', () => {
       const stream = await llmStreamCallExecute(
         'node_stream_flush',
         makeNative(),
-        (wrapper) => {
-          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { delta: 'ok' });
-          lib.endStream(wrapper.__nemo_relay_stream_id);
+        async function* () {
+          yield { delta: 'ok' };
         },
         null,
         () => ({ response: 'ok' }),
@@ -768,10 +764,8 @@ describe('LLM guardrails', () => {
           headers: {},
           content: { model: 'test-model', messages: [] },
         },
-        (wrapper) => {
-          setTimeout(() => {
-            lib.endStream(wrapper.__nemo_relay_stream_id);
-          }, 25);
+        async function* () {
+          await new Promise((resolve) => setTimeout(resolve, 25));
         },
         null,
         () => ({ model: 'test-model', choices: [] }),
@@ -1505,19 +1499,15 @@ describe('LLM intercepts', () => {
     const events = [];
     const observed = {};
     registerSubscriber('node_llm_replace_callback_context', (event) => events.push(event));
-    registerLlmExecutionIntercept(
-      'node_llm_replace_callback_context',
-      10,
-      async (request, _context, next) => {
-        observed.before = lib.capturePropagationContext();
-        observed.replacement = lib.withScopeStack(stack, () => ({
-          context: lib.capturePropagationContext(),
-          traceparent: lib.captureTraceparent(),
-        }));
-        observed.after = lib.capturePropagationContext();
-        return next(request);
-      },
-    );
+    registerLlmExecutionIntercept('node_llm_replace_callback_context', 10, async (request, _context, next) => {
+      observed.before = lib.capturePropagationContext();
+      observed.replacement = lib.withScopeStack(stack, () => ({
+        context: lib.capturePropagationContext(),
+        traceparent: lib.captureTraceparent(),
+      }));
+      observed.after = lib.capturePropagationContext();
+      return next(request);
+    });
     try {
       await llmCallExecuteAsync(
         'replace_callback_context_llm',
@@ -1805,9 +1795,8 @@ describe('LLM intercepts', () => {
       const stream = await llmStreamCallExecute(
         'node_llm_stream_execution_context',
         makeNative(),
-        (wrapper) => {
-          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'ok' });
-          lib.endStream(wrapper.__nemo_relay_stream_id);
+        async function* () {
+          yield { token: 'ok' };
         },
         null,
         () => ({}),
@@ -2016,11 +2005,8 @@ describe('LLM intercepts', () => {
     const stream = await llmStreamCallExecute(
       'stream_llm',
       native,
-      (wrapper) => {
-        lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
-          chunk: wrapper.__nemo_relay_native.content.intercepted,
-        });
-        lib.endStream(wrapper.__nemo_relay_stream_id);
+      async function* (request) {
+        yield { chunk: request.content.intercepted };
       },
       null,
       null,
@@ -2086,9 +2072,8 @@ describe('LLM intercepts', () => {
     });
     try {
       const stream = await lib.withScopeStack(invocationStack, () =>
-        llmStreamCallExecute('retained_next_scope_stream_llm', makeNative(), (wrapper) => {
-          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { scope: lib.getHandle().uuid });
-          lib.endStream(wrapper.__nemo_relay_stream_id);
+        llmStreamCallExecute('retained_next_scope_stream_llm', makeNative(), async function* () {
+          yield { scope: lib.getHandle().uuid };
         }),
       );
       const downstream = await retainedNext();
@@ -2110,9 +2095,9 @@ describe('LLM intercepts', () => {
       next(request),
     );
     try {
-      const stream = await llmStreamCallExecute('incremental_stream_llm', makeNative(), (wrapper) => {
-        lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'first' });
-        completion.then(() => lib.endStream(wrapper.__nemo_relay_stream_id));
+      const stream = await llmStreamCallExecute('incremental_stream_llm', makeNative(), async function* () {
+        yield { token: 'first' };
+        await completion;
       });
       assert.deepEqual(await stream.next(), { token: 'first' });
       releaseCompletion();
@@ -2162,15 +2147,16 @@ describe('LLM intercepts', () => {
       })();
     });
     try {
-      const stream = await llmStreamCallExecute('early_close_stream_llm', makeNative(), (wrapper) => {
-        lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'first' });
-        const poll = setInterval(() => {
-          if (!lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'later' })) {
-            clearInterval(poll);
-            providerEnded = true;
-            lib.endStream(wrapper.__nemo_relay_stream_id);
+      const stream = await llmStreamCallExecute('early_close_stream_llm', makeNative(), async function* () {
+        try {
+          yield { token: 'first' };
+          for (;;) {
+            await new Promise((resolve) => setTimeout(resolve, 1));
+            yield { token: 'later' };
           }
-        }, 1);
+        } finally {
+          providerEnded = true;
+        }
       });
       assert.deepEqual(await stream.next(), { token: 'first' });
       await stream.close();
@@ -2259,16 +2245,14 @@ describe('LLM intercepts', () => {
     registerSubscriber('node_default_lazy_stream_context', (event) => events.push(event));
     try {
       const stream = await lib.withScopeStack(stack, () =>
-        llmStreamCallExecute('node_default_lazy_stream_context', makeNative(), (wrapper) => {
-          setImmediate(() => {
-            observed = {
-              context: lib.capturePropagationContext(),
-              traceparent: lib.captureTraceparent(),
-              headers: wrapper.__nemo_relay_native.headers,
-            };
-            lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'done' });
-            lib.endStream(wrapper.__nemo_relay_stream_id);
-          });
+        llmStreamCallExecute('node_default_lazy_stream_context', makeNative(), async function* (request) {
+          await new Promise((resolve) => setImmediate(resolve));
+          observed = {
+            context: lib.capturePropagationContext(),
+            traceparent: lib.captureTraceparent(),
+            headers: request.headers,
+          };
+          yield { token: 'done' };
         }),
       );
       assert.deepEqual(await stream.next(), { token: 'done' });
@@ -2308,19 +2292,70 @@ describe('LLM intercepts', () => {
       resolveLateContext = resolve;
     });
 
-    const stream = await llmStreamCallExecute('node_default_lazy_stream_expiry', makeNative(), (wrapper) => {
-      lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'done' });
+    const stream = await llmStreamCallExecute('node_default_lazy_stream_expiry', makeNative(), async function* () {
+      yield { token: 'done' };
       setImmediate(() => {
         resolveLateContext({
           active: lib.scopeStackActive(),
           parentUuid: lib.capturePropagationContext().parentUuid,
         });
       });
-      lib.endStream(wrapper.__nemo_relay_stream_id);
     });
     assert.deepEqual(await stream.next(), { token: 'done' });
     assert.equal(await stream.next(), null);
     assert.deepEqual(await lateContext, baseline);
+  });
+
+  it('default stream provider errors reject the stream call without terminating Node', async () => {
+    await assert.rejects(
+      () =>
+        llmStreamCallExecute('provider_sync_throw_stream_llm', makeNative(), () => {
+          throw new TypeError('provider boom');
+        }),
+      /provider boom/,
+    );
+    await assert.rejects(
+      () =>
+        llmStreamCallExecute('provider_reject_stream_llm', makeNative(), async () =>
+          Promise.reject(new Error('provider rejected')),
+        ),
+      /provider rejected/,
+    );
+    await assert.rejects(
+      () => llmStreamCallExecute('provider_non_iterable_stream_llm', makeNative(), () => ({ invalid: true })),
+      /must return an AsyncIterable/i,
+    );
+    await assert.rejects(
+      () =>
+        llmStreamCallExecute('provider_empty_message_stream_llm', makeNative(), () => {
+          throw new Error();
+        }),
+      /unknown error/,
+    );
+  });
+
+  it('default stream provider receives an abort signal when the consumer closes early', async () => {
+    let aborted = false;
+    let cleaned = false;
+    const stream = await llmStreamCallExecute(
+      'provider_abort_stream_llm',
+      makeNative(),
+      async function* (_request, signal) {
+        try {
+          yield { token: 'first' };
+          if (!signal.aborted) {
+            await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+          }
+        } finally {
+          aborted = signal.aborted;
+          cleaned = true;
+        }
+      },
+    );
+    assert.deepEqual(await stream.next(), { token: 'first' });
+    await stream.close();
+    assert.equal(aborted, true);
+    assert.equal(cleaned, true);
   });
 
   it('stream execution next honors concurrent per-call scope-stack replacements', async () => {
@@ -2353,12 +2388,8 @@ describe('LLM intercepts', () => {
       },
     );
     try {
-      const stream = await llmStreamCallExecute('scoped_next_stream_llm', makeNative(), (wrapper) => {
-        lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
-          branch: wrapper.__nemo_relay_native.content.branch,
-          scope: lib.getHandle().uuid,
-        });
-        lib.endStream(wrapper.__nemo_relay_stream_id);
+      const stream = await llmStreamCallExecute('scoped_next_stream_llm', makeNative(), async function* (request) {
+        yield { branch: request.content.branch, scope: lib.getHandle().uuid };
       });
       const chunks = [];
       for (;;) {
@@ -2381,10 +2412,7 @@ describe('LLM intercepts', () => {
     registerLlmStreamExecutionIntercept('node_llm_stream_bigint_next', 10, async (_native, _context, next) => next(1n));
     try {
       await assert.rejects(
-        () =>
-          llmStreamCallExecute('bigint_next_stream_llm', makeNative(), (wrapper) => {
-            lib.endStream(wrapper.__nemo_relay_stream_id);
-          }),
+        () => llmStreamCallExecute('bigint_next_stream_llm', makeNative(), async function* () {}),
         /unsupported bigint value.*JSON/i,
       );
     } finally {
@@ -2419,9 +2447,8 @@ describe('LLM intercepts', () => {
       const streamPromise = llmStreamCallExecute(
         'stream_snapshot_llm',
         makeNative(),
-        (wrapper) => {
-          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { downstream: true });
-          lib.endStream(wrapper.__nemo_relay_stream_id);
+        async function* () {
+          yield { downstream: true };
         },
         null,
         null,
@@ -2465,9 +2492,8 @@ describe('LLM intercepts', () => {
       const stream = await lib.llmStreamCallExecute(
         'process-exit-llm',
         request,
-        (wrapper) => {
-          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { done: true });
-          lib.endStream(wrapper.__nemo_relay_stream_id);
+        async function* () {
+          yield { done: true };
         },
         null,
         null,
@@ -2505,11 +2531,8 @@ describe('LLM intercepts', () => {
         llmStreamCallExecute(
           'stream_invalid_next_llm',
           makeNative(),
-          (wrapper) => {
-            lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
-              chunk: true,
-            });
-            lib.endStream(wrapper.__nemo_relay_stream_id);
+          async function* () {
+            yield { chunk: true };
           },
           null,
           null,
@@ -2597,6 +2620,15 @@ describe('LLM intercepts', () => {
     assert.doesNotMatch(declarations, /registerLlmSanitizeRequestGuardrail\([^\n]*\.\.\.args: any\[\]/);
   });
 
+  it('generated streaming LLM declarations expose the producer, collector, and finalizer contracts', () => {
+    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+
+    assert.match(
+      declarations,
+      /llmStreamCallExecute\([^\n]*func: \(request: Json, signal: AbortSignal\) => AsyncIterable<Json> \| Promise<AsyncIterable<Json>>/,
+    );
+  });
+
   it('generated middleware declarations expose Promise-aware callback types', () => {
     const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
     const registrations = [
@@ -2652,14 +2684,8 @@ describe('LLM intercepts', () => {
       4,
       'global and scope-local unary and streaming LLM intercept declarations must expose the execution codec context',
     );
-    assert.match(
-      declarations,
-      /export type LlmRequestContext = LlmSanitizeRequestContext/,
-    );
-    assert.match(
-      declarations,
-      /export type LlmResponseContext = LlmSanitizeResponseContext/,
-    );
+    assert.match(declarations, /export type LlmRequestContext = LlmSanitizeRequestContext/);
+    assert.match(declarations, /export type LlmResponseContext = LlmSanitizeResponseContext/);
     assert.match(
       declarations,
       /export interface LlmExecutionContext \{[\s\S]*?requestCodec: LlmRequestContext[\s\S]*?responseCodec: LlmResponseContext \| null/,

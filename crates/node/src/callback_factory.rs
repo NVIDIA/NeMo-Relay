@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v16";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v17";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -110,6 +110,40 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     return result;
   }
 
+  function failureEnvelope(error, fallbackMessage) {
+    let message = fallbackMessage;
+    let exceptionType = 'Error';
+    try {
+      if (typeof error === 'string') {
+        message = error;
+      } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+        message = String(error);
+      } else {
+        const errorMessage = error.message;
+        if (typeof errorMessage === 'string' && errorMessage.length > 0) {
+          message = errorMessage;
+        }
+      }
+    } catch {}
+    try {
+      const errorName = error?.name;
+      if (typeof errorName === 'string' && errorName.length > 0) {
+        exceptionType = errorName;
+      }
+    } catch {}
+    return { ok: false, error: message, exceptionType };
+  }
+
+  async function settleEnvelope(fn, encode, complete, fallbackMessage) {
+    let envelope;
+    try {
+      envelope = { ok: true, value: encode(await fn()) };
+    } catch (error) {
+      envelope = failureEnvelope(error, fallbackMessage);
+    }
+    complete(envelope);
+  }
+
   function callPromise(
     fn,
     arg0,
@@ -199,7 +233,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           return;
         }
         if (value == null || typeof value[Symbol.asyncIterator] !== 'function') {
-          throw new TypeError('streaming execution intercept must return an AsyncIterable');
+          throw new TypeError('streaming callback must return an AsyncIterable');
         }
         resolve();
         const iterator = value[Symbol.asyncIterator]();
@@ -222,27 +256,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         settlePublication();
       }).catch((error) => {
         settlePublication();
-        let message = 'unknown error';
-        let exceptionType = 'Error';
-        try {
-          if (typeof error === 'string') {
-            message = error;
-          } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
-            message = String(error);
-          } else if (error != null) {
-            const errorMessage = error.message;
-            if (typeof errorMessage === 'string') {
-              message = errorMessage;
-            }
-          }
-        } catch {}
-        try {
-          const errorName = error?.name;
-          if (typeof errorName === 'string' && errorName.length > 0) {
-            exceptionType = errorName;
-          }
-        } catch {}
-        reject(message, exceptionType);
+        const failure = failureEnvelope(error, 'unknown error');
+        reject(failure.error, failure.exceptionType);
       });
     };
     eventSanitizerContext.run(token, invoke);
@@ -255,22 +270,25 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           const value = fn(...args);
           return { ok: true, value: jsonValue(value === undefined ? null : value) };
         } catch (error) {
-          let message = 'JavaScript callback failed';
-          let exceptionType = 'Error';
-          try {
-            const errorMessage = error?.message;
-            if (typeof errorMessage === 'string') {
-              message = errorMessage;
-            }
-          } catch {}
-          try {
-            const errorName = error?.name;
-            if (typeof errorName === 'string' && errorName.length > 0) {
-              exceptionType = errorName;
-            }
-          } catch {}
-          return { ok: false, error: message, exceptionType };
+          return failureEnvelope(error, 'JavaScript callback failed');
         }
+      };
+    },
+
+    collector(fn) {
+      return function __nemo_relay_collector_wrapper(chunk, complete) {
+        settleEnvelope(() => fn(chunk), () => null, complete, 'JavaScript collector callback failed');
+      };
+    },
+
+    finalizer(fn) {
+      return function __nemo_relay_finalizer_wrapper(complete) {
+        settleEnvelope(
+          fn,
+          (value) => jsonValue(value === undefined ? null : value),
+          complete,
+          'JavaScript finalizer callback failed',
+        );
       };
     },
 
@@ -293,19 +311,9 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         streamEnd,
       ) {
         if (error != null) {
-          let message = 'unknown error';
-          let exceptionType = 'Error';
-          try {
-            message = String(error?.message ?? error);
-          } catch {}
-          try {
-            const errorName = error?.name;
-            if (typeof errorName === 'string' && errorName.length > 0) {
-              exceptionType = errorName;
-            }
-          } catch {}
           if (typeof reject === 'function') {
-            reject(message, exceptionType);
+            const failure = failureEnvelope(error, 'unknown error');
+            reject(failure.error, failure.exceptionType);
           }
           return;
         }
@@ -326,25 +334,6 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           streamPush,
           streamEnd,
         );
-      };
-    },
-
-    scopedStream(fn) {
-      return function __nemo_relay_scoped_stream_wrapper(
-        arg,
-        scopeStack,
-        propagationParentUuid,
-        propagationContext,
-      ) {
-        const current = eventSanitizerContext.getStore();
-        const token = callbackStore(
-          current?.publicationState ?? { active: false },
-          current?.publicationContextId,
-          scopeStack,
-          propagationParentUuid,
-          propagationContext,
-        );
-        return eventSanitizerContext.run(token, () => fn(arg));
       };
     },
 
@@ -431,13 +420,6 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       return true;
     },
 
-    expireCallbackContext() {
-      const current = eventSanitizerContext.getStore();
-      if (current === undefined) {
-        return;
-      }
-      expireCallbackStore(current);
-    },
   };
 })()"#;
 
@@ -485,11 +467,12 @@ pub(crate) fn wrap_promise_callback(env: &Env, func: &JsFunction) -> napi::Resul
     wrap_callback(env, func, "promise")
 }
 
-pub(crate) fn wrap_scoped_stream_callback(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<JsFunction> {
-    wrap_callback(env, func, "scopedStream")
+pub(crate) fn wrap_collector_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
+    wrap_callback(env, func, "collector")
+}
+
+pub(crate) fn wrap_finalizer_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
+    wrap_callback(env, func, "finalizer")
 }
 
 pub(crate) fn wrap_scoped_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
@@ -562,13 +545,6 @@ pub(crate) fn callback_propagation_context(
         <crate::api::PropagationContext as FromNapiValue>::from_napi_value(env.raw(), value.raw())
             .map(Some)
     }
-}
-
-pub(crate) fn expire_callback_context(env: &Env) -> napi::Result<()> {
-    let factories = callback_factories(env)?;
-    let expire: JsFunction = factories.get_named_property("expireCallbackContext")?;
-    expire.call::<JsUnknown>(None, &[])?;
-    Ok(())
 }
 
 pub(crate) fn with_callback_scope_stack(

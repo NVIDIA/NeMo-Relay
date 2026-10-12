@@ -754,7 +754,7 @@ impl PromiseAwareFn {
         args: Json,
         next: JsonStreamNextFn,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
-        self.call_with_stream_next_inner(PrimaryArg::Json(args), false, next)
+        self.call_with_stream_next_inner(PrimaryArg::Json(args), false, Some(next))
             .await
     }
 
@@ -765,7 +765,16 @@ impl PromiseAwareFn {
         build_arg0: Arg0Builder,
         next: JsonStreamNextFn,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
-        self.call_with_stream_next_inner(PrimaryArg::Build(build_arg0), true, next)
+        self.call_with_stream_next_inner(PrimaryArg::Build(build_arg0), true, Some(next))
+            .await
+    }
+
+    /// Call the JS function and expose the `AsyncIterable` it returns as a lazy stream.
+    pub async fn call_stream(
+        &self,
+        args: Json,
+    ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
+        self.call_with_stream_next_inner(PrimaryArg::Json(args), false, None)
             .await
     }
 
@@ -773,7 +782,7 @@ impl PromiseAwareFn {
         &self,
         arg0: PrimaryArg,
         spread: bool,
-        next: JsonStreamNextFn,
+        next: Option<JsonStreamNextFn>,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
         let (chunk_sender, chunk_receiver) =
@@ -782,7 +791,9 @@ impl PromiseAwareFn {
             CallCompletion::stream(ready_sender, chunk_sender);
         let cancellation = CallCancellation::default();
         let mut cancellation_guard = CallCancellationGuard::new(cancellation.clone());
-        let continuation_context = MiddlewareContinuationContext::capture();
+        let continuation_context = next
+            .as_ref()
+            .map(|_| MiddlewareContinuationContext::capture());
         let propagation_context = capture_propagation_context().ok();
         let propagation_parent_uuid = propagation_context
             .as_ref()
@@ -798,7 +809,7 @@ impl PromiseAwareFn {
             Ok(CallArgs {
                 arg0,
                 spread,
-                next: Some(NextFn::Stream(next)),
+                next: next.map(NextFn::Stream),
                 publication: false,
                 publication_context_id: publication_callback_context_id(),
                 scope_stack: Some(current_scope_stack()),
@@ -806,7 +817,7 @@ impl PromiseAwareFn {
                 propagation_context,
                 publication_buffer: capture_nested_publication_buffer(),
                 stream_result: true,
-                continuation_context: Some(continuation_context),
+                continuation_context,
                 cancellation: cancellation.clone(),
                 completion,
             }),
