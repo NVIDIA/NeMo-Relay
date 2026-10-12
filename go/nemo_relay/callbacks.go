@@ -97,6 +97,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -123,6 +124,17 @@ func setLastErrorMessage(msg string) {
 	cMsg := C.CString(msg)
 	defer C.free(unsafe.Pointer(cMsg))
 	C.nemo_relay_set_last_error_message(cMsg)
+}
+
+const nemoRelayStatusInternal C.int32_t = 5
+
+func recoverCallbackPanic(kind string, onPanic func()) {
+	if r := recover(); r != nil {
+		setLastErrorMessage(fmt.Sprintf("%s callback panicked: %v", kind, r))
+		if onPanic != nil {
+			onPanic()
+		}
+	}
 }
 
 // registerClosure stores fn in the global registry and returns an
@@ -680,7 +692,8 @@ func pluginRegisterErrorForTest(plugin Plugin, raw json.RawMessage, ctx *PluginC
 // ---------------------------------------------------------------------------
 
 //export goToolSanitizeTrampoline
-func goToolSanitizeTrampoline(userData unsafe.Pointer, name *C.char, argsJSON *C.char) *C.char {
+func goToolSanitizeTrampoline(userData unsafe.Pointer, name *C.char, argsJSON *C.char) (cResult *C.char) {
+	defer recoverCallbackPanic("tool sanitize", func() { cResult = nil })
 	fn := lookupClosure(userData).(ToolSanitizeFunc)
 	goName := C.GoString(name)
 	goArgs := json.RawMessage(C.GoString(argsJSON))
@@ -689,7 +702,8 @@ func goToolSanitizeTrampoline(userData unsafe.Pointer, name *C.char, argsJSON *C
 }
 
 //export goToolConditionalTrampoline
-func goToolConditionalTrampoline(userData unsafe.Pointer, name *C.char, argsJSON *C.char) *C.char {
+func goToolConditionalTrampoline(userData unsafe.Pointer, name *C.char, argsJSON *C.char) (cResult *C.char) {
+	defer recoverCallbackPanic("tool conditional guardrail", func() { cResult = nil })
 	fn := lookupClosure(userData).(ToolConditionalFunc)
 	goName := C.GoString(name)
 	goArgs := json.RawMessage(C.GoString(argsJSON))
@@ -701,7 +715,8 @@ func goToolConditionalTrampoline(userData unsafe.Pointer, name *C.char, argsJSON
 }
 
 //export goConditionalMiddlewareGuardrailTrampoline
-func goConditionalMiddlewareGuardrailTrampoline(userData unsafe.Pointer, kindsJSON *C.char, registrationName *C.char) *C.char {
+func goConditionalMiddlewareGuardrailTrampoline(userData unsafe.Pointer, kindsJSON *C.char, registrationName *C.char) (cResult *C.char) {
+	defer recoverCallbackPanic("conditional middleware guardrail", func() { cResult = nil })
 	fn := lookupClosure(userData).(ConditionalMiddlewareGuardrailFunc)
 	var kinds []RuntimeRegistrationKind
 	if err := json.Unmarshal([]byte(C.GoString(kindsJSON)), &kinds); err != nil {
@@ -716,7 +731,8 @@ func goConditionalMiddlewareGuardrailTrampoline(userData unsafe.Pointer, kindsJS
 }
 
 //export goToolExecTrampoline
-func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) *C.char {
+func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) (cResult *C.char) {
+	defer recoverCallbackPanic("tool execution", func() { cResult = nil })
 	fn := lookupClosure(userData).(ToolExecutionFunc)
 	goArgs := json.RawMessage(C.GoString(argsJSON))
 	result, err := fn(goArgs)
@@ -733,15 +749,23 @@ func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) *C.char {
 	return C.CString(string(resultJSON))
 }
 
+func logSubscriberPanic() {
+	if r := recover(); r != nil {
+		_ = Error("callbacks", "event subscriber callback panicked", map[string]any{"panic": fmt.Sprint(r)})
+	}
+}
+
 //export goEventSubscriberTrampoline
 func goEventSubscriberTrampoline(userData unsafe.Pointer, event *C.FfiEvent) {
+	defer logSubscriberPanic()
 	fn := lookupClosure(userData).(EventSubscriberFunc)
 	goEvent := newEvent(event)
 	fn(goEvent)
 }
 
 //export goEventMetadataInjectorTrampoline
-func goEventMetadataInjectorTrampoline(userData unsafe.Pointer, event *C.FfiEvent) *C.char {
+func goEventMetadataInjectorTrampoline(userData unsafe.Pointer, event *C.FfiEvent) (cResult *C.char) {
+	defer recoverCallbackPanic("event metadata injector", func() { cResult = nil })
 	fn := lookupClosure(userData).(EventMetadataInjectorFunc)
 	metadata, err := fn(newEvent(event))
 	if err != nil {
@@ -760,7 +784,8 @@ func goEventMetadataInjectorTrampoline(userData unsafe.Pointer, event *C.FfiEven
 }
 
 //export goEventSanitizeTrampoline
-func goEventSanitizeTrampoline(userData unsafe.Pointer, event *C.FfiEvent, fieldsJSON *C.char) *C.char {
+func goEventSanitizeTrampoline(userData unsafe.Pointer, event *C.FfiEvent, fieldsJSON *C.char) (cResult *C.char) {
+	defer recoverCallbackPanic("event sanitizer", func() { cResult = nil })
 	fn := lookupClosure(userData).(EventSanitizeFunc)
 	var fields EventSanitizeFields
 	if err := json.Unmarshal([]byte(C.GoString(fieldsJSON)), &fields); err != nil {
@@ -781,7 +806,8 @@ func goFreeTrampoline(userData unsafe.Pointer) {
 }
 
 //export goLlmRequestTrampoline
-func goLlmRequestTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest, context C.NemoRelayLlmSanitizeRequestContext) *C.FfiLLMRequest {
+func goLlmRequestTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest, context C.NemoRelayLlmSanitizeRequestContext) (cResult *C.FfiLLMRequest) {
+	defer recoverCallbackPanic("LLM request sanitizer", func() { cResult = nil })
 	fn := lookupClosure(userData).(LLMRequestFunc)
 	cHeaders := C.nemo_relay_llm_request_headers(request)
 	cContent := C.nemo_relay_llm_request_content(request)
@@ -838,7 +864,8 @@ func llmCodecIdentity(codecKind uint32, codecID *string) LLMCodec {
 }
 
 //export goLlmResponseTrampoline
-func goLlmResponseTrampoline(userData unsafe.Pointer, responseJSON *C.char, context C.NemoRelayLlmSanitizeResponseContext) *C.char {
+func goLlmResponseTrampoline(userData unsafe.Pointer, responseJSON *C.char, context C.NemoRelayLlmSanitizeResponseContext) (cResult *C.char) {
+	defer recoverCallbackPanic("LLM response sanitizer", func() { cResult = nil })
 	fn := lookupClosure(userData).(LLMResponseFunc)
 	invocation := newLLMSanitizeCodecInvocation()
 	defer invocation.invalidate()
@@ -875,7 +902,8 @@ func llmSanitizeResponseContextFromC(
 }
 
 //export goLlmConditionalTrampoline
-func goLlmConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *C.char {
+func goLlmConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) (cResult *C.char) {
+	defer recoverCallbackPanic("LLM conditional guardrail", func() { cResult = nil })
 	fn := lookupClosure(userData).(LLMConditionalFunc)
 
 	// Extract headers and content from the incoming FfiLLMRequest
@@ -894,7 +922,8 @@ func goLlmConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMReques
 }
 
 //export goLlmExecTrampoline
-func goLlmExecTrampoline(userData unsafe.Pointer, nativeJSON *C.char) *C.char {
+func goLlmExecTrampoline(userData unsafe.Pointer, nativeJSON *C.char) (cResult *C.char) {
+	defer recoverCallbackPanic("LLM execution", func() { cResult = nil })
 	fn := lookupClosure(userData).(LLMExecutionFunc)
 	goJSON := json.RawMessage(C.GoString(nativeJSON))
 
@@ -907,7 +936,8 @@ func goLlmExecTrampoline(userData unsafe.Pointer, nativeJSON *C.char) *C.char {
 }
 
 //export goToolExecInterceptTrampoline
-func goToolExecInterceptTrampoline(userData unsafe.Pointer, contextJSON *C.char, nextFn C.NemoRelayToolExecNextFn, nextCtx unsafe.Pointer) *C.char {
+func goToolExecInterceptTrampoline(userData unsafe.Pointer, contextJSON *C.char, nextFn C.NemoRelayToolExecNextFn, nextCtx unsafe.Pointer) (cResult *C.char) {
+	defer recoverCallbackPanic("tool execution intercept", func() { cResult = nil })
 	fn := lookupClosure(userData).(ToolExecutionInterceptFunc)
 	var goContext ToolExecutionContext
 	if err := json.Unmarshal([]byte(C.GoString(contextJSON)), &goContext); err != nil {
@@ -942,7 +972,8 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, contextJSON *C.char,
 }
 
 //export goLlmExecInterceptTrampoline
-func goLlmExecInterceptTrampoline(userData unsafe.Pointer, name *C.char, nativeJSON *C.char, context C.NemoRelayLlmExecutionContext, nextFn C.NemoRelayLlmExecNextFn, nextCtx unsafe.Pointer) *C.char {
+func goLlmExecInterceptTrampoline(userData unsafe.Pointer, name *C.char, nativeJSON *C.char, context C.NemoRelayLlmExecutionContext, nextFn C.NemoRelayLlmExecNextFn, nextCtx unsafe.Pointer) (cResult *C.char) {
+	defer recoverCallbackPanic("LLM execution intercept", func() { cResult = nil })
 	// Go intentionally omits the interceptor name from its public callback shape.
 	_ = name
 	fn := lookupClosure(userData).(LLMExecutionInterceptFunc)
@@ -978,13 +1009,15 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, name *C.char, nativeJ
 }
 
 //export goCodecDecodeTrampoline
-func goCodecDecodeTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) *C.char {
+func goCodecDecodeTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) (cResult *C.char) {
+	defer recoverCallbackPanic("codec decode", func() { cResult = nil })
 	codec := lookupClosure(userData).(*CodecFunc)
 	return codecDecodeCStringForTest(codec, &LLMRequest{ptr: request})
 }
 
 //export goCodecEncodeTrampoline
-func goCodecEncodeTrampoline(userData unsafe.Pointer, annotatedJSON *C.char, originalRequest *C.FfiLLMRequest) *C.char {
+func goCodecEncodeTrampoline(userData unsafe.Pointer, annotatedJSON *C.char, originalRequest *C.FfiLLMRequest) (cResult *C.char) {
+	defer recoverCallbackPanic("codec encode", func() { cResult = nil })
 	codec := lookupClosure(userData).(*CodecFunc)
 	goAnnotated := json.RawMessage(C.GoString(annotatedJSON))
 	return codecEncodeCStringForTest(codec, goAnnotated, &LLMRequest{ptr: originalRequest})
@@ -994,7 +1027,8 @@ func goCodecEncodeTrampoline(userData unsafe.Pointer, annotatedJSON *C.char, ori
 func goLlmRequestInterceptTrampoline(
 	userData unsafe.Pointer, name *C.char, request *C.FfiLLMRequest,
 	annotatedJSON *C.char, outOutcomeJSON **C.char,
-) C.int32_t {
+) (status C.int32_t) {
+	defer recoverCallbackPanic("LLM request intercept", func() { status = nemoRelayStatusInternal })
 	fn := lookupClosure(userData).(LLMRequestInterceptFunc)
 	goName := C.GoString(name)
 	cHeaders := C.nemo_relay_llm_request_headers(request)
@@ -1028,7 +1062,8 @@ func goLlmRequestInterceptTrampoline(
 }
 
 //export goPluginValidateTrampoline
-func goPluginValidateTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.char) *C.char {
+func goPluginValidateTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.char) (cResult *C.char) {
+	defer recoverCallbackPanic("plugin validate", func() { cResult = nil })
 	plugin := lookupClosure(userData).(Plugin)
 	var raw json.RawMessage
 	if pluginConfigJSON != nil {
@@ -1038,7 +1073,8 @@ func goPluginValidateTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.cha
 }
 
 //export goPluginRegisterTrampoline
-func goPluginRegisterTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.char, ctx *C.FfiPluginContext) C.int32_t {
+func goPluginRegisterTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.char, ctx *C.FfiPluginContext) (status C.int32_t) {
+	defer recoverCallbackPanic("plugin register", func() { status = nemoRelayStatusInternal })
 	plugin := lookupClosure(userData).(Plugin)
 	var raw json.RawMessage
 	if pluginConfigJSON != nil {

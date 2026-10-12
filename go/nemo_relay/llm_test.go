@@ -1652,3 +1652,21 @@ func TestLlmStreamNilCollectorFinalizer(t *testing.T) {
 		}
 	}
 }
+
+func TestLlmExecutionPanicReturnsErrorAndRuntimeStaysUsable(t *testing.T) {
+	_, err := LlmStreamCallExecute("provider_panic_stream_llm", makeRequest(),
+		func(json.RawMessage) (json.RawMessage, error) { panic("provider boom") }, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "LLM execution callback panicked: provider boom") {
+		t.Fatalf("stream provider panic error = %v", err)
+	}
+	_, err = LlmCallExecute("provider_panic_llm", makeRequest(),
+		func(json.RawMessage) (json.RawMessage, error) { panic(errors.New("typed boom")) })
+	if err == nil || !strings.Contains(err.Error(), "LLM execution callback panicked: typed boom") {
+		t.Fatalf("unary provider panic error = %v", err)
+	}
+	result, err := LlmCallExecute("after_panic_llm", makeRequest(),
+		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"ok": true}`), nil })
+	if err != nil || string(result) != `{"ok":true}` {
+		t.Fatalf("call after recovered panic = %s, %v", result, err)
+	}
+}

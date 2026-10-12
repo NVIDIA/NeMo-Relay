@@ -41,6 +41,22 @@ func TestBindingLoggingEnvironment(t *testing.T) {
 			if err := ShutdownLogging(); err != nil {
 				t.Fatalf("logging shutdown failed: %v", err)
 			}
+		} else if helper == "subscriber-panic" {
+			if err := RegisterSubscriber("go_logged_panicking_subscriber", func(Event) {
+				panic("subscriber boom")
+			}); err != nil {
+				t.Fatalf("RegisterSubscriber failed: %v", err)
+			}
+			if _, err := LlmCallExecute("subscriber_panic_logged_llm", makeRequest(),
+				func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil }); err != nil {
+				t.Fatalf("LlmCallExecute failed: %v", err)
+			}
+			if err := FlushSubscribers(); err != nil {
+				t.Fatalf("FlushSubscribers failed: %v", err)
+			}
+			if err := ShutdownLogging(); err != nil {
+				t.Fatalf("logging shutdown failed: %v", err)
+			}
 		} else if helper == "emit" {
 			for ordinal, emit := range []func(string, string, map[string]any) error{
 				Trace, Debug, Info, Warn, Error,
@@ -66,6 +82,59 @@ func TestBindingLoggingEnvironment(t *testing.T) {
 	t.Run("rejects invalid environment", testLoggingInvalidEnvironment)
 	t.Run("flushes file sink during shutdown", testLoggingFileSinkShutdown)
 	t.Run("emits structured records through every level helper", testBindingLoggingLevels)
+	t.Run("logs subscriber panics", testSubscriberPanicIsLogged)
+}
+
+func testSubscriberPanicIsLogged(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "logging.toml")
+	logPath := filepath.Join(directory, "operational.jsonl")
+	config := `[logging]
+level = "error"
+stderr_format = "human"
+flush_interval_millis = 0
+
+[[logging.sinks]]
+path = ` + strconv.Quote(logPath) + `
+level = "error"
+format = "jsonl"
+queue_capacity = 16
+`
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatalf("write logging config: %v", err)
+	}
+
+	command := exec.Command(os.Args[0], loggingEnvironmentTestRunArg)
+	command.Env = loggingTestEnvironment(
+		loggingHelperEnvironment+"=subscriber-panic",
+		"NEMO_RELAY_LOG_CONFIG_PATH="+configPath,
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("subscriber panic helper failed: %v\n%s", err, output)
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read operational log: %v", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(contents)), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode JSONL record: %v", err)
+		}
+		if record["message"] != "event subscriber callback panicked" {
+			continue
+		}
+		if record["level"] != "error" || record["target"] != "nemo_relay.go.callbacks" {
+			t.Fatalf("panic record = %v", record)
+		}
+		fields, _ := record["fields"].(map[string]any)
+		if fields["panic"] != "subscriber boom" {
+			t.Fatalf("panic record fields = %v", record["fields"])
+		}
+		return
+	}
+	t.Fatalf("subscriber panic was not logged:\n%s", contents)
 }
 
 func testBindingLoggingLevels(t *testing.T) {
