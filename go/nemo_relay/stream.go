@@ -51,26 +51,53 @@ import (
 // Calls to Next and Close are synchronized. If not closed explicitly, the
 // underlying C resources are freed automatically by a Go runtime finalizer.
 //
-// Each stream carries its own collector and finalizer callbacks, so multiple
-// streams can operate concurrently without interfering with one another.
+// Each stream carries its own collector and finalizer, so multiple streams can
+// operate concurrently without interfering with one another.
 type LlmStream struct {
-	nextMu            sync.Mutex
-	mu                sync.Mutex
-	ptr               *C.FfiStream
-	closed            bool
-	closing           bool
-	inFlight          int
-	idle              chan struct{}
-	closeDone         chan struct{}
-	closeErr          error
-	callbackGoroutine uint64
-	collector         CollectorFunc
-	finalizer         FinalizerFunc
+	mu        sync.Mutex
+	ptr       *C.FfiStream
+	callbacks *streamCallbacks
+	closed    bool
+	closing   bool
+	inFlight  int
+	idle      chan struct{}
+	closeDone chan struct{}
+	closeErr  error
 }
 
-// currentGoroutineID identifies a callback-reentrant Close so that only that
-// callback avoids waiting for its own completion; external callers wait for
-// collector and finalizer cleanup.
+type streamCallbacks struct {
+	collector CollectorFunc
+	finalizer FinalizerFunc
+
+	mu                sync.Mutex
+	callbackGoroutine uint64
+	callbackDone      chan struct{}
+}
+
+func (c *streamCallbacks) enter() (release func()) {
+	done := make(chan struct{})
+	c.mu.Lock()
+	c.callbackGoroutine = currentGoroutineID()
+	c.callbackDone = done
+	c.mu.Unlock()
+	return func() {
+		c.mu.Lock()
+		c.callbackGoroutine = 0
+		c.callbackDone = nil
+		c.mu.Unlock()
+		close(done)
+	}
+}
+
+func (c *streamCallbacks) activeCallback(id uint64) (<-chan struct{}, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.callbackGoroutine != 0 && c.callbackGoroutine == id {
+		return c.callbackDone, true
+	}
+	return nil, false
+}
+
 func currentGoroutineID() uint64 {
 	var stack [64]byte
 	n := runtime.Stack(stack[:], false)
@@ -82,55 +109,17 @@ func currentGoroutineID() uint64 {
 	return id
 }
 
-func (s *LlmStream) beginCallback() uint64 {
-	id := currentGoroutineID()
-	s.mu.Lock()
-	s.callbackGoroutine = id
-	s.mu.Unlock()
-	return id
-}
-
-func (s *LlmStream) finishCallback(id uint64) {
-	s.mu.Lock()
-	if s.callbackGoroutine == id {
-		s.callbackGoroutine = 0
-	}
-	s.mu.Unlock()
-}
-
-func llmStreamNextResult(rc int32, chunk json.RawMessage, collector CollectorFunc, finalizer *FinalizerFunc) (json.RawMessage, error) {
-	switch rc {
-	case 1:
-		if collector != nil {
-			collector(chunk)
-		}
-		return chunk, nil
-	case 0:
-		if finalizer != nil && *finalizer != nil {
-			(*finalizer)()
-			*finalizer = nil
-		}
-		return nil, io.EOF
-	default:
-		return nil, lastError()
-	}
-}
-
-func newLlmStream(ptr *C.FfiStream, collector CollectorFunc, finalizer FinalizerFunc) *LlmStream {
+func newLlmStream(ptr *C.FfiStream, callbacks *streamCallbacks) *LlmStream {
 	if ptr == nil {
 		return nil
 	}
-	s := &LlmStream{
-		ptr:       ptr,
-		collector: collector,
-		finalizer: finalizer,
-	}
+	s := &LlmStream{ptr: ptr, callbacks: callbacks}
 	runtime.SetFinalizer(s, (*LlmStream).release)
 	return s
 }
 
-// release frees the native handle without waiting for producer cleanup or
-// invoking user callbacks. Explicit Close owns deterministic cleanup.
+// release frees the native handle without waiting for producer cleanup.
+// Explicit Close owns deterministic cleanup.
 func (s *LlmStream) release() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -140,8 +129,6 @@ func (s *LlmStream) release() {
 	C.nemo_relay_stream_free(s.ptr)
 	s.ptr = nil
 	s.closed = true
-	s.collector = nil
-	s.finalizer = nil
 }
 
 // Next returns the next chunk from the stream as a JSON value. It returns
@@ -149,15 +136,8 @@ func (s *LlmStream) release() {
 // Any registered stream execution intercepts are applied to each chunk before
 // it is returned.
 //
-// If a collector function was provided when creating the stream, it is called
-// with each chunk. When the stream is exhausted (EOF), the finalizer function
-// (if provided) is called exactly once.
-//
 // If the stream has already been closed, Next returns io.EOF.
 func (s *LlmStream) Next() (json.RawMessage, error) {
-	s.nextMu.Lock()
-	defer s.nextMu.Unlock()
-
 	s.mu.Lock()
 	if s.closed || s.closing || s.ptr == nil {
 		s.mu.Unlock()
@@ -169,37 +149,19 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 		s.idle = make(chan struct{})
 	}
 	s.mu.Unlock()
-
-	var chunk *C.char
-	rc := C.nemo_relay_stream_next(ptr, &chunk)
 	defer s.finishNext()
 
-	if rc == 1 {
-		// Chunk available
+	var chunk *C.char
+	switch rc := C.nemo_relay_stream_next(ptr, &chunk); rc {
+	case 1:
 		text := C.GoString(chunk)
 		C.nemo_relay_string_free(chunk)
-		chunk := json.RawMessage(text)
-		s.mu.Lock()
-		collector := s.collector
-		s.mu.Unlock()
-		if collector != nil {
-			callbackID := s.beginCallback()
-			defer s.finishCallback(callbackID)
-			collector(chunk)
-		}
-		return chunk, nil
-	}
-	if rc == 0 {
-		s.mu.Lock()
-		finalizer := s.finalizer
-		s.finalizer = nil
-		s.mu.Unlock()
-		if finalizer != nil {
-			finalizer()
-		}
+		return json.RawMessage(text), nil
+	case 0:
 		return nil, io.EOF
+	default:
+		return nil, lastError()
 	}
-	return nil, lastError()
 }
 
 func (s *LlmStream) finishNext() {
@@ -212,27 +174,27 @@ func (s *LlmStream) finishNext() {
 }
 
 // Close stops the producer, waits for cleanup, and releases the underlying C
-// stream resources. It is safe to call Close multiple times; subsequent calls
-// are no-ops. After Close is called, any further calls to [LlmStream.Next]
-// return [io.EOF]. The finalizer runs once with any collected partial response.
+// stream resources. It is safe to call Close multiple times; later calls
+// return the first result. A Close from inside this stream's own collector or
+// finalizer returns nil at once and finishes cleanup after the callback
+// returns. After Close is called, any further calls to [LlmStream.Next] return
+// [io.EOF]. The finalizer runs once with any collected partial response.
 func (s *LlmStream) Close() error {
 	callerID := currentGoroutineID()
 	s.mu.Lock()
-	if s.closing {
-		if s.callbackGoroutine != 0 && s.callbackGoroutine == callerID {
-			err := s.closeErr
-			s.mu.Unlock()
-			return err
-		}
-		done := s.closeDone
-		s.mu.Unlock()
-		<-done
-		s.mu.Lock()
+	if s.closed {
 		err := s.closeErr
 		s.mu.Unlock()
 		return err
 	}
-	if s.closed || s.ptr == nil {
+	if s.closing {
+		done := s.closeDone
+		s.mu.Unlock()
+		if _, reentrant := s.callbacks.activeCallback(callerID); reentrant {
+			return nil
+		}
+		<-done
+		s.mu.Lock()
 		err := s.closeErr
 		s.mu.Unlock()
 		return err
@@ -243,26 +205,25 @@ func (s *LlmStream) Close() error {
 	runtime.SetFinalizer(s, nil)
 	s.mu.Unlock()
 
-	status := C.nemo_relay_stream_close(ptr)
-	var err error
-	if status != 0 {
-		err = lastError()
+	if callbackDone, reentrant := s.callbacks.activeCallback(callerID); reentrant {
+		go func() {
+			<-callbackDone
+			s.closeNative(ptr)
+		}()
+		return nil
 	}
-
+	s.closeNative(ptr)
 	s.mu.Lock()
-	if s.inFlight > 0 && s.callbackGoroutine != 0 && s.callbackGoroutine == callerID {
-		s.mu.Unlock()
-		// A collector can close its own stream. Finish cleanup after the callback
-		// returns instead of waiting here and deadlocking that callback.
-		go s.finishClose(ptr, err)
-		return err
-	}
+	err := s.closeErr
 	s.mu.Unlock()
-	s.finishClose(ptr, err)
 	return err
 }
 
-func (s *LlmStream) finishClose(ptr *C.FfiStream, err error) {
+func (s *LlmStream) closeNative(ptr *C.FfiStream) {
+	var err error
+	if C.nemo_relay_stream_close(ptr) != 0 {
+		err = lastError()
+	}
 	s.mu.Lock()
 	for s.inFlight > 0 {
 		idle := s.idle
@@ -273,21 +234,7 @@ func (s *LlmStream) finishClose(ptr *C.FfiStream, err error) {
 	s.closeErr = err
 	s.ptr = nil
 	s.closed = true
-	s.collector = nil
-	finalizer := s.finalizer
-	s.finalizer = nil
-	s.mu.Unlock()
-
-	C.nemo_relay_stream_free(ptr)
-
-	if finalizer != nil {
-		callbackID := s.beginCallback()
-		finalizer()
-		s.finishCallback(callbackID)
-	}
-
-	s.mu.Lock()
-	s.closing = false
 	close(s.closeDone)
 	s.mu.Unlock()
+	C.nemo_relay_stream_free(ptr)
 }

@@ -369,11 +369,15 @@ type LLMExecutionInterceptFunc func(requestJSON json.RawMessage, context LLMExec
 // CollectorFunc is a callback invoked with each intercepted chunk during a
 // streaming LLM response. It is used to accumulate chunks on the Go side for
 // aggregation. The chunk JSON is only valid for the duration of the call.
+// It runs on a runtime worker thread during [LlmStream.Next]; a panic ends the
+// stream and is returned from Next.
 type CollectorFunc func(chunkJSON json.RawMessage)
 
 // FinalizerFunc is a callback invoked exactly once when a streaming LLM
-// response is exhausted. It takes no arguments and must return a JSON string
-// representing the aggregated response.
+// response is exhausted, closed, or released. It takes no arguments and must
+// return a JSON string representing the aggregated response. It runs on a
+// runtime worker thread; a panic or non-JSON result is returned from
+// [LlmStream.Close].
 type FinalizerFunc func() string
 
 // EventSubscriberFunc is a callback invoked for each lifecycle event emitted
@@ -919,6 +923,29 @@ func goLlmConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMReques
 		return nil
 	}
 	return C.CString(*result)
+}
+
+//export goStreamCollectorTrampoline
+func goStreamCollectorTrampoline(userData unsafe.Pointer, chunkJSON *C.char) (status C.int32_t) {
+	defer recoverCallbackPanic("stream collector", func() { status = nemoRelayStatusInternal })
+	callbacks := lookupClosure(userData).(*streamCallbacks)
+	if callbacks.collector == nil {
+		return 0
+	}
+	defer callbacks.enter()()
+	callbacks.collector(json.RawMessage(C.GoString(chunkJSON)))
+	return 0
+}
+
+//export goStreamFinalizerTrampoline
+func goStreamFinalizerTrampoline(userData unsafe.Pointer) (cResult *C.char) {
+	defer recoverCallbackPanic("stream finalizer", func() { cResult = nil })
+	callbacks := lookupClosure(userData).(*streamCallbacks)
+	if callbacks.finalizer == nil {
+		return nil
+	}
+	defer callbacks.enter()()
+	return C.CString(callbacks.finalizer())
 }
 
 //export goLlmExecTrampoline

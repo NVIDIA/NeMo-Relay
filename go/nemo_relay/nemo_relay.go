@@ -84,9 +84,9 @@ extern int32_t nemo_relay_tool_call_execute_v2(
 	const char* tool_call_id, char** out);
 
 // LLM lifecycle
-typedef void (*NemoRelayCollectorCb)(const char* chunk_json);
+typedef int32_t (*NemoRelayCollectorCb)(void* user_data, const char* chunk_json);
 typedef struct Option_NemoRelayCollectorCb { NemoRelayCollectorCb cb; } Option_NemoRelayCollectorCb;
-typedef char* (*NemoRelayFinalizerCb)();
+typedef char* (*NemoRelayFinalizerCb)(void* user_data);
 typedef struct Option_NemoRelayFinalizerCb { NemoRelayFinalizerCb cb; } Option_NemoRelayFinalizerCb;
 
 static inline Option_NemoRelayCollectorCb makeOptCollectorCb(NemoRelayCollectorCb cb) {
@@ -121,6 +121,7 @@ extern int32_t nemo_relay_llm_stream_call_execute(
 	const char* name, const char* native_json,
 	NemoRelayLlmExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
 	Option_NemoRelayCollectorCb collector, Option_NemoRelayFinalizerCb finalizer,
+	void* callback_user_data, NemoRelayFreeFn callback_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* model_name,
@@ -329,6 +330,8 @@ extern FfiLLMRequest* goLlmRequestTrampoline(void*, const FfiLLMRequest*, NemoRe
 extern char* goLlmResponseTrampoline(void*, const char*, NemoRelayLlmSanitizeResponseContext);
 extern char* goLlmConditionalTrampoline(void*, const FfiLLMRequest*);
 extern char* goLlmExecTrampoline(void*, const char*);
+extern int32_t goStreamCollectorTrampoline(void*, const char*);
+extern char* goStreamFinalizerTrampoline(void*);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
 extern char* goToolExecInterceptContextTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, const char*, NemoRelayLlmExecutionContext, NemoRelayLlmExecNextFn, void*);
@@ -1558,14 +1561,16 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 	defer C.free(unsafe.Pointer(cName))
 	defer C.free(unsafe.Pointer(cRequest))
 
-	// Pass nil collector/finalizer to the FFI. The FFI collector/finalizer
-	// callbacks lack user_data parameters, making them unsuitable for
-	// concurrent streams (all streams would share a single global
-	// callback). Instead, we store the collector/finalizer on the
-	// returned LlmStream and invoke them from LlmStream.Next(), which
-	// provides natural per-stream isolation.
+	callbacks := &streamCallbacks{collector: collector, finalizer: finalizer}
+	callbackID := registerClosure(callbacks)
 	cCollector := C.makeOptCollectorCb(nil)
+	if collector != nil {
+		cCollector = C.makeOptCollectorCb(C.NemoRelayCollectorCb(C.goStreamCollectorTrampoline))
+	}
 	cFinalizer := C.makeOptFinalizerCb(nil)
+	if finalizer != nil {
+		cFinalizer = C.makeOptFinalizerCb(C.NemoRelayFinalizerCb(C.goStreamFinalizerTrampoline))
+	}
 
 	var out *C.FfiStream
 	status := C.nemo_relay_llm_stream_call_execute(
@@ -1575,6 +1580,8 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
 		cCollector,
 		cFinalizer,
+		callbackID,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
 		o.modelName,
@@ -1587,7 +1594,7 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 	if err := checkStatus(status); err != nil {
 		return nil, err
 	}
-	return newLlmStream(out, collector, finalizer), nil
+	return newLlmStream(out, callbacks), nil
 }
 
 // ---------------------------------------------------------------------------

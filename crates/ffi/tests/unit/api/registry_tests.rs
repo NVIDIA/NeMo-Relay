@@ -3123,6 +3123,8 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
                 None,
                 Some(collector_cb),
                 Some(finalizer_cb),
+                ptr::null_mut(),
+                None,
                 ptr::null(),
                 0,
                 ptr::null(),
