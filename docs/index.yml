@@ -23,6 +23,14 @@ navigation:
         slug: quick-start
         collapsed: open-by-default
         contents:
+          - section: "Agent Runtimes"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Codex"
+                icon: fa-brands fa-openai
+                path: ./getting-started/quick-start/codex.mdx
+                slug: codex
           - section: "Application APIs"
             skip-slug: true
             collapsed: open-by-default
