@@ -2167,7 +2167,9 @@ fn active_dynamic_plugin_components_from_scopes(
                     .find(|scope| scope.plugins_toml_path == resolved_plugin.source)
                     .and_then(|scope| scope.registry.get(&resolved_plugin.plugin_id))
             })
-            .filter(|record| !record.is_tombstoned() && record.spec.enabled)
+            .filter(|record| {
+                !record.is_tombstoned() && record.spec.enabled && !optional_trust_failure(record)
+            })
             .filter_map(|record| match record.metadata.kind {
                 DynamicPluginKind::RustDynamic => Some(manifest_ref_from_record(record)),
                 DynamicPluginKind::Worker => record.source.manifest_ref.clone().map(Ok),
@@ -2205,7 +2207,7 @@ fn active_dynamic_plugin_components_from_scopes(
                 resolved_plugin.plugin_id
             )));
         };
-        if record.is_tombstoned() || !record.spec.enabled {
+        if record.is_tombstoned() || !record.spec.enabled || optional_trust_failure(record) {
             continue;
         }
         let host_config = host_config_by_id.get(&record.metadata.id).ok_or_else(|| {
@@ -2692,6 +2694,13 @@ fn restore_plugins_toml(path: &std::path::Path, original: Option<&[u8]>) -> Resu
         None => {}
     }
     Ok(())
+}
+
+fn optional_trust_failure(record: &nemo_relay::plugin::dynamic::DynamicPluginRecord) -> bool {
+    record.status.startup_class
+        == Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Optional)
+        && (record.status.validation.integrity == DynamicPluginCheckState::Invalid
+            || record.status.validation.authenticity == DynamicPluginCheckState::Invalid)
 }
 
 fn required_startup_failure(

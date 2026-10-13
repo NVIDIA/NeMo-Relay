@@ -284,14 +284,15 @@ async fn serve_listener_with_dynamic_inner(
         transparent_proxy_credential,
     } = bootstrap;
     let bootstrap_challenge_key = Some(BootstrapChallengeKey::load()?);
-    let bootstrap_tls = bootstrap_fingerprint
-        .as_ref()
-        .map(|_| crate::gateway::tls::RelayTlsIdentity::load_or_create())
-        .transpose()
-        .map_err(CliError::Launch)?
-        .map(|identity| identity.server_config())
-        .transpose()
-        .map_err(CliError::Launch)?;
+    // Standalone local pi hooks use the same pinned TLS delivery as installed command hooks.
+    let bootstrap_tls = (bootstrap_fingerprint.is_some()
+        || listener.local_addr()?.ip().is_loopback())
+    .then(crate::gateway::tls::RelayTlsIdentity::load_or_create)
+    .transpose()
+    .map_err(CliError::Launch)?
+    .map(|identity| identity.server_config())
+    .transpose()
+    .map_err(CliError::Launch)?;
     let require_provider_client_token =
         bootstrap_fingerprint.is_some() && transparent_proxy_credential.is_none();
     let plugin_activation =
@@ -1428,16 +1429,13 @@ async fn claude_code_hook(
 // Relay-authored extension rather than from pi itself. Events are committed before the response
 // so a conditional-execution guardrail rejection surfaces as HTTP 403 and the extension can turn
 // it into pi's `{block, reason}` before the tool runs.
-//
-// This is the one hook route that does not call `authorize_hook_request`. The extension posts from
-// inside pi's process, and on the standalone-daemon route nothing hands it a bootstrap or
-// transparent-proxy token, so requiring one here would break the documented setup. Closing that gap
-// means giving the extension a credential first; see `SessionManager::apply_events`.
+/// Authenticates pi lifecycle hooks and returns their policy verdict and argument rewrites.
 async fn pi_hook(
     State(state): State<AppState>,
     mut headers: HeaderMap,
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, CliError> {
+    let owner = state.authorize_hook_request(&mut headers)?;
     state.touch();
     let operational = OperationalContext::take_from_headers(&mut headers);
     let Json(payload) = payload.map_err(|error| {
@@ -1450,7 +1448,11 @@ async fn pi_hook(
         .map(|event| operational.clone().with_session(event.session_id()))
         .unwrap_or(operational);
     operational::hook_started(&operational, "hook_server");
-    let effects = match state.sessions.apply_events(&headers, outcome.events).await {
+    let effects = match state
+        .sessions
+        .apply_authenticated_events_with_effects(&headers, outcome.events, &owner)
+        .await
+    {
         Ok(effects) => effects,
         Err(error) => {
             operational::hook_failed(&operational, "hook_server", error.log_kind(), true);

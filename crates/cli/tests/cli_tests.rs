@@ -6512,3 +6512,63 @@ fn daemon_token_ensure_creates_once_and_never_prints_the_token() {
     assert!(!stderr.contains("corrupt"), "{stderr}");
     assert_eq!(std::fs::read_to_string(&token_path).unwrap(), "corrupt");
 }
+
+/// Verifies standalone CLI delivery authenticates pi clients and preserves HTTP verdicts.
+#[test]
+fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verdicts() {
+    let temp = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let mut server = Command::new(gateway_bin());
+    server
+        .args(["--bind", &address.to_string()])
+        .current_dir(temp.path())
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let _server = ChildGuard::new(server.spawn().unwrap());
+    wait_for_port_open(address);
+    assert_eq!(relay_health(address)["status"], "ok");
+    let gateway_url = format!("http://{address}");
+    let forward = |client: &str, event: &str| {
+        let mut child = Command::new(gateway_bin())
+            .args([
+                "hook-forward",
+                "pi",
+                "--gateway-url",
+                &gateway_url,
+                "--pi-extension-client",
+                client,
+                "--fail-closed",
+            ])
+            .current_dir(temp.path())
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let payload = serde_json::json!({"session_id": "pi-wire-victim", "hook_event_name": event});
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let output = wait_child_with_output(child);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let started = forward("victim", "session_start");
+    assert_eq!(started["status"], 200);
+    assert_eq!(started["body"], "{}");
+    assert_eq!(forward("attacker", "session_shutdown")["status"], 401);
+    assert_eq!(forward("victim", "session_shutdown")["status"], 200);
+}

@@ -10,12 +10,12 @@ use serde::Deserialize;
 use serde_json::{Map, Value as Json};
 
 use super::read_bounded_regular_file;
+use super::trust::DynamicPluginLoadTrust;
 use super::{
     DynamicPluginCheckState, DynamicPluginFailure, DynamicPluginHostPolicy, DynamicPluginKind,
     DynamicPluginManifest, DynamicPluginRecord, DynamicPluginStartupClass,
     DynamicPluginValidationStatus, EvaluatedDynamicPluginHostPolicy, FileDynamicPluginHostPolicy,
-    evaluate_dynamic_plugin_host_policy, evaluate_dynamic_plugin_trust,
-    validate_dynamic_plugin_config_schema,
+    evaluate_dynamic_plugin_host_policy, validate_dynamic_plugin_config_schema,
 };
 use crate::plugin::{
     PluginConfig, PluginError, Result, plugin_config_paths, resolve_plugin_config_documents,
@@ -153,6 +153,8 @@ pub(crate) struct ResolvedPluginHostConfig {
     pub(crate) config: PluginConfig,
     pub(crate) policy: DynamicPluginHostPolicy,
     pub(crate) dynamic_plugins: Vec<super::VerifiedDynamicPluginSpec>,
+    pub(super) load_trust: HashMap<String, DynamicPluginLoadTrust>,
+    pub(super) native_artifacts: Vec<super::native::PreparedNativePlugin>,
     pub(super) dynamic_reports: Vec<ResolvedDynamicPluginReport>,
     pub(crate) diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
     pub(crate) config_paths: Vec<String>,
@@ -328,6 +330,8 @@ fn resolve_plugin_host_config_inner(
     diagnostics.extend(resolved.diagnostics.iter().cloned());
     let (mut policy, declarations) = resolve_dynamic_plugin_declarations(files)?;
     let mut active = Vec::new();
+    let mut native_artifacts = Vec::new();
+    let mut load_trust = HashMap::new();
     let mut reports = Vec::new();
 
     policy.apply_secure_defaults();
@@ -342,7 +346,7 @@ fn resolve_plugin_host_config_inner(
         let state = state_for_plugin(&source, &manifest_ref, &plugin_id)?;
         let selected = state.as_ref().map(|state| state.selected).unwrap_or(true);
         let evaluated_policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
-        let report = validate_declaration(
+        let (report, artifact_bytes) = validate_declaration_with_artifact(
             &manifest,
             manifest_ref.clone(),
             selected,
@@ -368,6 +372,20 @@ fn resolve_plugin_host_config_inner(
             ));
         }
         if effective_selected {
+            if reject_required_failures && manifest.plugin.kind == DynamicPluginKind::RustDynamic {
+                native_artifacts.push(super::native::PreparedNativePlugin::new(
+                    manifest.clone(),
+                    manifest_ref.clone(),
+                    artifact_bytes,
+                )?);
+            }
+            load_trust.insert(
+                plugin_id.clone(),
+                DynamicPluginLoadTrust {
+                    manifest: manifest.clone(),
+                    policy: evaluated_policy,
+                },
+            );
             active.push(super::VerifiedDynamicPluginSpec {
                 plugin_id,
                 kind: manifest.plugin.kind,
@@ -383,6 +401,8 @@ fn resolve_plugin_host_config_inner(
         config: resolved.config,
         policy,
         dynamic_plugins: active,
+        native_artifacts,
+        load_trust,
         dynamic_reports: reports,
         diagnostics,
     })
@@ -547,8 +567,22 @@ fn validate_declaration(
     config: &Map<String, Json>,
     evaluated_policy: &EvaluatedDynamicPluginHostPolicy,
 ) -> DynamicPluginValidationReport {
+    validate_declaration_with_artifact(manifest, manifest_ref, selected, config, evaluated_policy).0
+}
+
+fn validate_declaration_with_artifact(
+    manifest: &DynamicPluginManifest,
+    manifest_ref: String,
+    selected: bool,
+    config: &Map<String, Json>,
+    evaluated_policy: &EvaluatedDynamicPluginHostPolicy,
+) -> (DynamicPluginValidationReport, Option<Vec<u8>>) {
     let plugin_id = manifest.plugin.id.trim().to_owned();
-    let trust = evaluate_dynamic_plugin_trust(manifest, &manifest_ref, evaluated_policy);
+    let (trust, artifact_bytes) = super::trust::evaluate_dynamic_plugin_trust_with_artifact(
+        manifest,
+        &manifest_ref,
+        evaluated_policy,
+    );
     let schema_failure = validate_dynamic_plugin_config_schema(
         manifest,
         &manifest_ref,
@@ -583,16 +617,18 @@ fn validate_declaration(
     let effective_selected = selected
         && evaluated_policy.policy_satisfied
         && schema_failure.is_none()
-        && (trust.last_error(&plugin_id).is_none()
-            || evaluated_policy.startup_class == DynamicPluginStartupClass::Optional);
-    DynamicPluginValidationReport {
-        plugin_id,
-        manifest_ref,
-        kind: manifest.plugin.kind,
-        status,
-        failure,
-        selected: effective_selected,
-    }
+        && trust.is_satisfied();
+    (
+        DynamicPluginValidationReport {
+            plugin_id,
+            manifest_ref,
+            kind: manifest.plugin.kind,
+            status,
+            failure,
+            selected: effective_selected,
+        },
+        artifact_bytes,
+    )
 }
 
 fn read_plugin_files(

@@ -1295,10 +1295,14 @@ struct AnthropicMessagesStreamingState {
     /// Final context-management result. Anthropic emits this on `message_delta`, and callers
     /// need the same field on the assembled response as they receive from buffered Messages.
     context_management: Option<Json>,
-    /// Indexed by the SSE event's `index` field. `None` slots accommodate sparse indices though
-    /// Anthropic emits them in order today.
-    blocks: Vec<Option<StreamingBlock>>,
+    /// Dense storage for the first 2048 indices keeps ordinary streams inexpensive.
+    dense_blocks: Vec<Option<StreamingBlock>>,
+    /// Higher indices use sparse storage so untrusted indices cannot allocate unbounded gaps.
+    /// Ordered keys preserve content block order during finalization.
+    sparse_blocks: std::collections::BTreeMap<u64, StreamingBlock>,
 }
+
+const DENSE_CONTENT_BLOCK_LIMIT: u64 = 2048;
 
 #[derive(Debug, Default, Clone)]
 struct StreamingBlock {
@@ -1371,29 +1375,38 @@ impl AnthropicMessagesStreamingState {
             Json::Object(map) => map.clone(),
             _ => return,
         };
-        let index = index as usize;
-        while self.blocks.len() <= index {
-            self.blocks.push(None);
-        }
-        self.blocks[index] = Some(StreamingBlock {
+        let block = StreamingBlock {
             skeleton,
             ..StreamingBlock::default()
-        });
+        };
+        if index < DENSE_CONTENT_BLOCK_LIMIT {
+            let index = index as usize;
+            self.dense_blocks
+                .resize_with(self.dense_blocks.len().max(index + 1), || None);
+            self.dense_blocks[index] = Some(block);
+        } else {
+            self.sparse_blocks.insert(index, block);
+        }
     }
 
     fn observe_content_block_delta(&mut self, event: &Json) {
         let Some(index) = event.get("index").and_then(Json::as_u64) else {
             return;
         };
-        let index = index as usize;
         let Some(delta) = event.get("delta") else {
             return;
         };
         let delta_type = delta.get("type").and_then(Json::as_str).unwrap_or("");
-        let Some(slot) = self.blocks.get_mut(index) else {
+        let block = if index < DENSE_CONTENT_BLOCK_LIMIT {
+            self.dense_blocks
+                .get_mut(index as usize)
+                .and_then(Option::as_mut)
+        } else {
+            self.sparse_blocks.get_mut(&index)
+        };
+        let Some(block) = block else {
             return;
         };
-        let Some(block) = slot.as_mut() else { return };
         match delta_type {
             "text_delta" => {
                 if let Some(text) = delta.get("text").and_then(Json::as_str) {
@@ -1484,9 +1497,11 @@ impl AnthropicMessagesStreamingState {
             }
         }
         let content: Vec<Json> = self
-            .blocks
+            .dense_blocks
             .into_iter()
-            .filter_map(|block| block.map(StreamingBlock::finalize))
+            .flatten()
+            .chain(self.sparse_blocks.into_values())
+            .map(StreamingBlock::finalize)
             .collect();
         output.insert("content".to_string(), Json::Array(content));
         if let Some(reason) = self.stop_reason {

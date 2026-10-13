@@ -9,7 +9,8 @@
 //! caller. Plugin registration therefore must not depend on caller-thread
 //! affinity; the lifecycle executor remains available for the process lifetime.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -23,13 +24,17 @@ use crate::plugin::{
     plugin_configuration_report_for_host, run_owned_plugin_mutation,
 };
 
+use super::native::load_native_plugins_with_trust;
+use super::trust::DynamicPluginLoadTrust;
 use super::{
     DynamicPluginKind, DynamicPluginTeardownOutcome, NativePluginActivation, NativePluginLoadSpec,
-    PluginHostReport, load_native_plugins, resolve_plugin_host_config,
+    PluginHostReport, resolve_plugin_host_config,
 };
 
 #[cfg(feature = "worker-grpc")]
-use super::{WorkerPluginActivation, WorkerPluginLoadSpec, prepare_worker_plugins};
+use super::worker::prepare_worker_plugins_with_trust;
+#[cfg(feature = "worker-grpc")]
+use super::{WorkerPluginActivation, WorkerPluginLoadSpec};
 
 /// Initializes the process-wide static and dynamic plugin host.
 ///
@@ -44,7 +49,7 @@ pub async fn initialize(
     additional_plugins_toml: Option<PathBuf>,
 ) -> Result<PluginHostActivation> {
     let resolved = resolve_plugin_host_config(config, additional_plugins_toml.as_deref())?;
-    let dynamic_reports = resolved
+    let mut dynamic_reports: Vec<_> = resolved
         .dynamic_reports
         .into_iter()
         .map(|entry| entry.report)
@@ -55,8 +60,18 @@ pub async fn initialize(
         resolved.config,
         resolved.dynamic_plugins,
         resolved.diagnostics,
+        resolved.load_trust,
+        resolved.native_artifacts,
     )
     .await?;
+    for skipped in activation.report.dynamic_plugins.drain(..) {
+        if let Some(report) = dynamic_reports
+            .iter_mut()
+            .find(|report| report.plugin_id == skipped.plugin_id)
+        {
+            *report = skipped;
+        }
+    }
     activation.report = PluginHostReport {
         config: config_report,
         dynamic_plugins: dynamic_reports,
@@ -110,7 +125,8 @@ impl PluginHostActivation {
     pub async fn initialize_exact(config: PluginConfig) -> Result<Self> {
         let resolved_config = super::sanitized_plugin_config(&config);
         let (mut activation, report) =
-            Self::activate_validated(config, Vec::new(), Vec::new()).await?;
+            Self::activate_validated(config, Vec::new(), Vec::new(), HashMap::new(), Vec::new())
+                .await?;
         activation.report = PluginHostReport {
             config: report,
             dynamic_plugins: Vec::new(),
@@ -136,8 +152,14 @@ impl PluginHostActivation {
         let dynamic_plugins = dynamic_plugins.into_iter().collect::<Vec<_>>();
         validate_dynamic_plugin_specs(&dynamic_plugins)?;
         let resolved_config = super::sanitized_plugin_config(&config);
-        let (mut activation, report) =
-            Self::activate_validated(config, dynamic_plugins, Vec::new()).await?;
+        let (mut activation, report) = Self::activate_validated(
+            config,
+            dynamic_plugins,
+            Vec::new(),
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
         activation.report = PluginHostReport {
             config: report.clone(),
             dynamic_plugins: Vec::new(),
@@ -151,9 +173,18 @@ impl PluginHostActivation {
         config: PluginConfig,
         dynamic_plugins: Vec<VerifiedDynamicPluginSpec>,
         diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
+        load_trust: HashMap<String, DynamicPluginLoadTrust>,
+        native_artifacts: Vec<super::native::PreparedNativePlugin>,
     ) -> Result<(Self, ConfigReport)> {
         run_owned_plugin_mutation("dynamic plugin activation", move || async move {
-            Self::activate_inner(config, dynamic_plugins, diagnostics).await
+            Self::activate_inner(
+                config,
+                dynamic_plugins,
+                diagnostics,
+                load_trust,
+                native_artifacts,
+            )
+            .await
         })
         .await
     }
@@ -162,6 +193,8 @@ impl PluginHostActivation {
         mut config: PluginConfig,
         dynamic_plugins: Vec<VerifiedDynamicPluginSpec>,
         diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
+        load_trust: HashMap<String, DynamicPluginLoadTrust>,
+        native_artifacts: Vec<super::native::PreparedNativePlugin>,
     ) -> Result<(Self, ConfigReport)> {
         let dynamic_plugin_count = dynamic_plugins.len();
         log::info!(
@@ -188,6 +221,7 @@ impl PluginHostActivation {
         // cache a failed builtin registration attempt.
         ensure_builtin_plugins_registered()?;
 
+        let mut skipped = Vec::new();
         let native_specs = dynamic_plugins
             .iter()
             .filter(|plugin| plugin.kind == DynamicPluginKind::RustDynamic)
@@ -198,8 +232,13 @@ impl PluginHostActivation {
             .collect::<Vec<_>>();
         let native = (!native_specs.is_empty())
             .then(|| {
-                load_native_plugins(native_specs)
-                    .map_err(|error| plugin_error_context("native plugin load failed", error))
+                load_native_plugins_with_trust(
+                    native_specs,
+                    &load_trust,
+                    &mut skipped,
+                    native_artifacts,
+                )
+                .map_err(|error| plugin_error_context("native plugin load failed", error))
             })
             .transpose()?;
 
@@ -219,7 +258,7 @@ impl PluginHostActivation {
                 .collect::<Vec<_>>();
             (!worker_specs.is_empty())
                 .then(|| {
-                    prepare_worker_plugins(worker_specs)
+                    prepare_worker_plugins_with_trust(worker_specs, &load_trust, &mut skipped)
                         .map_err(|error| plugin_error_context("worker plugin load failed", error))
                 })
                 .transpose()?
@@ -228,6 +267,11 @@ impl PluginHostActivation {
         config.components.extend(
             dynamic_plugins
                 .into_iter()
+                .filter(|plugin| {
+                    !skipped
+                        .iter()
+                        .any(|report| report.plugin_id == plugin.plugin_id)
+                })
                 .map(|plugin| PluginComponentSpec {
                     kind: plugin.plugin_id,
                     enabled: true,
@@ -286,16 +330,20 @@ impl PluginHostActivation {
             }
         };
 
+        let activated_plugin_count = dynamic_plugin_count - skipped.len();
         log::info!(
             target: "nemo_relay.plugin",
             event = "dynamic_plugin_activated",
-            plugin_count = dynamic_plugin_count;
+            plugin_count = activated_plugin_count;
             "Dynamic plugins activated"
         );
         Ok((
             Self {
                 active: true,
-                report: PluginHostReport::default(),
+                report: PluginHostReport {
+                    dynamic_plugins: skipped,
+                    ..PluginHostReport::default()
+                },
                 native,
                 #[cfg(feature = "worker-grpc")]
                 worker,

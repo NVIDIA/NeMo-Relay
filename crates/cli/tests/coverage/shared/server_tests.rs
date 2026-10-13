@@ -6899,3 +6899,60 @@ async fn websocket_tunnel_blocks_idle_shutdown_until_disconnect() {
     task.abort();
     provider_task.abort();
 }
+
+/// Verifies pi lifecycle and tool hooks require credentials and respect session ownership.
+#[tokio::test]
+async fn pi_hooks_require_credentials_and_reject_cross_owner_injection() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let key = BootstrapChallengeKey::from_bytes(b"pi hook authentication test");
+    let state =
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
+    let app = router_with_state(state);
+    let request = |session: &str, event: &str, client: Option<&str>| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/hooks/pi")
+            .header("content-type", "application/json");
+        if let Some(client) = client {
+            request = request
+                .header(BOOTSTRAP_CLIENT_TOKEN_HEADER, key.client_token())
+                .header(HOOK_CLIENT_TOKEN_HEADER, key.hook_client_token(client));
+        }
+        request.body(Body::from(json!({
+            "session_id": session, "hook_event_name": event,
+            "tool_call_id": "forged-call", "tool_name": "read", "input": {"path": "README.md"}
+        }).to_string())).unwrap()
+    };
+    let response = app
+        .clone()
+        .oneshot(request("pi-victim", "session_start", Some("victim")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    for client in [None, Some("attacker")] {
+        for event in ["session_start", "tool_call", "session_shutdown"] {
+            let response = app
+                .clone()
+                .oneshot(request("pi-victim", event, client))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{event} from {client:?}"
+            );
+        }
+    }
+    // The victim's credential remains valid after attempted shutdown and injection.
+    let response = app
+        .clone()
+        .oneshot(request("pi-victim", "tool_call", Some("victim")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .oneshot(request("pi-victim", "session_shutdown", Some("victim")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}

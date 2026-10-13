@@ -1,6 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+// pi's /reload replaces modules while retaining the session. Keep its owner identity
+// on the process global so reloading cannot strand the authenticated session.
+const CLIENT_ID = Symbol.for('nemo-relay.pi.hook-client.v1');
+const clientState = globalThis as typeof globalThis & { [CLIENT_ID]?: string };
+const fallbackClientId = clientState[CLIENT_ID] ??= randomUUID();
+
 /**
  * HTTP client for the NeMo Relay CLI gateway's `/hooks/pi` endpoint.
  *
@@ -19,6 +27,8 @@
  * - Anything else is a transport or gateway fault, and is resolved by the
  *   configured failure policy rather than being reported as a policy decision.
  *
+ * Hooks are delivered through `nemo-relay hook-forward pi`, which authenticates
+ * the gateway and attaches the client's signed identity before sending the payload.
  * pi awaits extension handlers on its critical path, so every call here is on
  * the critical path of the tool it gates. Observability-only hooks are therefore
  * sent without awaiting, and only the gating hook blocks.
@@ -55,6 +65,10 @@ export type FaultOrigin = 'transport' | 'timeout' | 'response' | 'handler';
 export type HookFault = Extract<HookOutcome, { kind: 'fault' }>;
 
 export type GatewayConfig = {
+  /** Relay executable used for authenticated hook forwarding. */
+  relayCommand?: string;
+  /** Stable identity for this extension client, signed by the Relay subprocess. */
+  clientId?: string;
   /** Base URL of the gateway, e.g. `http://127.0.0.1:4040`. */
   url: string;
   /** Per-request timeout in milliseconds. */
@@ -74,21 +88,6 @@ export type GatewayConfig = {
 
 const GUARDRAIL_REJECTION_TYPE = 'nemo_relay_guardrail_rejected';
 
-/** Build the routing-identity headers the gateway expects. */
-function headers(config: GatewayConfig): Record<string, string> {
-  return {
-    'content-type': 'application/json',
-    // On the hook route the gateway *reads* this header to key the session
-    // (`adapters::pi_session_id`), and without it a second live agent drops each
-    // call into a throwaway root. It is stripped and re-derived only on the
-    // provider-passthrough route, which is a different request entirely -- which
-    // is why the provider registration attaches its own copy. It must also appear
-    // in the payload, because a payload session id is what a direct `curl` of the
-    // hook route has.
-    'x-nemo-relay-session-id': config.sessionId,
-  };
-}
-
 /**
  * Post one hook and wait for the verdict.
  *
@@ -100,30 +99,52 @@ export async function postHook(
   config: GatewayConfig,
   payload: Record<string, unknown>,
 ): Promise<HookOutcome> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  const args = [
+    'hook-forward', 'pi',
+    '--gateway-url', config.url,
+    '--pi-extension-client', config.clientId ?? fallbackClientId,
+    '--fail-closed',
+  ];
+  if (process.env.NEMO_RELAY_PROXY_CREDENTIAL) args.push('--transparent-run');
   try {
-    const response = await fetch(`${config.url}/hooks/pi`, {
-      method: 'POST',
-      headers: headers(config),
-      body: JSON.stringify({ session_id: config.sessionId, ...payload }),
-      signal: controller.signal,
+    const raw = await new Promise<string>((resolve, reject) => {
+      const child = execFile(config.relayCommand ?? process.env.NEMO_RELAY_PI_COMMAND ?? 'nemo-relay', args, {
+        timeout: config.timeoutMs,
+        // A bounded 1 MiB gateway body can expand sixfold inside the JSON envelope.
+        maxBuffer: 8 * 1024 * 1024,
+        killSignal: 'SIGKILL',
+        windowsHide: true,
+        encoding: 'utf8',
+      }, (error, stdout, stderr) => {
+        if (error) reject(Object.assign(error, { detail: stderr.trim() || error.message }));
+        else resolve(stdout);
+      });
+      child.stdin?.on('error', () => undefined);
+      child.stdin?.end(JSON.stringify({ session_id: config.sessionId, ...payload }));
     });
-
+    let envelope: { status?: unknown; body?: unknown };
+    try { envelope = JSON.parse(raw); }
+    catch { return { kind: 'fault', origin: 'response', detail: 'hook forward returned an unreadable response' }; }
+    if (!envelope || typeof envelope.status !== 'number' || !Number.isInteger(envelope.status)
+      || envelope.status < 200 || envelope.status > 599 || typeof envelope.body !== 'string') {
+      return { kind: 'fault', origin: 'response', detail: 'hook forward returned an invalid response' };
+    }
+    const body = [204, 205, 304].includes(envelope.status) ? null : envelope.body;
+    const response = new Response(body, { status: envelope.status });
     if (response.ok) return await allowedOutcome(response);
     if (response.status === 403) return await forbiddenOutcome(response);
     return { kind: 'fault', origin: 'response', detail: `gateway returned HTTP ${response.status}` };
   } catch (error) {
-    const timedOut = error instanceof Error && error.name === 'AbortError';
-    let detail = `gateway request failed: ${String(error)}`;
-    if (error instanceof Error) detail = `gateway request failed: ${error.message}`;
-    if (timedOut) detail = `gateway did not respond within ${config.timeoutMs}ms`;
-    // A timeout is not an unreachable gateway. It may be up and slow, and because posts are
-    // serialized a gate also waits out everything queued ahead of it -- so the remedy is the
-    // timeout value or the gateway's speed, not the socket.
-    return { kind: 'fault', origin: timedOut ? 'timeout' : 'transport', detail };
-  } finally {
-    clearTimeout(timer);
+    const failure = error as { detail?: string; killed?: boolean; signal?: string; code?: unknown };
+    if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      return { kind: 'fault', origin: 'response', detail: 'hook forward output exceeded the output limit' };
+    }
+    const detail = failure.detail ?? (error instanceof Error ? error.message : String(error));
+    const timedOut = failure.killed === true && failure.signal === 'SIGKILL';
+    return {
+      kind: 'fault', origin: timedOut ? 'timeout' : 'transport',
+      detail: timedOut ? `gateway did not respond within ${config.timeoutMs}ms` : `gateway request failed: ${detail}`,
+    };
   }
 }
 
@@ -221,6 +242,8 @@ export function configFromEnv(sessionId: string): GatewayConfig {
     Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? Math.min(timeoutRaw, MAX_TIMEOUT_MS) : 5000;
   return {
     url,
+    relayCommand: process.env.NEMO_RELAY_PI_COMMAND ?? 'nemo-relay',
+    clientId: fallbackClientId,
     timeoutMs,
     onFault: process.env.NEMO_RELAY_PI_FAIL === 'closed' ? 'closed' : 'open',
     sessionId,

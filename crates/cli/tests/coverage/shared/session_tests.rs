@@ -8630,7 +8630,11 @@ fn llm_start_with_content(
 async fn apply_pi_hook(manager: &SessionManager, payload: Value) {
     let outcome = crate::agents::shared::adapters::pi::adapt(payload, &HeaderMap::new());
     manager
-        .apply_events(&HeaderMap::new(), outcome.events)
+        .apply_authenticated_events_with_effects(
+            &HeaderMap::new(),
+            outcome.events,
+            "pi-test-client",
+        )
         .await
         .unwrap();
 }
@@ -11117,4 +11121,62 @@ async fn codex_finished_child_hooks_do_not_revive_parent_work() {
         }
         manager.close_all("test_shutdown").await.unwrap();
     }
+}
+
+/// Verifies a pi client cannot mutate another client's Codex root or child aliases.
+#[tokio::test]
+async fn authenticated_pi_cannot_inject_into_codex_root_or_child_alias() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let manager = SessionManager::new(session_test_config());
+    start_authenticated_codex_alias(&manager).await;
+    for session_id in ["parent-thread", "child-thread"] {
+        for event in ["session_start", "tool_call", "session_shutdown"] {
+            let outcome = crate::agents::shared::adapters::pi::adapt(
+                json!({
+                    "session_id": session_id, "hook_event_name": event,
+                    "tool_call_id": "forged", "tool_name": "read", "input": {}
+                }),
+                &HeaderMap::new(),
+            );
+            let error = manager
+                .apply_authenticated_events_with_effects(
+                    &HeaderMap::new(),
+                    outcome.events,
+                    "pi-client",
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, CliError::Unauthorized(_)),
+                "{session_id}: {event}"
+            );
+        }
+    }
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+    assert!(manager.inner.lock().await.contains_key("parent-thread"));
+    assert!(manager.inner.lock().await["parent-thread"].tools.is_empty());
+}
+
+/// Verifies pending ownership claims reject pi events before a session can be created.
+#[tokio::test]
+async fn authenticated_pi_respects_pending_owner_claims() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .authenticated_reservations
+        .lock()
+        .await
+        .insert("reserved-pi".into(), ("other-client".into(), 1));
+    let outcome = crate::agents::shared::adapters::pi::adapt(
+        json!({
+            "session_id": "reserved-pi", "hook_event_name": "session_start"
+        }),
+        &HeaderMap::new(),
+    );
+    let error = manager
+        .apply_authenticated_events_with_effects(&HeaderMap::new(), outcome.events, "pi-client")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CliError::Unauthorized(_)));
+    assert!(manager.inner.lock().await.is_empty());
 }

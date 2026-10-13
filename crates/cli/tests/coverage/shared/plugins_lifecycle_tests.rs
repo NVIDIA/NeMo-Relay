@@ -5359,3 +5359,70 @@ fn python_environment_snapshot_preserves_launchers_and_lib_alias_without_copying
         "external interpreter"
     );
 }
+
+#[test]
+fn gateway_skips_optional_plugins_with_failed_integrity_or_attestation() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let server = GatewayOverrides::default();
+    for (plugin_id, native) in [("acme.trust-native", true), ("acme.trust-worker", false)] {
+        let plugin_dir = temp.path().join(plugin_id);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        if native {
+            write_native_dynamic_manifest(&plugin_dir, plugin_id);
+        } else {
+            write_dynamic_manifest(&plugin_dir, plugin_id);
+        }
+        add(
+            PluginsAddRequest {
+                scope: ConfigurationScope::User,
+                path: plugin_dir.clone(),
+            },
+            &server,
+        )
+        .unwrap();
+        enable(
+            PluginsEnableRequest {
+                id: plugin_id.into(),
+            },
+            &server,
+        )
+        .unwrap();
+        let mut resolved = resolve_plugins_config(None).unwrap();
+        allow_unsigned_test_plugins(&mut resolved);
+        assert_eq!(
+            active_dynamic_plugin_components(None, &resolved)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        resolved.dynamic_plugin_policy.defaults.attestation =
+            Some(nemo_relay::plugin::dynamic::DynamicPluginAttestationMode::SignatureRequired);
+        assert!(
+            active_dynamic_plugin_components(None, &resolved)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(enforce_required_dynamic_plugin_startup(None, &resolved).is_ok());
+
+        allow_unsigned_test_plugins(&mut resolved);
+        let artifact = if native {
+            "libfixture_native.so"
+        } else {
+            "plugin.py"
+        };
+        std::fs::write(plugin_dir.join(artifact), b"modified artifact").unwrap();
+        assert!(
+            active_dynamic_plugin_components(None, &resolved)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(enforce_required_dynamic_plugin_startup(None, &resolved).is_ok());
+
+        resolved.dynamic_plugin_policy.defaults.startup =
+            Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required);
+        assert!(enforce_required_dynamic_plugin_startup(None, &resolved).is_err());
+    }
+}

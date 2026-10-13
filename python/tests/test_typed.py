@@ -218,22 +218,6 @@ class TestTypedHelpers:
     def test_resolve_runtime_type_non_string(self) -> None:
         assert typed._resolve_runtime_type(123) is None
 
-    def test_resolve_importable_type_success(self) -> None:
-        path = f"{SearchArgs.__module__}.{SearchArgs.__qualname__}"
-        assert typed._resolve_importable_type(path) is SearchArgs
-
-    def test_resolve_importable_type_invalid_inputs(self) -> None:
-        assert typed._resolve_importable_type("") is None
-        assert typed._resolve_importable_type(123) is None
-        assert typed._resolve_importable_type("does.not.exist.Type") is None
-
-    def test_resolve_importable_type_skips_local_classes(self) -> None:
-        class LocalType:
-            pass
-
-        path = f"{LocalType.__module__}.{LocalType.__qualname__}"
-        assert typed._resolve_importable_type(path) is None
-
 
 # ---------------------------------------------------------------------------
 # tool_execute tests
@@ -876,9 +860,35 @@ class TestBestEffortAnyCodec:
     def test_from_json_empty_dict(self) -> None:
         assert self.codec.from_json({}) == {}
 
+    @pytest.mark.parametrize("tag", ["__nv_dataclass__", "__nv_pydantic__"])
+    @pytest.mark.parametrize("runtime_token", [None, "unregistered.Type:123", 123])
+    def test_unregistered_tags_do_not_import(
+        self, tag: str, runtime_token: object, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        marker = tmp_path / "import-marker"
+        module = tmp_path / "untrusted_codec_module.py"
+        module.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\nclass Payload: pass\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        data = {tag: "untrusted_codec_module.Payload", "__nv_runtime_type__": runtime_token, "data": {}}
+
+        assert self.codec.from_json(data) is data
+        assert not marker.exists()
+
+    @pytest.mark.parametrize("tag", ["__nv_dataclass__", "__nv_pydantic__"])
+    def test_unregistered_importable_types_do_not_construct(self, tag: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fail(*args, **kwargs):
+            pytest.fail("unregistered type must not be reconstructed")
+
+        cls = BEPoint if tag == "__nv_dataclass__" else BrokenValidatedModel
+        monkeypatch.setattr(cls, "__init__" if tag == "__nv_dataclass__" else "model_validate", fail)
+        data = {tag: f"{cls.__module__}.{cls.__qualname__}", "data": {"x": 1, "y": 2}}
+
+        assert self.codec.from_json(data) is data
+
     def test_from_json_pydantic_validation_failure_returns_raw_dict(self) -> None:
         data = {
             "__nv_pydantic__": f"{BrokenValidatedModel.__module__}.{BrokenValidatedModel.__qualname__}",
+            "__nv_runtime_type__": typed._register_runtime_type(BrokenValidatedModel),
             "data": {"x": 1},
         }
         assert self.codec.from_json(data) == data
@@ -886,6 +896,7 @@ class TestBestEffortAnyCodec:
     def test_from_json_dataclass_reconstruction_failure_returns_raw_dict(self) -> None:
         data = {
             "__nv_dataclass__": f"{BEPoint.__module__}.{BEPoint.__qualname__}",
+            "__nv_runtime_type__": typed._register_runtime_type(BEPoint),
             "data": {"x": 1},
         }
         assert self.codec.from_json(data) == data
@@ -893,6 +904,7 @@ class TestBestEffortAnyCodec:
     def test_from_json_dataclass_with_non_mapping_payload_returns_raw_dict(self) -> None:
         data = {
             "__nv_dataclass__": f"{BEPoint.__module__}.{BEPoint.__qualname__}",
+            "__nv_runtime_type__": typed._register_runtime_type(BEPoint),
             "data": "not-a-mapping",
         }
         assert self.codec.from_json(data) == data

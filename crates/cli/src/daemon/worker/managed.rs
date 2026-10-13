@@ -307,12 +307,13 @@ impl ManagedRuntime {
                     .map(|event| operational.clone().with_session(event.session_id()))
                     .unwrap_or(operational);
                 operational::hook_started(&operational, "managed_worker_hook");
-                // A daemon worker is already isolated to one authenticated machine owner. Keep
-                // pi's response-transform behavior while using that isolation as its ownership
-                // boundary, just as the personal gateway does for its local extension.
                 let effects = match self
                     .sessions
-                    .apply_events(&parts.headers, outcome.events)
+                    .apply_authenticated_events_with_effects(
+                        &parts.headers,
+                        outcome.events,
+                        &self.owner,
+                    )
                     .await
                 {
                     Ok(effects) => effects,

@@ -1490,6 +1490,115 @@ fn test_encode_tool_choice_specific_to_anthropic() {
 use super::super::streaming::StreamingCodec;
 
 #[test]
+fn anthropic_streaming_codec_stores_extreme_indices_sparsely() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+
+    // Check a safe sparse index first so a dense-storage regression fails before the
+    // extreme indices could exhaust memory. These indices must also remain distinct
+    // on platforms where usize is narrower than the provider's unsigned index.
+    for (count, index) in [4096_u64, u64::MAX, 1_u64 << 32, 0].into_iter().enumerate() {
+        collector(json!({
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "text", "text": ""}
+        }))
+        .unwrap();
+        {
+            let state = codec.state.lock().unwrap();
+            assert_eq!(state.sparse_blocks.len(), (count + 1).min(3));
+            assert_eq!(state.dense_blocks.len(), usize::from(index == 0));
+        }
+        collector(json!({
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "text_delta", "text": index.to_string()}
+        }))
+        .unwrap();
+    }
+
+    assert_eq!(
+        codec.finalizer()()["content"],
+        json!([
+            {"type": "text", "text": "0"},
+            {"type": "text", "text": "4096"},
+            {"type": "text", "text": "4294967296"},
+            {"type": "text", "text": "18446744073709551615"}
+        ])
+    );
+}
+
+#[test]
+fn anthropic_streaming_codec_bounds_dense_storage_at_2048_indices() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+
+    for index in [2048, 2047, 0] {
+        collector(json!({
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "text", "text": ""}
+        }))
+        .unwrap();
+        collector(json!({
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "text_delta", "text": index.to_string()}
+        }))
+        .unwrap();
+    }
+    {
+        let state = codec.state.lock().unwrap();
+        assert_eq!(state.dense_blocks.len(), 2048);
+        assert_eq!(state.sparse_blocks.len(), 1);
+    }
+    assert_eq!(
+        codec.finalizer()()["content"],
+        json!([
+            {"type": "text", "text": "0"},
+            {"type": "text", "text": "2047"},
+            {"type": "text", "text": "2048"}
+        ])
+    );
+}
+
+#[test]
+fn anthropic_streaming_codec_preserves_sparse_block_replacement_and_order() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+
+    for index in [2048, 3, 1, 3, 2048] {
+        collector(json!({
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "text", "text": ""}
+        }))
+        .unwrap();
+        collector(json!({
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "text_delta", "text": index.to_string()}
+        }))
+        .unwrap();
+    }
+    collector(json!({
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {"type": "text_delta", "text": "orphaned"}
+    }))
+    .unwrap();
+
+    assert_eq!(
+        codec.finalizer()()["content"],
+        json!([
+            {"type": "text", "text": "1"},
+            {"type": "text", "text": "3"},
+            {"type": "text", "text": "2048"}
+        ])
+    );
+}
+
+#[test]
 fn anthropic_streaming_codec_assembles_text_response() {
     let codec = AnthropicMessagesStreamingCodec::new();
     let mut collector = codec.collector();

@@ -106,6 +106,10 @@ const passthrough = new JsonPassthrough();
 
 Use `BestEffortAnyCodec` only at boundary code where strict schemas are unavailable. Prefer dataclass, Pydantic, or explicit Node.js codecs when the framework owns a stable schema.
 
+Python dataclass and Pydantic tags reconstruct only types registered by `to_json()` in the same process. Unregistered tags remain JSON dictionaries. For stored or cross-process payloads, use an explicit `DataclassCodec` or `PydanticCodec` to select the type.
+
+Use `JsonPassthrough` for model-controlled tool arguments, as the LangChain and LangGraph integrations do.
+
 ## Example: Typed Tool Boundary
 
 Use typed value codecs when the framework wants native objects but NeMo Relay should emit JSON payloads.

@@ -41,6 +41,12 @@ pub(crate) fn prepare(
     gateway: &crate::configuration::GatewayConfig,
 ) -> Result<(), CliError> {
     set_env(launch, PI_GATEWAY_URL_ENV, gateway_url);
+    let relay_command = std::env::current_exe()?;
+    set_env(
+        launch,
+        "NEMO_RELAY_PI_COMMAND",
+        &relay_command.to_string_lossy(),
+    );
 
     // Tell the extension what this gateway actually forwards to.
     //

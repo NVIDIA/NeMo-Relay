@@ -109,7 +109,7 @@ fn validation_request_deserializes_every_target_and_rejects_invalid_shapes() {
 }
 
 #[test]
-fn validation_reports_selected_trust_failures_without_blocking() {
+fn validation_rejects_trust_failures_and_skips_optional_plugins() {
     let temp = tempfile::tempdir().unwrap();
     let artifact = temp.path().join("artifact.bin");
     fs::write(&artifact, b"dynamic plugin trust fixture").unwrap();
@@ -204,7 +204,7 @@ manifest = {:?}
     .unwrap();
     let optional_report = validate(PluginConfig::default(), Some(plugins_toml.clone())).unwrap();
     assert_eq!(optional_report.dynamic_plugins.len(), 1);
-    assert!(optional_report.dynamic_plugins[0].selected);
+    assert!(!optional_report.dynamic_plugins[0].selected);
     assert_eq!(
         optional_report.dynamic_plugins[0]
             .failure
@@ -214,11 +214,8 @@ manifest = {:?}
     );
     let optional_resolved =
         resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)).unwrap();
-    assert_eq!(optional_resolved.dynamic_plugins.len(), 1);
-    assert_eq!(
-        optional_resolved.dynamic_plugins[0].plugin_id,
-        "fixture.trust"
-    );
+    assert!(optional_resolved.dynamic_plugins.is_empty());
+    assert!(optional_resolved.load_trust.is_empty());
 
     let manifest_ref = fs::canonicalize(&manifest)
         .unwrap()
@@ -735,4 +732,118 @@ fn manifest_paths_and_validation_reports_preserve_fail_closed_selection() {
     assert!(!report.selected);
     assert_eq!(report.status.manifest, DynamicPluginCheckState::Invalid);
     assert!(report.failure.is_some());
+}
+
+#[test]
+fn trust_failures_disqualify_both_runtime_kinds_under_each_startup_class() {
+    use sha2::{Digest, Sha256};
+    let temp = tempfile::tempdir().unwrap();
+    let bytes = b"trust fixture that must never execute";
+    fs::write(temp.path().join("artifact.bin"), bytes).unwrap();
+    let digest = format!(
+        "sha256:{}",
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    fs::write(temp.path().join("artifact.sig"), "invalid-signature").unwrap();
+    let manifest_path = temp.path().join("relay-plugin.toml");
+    let plugins_toml = temp.path().join("plugins.toml");
+    for kind in ["rust_dynamic", "worker"] {
+        for startup in ["optional", "required"] {
+            for failure in [
+                "missing_digest",
+                "digest_mismatch",
+                "missing_signature",
+                "invalid_signature",
+            ] {
+                let compatibility = if kind == "rust_dynamic" {
+                    "native_api = \"1\""
+                } else {
+                    "worker_protocol = \"grpc-v1\""
+                };
+                let load = if kind == "rust_dynamic" {
+                    "library = \"artifact.bin\"\nsymbol = \"never_load\""
+                } else {
+                    "runtime = \"command\"\nentrypoint = \"artifact.bin\""
+                };
+                let capability = if kind == "rust_dynamic" {
+                    "plugin_native"
+                } else {
+                    "plugin_worker"
+                };
+                let integrity = match failure {
+                    "missing_digest" => String::new(),
+                    "digest_mismatch" => format!(
+                        "[integrity]\nsha256 = {:?}\n",
+                        format!("sha256:{}", "0".repeat(64))
+                    ),
+                    "missing_signature" => format!("[integrity]\nsha256 = {digest:?}\n"),
+                    _ => {
+                        format!("[integrity]\nsha256 = {digest:?}\nsignature = \"artifact.sig\"\n")
+                    }
+                };
+                fs::write(
+                    &manifest_path,
+                    format!(
+                        r#"
+manifest_version = 1
+[plugin]
+id = "fixture.trust"
+kind = {kind:?}
+[compat]
+relay = ">=0.8.0,<1.0"
+{compatibility}
+[defaults]
+enabled = false
+[capabilities]
+items = ["{capability}"]
+[source]
+artifact = "artifact.bin"
+[load]
+{load}
+{integrity}
+"#
+                    ),
+                )
+                .unwrap();
+                fs::write(
+                    &plugins_toml,
+                    format!(
+                        r#"
+[plugins.policy.defaults]
+startup = {startup:?}
+attestation = "signature_required"
+trusted_public_keys = ["ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]
+[[plugins.dynamic]]
+manifest = "relay-plugin.toml"
+"#
+                    ),
+                )
+                .unwrap();
+                let report = validate(PluginConfig::default(), Some(plugins_toml.clone())).unwrap();
+                let dynamic = &report.dynamic_plugins[0];
+                assert!(!dynamic.selected, "{kind}/{startup}/{failure}");
+                let code = if failure.starts_with("missing_digest") || failure == "digest_mismatch"
+                {
+                    "integrity_failed"
+                } else {
+                    "attestation_failed"
+                };
+                assert_eq!(
+                    dynamic.failure.as_ref().unwrap().code,
+                    code,
+                    "{kind}/{startup}/{failure}"
+                );
+                match resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)) {
+                    Ok(resolved) => {
+                        assert_eq!(startup, "optional");
+                        assert!(resolved.dynamic_plugins.is_empty());
+                    }
+                    Err(_) => assert_eq!(startup, "required"),
+                }
+            }
+        }
+    }
 }

@@ -38,6 +38,15 @@ These are the complete manifest shapes used by the checked examples. The path in
 same library; a worker loader either starts the compiled program or imports the Python
 entrypoint from the managed environment.
 
+For application embeddings, core initialization loads a private temporary copy of the
+native library bytes checked by the host trust policy. The copy remains available until
+the library unloads. Replacing the source manifest, library, or signature after validation
+does not change the library loaded by that activation. Native plugins used in embeddings
+must not depend on adjacent files being available relative to the loaded library's
+location. The CLI retains its activation snapshot, which includes adjacent native
+dependencies. Native library digest checks use bounded regular-file reads and reject
+symbolic links and special files.
+
 <Tabs>
 <Tab title="Python Worker" language="toml">
 ```toml

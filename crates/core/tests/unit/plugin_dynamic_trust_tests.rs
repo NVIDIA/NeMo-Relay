@@ -340,3 +340,88 @@ fn blocked_policy_short_circuits_io_and_path_resolution_preserves_anchors() {
         absolute
     );
 }
+
+#[test]
+fn load_trust_retains_verified_metadata_and_rechecks_artifact_and_signature() {
+    let temp = tempfile::tempdir().unwrap();
+    let bytes = b"signed plugin artifact";
+    let artifact = temp.path().join("artifact.bin");
+    let signature = temp.path().join("artifact.sig");
+    std::fs::write(&artifact, bytes).unwrap();
+    let key = signing_key();
+    std::fs::write(
+        &signature,
+        base64::engine::general_purpose::STANDARD.encode(key.sign(bytes).as_ref()),
+    )
+    .unwrap();
+    let original = manifest(
+        Some("artifact.bin"),
+        Some(&digest(bytes)),
+        Some("artifact.sig"),
+    );
+    let manifest_path = temp.path().join("relay-plugin.toml");
+    let manifest_ref = manifest_path.to_str().unwrap();
+    std::fs::write(&manifest_path, toml::to_string(&original).unwrap()).unwrap();
+    let context = DynamicPluginLoadTrust {
+        manifest: original.clone(),
+        policy: policy(
+            true,
+            DynamicPluginAttestationMode::SignatureRequired,
+            vec![format!(
+                "ed25519:{}",
+                base64::engine::general_purpose::STANDARD.encode(key.public_key().as_ref())
+            )],
+        ),
+    };
+    assert_eq!(
+        context
+            .manifest_for_load(manifest_ref, &mut Vec::new())
+            .unwrap(),
+        Some(original.clone())
+    );
+
+    // Replacing the manifest cannot strip the original trust or load contract.
+    let replacement = manifest(Some("artifact.bin"), None, None);
+    std::fs::write(&manifest_path, toml::to_string(&replacement).unwrap()).unwrap();
+    assert_eq!(
+        context
+            .manifest_for_load(manifest_ref, &mut Vec::new())
+            .unwrap(),
+        Some(original.clone())
+    );
+
+    std::fs::write(&artifact, b"replacement artifact").unwrap();
+    let replacement = manifest(
+        Some("artifact.bin"),
+        Some(&digest(b"replacement artifact")),
+        None,
+    );
+    std::fs::write(&manifest_path, toml::to_string(&replacement).unwrap()).unwrap();
+    assert!(
+        context
+            .manifest_for_load(manifest_ref, &mut Vec::new())
+            .unwrap_err()
+            .to_string()
+            .contains("failed integrity verification")
+    );
+
+    std::fs::write(&artifact, bytes).unwrap();
+    std::fs::write(
+        &signature,
+        base64::engine::general_purpose::STANDARD.encode([0u8; 64]),
+    )
+    .unwrap();
+    assert!(
+        context
+            .manifest_for_load(manifest_ref, &mut Vec::new())
+            .unwrap_err()
+            .to_string()
+            .contains("failed signature verification")
+    );
+    std::fs::remove_file(&signature).unwrap();
+    assert!(
+        context
+            .manifest_for_load(manifest_ref, &mut Vec::new())
+            .is_err()
+    );
+}
