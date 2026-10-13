@@ -334,6 +334,16 @@ meaning of scope parentage, event UUIDs, codec annotations, and exporter-local
 lineage rules without becoming the source of truth for runtime ownership,
 middleware ordering, or provider payload decoding.
 
+When a step message or observation result is emitted as a content-part array,
+each part contains only ATIF fields: text parts keep `type` and `text`, and
+image parts keep `type` and a `source` with `media_type` and `path`. Fields
+that ATIF does not define, such as `cache_control`, are dropped from the parts
+but remain in the original payload under `extra.llm_request` or
+`extra.llm_response`, or under `extra.tool_result` for tool results. Arrays
+that contain a part ATIF cannot represent, such as a base64 image source, are
+not emitted as content parts, and the original payload remains in the same
+`extra` fields.
+
 When a successful tool result carries an opaque annotation, the corresponding
 ATIF observation result stores it at `extra.tool_result_annotation`. ATIF
 preserves the JSON value without interpreting application-defined keys.
