@@ -112,6 +112,7 @@ impl From<GatewayModeArg> for crate::hooks::GatewayMode {
     }
 }
 
+/// Dispatches native command hooks or pi extension hooks through authenticated forwarding.
 pub(super) async fn execute(command: HookForwardCommand) -> Result<(), CliError> {
     let pi_client = command.pi_extension_client.clone();
     let mut request = command.into_runtime();

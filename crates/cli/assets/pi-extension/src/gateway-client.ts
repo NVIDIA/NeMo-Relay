@@ -135,7 +135,10 @@ export async function postHook(
     if (response.status === 403) return await forbiddenOutcome(response);
     return { kind: 'fault', origin: 'response', detail: `gateway returned HTTP ${response.status}` };
   } catch (error) {
-    const failure = error as { detail?: string; killed?: boolean; signal?: string };
+    const failure = error as { detail?: string; killed?: boolean; signal?: string; code?: unknown };
+    if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      return { kind: 'fault', origin: 'response', detail: 'hook forward output exceeded the output limit' };
+    }
     const detail = failure.detail ?? (error instanceof Error ? error.message : String(error));
     const timedOut = failure.killed === true && failure.signal === 'SIGKILL';
     return {

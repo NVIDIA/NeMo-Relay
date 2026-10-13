@@ -6900,6 +6900,7 @@ async fn websocket_tunnel_blocks_idle_shutdown_until_disconnect() {
     provider_task.abort();
 }
 
+/// Verifies pi lifecycle and tool hooks require credentials and respect session ownership.
 #[tokio::test]
 async fn pi_hooks_require_credentials_and_reject_cross_owner_injection() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;

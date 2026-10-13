@@ -11123,6 +11123,7 @@ async fn codex_finished_child_hooks_do_not_revive_parent_work() {
     }
 }
 
+/// Verifies a pi client cannot mutate another client's Codex root or child aliases.
 #[tokio::test]
 async fn authenticated_pi_cannot_inject_into_codex_root_or_child_alias() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -11156,6 +11157,7 @@ async fn authenticated_pi_cannot_inject_into_codex_root_or_child_alias() {
     assert!(manager.inner.lock().await["parent-thread"].tools.is_empty());
 }
 
+/// Verifies pending ownership claims reject pi events before a session can be created.
 #[tokio::test]
 async fn authenticated_pi_respects_pending_owner_claims() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;

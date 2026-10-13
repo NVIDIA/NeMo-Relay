@@ -6513,6 +6513,7 @@ fn daemon_token_ensure_creates_once_and_never_prints_the_token() {
     assert_eq!(std::fs::read_to_string(&token_path).unwrap(), "corrupt");
 }
 
+/// Verifies standalone CLI delivery authenticates pi clients and preserves HTTP verdicts.
 #[test]
 fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verdicts() {
     let temp = tempfile::tempdir().unwrap();

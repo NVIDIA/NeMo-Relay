@@ -16,7 +16,9 @@
 import './harness.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it, mock } from 'node:test';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 
 const { postHook, resolveFault, configFromEnv } = await import('../src/gateway-client.ts');
 
@@ -59,6 +61,45 @@ const baseConfig = (url, overrides = {}) => ({
 });
 
 describe('gateway client wire contract', () => {
+  it('classifies oversized stdout and stderr as response faults', async () => {
+    for (const stream of ['stdout', 'stderr']) {
+      const config = baseConfig('http://127.0.0.1:4040');
+      const outcome = await postHook(config, { hook_event_name: 'fixture_output_overflow', stream });
+      assert.equal(outcome.kind, 'fault');
+      assert.equal(outcome.origin, 'response', stream);
+      assert.equal(outcome.detail, 'hook forward output exceeded the output limit');
+      assert.equal(resolveFault(config, outcome, 'read').kind, 'allow');
+      const blocked = resolveFault({ ...config, onFault: 'closed' }, outcome, 'read');
+      assert.equal(blocked.kind, 'block');
+      assert.match(blocked.reason, /gateway answered/);
+    }
+  });
+
+  it('prioritizes an output overflow over process-kill timeout fields', async () => {
+    const previousExecFile = childProcess.execFile;
+    const decorated = mock.method(childProcess, 'execFile', (command, args, options, callback) =>
+      previousExecFile(command, args, options, (error, stdout, stderr) => {
+        if (error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+          error.killed = true;
+          error.signal = 'SIGKILL';
+        }
+        callback(error, stdout, stderr);
+      }),
+    );
+    syncBuiltinESMExports();
+    try {
+      const outcome = await postHook(baseConfig('http://127.0.0.1:4040'), {
+        hook_event_name: 'fixture_output_overflow', stream: 'stdout',
+      });
+      assert.equal(outcome.kind, 'fault');
+      assert.equal(outcome.origin, 'response');
+      assert.equal(outcome.detail, 'hook forward output exceeded the output limit');
+    } finally {
+      decorated.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+
   it('reports a missing Relay executable through the existing fault policy', async () => {
     const config = baseConfig('http://127.0.0.1:4040', { relayCommand: 'missing-nemo-relay-executable-for-test' });
     const outcome = await postHook(config, { hook_event_name: 'tool_call' });

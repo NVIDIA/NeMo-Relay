@@ -1429,6 +1429,7 @@ async fn claude_code_hook(
 // Relay-authored extension rather than from pi itself. Events are committed before the response
 // so a conditional-execution guardrail rejection surfaces as HTTP 403 and the extension can turn
 // it into pi's `{block, reason}` before the tool runs.
+/// Authenticates pi lifecycle hooks and returns their policy verdict and argument rewrites.
 async fn pi_hook(
     State(state): State<AppState>,
     mut headers: HeaderMap,

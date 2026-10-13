@@ -9,14 +9,20 @@ if (args[0] !== 'hook-forward' || args[1] !== 'pi' || !args.includes('--pi-exten
 }
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
-const gateway = args[args.indexOf('--gateway-url') + 1];
-try {
-  const response = await fetch(`${gateway}/hooks/pi`, {
-    method: 'POST', redirect: 'error',
-    headers: { 'content-type': 'application/json' }, body: input,
-  });
-  console.log(JSON.stringify({ status: response.status, body: await response.text() }));
-} catch (error) {
-  console.error(String(error));
-  process.exitCode = 1;
+const payload = JSON.parse(input);
+if (payload.hook_event_name === 'fixture_output_overflow') {
+  // Exercise execFile's real stdout/stderr limits without an HTTP server or CLI build.
+  process[payload.stream].write('x'.repeat(9 * 1024 * 1024));
+} else {
+  const gateway = args[args.indexOf('--gateway-url') + 1];
+  try {
+    const response = await fetch(`${gateway}/hooks/pi`, {
+      method: 'POST', redirect: 'error',
+      headers: { 'content-type': 'application/json' }, body: input,
+    });
+    console.log(JSON.stringify({ status: response.status, body: await response.text() }));
+  } catch (error) {
+    console.error(String(error));
+    process.exitCode = 1;
+  }
 }
