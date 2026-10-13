@@ -214,11 +214,12 @@ still stops gateway startup; correct or disable the plugin to start without it.
 `signature_required`; integrity verification always checks the declared
 artifact digest.
 
-Use `startup = "required"` when failed integrity or signature verification must
-prevent worker startup. An optional trust failure records failed lifecycle
-state, but does not itself prevent an enabled worker from launching. The native
-loader also verifies `load.library`; the worker loader relies on lifecycle trust
-evaluation.
+Failed integrity or signature verification always prevents plugin activation.
+With `startup = "optional"`, the host skips the failed plugin and continues;
+with `startup = "required"`, the failure stops host startup. The embedding host
+retains the validated manifest and host policy and rechecks trust before loading
+native libraries or launching workers. The native loader also verifies
+`load.library` against the validated digest.
 
 Use `[[plugins.policy.rules]]` to apply an effect by `match_kind` or
 `match_plugin_id`, and `[plugins.policy.overrides."plugin.id"]` for one
