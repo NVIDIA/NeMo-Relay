@@ -225,24 +225,21 @@ impl CallCancellation {
             Ok(Vec::<JsUnknown>::new())
         })?;
         abort.unref(env)?;
-        let abort = {
-            let mut registered = self.abort.lock().unwrap();
-            *registered = Some(abort);
-            registered.as_ref().cloned()
-        };
+        let mut registered = self.abort.lock().unwrap();
+        *registered = Some(abort);
         if self.requested.load(Ordering::Acquire) {
-            Self::call_abort(abort);
+            Self::call_abort(registered.as_ref());
         }
         Ok(())
     }
 
     fn cancel(&self) {
         self.requested.store(true, Ordering::Release);
-        let abort = self.abort.lock().unwrap().as_ref().cloned();
-        Self::call_abort(abort);
+        Self::call_abort(self.abort.lock().unwrap().as_ref());
     }
 
-    fn call_abort(abort: Option<ThreadsafeFunction<()>>) {
+    // A clone of a finalized threadsafe function panics, so call through the stored handle.
+    fn call_abort(abort: Option<&ThreadsafeFunction<()>>) {
         if let Some(abort) = abort {
             let _ = abort.call(
                 Ok(()),
