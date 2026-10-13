@@ -89,6 +89,7 @@ use tokio::runtime::Runtime;
 use tokio_stream::{Stream, StreamExt};
 use uuid::Uuid;
 
+use super::trust::DynamicPluginLoadTrust;
 use super::{
     DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, deregister_tracked_registrations_checked,
@@ -153,12 +154,30 @@ pub fn load_native_plugins<I>(specs: I) -> crate::plugin::Result<NativePluginAct
 where
     I: IntoIterator<Item = NativePluginLoadSpec>,
 {
+    load_native_plugins_with_trust(specs, &HashMap::new(), &mut Vec::new())
+}
+
+pub(super) fn load_native_plugins_with_trust<I>(
+    specs: I,
+    trust: &HashMap<String, DynamicPluginLoadTrust>,
+    skipped: &mut Vec<super::DynamicPluginValidationReport>,
+) -> crate::plugin::Result<NativePluginActivation>
+where
+    I: IntoIterator<Item = NativePluginLoadSpec>,
+{
     let mut activation = NativePluginActivation {
         plugins: Vec::new(),
         plugin_registrations: Vec::new(),
     };
     for spec in specs {
-        let instance = load_one_native_plugin(&spec)?;
+        let manifest = match trust.get(&spec.plugin_id) {
+            Some(trust) => match trust.manifest_for_load(&spec.manifest_ref, skipped)? {
+                Some(manifest) => Some(manifest),
+                None => continue,
+            },
+            None => None,
+        };
+        let instance = load_one_native_plugin(&spec, manifest)?;
         let plugin_kind = instance.plugin_kind.clone();
         let registration_id = register_plugin_tracked(Arc::new(NativePluginAdapter {
             plugin_kind: plugin_kind.clone(),
@@ -340,8 +359,12 @@ fn drop_native_plugin_descriptor(plugin: &mut NemoRelayNativePluginV1) {
 
 fn load_one_native_plugin(
     spec: &NativePluginLoadSpec,
+    verified_manifest: Option<DynamicPluginManifest>,
 ) -> crate::plugin::Result<Arc<NativePluginInstance>> {
-    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&spec.manifest_ref)?;
+    let (manifest, manifest_ref) = match verified_manifest {
+        Some(manifest) => (manifest, spec.manifest_ref.clone()),
+        None => DynamicPluginManifest::load_from_path(&spec.manifest_ref)?,
+    };
     if manifest.plugin.id.trim() != spec.plugin_id {
         return Err(PluginError::InvalidConfig(format!(
             "dynamic plugin manifest id '{}' does not match expected id '{}'",

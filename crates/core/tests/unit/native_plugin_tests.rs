@@ -8784,3 +8784,97 @@ async fn native_llm_intercept_preserves_annotations_and_releases_invalid_output_
         assert_eq!(native_string_live_allocations(), before);
     }
 }
+
+#[test]
+fn native_host_load_rejects_replacement_artifact_using_retained_trust() {
+    use crate::plugin::dynamic::{
+        DynamicPluginAttestationMode, DynamicPluginHostPolicy, evaluate_dynamic_plugin_host_policy,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let library = temp.path().join("library.so");
+    let bytes = b"verified library fixture";
+    std::fs::write(&library, bytes).unwrap();
+    let digest = hex_digest(Sha256::digest(bytes));
+    let manifest_path = temp.path().join("relay-plugin.toml");
+    let original = format!(
+        r#"
+manifest_version = 1
+[plugin]
+id = "fixture.retained-trust"
+kind = "rust_dynamic"
+[compat]
+relay = ">=0.8.0,<1.0"
+native_api = "1"
+[defaults]
+enabled = false
+[capabilities]
+items = ["plugin_native"]
+[source]
+artifact = "library.so"
+[integrity]
+sha256 = "sha256:{digest}"
+[load]
+library = "library.so"
+symbol = "never_call"
+"#
+    );
+    std::fs::write(&manifest_path, &original).unwrap();
+    let manifest = DynamicPluginManifest::parse_toml(&original).unwrap();
+    let mut policy = DynamicPluginHostPolicy::default();
+    policy.defaults.attestation = Some(DynamicPluginAttestationMode::IntegrityOnly);
+    policy.defaults.startup = Some(crate::plugin::dynamic::DynamicPluginStartupClass::Required);
+    let context = DynamicPluginLoadTrust {
+        policy: evaluate_dynamic_plugin_host_policy(&policy, &manifest),
+        manifest,
+    };
+    let manifest_ref = manifest_path.to_str().unwrap().to_owned();
+    assert!(
+        context
+            .manifest_for_load(&manifest_ref, &mut Vec::new())
+            .is_ok()
+    );
+
+    // The replacement removes integrity metadata and points at modified code.
+    std::fs::write(&library, b"modified library fixture").unwrap();
+    std::fs::write(
+        &manifest_path,
+        original.replace(&format!("[integrity]\nsha256 = \"sha256:{digest}\"\n"), ""),
+    )
+    .unwrap();
+    let mut trust =
+        std::collections::HashMap::from([("fixture.retained-trust".to_owned(), context)]);
+    let error = match load_native_plugins_with_trust(
+        [NativePluginLoadSpec {
+            plugin_id: "fixture.retained-trust".into(),
+            manifest_ref: manifest_ref.clone(),
+        }],
+        &trust,
+        &mut Vec::new(),
+    ) {
+        Ok(_) => panic!("replacement artifact must be rejected before loading native code"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("failed integrity verification"));
+    trust
+        .get_mut("fixture.retained-trust")
+        .unwrap()
+        .policy
+        .startup_class = crate::plugin::dynamic::DynamicPluginStartupClass::Optional;
+    let mut skipped = Vec::new();
+    let activation = load_native_plugins_with_trust(
+        [NativePluginLoadSpec {
+            plugin_id: "fixture.retained-trust".into(),
+            manifest_ref,
+        }],
+        &trust,
+        &mut skipped,
+    )
+    .unwrap();
+    assert!(activation.is_empty());
+    assert_eq!(skipped.len(), 1);
+    assert!(!skipped[0].selected);
+    assert_eq!(
+        skipped[0].failure.as_ref().unwrap().code,
+        "integrity_failed"
+    );
+}

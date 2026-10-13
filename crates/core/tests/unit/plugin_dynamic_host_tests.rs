@@ -189,3 +189,103 @@ fn standalone_validation_defaults_an_omitted_target_to_all() {
             .expect("omitted target should deserialize");
     assert_eq!(request.target, PluginHostValidationTarget::All);
 }
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // Serializes process-wide host ownership for this test.
+async fn optional_load_time_trust_failure_skips_component_and_preserves_host() {
+    use crate::plugin::dynamic::{
+        DynamicPluginAttestationMode, DynamicPluginHostPolicy, DynamicPluginManifest,
+        DynamicPluginStartupClass, evaluate_dynamic_plugin_host_policy,
+    };
+    let _guard = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let _ = crate::plugin::test_close_plugin_host();
+    let temp = tempfile::tempdir().unwrap();
+    for kind in [DynamicPluginKind::RustDynamic, DynamicPluginKind::Worker] {
+        if kind == DynamicPluginKind::Worker && !cfg!(feature = "worker-grpc") {
+            continue;
+        }
+        let (compat, load) = if kind == DynamicPluginKind::RustDynamic {
+            (
+                "native_api = \"1\"",
+                "library = \"never-load.so\"\nsymbol = \"never_call\"",
+            )
+        } else {
+            (
+                "worker_protocol = \"grpc-v1\"",
+                "runtime = \"command\"\nentrypoint = \"never-launch\"",
+            )
+        };
+        let capability = if kind == DynamicPluginKind::RustDynamic {
+            "plugin_native"
+        } else {
+            "plugin_worker"
+        };
+        let manifest = DynamicPluginManifest::parse_toml(&format!(
+            r#"
+manifest_version = 1
+[plugin]
+id = "fixture.skipped"
+kind = "{kind}"
+[compat]
+relay = ">=0.8.0,<1.0"
+{compat}
+[defaults]
+enabled = false
+[capabilities]
+items = ["{capability}"]
+[source]
+artifact = "missing-artifact"
+[integrity]
+sha256 = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+[load]
+{load}
+"#
+        ))
+        .unwrap();
+        let mut policy = DynamicPluginHostPolicy::default();
+        policy.defaults.startup = Some(DynamicPluginStartupClass::Optional);
+        policy.defaults.attestation = Some(DynamicPluginAttestationMode::IntegrityOnly);
+        let context = DynamicPluginLoadTrust {
+            policy: evaluate_dynamic_plugin_host_policy(&policy, &manifest),
+            manifest,
+        };
+        let manifest_ref = temp
+            .path()
+            .join("relay-plugin.toml")
+            .to_string_lossy()
+            .into_owned();
+        let spec = VerifiedDynamicPluginSpec {
+            plugin_id: "fixture.skipped".into(),
+            kind,
+            manifest_ref,
+            environment_ref: None,
+            config: Map::new(),
+        };
+        let (mut activation, _) = PluginHostActivation::activate_validated(
+            PluginConfig::default(),
+            vec![spec],
+            Vec::new(),
+            HashMap::from([("fixture.skipped".into(), context)]),
+        )
+        .await
+        .unwrap();
+        assert!(activation.is_active());
+        let report = activation.report();
+        assert_eq!(report.dynamic_plugins.len(), 1);
+        assert!(!report.dynamic_plugins[0].selected);
+        assert_eq!(
+            report.dynamic_plugins[0].failure.as_ref().unwrap().code,
+            "integrity_failed"
+        );
+        assert!(
+            !report
+                .config
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.component.as_deref() == Some("fixture.skipped"))
+        );
+        activation.close().unwrap();
+    }
+}

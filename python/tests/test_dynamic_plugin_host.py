@@ -210,7 +210,7 @@ def test_validate_uses_core_report(
     assert report["dynamic_plugins"][0]["selected"] is True
 
 
-async def test_validate_reports_selected_dynamic_plugin_trust_failures(tmp_path: Path) -> None:
+async def test_trust_failures_refuse_required_and_skip_optional_dynamic_plugins(tmp_path: Path) -> None:
     artifact = tmp_path / "artifact.bin"
     artifact.write_bytes(b"dynamic plugin trust fixture")
     manifest = tmp_path / "relay-plugin.toml"
@@ -261,8 +261,14 @@ async def test_validate_reports_selected_dynamic_plugin_trust_failures(tmp_path:
     plugins_toml.write_text(plugins_toml.read_text().replace('startup = "required"', 'startup = "optional"'))
     optional_report = plugin.validate(plugin.PluginConfig(), plugins_toml)
     optional_dynamic = optional_report["dynamic_plugins"][0]
-    assert optional_dynamic["selected"] is True
+    assert optional_dynamic["selected"] is False
     assert optional_dynamic["failure"]["code"] == "integrity_failed"
+
+    async with plugin.activate(plugin.PluginConfig(), plugins_toml) as activation:
+        assert activation.is_active
+        skipped = activation.report["dynamic_plugins"][0]
+        assert skipped["selected"] is False
+        assert skipped["failure"]["code"] == "integrity_failed"
 
 
 async def test_native_host_owns_callbacks_and_close_is_idempotent(

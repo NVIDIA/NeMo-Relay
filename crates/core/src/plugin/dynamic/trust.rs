@@ -160,6 +160,61 @@ impl EvaluatedDynamicPluginTrust {
     }
 }
 
+/// Trust context retained by the host from resolution through runtime loading.
+#[derive(Debug, Clone)]
+pub(super) struct DynamicPluginLoadTrust {
+    pub(super) manifest: DynamicPluginManifest,
+    pub(super) policy: EvaluatedDynamicPluginHostPolicy,
+}
+
+impl DynamicPluginLoadTrust {
+    fn validation_report(&self, manifest_ref: &str) -> super::DynamicPluginValidationReport {
+        let plugin_id = self.manifest.plugin.id.trim();
+        let trust = evaluate_dynamic_plugin_trust(&self.manifest, manifest_ref, &self.policy);
+        let failure = self
+            .policy
+            .last_error(plugin_id)
+            .or_else(|| trust.last_error(plugin_id));
+        super::DynamicPluginValidationReport {
+            plugin_id: plugin_id.to_owned(),
+            manifest_ref: manifest_ref.to_owned(),
+            kind: self.manifest.plugin.kind,
+            selected: failure.is_none(),
+            status: super::DynamicPluginValidationStatus {
+                manifest: DynamicPluginCheckState::Valid,
+                compatibility: DynamicPluginCheckState::Valid,
+                integrity: trust.integrity,
+                authenticity: trust.authenticity,
+                policy_satisfied: self.policy.check_state(),
+                environment: DynamicPluginCheckState::Unknown,
+                checked_at: None,
+                message: Some("verified before runtime load".into()),
+            },
+            failure,
+        }
+    }
+
+    pub(super) fn manifest_for_load(
+        &self,
+        manifest_ref: &str,
+        skipped: &mut Vec<super::DynamicPluginValidationReport>,
+    ) -> crate::plugin::Result<Option<DynamicPluginManifest>> {
+        let report = self.validation_report(manifest_ref);
+        if let Some(failure) = &report.failure {
+            if self.policy.startup_class == super::DynamicPluginStartupClass::Optional {
+                skipped.push(report);
+                return Ok(None);
+            }
+            return Err(crate::plugin::PluginError::InvalidConfig(
+                failure.message.clone(),
+            ));
+        }
+        // Load the validated contract, never a replacement manifest whose digest,
+        // signature, or entrypoint may have changed since configuration resolution.
+        Ok(Some(self.manifest.clone()))
+    }
+}
+
 /// Validates the manifest artifact under the already-evaluated host policy.
 pub fn evaluate_dynamic_plugin_trust(
     manifest: &DynamicPluginManifest,

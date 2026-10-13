@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value as Json};
 
 use super::read_bounded_regular_file;
+use super::trust::DynamicPluginLoadTrust;
 use super::{
     DynamicPluginCheckState, DynamicPluginFailure, DynamicPluginHostPolicy, DynamicPluginKind,
     DynamicPluginManifest, DynamicPluginRecord, DynamicPluginStartupClass,
@@ -153,6 +154,7 @@ pub(crate) struct ResolvedPluginHostConfig {
     pub(crate) config: PluginConfig,
     pub(crate) policy: DynamicPluginHostPolicy,
     pub(crate) dynamic_plugins: Vec<super::VerifiedDynamicPluginSpec>,
+    pub(super) load_trust: HashMap<String, DynamicPluginLoadTrust>,
     pub(super) dynamic_reports: Vec<ResolvedDynamicPluginReport>,
     pub(crate) diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
     pub(crate) config_paths: Vec<String>,
@@ -328,6 +330,7 @@ fn resolve_plugin_host_config_inner(
     diagnostics.extend(resolved.diagnostics.iter().cloned());
     let (mut policy, declarations) = resolve_dynamic_plugin_declarations(files)?;
     let mut active = Vec::new();
+    let mut load_trust = HashMap::new();
     let mut reports = Vec::new();
 
     policy.apply_secure_defaults();
@@ -368,6 +371,13 @@ fn resolve_plugin_host_config_inner(
             ));
         }
         if effective_selected {
+            load_trust.insert(
+                plugin_id.clone(),
+                DynamicPluginLoadTrust {
+                    manifest: manifest.clone(),
+                    policy: evaluated_policy,
+                },
+            );
             active.push(super::VerifiedDynamicPluginSpec {
                 plugin_id,
                 kind: manifest.plugin.kind,
@@ -383,6 +393,7 @@ fn resolve_plugin_host_config_inner(
         config: resolved.config,
         policy,
         dynamic_plugins: active,
+        load_trust,
         dynamic_reports: reports,
         diagnostics,
     })
@@ -583,8 +594,7 @@ fn validate_declaration(
     let effective_selected = selected
         && evaluated_policy.policy_satisfied
         && schema_failure.is_none()
-        && (trust.last_error(&plugin_id).is_none()
-            || evaluated_policy.startup_class == DynamicPluginStartupClass::Optional);
+        && trust.is_satisfied();
     DynamicPluginValidationReport {
         plugin_id,
         manifest_ref,

@@ -103,6 +103,7 @@ use crate::plugin::{
     register_plugin_tracked,
 };
 
+use super::trust::DynamicPluginLoadTrust;
 use super::{
     DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, WorkerRuntime, deregister_tracked_registrations_checked,
@@ -198,20 +199,26 @@ pub fn load_worker_plugins<I>(specs: I) -> crate::plugin::Result<WorkerPluginAct
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
-    load_worker_plugins_inner(specs, false)
+    load_worker_plugins_inner(specs, false, &HashMap::new(), &mut Vec::new())
 }
 
 /// Prepare workers without calling Register until their host component activates.
-pub(super) fn prepare_worker_plugins<I>(specs: I) -> crate::plugin::Result<WorkerPluginActivation>
+pub(super) fn prepare_worker_plugins_with_trust<I>(
+    specs: I,
+    trust: &HashMap<String, DynamicPluginLoadTrust>,
+    skipped: &mut Vec<super::DynamicPluginValidationReport>,
+) -> crate::plugin::Result<WorkerPluginActivation>
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
-    load_worker_plugins_inner(specs, true)
+    load_worker_plugins_inner(specs, true, trust, skipped)
 }
 
 fn load_worker_plugins_inner<I>(
     specs: I,
     defer_registration: bool,
+    trust: &HashMap<String, DynamicPluginLoadTrust>,
+    skipped: &mut Vec<super::DynamicPluginValidationReport>,
 ) -> crate::plugin::Result<WorkerPluginActivation>
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
@@ -221,7 +228,14 @@ where
         plugin_registrations: Vec::new(),
     };
     for spec in specs {
-        let instance = load_one_worker_plugin(&spec, defer_registration)?;
+        let manifest = match trust.get(&spec.plugin_id) {
+            Some(trust) => match trust.manifest_for_load(&spec.manifest_ref, skipped)? {
+                Some(manifest) => Some(manifest),
+                None => continue,
+            },
+            None => None,
+        };
+        let instance = load_one_worker_plugin(&spec, defer_registration, manifest)?;
         let plugin_kind = instance.plugin_kind.clone();
         let registration_id = register_plugin_tracked(Arc::new(WorkerPluginAdapter {
             plugin_kind: plugin_kind.clone(),
@@ -488,6 +502,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
 fn load_one_worker_plugin(
     spec: &WorkerPluginLoadSpec,
     defer_registration: bool,
+    verified_manifest: Option<DynamicPluginManifest>,
 ) -> crate::plugin::Result<Arc<WorkerPluginInstance>> {
     log::info!(
         target: "nemo_relay.worker",
@@ -495,7 +510,10 @@ fn load_one_worker_plugin(
         plugin_id = spec.plugin_id.as_str();
         "Worker plugin is starting"
     );
-    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&spec.manifest_ref)?;
+    let (manifest, manifest_ref) = match verified_manifest {
+        Some(manifest) => (manifest, spec.manifest_ref.clone()),
+        None => DynamicPluginManifest::load_from_path(&spec.manifest_ref)?,
+    };
     if manifest.plugin.id.trim() != spec.plugin_id {
         return Err(PluginError::InvalidConfig(format!(
             "dynamic plugin manifest id '{}' does not match expected id '{}'",
