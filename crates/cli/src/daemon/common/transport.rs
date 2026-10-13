@@ -35,6 +35,12 @@ pub(crate) type RelayBody = UnsyncBoxBody<Bytes, BoxError>;
 /// A pooled client supporting cleartext HTTP and rustls-backed HTTPS with HTTP/1.1 and HTTP/2.
 pub(crate) type PooledClient = Client<HttpsConnector<HttpConnector>, RelayBody>;
 
+/// A [`PooledClient`] that connects only where a client-named upstream may go.
+pub(crate) type NamedUpstreamClient = Client<
+    HttpsConnector<HttpConnector<crate::agents::pi::alignment::NamedUpstreamResolver>>,
+    RelayBody,
+>;
+
 /// A pooled cleartext client. The normal builder uses HTTP/1.1; the h2c builder uses HTTP/2 prior
 /// knowledge.
 #[cfg(test)]
@@ -276,8 +282,63 @@ pub(crate) fn pooled_websocket_client() -> Result<PooledClient, TransportError> 
     Ok(CLIENT.get_or_init(|| client).clone())
 }
 
+/// The WebSocket pool for client-named upstreams; see [`named_upstream_pool`].
+pub(crate) fn named_upstream_websocket_client() -> Result<NamedUpstreamClient, TransportError> {
+    named_upstream_pool(true)
+}
+
+/// The HTTP pool for client-named upstreams; see [`named_upstream_pool`].
+pub(crate) fn named_upstream_client() -> Result<NamedUpstreamClient, TransportError> {
+    named_upstream_pool(false)
+}
+
+/// Sends a provider request through `configured`, or through the client-named upstream pool
+/// when the caller chose the destination.
+pub(crate) fn request_provider(
+    configured: &PooledClient,
+    client_named: bool,
+    request: Request<RelayBody>,
+) -> Result<hyper_util::client::legacy::ResponseFuture, TransportError> {
+    Ok(if client_named {
+        named_upstream_client()?.request(request)
+    } else {
+        configured.request(request)
+    })
+}
+
+/// Pools for client-named upstreams, which resolve through the named-upstream address policy.
+///
+/// Kept apart from the shared pools so a connection opened for a configured provider -- which
+/// an operator may legitimately place on a private network -- is never reused for a
+/// destination the caller chose.
+fn named_upstream_pool(http1_only: bool) -> Result<NamedUpstreamClient, TransportError> {
+    static HTTP: OnceLock<NamedUpstreamClient> = OnceLock::new();
+    static WEBSOCKET: OnceLock<NamedUpstreamClient> = OnceLock::new();
+    static INITIALIZE: Mutex<()> = Mutex::new(());
+    let cell = if http1_only { &WEBSOCKET } else { &HTTP };
+    if let Some(client) = cell.get() {
+        return Ok(client.clone());
+    }
+    let _initializing = INITIALIZE.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(client) = cell.get() {
+        return Ok(client.clone());
+    }
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let http = HttpConnector::new_with_resolver(
+        crate::agents::pi::alignment::NamedUpstreamResolver::default(),
+    );
+    let client = pooled_builder().build(pooled_connector_with(http, http1_only)?);
+    Ok(cell.get_or_init(|| client).clone())
+}
+
 fn pooled_connector(http1_only: bool) -> Result<HttpsConnector<HttpConnector>, TransportError> {
-    let mut http = HttpConnector::new();
+    pooled_connector_with(HttpConnector::new(), http1_only)
+}
+
+fn pooled_connector_with<R>(
+    mut http: HttpConnector<R>,
+    http1_only: bool,
+) -> Result<HttpsConnector<HttpConnector<R>>, TransportError> {
     http.enforce_http(false);
     http.set_nodelay(true);
     http.set_connect_timeout(Some(CONNECT_TIMEOUT));

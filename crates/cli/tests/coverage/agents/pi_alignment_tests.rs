@@ -171,3 +171,120 @@ fn a_base_carrying_a_query_or_fragment_is_refused() {
         );
     }
 }
+
+/// The credential proves who is asking, not that the destination is harmless: a gateway can
+/// reach networks the agent cannot, and TLS to an internal host is still internal.
+#[test]
+fn a_named_upstream_may_not_be_an_internal_address() {
+    for rejected in [
+        "https://10.0.0.5/v1",
+        "https://172.16.0.1/v1",
+        "https://192.168.1.10/v1",
+        // Cloud metadata.
+        "https://169.254.169.254/latest",
+        "https://100.64.0.1/v1",
+        "https://0.0.0.0/v1",
+        "https://[fd00::1]/v1",
+        "https://[fe80::1]/v1",
+        // IPv4 smuggled through IPv6 forms.
+        "https://[::ffff:10.0.0.5]/v1",
+        "https://[64:ff9b::a9fe:a9fe]/latest",
+        // `Url` normalizes this to 10.0.0.5, and so does the dialer.
+        "https://0x0a.0.0.5/v1",
+    ] {
+        assert!(
+            is_rejected(client_named_upstream_base(&headers_naming(rejected), true)),
+            "{rejected} reaches a network the caller was never granted"
+        );
+    }
+
+    for accepted in [
+        "https://8.8.8.8/v1",
+        "https://[2606:4700:4700::1111]/v1",
+        "https://127.0.0.1:8443/v1",
+        "https://[::ffff:127.0.0.1]:8443/v1",
+    ] {
+        assert_eq!(
+            named(client_named_upstream_base(&headers_naming(accepted), true)).as_deref(),
+            Some(accepted),
+            "{accepted} is public or loopback"
+        );
+    }
+}
+
+/// Hostnames are checked where they are dialed, since the header only carries a name.
+#[tokio::test]
+async fn the_resolver_keeps_only_public_and_loopback_addresses() {
+    let resolver = NamedUpstreamResolver::default();
+
+    for host in ["10.0.0.5", "169.254.169.254", "fd00::1"] {
+        let error = resolver
+            .clone()
+            .permitted_addresses(host.to_string())
+            .await
+            .expect_err("an internal address must leave nothing to connect to");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied, "{host}");
+    }
+    for host in ["8.8.8.8", "127.0.0.1", "::1"] {
+        let addresses = resolver
+            .clone()
+            .permitted_addresses(host.to_string())
+            .await
+            .unwrap();
+        assert_eq!(addresses.len(), 1, "{host}");
+    }
+}
+
+/// `localhost` is what lets plain `http` through, so it must not depend on the host resolver.
+#[tokio::test]
+async fn localhost_resolves_only_to_loopback_without_dns() {
+    let addresses = NamedUpstreamResolver::default()
+        .permitted_addresses("LocalHost".to_string())
+        .await
+        .unwrap();
+    assert!(!addresses.is_empty());
+    assert!(addresses.iter().all(|address| address.ip().is_loopback()));
+}
+
+/// A configured proxy is the operator's choice, often on a private network, and reqwest
+/// resolves it in place of the destination.
+#[tokio::test]
+async fn an_operator_proxy_is_resolved_without_the_policy() {
+    let resolver = NamedUpstreamResolver {
+        proxy_hosts: Arc::from(["10.1.2.3".to_string()]),
+    };
+    let addresses = resolver
+        .permitted_addresses("10.1.2.3".to_string())
+        .await
+        .unwrap();
+    assert_eq!(addresses, [SocketAddr::from(([10, 1, 2, 3], 0))]);
+}
+
+/// The resolver cannot tell resolving a proxy from dialing that host directly, which reqwest
+/// does when `NO_PROXY` excludes it, so a proxy host is never a nameable destination.
+#[test]
+fn a_named_upstream_may_not_be_a_configured_proxy() {
+    let proxies = ["proxy.corp.example".to_string()];
+    for rejected in [
+        "https://proxy.corp.example/v1",
+        "https://PROXY.corp.example:8443/v1",
+    ] {
+        assert!(
+            is_rejected(client_named_upstream_base_with_proxies(
+                &headers_naming(rejected),
+                true,
+                &proxies
+            )),
+            "{rejected} would be resolved without the address policy"
+        );
+    }
+    assert_eq!(
+        named(client_named_upstream_base_with_proxies(
+            &headers_naming("https://api.corp.example/v1"),
+            true,
+            &proxies
+        ))
+        .as_deref(),
+        Some("https://api.corp.example/v1")
+    );
+}

@@ -38,6 +38,7 @@ use super::super::common::control::{
 use super::super::common::routes::{HookRoute, ProviderRoute};
 use super::super::common::transport::{
     BoxError, PooledClient, RelayBody, box_body, prepare_forward_request, prepare_forward_response,
+    request_provider,
 };
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::GatewayConfig;
@@ -712,6 +713,7 @@ async fn dispatch_unmanaged(
         .uri()
         .path_and_query()
         .map_or_else(|| request.uri().path().to_owned(), ToString::to_string);
+    let client_named = crate::gateway::daemon_destination_is_client_named(request.headers(), true);
     let destination =
         crate::gateway::daemon_provider_upstream_url(request.headers(), &path_and_query, config)?
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
@@ -736,8 +738,10 @@ async fn dispatch_unmanaged(
     let request = prepare_forward_request(request, destination, &strip)
         .map_err(|error| CliError::InvalidPayload(error.to_string()))?
         .map(box_body);
+    let request = request_provider(&upstream, client_named, request)
+        .map_err(|error| CliError::Launch(error.to_string()))?;
     let response = config
-        .wait_for_response(upstream.request(request))
+        .wait_for_response(request)
         .await
         .map_err(|_| CliError::Launch("provider response-head timeout".into()))?
         .map_err(|error| CliError::Launch(error.to_string()))?;
@@ -763,6 +767,7 @@ async fn dispatch_unbuffered_observed(
         .uri()
         .path_and_query()
         .map_or_else(|| request.uri().path().to_owned(), ToString::to_string);
+    let client_named = crate::gateway::daemon_destination_is_client_named(request.headers(), true);
     let destination =
         crate::gateway::daemon_provider_upstream_url(request.headers(), &path_and_query, config)?
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
@@ -788,8 +793,15 @@ async fn dispatch_unbuffered_observed(
     let request = prepare_forward_request(request, destination, &strip)
         .map_err(|error| CliError::InvalidPayload(error.to_string()))?
         .map(box_body);
-    let response =
-        request_worker_upstream(upstream, request, &operational, streaming, config).await?;
+    let response = request_worker_upstream(
+        upstream,
+        client_named,
+        request,
+        &operational,
+        streaming,
+        config,
+    )
+    .await?;
     let response = prepare_forward_response(response, &strip).map_err(|error| {
         operational::upstream_failed(&operational, "invalid_response");
         CliError::Launch(error.to_string())
@@ -871,6 +883,9 @@ async fn dispatch_observed(
     let allow_environment_provider_auth =
         crate::gateway::daemon_allows_environment_provider_auth(&prepared.headers);
     let destination = effective_destination(&prepared, route, effective, config)?;
+    // An intercept's dispatch override is trusted plugin code, not the caller naming a host.
+    let client_named = dispatch_override(effective).is_none()
+        && crate::gateway::daemon_destination_is_client_named(&prepared.headers, true);
     let (mut headers, body, explicit_target) = effective_request(&prepared, effective)?;
     if !explicit_target
         && let Some(aligned) =
@@ -895,9 +910,15 @@ async fn dispatch_observed(
     let request = prepare_forward_request(request, destination, &strip)
         .map_err(|error| CliError::InvalidPayload(error.to_string()))?
         .map(box_body);
-    let response =
-        request_worker_upstream(upstream, request, &operational, prepared.streaming, config)
-            .await?;
+    let response = request_worker_upstream(
+        upstream,
+        client_named,
+        request,
+        &operational,
+        prepared.streaming,
+        config,
+    )
+    .await?;
     let response = prepare_forward_response(response, &strip).map_err(|error| {
         operational::upstream_failed(&operational, "invalid_response");
         CliError::Launch(error.to_string())
@@ -912,13 +933,18 @@ async fn dispatch_observed(
 /// The ten-second observation timer reports slow headers but never cancels the request.
 async fn request_worker_upstream(
     upstream: PooledClient,
+    client_named: bool,
     request: Request<RelayBody>,
     operational: &OperationalContext,
     streaming: bool,
     config: &GatewayConfig,
 ) -> Result<Response<Incoming>, CliError> {
     operational::upstream_started(operational, streaming);
-    let request = config.wait_for_response(upstream.request(request));
+    let request = request_provider(&upstream, client_named, request).map_err(|error| {
+        operational::upstream_failed(operational, "transport");
+        CliError::Launch(error.to_string())
+    })?;
+    let request = config.wait_for_response(request);
     tokio::pin!(request);
     let response = tokio::select! {
         response = &mut request => response,
@@ -950,13 +976,9 @@ async fn request_worker_upstream(
     }
 }
 
-fn effective_destination(
-    prepared: &PreparedProviderRequest,
-    route: ProviderRoute,
-    effective: Option<&LlmRequest>,
-    config: &GatewayConfig,
-) -> Result<Uri, CliError> {
-    let override_url = effective.and_then(|request| {
+/// The destination a request intercept set through the internal dispatch header, if any.
+fn dispatch_override(effective: Option<&LlmRequest>) -> Option<&str> {
+    effective.and_then(|request| {
         request
             .headers
             .iter()
@@ -964,8 +986,16 @@ fn effective_destination(
             .and_then(|(_, value)| value.as_str())
             .map(str::trim)
             .filter(|value| !value.is_empty())
-    });
-    let destination = match override_url {
+    })
+}
+
+fn effective_destination(
+    prepared: &PreparedProviderRequest,
+    route: ProviderRoute,
+    effective: Option<&LlmRequest>,
+    config: &GatewayConfig,
+) -> Result<Uri, CliError> {
+    let destination = match dispatch_override(effective) {
         Some(destination) => destination.to_owned(),
         None => crate::gateway::daemon_provider_upstream_url(
             &prepared.headers,

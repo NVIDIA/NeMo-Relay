@@ -23,6 +23,8 @@ use axum::{Json, Router};
 use base64::Engine;
 use bytes::Bytes;
 use hyper::body::Body as HttpBody;
+use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::Connect;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as ConnectionBuilder;
 use hyper_util::service::TowerToHyperService;
@@ -1858,6 +1860,10 @@ async fn forward_to_provider(
         .uri()
         .path_and_query()
         .map_or("/", |value| value.as_str());
+    let client_named = crate::gateway::daemon_destination_is_client_named(
+        request.headers(),
+        invocation_authenticated,
+    );
     let destination = match crate::gateway::daemon_provider_upstream_url_with_access(
         request.headers(),
         path_and_query,
@@ -1884,30 +1890,33 @@ async fn forward_to_provider(
         inject_provider_auth(request.headers_mut(), route, &state.config);
     }
     if crate::gateway::websocket::is_websocket(&request) {
-        let client = match crate::daemon::common::transport::pooled_websocket_client() {
-            Ok(client) => client,
-            Err(error) => return control_error(StatusCode::BAD_GATEWAY, error),
-        };
-        return crate::gateway::websocket::forward(
-            &client,
+        return crate::gateway::websocket::forward_to_provider(
+            client_named,
             request,
             &destination,
-            None,
             (),
             &state.config,
             std::future::pending(),
         )
-        .await;
+        .await
+        .unwrap_or_else(|error| control_error(StatusCode::BAD_GATEWAY, error));
     }
-    let outcome = forward(
-        &state.upstream,
-        request,
-        &destination,
-        None,
-        None,
-        &state.config,
-    )
-    .await;
+    let outcome = if client_named {
+        match crate::daemon::common::transport::named_upstream_client() {
+            Ok(client) => forward(&client, request, &destination, None, None, &state.config).await,
+            Err(error) => return control_error(StatusCode::BAD_GATEWAY, error),
+        }
+    } else {
+        forward(
+            &state.upstream,
+            request,
+            &destination,
+            None,
+            None,
+            &state.config,
+        )
+        .await
+    };
     if let Some(failure) = outcome.failure {
         log_upstream_request_failed(route, failure);
     }
@@ -2135,14 +2144,17 @@ fn log_upstream_request_failed(route: ProviderRoute, failure: ForwardFailure) {
     );
 }
 
-async fn forward(
-    client: &PooledClient,
+async fn forward<C>(
+    client: &Client<C, RelayBody>,
     request: Request<Body>,
     destination: &str,
     authentication: Option<(HeaderName, String)>,
     hold: Option<WorkerRequest>,
     config: &GatewayConfig,
-) -> ForwardOutcome {
+) -> ForwardOutcome
+where
+    C: Connect + Clone + Send + Sync + 'static,
+{
     let destination = match destination.parse::<Uri>() {
         Ok(destination) => destination,
         Err(_) => {
