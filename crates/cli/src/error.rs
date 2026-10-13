@@ -256,11 +256,15 @@ fn response_status(error: &CliError) -> StatusCode {
         }
         CliError::InvalidPayload(_) => StatusCode::BAD_REQUEST,
         CliError::Upstream(_) => StatusCode::BAD_GATEWAY,
-        CliError::ProviderFailure(failure) => failure
-            .status
-            .and_then(|status| StatusCode::from_u16(status).ok())
-            .unwrap_or(StatusCode::BAD_GATEWAY),
-        CliError::McpFailure { source, .. } => response_status(source),
+        CliError::ProviderFailure(failure) | CliError::Flow(FlowError::Upstream(failure)) => {
+            failure
+                .status
+                .and_then(|status| StatusCode::from_u16(status).ok())
+                .unwrap_or(StatusCode::BAD_GATEWAY)
+        }
+        CliError::McpFailure { source, .. } | CliError::HookDelivery { source } => {
+            response_status(source)
+        }
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

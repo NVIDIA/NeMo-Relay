@@ -4,6 +4,7 @@
 //! Gateway response handling for forwarded lifecycle hooks.
 
 use futures_util::StreamExt;
+use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
 use serde_json::Value;
 
 use crate::error::CliError;
@@ -23,10 +24,14 @@ pub(super) async fn handle_hook_forward_response_with_context(
                 Ok(body) => body,
                 Err(error) => {
                     return handle_hook_failure(
-                        error,
+                        if status.is_client_error() || status.is_server_error() {
+                            hook_status_error(status, error.to_string())
+                        } else {
+                            error
+                        },
                         fail_closed,
                         "response_read",
-                        None,
+                        Some(status.as_u16()),
                         operational,
                     );
                 }
@@ -117,7 +122,7 @@ pub(super) fn handle_hook_forward_status_with_context(
             return Err(CliError::GuardrailRejected(reason));
         }
         return handle_hook_failure(
-            CliError::Install(format!("hook forward failed with HTTP {status}")),
+            hook_status_error(status, format!("hook forward failed with HTTP {status}")),
             fail_closed,
             "http_status",
             Some(status.as_u16()),
@@ -227,3 +232,20 @@ pub(super) fn guardrail_rejection_reason(body: &str) -> Option<String> {
         })
         .flatten()
 }
+
+fn hook_status_error(status: reqwest::StatusCode, body: String) -> CliError {
+    if status.is_client_error() || status.is_server_error() {
+        CliError::ProviderFailure(UpstreamFailure {
+            status: Some(status.as_u16()),
+            body,
+            headers: Default::default(),
+            class: UpstreamFailureClass::Other,
+        })
+    } else {
+        CliError::Install(body)
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/coverage/shared/hook_response_tests.rs"]
+mod tests;

@@ -1081,3 +1081,14 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
         }
     }
 }
+
+#[test]
+fn forwarded_hook_http_errors_preserve_status_and_failure_policy() {
+    use axum::response::IntoResponse;
+    for status in 400..=599 {
+        let status = reqwest::StatusCode::from_u16(status).unwrap();
+        let error = handle_hook_forward_status(status, "backend error".into(), true).unwrap_err();
+        assert_eq!(error.into_response().status(), status);
+        handle_hook_forward_status(status, "backend error".into(), false).unwrap();
+    }
+}

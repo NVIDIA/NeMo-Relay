@@ -4176,7 +4176,7 @@ fn tool_execution_intercept_outcome_from_proto(
 fn flow_error_to_worker(err: FlowError) -> WorkerError {
     WorkerError {
         code: "host.runtime_error".into(),
-        message: err.to_string(),
+        message: super::http_error::to_message(&err),
         retryable: false,
     }
 }
@@ -4184,6 +4184,8 @@ fn flow_error_to_worker(err: FlowError) -> WorkerError {
 fn worker_error_to_flow(error: WorkerError) -> FlowError {
     if error.code == "worker.cancelled" {
         FlowError::Internal(format!("worker invocation cancelled: {}", error.message))
+    } else if let Some(failure) = super::http_error::upstream_from_message(&error.message) {
+        failure
     } else {
         FlowError::Internal(format!("{}: {}", error.code, error.message))
     }

@@ -1871,7 +1871,7 @@ fn flow_error_from_status(status: NemoRelayStatus, fallback: &str) -> FlowError 
         NemoRelayStatus::ScopeStackEmpty => FlowError::ScopeStackEmpty,
         NemoRelayStatus::GuardrailRejected => FlowError::GuardrailRejected(message),
         NemoRelayStatus::InvalidArg => FlowError::InvalidArgument(message),
-        _ => FlowError::Internal(message),
+        _ => super::http_error::from_message(message),
     }
 }
 
@@ -1888,7 +1888,7 @@ fn status_from_plugin_error(err: PluginError) -> NemoRelayStatus {
 }
 
 fn status_from_flow_error(err: FlowError) -> NemoRelayStatus {
-    set_native_last_error(err.to_string());
+    set_native_last_error(super::http_error::to_message(&err));
     match err {
         FlowError::AlreadyExists(_) => NemoRelayStatus::AlreadyExists,
         FlowError::NotFound(_) => NemoRelayStatus::NotFound,
@@ -2590,7 +2590,7 @@ unsafe extern "C" fn native_async_completion_reject(
         abort.abort();
     }
     abort_completion_continuations(completion);
-    let _ = sender.send(Err(FlowError::Internal(message)));
+    let _ = sender.send(Err(super::http_error::from_message(message)));
     NemoRelayStatus::Ok
 }
 
@@ -2892,7 +2892,7 @@ unsafe extern "C" fn native_async_stream_reject(
     let Some(sender) = sender_guard.as_ref() else {
         return NemoRelayStatus::InvalidArg;
     };
-    match sender.try_send(Err(FlowError::Internal(message))) {
+    match sender.try_send(Err(super::http_error::from_message(message))) {
         Ok(()) => {
             sender_guard.take();
             stream.settled.store(true, Ordering::Release);
@@ -3152,7 +3152,7 @@ impl NativeAsyncResultCallbackGuard {
                     self.deliver_error("failed to allocate native async next result");
                 }
             }
-            Err(error) => self.deliver_error(&error.to_string()),
+            Err(error) => self.deliver_error(&super::http_error::to_message(&error)),
         }
     }
 
@@ -3611,7 +3611,7 @@ unsafe extern "C" fn native_async_next_open_llm_stream(
                 };
                 callback_guard.active = false;
             }
-            Ok(Err(error)) => callback_guard.fail(&error.to_string()),
+            Ok(Err(error)) => callback_guard.fail(&super::http_error::to_message(&error)),
             Err(payload) => callback_guard.fail(&format!(
                 "native async stream continuation panicked: {}",
                 panic_payload_message(payload.as_ref())
@@ -3755,7 +3755,7 @@ fn deliver_native_pull_result(
         }
         Ok(None) => unsafe { cb(user_data as *mut c_void, ptr::null(), ptr::null(), true) },
         Err(error) => {
-            if let Some(error) = native_string_from_str(&error.to_string()) {
+            if let Some(error) = native_string_from_str(&super::http_error::to_message(&error)) {
                 unsafe {
                     cb(user_data as *mut c_void, ptr::null(), error, true);
                     native_string_free(error);
@@ -3808,7 +3808,7 @@ async fn deliver_native_async_next_stream(
     let result = AssertUnwindSafe(async {
         match next_fn(request).await {
             Ok(stream) => forward_native_async_next_stream(stream, &mut callback_guard).await,
-            Err(error) => callback_guard.fail(&error.to_string()),
+            Err(error) => callback_guard.fail(&super::http_error::to_message(&error)),
         }
     })
     .catch_unwind()
@@ -3857,7 +3857,7 @@ async fn forward_native_async_next_stream_with(
                 }
             }
             Err(error) => {
-                callback_guard.fail(&error.to_string());
+                callback_guard.fail(&super::http_error::to_message(&error));
                 return;
             }
         }
@@ -6282,7 +6282,7 @@ impl Stream for NativeRelayLlmStream {
         match status {
             NemoRelayStatus::Ok => {
                 if out.is_null() {
-                    let error = FlowError::Internal(
+                    let error = super::http_error::from_message(
                         native_last_error_message()
                             .unwrap_or_else(|| "native LLM stream returned null chunk".into()),
                     );

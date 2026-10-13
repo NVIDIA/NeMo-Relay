@@ -129,3 +129,40 @@ fn mcp_failure_reasons_are_static_and_preserve_source_errors() {
         );
     }
 }
+
+#[test]
+fn http_error_statuses_survive_runtime_and_delivery_wrappers() {
+    for status in 400..=599 {
+        for variant in 0..4 {
+            let failure = UpstreamFailure {
+                status: Some(status),
+                body: "backend error".into(),
+                headers: BTreeMap::new(),
+                class: UpstreamFailureClass::Other,
+            };
+            let error = match variant {
+                0 => CliError::ProviderFailure(failure),
+                1 => CliError::Flow(FlowError::Upstream(failure)),
+                2 => CliError::HookDelivery {
+                    source: Box::new(CliError::Flow(FlowError::Upstream(failure))),
+                },
+                _ => CliError::HookDelivery {
+                    source: Box::new(CliError::McpFailure {
+                        reason: McpFailureReason::UnknownMcpFailure,
+                        source: Box::new(CliError::ProviderFailure(failure)),
+                    }),
+                },
+            };
+            assert_eq!(error.into_response().status().as_u16(), status);
+        }
+    }
+    for status in [None, Some(0), Some(1000)] {
+        let error = CliError::ProviderFailure(UpstreamFailure {
+            status,
+            body: "invalid status".into(),
+            headers: BTreeMap::new(),
+            class: UpstreamFailureClass::Other,
+        });
+        assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
+    }
+}
