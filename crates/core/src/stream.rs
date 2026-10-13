@@ -288,8 +288,7 @@ impl LlmStreamWrapper {
             },
             None => (Json::Null, false),
         };
-        let response_was_null_without_fallback =
-            aggregated.is_null() && (finalizer_failed || self.handle.data.is_none());
+        let response_was_null_without_fallback = aggregated.is_null() && self.handle.data.is_none();
         let response = if aggregated.is_null() && !finalizer_failed {
             self.handle.data.clone().unwrap_or(aggregated)
         } else {
@@ -308,7 +307,7 @@ impl LlmStreamWrapper {
             .first_chunk_elapsed
             .map(|elapsed| elapsed.as_secs_f64());
         let finalize = async move {
-            let sanitized = (!sanitizer_snapshot_failed).then(|| {
+            let sanitized = (!sanitizer_snapshot_failed && !finalizer_failed).then(|| {
                 NemoRelayContextState::llm_sanitize_response_snapshot_chain(
                     response,
                     sanitize_context,

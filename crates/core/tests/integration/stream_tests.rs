@@ -15,6 +15,9 @@ use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
 use nemo_relay::api::optimization::LlmOptimizationRecorder;
+use nemo_relay::api::registry::{
+    deregister_llm_sanitize_response_guardrail, register_llm_sanitize_response_guardrail,
+};
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{
     LlmFinalizer, LlmJsonStream, LlmStreamInner, NemoRelayContextState,
@@ -1141,4 +1144,45 @@ async fn failed_finalizer_skips_the_data_fallback() {
         Some(json!({"fallback": "not a response"}))
     );
     assert!(deregister_subscriber("failed_finalizer_no_fallback").unwrap());
+}
+
+#[tokio::test]
+async fn failed_finalizer_skips_response_sanitizers() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "failed_finalizer_no_sanitizers",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_sanitize_response_guardrail(
+        "failed_finalizer_no_sanitizers",
+        1,
+        Arc::new(|_response, _context| Box::pin(async { Ok(Some(json!({"sanitized": true}))) })),
+    )
+    .unwrap();
+
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        make_llm_handle("finalizer-failed-sanitized"),
+        Box::new(|_| Ok(())),
+        LlmFinalizer::Fallible(Box::new(|| {
+            Err(FlowError::Internal("finalizer failed".into()))
+        })),
+        None,
+        None,
+        None,
+    );
+    while wrapper.next().await.is_some() {}
+
+    let events = captured_snapshot(&events);
+    let end = events
+        .iter()
+        .find(|event| event.name() == "finalizer-failed-sanitized" && is_llm_end(event))
+        .expect("END event");
+    assert!(end.data().is_none_or(Json::is_null));
+    assert!(deregister_llm_sanitize_response_guardrail("failed_finalizer_no_sanitizers").unwrap());
+    assert!(deregister_subscriber("failed_finalizer_no_sanitizers").unwrap());
 }
