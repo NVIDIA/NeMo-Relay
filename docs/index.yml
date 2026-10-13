@@ -23,6 +23,14 @@ navigation:
         slug: quick-start
         collapsed: open-by-default
         contents:
+          - section: "Agent Runtimes"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "pi"
+                icon: fa-solid fa-pi
+                path: ./getting-started/quick-start/pi.mdx
+                slug: pi
           - section: "Application APIs"
             skip-slug: true
             collapsed: open-by-default
