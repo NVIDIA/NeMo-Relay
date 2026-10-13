@@ -53,6 +53,7 @@ async fn managed_provider_wait_has_no_default_deadline_and_honors_configuration(
         let task = tokio::spawn(async move {
             request_worker_upstream(
                 pooled_client().unwrap(),
+                false,
                 Request::post(destination)
                     .body(box_body(Body::empty()))
                     .unwrap(),

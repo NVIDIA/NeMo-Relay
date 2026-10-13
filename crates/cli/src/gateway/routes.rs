@@ -304,12 +304,45 @@ pub(super) fn client_named_upstream_url(
         invocation_authenticated,
     ) {
         crate::agents::pi::alignment::NamedUpstream::Named(base) => {
+            log_named_upstream(&base);
             crate::agents::pi::alignment::NamedUpstream::Named(format!(
                 "{}{path_and_query}",
                 base.trim_end_matches('/')
             ))
         }
+        crate::agents::pi::alignment::NamedUpstream::Rejected(reason) => {
+            log::warn!(
+                target: "nemo_relay.gateway",
+                event = "named_upstream_rejected",
+                reason = reason;
+                "Rejected a client-named upstream"
+            );
+            crate::agents::pi::alignment::NamedUpstream::Rejected(reason)
+        }
         other => other,
+    }
+}
+
+/// Records each distinct origin a caller sends traffic to, once per process, so an operator can
+/// audit where named upstreams went without a log line on every model call.
+fn log_named_upstream(base: &str) {
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+    let Ok(origin) = reqwest::Url::parse(base).map(|url| url.origin().ascii_serialization()) else {
+        return;
+    };
+    let first = SEEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_or_insert_default()
+        .insert(origin.clone());
+    if first {
+        log::info!(
+            target: "nemo_relay.gateway",
+            event = "named_upstream_used",
+            origin = origin.as_str();
+            "Forwarding to a client-named upstream"
+        );
     }
 }
 

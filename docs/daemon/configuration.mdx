@@ -306,7 +306,12 @@ x-nemo-relay-client-token: <base64url-encoded-256-bit-credential>
 Pi provider registrations also preserve Pi's runtime-selected endpoint in
 `x-nemo-relay-upstream-base-url`. The authenticated daemon consumes that
 routing header and removes it before contacting the provider. It is runtime
-model metadata, not part of the managed settings artifact.
+model metadata, not part of the managed settings artifact. A named endpoint
+must use `https` unless it is loopback, and must be a public or loopback
+address: the daemon refuses private, link-local, shared, and other special-use
+addresses, including any a hostname resolves to when the daemon connects.
+Provider endpoints on a private network must be configured as the daemon's
+upstream rather than named.
 
 Enterprise bootstrap can provide the credential through this environment
 variable. Managed hooks and MCP also read the

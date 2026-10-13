@@ -124,6 +124,18 @@ pub(crate) fn daemon_provider_upstream_url_with_access(
     }
 }
 
+/// Whether a daemon delivery goes to an upstream the caller named, and so must be dialed through
+/// the named-upstream address policy rather than the shared provider pool.
+pub(crate) fn daemon_destination_is_client_named(
+    headers: &HeaderMap,
+    invocation_authenticated: bool,
+) -> bool {
+    matches!(
+        crate::agents::pi::alignment::client_named_upstream_base(headers, invocation_authenticated),
+        crate::agents::pi::alignment::NamedUpstream::Named(_)
+    )
+}
+
 /// Applies the personal gateway's agent-auth replacement rules to a daemon provider request.
 pub(crate) fn daemon_provider_forward_headers(
     headers: &HeaderMap,
@@ -292,8 +304,6 @@ pub(crate) async fn websocket_passthrough(
     }
     let extensions = std::mem::take(request.extensions_mut());
     let prepared = prepare_gateway_request(&state.config, request, authorization, &path).await?;
-    let client = crate::daemon::common::transport::pooled_websocket_client()
-        .map_err(|e| CliError::Launch(e.to_string()))?;
     let headers = inject_provider_auth(
         state
             .http
@@ -311,16 +321,16 @@ pub(crate) async fn websocket_passthrough(
     *request.method_mut() = prepared.method;
     *request.headers_mut() = headers;
     *request.extensions_mut() = extensions;
-    Ok(websocket::forward(
-        &client,
+    websocket::forward_to_provider(
+        prepared.client_named_upstream,
         request,
         &prepared.upstream_url,
-        None,
         state.hold_websocket(),
         &state.config,
         std::future::pending(),
     )
-    .await)
+    .await
+    .map_err(|e| CliError::Launch(e.to_string()))
 }
 
 /// Transparently proxies compaction, image generation, and voice call setup without emitting LLM events.
