@@ -170,6 +170,7 @@ mod native {
         Flush {
             done: Sender<()>,
             include_pending: bool,
+            exclude: Option<Arc<PublicationLineage>>,
         },
         RegisterPending {
             lineage: Arc<PublicationLineage>,
@@ -301,6 +302,7 @@ mod native {
     }
     tokio::task_local! {
         static ASYNC_PUBLICATION_BUFFER: PublicationBuffer;
+        static TASK_PUBLICATION_LINEAGE: Arc<PublicationLineage>;
     }
 
     struct DispatchGuard;
@@ -389,6 +391,7 @@ mod native {
                         .and_then(|buffer| buffer.lineage.clone())
                 })
             })
+            .or_else(|| TASK_PUBLICATION_LINEAGE.try_with(Arc::clone).ok())
             .or_else(|| THREAD_PUBLICATION_LINEAGE.with(|lineage| lineage.borrow().clone()))
     }
 
@@ -768,6 +771,21 @@ mod native {
         })
     }
 
+    pub(super) async fn with_pending_publication<F: Future>(
+        pending: Option<PendingPublication>,
+        future: F,
+    ) -> F::Output {
+        let Some(pending) = pending else {
+            return future.await;
+        };
+        let output = match pending.permit.as_ref().map(PublicationPermit::lineage) {
+            Some(lineage) => TASK_PUBLICATION_LINEAGE.scope(lineage, future).await,
+            None => future.await,
+        };
+        drop(pending);
+        output
+    }
+
     fn flush_subscribers_inner(include_pending: bool, started: Option<Sender<()>>) -> Result<()> {
         if in_dispatcher_callback() {
             return Ok(());
@@ -790,6 +808,8 @@ mod native {
             .send(DispatcherMessage::Flush {
                 done: done_tx,
                 include_pending,
+                // A pending publication's own work must not wait on it.
+                exclude: current_publication_lineage(),
             })
             .map_err(|error| {
                 FlowError::Internal(format!("failed to queue subscriber flush: {error}"))
@@ -978,12 +998,18 @@ mod native {
             }
         }
 
-        fn defer_or_complete_flush(&mut self, done: Sender<()>, include_pending: bool) {
+        fn defer_or_complete_flush(
+            &mut self,
+            done: Sender<()>,
+            include_pending: bool,
+            exclude: Option<&Arc<PublicationLineage>>,
+        ) {
             let lineages = self
                 .active_lineages
                 .iter()
                 .filter_map(Weak::upgrade)
                 .filter(|lineage| include_pending || !lineage.pending_terminal)
+                .filter(|lineage| exclude.is_none_or(|excluded| !Arc::ptr_eq(lineage, excluded)))
                 .filter(|lineage| lineage.outstanding.load(Ordering::Acquire) > 0)
                 .collect::<Vec<_>>();
             if lineages.is_empty() {
@@ -1032,8 +1058,9 @@ mod native {
             DispatcherMessage::Flush {
                 done,
                 include_pending,
+                exclude,
             } => {
-                state.defer_or_complete_flush(done, include_pending);
+                state.defer_or_complete_flush(done, include_pending, exclude.as_ref());
                 return;
             }
             DispatcherMessage::RegisterPending { lineage } => {
@@ -1482,7 +1509,7 @@ pub(crate) fn register_async_publication() -> Option<native::AsyncPublication> {
     native::register_async_publication()
 }
 
-pub(crate) use native::PendingPublication;
+pub(crate) use native::{AsyncPublication, PendingPublication};
 
 /// Register pending asynchronous work that must finish before a later
 /// subscriber flush can complete.
@@ -1492,6 +1519,16 @@ pub(crate) use native::PendingPublication;
 /// after previously queued terminal publications have been delivered.
 pub(crate) fn register_pending_publication() -> Option<native::PendingPublication> {
     native::register_pending_publication()
+}
+
+/// Run asynchronous work as part of a registered pending publication and
+/// release it when the work completes or is dropped. A flush issued by the
+/// work waits for earlier publications but not for this one.
+pub(crate) async fn with_pending_publication<F: Future>(
+    pending: Option<PendingPublication>,
+    future: F,
+) -> F::Output {
+    native::with_pending_publication(pending, future).await
 }
 
 /// Run asynchronous middleware as part of an already-registered publication,

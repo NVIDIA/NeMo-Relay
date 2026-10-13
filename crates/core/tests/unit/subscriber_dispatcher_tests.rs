@@ -156,6 +156,7 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
         .send(DispatcherMessage::Flush {
             done: flush_tx,
             include_pending: true,
+            exclude: None,
         })
         .unwrap();
     let later = register_async_publication().expect("later publication barrier");
@@ -241,6 +242,7 @@ fn pending_publication_defers_flush_without_blocking_unrelated_delivery() {
         .send(DispatcherMessage::Flush {
             done: flush_tx,
             include_pending: true,
+            exclude: None,
         })
         .unwrap();
     assert!(
@@ -270,6 +272,7 @@ fn flush_does_not_wait_for_later_delivery() {
         .send(DispatcherMessage::Flush {
             done: flush_tx,
             include_pending: true,
+            exclude: None,
         })
         .unwrap();
 
@@ -1146,6 +1149,7 @@ fn detached_sanitizer_tasks_cannot_inherit_a_later_publication_context() {
                 enqueue_dispatch_message(DispatcherMessage::Flush {
                     done,
                     include_pending: true,
+                    exclude: None,
                 });
             });
             Ok(fields)
