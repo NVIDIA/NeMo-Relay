@@ -250,7 +250,11 @@ def test_langchain_model_request_exposes_tools_without_replacing_unchanged_defin
     from langchain_core.messages import HumanMessage
     from langchain_core.tools import tool
 
-    from nemo_relay.integrations.langchain._serialization import model_request_to_payload, payload_to_model_request
+    from nemo_relay.integrations.langchain._serialization import (
+        LangChainCodec,
+        model_request_to_payload,
+        payload_to_model_request,
+    )
 
     @tool
     def get_weather(location: str) -> str:
@@ -266,14 +270,167 @@ def test_langchain_model_request_exposes_tools_without_replacing_unchanged_defin
 
     payload = model_request_to_payload("mock-model", original)
     assert payload["tools"][0]["function"]["name"] == "get_weather"
-    assert payload["tools"][1] == built_in_tool
+    assert payload["tools"][1] == {
+        "type": "provider_native",
+        "provider": "langchain",
+        "kind": "tool",
+        "value": built_in_tool,
+    }
+    assert LangChainCodec().decode(nemo_relay.LLMRequest({}, payload)).tools[1] == payload["tools"][1]
 
     returned = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
     assert returned.tools[0] is get_weather
     assert returned.tools[1] is built_in_tool
 
-    payload["tools"][1]["type"] = "edited"
+    payload["tools"][1]["value"]["search_context_size"] = "low"
     assert built_in_tool == {"type": "web_search_preview"}
+    edited = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    assert edited.tools[0] is get_weather
+    assert edited.tools[1] == {"type": "web_search_preview", "search_context_size": "low"}
+    assert edited.tools[1] is not built_in_tool
+
+
+def test_langchain_model_request_preserves_gemini_native_tool_definition() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+
+    from nemo_relay.integrations.langchain._serialization import (
+        LangChainCodec,
+        model_request_to_payload,
+        payload_to_model_request,
+    )
+
+    gemini_search = {"google_search": {}}
+    original = ModelRequest(
+        model=_mk_mock_model(),
+        messages=[HumanMessage(content="Search the web")],
+        tools=[gemini_search],
+    )
+    payload = model_request_to_payload("mock-model", original)
+    assert payload["tools"][0]["value"] == gemini_search
+    assert LangChainCodec().decode(nemo_relay.LLMRequest({}, payload)).tools[0] == payload["tools"][0]
+
+    restored = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    assert restored.tools[0] is gemini_search
+
+    payload["tools"][0]["value"] = {"google_maps": {}}
+    with pytest.raises(ValueError, match="cannot change a LangChain provider tool's identity"):
+        payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+
+
+def test_langchain_model_request_applies_provider_definition_edit_to_tool_copy() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+    from langchain_core.tools import BaseTool, tool
+
+    from nemo_relay.integrations.langchain._serialization import model_request_to_payload, payload_to_model_request
+
+    @tool
+    def search(query: str) -> str:
+        """Search for information."""
+        return query
+
+    provider_definition = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+    provider_tool = search.model_copy(update={"extras": {"provider_tool_definition": provider_definition}})
+    original = ModelRequest(
+        model=_mk_mock_model(),
+        messages=[HumanMessage(content="Search the web")],
+        tools=[provider_tool],
+    )
+    payload = model_request_to_payload("mock-model", original)
+    payload["tools"][0]["value"]["max_uses"] = 2
+
+    restored = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    restored_tool = restored.tools[0]
+    assert isinstance(restored_tool, BaseTool)
+    assert restored_tool is not provider_tool
+    assert restored_tool.extras["provider_tool_definition"]["max_uses"] == 2
+    assert provider_tool.extras["provider_tool_definition"]["max_uses"] == 5
+
+    payload["tools"][0]["value"]["type"] = "computer_20250124"
+    with pytest.raises(ValueError, match="cannot change a LangChain provider tool's identity"):
+        payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+
+
+def test_langchain_anthropic_adapter_receives_mixed_edited_tools() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+    from langchain_core.runnables import RunnableBinding
+    from langchain_core.tools import tool
+
+    from nemo_relay.integrations.langchain._serialization import model_request_to_payload, payload_to_model_request
+
+    ChatAnthropic = pytest.importorskip("langchain_anthropic").ChatAnthropic
+
+    @tool
+    def get_weather(location: str) -> str:
+        """Get weather for a location."""
+        return location
+
+    provider_definition = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+    provider_tool = get_weather.model_copy(update={"extras": {"provider_tool_definition": provider_definition}})
+    original = ModelRequest(
+        model=ChatAnthropic.model_construct(model="claude-test"),
+        messages=[HumanMessage(content="Check the weather")],
+        tools=[get_weather, provider_tool],
+    )
+    payload = model_request_to_payload("claude-test", original)
+    payload["tools"][0]["function"]["description"] = "Return a brief forecast."
+    payload["tools"][1]["value"]["max_uses"] = 2
+
+    restored = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    bound_model = original.model.bind_tools(restored.tools)
+    assert isinstance(bound_model, RunnableBinding)
+    prepared_tools = bound_model.kwargs["tools"]
+
+    assert prepared_tools[0]["name"] == "get_weather"
+    assert prepared_tools[0]["description"] == "Return a brief forecast."
+    assert prepared_tools[1] == {"type": "web_search_20250305", "name": "web_search", "max_uses": 2}
+    assert get_weather.description == "Get weather for a location."
+    assert provider_definition["max_uses"] == 5
+
+
+def test_langchain_gemini_adapter_receives_mixed_edited_tools() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+    from langchain_core.runnables import RunnableBinding
+    from langchain_core.tools import tool
+
+    from nemo_relay.integrations.langchain._serialization import model_request_to_payload, payload_to_model_request
+
+    ChatGoogleGenerativeAI = pytest.importorskip("langchain_google_genai").ChatGoogleGenerativeAI
+
+    @tool
+    def get_weather(location: str) -> str:
+        """Get weather for a location."""
+        return location
+
+    google_search = {"google_search": {"exclude_domains": ["example.com"]}}
+    original = ModelRequest(
+        model=ChatGoogleGenerativeAI.model_construct(model="gemini-test"),
+        messages=[HumanMessage(content="Check the weather")],
+        tools=[get_weather, google_search],
+    )
+    payload = model_request_to_payload("gemini-test", original)
+    payload["tools"][0]["function"]["description"] = "Return a brief forecast."
+    payload["tools"][1]["value"]["google_search"]["exclude_domains"].append("example.org")
+
+    restored = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    bound_model = original.model.bind_tools(restored.tools)
+    assert isinstance(bound_model, RunnableBinding)
+    prepared_tools = bound_model.kwargs["tools"]
+    function_declarations = [
+        function for prepared_tool in prepared_tools for function in prepared_tool.get("function_declarations") or []
+    ]
+    search_tools = [
+        prepared_tool["google_search"] for prepared_tool in prepared_tools if prepared_tool.get("google_search")
+    ]
+
+    assert function_declarations[0]["name"] == "get_weather"
+    assert function_declarations[0]["description"] == "Return a brief forecast."
+    assert search_tools[0]["exclude_domains"] == ["example.com", "example.org"]
+    assert get_weather.description == "Get weather for a location."
+    assert google_search == {"google_search": {"exclude_domains": ["example.com"]}}
 
 
 def test_langchain_model_request_rejects_malformed_tool_schemas() -> None:
@@ -1305,7 +1462,7 @@ def test_agent_model_call_uses_relay_edited_tool_schema(
     nemo_relay_middleware: NemoRelayMiddleware,
 ) -> None:
     from langchain.agents import create_agent
-    from langchain_core.tools import tool
+    from langchain_core.tools import BaseTool, tool
 
     model = _mk_mock_model("done")
 
@@ -1313,8 +1470,6 @@ def test_agent_model_call_uses_relay_edited_tool_schema(
     def get_weather(location: str) -> str:
         """Get weather for a location."""
         return location
-
-    edited_schema: dict[str, Any] = {}
 
     def edit_tool_schema(
         _name: str,
@@ -1326,7 +1481,6 @@ def test_agent_model_call_uses_relay_edited_tool_schema(
         tool_schema = cast(dict[str, Any], copy.deepcopy(annotated.tools[0]))
         tool_schema["function"]["description"] = "Return a brief forecast."
         tool_schema["function"]["parameters"]["properties"]["location"]["description"] = "City name"
-        edited_schema.update(tool_schema)
         annotated.tools = [tool_schema]
         return nemo_relay.LLMRequestInterceptOutcome(request, annotated)
 
@@ -1342,7 +1496,11 @@ def test_agent_model_call_uses_relay_edited_tool_schema(
         nemo_relay.intercepts.deregister_llm_request("edit_weather_schema")
 
     assert result["messages"][-1].content == "done"
-    assert model.bind_tools.call_args.args[0] == [edited_schema]
+    bound_tool = model.bind_tools.call_args.args[0][0]
+    assert isinstance(bound_tool, BaseTool)
+    assert bound_tool is not get_weather
+    assert bound_tool.description == "Return a brief forecast."
+    assert bound_tool.tool_call_schema["properties"]["location"]["description"] == "City name"
     assert get_weather.description == "Get weather for a location."
 
 
