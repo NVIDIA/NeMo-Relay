@@ -528,9 +528,9 @@ fn empty_message() -> Json {
 fn atif_content_value(value: &Json) -> Json {
     match value {
         Json::String(_) => value.clone(),
-        Json::Array(_) if is_atif_content_parts(value) => value.clone(),
         Json::Null => empty_message(),
-        _ => Json::String(json_to_string(value)),
+        _ => canonicalize_atif_content_parts(value)
+            .unwrap_or_else(|| Json::String(json_to_string(value))),
     }
 }
 
@@ -569,16 +569,18 @@ fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<J
 fn observation_content_value(value: &Json) -> Option<Json> {
     match value {
         Json::String(_) => Some(value.clone()),
-        Json::Array(_) if is_atif_content_parts(value) => Some(value.clone()),
-        _ => None,
+        _ => canonicalize_atif_content_parts(value),
     }
 }
 
-fn observation_extra(event: &Event, output: Option<&Json>) -> Json {
+fn observation_extra(event: &Event, output: Option<&Json>, content: Option<&Json>) -> Json {
     let mut extra = event_extra(event);
     if let Json::Object(extra_object) = &mut extra {
-        if let Some(tool_result) = output.and_then(observation_tool_result_extra) {
-            extra_object.insert("tool_result".to_string(), tool_result);
+        // Keep the raw tool result unless the observation content already carries it unchanged.
+        if let Some(tool_result) =
+            output.filter(|output| !output.is_null() && content != Some(*output))
+        {
+            extra_object.insert("tool_result".to_string(), tool_result.clone());
         }
         if let Some(annotation) = super::tool_result_annotation(event) {
             extra_object.insert("tool_result_annotation".to_string(), annotation);
@@ -587,38 +589,36 @@ fn observation_extra(event: &Event, output: Option<&Json>) -> Json {
     extra
 }
 
-fn observation_tool_result_extra(value: &Json) -> Option<Json> {
-    match value {
-        Json::Null | Json::String(_) => None,
-        Json::Array(_) if is_atif_content_parts(value) => None,
-        _ => Some(value.clone()),
-    }
+/// Strip each content part to its ATIF fields. Returns `None` unless `value` is an array of
+/// supported text and image parts, so callers never emit a partially converted array.
+fn canonicalize_atif_content_parts(value: &Json) -> Option<Json> {
+    value
+        .as_array()?
+        .iter()
+        .map(|part| match part.get("type")?.as_str()? {
+            "text" => Some(serde_json::json!({
+                "type": "text",
+                "text": part.get("text")?.as_str()?,
+            })),
+            "image" => Some(serde_json::json!({
+                "type": "image",
+                "source": atif_image_source(part.get("source")?)?,
+            })),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(Json::Array)
 }
 
-fn is_atif_content_parts(value: &Json) -> bool {
-    let Some(parts) = value.as_array() else {
-        return false;
-    };
-    parts.iter().all(|part| {
-        let Some(object) = part.as_object() else {
-            return false;
-        };
-        match object.get("type").and_then(Json::as_str) {
-            Some("text") => object.get("text").and_then(Json::as_str).is_some(),
-            Some("image") => is_atif_image_source(object.get("source")),
-            _ => false,
+fn atif_image_source(source: &Json) -> Option<Json> {
+    let media_type = source.get("media_type")?.as_str()?;
+    let path = source.get("path")?.as_str()?;
+    match media_type {
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp" => {
+            Some(serde_json::json!({"media_type": media_type, "path": path}))
         }
-    })
-}
-
-fn is_atif_image_source(value: Option<&Json>) -> bool {
-    let Some(source) = value.and_then(Json::as_object) else {
-        return false;
-    };
-    matches!(
-        source.get("media_type").and_then(Json::as_str),
-        Some("image/jpeg" | "image/png" | "image/gif" | "image/webp")
-    ) && source.get("path").and_then(Json::as_str).is_some()
+        _ => None,
+    }
 }
 
 fn json_to_string(value: &Json) -> String {
@@ -1154,7 +1154,7 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
             collect_openai_responses_content_text(content_parts, "text", &mut text_parts);
         }
         return match text_parts.as_slice() {
-            [] => is_atif_content_parts(content).then(|| content.clone()),
+            [] => canonicalize_atif_content_parts(content),
             [text] => Some(Json::String(text.clone())),
             _ => Some(Json::String(text_parts.join("\n"))),
         };
@@ -2809,11 +2809,12 @@ impl StepConversionState {
             if self.pending_obs_timestamp.is_none() {
                 self.pending_obs_timestamp = Some(event.timestamp().to_rfc3339());
             }
+            let content = output.and_then(observation_content_value);
             self.pending_observations.push(AtifObservationResult {
                 source_call_id: source_call_id.clone(),
-                content: output.and_then(observation_content_value),
+                extra: Some(observation_extra(event, output, content.as_ref())),
+                content,
                 subagent_trajectory_ref: None,
-                extra: Some(observation_extra(event, output)),
             });
         }
 
