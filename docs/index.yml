@@ -23,6 +23,14 @@ navigation:
         slug: quick-start
         collapsed: open-by-default
         contents:
+          - section: "Featured Plugins"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Switchyard"
+                icon: fa-brands fa-nvidia
+                path: ./getting-started/quick-start/switchyard.mdx
+                slug: switchyard
           - section: "Application APIs"
             skip-slug: true
             collapsed: open-by-default
