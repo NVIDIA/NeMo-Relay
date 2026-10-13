@@ -775,6 +775,12 @@ such as `/responses` or `/realtime/calls`, to that base and forwards the
 caller's ChatGPT credential to it, so use only an endpoint you trust with
 users' ChatGPT credentials.
 
+The base URL must use HTTPS for remote hosts. HTTP is allowed only for loopback
+hosts. Managed workers read this endpoint from system TOML configuration and
+ignore `NEMO_RELAY_CHATGPT_CODEX_BASE_URL`, consistent with the other managed
+provider endpoint settings. Personal gateways also accept that environment
+variable and `--chatgpt-codex-base-url`; CLI flags take precedence.
+
 Live and Realtime connections use the configured OpenAI upstream and keep the
 caller's provider credential. By default, that upstream is `api.openai.com`, which matches Codex's WebRTC sideband destination.
 Relay does not replace a ChatGPT sideband credential with an administrator key.

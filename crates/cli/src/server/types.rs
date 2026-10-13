@@ -10,6 +10,7 @@ pub(crate) struct GatewayOverrides {
     pub(crate) bind: Option<SocketAddr>,
     pub(crate) openai_base_url: Option<String>,
     pub(crate) anthropic_base_url: Option<String>,
+    pub(crate) chatgpt_codex_base_url: Option<String>,
     pub(crate) plugin_config_path: Option<PathBuf>,
     pub(crate) ready_file: Option<PathBuf>,
     pub(crate) max_hook_payload_bytes: Option<usize>,
@@ -21,6 +22,7 @@ impl GatewayOverrides {
         self.bind.is_some()
             || self.openai_base_url.is_some()
             || self.anthropic_base_url.is_some()
+            || self.chatgpt_codex_base_url.is_some()
             || self.plugin_config_path.is_some()
             || self.ready_file.is_some()
             || self.max_hook_payload_bytes.is_some()
