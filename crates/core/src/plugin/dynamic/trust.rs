@@ -221,24 +221,40 @@ pub fn evaluate_dynamic_plugin_trust(
     manifest_ref: &str,
     policy: &EvaluatedDynamicPluginHostPolicy,
 ) -> EvaluatedDynamicPluginTrust {
+    evaluate_dynamic_plugin_trust_with_artifact(manifest, manifest_ref, policy).0
+}
+
+// Keep the exact integrity-checked bytes for native activation without changing
+// the public trust report or any public load-spec struct.
+pub(super) fn evaluate_dynamic_plugin_trust_with_artifact(
+    manifest: &DynamicPluginManifest,
+    manifest_ref: &str,
+    policy: &EvaluatedDynamicPluginHostPolicy,
+) -> (EvaluatedDynamicPluginTrust, Option<Vec<u8>>) {
     if !policy.policy_satisfied {
-        return EvaluatedDynamicPluginTrust {
-            integrity: DynamicPluginCheckState::Unknown,
-            authenticity: DynamicPluginCheckState::Unknown,
-            failure: None,
-        };
+        return (
+            EvaluatedDynamicPluginTrust {
+                integrity: DynamicPluginCheckState::Unknown,
+                authenticity: DynamicPluginCheckState::Unknown,
+                failure: None,
+            },
+            None,
+        );
     }
     let artifact_bytes = match verify_integrity(manifest, manifest_ref) {
         Ok(artifact) => artifact,
         Err(failure) => {
-            return EvaluatedDynamicPluginTrust {
-                integrity: DynamicPluginCheckState::Invalid,
-                authenticity: DynamicPluginCheckState::Unknown,
-                failure: Some(failure),
-            };
+            return (
+                EvaluatedDynamicPluginTrust {
+                    integrity: DynamicPluginCheckState::Invalid,
+                    authenticity: DynamicPluginCheckState::Unknown,
+                    failure: Some(failure),
+                },
+                None,
+            );
         }
     };
-    match verify_authenticity(manifest, manifest_ref, &artifact_bytes, policy) {
+    let trust = match verify_authenticity(manifest, manifest_ref, &artifact_bytes, policy) {
         Ok(authenticity) => EvaluatedDynamicPluginTrust {
             integrity: DynamicPluginCheckState::Valid,
             authenticity,
@@ -249,7 +265,8 @@ pub fn evaluate_dynamic_plugin_trust(
             authenticity: DynamicPluginCheckState::Invalid,
             failure: Some(failure),
         },
-    }
+    };
+    (trust, Some(artifact_bytes))
 }
 
 /// Resolves an artifact or signature reference relative to its manifest.

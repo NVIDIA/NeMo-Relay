@@ -106,6 +106,54 @@ pub struct NativePluginLoadSpec {
     pub manifest_ref: String,
 }
 
+pub(super) struct PreparedNativePlugin {
+    pub(super) manifest: DynamicPluginManifest,
+    pub(super) manifest_ref: String,
+    pub(super) artifact_bytes: Option<Vec<u8>>,
+}
+
+impl PreparedNativePlugin {
+    pub(super) fn new(
+        manifest: DynamicPluginManifest,
+        manifest_ref: String,
+        artifact_bytes: Option<Vec<u8>>,
+    ) -> crate::plugin::Result<Self> {
+        if let (Some(bytes), DynamicPluginManifestLoad::RustDynamic(load)) =
+            (&artifact_bytes, &manifest.load)
+        {
+            let library = load
+                .library
+                .as_deref()
+                .expect("validated native load.library");
+            let source = manifest
+                .source
+                .as_ref()
+                .and_then(|source| source.artifact.as_deref())
+                .expect("integrity-checked source.artifact");
+            let library_path = super::resolve_dynamic_plugin_artifact_path(&manifest_ref, library);
+            let source_path = super::resolve_dynamic_plugin_artifact_path(&manifest_ref, source);
+            // Preserve the existing requirement that load.library also matches
+            // the artifact digest when the manifest names two distinct files.
+            if library_path != source_path {
+                let library_bytes =
+                    super::read_bounded_regular_file(&library_path, "native plugin library")
+                        .map_err(PluginError::InvalidConfig)?;
+                if library_bytes != *bytes {
+                    return Err(PluginError::InvalidConfig(format!(
+                        "native plugin library '{}' differs from the verified artifact",
+                        library_path.display()
+                    )));
+                }
+            }
+        }
+        Ok(Self {
+            manifest,
+            manifest_ref,
+            artifact_bytes,
+        })
+    }
+}
+
 /// Owns native dynamic libraries registered into the plugin registry.
 ///
 /// Dropping this value deregisters the native plugin kinds before unloading
@@ -154,30 +202,44 @@ pub fn load_native_plugins<I>(specs: I) -> crate::plugin::Result<NativePluginAct
 where
     I: IntoIterator<Item = NativePluginLoadSpec>,
 {
-    load_native_plugins_with_trust(specs, &HashMap::new(), &mut Vec::new())
+    load_native_plugins_with_trust(specs, &HashMap::new(), &mut Vec::new(), Vec::new())
 }
 
 pub(super) fn load_native_plugins_with_trust<I>(
     specs: I,
     trust: &HashMap<String, DynamicPluginLoadTrust>,
     skipped: &mut Vec<super::DynamicPluginValidationReport>,
+    artifacts: Vec<PreparedNativePlugin>,
 ) -> crate::plugin::Result<NativePluginActivation>
 where
     I: IntoIterator<Item = NativePluginLoadSpec>,
 {
+    let mut artifacts = artifacts
+        .into_iter()
+        .map(|artifact| (artifact.manifest.plugin.id.trim().to_owned(), artifact))
+        .collect::<HashMap<_, _>>();
     let mut activation = NativePluginActivation {
         plugins: Vec::new(),
         plugin_registrations: Vec::new(),
     };
     for spec in specs {
-        let manifest = match trust.get(&spec.plugin_id) {
-            Some(trust) => match trust.manifest_for_load(&spec.manifest_ref, skipped)? {
-                Some(manifest) => Some(manifest),
-                None => continue,
+        // Core resolution supplies the already verified artifact. Do not
+        // re-check an authored path after successful verification.
+        let artifact = match artifacts.remove(&spec.plugin_id) {
+            Some(artifact) => Some(artifact),
+            None => match trust.get(&spec.plugin_id) {
+                Some(trust) => match trust.manifest_for_load(&spec.manifest_ref, skipped)? {
+                    Some(manifest) => Some(PreparedNativePlugin::new(
+                        manifest,
+                        spec.manifest_ref.clone(),
+                        None,
+                    )?),
+                    None => continue,
+                },
+                None => None,
             },
-            None => None,
         };
-        let instance = load_one_native_plugin(&spec, manifest)?;
+        let instance = load_one_native_plugin(&spec, artifact)?;
         let plugin_kind = instance.plugin_kind.clone();
         let registration_id = register_plugin_tracked(Arc::new(NativePluginAdapter {
             plugin_kind: plugin_kind.clone(),
@@ -317,6 +379,8 @@ struct NativePluginInstance {
     allows_multiple_components: bool,
     plugin: Mutex<NemoRelayNativePluginV1>,
     _library: Library,
+    // Declared after the library so the loader closes it before removing its copy.
+    _artifact_snapshot: Option<tempfile::TempDir>,
 }
 
 fn serialize_native_tool_result(result: ToolExecutionResult) -> serde_json::Result<Json> {
@@ -359,11 +423,20 @@ fn drop_native_plugin_descriptor(plugin: &mut NemoRelayNativePluginV1) {
 
 fn load_one_native_plugin(
     spec: &NativePluginLoadSpec,
-    verified_manifest: Option<DynamicPluginManifest>,
+    artifact: Option<PreparedNativePlugin>,
 ) -> crate::plugin::Result<Arc<NativePluginInstance>> {
-    let (manifest, manifest_ref) = match verified_manifest {
-        Some(manifest) => (manifest, spec.manifest_ref.clone()),
-        None => DynamicPluginManifest::load_from_path(&spec.manifest_ref)?,
+    let snapshot_required = artifact.is_some();
+    let (manifest, manifest_ref, artifact_bytes) = match artifact {
+        Some(artifact) => (
+            artifact.manifest,
+            artifact.manifest_ref,
+            artifact.artifact_bytes,
+        ),
+        None => {
+            let (manifest, manifest_ref) =
+                DynamicPluginManifest::load_from_path(&spec.manifest_ref)?;
+            (manifest, manifest_ref, None)
+        }
     };
     if manifest.plugin.id.trim() != spec.plugin_id {
         return Err(PluginError::InvalidConfig(format!(
@@ -405,19 +478,8 @@ fn load_one_native_plugin(
             .as_deref()
             .ok_or_else(|| PluginError::InvalidConfig("load.library is required".into()))?,
     );
-    if !library_path.exists() {
-        return Err(PluginError::NotFound(format!(
-            "native plugin library '{}' does not exist",
-            library_path.display()
-        )));
-    }
-    if let Some(expected_digest) = manifest
-        .integrity
-        .as_ref()
-        .and_then(|integrity| integrity.sha256.as_deref())
-    {
-        verify_sha256(&library_path, expected_digest)?;
-    }
+    let (library_path, artifact_snapshot) =
+        prepare_native_library(&manifest, library_path, artifact_bytes, snapshot_required)?;
     let symbol = load
         .symbol
         .as_deref()
@@ -473,7 +535,71 @@ fn load_one_native_plugin(
         allows_multiple_components: plugin.allows_multiple_components,
         plugin: Mutex::new(plugin),
         _library: library,
+        _artifact_snapshot: artifact_snapshot,
     }))
+}
+
+fn prepare_native_library(
+    manifest: &DynamicPluginManifest,
+    library_path: PathBuf,
+    artifact_bytes: Option<Vec<u8>>,
+    snapshot_required: bool,
+) -> crate::plugin::Result<(PathBuf, Option<tempfile::TempDir>)> {
+    if snapshot_required {
+        // Core trust verification supplies its exact bytes. Other internal
+        // verified load requests pin a bounded read and check it against the
+        // retained manifest's digest before staging.
+        let bytes = match artifact_bytes {
+            Some(bytes) => bytes,
+            None => super::read_bounded_regular_file(&library_path, "native plugin library")
+                .map_err(PluginError::InvalidConfig)?,
+        };
+        if let Some(expected) = manifest
+            .integrity
+            .as_ref()
+            .and_then(|integrity| integrity.sha256.as_deref())
+        {
+            verify_sha256_bytes(&library_path, &bytes, expected)?;
+        }
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("nemo-relay-native-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let snapshot = builder.tempdir().map_err(|error| {
+            PluginError::Internal(format!("failed to stage native plugin: {error}"))
+        })?;
+        // Create the private directory with restrictive permissions from the
+        // outset, independently of every attacker-controlled source path.
+        let staged_path = snapshot
+            .path()
+            .join(library_path.file_name().ok_or_else(|| {
+                PluginError::InvalidConfig("native plugin library must name a file".into())
+            })?);
+        std::fs::write(&staged_path, bytes).map_err(|error| {
+            PluginError::Internal(format!("failed to stage native plugin: {error}"))
+        })?;
+        Ok((staged_path, Some(snapshot)))
+    } else {
+        // The CLI supplies its own protected activation snapshot, including
+        // runtime dependencies. Keep that closure and its loading location.
+        if !library_path.exists() {
+            return Err(PluginError::NotFound(format!(
+                "native plugin library '{}' does not exist",
+                library_path.display()
+            )));
+        }
+        if let Some(expected) = manifest
+            .integrity
+            .as_ref()
+            .and_then(|integrity| integrity.sha256.as_deref())
+        {
+            verify_sha256(&library_path, expected)?;
+        }
+        Ok((library_path, None))
+    }
 }
 
 fn validate_relay_compatibility(relay: Option<&str>) -> crate::plugin::Result<()> {
@@ -516,13 +642,16 @@ fn resolve_manifest_relative_path(manifest_path: &Path, value: &str) -> PathBuf 
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> crate::plugin::Result<()> {
+    let bytes = super::read_bounded_regular_file(path, "native plugin library")
+        .map_err(PluginError::InvalidConfig)?;
+    verify_sha256_bytes(path, &bytes, expected)
+}
+
+fn verify_sha256_bytes(path: &Path, bytes: &[u8], expected: &str) -> crate::plugin::Result<()> {
     let expected = expected
         .trim()
         .strip_prefix("sha256:")
         .unwrap_or(expected.trim());
-    let bytes = std::fs::read(path).map_err(|err| {
-        PluginError::Internal(format!("failed to read '{}': {err}", path.display()))
-    })?;
     let actual = hex_digest(Sha256::digest(bytes));
     if actual.eq_ignore_ascii_case(expected) {
         Ok(())

@@ -73,6 +73,7 @@ opentelemetry-semantic-conventions.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["trace", "logs", "metrics", "internal-logs", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_logs_batch_log_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime"] }
 tracing = { version = "0.1", default-features = false, features = ["std", "log"] }
 libloading = "0.8"
+tempfile = "3"
 semver = "1"
 sha2 = "0.11"
 base64 = "0.22"
@@ -111,7 +112,6 @@ tonic = { version = "0.14.1", features = ["transport"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 serde_json = "1"
 object_store = { version = "0.14.1", default-features = false, features = ["aws"] }
-tempfile = "3"
 
 [[test]]
 name = "codec_integration"

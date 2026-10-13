@@ -443,6 +443,7 @@ fn native_context_gate_registration_validates_inputs_and_rolls_back_the_gate() {
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
     });
     let mut registration = PluginRegistrationContext::with_namespace("fixture:");
     let mut host = NativeHostPluginContext {
@@ -1005,6 +1006,7 @@ fn native_test_adapter(
             allows_multiple_components: false,
             plugin: Mutex::new(plugin),
             _library: libloading::os::unix::Library::this().into(),
+            _artifact_snapshot: None,
         }),
     }
 }
@@ -5743,6 +5745,7 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
     });
     let mut invalid_host = NativeHostPluginContext {
         ctx: ptr::null_mut(),
@@ -6179,6 +6182,7 @@ fn assert_context_registrations_reject_legacy_relay_contracts() {
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
     });
     let mut registration = PluginRegistrationContext::new();
     let mut host = NativeHostPluginContext {
@@ -6209,6 +6213,7 @@ fn assert_context_registrations_reject_legacy_relay_contracts() {
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
     });
     let mut context_registration = PluginRegistrationContext::new();
     let mut context_host = NativeHostPluginContext {
@@ -6654,6 +6659,7 @@ async fn native_async_wrappers_validate_callback_result_shapes() {
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
     });
     let result = native_string("true");
     let user_data = result.cast();
@@ -7600,6 +7606,7 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
     });
     let request = LlmRequest {
         headers: Map::new(),
@@ -7732,6 +7739,7 @@ async fn native_tool_execution_context_preserves_fields_and_callback_boundaries(
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
     });
     let observed_context = Mutex::new(None);
     let context = ToolExecutionContext::new("lookup", json!({"query": "private"}))
@@ -8754,6 +8762,7 @@ async fn native_llm_intercept_preserves_annotations_and_releases_invalid_output_
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
     });
     let callback =
         wrap_llm_request_intercept_fn(instance, echo_native_llm_intercept, ptr::null_mut(), None);
@@ -8783,6 +8792,54 @@ async fn native_llm_intercept_preserves_annotations_and_releases_invalid_output_
         assert!(error.to_string().contains(reason), "{error}");
         assert_eq!(native_string_live_allocations(), before);
     }
+}
+
+#[test]
+fn native_snapshot_keeps_verified_bytes_private_until_drop() {
+    let source = tempfile::tempdir().unwrap();
+    let library = source.path().join("plugin.bin");
+    let bytes = b"verified native plugin bytes";
+    let manifest = DynamicPluginManifest::parse_toml(&format!(
+        r#"
+manifest_version = 1
+[plugin]
+id = "fixture.snapshot"
+kind = "rust_dynamic"
+[compat]
+relay = ">=0.10.0,<1.0"
+native_api = "1"
+[defaults]
+enabled = false
+[capabilities]
+items = ["plugin_native"]
+[source]
+artifact = "plugin.bin"
+[integrity]
+sha256 = "sha256:{digest}"
+[load]
+library = "plugin.bin"
+symbol = "unused"
+"#,
+        digest = hex_digest(Sha256::digest(bytes))
+    ))
+    .unwrap();
+    std::fs::write(&library, b"replacement source bytes").unwrap();
+    let (staged, snapshot) =
+        prepare_native_library(&manifest, library, Some(bytes.to_vec()), true).unwrap();
+    let snapshot = snapshot.unwrap();
+    assert_eq!(std::fs::read(&staged).unwrap(), bytes);
+    assert!(!staged.starts_with(source.path()));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            snapshot.path().metadata().unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    let root = snapshot.path().to_owned();
+    drop(snapshot);
+    assert!(!root.exists());
 }
 
 #[test]
@@ -8850,6 +8907,7 @@ symbol = "never_call"
         }],
         &trust,
         &mut Vec::new(),
+        Vec::new(),
     ) {
         Ok(_) => panic!("replacement artifact must be rejected before loading native code"),
         Err(error) => error,
@@ -8868,6 +8926,7 @@ symbol = "never_call"
         }],
         &trust,
         &mut skipped,
+        Vec::new(),
     )
     .unwrap();
     assert!(activation.is_empty());
