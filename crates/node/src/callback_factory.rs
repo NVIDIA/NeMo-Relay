@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v17";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v18";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -163,6 +163,16 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   ) {
     const controller = new AbortController();
     registerAbort(() => controller.abort());
+    const downstreams = [];
+    controller.signal.addEventListener(
+      'abort',
+      () => {
+        for (const downstream of downstreams) {
+          downstream.close().catch(() => {});
+        }
+      },
+      { once: true },
+    );
     let ownsPublicationState = false;
     let publicationState;
     if (publicationContextId !== undefined) {
@@ -207,6 +217,10 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         ? invokeNext
         : async (value) => {
         const downstream = await invokeNext(value);
+        downstreams.push(downstream);
+        if (controller.signal.aborted) {
+          downstream.close().catch(() => {});
+        }
         return {
           async *[Symbol.asyncIterator]() {
             try {

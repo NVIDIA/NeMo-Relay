@@ -2414,6 +2414,46 @@ describe('LLM intercepts', () => {
     await assert.rejects(() => stream.close(), /close-first boom/);
   });
 
+  it('stream intercepts forward close to the provider they pass through', async () => {
+    let aborted = false;
+    let cleaned = false;
+    registerLlmStreamExecutionIntercept('node_llm_stream_passthrough_abort', 10, async (request, _context, next) =>
+      next(request),
+    );
+    let stream;
+    try {
+      stream = await llmStreamCallExecute(
+        'passthrough_abort_stream_llm',
+        makeNative(),
+        async function* (_request, signal) {
+          try {
+            yield { token: 'first' };
+            if (!signal.aborted) {
+              await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            }
+          } finally {
+            aborted = signal.aborted;
+            cleaned = true;
+          }
+        },
+      );
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      let timer;
+      const closed = await Promise.race([
+        stream.close().then(() => 'closed'),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, 2_000, 'timeout');
+        }),
+      ]);
+      clearTimeout(timer);
+      assert.equal(closed, 'closed');
+      assert.equal(aborted, true);
+      assert.equal(cleaned, true);
+    } finally {
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_passthrough_abort');
+    }
+  });
+
   it('close surfaces producer cleanup errors after an early close', async () => {
     const stream = await llmStreamCallExecute(
       'provider_cleanup_error_llm',
