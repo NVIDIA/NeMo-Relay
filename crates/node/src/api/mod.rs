@@ -45,7 +45,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
 use nemo_relay::api::runtime::{
-    EventMetadataInjectorFn, EventSanitizeFn, LlmExecutionNextFn, LlmJsonStream,
+    EventMetadataInjectorFn, EventSanitizeFn, LlmExecutionNextFn, LlmFinalizer, LlmJsonStream,
     ScopeStackHandle as CoreScopeStackHandle, ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
@@ -2938,8 +2938,12 @@ pub fn test_closed_finalizer_callback(env: Env, callback: JsFunction) -> Result<
     clear_recorded_callback_error();
     let callback = callable::js_finalizer_tsfn(&env, &callback)?;
     let _ = callback.clone().abort();
-    let wrapped = callable::wrap_js_finalizer_fn(callback, Default::default());
-    Ok(wrapped())
+    let LlmFinalizer::Fallible(wrapped) =
+        callable::wrap_js_finalizer_fn(callback, Default::default())
+    else {
+        return Err(napi::Error::from_reason("JS finalizers are fallible"));
+    };
+    Ok(wrapped().unwrap_or(Json::Null))
 }
 
 /// Internal test helper: exercise PromiseAwareFn queue and conversion failures.
@@ -3813,12 +3817,12 @@ pub fn llm_stream_call_execute(
     };
 
     let finalizer_error = callable::FinalizerError::default();
-    let wrapped_finalizer: Box<dyn FnOnce() -> Json + Send> = match finalizer {
+    let wrapped_finalizer = match finalizer {
         Some(cb) => callable::wrap_js_finalizer_fn(
             callable::js_finalizer_tsfn(&env, &cb)?,
             finalizer_error.clone(),
         ),
-        None => Box::new(|| Json::Null),
+        None => LlmFinalizer::from(|| Json::Null),
     };
 
     let provider = Arc::new(PromiseAwareFn::new(&env, &func)?);

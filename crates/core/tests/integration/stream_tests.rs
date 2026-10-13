@@ -16,7 +16,9 @@ use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
 use nemo_relay::api::optimization::LlmOptimizationRecorder;
 use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{LlmJsonStream, LlmStreamInner, NemoRelayContextState};
+use nemo_relay::api::runtime::{
+    LlmFinalizer, LlmJsonStream, LlmStreamInner, NemoRelayContextState,
+};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
 use nemo_relay::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
@@ -1079,4 +1081,64 @@ async fn test_stream_wrapper_collector_error_terminates_stream() {
 
     // Collector was called exactly twice (once for chunk1, once for chunk2)
     assert_eq!(*collector_calls.lock().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn failed_finalizer_skips_the_data_fallback() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "failed_finalizer_no_fallback",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    let handle_with_data = |name: &str| {
+        LlmHandle::builder()
+            .name(name.to_string())
+            .attributes(LlmAttributes::STREAMING)
+            .data(json!({"fallback": "not a response"}))
+            .build()
+    };
+
+    let mut failed = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        handle_with_data("finalizer-failed"),
+        Box::new(|_| Ok(())),
+        LlmFinalizer::Fallible(Box::new(|| {
+            Err(FlowError::Internal("finalizer failed".into()))
+        })),
+        None,
+        None,
+        None,
+    );
+    while failed.next().await.is_some() {}
+
+    let mut null_aggregate = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        handle_with_data("finalizer-null"),
+        Box::new(|_| Ok(())),
+        Box::new(|| Json::Null),
+        None,
+        None,
+        None,
+    );
+    while null_aggregate.next().await.is_some() {}
+
+    let events = captured_snapshot(&events);
+    let end_data = |name: &str| {
+        events
+            .iter()
+            .find(|event| event.name() == name && is_llm_end(event))
+            .expect("END event")
+            .data()
+            .cloned()
+    };
+    assert!(end_data("finalizer-failed").is_none_or(|data| data.is_null()));
+    assert_eq!(
+        end_data("finalizer-null"),
+        Some(json!({"fallback": "not a response"}))
+    );
+    assert!(deregister_subscriber("failed_finalizer_no_fallback").unwrap());
 }

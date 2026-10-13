@@ -2554,6 +2554,41 @@ describe('LLM intercepts', () => {
     }
   });
 
+  it('finalizer failures skip the data fallback on the end event', async () => {
+    clearLastCallbackError();
+    const events = [];
+    registerSubscriber('node_finalizer_failure_no_fallback', (event) => events.push(event));
+    let stream;
+    try {
+      stream = await llmStreamCallExecute(
+        'finalizer_failure_no_fallback_llm',
+        makeNative(),
+        async function* () {
+          yield { token: 'only' };
+        },
+        null,
+        () => {
+          throw new Error('finalizer boom');
+        },
+        null,
+        null,
+        { fallback: 'not a response' },
+      );
+      assert.deepEqual(await stream.next(), { token: 'only' });
+      assert.equal(await stream.next(), null);
+      await assert.rejects(() => stream.close(), /finalizer boom/);
+      await flushSubscribers();
+      const end = events.find(
+        (event) => event.name === 'finalizer_failure_no_fallback_llm' && event.scope_category === 'end',
+      );
+      assert.equal(end.data, null);
+    } finally {
+      await stream?.close().catch(() => {});
+      clearLastCallbackError();
+      deregisterSubscriber('node_finalizer_failure_no_fallback');
+    }
+  });
+
   it('finalizer errors are thrown by close and yield a null aggregated response', async () => {
     clearLastCallbackError();
     const events = [];

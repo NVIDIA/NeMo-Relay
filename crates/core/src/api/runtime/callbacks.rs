@@ -638,6 +638,28 @@ pub type LlmCollectorFn = Box<dyn FnMut(Json) -> Result<()> + Send>;
 /// # Returns
 /// Aggregate response JSON synthesized from collected stream chunks.
 pub type LlmFinalizerFn = Box<dyn FnOnce() -> Json + Send>;
+/// Finalizer that can fail; see [`LlmFinalizer`].
+pub type LlmFallibleFinalizerFn = Box<dyn FnOnce() -> Result<Json> + Send>;
+
+/// Finalizer used to synthesize the aggregate streaming response payload.
+///
+/// A failed finalizer yields a `null` aggregate with no `data` fallback. Any
+/// `FnOnce() -> Json` converts into the infallible form.
+pub enum LlmFinalizer {
+    /// Returns the aggregate directly.
+    Sync(LlmFinalizerFn),
+    /// Returns the aggregate or a failure.
+    Fallible(LlmFallibleFinalizerFn),
+}
+
+impl<F> From<F> for LlmFinalizer
+where
+    F: FnOnce() -> Json + Send + 'static,
+{
+    fn from(finalizer: F) -> Self {
+        Self::Sync(Box::new(finalizer))
+    }
+}
 /// Scope-local registry references passed into streaming execution-chain builders.
 ///
 /// # Returns

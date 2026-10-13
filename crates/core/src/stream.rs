@@ -44,8 +44,8 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{
-    EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK,
-    current_scope_stack,
+    EventSubscriberFn, LlmFinalizer, LlmJsonStream, LlmStreamInner, ScopeStackHandle,
+    TASK_SCOPE_STACK, current_scope_stack,
 };
 use crate::api::runtime::{LlmSanitizeResponseContext, LlmSanitizeResponseFn};
 use crate::api::shared::{
@@ -79,7 +79,7 @@ pub struct LlmStreamWrapper {
     handle: LlmHandle,
     scope_stack: ScopeStackHandle,
     collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
-    finalizer: Option<Box<dyn FnOnce() -> Json + Send>>,
+    finalizer: Option<LlmFinalizer>,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
     sanitize_context: LlmSanitizeResponseContext,
     metadata: Option<Json>,
@@ -145,7 +145,7 @@ impl LlmStreamWrapper {
         inner: LlmJsonStream,
         handle: LlmHandle,
         collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
-        finalizer: Box<dyn FnOnce() -> Json + Send>,
+        finalizer: impl Into<LlmFinalizer>,
         _data: Option<Json>,
         metadata: Option<Json>,
         response_codec: Option<Arc<dyn LlmResponseCodec>>,
@@ -165,7 +165,7 @@ impl LlmStreamWrapper {
             inner,
             handle,
             collector,
-            finalizer,
+            finalizer.into(),
             metadata,
             response_codec,
             ManagedLlmStreamTelemetry::new(subscribers, Instant::now()),
@@ -176,7 +176,7 @@ impl LlmStreamWrapper {
         inner: LlmJsonStream,
         handle: LlmHandle,
         collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
-        finalizer: Box<dyn FnOnce() -> Json + Send>,
+        finalizer: LlmFinalizer,
         metadata: Option<Json>,
         response_codec: Option<Arc<dyn LlmResponseCodec>>,
         telemetry: ManagedLlmStreamTelemetry,
@@ -273,12 +273,24 @@ impl LlmStreamWrapper {
         // flush after this stream is dropped cannot overtake the END event.
         let publication_barrier = subscriber_dispatcher::register_async_publication();
         let timestamp = Utc::now();
-        let aggregated = match self.finalizer.take() {
-            Some(finalizer) => finalizer(),
-            None => Json::Null,
+        let (aggregated, finalizer_failed) = match self.finalizer.take() {
+            Some(LlmFinalizer::Sync(finalizer)) => (finalizer(), false),
+            Some(LlmFinalizer::Fallible(finalizer)) => match finalizer() {
+                Ok(aggregated) => (aggregated, false),
+                Err(error) => {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "stream_finalizer_failed";
+                        "LLM stream finalizer failed; omitting the aggregated response: {error}"
+                    );
+                    (Json::Null, true)
+                }
+            },
+            None => (Json::Null, false),
         };
-        let response_was_null_without_fallback = aggregated.is_null() && self.handle.data.is_none();
-        let response = if aggregated.is_null() {
+        let response_was_null_without_fallback =
+            aggregated.is_null() && (finalizer_failed || self.handle.data.is_none());
+        let response = if aggregated.is_null() && !finalizer_failed {
             self.handle.data.clone().unwrap_or(aggregated)
         } else {
             aggregated

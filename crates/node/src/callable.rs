@@ -23,7 +23,7 @@ use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use nemo_relay::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
-    LlmConditionalFn, LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn,
+    LlmConditionalFn, LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn, LlmFinalizer,
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionContext, ToolExecutionNextFn,
@@ -1350,13 +1350,13 @@ pub(crate) type FinalizerError = Arc<std::sync::Mutex<Option<String>>>;
 
 /// Wrap a JS finalizer `() => object | Promise<object>` for a streaming LLM call.
 ///
-/// If the finalizer throws, rejects, or returns a non-JSON value, the aggregated
-/// response is `null` and the failure is stored in `error`.
+/// If the finalizer throws, rejects, or returns a non-JSON value, the failure
+/// is returned, stored in `error`, and the END event carries no aggregate.
 pub fn wrap_js_finalizer_fn(
     func: ThreadsafeFunction<JsFinalizerCall, ErrorStrategy::Fatal>,
     error: FinalizerError,
-) -> Box<dyn FnOnce() -> Json + Send> {
-    Box::new(move || {
+) -> LlmFinalizer {
+    LlmFinalizer::Fallible(Box::new(move || {
         let (complete, rx) = std::sync::mpsc::sync_channel(1);
         // Also runs from the core wrapper's `Drop`. `block_in_place` runs inline outside a runtime
         // and panics only on a `current_thread` runtime; the napi tokio runtime is multi-threaded.
@@ -1366,15 +1366,14 @@ pub fn wrap_js_finalizer_fn(
                     recv_middleware_json_result(rx, "nemo_relay: JS finalizer callback failed")
                 })
             });
-        result.unwrap_or_else(|failure| {
+        result.inspect_err(|failure| {
             let message = failure.to_string();
             record_callback_error(message.clone());
             *error
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(message);
-            Json::Null
         })
-    })
+    }))
 }
 
 struct JsSubscriberCallbackCall {
