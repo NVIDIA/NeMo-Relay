@@ -102,17 +102,11 @@ $env:NVIDIA_API_KEY = "your-api-key"
 
 <Note icon="circle-info">
 Relay does not impose a model choice. This copyable example selects the public
-[`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground)
+[`nvidia/nemotron-3.5-lightning-30b-a3b`](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b)
 model through the NVIDIA provider. To use another model or provider, replace
 the example's `model` argument and configure that provider's credentials.
 The NVIDIA provider reads `NVIDIA_API_KEY`. In the LangChain string, the first `nvidia:`
 selects the provider; the remaining `nvidia/...` value is the model ID.
-</Note>
-
-<Note icon="circle-info">
-The provider may warn that this model is "not known to support tools" when its
-capability catalog lags the endpoint. This warning is advisory; the run must
-still produce the actual tool result and all three success lines below.
 </Note>
 
 ## Configure
@@ -184,7 +178,7 @@ async def require_marker_tool(request, handler):
 
 agent = create_agent(
     model=init_chat_model(
-        "nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", temperature=0
+        "nvidia:nvidia/nemotron-3.5-lightning-30b-a3b", temperature=0
     ),
     tools=[emit_marker],
     middleware=[require_marker_tool, NemoRelayMiddleware()],
