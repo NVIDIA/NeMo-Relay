@@ -436,9 +436,9 @@ def _model_tool_schemas(tools: list[BaseTool | dict[str, Any]]) -> list[dict[str
         if isinstance(input_schema, dict):
             parameters = copy.deepcopy(input_schema)
         elif issubclass(input_schema, BaseModel):
-            parameters = input_schema.model_json_schema()
+            parameters = copy.deepcopy(input_schema.model_json_schema())
         else:
-            parameters = input_schema.schema()
+            parameters = copy.deepcopy(input_schema.schema())
         schemas.append(
             {
                 "type": "function",

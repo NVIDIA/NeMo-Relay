@@ -1140,7 +1140,7 @@ def test_wrap_model_call_does_not_inject_extra_headers_for_models_that_reject_th
     from langchain_core.outputs import ChatGeneration, ChatResult
 
     class StrictKwargsChatModel(BaseChatModel):
-        """Provider whose SDK rejects unknown request fields, like langchain-oci."""
+        """Provider whose SDK rejects unknown request fields."""
 
         model: str = "strict-model"
 
@@ -1502,6 +1502,7 @@ def test_agent_model_call_uses_relay_edited_tool_schema(
     assert bound_tool.description == "Return a brief forecast."
     assert bound_tool.tool_call_schema["properties"]["location"]["description"] == "City name"
     assert get_weather.description == "Get weather for a location."
+    assert "description" not in get_weather.args["location"]
 
 
 @pytest.mark.parametrize("use_async", [False, True])
