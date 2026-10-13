@@ -29,7 +29,7 @@ navigation:
             contents:
               - page: "LangChain"
                 icon: fa-solid fa-link
-                path: ./docs/getting-started/quick-start/langchain.mdx
+                path: ./getting-started/quick-start/langchain.mdx
                 slug: langchain
           - section: "Application APIs"
             skip-slug: true
