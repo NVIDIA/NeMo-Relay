@@ -40,8 +40,15 @@ run the following command as that user:
 nemo-relay daemon token ensure
 ```
 
-Do not run this command as root. Check custom hook wrappers and scripts that
-handle exit codes: delivery failures under a fail-closed policy now return `2`
+Do not run this command as root. Creating the token file does not register a
+route for an MCP server that already started without a credential. Start a new
+harness session and confirm that its MCP server registered the token with the
+daemon before retrying hooks. Refer to
+[Diagnose Common Failures](/daemon/operations#diagnose-common-failures) for credential and route
+diagnostics.
+
+Check custom hook wrappers and scripts that handle exit codes: delivery failures
+under a fail-closed policy now return `2`
 instead of `1`. Fail-open delivery failures still return `0`. Guardrail
 rejections still return `2` under either policy. Public HTTP requests without
 a bound credential retain their separate pass-through rules. Refer to
@@ -76,11 +83,13 @@ intercepts, or conditional execution guardrails. These now use the managed
 LLM pipeline and can change or block requests and responses.
 
 Check clients that depend on provider success headers or exact stream
-formatting. With these middleware types, successful calls return HTTP `200`
-without the provider's original success headers or HTTP trailers. Streaming
+formatting. When request intercepts, execution intercepts, or conditional
+execution guardrails are configured, successful calls return HTTP `200` without
+the provider's original success headers or HTTP trailers. Streaming
 responses still arrive in parts, but their formatting can change. Provider
-HTTP errors keep their status, supported headers, and body. Other provider
-APIs and WebSocket connections bypass LLM middleware.
+HTTP errors keep their status, supported headers, and body. LLM sanitizers alone
+forward the provider response unchanged, including its success status and
+headers. Other provider APIs and WebSocket connections bypass LLM middleware.
 
 The response-header timeout includes middleware execution. For calls without
 streaming, it also includes the wait for the full response. It does not limit

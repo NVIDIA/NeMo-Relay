@@ -44,9 +44,9 @@ workers:
   Completions, OpenAI Responses, and Anthropic Messages. This includes calls
   with and without streaming. Request intercepts can change requests, and
   execution intercepts can change or replace responses. Conditional execution
-  guardrails can block calls. The default limit for the copy of a streamed
-  response used for observability increases from 4 MiB to 16 MiB. This limit
-  does not cut off the client's stream. Refer to
+  guardrails can block calls. For streamed responses forwarded unchanged, the
+  default limit for the observation copy increases from 4 MiB to 16 MiB. This
+  limit does not cut off the client's stream. Refer to
   [LLM Middleware](/daemon/reference#llm-middleware).
 
 ### Compatibility and Migration
@@ -54,8 +54,10 @@ workers:
 Review these behavior changes when upgrading from 0.10.0:
 
 - Restore missing hook credentials through `NEMO_RELAY_CLIENT_TOKEN` or
-  `nemo-relay daemon token ensure` before retrying fail-closed daemon hooks.
-  Unlike 0.10.0, these hooks block the action when no credential is available.
+  `nemo-relay daemon token ensure`. Start a new harness session and confirm
+  that its MCP server registered the token with the daemon before retrying
+  fail-closed hooks. Unlike 0.10.0, these hooks block the action when no
+  credential is available.
   Public HTTP requests without a bound credential still follow the daemon's
   separate pass-through rules.
 - Refresh personal hooks with `nemo-relay integrations refresh`, or use
