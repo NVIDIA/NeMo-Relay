@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import base64
 import dataclasses
-import importlib
 import inspect
 import io
 import json
@@ -128,30 +127,6 @@ def _resolve_runtime_type(token: object) -> type[object] | None:
 
     resolved = _RUNTIME_TYPE_REGISTRY.get(token)
     return resolved if isinstance(resolved, type) else None
-
-
-def _resolve_importable_type(path: object) -> type[object] | None:
-    if not isinstance(path, str) or not path:
-        return None
-
-    parts = path.split(".")
-    for split_at in range(len(parts) - 1, 0, -1):
-        mod_name = ".".join(parts[:split_at])
-        qualname_parts = parts[split_at:]
-        if "<locals>" in qualname_parts:
-            continue
-
-        try:
-            resolved: object = importlib.import_module(mod_name)
-            for part in qualname_parts:
-                resolved = getattr(resolved, part)
-        except (ImportError, AttributeError):
-            continue
-
-        if isinstance(resolved, type):
-            return resolved
-
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +279,9 @@ class BestEffortAnyCodec(Codec[object]):
     It prefers JSON-native encodings, then dataclass or Pydantic-style model
     support, and finally falls back to pickle or string encoding when needed.
     Pickle decoding is restricted to a small allowlist of builtin containers;
-    arbitrary classes and callable globals are never reconstructed.
+    arbitrary classes and callable globals are never reconstructed. Dataclass
+    and Pydantic tags reconstruct only types registered by ``to_json()`` in
+    this process; unregistered tags remain JSON dictionaries.
 
     Notes:
         This codec favors resilience over strictness. If it cannot preserve the
@@ -366,7 +343,7 @@ class BestEffortAnyCodec(Codec[object]):
 
     @staticmethod
     def _resolve_tagged_type(data: dict[str, Json], tag: str) -> type[object] | None:
-        return _resolve_runtime_type(data.get("__nv_runtime_type__")) or _resolve_importable_type(data[tag])
+        return _resolve_runtime_type(data.get("__nv_runtime_type__"))
 
     @staticmethod
     def _mapping_payload(data: dict[str, Json]) -> dict[str, object] | None:

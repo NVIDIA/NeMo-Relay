@@ -107,7 +107,7 @@ def wrap_tool_call(
         The LangGraph tool result after managed Relay execution.
     """
     parent, tool_name, tool_args, tool_call_id = _tool_details(request)
-    args_codec = cast(Codec[dict[str, Any]], nemo_relay.typed.BestEffortAnyCodec())
+    args_codec = cast(Codec[dict[str, Any]], nemo_relay.typed.JsonPassthrough())
     result_codec = cast(Codec[ToolMessage | Command[Any] | dict[str, bool]], _ToolNodeResultCodec())
     graph_bubble: GraphBubbleUp | None = None
 
@@ -152,7 +152,7 @@ async def awrap_tool_call(
         The LangGraph tool result after managed Relay execution.
     """
     parent, tool_name, tool_args, tool_call_id = _tool_details(request)
-    args_codec = cast(Codec[dict[str, Any]], nemo_relay.typed.BestEffortAnyCodec())
+    args_codec = cast(Codec[dict[str, Any]], nemo_relay.typed.JsonPassthrough())
     result_codec = cast(Codec[ToolMessage | Command[Any] | dict[str, bool]], _ToolNodeResultCodec())
     graph_bubble: GraphBubbleUp | None = None
 
