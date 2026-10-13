@@ -29,7 +29,7 @@ navigation:
             contents:
               - page: "Deep Agents"
                 icon: fa-solid fa-layer-group
-                path: ./docs/getting-started/quick-start/deep-agents.mdx
+                path: ./getting-started/quick-start/deep-agents.mdx
                 slug: deep-agents
           - section: "Application APIs"
             skip-slug: true
