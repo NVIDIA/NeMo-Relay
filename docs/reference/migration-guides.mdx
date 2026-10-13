@@ -1,23 +1,113 @@
 ---
 title: "Migration Guides"
-description: "Upgrade from NeMo Relay 0.9.0 to 0.10.0."
+description: "Upgrade to NeMo Relay 0.10, including the update from 0.10.0 to 0.10.1."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this page to upgrade from NeMo Relay 0.9.0 to 0.10.0.
+Use this page to upgrade from NeMo Relay 0.9.0 to the current 0.10 release.
+If you already use 0.10.0, apply the patch-upgrade steps below.
 
-These steps also cover configuration and telemetry changes from the 0.9 patch
-releases. Apply them when upgrading directly from 0.9.0.
+If you upgrade directly from 0.9.0, apply both the base-release and patch-upgrade
+steps. The base-release steps also cover configuration and telemetry changes
+from the 0.9 patch releases.
 
-## Upgrade to NeMo Relay 0.10.0
+## Upgrade to NeMo Relay 0.10
+
+### Update from NeMo Relay 0.10.0 to 0.10.1
+
+Update the Relay packages you use to 0.10.1. Review the following steps for
+hook delivery, daemon workers, and request intercepts.
+
+#### Restore Credentials for Fail-Closed Daemon Hooks
+
+<Warning title="Hook Behavior Change">
+
+In 0.10.0, daemon hooks without a usable client credential let the coding agent
+continue, even with `--fail-closed`. In 0.10.1, fail-closed hooks return exit
+code `2` without an allow response. Delivery failures, including connection
+errors, timeouts, and HTTP errors, also return `2` in gateway and daemon modes.
+
+</Warning>
+
+Make sure each user's hooks can resolve `NEMO_RELAY_CLIENT_TOKEN` or the
+per-user token file before starting a session. If the token file is missing,
+run the following command as that user:
+
+```bash
+nemo-relay daemon token ensure
+```
+
+Do not run this command as root. Check custom hook wrappers and scripts that
+handle exit codes: delivery failures under a fail-closed policy now return `2`
+instead of `1`. Fail-open delivery failures still return `0`. Guardrail
+rejections still return `2` under either policy. Public HTTP requests without
+a bound credential retain their separate pass-through rules. Refer to
+[Requests Without a Bound Credential](/daemon/configuration#requests-without-a-bound-credential).
+
+#### Refresh Personal Hooks and Review Timeouts
+
+Gateway hook delivery now waits up to 30 seconds instead of two seconds.
+Daemon and daemon-worker delivery use the same limit. Set LLM judge guardrail
+evaluation timeouts to leave room for hook delivery within that limit.
+Timed-out requests are not retried.
+
+Refresh personal Relay-managed hooks before starting new sessions:
+
+```bash
+nemo-relay integrations refresh
+```
+
+To refresh one agent, use `nemo-relay install <agent> --force`.
+For administrator-managed daemon bundles, follow
+[Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back) instead.
+Keep the existing bundle files; do not regenerate them with personal install
+or refresh commands. Refer to
+[Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding) for failure policies.
+
+#### Review Daemon-Worker LLM Middleware
+
+Daemon workers now support all six large language model (LLM) middleware types
+for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages, including
+streaming calls. Review plugins that register request intercepts, execution
+intercepts, or conditional execution guardrails. These now use the managed
+LLM pipeline and can change or block requests and responses.
+
+Check clients that depend on provider success headers or exact stream
+formatting. With these middleware types, successful calls return HTTP `200`
+without the provider's original success headers or HTTP trailers. Streaming
+responses still arrive in parts, but their formatting can change. Provider
+HTTP errors keep their status, supported headers, and body. Other provider
+APIs and WebSocket connections bypass LLM middleware.
+
+The response-header timeout includes middleware execution. For calls without
+streaming, it also includes the wait for the full response. It does not limit
+stream duration after response headers arrive.
+
+For responses forwarded unchanged, the default stream observation copy limit
+increases from 4 MiB to 16 MiB. If needed, set
+`NEMO_RELAY_DAEMON_OBSERVATION_CAPTURE_BYTES` before starting the worker to
+choose another limit. This setting does not cut off the client's stream.
+Refer to [LLM Middleware](/daemon/reference#llm-middleware).
+
+#### Review Request-Intercept Edits
+
+If your intercept edits several messages or array entries, review the rules
+for keeping provider fields. Relay keeps those fields on unchanged entries
+and on tool calls or results with a clear call-ID match. Entries without a
+match use the values you return. New entries do not inherit fields from old
+entries. Do not rely on a generic `id` field to preserve data in arbitrary JSON
+arrays. Refer to
+[Editing Arrays and Mappings](/integrate-into-frameworks/provider-codecs#editing-arrays-and-mappings)
+for matching rules and the limited fallback for a single edit.
 
 ### Update Packages and Plugin SDKs
 
-Update the Relay CLI, application bindings, and plugin SDK dependencies to
-0.10.0. Rebuild Rust applications and native or worker plugins against the
-updated dependencies. If you use the OpenClaw plugin, update its package too.
+When upgrading from 0.9, update the Relay CLI, application bindings, and plugin
+SDK dependencies to the current 0.10 release. Rebuild Rust applications and
+native or worker plugins against the updated dependencies. If you use the
+OpenClaw plugin, update its package too.
 It requires the matching Node.js binding version.
 
 The optional Python LangChain NVIDIA integration now requires
