@@ -2454,6 +2454,41 @@ describe('LLM intercepts', () => {
     }
   });
 
+  it('close waits for cleanup of a downstream stream an intercept replaced', async () => {
+    let cleaned = false;
+    registerLlmStreamExecutionIntercept('node_llm_stream_replaced_downstream', 10, async (request, _context, next) => {
+      await next(request);
+      return (async function* () {
+        yield { replacement: true };
+      })();
+    });
+    let stream;
+    try {
+      stream = await llmStreamCallExecute(
+        'replaced_downstream_cleanup_llm',
+        makeNative(),
+        async function* (_request, signal) {
+          try {
+            yield { provider: true };
+            if (!signal.aborted) {
+              await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            }
+          } finally {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            cleaned = true;
+            throw new Error('downstream cleanup failure');
+          }
+        },
+      );
+      assert.deepEqual(await stream.next(), { replacement: true });
+      await assert.rejects(() => stream.close(), /downstream cleanup failure/);
+      assert.equal(cleaned, true);
+    } finally {
+      await stream?.close().catch(() => {});
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_replaced_downstream');
+    }
+  });
+
   it('next reports a chunk conversion error ahead of a failing iterator return', async () => {
     const events = [];
     registerSubscriber('node_conversion_then_cleanup_error', (event) => events.push(event));

@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v18";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v19";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -171,12 +171,31 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   ) {
     const controller = new AbortController();
     registerAbort(() => controller.abort());
-    const downstreams = [];
+    // Downstream streams from `next()`. A wrapper the intercept iterates reports
+    // the close itself. The rest are closed before this call settles.
+    const downstreams = new Map();
+    const closeDownstream = (downstream) => {
+      const state = downstreams.get(downstream);
+      state.closing ??= downstream.close();
+      return state.closing;
+    };
+    const settleDownstreams = async (failure) => {
+      for (const [downstream, state] of downstreams) {
+        if (state.reported) continue;
+        state.reported = true;
+        try {
+          await closeDownstream(downstream);
+        } catch (cleanup) {
+          failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
+        }
+      }
+      return failure;
+    };
     controller.signal.addEventListener(
       'abort',
       () => {
-        for (const downstream of downstreams) {
-          downstream.close().catch(() => {});
+        for (const downstream of downstreams.keys()) {
+          closeDownstream(downstream).catch(() => {});
         }
       },
       { once: true },
@@ -225,9 +244,10 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         ? invokeNext
         : async (value) => {
         const downstream = await invokeNext(value);
-        downstreams.push(downstream);
+        const state = { closing: undefined, reported: false };
+        downstreams.set(downstream, state);
         if (controller.signal.aborted) {
-          downstream.close().catch(() => {});
+          closeDownstream(downstream).catch(() => {});
         }
         return {
           async *[Symbol.asyncIterator]() {
@@ -238,7 +258,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
                 yield chunk;
               }
             } finally {
-              await downstream.close();
+              state.reported = true;
+              await closeDownstream(downstream);
             }
           },
         };
@@ -287,15 +308,17 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
             failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
           }
         }
+        failure = await settleDownstreams(failure);
         if (failure !== undefined) {
           throw failure.error;
         }
         streamEnd();
         settlePublication();
-      }).catch((error) => {
+      }).catch(async (error) => {
+        const failure = await settleDownstreams({ error });
         settlePublication();
-        const failure = failureEnvelope(error, 'unknown error');
-        reject(failure.error, failure.exceptionType);
+        const envelope = failureEnvelope(failure.error, 'unknown error');
+        reject(envelope.error, envelope.exceptionType);
       });
     };
     eventSanitizerContext.run(token, invoke);
