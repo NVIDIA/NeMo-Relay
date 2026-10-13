@@ -23,6 +23,14 @@ navigation:
         slug: quick-start
         collapsed: open-by-default
         contents:
+          - section: "Agent Runtimes"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "OpenClaw"
+                icon: fa-solid fa-paw
+                path: ./getting-started/quick-start/openclaw.mdx
+                slug: openclaw
           - section: "Application APIs"
             skip-slug: true
             collapsed: open-by-default
