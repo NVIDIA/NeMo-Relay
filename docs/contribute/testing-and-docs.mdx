@@ -9,6 +9,24 @@ SPDX-License-Identifier: Apache-2.0 */}
 This page describes the validation and documentation checks expected for repository
 changes.
 
+## Quickstart Contracts
+
+The Quick Starts store commands, artifacts, and expected output in their MDX
+pages. The checker extracts these contracts without executing commands or
+calling an inference provider:
+
+```bash
+python3 scripts/check-quickstarts.py check
+python3 -m unittest discover -s scripts/tests -p 'test_*quickstart*.py'
+```
+
+Use `extract <page> --shell bash` to inspect one executable branch, and
+`preflight` and `verify` to check a disposable run's outputs. Live execution
+and operating-system coverage remain separate validation work. Copyable Relay
+install pins follow the Cargo workspace version through `just set-version`;
+`python3 scripts/docs/docs_version_pins.py check` detects drift. The external
+Switchyard bundle and its tested Relay pairing are pinned independently.
+
 Rust and Python examples, plugin test fixtures, and benchmark tools are workspace
 members. Dependency versions are locked in the repository-root `Cargo.lock` and
 `uv.lock`; npm workspaces use the root `package-lock.json`. Run Python example
