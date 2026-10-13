@@ -48,6 +48,31 @@ workers:
   [LLM Middleware](/daemon/reference#llm-middleware).
   ([PR #1281](https://github.com/NVIDIA/NeMo-Relay/pull/1281))
 
+### Compatibility and Migration
+
+Review these behavior changes when upgrading from 0.10.0:
+
+- Restore missing hook credentials through `NEMO_RELAY_CLIENT_TOKEN` or
+  `nemo-relay daemon token ensure` before retrying fail-closed daemon hooks.
+  Unlike 0.10.0, these hooks block the action when no credential is available.
+  Public HTTP requests without a bound credential still follow the daemon's
+  separate pass-through rules.
+- Refresh personal hooks with `nemo-relay integrations refresh`, or use
+  `nemo-relay install <agent> --force` for one agent. For administrator-managed
+  daemon bundles, follow [Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back).
+  Allow time for hook delivery when setting guardrail evaluation timeouts
+  within the 30-second limit.
+- In daemon workers, request intercepts, execution intercepts, and conditional
+  execution guardrails now use Relay's managed LLM pipeline. Successful calls
+  return HTTP `200` without the provider's original success headers or HTTP
+  trailers. Streaming responses can have different formatting. Provider HTTP
+  errors keep their status, supported headers, and body. Calls without these
+  middleware types still forward responses unchanged. Refer to
+  [LLM Middleware](/daemon/reference#llm-middleware) for details and limits.
+
+For the patch-upgrade steps, refer to
+[Update from NeMo Relay 0.10.0 to 0.10.1](/reference/migration-guides#update-from-nemo-relay-0100-to-0101).
+
 ### Fixes and Other Changes
 
 This release includes the following fixes and dependency update:
@@ -82,31 +107,6 @@ This release includes the following fixes and dependency update:
   for YAML output from plugin inspection. The release also updates its Rust
   dependency attribution file.
   ([PR #1282](https://github.com/NVIDIA/NeMo-Relay/pull/1282))
-
-### Compatibility and Upgrade Notes
-
-Review these behavior changes when upgrading from 0.10.0:
-
-- Restore missing hook credentials through `NEMO_RELAY_CLIENT_TOKEN` or
-  `nemo-relay daemon token ensure` before retrying fail-closed daemon hooks.
-  Unlike 0.10.0, these hooks block the action when no credential is available.
-  Public HTTP requests without a bound credential still follow the daemon's
-  separate pass-through rules.
-- Refresh personal hooks with `nemo-relay integrations refresh`, or use
-  `nemo-relay install <agent> --force` for one agent. For administrator-managed
-  daemon bundles, follow [Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back).
-  Allow time for hook delivery when setting guardrail evaluation timeouts
-  within the 30-second limit.
-- In daemon workers, request intercepts, execution intercepts, and conditional
-  execution guardrails now use Relay's managed LLM pipeline. Successful calls
-  return HTTP `200` without the provider's original success headers or HTTP
-  trailers. Streaming responses can have different formatting. Provider HTTP
-  errors keep their status, supported headers, and body. Calls without these
-  middleware types still forward responses unchanged. Refer to
-  [LLM Middleware](/daemon/reference#llm-middleware) for details and limits.
-
-For the patch-upgrade steps, refer to
-[Update from NeMo Relay 0.10.0 to 0.10.1](/reference/migration-guides#update-from-nemo-relay-0100-to-0101).
 
 ## Release 0.10.0
 
