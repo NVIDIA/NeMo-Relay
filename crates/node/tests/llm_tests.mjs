@@ -2454,6 +2454,34 @@ describe('LLM intercepts', () => {
     }
   });
 
+  it('next reports a chunk conversion error ahead of a failing iterator return', async () => {
+    const events = [];
+    registerSubscriber('node_conversion_then_cleanup_error', (event) => events.push(event));
+    let stream;
+    try {
+      stream = await llmStreamCallExecute('conversion_then_cleanup_error_llm', makeNative(), async function* () {
+        try {
+          yield 1n;
+        } finally {
+          throw new Error('cleanup boom');
+        }
+      });
+      await assert.rejects(
+        () => stream.next(),
+        /unsupported bigint value.*stream cleanup also failed: .*cleanup boom/i,
+      );
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find(
+        (event) => event.name === 'conversion_then_cleanup_error_llm' && event.scope_category === 'end',
+      );
+      assert.equal(end.metadata['exception.type'], 'TypeError');
+    } finally {
+      await stream?.close().catch(() => {});
+      deregisterSubscriber('node_conversion_then_cleanup_error');
+    }
+  });
+
   it('close surfaces producer cleanup errors after an early close', async () => {
     const stream = await llmStreamCallExecute(
       'provider_cleanup_error_llm',

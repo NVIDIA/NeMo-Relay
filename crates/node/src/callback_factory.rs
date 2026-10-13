@@ -134,6 +134,14 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     return { ok: false, error: message, exceptionType };
   }
 
+  function cleanupFailure(error, cleanup) {
+    const primary = failureEnvelope(error, 'unknown error');
+    const secondary = failureEnvelope(cleanup, 'unknown error');
+    const combined = new Error(`${primary.error}; stream cleanup also failed: ${secondary.error}`);
+    combined.name = primary.exceptionType;
+    return combined;
+  }
+
   async function settleEnvelope(fn, encode, complete, fallbackMessage) {
     let envelope;
     try {
@@ -253,6 +261,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         const iterator = value[Symbol.asyncIterator]();
         // Like `for await`, a finished or failed `next()` leaves nothing for `return()` to clean up.
         let finished = false;
+        let failure;
         try {
           while (!controller.signal.aborted) {
             let item;
@@ -268,10 +277,18 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
             }
             await streamPush(jsonValue(item.value === undefined ? null : item.value));
           }
-        } finally {
-          if (!finished && typeof iterator.return === 'function') {
+        } catch (error) {
+          failure = { error };
+        }
+        if (!finished && typeof iterator.return === 'function') {
+          try {
             await iterator.return();
+          } catch (cleanup) {
+            failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
           }
+        }
+        if (failure !== undefined) {
+          throw failure.error;
         }
         streamEnd();
         settlePublication();
