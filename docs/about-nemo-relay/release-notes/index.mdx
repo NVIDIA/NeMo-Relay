@@ -25,13 +25,13 @@ This is the Release Notes template. Document one release version per page and us
 This page contains the release notes for [NVIDIA NeMo
 Relay](/about-nemo-relay/overview).
 
-For the full release history, including individual pull requests, refer to
+For the full release history, refer to
 [GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
 
 ## Release 0.10.1
 
-NeMo Relay 0.10.1 includes all six pull requests merged into `release/0.10`
-after the `0.10.0` tag. The sections below describe each change.
+NeMo Relay 0.10.1 expands daemon-worker middleware support and fixes hook
+delivery and request editing. It also updates a CLI dependency.
 
 ### Highlights
 
@@ -46,7 +46,6 @@ workers:
   response used for observability increases from 4 MiB to 16 MiB. This limit
   does not cut off the client's stream. Refer to
   [LLM Middleware](/daemon/reference#llm-middleware).
-  ([PR #1281](https://github.com/NVIDIA/NeMo-Relay/pull/1281))
 
 ### Compatibility and Migration
 
@@ -82,19 +81,16 @@ This release includes the following fixes and dependency update:
   Claude Code and Codex hook configurations. This gives LLM judge guardrails
   more time to finish. Timed-out requests are not retried. Refer to
   [Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding).
-  ([PR #1288](https://github.com/NVIDIA/NeMo-Relay/pull/1288))
 - Fail-closed hooks now return exit code `2` on delivery failures, so the
   coding agent blocks the action. This includes connection errors, timeouts,
   and HTTP errors. Fail-open delivery failures still return `0`, and guardrail
   rejections still return `2` under either policy. Refer to
   [Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding).
-  ([PR #1289](https://github.com/NVIDIA/NeMo-Relay/pull/1289))
 - Daemon hooks now honor their failure policy when no usable client credential
   is available. A fail-closed hook returns exit code `2` without an allow
   response. A fail-open hook still lets the agent continue. This applies to
   daemon and daemon-worker deployments. Refer to
   [Requests Without a Bound Credential](/daemon/configuration#requests-without-a-bound-credential).
-  ([PR #1290](https://github.com/NVIDIA/NeMo-Relay/pull/1290))
 - Request intercepts can now change several messages or array entries in one
   request. They can add, remove, reorder, or replace entries and edit nested
   JSON objects. Relay keeps provider fields on unchanged entries and on tool
@@ -102,11 +98,9 @@ This release includes the following fixes and dependency update:
   as `thoughtSignature` when that match is clear. New entries do not inherit
   fields from old entries. Refer to
   [Editing Arrays and Mappings](/integrate-into-frameworks/provider-codecs#editing-arrays-and-mappings).
-  ([PR #1296](https://github.com/NVIDIA/NeMo-Relay/pull/1296))
 - The CLI replaces the deprecated `serde_yaml` dependency with `serde-saphyr`
   for YAML output from plugin inspection. The release also updates its Rust
   dependency attribution file.
-  ([PR #1282](https://github.com/NVIDIA/NeMo-Relay/pull/1282))
 
 ## Release 0.10.0
 
@@ -564,7 +558,7 @@ The following list covers unresolved issues from 0.9 and new limitations in
 
 ## Previous Releases
 
-For previous release notes, release artifacts, and the complete pull request
+For previous release notes, release artifacts, and the complete release
 history, refer to [GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
 
 ## Related Topics
