@@ -215,34 +215,45 @@ func newScopeHandle(ptr *C.FfiScopeHandle) *ScopeHandle {
 }
 
 // UUID returns the unique identifier for this scope.
-func (h *ScopeHandle) UUID() string { return goString(C.nemo_relay_scope_handle_uuid(h.ptr)) }
+func (h *ScopeHandle) UUID() string {
+	defer runtime.KeepAlive(h)
+	return goString(C.nemo_relay_scope_handle_uuid(h.ptr))
+}
 
 // Name returns the human-readable name of this scope.
-func (h *ScopeHandle) Name() string { return goString(C.nemo_relay_scope_handle_name(h.ptr)) }
+func (h *ScopeHandle) Name() string {
+	defer runtime.KeepAlive(h)
+	return goString(C.nemo_relay_scope_handle_name(h.ptr))
+}
 
 // Type returns the ScopeType of this scope.
 func (h *ScopeHandle) Type() ScopeType {
+	defer runtime.KeepAlive(h)
 	return ScopeType(C.nemo_relay_scope_handle_scope_type(h.ptr))
 }
 
 // Attributes returns the attribute bitflags for this scope.
 func (h *ScopeHandle) Attributes() uint32 {
+	defer runtime.KeepAlive(h)
 	return uint32(C.nemo_relay_scope_handle_attributes(h.ptr))
 }
 
 // ParentUUID returns the UUID of the parent scope, or an empty string if this
 // is a root scope.
 func (h *ScopeHandle) ParentUUID() string {
+	defer runtime.KeepAlive(h)
 	return goStringOpt(C.nemo_relay_scope_handle_parent_uuid(h.ptr))
 }
 
 // Data returns the optional data JSON payload attached to this scope.
 func (h *ScopeHandle) Data() json.RawMessage {
+	defer runtime.KeepAlive(h)
 	return goJSONOpt(C.nemo_relay_scope_handle_data(h.ptr))
 }
 
 // Metadata returns the optional metadata JSON payload attached to this scope.
 func (h *ScopeHandle) Metadata() json.RawMessage {
+	defer runtime.KeepAlive(h)
 	return goJSONOpt(C.nemo_relay_scope_handle_metadata(h.ptr))
 }
 
@@ -268,18 +279,26 @@ func newToolHandle(ptr *C.FfiToolHandle) *ToolHandle {
 }
 
 // UUID returns the unique identifier for this tool call.
-func (h *ToolHandle) UUID() string { return goString(C.nemo_relay_tool_handle_uuid(h.ptr)) }
+func (h *ToolHandle) UUID() string {
+	defer runtime.KeepAlive(h)
+	return goString(C.nemo_relay_tool_handle_uuid(h.ptr))
+}
 
 // Name returns the name of the tool being called.
-func (h *ToolHandle) Name() string { return goString(C.nemo_relay_tool_handle_name(h.ptr)) }
+func (h *ToolHandle) Name() string {
+	defer runtime.KeepAlive(h)
+	return goString(C.nemo_relay_tool_handle_name(h.ptr))
+}
 
 // Attributes returns the attribute bitflags for this tool call.
 func (h *ToolHandle) Attributes() uint32 {
+	defer runtime.KeepAlive(h)
 	return uint32(C.nemo_relay_tool_handle_attributes(h.ptr))
 }
 
 // ParentUUID returns the UUID of the parent scope for this tool call.
 func (h *ToolHandle) ParentUUID() string {
+	defer runtime.KeepAlive(h)
 	return goStringOpt(C.nemo_relay_tool_handle_parent_uuid(h.ptr))
 }
 
@@ -305,18 +324,26 @@ func newLLMHandle(ptr *C.FfiLLMHandle) *LLMHandle {
 }
 
 // UUID returns the unique identifier for this LLM call.
-func (h *LLMHandle) UUID() string { return goString(C.nemo_relay_llm_handle_uuid(h.ptr)) }
+func (h *LLMHandle) UUID() string {
+	defer runtime.KeepAlive(h)
+	return goString(C.nemo_relay_llm_handle_uuid(h.ptr))
+}
 
 // Name returns the name of the LLM being called.
-func (h *LLMHandle) Name() string { return goString(C.nemo_relay_llm_handle_name(h.ptr)) }
+func (h *LLMHandle) Name() string {
+	defer runtime.KeepAlive(h)
+	return goString(C.nemo_relay_llm_handle_name(h.ptr))
+}
 
 // Attributes returns the attribute bitflags for this LLM call.
 func (h *LLMHandle) Attributes() uint32 {
+	defer runtime.KeepAlive(h)
 	return uint32(C.nemo_relay_llm_handle_attributes(h.ptr))
 }
 
 // ParentUUID returns the UUID of the parent scope for this LLM call.
 func (h *LLMHandle) ParentUUID() string {
+	defer runtime.KeepAlive(h)
 	return goStringOpt(C.nemo_relay_llm_handle_parent_uuid(h.ptr))
 }
 
@@ -346,11 +373,13 @@ func NewLLMRequest(headers map[string]interface{}, content interface{}) *LLMRequ
 
 // Headers returns the request headers as a JSON object.
 func (r *LLMRequest) Headers() json.RawMessage {
+	defer runtime.KeepAlive(r)
 	return goJSONOpt(C.nemo_relay_llm_request_headers(r.ptr))
 }
 
 // Content returns the request content as raw JSON.
 func (r *LLMRequest) Content() json.RawMessage {
+	defer runtime.KeepAlive(r)
 	return goJSONOpt(C.nemo_relay_llm_request_content(r.ptr))
 }
 

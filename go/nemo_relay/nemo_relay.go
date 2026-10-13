@@ -608,12 +608,13 @@ func ListRuntimeRegistrations(kinds []RuntimeRegistrationKind) ([]RuntimeRegistr
 // ---------------------------------------------------------------------------
 
 type scopeOptions struct {
-	parent     *C.FfiScopeHandle
-	attributes uint32
-	data       *C.char
-	metadata   *C.char
-	input      *C.char
-	timestamp  *C.int64_t
+	parentHandle *ScopeHandle // retains the borrowed native handle through the FFI call
+	parent       *C.FfiScopeHandle
+	attributes   uint32
+	data         *C.char
+	metadata     *C.char
+	input        *C.char
+	timestamp    *C.int64_t
 }
 
 // ScopeOption is a functional option that configures optional parameters for
@@ -629,6 +630,7 @@ func WithParent(parent *ScopeHandle) ScopeOption {
 	return func(o *scopeOptions) {
 		if parent != nil {
 			o.parent = parent.ptr
+			o.parentHandle = parent
 		}
 	}
 }
@@ -743,6 +745,7 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 	for _, opt := range opts {
 		opt(o)
 	}
+	defer runtime.KeepAlive(o.parentHandle)
 
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
@@ -774,6 +777,7 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 // [WithScopeEndMetadata], and an explicit event timestamp can be supplied with
 // [WithScopeEndTimestamp].
 func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
+	defer runtime.KeepAlive(handle)
 	o := &scopeEndOptions{}
 	for _, opt := range opts {
 		opt(o)
@@ -795,12 +799,13 @@ func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 // ---------------------------------------------------------------------------
 
 type eventOptions struct {
-	parent     *C.FfiScopeHandle
-	data       *C.char
-	dataSchema *C.char
-	metadata   *C.char
-	severity   LogSeverity
-	timestamp  *C.int64_t
+	parentHandle *ScopeHandle // retains the borrowed native handle through the FFI call
+	parent       *C.FfiScopeHandle
+	data         *C.char
+	dataSchema   *C.char
+	metadata     *C.char
+	severity     LogSeverity
+	timestamp    *C.int64_t
 }
 
 // replaceCString replaces an option-owned C string and frees its prior value.
@@ -842,6 +847,7 @@ func WithEventParent(parent *ScopeHandle) EventOption {
 	return func(o *eventOptions) {
 		if parent != nil {
 			o.parent = parent.ptr
+			o.parentHandle = parent
 		}
 	}
 }
@@ -902,6 +908,7 @@ func EmitEvent(name string, opts ...EventOption) error {
 	for _, opt := range opts {
 		opt(o)
 	}
+	defer runtime.KeepAlive(o.parentHandle)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	if o.data != nil {
@@ -1026,12 +1033,13 @@ func EmitMetric(name string, measurements []MetricMeasurement, opts ...MetricOpt
 // ---------------------------------------------------------------------------
 
 type toolCallOptions struct {
-	parent     *C.FfiScopeHandle
-	attributes uint32
-	data       *C.char
-	metadata   *C.char
-	toolCallID *C.char
-	timestamp  *C.int64_t
+	parentHandle *ScopeHandle // retains the borrowed native handle through the FFI call
+	parent       *C.FfiScopeHandle
+	attributes   uint32
+	data         *C.char
+	metadata     *C.char
+	toolCallID   *C.char
+	timestamp    *C.int64_t
 }
 
 // ToolCallOption is a functional option that configures optional parameters for
@@ -1049,6 +1057,7 @@ func WithToolParent(parent *ScopeHandle) ToolCallOption {
 	return func(o *toolCallOptions) {
 		if parent != nil {
 			o.parent = parent.ptr
+			o.parentHandle = parent
 		}
 	}
 }
@@ -1130,6 +1139,7 @@ func ToolCall(name string, args json.RawMessage, opts ...ToolCallOption) (*ToolH
 	for _, opt := range opts {
 		opt(o)
 	}
+	defer runtime.KeepAlive(o.parentHandle)
 	defer freeToolOpts(o)
 
 	cName := C.CString(name)
@@ -1153,6 +1163,7 @@ func ToolCall(name string, args json.RawMessage, opts ...ToolCallOption) (*ToolH
 // the sanitized result is JSON null. Response intercepts run only through
 // [ToolCallExecute].
 func ToolCallEnd(handle *ToolHandle, result ToolExecutionResult, opts ...ToolCallOption) error {
+	defer runtime.KeepAlive(handle)
 	o := &toolCallOptions{}
 	for _, opt := range opts {
 		opt(o)
@@ -1185,6 +1196,7 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 	for _, opt := range opts {
 		opt(o)
 	}
+	defer runtime.KeepAlive(o.parentHandle)
 	defer freeToolOpts(o)
 
 	id := registerClosure(fn)
@@ -1221,6 +1233,7 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 // ---------------------------------------------------------------------------
 
 type llmCallOptions struct {
+	parentHandle        *ScopeHandle // retains the borrowed native handle through the FFI call
 	parent              *C.FfiScopeHandle
 	attributes          uint32
 	data                *C.char
@@ -1250,6 +1263,7 @@ func WithLLMParent(parent *ScopeHandle) LLMCallOption {
 	return func(o *llmCallOptions) {
 		if parent != nil {
 			o.parent = parent.ptr
+			o.parentHandle = parent
 		}
 	}
 }
@@ -1433,6 +1447,7 @@ func LlmCall(name string, request interface{}, opts ...LLMCallOption) (*LLMHandl
 	for _, opt := range opts {
 		opt(o)
 	}
+	defer runtime.KeepAlive(o.parentHandle)
 	defer freeLLMOpts(o)
 
 	requestJSON, err := jsonMarshal(request)
@@ -1460,6 +1475,7 @@ func LlmCall(name string, request interface{}, opts ...LLMCallOption) (*LLMHandl
 // is used only when the sanitized response is JSON null. Response intercepts
 // run only through [LlmCallExecute] and [LlmStreamCallExecute].
 func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOption) error {
+	defer runtime.KeepAlive(handle)
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
@@ -1486,6 +1502,7 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 	for _, opt := range opts {
 		opt(o)
 	}
+	defer runtime.KeepAlive(o.parentHandle)
 	defer freeLLMOpts(o)
 
 	requestJSON, err := json.Marshal(request)
@@ -1544,6 +1561,7 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 	for _, opt := range opts {
 		opt(o)
 	}
+	defer runtime.KeepAlive(o.parentHandle)
 	defer freeLLMOpts(o)
 
 	requestJSON, err := json.Marshal(request)
