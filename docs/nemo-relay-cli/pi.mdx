@@ -23,9 +23,18 @@ Redirection](#model-redirection) explains.
 pi has no native hook-configuration file, and its external event stream is
 observation-only, so hook calls cannot be injected from outside the process. They
 originate inside a pi *extension*, which Relay ships in this repository. The
-extension is a thin HTTP client: it forwards pi's lifecycle to `POST /hooks/pi`
-and gates tool calls on the gateway's verdict. All policy and all span
+extension invokes `nemo-relay hook-forward pi` to forward pi's lifecycle to
+`POST /hooks/pi` with the same authentication mechanism as Codex and Claude Code.
+It gates tool calls on the gateway's verdict. All policy and all span
 construction stay in the gateway.
+
+Standalone pi requires the updated `nemo-relay` executable on `PATH`, or its
+path in `NEMO_RELAY_PI_COMMAND`. The launcher sets that path automatically.
+Use a loopback HTTP gateway URL. Requests without valid credentials and requests
+for sessions owned by another client receive HTTP 401. Refresh an older
+Relay-managed extension with `nemo-relay install pi --force` after upgrading the
+gateway; refresh manually installed copies from the updated extension source.
+Delivery failures continue to use the configured fail-open or fail-closed policy.
 
 <Warning>
 pi ships breaking changes through *minor* releases and has no major-release

@@ -21,6 +21,36 @@ use super::response::{
 };
 use super::{GatewayMode, HOOK_FORWARD_TIMEOUT, HookForwardRequest};
 
+/// Pi invokes the same credentialed sender as native command hooks, but consumes the raw
+/// HTTP verdict itself so transport faults retain the extension's existing failure policy.
+pub(crate) async fn hook_forward_pi(command: HookForwardRequest) -> Result<(), CliError> {
+    let operational = OperationalContext::new();
+    let destination = hook_destination(&command);
+    // The challenge accepts any caller fingerprint, including on a standalone gateway.
+    // Reuse the pinned TLS sender so the hook payload reaches only an authenticated Relay.
+    let gateway = transparent_gateway_spec(&destination.gateway_url)?;
+    let input = read_hook_payload(
+        crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        &operational,
+    )?;
+    let response = send_verified_hook_forward_request_with_context(
+        &command,
+        &gateway,
+        &destination.gateway_url,
+        input,
+        &operational,
+    )
+    .await?
+    .map_err(|error| CliError::Launch(error.to_string()))?;
+    let body = String::from_utf8(response.body)
+        .map_err(|error| CliError::Install(format!("pi hook response is not UTF-8: {error}")))?;
+    println!(
+        "{}",
+        serde_json::json!({"status": response.status, "body": body})
+    );
+    Ok(())
+}
+
 pub(crate) async fn hook_forward(mut command: HookForwardRequest) -> Result<(), CliError> {
     let operational = OperationalContext::new();
     operational::hook_started(&operational, "hook_forward");

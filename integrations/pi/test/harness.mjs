@@ -20,6 +20,20 @@
  * all preempts, which is why `{}` is dangerous there.
  */
 import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { mock } from 'node:test';
+
+const fixture = fileURLToPath(new URL('./fixtures/hook-forward.mjs', import.meta.url));
+const realExecFile = childProcess.execFile;
+mock.method(childProcess, 'execFile', (command, args, options, callback) =>
+  command === fixture
+    ? realExecFile(process.execPath, [fixture, ...args], options, callback)
+    : realExecFile(command, args, options, callback),
+);
+syncBuiltinESMExports();
+process.env.NEMO_RELAY_PI_COMMAND = fixture;
 
 /**
  * A gateway whose reply to the *gated* hook is set per test.

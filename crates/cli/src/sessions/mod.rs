@@ -644,9 +644,21 @@ impl SessionManager {
         events: Vec<NormalizedEvent>,
         owner: &str,
     ) -> Result<(), CliError> {
+        self.apply_authenticated_events_with_effects(headers, events, owner)
+            .await
+            .map(|_| ())
+    }
+
+    /// Applies authenticated events while preserving pi's tool argument rewrites.
+    pub(crate) async fn apply_authenticated_events_with_effects(
+        &self,
+        headers: &HeaderMap,
+        events: Vec<NormalizedEvent>,
+        owner: &str,
+    ) -> Result<HookEffects, CliError> {
         let activity = self.session_activity.begin();
         if self.session_activity.is_closing() {
-            return Ok(());
+            return Ok(HookEffects::default());
         }
         let owners = self.authenticated_owners.lock().await;
         let mut reservations = self.authenticated_reservations.lock().await;
@@ -690,11 +702,11 @@ impl SessionManager {
             .await;
 
         match result {
-            Ok(_effects) => {
+            Ok(effects) => {
                 self.bind_retained_session_owners(reservation.session_ids(), owner)
                     .await;
                 reservation.release().await;
-                Ok(())
+                Ok(effects)
             }
             Err(error) => {
                 self.bind_retained_session_owners(reservation.session_ids(), owner)
@@ -918,12 +930,8 @@ impl SessionManager {
     /// scope-open time, so this upgrade applies to session metadata only — the
     /// provider-inferred kind set in `start_llm` is the primary defense.
     ///
-    /// Unlike [`Self::apply_authenticated_events`] this binds no session owner, so it is only for
-    /// callers that cannot present an internal client credential. That is pi: its extension posts
-    /// to `/hooks/pi` from inside pi's own process with `fetch`, and on the standalone-daemon route
-    /// (`nemo-relay serve` plus a user-run `pi`) there is no launcher to hand it a bootstrap or
-    /// transparent-proxy token. Codex and Claude Code deliver hooks through a Relay subprocess that
-    /// loads the challenge key, so they take the authenticated path.
+    /// Ownerless application is reserved for session test fixtures.
+    #[cfg(test)]
     pub(crate) async fn apply_events(
         &self,
         headers: &HeaderMap,
