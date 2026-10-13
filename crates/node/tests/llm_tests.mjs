@@ -2562,7 +2562,7 @@ describe('LLM intercepts', () => {
     assert.equal(signal.aborted, true);
   });
 
-  it('close reports a buffered collector error ahead of a producer cleanup failure', async () => {
+  it('close reports a buffered collector error when producer cleanup also fails', async () => {
     let collected;
     const collectorCalled = new Promise((resolve) => {
       collected = resolve;
@@ -2585,7 +2585,10 @@ describe('LLM intercepts', () => {
       () => ({}),
     );
     await collectorCalled;
-    await assert.rejects(() => stream.close(), /collector boom; stream cleanup also failed: .*cleanup boom/);
+    await assert.rejects(
+      () => stream.close(),
+      (error) => /collector boom/.test(error.message) && !/cleanup boom/.test(error.message),
+    );
   });
 
   it('collector errors terminate the stream with the collector error', async () => {
@@ -2675,6 +2678,7 @@ describe('LLM intercepts', () => {
       await flushSubscribers();
       const end = events.find((event) => event.name === 'finalizer_error_stream_llm' && event.scope_category === 'end');
       assert.equal(end.data, null);
+      assert.equal(end.metadata['otel.status_code'], 'ERROR');
       assert.match(getLastCallbackError() ?? '', /JS finalizer callback failed: finalizer boom/);
     } finally {
       clearLastCallbackError();
@@ -2784,10 +2788,39 @@ describe('LLM intercepts', () => {
         (event) => event.name === 'async_finalizer_error_stream_llm' && event.scope_category === 'end',
       );
       assert.equal(end.data, null);
+      assert.equal(end.metadata['otel.status_code'], 'ERROR');
       assert.match(getLastCallbackError() ?? '', /JS finalizer callback failed: async finalizer boom/);
     } finally {
       clearLastCallbackError();
       deregisterSubscriber('node_async_finalizer_error');
+    }
+  });
+
+  it('finalizers that await flushSubscribers resolve and record their aggregate', async () => {
+    const events = [];
+    registerSubscriber('node_finalizer_flush', (event) => events.push(event));
+    try {
+      const stream = await llmStreamCallExecute(
+        'finalizer_flush_stream_llm',
+        makeNative(),
+        async function* () {
+          yield { token: 'only' };
+        },
+        null,
+        async () => {
+          await flushSubscribers();
+          return { flushed: true };
+        },
+      );
+      assert.deepEqual(await stream.next(), { token: 'only' });
+      assert.equal(await stream.next(), null);
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find((event) => event.name === 'finalizer_flush_stream_llm' && event.scope_category === 'end');
+      assert.deepEqual(end.data, { flushed: true });
+      assert.equal(end.metadata['otel.status_code'], 'OK');
+    } finally {
+      deregisterSubscriber('node_finalizer_flush');
     }
   });
 

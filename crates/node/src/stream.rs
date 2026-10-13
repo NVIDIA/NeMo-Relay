@@ -51,9 +51,9 @@ impl LlmStream {
 
     /// Stop the producer and wait for its cleanup to complete.
     ///
-    /// Throws a producer error that `next()` has not yet thrown, then a
-    /// finalizer failure, then any cleanup error. Further calls return the
-    /// same result.
+    /// Throws a stream error that `next()` has not yet thrown, then a
+    /// finalizer failure, then a cleanup error. A cleanup failure after a
+    /// stream error is logged. Further calls return the same result.
     #[napi]
     pub async fn close(&self) -> Result<()> {
         let mut close_result = self.close_result.lock().await;

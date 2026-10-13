@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v19";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v20";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -344,11 +344,18 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
 
     finalizer(fn) {
       return function __nemo_relay_finalizer_wrapper(complete) {
-        settleEnvelope(
-          fn,
-          (value) => jsonValue(value === undefined ? null : value),
-          complete,
-          'JavaScript finalizer callback failed',
+        // The finalizer is part of the END publication, so a flush inside it is re-entrant.
+        const token = callbackStore({ active: true }, undefined, undefined, undefined, undefined);
+        eventSanitizerContext.run(token, () =>
+          settleEnvelope(
+            fn,
+            (value) => jsonValue(value === undefined ? null : value),
+            (envelope) => {
+              expireCallbackStore(token);
+              complete(envelope);
+            },
+            'JavaScript finalizer callback failed',
+          ),
         );
       };
     },

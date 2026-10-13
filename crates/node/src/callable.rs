@@ -22,7 +22,7 @@ use napi::threadsafe_function::{
 use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use nemo_relay::api::runtime::{
-    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
+    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmCollector,
     LlmConditionalFn, LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn, LlmFinalizer,
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
@@ -263,29 +263,6 @@ pub(crate) fn unwrap_middleware_result(value: Json, error_prefix: &str) -> Resul
             exception_type: result.exception_type,
             source: None,
         })
-    }
-}
-
-fn recv_middleware_json_result(
-    rx: std::sync::mpsc::Receiver<Json>,
-    error_prefix: &str,
-) -> Result<Json> {
-    let value = rx
-        .recv()
-        .map_err(|error| FlowError::Internal(format!("{error_prefix}: {error}")))?;
-    unwrap_middleware_result(value, error_prefix)
-}
-
-fn recv_middleware_option_string_result(
-    rx: std::sync::mpsc::Receiver<Json>,
-    error_prefix: &str,
-) -> Result<Option<String>> {
-    match recv_middleware_json_result(rx, error_prefix)? {
-        Json::Null => Ok(None),
-        Json::String(value) => Ok(Some(value)),
-        other => Err(FlowError::Internal(format!(
-            "{error_prefix}: expected string or null, got {other:?}",
-        ))),
     }
 }
 
@@ -1248,19 +1225,27 @@ pub fn wrap_js_llm_exec_fn(
     })
 }
 
+/// Reply slot for `complete(envelope)`, taken on its first call.
+type CompletionSender = Mutex<Option<tokio::sync::oneshot::Sender<Json>>>;
+
+fn completion_channel() -> (CompletionSender, tokio::sync::oneshot::Receiver<Json>) {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    (Mutex::new(Some(sender)), receiver)
+}
+
 pub(crate) struct JsCollectorCall {
     chunk: Json,
-    complete: std::sync::mpsc::SyncSender<Json>,
+    complete: CompletionSender,
 }
 
 pub(crate) struct JsFinalizerCall {
-    complete: std::sync::mpsc::SyncSender<Json>,
+    complete: CompletionSender,
 }
 
 fn completion_envelope_callback(
     env: &Env,
     name: &str,
-    complete: std::sync::mpsc::SyncSender<Json>,
+    complete: CompletionSender,
 ) -> napi::Result<JsUnknown> {
     let callback = env.create_function_from_closure(name, move |ctx| {
         let envelope = ctx.get::<Json>(0).unwrap_or_else(|error| {
@@ -1269,7 +1254,13 @@ fn completion_envelope_callback(
                 "error": format!("completion envelope is not JSON-compatible: {error}"),
             })
         });
-        let _ = complete.send(envelope);
+        if let Some(complete) = complete
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            let _ = complete.send(envelope);
+        }
         ctx.env.get_undefined()
     })?;
     // SAFETY: `callback` is a live handle just created in this same `env`.
@@ -1333,16 +1324,18 @@ fn queue_js_stream_callback<T: 'static>(
 /// If the collector throws or rejects, the stream terminates with that error.
 pub fn wrap_js_collector_fn(
     func: ThreadsafeFunction<JsCollectorCall, ErrorStrategy::Fatal>,
-) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
-    Box::new(move |chunk: Json| {
-        let (complete, rx) = std::sync::mpsc::sync_channel(1);
-        queue_js_stream_callback(&func, JsCollectorCall { chunk, complete }, "collector")?;
-        // The collector may await Relay APIs on this runtime, so do not park the worker.
-        tokio::task::block_in_place(|| {
-            recv_middleware_json_result(rx, "JS collector callback failed")
+) -> LlmCollector {
+    LlmCollector::Async(Box::new(move |chunk: Json| {
+        let (complete, reply) = completion_channel();
+        let queued =
+            queue_js_stream_callback(&func, JsCollectorCall { chunk, complete }, "collector");
+        Box::pin(async move {
+            queued?;
+            await_middleware_json_result(reply, "JS collector callback failed")
+                .await
+                .map(|_| ())
         })
-        .map(|_| ())
-    })
+    }))
 }
 
 /// Finalizer failure shared with the stream handle so `close()` can report it.
@@ -1356,22 +1349,24 @@ pub fn wrap_js_finalizer_fn(
     func: ThreadsafeFunction<JsFinalizerCall, ErrorStrategy::Fatal>,
     error: FinalizerError,
 ) -> LlmFinalizer {
-    LlmFinalizer::Fallible(Box::new(move || {
-        let (complete, rx) = std::sync::mpsc::sync_channel(1);
-        // Also runs from the core wrapper's `Drop`. `block_in_place` runs inline outside a runtime
-        // and panics only on a `current_thread` runtime; the napi tokio runtime is multi-threaded.
-        let result = queue_js_stream_callback(&func, JsFinalizerCall { complete }, "finalizer")
-            .and_then(|()| {
-                tokio::task::block_in_place(|| {
-                    recv_middleware_json_result(rx, "nemo_relay: JS finalizer callback failed")
-                })
-            });
-        result.inspect_err(|failure| {
-            let message = failure.to_string();
-            record_callback_error(message.clone());
-            *error
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(message);
+    LlmFinalizer::Async(Box::new(move || {
+        let (complete, reply) = completion_channel();
+        let queued = queue_js_stream_callback(&func, JsFinalizerCall { complete }, "finalizer");
+        Box::pin(async move {
+            let result = match queued {
+                Ok(()) => {
+                    await_middleware_json_result(reply, "nemo_relay: JS finalizer callback failed")
+                        .await
+                }
+                Err(failure) => Err(failure),
+            };
+            result.inspect_err(|failure| {
+                let message = failure.to_string();
+                record_callback_error(message.clone());
+                *error
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(message);
+            })
         })
     }))
 }

@@ -45,8 +45,8 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
 use nemo_relay::api::runtime::{
-    EventMetadataInjectorFn, EventSanitizeFn, LlmExecutionNextFn, LlmFinalizer, LlmJsonStream,
-    ScopeStackHandle as CoreScopeStackHandle, ToolExecutionNextFn,
+    EventMetadataInjectorFn, EventSanitizeFn, LlmCollector, LlmExecutionNextFn, LlmFinalizer,
+    LlmJsonStream, ScopeStackHandle as CoreScopeStackHandle, ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
@@ -2923,14 +2923,27 @@ pub fn test_closed_llm_response_callback(
     None
 }
 
+/// Resolve a stream callback future whose queue step already failed.
+fn settled_now<T>(mut future: Pin<Box<dyn Future<Output = T> + Send>>) -> Result<T> {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match future.as_mut().poll(&mut context) {
+        std::task::Poll::Ready(value) => Ok(value),
+        std::task::Poll::Pending => Err(napi::Error::from_reason(
+            "stream callback did not settle synchronously",
+        )),
+    }
+}
+
 /// Internal test helper: invoke a closed JS collector wrapper and surface the queue failure.
 #[napi(js_name = "__testClosedCollectorCallback")]
 pub fn test_closed_collector_callback(env: Env, callback: JsFunction, chunk: Json) -> Result<()> {
     clear_recorded_callback_error();
     let callback = callable::js_collector_tsfn(&env, &callback)?;
     let _ = callback.clone().abort();
-    let mut wrapped = callable::wrap_js_collector_fn(callback);
-    wrapped(chunk).map_err(to_napi_err)
+    let LlmCollector::Async(mut wrapped) = callable::wrap_js_collector_fn(callback) else {
+        return Err(napi::Error::from_reason("JS collectors are asynchronous"));
+    };
+    settled_now(wrapped(chunk))?.map_err(to_napi_err)
 }
 
 /// Internal test helper: invoke a closed JS finalizer wrapper and return the fallback value.
@@ -2939,12 +2952,11 @@ pub fn test_closed_finalizer_callback(env: Env, callback: JsFunction) -> Result<
     clear_recorded_callback_error();
     let callback = callable::js_finalizer_tsfn(&env, &callback)?;
     let _ = callback.clone().abort();
-    let LlmFinalizer::Fallible(wrapped) =
-        callable::wrap_js_finalizer_fn(callback, Default::default())
+    let LlmFinalizer::Async(wrapped) = callable::wrap_js_finalizer_fn(callback, Default::default())
     else {
-        return Err(napi::Error::from_reason("JS finalizers are fallible"));
+        return Err(napi::Error::from_reason("JS finalizers are asynchronous"));
     };
-    Ok(wrapped().unwrap_or(Json::Null))
+    Ok(settled_now(wrapped())?.unwrap_or(Json::Null))
 }
 
 /// Internal test helper: exercise PromiseAwareFn queue and conversion failures.
@@ -3812,9 +3824,9 @@ pub fn llm_stream_call_execute(
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
 
-    let wrapped_collector: Box<dyn FnMut(Json) -> FlowResult<()> + Send> = match collector {
+    let wrapped_collector = match collector {
         Some(cb) => callable::wrap_js_collector_fn(callable::js_collector_tsfn(&env, &cb)?),
-        None => Box::new(|_: Json| Ok(())),
+        None => LlmCollector::from(|_: Json| Ok(())),
     };
 
     let finalizer_error = callable::FinalizerError::default();
