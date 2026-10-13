@@ -2499,6 +2499,34 @@ describe('LLM intercepts', () => {
     await assert.rejects(() => stream.close(), /cleanup boom/);
   });
 
+  it('close aborts the provider while an async collector is waiting', async () => {
+    let signal;
+    let collectorEntered;
+    const entered = new Promise((resolve) => {
+      collectorEntered = resolve;
+    });
+    const stream = await llmStreamCallExecute(
+      'collector_waits_for_abort_llm',
+      makeNative(),
+      async function* (_request, abortSignal) {
+        signal = abortSignal;
+        yield { token: 'first' };
+        if (!signal.aborted) {
+          await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        }
+      },
+      async () => {
+        collectorEntered();
+        if (!signal.aborted) {
+          await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        }
+      },
+    );
+    await entered;
+    await assertCompletesWithin(stream.close(), 'close did not abort the provider while the collector waited');
+    assert.equal(signal.aborted, true);
+  });
+
   it('close reports a buffered collector error ahead of a producer cleanup failure', async () => {
     let collected;
     const collectorCalled = new Promise((resolve) => {

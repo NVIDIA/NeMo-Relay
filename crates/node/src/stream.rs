@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use crate::api::PersistentJsFunction;
 use crate::callable::FinalizerError;
+use crate::promise_call::StreamCancellation;
 
 /// An async iterator over chunks from a streaming LLM response.
 ///
@@ -28,6 +29,7 @@ pub struct LlmStream {
     pub(crate) codec_references: Vec<Arc<PersistentJsFunction>>,
     pub(crate) finalizer_error: FinalizerError,
     pub(crate) close_result: tokio::sync::Mutex<Option<std::result::Result<(), String>>>,
+    pub(crate) producers: StreamCancellation,
 }
 
 #[napi]
@@ -59,6 +61,7 @@ impl LlmStream {
             return result.clone().map_err(napi::Error::from_reason);
         }
         self.cancel.send_replace(true);
+        self.producers.cancel();
         let result = self
             .closed
             .clone()

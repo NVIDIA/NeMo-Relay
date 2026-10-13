@@ -269,6 +269,39 @@ impl Drop for CallCancellationGuard {
     }
 }
 
+/// Provider aborts shared with the stream handle so `close()` can fire them while
+/// a collector blocks the forwarding task.
+#[derive(Clone, Default)]
+pub(crate) struct StreamCancellation {
+    state: Arc<std::sync::Mutex<StreamCancellationState>>,
+}
+
+#[derive(Default)]
+struct StreamCancellationState {
+    requested: bool,
+    calls: Vec<CallCancellation>,
+}
+
+impl StreamCancellation {
+    fn attach(&self, call: &CallCancellation) {
+        let mut state = self.state.lock().unwrap();
+        if state.requested {
+            drop(state);
+            call.cancel();
+            return;
+        }
+        state.calls.push(call.clone());
+    }
+
+    pub(crate) fn cancel(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.requested = true;
+        for call in &state.calls {
+            call.cancel();
+        }
+    }
+}
+
 struct JsCallbackStream {
     receiver: tokio_stream::wrappers::ReceiverStream<FlowResult<Json>>,
     completion: Arc<StreamCompletion>,
@@ -760,7 +793,7 @@ impl PromiseAwareFn {
         args: Json,
         next: JsonStreamNextFn,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
-        self.call_with_stream_next_inner(PrimaryArg::Json(args), false, Some(next))
+        self.call_with_stream_next_inner(PrimaryArg::Json(args), false, Some(next), None)
             .await
     }
 
@@ -771,7 +804,7 @@ impl PromiseAwareFn {
         build_arg0: Arg0Builder,
         next: JsonStreamNextFn,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
-        self.call_with_stream_next_inner(PrimaryArg::Build(build_arg0), true, Some(next))
+        self.call_with_stream_next_inner(PrimaryArg::Build(build_arg0), true, Some(next), None)
             .await
     }
 
@@ -779,9 +812,15 @@ impl PromiseAwareFn {
     pub async fn call_stream(
         &self,
         args: Json,
+        stream_cancellation: &StreamCancellation,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
-        self.call_with_stream_next_inner(PrimaryArg::Json(args), false, None)
-            .await
+        self.call_with_stream_next_inner(
+            PrimaryArg::Json(args),
+            false,
+            None,
+            Some(stream_cancellation),
+        )
+        .await
     }
 
     async fn call_with_stream_next_inner(
@@ -789,6 +828,7 @@ impl PromiseAwareFn {
         arg0: PrimaryArg,
         spread: bool,
         next: Option<JsonStreamNextFn>,
+        stream_cancellation: Option<&StreamCancellation>,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
         let (chunk_sender, chunk_receiver) =
@@ -796,6 +836,9 @@ impl PromiseAwareFn {
         let (completion, stream_completion, closed) =
             CallCompletion::stream(ready_sender, chunk_sender);
         let cancellation = CallCancellation::default();
+        if let Some(stream_cancellation) = stream_cancellation {
+            stream_cancellation.attach(&cancellation);
+        }
         let mut cancellation_guard = CallCancellationGuard::new(cancellation.clone());
         let continuation_context = next
             .as_ref()

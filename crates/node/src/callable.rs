@@ -46,7 +46,7 @@ use nemo_relay::error::{FlowError, Result};
 
 use crate::callback_factory;
 use crate::convert::{callback_json, record_callback_error, to_napi_err};
-use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
+use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn, StreamCancellation};
 use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_json};
 
 #[derive(Default)]
@@ -1764,14 +1764,20 @@ pub fn wrap_js_llm_exec_intercept_fn(func: Arc<PromiseAwareFn>) -> LlmExecutionF
 }
 
 /// Wrap a JS `(request: object, signal: AbortSignal) => AsyncIterable` streaming LLM provider.
-pub fn wrap_js_llm_stream_fn(func: Arc<PromiseAwareFn>) -> LlmStreamExecutionNextFn {
+///
+/// Each call registers its abort in `cancellation`.
+pub fn wrap_js_llm_stream_fn(
+    func: Arc<PromiseAwareFn>,
+    cancellation: StreamCancellation,
+) -> LlmStreamExecutionNextFn {
     Arc::new(move |request: LlmRequest| {
         let func = func.clone();
+        let cancellation = cancellation.clone();
         Box::pin(async move {
             let request = serde_json::to_value(&request).map_err(|error| {
                 FlowError::Internal(format!("failed to serialize LlmRequest: {error}"))
             })?;
-            func.call_stream(request).await
+            func.call_stream(request, &cancellation).await
         })
     })
 }

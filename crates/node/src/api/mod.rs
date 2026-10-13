@@ -1094,6 +1094,7 @@ pub(crate) fn llm_stream_from_rust_stream(rust_stream: RustJsonStream) -> LlmStr
         codec_references: Vec::new(),
         finalizer_error: Default::default(),
         close_result: tokio::sync::Mutex::new(None),
+        producers: Default::default(),
     }
 }
 
@@ -3826,7 +3827,8 @@ pub fn llm_stream_call_execute(
     };
 
     let provider = Arc::new(PromiseAwareFn::new(&env, &func)?);
-    let default_fn = callable::wrap_js_llm_stream_fn(provider);
+    let producers = crate::promise_call::StreamCancellation::default();
+    let default_fn = callable::wrap_js_llm_stream_fn(provider, producers.clone());
 
     let mut codec_references = Vec::new();
     let codec = match (codec_decode.as_ref(), codec_encode.as_ref()) {
@@ -3894,6 +3896,7 @@ pub fn llm_stream_call_execute(
                                 codec_references,
                                 finalizer_error,
                                 close_result: tokio::sync::Mutex::new(None),
+                                producers,
                             })
                         })
                         .await
