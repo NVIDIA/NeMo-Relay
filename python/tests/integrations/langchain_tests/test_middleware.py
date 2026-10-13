@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -242,6 +243,48 @@ def test_langchain_model_request_codec_round_trips_messages(model_request: Model
     round_tripped = payload_to_model_request(model_request, encoded)
 
     assert round_tripped.messages[0].content == "hello from intercept"
+
+
+def test_langchain_model_request_exposes_tools_without_replacing_unchanged_definitions() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+    from langchain_core.tools import tool
+
+    from nemo_relay.integrations.langchain._serialization import model_request_to_payload, payload_to_model_request
+
+    @tool
+    def get_weather(location: str) -> str:
+        """Get weather for a location."""
+        return location
+
+    built_in_tool = {"type": "web_search_preview"}
+    original = ModelRequest(
+        model=_mk_mock_model(),
+        messages=[HumanMessage(content="hello")],
+        tools=[get_weather, built_in_tool],
+    )
+
+    payload = model_request_to_payload("mock-model", original)
+    assert payload["tools"][0]["function"]["name"] == "get_weather"
+    assert payload["tools"][1] == built_in_tool
+
+    returned = payload_to_model_request(original, nemo_relay.LLMRequest({}, payload))
+    assert returned.tools[0] is get_weather
+    assert returned.tools[1] is built_in_tool
+
+    payload["tools"][1]["type"] = "edited"
+    assert built_in_tool == {"type": "web_search_preview"}
+
+
+def test_langchain_model_request_rejects_malformed_tool_schemas() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import HumanMessage
+
+    from nemo_relay.integrations.langchain._serialization import payload_to_model_request
+
+    original = ModelRequest(model=_mk_mock_model(), messages=[HumanMessage(content="hello")])
+    with pytest.raises(ValueError, match="tools must be a list of tool schema objects"):
+        payload_to_model_request(original, nemo_relay.LLMRequest({}, {"tools": ["invalid"]}))
 
 
 def test_langchain_request_codec_preserves_provider_tool_calls() -> None:
@@ -1251,8 +1294,56 @@ def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMidd
         message.content == "The weather in San Francisco is sunny and 72 degrees." for message in result["messages"]
     )
     assert result["messages"][-1].content == _DEFAULT_MOCK_RESPONSE_MSG
+    assert mock_model.bind_tools.call_args.args[0][0] is get_weather
 
     assert events == expected_events
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_agent_model_call_uses_relay_edited_tool_schema(
+    use_async: bool,
+    nemo_relay_middleware: NemoRelayMiddleware,
+) -> None:
+    from langchain.agents import create_agent
+    from langchain_core.tools import tool
+
+    model = _mk_mock_model("done")
+
+    @tool
+    def get_weather(location: str) -> str:
+        """Get weather for a location."""
+        return location
+
+    edited_schema: dict[str, Any] = {}
+
+    def edit_tool_schema(
+        _name: str,
+        request: nemo_relay.LLMRequest,
+        annotated: nemo_relay.AnnotatedLLMRequest | None,
+    ) -> nemo_relay.LLMRequestInterceptOutcome:
+        assert annotated is not None
+        assert annotated.tools is not None
+        tool_schema = cast(dict[str, Any], copy.deepcopy(annotated.tools[0]))
+        tool_schema["function"]["description"] = "Return a brief forecast."
+        tool_schema["function"]["parameters"]["properties"]["location"]["description"] = "City name"
+        edited_schema.update(tool_schema)
+        annotated.tools = [tool_schema]
+        return nemo_relay.LLMRequestInterceptOutcome(request, annotated)
+
+    agent = create_agent(model=model, tools=[get_weather], middleware=[nemo_relay_middleware])
+    nemo_relay.intercepts.register_llm_request("edit_weather_schema", 1, False, edit_tool_schema)
+    try:
+        with nemo_relay.scope.scope("langchain-tool-schema", nemo_relay.ScopeType.Agent):
+            if use_async:
+                result = asyncio.run(agent.ainvoke({"messages": [{"role": "user", "content": "Weather?"}]}))
+            else:
+                result = agent.invoke({"messages": [{"role": "user", "content": "Weather?"}]})
+    finally:
+        nemo_relay.intercepts.deregister_llm_request("edit_weather_schema")
+
+    assert result["messages"][-1].content == "done"
+    assert model.bind_tools.call_args.args[0] == [edited_schema]
+    assert get_weather.description == "Get weather for a location."
 
 
 @pytest.mark.parametrize("use_async", [False, True])

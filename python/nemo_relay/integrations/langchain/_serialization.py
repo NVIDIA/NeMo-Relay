@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import functools
 import importlib
 import json
@@ -20,6 +21,8 @@ from langchain_core.messages import (
     messages_from_dict,
     messages_to_dict,
 )
+from langchain_core.tools import BaseTool
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.types import Command, Send
 
 from nemo_relay import AnnotatedLLMRequest, AnnotatedLLMResponse, LLMRequest
@@ -401,6 +404,11 @@ def split_system_message(messages: list[BaseMessage]) -> tuple[SystemMessage | N
     return None, messages
 
 
+def _model_tool_schemas(tools: list[BaseTool | dict[str, Any]]) -> list[dict[str, Any]]:
+    """Expose LangChain tool definitions as model-visible JSON schemas."""
+    return [convert_to_openai_tool(tool) if isinstance(tool, BaseTool) else copy.deepcopy(tool) for tool in tools]
+
+
 def model_request_to_payload(model_name: str | None, request: ModelRequest[Any]) -> dict[str, Any]:
     """Serialize public ``ModelRequest`` fields into a JSON-compatible payload."""
     messages: list[BaseMessage] = []
@@ -417,6 +425,8 @@ def model_request_to_payload(model_name: str | None, request: ModelRequest[Any])
         payload["model_settings"] = request.model_settings
     if request.response_format is not None:
         payload["response_format"] = repr(request.response_format)
+    if request.tools:
+        payload["tools"] = _model_tool_schemas(request.tools)
     return payload
 
 
@@ -512,6 +522,13 @@ def payload_to_model_request(
 
     if "tool_choice" in llm_request.content:
         overrides["tool_choice"] = llm_request.content["tool_choice"]
+
+    if "tools" in llm_request.content:
+        tool_schemas = llm_request.content["tools"]
+        if not isinstance(tool_schemas, list) or not all(isinstance(tool_schema, dict) for tool_schema in tool_schemas):
+            raise ValueError("LangChain model request tools must be a list of tool schema objects")
+        if tool_schemas != _model_tool_schemas(original.tools):
+            overrides["tools"] = tool_schemas
 
     return original.override(**overrides) if overrides else original
 
