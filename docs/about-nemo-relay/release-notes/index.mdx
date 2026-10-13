@@ -31,7 +31,9 @@ For the full release history, refer to
 ## Release 0.10.1
 
 NeMo Relay 0.10.1 expands daemon-worker middleware support and fixes hook
-delivery and request editing. It also updates a CLI dependency.
+authentication and delivery, plugin verification, request editing, Python typed
+values, Anthropic streaming storage, and Go handle lifetimes. It also updates a
+CLI dependency.
 
 ### Highlights
 
@@ -68,6 +70,10 @@ Review these behavior changes when upgrading from 0.10.0:
   errors keep their status, supported headers, and body. Calls without these
   middleware types still forward responses unchanged. Refer to
   [LLM Middleware](/daemon/reference#llm-middleware) for details and limits.
+- Refresh older Pi extensions to use authenticated hook forwarding. Review
+  plugin trust failures and native plugins that depend on files beside their
+  loaded library. For stored Python typed values, select an explicit codec
+  instead of relying on automatic type reconstruction.
 
 For the patch-upgrade steps, refer to
 [Update from NeMo Relay 0.10.0 to 0.10.1](/reference/migration-guides#update-from-nemo-relay-0100-to-0101).
@@ -98,6 +104,32 @@ This release includes the following fixes and dependency update:
   as `thoughtSignature` when that match is clear. New entries do not inherit
   fields from old entries. Refer to
   [Editing Arrays and Mappings](/integrate-into-frameworks/provider-codecs#editing-arrays-and-mappings).
+- Pi hooks now use authenticated `nemo-relay hook-forward pi` calls. Requests
+  without valid credentials and requests for sessions owned by
+  another client receive HTTP `401`. Tool argument rewrites and the extension's
+  configured failure policy are preserved. Refer to
+  [Pi](/nemo-relay-cli/pi).
+- Dynamic plugins no longer activate after failed integrity or signature
+  verification. Optional plugins are skipped; required plugins stop host
+  startup. Embedding hosts retain the validated manifest and host policy and
+  check trust again before loading native libraries or starting workers.
+  Refer to [Discoverable Plugins](/configure-plugins/discoverable-plugins).
+- Application embeddings load a private temporary copy of the native library
+  bytes verified by the host. Replacing the source manifest, library, or
+  signature after validation does not change that activation's loaded library.
+  Native library digest checks reject symbolic links and special files. Refer
+  to [Package Discoverable Plugins](/build-plugins/package-discoverable-plugins).
+- Python `BestEffortAnyCodec` reconstructs dataclass and Pydantic values only
+  when their types were registered by `to_json()` in the same process.
+  Unregistered tags remain JSON dictionaries. LangChain and LangGraph tool
+  arguments now pass through as JSON; tool result codecs remain unchanged.
+  Refer to [Using Codecs](/integrate-into-frameworks/using-codecs#typed-value-codecs).
+- Anthropic streaming response assembly no longer allocates storage for every
+  unused index before a content block with a large index. Content blocks keep
+  their numeric order, and repeated starts replace the block at that index.
+- The experimental Go binding keeps handle wrappers and parent scopes alive
+  until native calls finish, preventing garbage collection from releasing
+  handles while a call still uses them. Public API signatures remain unchanged.
 - The CLI replaces the deprecated `serde_yaml` dependency with `serde-saphyr`
   for YAML output from plugin inspection. The release also updates its Rust
   dependency attribution file.

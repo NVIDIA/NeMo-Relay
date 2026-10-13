@@ -18,7 +18,8 @@ from the 0.9 patch releases.
 ### Update from NeMo Relay 0.10.0 to 0.10.1
 
 Update the Relay packages you use to 0.10.1. Review the following steps for
-hook delivery, daemon workers, and request intercepts.
+hook delivery and authentication, daemon workers, request intercepts, dynamic
+plugins, and Python typed values.
 
 #### Restore Credentials for Fail-Closed Daemon Hooks
 
@@ -101,6 +102,49 @@ entries. Do not rely on a generic `id` field to preserve data in arbitrary JSON
 arrays. Refer to
 [Editing Arrays and Mappings](/integrate-into-frameworks/provider-codecs#editing-arrays-and-mappings)
 for matching rules and the limited fallback for a single edit.
+
+#### Refresh Pi Extensions for Authenticated Hooks
+
+After upgrading the gateway, refresh a Relay-managed Pi extension with
+`nemo-relay install pi --force`. Replace manually installed copies with the
+updated extension source. The extension now forwards hooks through
+`nemo-relay hook-forward pi`; direct requests without valid credentials receive
+HTTP `401`. Requests for sessions owned by another client also receive `401`.
+
+For standalone Pi, make the updated `nemo-relay` executable available on `PATH`
+or set `NEMO_RELAY_PI_COMMAND` to its path. Use a loopback HTTP gateway URL and
+run Pi as the same local user as the gateway so the forwarder can load bootstrap
+credentials. The Relay launcher sets the executable path automatically.
+Refer to [Pi](/nemo-relay-cli/pi).
+
+#### Review Dynamic Plugin Trust and Native Dependencies
+
+Failed integrity or signature verification now always prevents plugin
+activation. With `startup = "optional"`, the host skips the failed plugin and
+continues. With `startup = "required"`, the failure stops host startup. Review
+plugin validation and lifecycle reports and correct artifact digests, signatures,
+or trusted keys before restarting. Refer to
+[Discoverable Plugins](/configure-plugins/discoverable-plugins).
+
+Application embeddings load native libraries from private temporary copies of
+the verified bytes. Native plugins used in embeddings must not rely on adjacent
+files relative to the loaded library's location. Review those dependencies
+before upgrading. The CLI retains its activation snapshot, including adjacent
+native dependencies. Native library digest checks reject symbolic links and
+special files; use regular files for native library artifacts. Refer to
+[Package Discoverable Plugins](/build-plugins/package-discoverable-plugins).
+
+#### Select Explicit Codecs for Stored Python Typed Values
+
+`BestEffortAnyCodec` no longer imports a Python type named by a dataclass or
+Pydantic tag. It reconstructs only types registered by `to_json()` in the same
+process. Unregistered tags remain JSON dictionaries. For stored or cross-process
+payloads, use an explicit `DataclassCodec` or `PydanticCodec` to select the type.
+
+LangChain and LangGraph tool arguments now use `JsonPassthrough`, even when a
+tag names a registered type. Review tool handlers that expect Relay to
+reconstruct objects from tagged arguments. Tool result codecs remain unchanged.
+Refer to [Using Codecs](/integrate-into-frameworks/using-codecs#typed-value-codecs).
 
 ### Update Packages and Plugin SDKs
 
