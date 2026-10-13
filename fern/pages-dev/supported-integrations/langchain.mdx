@@ -88,6 +88,13 @@ final_message = result["messages"][-1]
 print(f"Final response: {final_message.content}")
 ```
 
+Managed model calls expose available tools to NeMo Relay request intercepts.
+Function tools have editable descriptions and input schemas. Provider-specific
+definitions travel as opaque JSON values. After an edit, `NemoRelayMiddleware`
+passes a copy of the original LangChain tool or provider-specific definition to
+the model call, where the selected LangChain model adapter prepares it for its
+provider. Tool count, order, and function-tool names must remain unchanged.
+
 When the agent uses `ChatNVIDIA`, NeMo Relay forwards request headers, including
 Dynamo session lineage, as HTTP headers. They are not added to the NIM request
 body. For chat models built on the OpenAI or Anthropic Python SDKs, such as
