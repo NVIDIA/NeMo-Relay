@@ -1,7 +1,7 @@
 ---
 title: "Release Notes for NVIDIA NeMo Relay"
 sidebar-title: "Release Notes"
-description: "Review highlights, compatibility updates, fixed known issues, and current known issues for NVIDIA NeMo Relay 0.10."
+description: "Review highlights, compatibility updates, fixes, and known issues for NVIDIA NeMo Relay 0.10.1 and 0.10.0."
 template-library-version: "1.0.0"
 position: 6
 ---
@@ -13,7 +13,7 @@ Use title casing: Start with "Release Notes for" followed by the product name. F
 */}
 
 {/* @tpl:formatting
-This is the Release Notes template. Document one release version per page and use the documentation version selector or previous-release links for earlier versions. Fold included patch updates into the current release.
+This page covers the 0.10 release series. Keep patch releases in separate sections and use previous-release links for earlier release series.
 */}
 
 {/* @tpl:formatting
@@ -27,6 +27,81 @@ Relay](/about-nemo-relay/overview).
 
 For the full release history, including individual pull requests, refer to
 [GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
+
+## Release 0.10.1
+
+NeMo Relay 0.10.1 includes all six pull requests merged into `release/0.10`
+after the `0.10.0` tag. The sections below describe each change.
+
+### Highlights
+
+This release expands large language model (LLM) middleware support in daemon
+workers:
+
+- Daemon workers support all six LLM middleware types for OpenAI Chat
+  Completions, OpenAI Responses, and Anthropic Messages. This includes calls
+  with and without streaming. Request intercepts can change requests, and
+  execution intercepts can change or replace responses. Conditional execution
+  guardrails can block calls. The default limit for the copy of a streamed
+  response used for observability increases from 4 MiB to 16 MiB. This limit
+  does not cut off the client's stream. Refer to
+  [LLM Middleware](/daemon/reference#llm-middleware).
+  ([PR #1281](https://github.com/NVIDIA/NeMo-Relay/pull/1281))
+
+### Fixes and Other Changes
+
+This release includes the following fixes and dependency update:
+
+- Gateway hooks now wait up to 30 seconds instead of two seconds. Gateway,
+  daemon, and daemon-worker hook delivery use the same timeout as generated
+  Claude Code and Codex hook configurations. This gives LLM judge guardrails
+  more time to finish. Timed-out requests are not retried. Refer to
+  [Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding).
+  ([PR #1288](https://github.com/NVIDIA/NeMo-Relay/pull/1288))
+- Fail-closed hooks now return exit code `2` on delivery failures, so the
+  coding agent blocks the action. This includes connection errors, timeouts,
+  and HTTP errors. Fail-open delivery failures still return `0`, and guardrail
+  rejections still return `2` under either policy. Refer to
+  [Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding).
+  ([PR #1289](https://github.com/NVIDIA/NeMo-Relay/pull/1289))
+- Daemon hooks now honor their failure policy when no usable client credential
+  is available. A fail-closed hook returns exit code `2` without an allow
+  response. A fail-open hook still lets the agent continue. This applies to
+  daemon and daemon-worker deployments. Refer to
+  [Requests Without a Bound Credential](/daemon/configuration#requests-without-a-bound-credential).
+  ([PR #1290](https://github.com/NVIDIA/NeMo-Relay/pull/1290))
+- Request intercepts can now change several messages or array entries in one
+  request. They can add, remove, reorder, or replace entries and edit nested
+  JSON objects. Relay keeps provider fields on unchanged entries and on tool
+  calls or results with a clear call-ID match. Gemini calls keep fields such
+  as `thoughtSignature` when that match is clear. New entries do not inherit
+  fields from old entries. Refer to
+  [Editing Arrays and Mappings](/integrate-into-frameworks/provider-codecs#editing-arrays-and-mappings).
+  ([PR #1296](https://github.com/NVIDIA/NeMo-Relay/pull/1296))
+- The CLI replaces the deprecated `serde_yaml` dependency with `serde-saphyr`
+  for YAML output from plugin inspection. The release also updates its Rust
+  dependency attribution file.
+  ([PR #1282](https://github.com/NVIDIA/NeMo-Relay/pull/1282))
+
+### Compatibility and Upgrade Notes
+
+Review these behavior changes when upgrading from 0.10.0:
+
+- Restore missing hook credentials through `NEMO_RELAY_CLIENT_TOKEN` or
+  `nemo-relay daemon token ensure` before retrying fail-closed daemon hooks.
+  Unlike 0.10.0, these hooks block the action when no credential is available.
+  Public HTTP requests without a bound credential still follow the daemon's
+  separate pass-through rules.
+- Refresh generated hooks with `nemo-relay install <agent> --force`. Allow time
+  for hook delivery when setting guardrail evaluation timeouts within the
+  30-second limit.
+- In daemon workers, request intercepts, execution intercepts, and conditional
+  execution guardrails now use Relay's managed LLM pipeline. Successful calls
+  return HTTP `200` without the provider's original success headers or HTTP
+  trailers. Streaming responses can have different formatting. Provider HTTP
+  errors keep their status, supported headers, and body. Calls without these
+  middleware types still forward responses unchanged. Refer to
+  [LLM Middleware](/daemon/reference#llm-middleware) for details and limits.
 
 ## Release 0.10.0
 
