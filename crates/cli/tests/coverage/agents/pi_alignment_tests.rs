@@ -259,3 +259,32 @@ async fn an_operator_proxy_is_resolved_without_the_policy() {
         .unwrap();
     assert_eq!(addresses, [SocketAddr::from(([10, 1, 2, 3], 0))]);
 }
+
+/// The resolver cannot tell resolving a proxy from dialing that host directly, which reqwest
+/// does when `NO_PROXY` excludes it, so a proxy host is never a nameable destination.
+#[test]
+fn a_named_upstream_may_not_be_a_configured_proxy() {
+    let proxies = ["proxy.corp.example".to_string()];
+    for rejected in [
+        "https://proxy.corp.example/v1",
+        "https://PROXY.corp.example:8443/v1",
+    ] {
+        assert!(
+            is_rejected(client_named_upstream_base_with_proxies(
+                &headers_naming(rejected),
+                true,
+                &proxies
+            )),
+            "{rejected} would be resolved without the address policy"
+        );
+    }
+    assert_eq!(
+        named(client_named_upstream_base_with_proxies(
+            &headers_naming("https://api.corp.example/v1"),
+            true,
+            &proxies
+        ))
+        .as_deref(),
+        Some("https://api.corp.example/v1")
+    );
+}

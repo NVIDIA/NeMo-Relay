@@ -75,6 +75,18 @@ pub(crate) fn client_named_upstream_base(
     headers: &HeaderMap,
     invocation_authenticated: bool,
 ) -> NamedUpstream {
+    client_named_upstream_base_with_proxies(
+        headers,
+        invocation_authenticated,
+        environment_proxy_hosts(),
+    )
+}
+
+fn client_named_upstream_base_with_proxies(
+    headers: &HeaderMap,
+    invocation_authenticated: bool,
+    proxy_hosts: &[String],
+) -> NamedUpstream {
     // Checked before the header is even read: an unauthenticated request has no say in where
     // this gateway sends traffic. `Absent` rather than `Rejected` deliberately -- a standalone
     // daemon serves clients that never had a credential to present, and its documented
@@ -135,6 +147,17 @@ pub(crate) fn client_named_upstream_base(
     // An IP literal never reaches a resolver, so the address policy has to be applied here.
     if ip_literal(&url).is_some_and(|address| !is_permitted_destination(address)) {
         return NamedUpstream::Rejected("upstream base URL must name a public or loopback address");
+    }
+    // The resolver exempts proxy hosts, because resolving the proxy is how a proxied request
+    // reaches the network. It cannot tell that apart from a request dialing the same host
+    // directly -- which reqwest does when `NO_PROXY` excludes it, or when the proxy serves only
+    // the other scheme -- so a proxy is never a destination that can be named.
+    if url.host_str().is_some_and(|host| {
+        proxy_hosts
+            .iter()
+            .any(|proxy| proxy.eq_ignore_ascii_case(host))
+    }) {
+        return NamedUpstream::Rejected("upstream base URL must not name a configured proxy");
     }
 
     NamedUpstream::Named(raw.to_string())
@@ -214,6 +237,27 @@ fn is_permitted_ipv4(address: Ipv4Addr) -> bool {
             || first >= 240)
 }
 
+/// Hosts of the proxies reqwest picks up from the environment, read once like reqwest does when
+/// the gateway's clients are built.
+fn environment_proxy_hosts() -> &'static [String] {
+    static HOSTS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    HOSTS.get_or_init(|| {
+        [
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .filter_map(|value| Url::parse(value.trim()).ok())
+        .filter_map(|url| url.host_str().map(str::to_ascii_lowercase))
+        .collect()
+    })
+}
+
 /// Resolves hosts for the clients that dispatch to named upstreams, keeping only addresses
 /// [`is_permitted_destination`] allows.
 ///
@@ -236,20 +280,9 @@ pub(crate) struct NamedUpstreamResolver {
 impl NamedUpstreamResolver {
     /// A resolver that exempts the proxies reqwest picks up from the environment.
     pub(crate) fn with_environment_proxies() -> Self {
-        let proxy_hosts = [
-            "HTTPS_PROXY",
-            "https_proxy",
-            "HTTP_PROXY",
-            "http_proxy",
-            "ALL_PROXY",
-            "all_proxy",
-        ]
-        .into_iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .filter_map(|value| Url::parse(value.trim()).ok())
-        .filter_map(|url| url.host_str().map(str::to_ascii_lowercase))
-        .collect();
-        Self { proxy_hosts }
+        Self {
+            proxy_hosts: environment_proxy_hosts().into(),
+        }
     }
 
     async fn permitted_addresses(self, host: String) -> std::io::Result<Vec<SocketAddr>> {
@@ -271,6 +304,12 @@ impl NamedUpstreamResolver {
             .filter(|address| is_permitted_destination(address.ip()))
             .collect::<Vec<_>>();
         if permitted.is_empty() {
+            log::warn!(
+                target: "nemo_relay.gateway",
+                event = "named_upstream_rejected",
+                reason = "resolves to no public or loopback address";
+                "Rejected a client-named upstream at connect time"
+            );
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 format!("named upstream {host} resolves to no public or loopback address"),

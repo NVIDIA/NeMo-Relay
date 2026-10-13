@@ -446,9 +446,14 @@ special-use address is refused. The check applies to every address the hostname
 resolves to when the gateway connects, so a name cannot be re-pointed after it is
 validated. `localhost` always means loopback and is not looked up in DNS. A
 provider on a private network has to be configured as the gateway's upstream
-with `--openai-base-url` or `--anthropic-base-url` instead of being named. The
-gateway logs `named_upstream_used` the first time each origin is named, and
+with `--openai-base-url` or `--anthropic-base-url` instead of being named, and a
+host configured as an HTTP proxy cannot be named at all. The gateway logs
+`named_upstream_used` the first time each origin is named, and
 `named_upstream_rejected` for each refusal.
+
+A hostname that passes validation but resolves only to refused addresses is
+caught when the gateway connects, so it fails as an upstream connection error
+rather than with the `400` described below.
 
 **A named endpoint that cannot be used fails the request**, with `400` and a
 reason, rather than falling back to the gateway's configured upstream. The
