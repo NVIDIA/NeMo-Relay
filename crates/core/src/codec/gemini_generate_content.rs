@@ -1889,14 +1889,20 @@ fn patch_gemini_non_system_contents(
         };
         let orig_cidx = content_idx_of_base_msg[base_idx];
         if processed_cidxs.contains(&orig_cidx) {
-            if let Some(original) = orig_contents.get(orig_cidx)
-                && let Some(item) = patch_changed_gemini_content(
-                    original,
+            if let Some(original) = orig_contents.get(orig_cidx) {
+                let mut original = original.clone();
+                // The first fragment already carries this turn's thought parts.
+                // Later fragments need only their original response metadata.
+                if let Some(parts) = original.get_mut("parts").and_then(Json::as_array_mut) {
+                    parts.retain(|part| part.get("functionResponse").is_some());
+                }
+                if let Some(item) = patch_changed_gemini_content(
+                    &original,
                     &ann_non_sys[i..i + 1],
                     &call_id_to_name,
-                )?
-            {
-                new_contents.push(item);
+                )? {
+                    new_contents.push(item);
+                }
             }
             i += 1;
             continue;

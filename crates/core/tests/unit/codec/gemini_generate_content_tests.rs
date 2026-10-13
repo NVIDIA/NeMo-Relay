@@ -6395,6 +6395,44 @@ fn gemini_split_and_merged_turns_keep_surviving_call_signatures() {
 }
 
 #[test]
+fn gemini_split_tool_results_preserve_thoughts_once_and_result_metadata() {
+    let codec = GeminiGenerateContentCodec;
+    let thought = json!({"text": "thinking", "thought": true, "thoughtSignature": "sig_thought"});
+    let original = make_request(json!({"contents": [
+        {"role": "user", "provider_marker": "turn", "parts": [
+            thought,
+            {"functionResponse": {"id": "a", "name": "lookup", "response": {"result": "old A"}}, "provider_marker": "A"},
+            {"functionResponse": {"id": "b", "name": "search", "response": {"result": "old B"}}, "provider_marker": "B"},
+            {"functionResponse": {"id": "c", "name": "fetch", "response": {"result": "old C"}}, "provider_marker": "C"}
+        ]}
+    ]}));
+    let mut annotated = codec.decode(&original).unwrap();
+    let Message::Tool { content, .. } = &mut annotated.messages[1] else {
+        panic!("expected tool result")
+    };
+    *content = MessageContent::Text(r#"{"result":"edited B"}"#.into());
+    let inserted = Message::User {
+        content: MessageContent::Text("inserted".into()),
+        name: None,
+    };
+    annotated.messages.insert(2, inserted.clone());
+    annotated.messages.insert(1, inserted);
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let contents = encoded.content["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 5);
+    assert_eq!(contents[0]["parts"][0], thought);
+    for (index, id, marker) in [(0, "a", "A"), (2, "b", "B"), (4, "c", "C")] {
+        assert_eq!(contents[index]["provider_marker"], "turn");
+        let parts = contents[index]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), if index == 0 { 2 } else { 1 });
+        let response = parts.last().unwrap();
+        assert_eq!(response["functionResponse"]["id"], id);
+        assert_eq!(response["provider_marker"], marker);
+    }
+    assert_eq!(codec.decode(&encoded).unwrap().messages, annotated.messages);
+}
+
+#[test]
 fn gemini_legacy_surviving_call_keeps_signature_without_adding_id() {
     let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({"contents": [
