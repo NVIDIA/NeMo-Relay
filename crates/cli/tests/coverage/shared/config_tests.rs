@@ -5042,6 +5042,19 @@ fn chatgpt_codex_base_url_rejects_unsafe_values_from_every_source() {
 }
 
 #[test]
+fn provider_base_url_validation_preserves_provider_specific_serialization() {
+    let value = " https://proxy.example ";
+    assert_eq!(
+        validate_chatgpt_codex_base_url("test", value.into()).unwrap(),
+        "https://proxy.example/"
+    );
+    assert_eq!(
+        validate_upstream_base_url("test", value.into()).unwrap(),
+        "https://proxy.example"
+    );
+}
+
+#[test]
 fn chatgpt_codex_base_url_overrides_preserve_precedence_and_managed_policy() {
     let _env = crate::test_support::EnvScope::set(&[(
         "NEMO_RELAY_CHATGPT_CODEX_BASE_URL",

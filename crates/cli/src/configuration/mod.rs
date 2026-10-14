@@ -2055,16 +2055,20 @@ fn replace_upstream_base_url(
     *base_url = replacement;
 }
 
-// Provider credentials may only travel over TLS, except to a loopback proxy. Reject URL
-// components that would change the meaning of the request path appended by the gateway.
+// Preserve Codex's normalized URL serialization, including a bare host's trailing slash.
 fn validate_chatgpt_codex_base_url(name: &str, value: String) -> Result<String, CliError> {
-    let value = validate_upstream_base_url(name, value)?;
-    Ok(reqwest::Url::parse(&value)
-        .expect("URL was validated")
-        .to_string())
+    Ok(parse_upstream_base_url(name, &value)?.to_string())
 }
 
+// Preserve the trimmed spelling used to compare OpenAI and Anthropic credential destinations.
 fn validate_upstream_base_url(name: &str, value: String) -> Result<String, CliError> {
+    parse_upstream_base_url(name, &value)?;
+    Ok(value.trim().to_string())
+}
+
+// Provider credentials may only travel over TLS, except to a loopback proxy. Reject URL
+// components that would change the meaning of the request path appended by the gateway.
+fn parse_upstream_base_url(name: &str, value: &str) -> Result<reqwest::Url, CliError> {
     let value = value.trim();
     if value.is_empty() {
         return Err(CliError::Config(format!("{name} must not be empty")));
@@ -2093,7 +2097,7 @@ fn validate_upstream_base_url(name: &str, value: String) -> Result<String, CliEr
             "{name} must not include user information, a query, or a fragment"
         )));
     }
-    Ok(value.to_string())
+    Ok(url)
 }
 
 fn validate_auth_header(name: &str, value: String) -> Result<String, CliError> {

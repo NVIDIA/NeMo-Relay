@@ -50,10 +50,10 @@ stderr_format = "jsonl"
 ```
 
 Provider base URLs must use HTTPS for remote hosts, including private Kubernetes
-service addresses. Plain HTTP is allowed only for loopback hosts (`localhost`,
-`127.0.0.1`, or `::1`). Managed workers validate these URLs when loading their
-configuration, before serving model requests. Base URLs must not include user
-information, query strings, or fragments.
+service addresses. Plain HTTP is allowed only for loopback hosts such as
+`localhost`, `127.0.0.1`, or `::1`. Managed workers validate these URLs when
+loading configuration and check destination transport requirements when forwarding
+requests. Base URLs must not include user information, query strings, or fragments.
 
 Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/basic-usage).
 Use your approved provider URLs when they differ from these defaults. Set the same
