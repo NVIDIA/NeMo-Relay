@@ -261,6 +261,14 @@ and unknown custom-mark payloads cannot pass through those projections. Present
 opaque typed JSON values become `{}`. A valid `nemo_relay.log.severity` value is
 restored for marks.
 
+Scope metadata retains only recognized `otel.status_code` values (`OK`, `ERROR`,
+`UNSET`) and, for `ERROR`, Relay's fixed `error.type` classifications or `_OTHER`.
+Unrecognized error types are discarded; the `full` and `gen_ai` OpenTelemetry
+projections use `_OTHER` for errors without a classification. Free-form status
+descriptions, exception types, and other metadata remain discarded, so redaction
+preserves success/error reporting without exporting error messages or application
+exception names.
+
 Typed LLM annotations retain message roles and content-part kinds; provider,
 model, and tool names; request tuning settings; finish reasons; token and cache
 usage; and normalized cost amounts, currency, and source classification.

@@ -702,6 +702,9 @@ impl PreparedAgentLaunch {
         println!("gateway_url = {gateway_url}");
         println!("openai_base_url = {}", resolved.gateway.openai_base_url);
         println!("openai_auth = {}", upstream_auth.openai.as_str());
+        if let Some(base) = &resolved.gateway.chatgpt_codex_base_url {
+            println!("chatgpt_codex_base_url = {base}");
+        }
         println!(
             "anthropic_base_url = {}",
             resolved.gateway.anthropic_base_url

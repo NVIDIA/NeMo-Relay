@@ -23,11 +23,11 @@ navigation:
         slug: quick-start
         collapsed: open-by-default
         contents:
-          - section: "Agent Runtimes"
+          - section: "Agent Harnesses"
             skip-slug: true
             collapsed: open-by-default
             contents:
-              - page: "Hermes"
+              - page: "Hermes Agent"
                 icon: fa-solid fa-terminal
                 path: ./getting-started/quick-start/hermes.mdx
                 slug: hermes

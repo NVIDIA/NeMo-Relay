@@ -800,6 +800,31 @@ fn test_exporter_canonicalizes_content_parts() {
 }
 
 #[test]
+fn test_exporter_collapses_text_only_content_parts() {
+    let parts = json!([
+        {"type": "text", "text": "first", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "second"},
+    ]);
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+    exporter.state.lock().unwrap().events.extend([
+        event_builder(llm_uuid, EventType::Start)
+            .scope_type(ScopeType::Llm)
+            .input(json!({"messages": [{"role": "user", "content": parts}]}))
+            .build(),
+        event_builder(llm_uuid, EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(json!({"assistant_message": {"content": parts}}))
+            .build(),
+    ]);
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps[0].message, json!("first\nsecond"));
+    assert_eq!(trajectory.steps[1].message, json!("first\nsecond"));
+}
+
+#[test]
 fn test_exporter_llm_lifecycle() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let llm_uuid = Uuid::now_v7();
