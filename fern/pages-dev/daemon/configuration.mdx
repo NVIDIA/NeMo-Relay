@@ -19,6 +19,15 @@ starting the service runbook for your platform.
 | Plugin manifest | `/etc/nemo-relay/plugins.toml` | `%ProgramData%\nemo-relay\plugins.toml` |
 | Identity state | See the resolution order below. | See the resolution order below. |
 
+<Note>
+The daemon loads configuration for the user and machine that run it. A daemon
+that runs as another user does not load your per-user `config.toml` settings.
+This includes a system service that runs under a separate account. The same
+applies to a daemon on another machine. Clients do not send their personal
+settings to the daemon. Add the settings the daemon needs to its deployment
+configuration.
+</Note>
+
 Relay resolves identity state in this order on every platform, including Windows:
 
 1. If `XDG_CONFIG_HOME` is set, use `<XDG_CONFIG_HOME>/nemo-relay/daemon`.
@@ -414,11 +423,11 @@ guardrails are skipped for that request; the coding agent keeps working:
 - A malformed credential or a repeated header still returns `401`.
 - A daemon started with `--require-worker` keeps rejecting missing and unbound
   credentials with `401`.
-- A request without a bound credential never receives daemon-held provider
-  credentials (configured provider auth headers or the daemon's own
-  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`), except that a daemon explicitly
-  started with `--pass-through` applies its provider credentials to every
-  request.
+- A request without a bound credential does not receive the daemon's provider
+  credentials. These include custom authorization headers, static API keys,
+  helper tokens, and API keys from the daemon's environment. A daemon started
+  with `--pass-through` can use these credentials for requests without a bound
+  credential.
 - A provider request that names its own upstream with
   `x-nemo-relay-upstream-base-url`, as the managed Pi extension does, is
   honored only with a bound credential. Without one it receives `503` with
@@ -759,9 +768,18 @@ Both the personal gateway and managed daemon recognize Codex ChatGPT OAuth on
 OpenAI routes, including the managed provider's `/v1/responses` and `/v1/models`
 requests. When no administrator OpenAI credential is configured, Relay preserves
 the OAuth credential and sends the request to the native ChatGPT Codex backend.
-When `openai_auth_header` or `OPENAI_API_KEY` is configured for the daemon, Relay
-removes the ChatGPT OAuth credential, injects that replacement credential, and
-uses the administrator's configured OpenAI-compatible upstream instead.
+
+Relay replaces the ChatGPT OAuth credential when the daemon has any of these
+credential sources:
+
+- `openai_auth_header` under `[upstream]`, or the
+  `NEMO_RELAY_OPENAI_AUTH_HEADER` environment variable
+- `openai_api_key` under `[upstream]`
+- `[upstream.openai_api_key_helper]`
+- A nonempty `OPENAI_API_KEY` environment variable
+
+Relay removes the ChatGPT OAuth credential and adds the replacement. It then
+sends the request to the administrator's configured OpenAI-compatible upstream.
 
 ChatGPT voice call creation is an exception. Requests to
 `POST /backend-api/codex/realtime/calls` keep the caller's ChatGPT credential
@@ -791,3 +809,23 @@ Responses route. A WebSocket upgrade probe sent with `GET` to that path,
 `/responses`, or `/v1/responses` receives `426 Upgrade Required`, which causes
 clients that support the fallback to use HTTP streaming. An ordinary GET remains
 `405 Method Not Allowed`.
+
+### Upstream API Key Helpers
+
+The daemon uses the same `[upstream.openai_api_key_helper]` and
+`[upstream.anthropic_api_key_helper]` configuration as the personal gateway.
+Relay runs the helper for each provider request attempt. This includes middleware
+retries, streaming requests, and WebSocket handshakes. Choose one credential
+source for each provider. You cannot combine a helper with a static API key or
+a custom authorization header. Refer to
+[Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request)
+for examples, supported authentication methods, limits, and error handling.
+
+With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and
+`NEMO_RELAY_OPENAI_AUTH_HEADER`. With an Anthropic helper, it warns about and
+ignores `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use `OPENAI_API_KEY` and
+`ANTHROPIC_API_KEY` to authenticate upstream requests.
+
+The daemon's access rules still control which requests can use its credentials.
+An upstream endpoint named by the client never receives a daemon helper token.
