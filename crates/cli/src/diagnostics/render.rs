@@ -40,6 +40,7 @@ pub(super) fn report_has_warn(report: &DoctorReport) -> bool {
         .observability
         .iter()
         .chain(report.completions.iter())
+        .chain(report.configuration.upstream_auth.checks.iter())
         .any(|c| matches!(c.status, Status::Warn))
         || report
             .agents
@@ -160,6 +161,14 @@ pub(super) fn format_human_configuration(out: &mut String, report: &DoctorReport
         report.configuration.upstream_auth.openai.as_str(),
         report.configuration.upstream_auth.anthropic.as_str()
     ));
+    for check in &report.configuration.upstream_auth.checks {
+        out.push_str(&format!(
+            "    {:<13}{} {}\n",
+            check.name,
+            format_status(check.status),
+            check.details
+        ));
+    }
     if !matches!(report.configuration.resolution.status, Status::Pass) {
         out.push_str(&format!(
             "    Resolution {} {}\n",

@@ -2145,6 +2145,7 @@ impl WorkerPluginCallback {
         let (tx, rx) = mpsc::channel(16);
         let (next_ready_tx, next_ready_rx) = oneshot::channel();
         let (completion_tx, completion_rx) = watch::channel(false);
+        let plugin_id = self.plugin_kind.clone();
         self.runtime.spawn(async move {
             let _completion = WorkerStreamCompletionSignal(completion_tx);
             let _codec_capabilities = codec_capabilities;
@@ -2172,7 +2173,8 @@ impl WorkerPluginCallback {
                             break;
                         };
                         let result = match item {
-                            Ok(chunk) => json_from_stream_chunk(chunk),
+                            Ok(chunk) => json_from_stream_chunk(chunk)
+                                .map_err(|error| super::http_error::reported_by(error, &plugin_id, "worker")),
                             Err(err) => Err(FlowError::Internal(format!(
                                 "worker stream transport failed: {err}"
                             ))),
@@ -2377,7 +2379,7 @@ impl WorkerPluginCallback {
         }
         guard.finish();
         result
-            .map(|response| response.into_inner())
+            .map(|response| report_worker_response(response.into_inner(), &self.plugin_kind))
             .map_err(|err| worker_status_to_flow("worker invoke failed", err))
     }
 }
@@ -4176,7 +4178,7 @@ fn tool_execution_intercept_outcome_from_proto(
 fn flow_error_to_worker(err: FlowError) -> WorkerError {
     WorkerError {
         code: "host.runtime_error".into(),
-        message: err.to_string(),
+        message: super::http_error::to_message(&err),
         retryable: false,
     }
 }
@@ -4184,6 +4186,8 @@ fn flow_error_to_worker(err: FlowError) -> WorkerError {
 fn worker_error_to_flow(error: WorkerError) -> FlowError {
     if error.code == "worker.cancelled" {
         FlowError::Internal(format!("worker invocation cancelled: {}", error.message))
+    } else if let Some(failure) = super::http_error::upstream_from_message(&error.message) {
+        failure
     } else {
         FlowError::Internal(format!("{}: {}", error.code, error.message))
     }
@@ -4332,3 +4336,20 @@ fn unix_endpoint_display(path: &Path) -> String {
 #[cfg(test)]
 #[path = "../../../tests/unit/dynamic_worker_tests.rs"]
 mod tests;
+
+fn report_worker_response(mut response: InvokeResponse, plugin_id: &str) -> InvokeResponse {
+    let error = match response.result.as_mut() {
+        Some(invoke_response_result::Result::Error(error)) => Some(error),
+        Some(invoke_response_result::Result::Json(result)) => result.error.as_mut(),
+        _ => None,
+    };
+    if let Some(error) = error
+        && error.code != "worker.cancelled"
+        && let Some(failure) = super::http_error::upstream_from_message(&error.message)
+    {
+        error.message = super::http_error::to_message(&super::http_error::reported_by(
+            failure, plugin_id, "worker",
+        ));
+    }
+    response
+}

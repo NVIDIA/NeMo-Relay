@@ -229,3 +229,26 @@ output_directory = "./atif"
 ## Documentation
 
 NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay
+
+### Per-Request Upstream Credentials
+
+Configure `[upstream.openai_api_key_helper]` or
+`[upstream.anthropic_api_key_helper]` in `config.toml`. Set `command` and `args`
+to run your helper. Use `timeout_ms` to set its timeout in milliseconds.
+The default timeout is 10 seconds.
+
+Relay runs the helper for each outbound request attempt. It reads the token from
+stdout and does not cache it. OpenAI uses bearer authentication. Anthropic uses
+`x-api-key` by default. Set `auth_scheme = "bearer"` for an Anthropic endpoint
+that requires bearer authentication.
+
+Choose one credential source for each provider. You can use a helper, a static
+API key, or a custom authorization header. If the helper fails, Relay stops the
+request before sending it upstream.
+
+With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and
+`NEMO_RELAY_OPENAI_AUTH_HEADER`. With an Anthropic helper, it warns about and
+ignores `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use environment API keys.
+Refer to [Generate API Keys Per Request](../../docs/nemo-relay-cli/basic-usage.mdx#generate-api-keys-per-request)
+for examples and credential routing rules.

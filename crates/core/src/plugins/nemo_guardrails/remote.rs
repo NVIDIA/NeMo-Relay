@@ -15,7 +15,7 @@ use crate::api::scope::{EmitMarkEventParams, ScopeHandle, event, get_handle};
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::streaming::SseEventDecoder;
 use crate::codec::traits::LlmCodec;
-use crate::error::FlowError;
+use crate::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use crate::plugin::{PluginError, PluginRegistrationContext, Result as PluginResult};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
@@ -159,9 +159,10 @@ impl RemoteBackendRuntime {
                         Some(format!("failed to read remote stream error body: {err}")),
                     ),
                 );
-                FlowError::Internal(format!(
-                    "nemo_guardrails failed to read remote stream error body: {err}"
-                ))
+                remote_status_error(
+                    status,
+                    format!("nemo_guardrails failed to read remote stream error body: {err}"),
+                )
             })?;
             self.emit_mark(
                 "nemo_guardrails.remote.error",
@@ -174,9 +175,12 @@ impl RemoteBackendRuntime {
                     Some(redact_remote_error_payload(status.as_u16(), &payload)),
                 ),
             );
-            return Err(FlowError::Internal(format!(
-                "nemo_guardrails remote stream request failed with status {status}: {payload}"
-            )));
+            return Err(remote_status_error(
+                status,
+                format!(
+                    "nemo_guardrails remote stream request failed with status {status}: {payload}"
+                ),
+            ));
         }
 
         let (tx, rx) = mpsc::channel(16);
@@ -341,9 +345,10 @@ impl RemoteBackendRuntime {
                 Some(status.as_u16()),
                 redact_remote_error_payload(status.as_u16(), &payload),
             );
-            return Err(FlowError::Internal(format!(
-                "nemo_guardrails remote request failed with status {status}: {payload}"
-            )));
+            return Err(remote_status_error(
+                status,
+                format!("nemo_guardrails remote request failed with status {status}: {payload}"),
+            ));
         }
 
         serde_json::from_str(&payload).map_err(|err| {
@@ -368,7 +373,7 @@ impl RemoteBackendRuntime {
             };
             let message = format!("failed to read {context}: {err}");
             self.emit_remote_error(parent, stream, Some(status.as_u16()), message.clone());
-            FlowError::Internal(format!("nemo_guardrails {message}"))
+            remote_status_error(status, format!("nemo_guardrails {message}"))
         })
     }
 
@@ -607,7 +612,7 @@ impl RemoteBackendRuntime {
                     Some(message.clone()),
                 ),
             );
-            FlowError::Internal(message)
+            remote_status_error(status, message)
         })?;
         if !status.is_success() {
             self.emit_mark(
@@ -622,9 +627,10 @@ impl RemoteBackendRuntime {
                     Some(redact_remote_error_payload(status.as_u16(), &payload)),
                 ),
             );
-            return Err(FlowError::Internal(format!(
-                "nemo_guardrails remote request failed with status {status}: {payload}"
-            )));
+            return Err(remote_status_error(
+                status,
+                format!("nemo_guardrails remote request failed with status {status}: {payload}"),
+            ));
         }
         let response_json = serde_json::from_str(&payload).map_err(|err| {
             let message = format!("nemo_guardrails failed to parse remote response JSON: {err}");
@@ -1196,6 +1202,20 @@ fn configured_tool_selector(
     .map(|selector| {
         serde_json::to_value(selector).expect("tool rail selector should serialize to JSON")
     })
+}
+
+// Keep remote HTTP failures non-retryable, as they were when represented as internal errors.
+fn remote_status_error(status: reqwest::StatusCode, body: String) -> FlowError {
+    if status.is_client_error() || status.is_server_error() {
+        FlowError::Upstream(UpstreamFailure {
+            status: Some(status.as_u16()),
+            body,
+            headers: Default::default(),
+            class: UpstreamFailureClass::Other,
+        })
+    } else {
+        FlowError::Internal(body)
+    }
 }
 
 #[cfg(test)]

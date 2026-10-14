@@ -1871,7 +1871,7 @@ fn flow_error_from_status(status: NemoRelayStatus, fallback: &str) -> FlowError 
         NemoRelayStatus::ScopeStackEmpty => FlowError::ScopeStackEmpty,
         NemoRelayStatus::GuardrailRejected => FlowError::GuardrailRejected(message),
         NemoRelayStatus::InvalidArg => FlowError::InvalidArgument(message),
-        _ => FlowError::Internal(message),
+        _ => super::http_error::from_message(message),
     }
 }
 
@@ -1888,7 +1888,7 @@ fn status_from_plugin_error(err: PluginError) -> NemoRelayStatus {
 }
 
 fn status_from_flow_error(err: FlowError) -> NemoRelayStatus {
-    set_native_last_error(err.to_string());
+    set_native_last_error(super::http_error::to_message(&err));
     match err {
         FlowError::AlreadyExists(_) => NemoRelayStatus::AlreadyExists,
         FlowError::NotFound(_) => NemoRelayStatus::NotFound,
@@ -1939,6 +1939,25 @@ struct NativeCallbackUserData {
     ptr: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
     _instance: Option<Arc<NativePluginInstance>>,
+}
+
+fn report_native_http_error(
+    error: FlowError,
+    user_data: Option<&NativeCallbackUserData>,
+) -> FlowError {
+    if let Some(instance) = user_data.and_then(|user_data| user_data._instance.as_ref()) {
+        super::http_error::reported_by(error, &instance.plugin_kind, "native")
+    } else {
+        error
+    }
+}
+
+fn flow_error_from_plugin_status(
+    status: NemoRelayStatus,
+    fallback: &str,
+    user_data: &NativeCallbackUserData,
+) -> FlowError {
+    report_native_http_error(flow_error_from_status(status, fallback), Some(user_data))
 }
 
 struct NativeCallbackUserDataGuard {
@@ -2590,7 +2609,10 @@ unsafe extern "C" fn native_async_completion_reject(
         abort.abort();
     }
     abort_completion_continuations(completion);
-    let _ = sender.send(Err(FlowError::Internal(message)));
+    let _ = sender.send(Err(report_native_http_error(
+        super::http_error::from_message(message),
+        completion._callback_user_data.as_deref(),
+    )));
     NemoRelayStatus::Ok
 }
 
@@ -2892,7 +2914,10 @@ unsafe extern "C" fn native_async_stream_reject(
     let Some(sender) = sender_guard.as_ref() else {
         return NemoRelayStatus::InvalidArg;
     };
-    match sender.try_send(Err(FlowError::Internal(message))) {
+    match sender.try_send(Err(report_native_http_error(
+        super::http_error::from_message(message),
+        stream._callback_user_data.as_deref(),
+    ))) {
         Ok(()) => {
             sender_guard.take();
             stream.settled.store(true, Ordering::Release);
@@ -3152,7 +3177,7 @@ impl NativeAsyncResultCallbackGuard {
                     self.deliver_error("failed to allocate native async next result");
                 }
             }
-            Err(error) => self.deliver_error(&error.to_string()),
+            Err(error) => self.deliver_error(&super::http_error::to_message(&error)),
         }
     }
 
@@ -3611,7 +3636,7 @@ unsafe extern "C" fn native_async_next_open_llm_stream(
                 };
                 callback_guard.active = false;
             }
-            Ok(Err(error)) => callback_guard.fail(&error.to_string()),
+            Ok(Err(error)) => callback_guard.fail(&super::http_error::to_message(&error)),
             Err(payload) => callback_guard.fail(&format!(
                 "native async stream continuation panicked: {}",
                 panic_payload_message(payload.as_ref())
@@ -3755,7 +3780,7 @@ fn deliver_native_pull_result(
         }
         Ok(None) => unsafe { cb(user_data as *mut c_void, ptr::null(), ptr::null(), true) },
         Err(error) => {
-            if let Some(error) = native_string_from_str(&error.to_string()) {
+            if let Some(error) = native_string_from_str(&super::http_error::to_message(&error)) {
                 unsafe {
                     cb(user_data as *mut c_void, ptr::null(), error, true);
                     native_string_free(error);
@@ -3808,7 +3833,7 @@ async fn deliver_native_async_next_stream(
     let result = AssertUnwindSafe(async {
         match next_fn(request).await {
             Ok(stream) => forward_native_async_next_stream(stream, &mut callback_guard).await,
-            Err(error) => callback_guard.fail(&error.to_string()),
+            Err(error) => callback_guard.fail(&super::http_error::to_message(&error)),
         }
     })
     .catch_unwind()
@@ -3857,7 +3882,7 @@ async fn forward_native_async_next_stream_with(
                 }
             }
             Err(error) => {
-                callback_guard.fail(&error.to_string());
+                callback_guard.fail(&super::http_error::to_message(&error));
                 return;
             }
         }
@@ -5469,7 +5494,10 @@ fn wrap_event_sanitize_fn(
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |event, fields| {
         let user_data = user_data.clone();
-        Box::pin(async move { call_event_sanitize_callback(cb, user_data.ptr, &event, &fields) })
+        Box::pin(async move {
+            call_event_sanitize_callback(cb, user_data.ptr, &event, &fields)
+                .map_err(|error| report_native_http_error(error, Some(&user_data)))
+        })
     })
 }
 
@@ -5525,7 +5553,10 @@ fn wrap_tool_json_fn(
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, payload| {
         let user_data = user_data.clone();
-        Box::pin(async move { call_tool_json_callback(cb, user_data.ptr, &name, &payload) })
+        Box::pin(async move {
+            call_tool_json_callback(cb, user_data.ptr, &name, &payload)
+                .map_err(|error| report_native_http_error(error, Some(&user_data)))
+        })
     })
 }
 
@@ -5538,7 +5569,10 @@ fn wrap_tool_intercept_fn(
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, payload| {
         let user_data = user_data.clone();
-        Box::pin(async move { call_tool_json_callback(cb, user_data.ptr, &name, &payload) })
+        Box::pin(async move {
+            call_tool_json_callback(cb, user_data.ptr, &name, &payload)
+                .map_err(|error| report_native_http_error(error, Some(&user_data)))
+        })
     })
 }
 
@@ -5596,9 +5630,10 @@ fn wrap_tool_conditional_fn(
                 if !out.is_null() {
                     unsafe { native_string_free(out) };
                 }
-                return Err(flow_error_from_status(
+                return Err(flow_error_from_plugin_status(
                     status,
                     "native tool conditional failed",
+                    &user_data,
                 ));
             }
             if out.is_null() {
@@ -5649,9 +5684,10 @@ fn wrap_tool_execution_fn(
                 if !out_outcome.is_null() {
                     unsafe { native_string_free(out_outcome) };
                 }
-                return Err(flow_error_from_status(
+                return Err(flow_error_from_plugin_status(
                     status,
                     "native tool execution failed",
+                    &user_data,
                 ));
             }
             let outcome_json = take_json_from_native_string(
@@ -5702,9 +5738,10 @@ fn wrap_tool_execution_context_fn(
                 if !outcome.is_null() {
                     unsafe { native_string_free(outcome) };
                 }
-                return Err(flow_error_from_status(
+                return Err(flow_error_from_plugin_status(
                     status,
                     "native tool execution failed",
+                    &user_data,
                 ));
             }
             let outcome = take_json_from_native_string(
@@ -5759,9 +5796,10 @@ fn wrap_llm_sanitize_request_fn(
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |request, context| {
         let user_data = user_data.clone();
-        Box::pin(
-            async move { call_llm_sanitize_request_callback(cb, user_data.ptr, &request, context) },
-        )
+        Box::pin(async move {
+            call_llm_sanitize_request_callback(cb, user_data.ptr, &request, context)
+                .map_err(|error| report_native_http_error(error, Some(&user_data)))
+        })
     })
 }
 
@@ -5776,6 +5814,7 @@ fn wrap_llm_sanitize_response_fn(
         let user_data = user_data.clone();
         Box::pin(async move {
             call_llm_sanitize_response_callback(cb, user_data.ptr, &payload, context)
+                .map_err(|error| report_native_http_error(error, Some(&user_data)))
         })
     })
 }
@@ -5933,9 +5972,10 @@ fn wrap_llm_conditional_fn(
                 if !out.is_null() {
                     unsafe { native_string_free(out) };
                 }
-                return Err(flow_error_from_status(
+                return Err(flow_error_from_plugin_status(
                     status,
                     "native LLM conditional failed",
+                    &user_data,
                 ));
             }
             if out.is_null() {
@@ -5997,9 +6037,10 @@ fn wrap_llm_request_intercept_fn(
                 unsafe {
                     native_string_free(out_outcome);
                 }
-                return Err(flow_error_from_status(
+                return Err(flow_error_from_plugin_status(
                     status,
                     "native LLM request intercept failed",
+                    &user_data,
                 ));
             }
             let outcome_json = json_from_native_string(
@@ -6083,9 +6124,10 @@ fn call_llm_execution_callback(
         if !out.is_null() {
             unsafe { native_string_free(out) };
         }
-        return Err(flow_error_from_status(
+        return Err(flow_error_from_plugin_status(
             status,
             "native LLM execution failed",
+            user_data,
         ));
     }
     take_json_from_native_string(out, "native LLM execution returned null")
@@ -6174,9 +6216,10 @@ fn call_llm_stream_execution_callback(
     }
     if status != NemoRelayStatus::Ok {
         drop_native_stream(out);
-        return Err(flow_error_from_status(
+        return Err(flow_error_from_plugin_status(
             status,
             "native LLM stream execution failed",
+            &user_data,
         ));
     }
     native_stream_to_relay_stream(out, Some(next_ctx), Some(user_data), request_codec)
@@ -6282,10 +6325,12 @@ impl Stream for NativeRelayLlmStream {
         match status {
             NemoRelayStatus::Ok => {
                 if out.is_null() {
-                    let error = FlowError::Internal(
+                    let error = super::http_error::from_message(
                         native_last_error_message()
                             .unwrap_or_else(|| "native LLM stream returned null chunk".into()),
                     );
+                    let error =
+                        report_native_http_error(error, self._callback_user_data.as_deref());
                     self.finish();
                     return Poll::Ready(Some(Err(error)));
                 }
@@ -6307,7 +6352,10 @@ impl Stream for NativeRelayLlmStream {
                 if !out.is_null() {
                     unsafe { native_string_free(out) };
                 }
-                let error = flow_error_from_status(status, "native LLM stream poll failed");
+                let error = report_native_http_error(
+                    flow_error_from_status(status, "native LLM stream poll failed"),
+                    self._callback_user_data.as_deref(),
+                );
                 self.finish();
                 Poll::Ready(Some(Err(error)))
             }

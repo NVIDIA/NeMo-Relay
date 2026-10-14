@@ -1081,3 +1081,40 @@ fn claude_windows_hooks_execute_in_bash_with_exact_arguments_and_io() {
         }
     }
 }
+
+#[test]
+fn forwarded_hook_http_errors_preserve_status_and_failure_policy() {
+    use axum::response::IntoResponse;
+    for status in 400..=599 {
+        let status = reqwest::StatusCode::from_u16(status).unwrap();
+        let error = handle_hook_forward_status(status, "backend error".into(), true).unwrap_err();
+        assert_eq!(error.log_kind(), "hook_http");
+        assert!(error.to_string().contains("hook gateway returned HTTP"));
+        assert_eq!(error.into_response().status(), status);
+        handle_hook_forward_status(status, "backend error".into(), false).unwrap();
+    }
+}
+
+#[test]
+fn hook_http_failures_keep_plugin_reporting_context_from_relay_responses() {
+    let message = "upstream provider returned HTTP 403 (Other): Reported by plugin 'nvidia.switchyard': denied";
+    let body =
+        serde_json::json!({"error": {"type": "nemo_relay_gateway_error", "message": message}})
+            .to_string();
+    let error = handle_hook_forward_status(reqwest::StatusCode::FORBIDDEN, body, true).unwrap_err();
+    assert_eq!(error.log_kind(), "hook_http");
+    assert!(error.to_string().contains(message));
+    use axum::response::IntoResponse;
+    assert_eq!(
+        error.into_response().status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+
+    let error = handle_hook_forward_status(
+        reqwest::StatusCode::FORBIDDEN,
+        r#"{"error":{"type":"unknown","message":"do not expose an arbitrary response"}}"#.into(),
+        true,
+    )
+    .unwrap_err();
+    assert!(!error.to_string().contains("do not expose"));
+}

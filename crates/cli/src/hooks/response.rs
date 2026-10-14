@@ -23,10 +23,14 @@ pub(super) async fn handle_hook_forward_response_with_context(
                 Ok(body) => body,
                 Err(error) => {
                     return handle_hook_failure(
-                        error,
+                        if status.is_client_error() || status.is_server_error() {
+                            hook_status_error(status, error.to_string())
+                        } else {
+                            error
+                        },
                         fail_closed,
                         "response_read",
-                        None,
+                        Some(status.as_u16()),
                         operational,
                     );
                 }
@@ -116,8 +120,22 @@ pub(super) fn handle_hook_forward_status_with_context(
         if let Some(reason) = guardrail_rejection_reason(&body) {
             return Err(CliError::GuardrailRejected(reason));
         }
+        let message = serde_json::from_str::<Value>(&body).ok().and_then(|value| {
+            let error = value.get("error")?;
+            (error.get("type").and_then(Value::as_str) == Some("nemo_relay_gateway_error"))
+                .then(|| {
+                    error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
+                .flatten()
+        });
         return handle_hook_failure(
-            CliError::Install(format!("hook forward failed with HTTP {status}")),
+            hook_status_error(
+                status,
+                message.unwrap_or_else(|| "hook request failed".into()),
+            ),
             fail_closed,
             "http_status",
             Some(status.as_u16()),
@@ -227,3 +245,18 @@ pub(super) fn guardrail_rejection_reason(body: &str) -> Option<String> {
         })
         .flatten()
 }
+
+fn hook_status_error(status: reqwest::StatusCode, body: String) -> CliError {
+    if status.is_client_error() || status.is_server_error() {
+        CliError::HookHttpFailure {
+            status,
+            message: body,
+        }
+    } else {
+        CliError::Install(body)
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/coverage/shared/hook_response_tests.rs"]
+mod tests;
