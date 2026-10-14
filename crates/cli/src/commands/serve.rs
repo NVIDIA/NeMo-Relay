@@ -20,6 +20,9 @@ pub(crate) struct ServerArgs {
     /// Upstream Anthropic base URL (e.g. https://api.anthropic.com)
     #[arg(long, env = "NEMO_RELAY_ANTHROPIC_BASE_URL")]
     pub(super) anthropic_base_url: Option<String>,
+    /// ChatGPT Codex upstream base URL; receives the caller's ChatGPT credential
+    #[arg(long, env = "NEMO_RELAY_CHATGPT_CODEX_BASE_URL")]
+    pub(super) chatgpt_codex_base_url: Option<String>,
     /// Internal override for the plugin configuration file.
     #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG_PATH", hide = true)]
     pub(super) plugin_config_path: Option<PathBuf>,
@@ -41,6 +44,7 @@ impl ServerArgs {
             bind: self.bind,
             openai_base_url: self.openai_base_url.clone(),
             anthropic_base_url: self.anthropic_base_url.clone(),
+            chatgpt_codex_base_url: self.chatgpt_codex_base_url.clone(),
             plugin_config_path: self.plugin_config_path.clone(),
             ready_file: self.ready_file.clone(),
             max_hook_payload_bytes: self.max_hook_payload_bytes,

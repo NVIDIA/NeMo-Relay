@@ -81,7 +81,8 @@ Before you start, make sure you have:
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 
 <Note icon="circle-info">
-On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+On Unix, the verification step also uses `jq` 1.6 or newer; check your version
+with `jq --version`. PowerShell uses its built-in JSON parser.
 pi itself supports Node.js 22.19 or newer; this guide uses Node.js 24.
 </Note>
 
@@ -92,6 +93,12 @@ For an NVIDIA example, choose an available model from
 [build.nvidia.com](https://build.nvidia.com/explore/discover) in pi's model selector.
 Use a provider speaking OpenAI Chat Completions, OpenAI Responses, or Anthropic
 Messages; Gemini and Vertex APIs are not supported by this Relay gateway.
+</Note>
+
+<Note icon="circle-info">
+Install commands target the Relay version documented here. If that version has
+not been released, its pinned packages and downloads are not available yet.
+Select a released documentation version to try Relay now.
 </Note>
 
 <Steps toc={true}>
@@ -233,8 +240,9 @@ jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt 
 jq -se '
   . as $events |
   def closed($category):
-    any($events[]; .kind == "scope" and .scope_category == "end" and
-      .category == $category and . as $end_event |
+    any($events[]; . as $end_event |
+      .kind == "scope" and .scope_category == "end" and
+      .category == $category and
       any($events[]; .kind == "scope" and .scope_category == "start" and
         .uuid == $end_event.uuid and .name == $end_event.name and
         .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));

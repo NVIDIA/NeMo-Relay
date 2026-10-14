@@ -529,8 +529,20 @@ fn atif_content_value(value: &Json) -> Json {
     match value {
         Json::String(_) => value.clone(),
         Json::Null => empty_message(),
-        _ => canonicalize_atif_content_parts(value)
-            .unwrap_or_else(|| Json::String(json_to_string(value))),
+        _ => match canonicalize_atif_content_parts(value) {
+            Some(Json::Array(parts)) => {
+                // Text-only parts become one message, as provider responses and Responses input do.
+                let texts: Option<Vec<&str>> = parts
+                    .iter()
+                    .map(|part| part.get("text").and_then(Json::as_str))
+                    .collect();
+                match texts {
+                    Some(texts) => Json::String(texts.join("\n")),
+                    None => Json::Array(parts),
+                }
+            }
+            _ => Json::String(json_to_string(value)),
+        },
     }
 }
 

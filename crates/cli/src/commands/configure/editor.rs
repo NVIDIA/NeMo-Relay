@@ -92,7 +92,7 @@ impl ConfigDocument {
             TargetScope::Global => {
                 if self.has_auth_headers() {
                     return Err(CliError::Config(
-                        "global config cannot include upstream authorization headers; configure credentials in a user config".into(),
+                        "global config cannot include upstream authorization headers or API keys; configure credentials in a user config".into(),
                     ));
                 }
                 crate::filesystem::atomic_write_system_readable(&self.path, contents.as_bytes())
@@ -105,15 +105,27 @@ impl ConfigDocument {
     }
 
     fn has_auth_headers(&self) -> bool {
-        ["openai_auth_header", "anthropic_auth_header"]
-            .into_iter()
-            .any(|key| self.has_key("upstream", key))
+        [
+            "openai_auth_header",
+            "anthropic_auth_header",
+            "openai_api_key",
+            "anthropic_api_key",
+        ]
+        .into_iter()
+        .any(|key| self.has_key("upstream", key))
     }
 
     fn preview(&self) -> String {
         let mut document = self.document.clone();
         if let Some(upstream) = document.get_mut("upstream") {
-            for key in ["openai_auth_header", "anthropic_auth_header"] {
+            for key in [
+                "openai_auth_header",
+                "anthropic_auth_header",
+                "openai_api_key",
+                "anthropic_api_key",
+                "openai_api_key_helper",
+                "anthropic_api_key_helper",
+            ] {
                 if let Some(table) = upstream.as_table_mut() {
                     if table.contains_key(key) {
                         table[key] = value("<redacted>");
