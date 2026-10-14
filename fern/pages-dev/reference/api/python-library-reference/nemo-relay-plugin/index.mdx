@@ -823,6 +823,14 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None
 
 Run a local `grpc-v1` worker until the Relay host shuts it down.
 
+### `http_error_message`
+
+```python
+def http_error_message(status: int, message: str) -> str
+```
+
+Format an HTTP error status (400–599) for Relay plugin error forwarding.
+
 ## Type Aliases And Constants
 
 - `ANNOTATED_LLM_REQUEST_SCHEMA`

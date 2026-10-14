@@ -18,3 +18,8 @@ Plugin configuration diagnostic data types. Shared plugin diagnostic data types.
 ## Enums
 
 - [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay-types/plugin/enum-diagnosticlevel): Severity of a plugin configuration or activation diagnostic.
+
+## Functions
+
+- [http_error_message](/reference/api/rust-library-reference/nemo-relay-types/plugin/fn-http-error-message): Formats an upstream HTTP error for transport through string-based plugin callbacks.
+- [parse_http_error_message](/reference/api/rust-library-reference/nemo-relay-types/plugin/fn-parse-http-error-message): Reads the exact HTTP error prefix, leaving the diagnostic message unchanged.
