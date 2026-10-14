@@ -76,7 +76,7 @@ Before you start, make sure you have:
 - Linux, Apple Silicon macOS, or Windows Subsystem for Linux 2 (WSL2)
 - Hermes with native Relay support, plugin diagnostics in `hermes doctor`, and `chat --oneshot`
 - A configured Hermes model with inference access: a provider API key or a supported authenticated session
-- `jq` for the JSON event check
+- `jq` 1.6 or newer for the JSON event check; check your version with `jq --version`
 - Permission to install Hermes in your user environment
 
 <Steps toc={true}>
@@ -183,8 +183,9 @@ jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt 
 jq -se '
   . as $events |
   def closed($category):
-    any($events[]; .kind == "scope" and .scope_category == "end" and
-      .category == $category and . as $end_event |
+    any($events[]; . as $end_event |
+      .kind == "scope" and .scope_category == "end" and
+      .category == $category and
       any($events[]; .kind == "scope" and .scope_category == "start" and
         .uuid == $end_event.uuid and .name == $end_event.name and
         .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));

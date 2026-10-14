@@ -834,6 +834,36 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         "worker-fixture-llm-stream"
     );
 
+    for status in [403, 404, 429, 503] {
+        let error = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("worker-fixture-http-error")
+                .request(LlmRequest {
+                    headers: Map::new(),
+                    content: json!({"prompt": "fail"}),
+                })
+                .func(Arc::new(move |_| {
+                    Box::pin(async move {
+                        Err(nemo_relay::error::FlowError::Upstream(
+                            nemo_relay::error::UpstreamFailure {
+                                status: Some(status),
+                                body: "provider failure".into(),
+                                headers: Default::default(),
+                                class: nemo_relay::error::UpstreamFailureClass::Other,
+                            },
+                        ))
+                    })
+                }))
+                .build(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "Reported by plugin 'fixture_worker': provider failure" && !failure.is_retryable())
+        );
+    }
+    flush_subscribers().expect("worker HTTP errors should flush");
+
     deregister_subscriber("worker_plugin_fixture_events")
         .expect("worker fixture subscriber should deregister");
     loaded.clear();
