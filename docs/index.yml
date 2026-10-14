@@ -23,7 +23,7 @@ navigation:
         slug: quick-start
         collapsed: open-by-default
         contents:
-          - section: "Agent Runtimes"
+          - section: "Agent Harnesses"
             skip-slug: true
             collapsed: open-by-default
             contents:
