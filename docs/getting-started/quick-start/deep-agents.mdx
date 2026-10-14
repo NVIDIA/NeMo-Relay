@@ -59,9 +59,11 @@ SPDX-License-Identifier: Apache-2.0 */}
 ## Goal
 
 Run one Deep Agents workflow and write its agent, model, and tool lifecycle to
-a local ATOF event file.
+a local Agent Trajectory Observability Format (ATOF) file.
 
 ## Prerequisites
+
+Before you start, make sure you have:
 
 - Python 3.11 or newer
 - `uv`
@@ -71,9 +73,9 @@ a local ATOF event file.
 
 ## Install
 
-Create a project and install the pinned NeMo Relay release with the Deep
-Agents and NVIDIA model provider extras. In an existing `uv` project, skip
-`uv init`.
+Create a project and install the NeMo Relay version for these docs with the
+Deep Agents and NVIDIA model provider extras.
+For an existing `uv` project, run only the `uv add` command from its directory.
 
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
 ```bash
@@ -111,7 +113,7 @@ selects the provider; the remaining `nvidia/...` value is the model ID.
 </Note>
 
 <Note icon="circle-info">
-The provider may warn that this model is "not known to support tools" when its
+The provider can warn that this model is "not known to support tools" when its
 capability catalog lags the endpoint. This warning is advisory; the run must
 still produce the actual tool result and all three success lines below.
 </Note>
@@ -261,7 +263,7 @@ uv run python quickstart.py
 ## Verify
 
 The program checks the tool result, final assistant response, and paired ATOF
-agent, tool, and LLM records before printing these success markers:
+agent, tool, and LLM records. A successful run prints these markers in order:
 
 {/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-deep-agents-quickstart","from":"run","match":"exact-lines"} */}
 ```text
