@@ -104,13 +104,20 @@ Before you start, make sure you have:
 - Permission to install plugins, restart, and stop your disposable OpenClaw gateway
 - A managed gateway service, or a second terminal for a foreground gateway
 
-On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+On Unix, the verification step also uses `jq` 1.6 or newer; check your version
+with `jq --version`. PowerShell uses its built-in JSON parser.
 
 Keep the agent's working model configuration; Relay does not require a
 particular model. For an NVIDIA example, configure an available
 [build.nvidia.com model](https://build.nvidia.com/explore/discover) and its
 [NVIDIA API key](https://build.nvidia.com/settings/api-keys) in OpenClaw before
 installing the Relay plugin.
+
+<Note icon="circle-info">
+Install commands target the Relay version documented here. If that version has
+not been released, its pinned packages and downloads are not available yet.
+Select a released documentation version to try Relay now.
+</Note>
 
 <Steps toc={true}>
 
@@ -232,8 +239,9 @@ jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' "/absolute/path/
 jq -se '
   . as $events |
   def closed($category):
-    any($events[]; .kind == "scope" and .scope_category == "end" and
-      .category == $category and . as $end_event |
+    any($events[]; . as $end_event |
+      .kind == "scope" and .scope_category == "end" and
+      .category == $category and
       any($events[]; .kind == "scope" and .scope_category == "start" and
         .uuid == $end_event.uuid and .name == $end_event.name and
         .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));

@@ -15,8 +15,9 @@ use hyper_util::rt::TokioIo;
 
 use crate::configuration::GatewayConfig;
 use crate::daemon::common::transport::{
-    RelayBody, TransportError, box_body, named_upstream_websocket_client, pooled_websocket_client,
-    prepare_forward_request, prepare_forward_response, strip_hop_by_hop_headers,
+    RelayBody, TransportError, box_body, helper_websocket_client, named_upstream_websocket_client,
+    pooled_websocket_client, prepare_forward_request, prepare_forward_response,
+    strip_hop_by_hop_headers,
 };
 
 pub(crate) fn is_websocket(request: &Request<Body>) -> bool {
@@ -74,6 +75,7 @@ pub(super) fn strip_private_headers(headers: &mut HeaderMap, keep_named_upstream
 /// Forwards to a provider, through the named-upstream pool when the caller chose the destination.
 pub(crate) async fn forward_to_provider<H: Send + 'static>(
     client_named: bool,
+    helper_auth: bool,
     request: Request<Body>,
     destination: &str,
     hold: H,
@@ -84,7 +86,11 @@ pub(crate) async fn forward_to_provider<H: Send + 'static>(
         let client = named_upstream_websocket_client()?;
         forward(&client, request, destination, None, hold, config, shutdown).await
     } else {
-        let client = pooled_websocket_client()?;
+        let client = if helper_auth {
+            helper_websocket_client()?
+        } else {
+            pooled_websocket_client()?
+        };
         forward(&client, request, destination, None, hold, config, shutdown).await
     })
 }

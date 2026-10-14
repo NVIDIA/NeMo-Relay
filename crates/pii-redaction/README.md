@@ -145,6 +145,14 @@ metadata field is restored in canonical form when valid. Set
 `custom_mark_payload_policy = "preserve"` only when an unknown custom-mark
 producer is trusted and its original payload must remain available.
 
+Scope metadata retains only recognized `otel.status_code` values (`OK`, `ERROR`,
+`UNSET`) and, for `ERROR`, Relay's fixed `error.type` classifications or `_OTHER`.
+Unrecognized error types are discarded; the `full` and `gen_ai` OpenTelemetry
+projections use `_OTHER` for errors without a classification. Free-form status
+descriptions, exception types, and other metadata remain discarded, so redaction
+preserves success/error reporting without exporting error messages or application
+exception names.
+
 Normalized LLM annotations retain message roles and content-part kinds; model,
 tool, provider, and metric names; request tuning parameters; finish reasons;
 token and cache usage; and normalized cost amounts, currency, and source
