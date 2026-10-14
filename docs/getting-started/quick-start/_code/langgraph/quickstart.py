@@ -13,11 +13,14 @@ from nemo_relay.integrations.langgraph import NemoRelayCallbackHandler
 
 
 class State(TypedDict):
+    """Carry the deterministic graph and response markers between nodes."""
+
     graph_marker: str
     response_marker: str
 
 
 def emit_marker(_: State) -> State:
+    """Produce local validation markers without an inference request."""
     return {
         "graph_marker": "RELAY_QUICKSTART_GRAPH_OK",
         "response_marker": "RELAY_QUICKSTART_RESPONSE_OK",
@@ -32,6 +35,7 @@ graph = builder.compile()
 
 
 async def main() -> None:
+    """Run the graph and verify that Relay exported the completed marker node."""
     async with nemo_relay.plugin.activate({}, "plugins.toml"):
         try:
             with nemo_relay.scope.scope("langgraph-request", nemo_relay.ScopeType.Agent):

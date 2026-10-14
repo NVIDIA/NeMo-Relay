@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use axum::Json;
 use axum::body::{Body, Bytes};
-use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
+#[cfg(test)]
+use axum::http::header::AUTHORIZATION;
+use axum::http::header::{ACCEPT, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use axum::response::IntoResponse;
 use http_body_util::LengthLimitError;
@@ -705,8 +707,11 @@ async fn dispatch_unmanaged(
     route: ProviderRoute,
     config: &GatewayConfig,
 ) -> Result<Response<RelayBody>, CliError> {
-    let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    let allow_environment_provider_auth = crate::gateway::daemon_allows_provider_auth(
+        request.headers(),
+        request.uri().path(),
+        config,
+    );
     strip_worker_headers(request.headers_mut());
     strip_untrusted_dispatch_headers(request.headers_mut());
     let path_and_query = request
@@ -728,8 +733,15 @@ async fn dispatch_unmanaged(
     }
     strip_internal_headers(request.headers_mut());
     if allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, config);
+        inject_provider_auth(request.headers_mut(), route, config).await?;
     }
+    let upstream = crate::daemon::common::transport::provider_client(
+        &upstream,
+        allow_environment_provider_auth
+            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
+                .is_some(),
+    )
+    .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
@@ -759,8 +771,11 @@ async fn dispatch_unbuffered_observed(
     capture_limit: usize,
     operational: OperationalContext,
 ) -> Result<(Response<RelayBody>, ObservationReceiver, bool), CliError> {
-    let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    let allow_environment_provider_auth = crate::gateway::daemon_allows_provider_auth(
+        request.headers(),
+        request.uri().path(),
+        config,
+    );
     strip_worker_headers(request.headers_mut());
     strip_untrusted_dispatch_headers(request.headers_mut());
     let path_and_query = request
@@ -782,8 +797,15 @@ async fn dispatch_unbuffered_observed(
     }
     strip_internal_headers(request.headers_mut());
     if allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, config);
+        inject_provider_auth(request.headers_mut(), route, config).await?;
     }
+    let upstream = crate::daemon::common::transport::provider_client(
+        &upstream,
+        allow_environment_provider_auth
+            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
+                .is_some(),
+    )
+    .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
@@ -881,7 +903,7 @@ async fn dispatch_observed(
     operational: OperationalContext,
 ) -> Result<(Response<RelayBody>, ObservationReceiver), CliError> {
     let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(&prepared.headers);
+        crate::gateway::daemon_allows_provider_auth(&prepared.headers, &prepared.path, config);
     let destination = effective_destination(&prepared, route, effective, config)?;
     // An intercept's dispatch override is trusted plugin code, not the caller naming a host.
     let client_named = dispatch_override(effective).is_none()
@@ -900,8 +922,16 @@ async fn dispatch_observed(
         .body(Body::from(body))?;
     *request.headers_mut() = headers;
     if !explicit_target && allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, config);
+        inject_provider_auth(request.headers_mut(), route, config).await?;
     }
+    let upstream = crate::daemon::common::transport::provider_client(
+        &upstream,
+        !explicit_target
+            && allow_environment_provider_auth
+            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
+                .is_some(),
+    )
+    .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
@@ -1113,43 +1143,18 @@ fn body_read_error(error: axum::Error) -> CliError {
     }
 }
 
-fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &GatewayConfig) {
-    if crate::provider_auth::has_provider_credential(headers) {
-        return;
-    }
-    if let Some(configured) = match route {
-        ProviderRoute::OpenAi => config.openai_auth_header.as_deref(),
-        ProviderRoute::Anthropic => config.anthropic_auth_header.as_deref(),
-    }
-    .and_then(|value| HeaderValue::from_str(value).ok())
-    {
-        headers.insert(AUTHORIZATION, configured);
-        return;
-    }
-    let (name, value) = match route {
-        ProviderRoute::OpenAi => {
-            let Some(key) = environment_value("OPENAI_API_KEY") else {
-                return;
-            };
-            (AUTHORIZATION, format!("Bearer {key}"))
-        }
-        ProviderRoute::Anthropic => {
-            let Some(key) = environment_value("ANTHROPIC_API_KEY") else {
-                return;
-            };
-            (HeaderName::from_static("x-api-key"), key)
-        }
-    };
-    if let Ok(value) = HeaderValue::from_str(&value) {
-        headers.insert(name, value);
-    }
-}
-
-fn environment_value(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+async fn inject_provider_auth(
+    headers: &mut HeaderMap,
+    route: ProviderRoute,
+    config: &GatewayConfig,
+) -> Result<(), CliError> {
+    crate::upstream_auth::apply(
+        headers,
+        matches!(route, ProviderRoute::Anthropic),
+        true,
+        config,
+    )
+    .await
 }
 
 fn observation_capture_limit_from_environment() -> Result<usize, CliError> {

@@ -62,6 +62,9 @@ use std::time::Duration;
 
 static TEST_LOGGING: Once = Once::new();
 
+#[path = "trajectory_status_tests.rs"]
+mod trajectory_status_tests;
+
 fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
         let runtime =
@@ -1575,7 +1578,7 @@ async fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
 }
 
 #[tokio::test]
-async fn trajectory_preset_empties_untyped_scope_metadata() {
+async fn trajectory_preset_preserves_only_bounded_scope_status_metadata() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
     let metadata = json!({
         "nemo_relay_scope_role": "turn",
@@ -1623,7 +1626,7 @@ async fn trajectory_preset_empties_untyped_scope_metadata() {
         )
         .await
         .unwrap();
-        assert_eq!(sanitized.metadata, Some(json!({})));
+        assert_eq!(sanitized.metadata, Some(json!({"otel.status_code": "OK"})));
     }
 
     let malformed = Event::Scope(ScopeEvent::new(
@@ -4144,7 +4147,10 @@ fn sanitized_trajectory_content_never_reaches_subscribers_or_exporters() {
         .unwrap();
     assert_eq!(agent_start.uuid(), agent_end.uuid());
     assert_eq!(agent_start.data(), Some(&json!({})));
-    assert_eq!(agent_start.metadata(), Some(&json!({})));
+    assert_eq!(
+        agent_start.metadata(),
+        Some(&json!({"otel.status_code": "OK"}))
+    );
     let custom_mark = captured
         .iter()
         .find(|event| event.name() == "hermes.checkpoint")

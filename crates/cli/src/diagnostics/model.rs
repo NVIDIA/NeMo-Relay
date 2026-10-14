@@ -9,6 +9,7 @@ use nemo_relay::plugin::dynamic::PluginHostReport;
 use serde::Serialize;
 
 use crate::configuration::{DynamicPluginHostConfigStatus, GatewayConfig};
+use crate::upstream_auth::AuthScheme;
 
 /// Outcome of one check inside the doctor report.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -108,26 +109,102 @@ pub(crate) struct PluginHostValidation {
 pub(crate) struct UpstreamAuthInfo {
     pub openai: SecretPresence,
     pub anthropic: SecretPresence,
+    pub checks: Vec<Check>,
 }
 
 impl UpstreamAuthInfo {
     pub(crate) fn from_effective_gateway_auth(gateway: &GatewayConfig) -> Self {
-        Self {
+        let mut info = Self {
             openai: SecretPresence::from_effective_provider_auth(
                 gateway.openai_auth_header.as_deref(),
-                "OPENAI_API_KEY",
+                gateway.openai_api_key.is_some()
+                    || gateway.openai_api_key_helper.is_some()
+                    || std::env::var("OPENAI_API_KEY")
+                        .ok()
+                        .is_some_and(|key| !key.trim().is_empty()),
             ),
             anthropic: SecretPresence::from_effective_provider_auth(
                 gateway.anthropic_auth_header.as_deref(),
-                "ANTHROPIC_API_KEY",
+                gateway.anthropic_api_key.is_some()
+                    || gateway.anthropic_api_key_helper.is_some()
+                    || std::env::var("ANTHROPIC_API_KEY")
+                        .ok()
+                        .is_some_and(|key| !key.trim().is_empty()),
             ),
+            checks: Vec::new(),
+        };
+        for (name, helper, key, header, environment, default_scheme) in [
+            (
+                "OpenAI auth",
+                gateway.openai_api_key_helper.as_ref(),
+                gateway.openai_api_key.is_some(),
+                gateway.openai_auth_header.is_some(),
+                &["OPENAI_API_KEY", "NEMO_RELAY_OPENAI_AUTH_HEADER"][..],
+                AuthScheme::Bearer,
+            ),
+            (
+                "Anthropic auth",
+                gateway.anthropic_api_key_helper.as_ref(),
+                gateway.anthropic_api_key.is_some(),
+                gateway.anthropic_auth_header.is_some(),
+                &[
+                    "ANTHROPIC_API_KEY",
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+                ][..],
+                AuthScheme::ApiKey,
+            ),
+        ] {
+            let mut status = Status::Info;
+            let details = if let Some(helper) = helper {
+                let scheme = helper.auth_scheme.unwrap_or(default_scheme);
+                let scheme = match scheme {
+                    AuthScheme::Bearer => "bearer",
+                    AuthScheme::ApiKey => "x-api-key",
+                };
+                let mut details = format!(
+                    "API key helper configured. Timeout: {} ms. Authentication: {scheme}. Doctor does not run the helper or check its token.",
+                    helper.timeout_ms
+                );
+                let ignored: Vec<_> = environment
+                    .iter()
+                    .copied()
+                    .filter(|name| std::env::var_os(name).is_some())
+                    .collect();
+                if !ignored.is_empty() {
+                    status = Status::Warn;
+                    details.push_str(&format!(
+                        " Ignored environment credentials: {}.",
+                        ignored.join(", ")
+                    ));
+                }
+                details
+            } else if key {
+                "Static API key configured.".into()
+            } else if header {
+                "Custom authorization header configured.".into()
+            } else if std::env::var(environment[0])
+                .ok()
+                .is_some_and(|key| !key.trim().is_empty())
+            {
+                format!("{} supplies the fallback API key.", environment[0])
+            } else {
+                "No gateway credential configured. Requests can use client credentials.".into()
+            };
+            info.checks.push(Check {
+                name,
+                status,
+                details,
+            });
         }
+        info
     }
 
     pub(crate) fn unknown() -> Self {
         Self {
             openai: SecretPresence::Unknown,
             anthropic: SecretPresence::Unknown,
+            checks: Vec::new(),
         }
     }
 }
@@ -143,9 +220,9 @@ pub(crate) enum SecretPresence {
 impl SecretPresence {
     pub(crate) fn from_effective_provider_auth(
         configured_auth_header: Option<&str>,
-        fallback_env_var: &str,
+        has_key_or_helper: bool,
     ) -> Self {
-        if configured_auth_header.is_some() || env_var_is_nonempty(fallback_env_var) {
+        if configured_auth_header.is_some() || has_key_or_helper {
             Self::Configured
         } else {
             Self::Unset
@@ -159,13 +236,6 @@ impl SecretPresence {
             Self::Unknown => "unknown",
         }
     }
-}
-
-fn env_var_is_nonempty(name: &str) -> bool {
-    std::env::var(name)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .is_some()
 }
 
 #[derive(Debug, Clone, Serialize)]

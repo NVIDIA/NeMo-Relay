@@ -56,6 +56,8 @@ pub(crate) struct AppState {
     pub(crate) transparent_proxy_credential:
         Option<crate::provider_auth::TransparentProxyCredential>,
     pub(crate) http: Client,
+    /// Configured helper requests cannot reuse credentials through redirects or transport retries.
+    pub(crate) http_helper: Client,
     /// Client for caller-named destinations; does not follow redirects. See `upstream_client`.
     pub(crate) http_no_redirect: Client,
     pub(crate) sessions: SessionManager,
@@ -541,7 +543,14 @@ impl AppState {
         sessions: SessionManager,
         idle_read_timeout: Option<Duration>,
     ) -> Self {
-        let http = gateway_http_client(idle_read_timeout, false);
+        let http = gateway_http_client(idle_read_timeout, false, false);
+        let http_helper = if config.openai_api_key_helper.is_some()
+            || config.anthropic_api_key_helper.is_some()
+        {
+            gateway_http_client(idle_read_timeout, false, true)
+        } else {
+            http.clone()
+        };
         // A second client for destinations the caller named, which must not follow redirects.
         //
         // Validation applies to the URL that was named; a redirect names a different one, and
@@ -549,7 +558,7 @@ impl AppState {
         // here either -- it covers `Authorization` across origins, and provider keys travel in
         // `x-api-key` and friends, which are ordinary headers to it. So a validated `https`
         // endpoint could 307 a caller's provider key to any host, including over plain http.
-        let http_no_redirect = gateway_http_client(idle_read_timeout, true);
+        let http_no_redirect = gateway_http_client(idle_read_timeout, true, false);
         Self {
             config,
             bootstrap_fingerprint: None,
@@ -558,6 +567,7 @@ impl AppState {
             transparent_proxy_credential: None,
             http,
             http_no_redirect,
+            http_helper,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             active_websockets: Arc::new(AtomicUsize::new(0)),
@@ -720,11 +730,23 @@ impl AppState {
     }
 }
 
-fn gateway_http_client(idle_read_timeout: Option<Duration>, no_redirect: bool) -> Client {
+fn gateway_http_client(
+    idle_read_timeout: Option<Duration>,
+    no_redirect: bool,
+    has_helpers: bool,
+) -> Client {
     let builder = Client::builder().connect_timeout(HTTP_CONNECT_TIMEOUT);
     let builder = match idle_read_timeout {
         Some(timeout) => builder.read_timeout(timeout),
         None => builder,
+    };
+    // Automatic redirects/retries would reuse a helper token without resolving another one.
+    let builder = if has_helpers {
+        builder
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+    } else {
+        builder
     };
     // The no-redirect client serves only caller-named destinations, so it is also the one that
     // resolves through the named-upstream address policy.

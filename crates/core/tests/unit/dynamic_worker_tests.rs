@@ -4963,3 +4963,69 @@ async fn worker_shutdown_reports_rpc_failure_and_reaps_an_exited_process() {
         "a disconnected worker must still release its activation directory"
     );
 }
+
+#[test]
+fn worker_http_error_prefix_preserves_status_through_continuations() {
+    for status in 400..=599 {
+        let original = FlowError::Upstream(crate::error::UpstreamFailure {
+            status: Some(status),
+            body: "provider failure".into(),
+            headers: Default::default(),
+            class: crate::error::UpstreamFailureClass::RetryableStatus,
+        });
+        let wire_error = flow_error_to_worker(original);
+        assert!(!wire_error.retryable);
+        let FlowError::Upstream(failure) = worker_error_to_flow(wire_error) else {
+            panic!("status was lost");
+        };
+        assert_eq!(failure.status, Some(status));
+        assert_eq!(failure.body, "provider failure");
+        assert!(!failure.is_retryable());
+    }
+    for message in ["plain failure", "HTTP 200: success", "http 403: denied"] {
+        assert!(matches!(
+            worker_error_to_flow(WorkerError {
+                code: "worker.error".into(),
+                message: message.into(),
+                retryable: true
+            }),
+            FlowError::Internal(_)
+        ));
+    }
+    assert!(matches!(
+        worker_error_to_flow(WorkerError {
+            code: "worker.cancelled".into(),
+            message: "HTTP 403: denied".into(),
+            retryable: false
+        }),
+        FlowError::Internal(_)
+    ));
+}
+
+#[test]
+fn worker_http_errors_include_the_verified_reporting_plugin() {
+    let response = InvokeResponse {
+        result: Some(InvokeResult::Error(WorkerError {
+            code: "worker.error".into(),
+            message: "HTTP 403: denied".into(),
+            retryable: false,
+        })),
+    };
+    let response = report_worker_response(response, "verified.worker");
+    let FlowError::Upstream(failure) = json_from_invoke_response(response).unwrap_err() else {
+        panic!("expected upstream failure");
+    };
+    assert_eq!(failure.status, Some(403));
+    assert_eq!(failure.body, "Reported by plugin 'verified.worker': denied");
+    let cancelled = InvokeResponse {
+        result: Some(InvokeResult::Error(WorkerError {
+            code: "worker.cancelled".into(),
+            message: "HTTP 403: denied".into(),
+            retryable: false,
+        })),
+    };
+    assert!(matches!(
+        json_from_invoke_response(report_worker_response(cancelled, "verified.worker")),
+        Err(FlowError::Internal(_))
+    ));
+}
