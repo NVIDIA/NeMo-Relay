@@ -15,6 +15,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Emit a local agent workflow and close its scope even if a callback fails.
 async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let handle = scope::push_scope(
         PushScopeParams::builder()
@@ -29,7 +30,6 @@ async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
         scope::event(
             EmitMarkEventParams::builder()
                 .name("initialized")
-                .parent(&handle)
                 .data(json!({"ok": true}))
                 .build(),
         )?;
@@ -41,7 +41,6 @@ async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
                 .func(Arc::new(|args| Box::pin(async move {
                     Ok(ToolExecutionResult::new(json!({"marker": args["marker"]})))
                 })))
-                .parent(handle.clone())
                 .build(),
         )
         .await?;
@@ -61,7 +60,6 @@ async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
                 .func(Arc::new(|_| Box::pin(async move {
                     Ok(json!({"content": "RELAY_QUICKSTART_RESPONSE_OK"}))
                 })))
-                .parent(handle.clone())
                 .model_name("demo-model")
                 .build(),
         )
@@ -83,6 +81,7 @@ async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
     }
     .await;
 
+    // Pop before propagating errors so a failed callback cannot leave the agent scope open.
     let pop_result = scope::pop_scope(
         PopScopeParams::builder().handle_uuid(&handle.uuid).build(),
     );
@@ -92,6 +91,7 @@ async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::main]
+/// Run the local example and verify its exported lifecycle records.
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut activation = initialize(
         PluginConfig::default(),
@@ -99,6 +99,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
+    // Attempt both cleanup operations even when the workflow or subscriber flush fails.
+    // Applying `?` immediately would skip later cleanup and could lose diagnostic events.
     let work_result = run_workflow().await;
     let flush_result = flush_subscribers();
     let close_result = activation.close();

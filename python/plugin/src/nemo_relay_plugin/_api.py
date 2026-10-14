@@ -55,6 +55,7 @@ Public callback aliases used in registration annotations:
     LlmStreamExecutionCallback: Streaming LLM execution intercept callback.
 
 Public functions:
+    http_error_message: Format an upstream HTTP error status for forwarding.
     serve_plugin: Run a local ``grpc-v1`` worker until host shutdown.
 """
 
@@ -3023,6 +3024,8 @@ def _stream_chunk_to_value(chunk: Any) -> Json:
 
 
 def _worker_error_to_sdk(error: Any) -> WorkerSdkError:
+    if error.code != "worker.cancelled" and _is_http_error_message(error.message):
+        return WorkerSdkError(error.message)
     return WorkerSdkError(f"{error.code}: {error.message}")
 
 
@@ -3260,3 +3263,18 @@ async def _unlink_unix_socket(endpoint: str) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(writer.wait_closed(), timeout=1)
             raise WorkerSdkError(f"worker socket path {path} is already active")
+
+
+def http_error_message(status: int, message: str) -> str:
+    """Format an HTTP error status (400–599) for Relay plugin error forwarding."""
+    if not isinstance(status, int) or not 400 <= status <= 599:
+        raise ValueError("plugin HTTP error status must be between 400 and 599")
+    return f"HTTP {status}: {message}"
+
+
+def _is_http_error_message(message: str) -> bool:
+    prefix = "HTTP "
+    if not message.startswith(prefix):
+        return False
+    code, separator, _body = message[len(prefix) :].partition(": ")
+    return bool(separator) and len(code) == 3 and code.isascii() and code.isdigit() and 400 <= int(code) <= 599
