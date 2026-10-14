@@ -32,6 +32,7 @@ agent = create_deep_agent(
 
 
 async def main() -> None:
+    """Run the instrumented agent and verify its tool, response, and event markers."""
     async with nemo_relay.plugin.activate({}, "plugins.toml"):
         try:
             with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):

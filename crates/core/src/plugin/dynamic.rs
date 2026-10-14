@@ -26,6 +26,7 @@ pub const DYNAMIC_PLUGIN_MANIFEST_FILENAME: &str = "relay-plugin.toml";
 mod bounded;
 mod configuration;
 mod host;
+mod http_error;
 mod manifest;
 mod native;
 mod policy;

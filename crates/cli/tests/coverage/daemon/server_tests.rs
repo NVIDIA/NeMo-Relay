@@ -1547,8 +1547,8 @@ async fn public_ingress_rejects_credentials_methods_websockets_and_unready_route
     assert_eq!(unavailable.headers()[RETRY_AFTER], "1");
 }
 
-#[test]
-fn pass_through_auth_injection_supports_environment_and_anthropic_configuration() {
+#[tokio::test]
+async fn pass_through_auth_injection_supports_environment_and_anthropic_configuration() {
     let _environment = EnvScope::set(&[
         ("OPENAI_API_KEY", Some(std::ffi::OsStr::new(" openai-env "))),
         (
@@ -1561,7 +1561,9 @@ fn pass_through_auth_injection_supports_environment_and_anthropic_configuration(
         &mut openai,
         ProviderRoute::OpenAi,
         &GatewayConfig::default(),
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(openai[AUTHORIZATION], "Bearer openai-env");
 
     let mut anthropic = HeaderMap::new();
@@ -1569,7 +1571,9 @@ fn pass_through_auth_injection_supports_environment_and_anthropic_configuration(
         &mut anthropic,
         ProviderRoute::Anthropic,
         &GatewayConfig::default(),
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(anthropic["x-api-key"], "anthropic-env");
 
     let mut configured = HeaderMap::new();
@@ -1580,7 +1584,9 @@ fn pass_through_auth_injection_supports_environment_and_anthropic_configuration(
             anthropic_auth_header: Some("configured".into()),
             ..GatewayConfig::default()
         },
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(configured[AUTHORIZATION], "configured");
 }
 
@@ -2689,22 +2695,26 @@ fn public_ingress_keeps_only_authenticated_provider_routing_metadata() {
     assert!(!hook_headers.contains_key(crate::operational::OPERATION_ID_HEADER));
 }
 
-#[test]
-fn pass_through_provider_auth_preserves_callers_and_fills_missing_configured_auth() {
+#[tokio::test]
+async fn pass_through_provider_auth_preserves_callers_and_fills_missing_configured_auth() {
     let config = GatewayConfig {
         openai_auth_header: Some("Bearer configured".into()),
         ..GatewayConfig::default()
     };
     let mut headers = HeaderMap::new();
     headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer caller"));
-    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config);
+    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config)
+        .await
+        .unwrap();
     assert_eq!(
         headers.get(AUTHORIZATION).expect("caller auth"),
         "Bearer caller"
     );
 
     headers.remove(AUTHORIZATION);
-    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config);
+    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config)
+        .await
+        .unwrap();
     assert_eq!(
         headers.get(AUTHORIZATION).expect("configured auth"),
         "Bearer configured"

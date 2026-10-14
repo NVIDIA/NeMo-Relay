@@ -646,6 +646,76 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     );
     assert!(llm_end.annotated_response().is_none());
 
+    for status in [403, 404, 429, 503] {
+        let error = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("native-fixture-http-error")
+                .request(LlmRequest {
+                    headers: Map::new(),
+                    content: json!({"prompt": "fail"}),
+                })
+                .func(Arc::new(move |_request| {
+                    Box::pin(async move {
+                        Err(nemo_relay::error::FlowError::Upstream(
+                            nemo_relay::error::UpstreamFailure {
+                                status: Some(status),
+                                body: "provider denied access".into(),
+                                headers: Default::default(),
+                                class: nemo_relay::error::UpstreamFailureClass::Other,
+                            },
+                        ))
+                    })
+                }))
+                .build(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "Reported by plugin 'fixture_native': provider denied access" && !failure.is_retryable())
+        );
+    }
+    let callback_error = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("native-fixture-originated-http-error")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"native_http_error": true}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async { panic!("plugin failure must skip provider") })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(callback_error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
+    );
+    let stream_error = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("native-fixture-originated-stream-http-error")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"native_http_error": true}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async { panic!("plugin failure must skip provider") })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| Json::Null))
+            .build(),
+    )
+    .await
+    .expect("native async stream opens before its callback is polled")
+    .next()
+    .await
+    .expect("stream reports the callback failure")
+    .unwrap_err();
+    assert!(
+        matches!(stream_error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
+    );
+    flush_subscribers().expect("HTTP error events should flush");
+
     events.lock().unwrap().clear();
     let cancelled_unary = tokio::spawn(llm_call_execute(
         LlmCallExecuteParams::builder()
