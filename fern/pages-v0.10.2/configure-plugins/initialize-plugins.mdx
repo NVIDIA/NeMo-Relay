@@ -1,0 +1,278 @@
+---
+title: "Configure and Initialize Plugins"
+description: "Configure, validate, activate, diagnose, and close a NeMo Relay plugin host."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use this page when your application manages plugin configuration and lifetime.
+It explains the shared plugin-host API in Rust, Python, Node.js, Go, and C.
+Use [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+for the full `plugins.toml` format and merge rules. Use a component guide for
+component-specific settings.
+
+## Choose a Configuration Path
+
+| Need | Use |
+|---|---|
+| Configure the CLI or a host through standard files | Create `plugins.toml`. Relay discovers it at startup. |
+| Add settings in application code | Pass a `PluginConfig` to `initialize` or `validate`. |
+| Test one chosen file with an embedded host | Pass that `plugins.toml` file as the optional second argument. |
+| Check only a complete in-memory static document | Use exact validation. It does not read files or check dynamic plugins. |
+| Preflight a deployment without starting plugin code | Use `validate`. It reads and resolves the same configuration as `initialize`. |
+
+## Initialize, Validate, or Validate Exactly
+
+All bindings use the same three operations. They accept a canonical plugin
+document. The document has a `version`, `components`, and optional `policy`.
+Component configuration keys use `snake_case` in every binding.
+
+| Operation | What it does | Side effects |
+|---|---|---|
+| `initialize` | Resolves, validates, and activates plugins. | Starts one host and returns its activation handle. |
+| `validate` | Resolves and validates configuration, policy, and trust. | Does not load plugin code or start a host. |
+| Exact validation | Validates only the supplied static document. | Does not read files or check dynamic plugins. |
+
+| Binding | Initialize | Validate | Exact validation |
+|---|---|---|---|
+| Rust | `initialize(config, path)` | `validate(config, path)` | `validate_exact(config)` |
+| Python | `await plugin.initialize(config, path)` | `plugin.validate(config, path)` | `plugin.validate_exact(config)` |
+| Node.js | `await plugin.initialize(config, path)` | `plugin.validate(config, path)` | `plugin.validateExact(config)` |
+| Go | `Initialize(config, path)` | `Validate(config, path)` | `ValidateExact(config)` |
+| C | `nemo_relay_plugin_initialize` | `nemo_relay_plugin_validate` | `nemo_relay_plugin_validate_exact` |
+
+`path` is optional. In Rust it is an `Option<PathBuf>`. In Python it can be a
+string or path-like value. Node.js uses an optional string, Go uses an optional
+string pointer, and C accepts a nullable C string.
+
+## Know Which Configuration Relay Uses
+
+Relay merges file layers first, then applies the configuration passed by your
+application. Programmatic values therefore take precedence over file values.
+
+```text
+default:  user plugins.toml → system plugins.toml → application config
+explicit: explicit plugins.toml → system plugins.toml → application config
+```
+
+An explicit path replaces user-file discovery; it does not remove the system
+file. A missing file is skipped. The system file can still add settings that
+the application does not declare.
+
+The application configuration can define static `components`. Dynamic plugin
+records, such as `[[plugins.dynamic]]`, come from `plugins.toml`. Use the
+optional path when an embedded host needs a specific dynamic-plugin file.
+
+For details such as list order, component matching, disabled components, and
+how omitted values behave, see [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+
+## Per-Language Plugin Configuration
+
+The following examples validate before activation. They use an empty document
+to show the host lifecycle. Replace it with component settings from the guide
+for the plugin you want to use.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+from nemo_relay import plugin
+
+config = plugin.PluginConfig()
+path = "path/to/plugins.toml"
+report = plugin.validate(config, path)
+if any(item["level"] == "error" for item in report["config"]["diagnostics"]):
+    raise RuntimeError(report["config"]["diagnostics"])
+
+async def main() -> None:
+    async with plugin.activate(config, path) as activation:
+        print(activation.report)
+        # Run application work while plugins are active.
+
+asyncio.run(main())
+```
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+const relay = require('nemo-relay-node');
+const plugin = require('nemo-relay-node/plugin');
+
+const config = plugin.defaultConfig();
+const path = 'path/to/plugins.toml';
+const report = plugin.validate(config, path);
+if (report.config.diagnostics.some((item) => item.level === 'error')) {
+  throw new Error(JSON.stringify(report.config.diagnostics));
+}
+
+const activation = await plugin.initialize(config, path);
+try {
+  console.log(activation.report);
+  // Run application work while plugins are active.
+} finally {
+  await relay.flushSubscribers();
+  await activation.close();
+}
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use std::path::PathBuf;
+
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::dynamic::{initialize, validate};
+
+let config = PluginConfig::default();
+let path = Some(PathBuf::from("path/to/plugins.toml"));
+let report = validate(config.clone(), path.clone())?;
+if report.config.has_errors() {
+    return Err("plugin configuration is invalid".into());
+}
+
+let mut activation = initialize(config, path).await?;
+println!("{:?}", activation.report());
+// Run application work while plugins are active.
+activation.close()?;
+```
+</Tab>
+</Tabs>
+
+## Read the Report
+
+`validate` returns a `PluginHostReport`. A successful `initialize` stores the
+same kind of report on its activation handle. Check the report before starting
+application work.
+
+| Report field | Meaning | What to do |
+|---|---|---|
+| `config.diagnostics` | Static document warnings and errors. | Stop on `error`; review warnings before deployment. |
+| `config.runtime_diagnostics` | Bounded failures after activation. | Inspect during troubleshooting and shutdown. |
+| `dynamic_plugins` | Results for dynamic plugin records. | Check `status` and `failure` for trust, policy, or schema problems. |
+
+A diagnostic has a level, code, and message. It also names the component and
+field when Relay knows them.
+
+For every lifecycle-selected dynamic plugin, `validate` returns a report even
+when integrity or signature verification fails. Trust failures do not make
+`validate` raise; inspect `status.integrity`, `status.authenticity`, and
+`failure`, then fail the deployment if the report is not acceptable. A failed
+trust report has `selected = false` because Relay will not activate that
+plugin. With `startup = "required"`, `initialize` still rejects the same
+failure before it loads plugin code.
+
+`validate` is a preflight. It proves that Relay can resolve and check the
+configuration without starting plugin code. It does not prove that a remote
+exporter can deliver data after activation. Use component health checks and
+runtime diagnostics for that work.
+
+## Keep the Activation Handle Alive
+
+`initialize` returns a `PluginHostActivation`. Keep it alive while any plugin
+callback can run. Only one plugin-host activation can exist in a process at a
+time.
+
+Close the handle during normal shutdown. Closing removes component-owned
+registrations before Relay unloads native libraries or stops worker processes.
+If close fails, keep the handle and retry `close`; do not deregister a custom
+plugin kind while its activation is still active.
+
+Use a guaranteed cleanup path. Node.js flushes queued subscribers before it
+closes the activation. Python and Rust close the activation after application
+work finishes.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+from nemo_relay import plugin
+
+
+async def main() -> None:
+    config = plugin.PluginConfig()
+    activation = await plugin.initialize(config)
+    try:
+        # Run application work while plugins are active.
+        print("plugins are active")
+    finally:
+        await activation.close()
+
+
+asyncio.run(main())
+```
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+const relay = require('nemo-relay-node');
+const plugin = require('nemo-relay-node/plugin');
+
+async function main() {
+  const activation = await plugin.initialize(plugin.defaultConfig());
+  try {
+    // Run application work while plugins are active.
+    console.log('plugins are active');
+  } finally {
+    await relay.flushSubscribers();
+    await activation.close();
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::dynamic::initialize;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut activation = initialize(PluginConfig::default(), None).await?;
+    let work_result = async {
+        // Run application work while plugins are active.
+        println!("plugins are active");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    activation.close()?;
+    work_result
+}
+```
+</Tab>
+</Tabs>
+
+## Common Use Cases
+
+### Preflight a Deployment
+
+Call `validate` with the same configuration and optional file path that
+production will use. Fail the deployment on error diagnostics or a dynamic
+plugin failure. This checks configuration, manifest compatibility, and trust
+policy before the application starts plugin code.
+
+### Configure a Service in Code
+
+Build a `PluginConfig` for application-owned settings. Call `initialize` once
+during startup, retain the activation handle, and close it during graceful
+shutdown. This works well when the service owns its plugin choices.
+
+### Use a Provisioned Plugin File
+
+Store shared plugin settings and dynamic-plugin records in `plugins.toml`.
+Pass the file path to `validate` and `initialize` when the host must use that
+selected file instead of a discovered user file. This is useful for a service that receives configuration from its
+deployment system.
+
+### Validate One Component in Isolation
+
+Use exact validation when the supplied document is complete and file discovery
+would hide a mistake. This is useful for unit tests and component-specific
+configuration helpers. Exact validation does not test manifest-backed plugins.
+
+For a complete configuration document, see [Plugin Configuration Files](/configure-plugins/plugin-configuration-files). For manifest-backed plugins,
+see [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins).
