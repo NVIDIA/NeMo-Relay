@@ -162,9 +162,38 @@ pub(crate) fn daemon_provider_forward_headers_with_access(
     Some(strip_replaceable_agent_auth_headers(
         headers,
         provider,
-        allow_provider_auth && path != "/backend-api/codex/realtime/calls",
-        provider.configured_auth_header(config),
+        allow_provider_auth && !is_chatgpt_voice_call(headers, path, config),
+        if provider.has_replacement(config) {
+            Some("configured")
+        } else {
+            None
+        },
     ))
+}
+
+pub(crate) fn daemon_allows_provider_auth(
+    headers: &HeaderMap,
+    path: &str,
+    config: &crate::configuration::GatewayConfig,
+) -> bool {
+    daemon_allows_environment_provider_auth(headers)
+        && !is_chatgpt_voice_call(headers, path, config)
+}
+
+fn is_chatgpt_voice_call(
+    headers: &HeaderMap,
+    path: &str,
+    config: &crate::configuration::GatewayConfig,
+) -> bool {
+    path.split('?').next() == Some("/backend-api/codex/realtime/calls")
+        && gateway_upstream_url_override(
+            ProviderRoute::OpenAiRealtimeCalls,
+            headers,
+            path,
+            true,
+            config,
+        )
+        .is_some()
 }
 
 pub(crate) fn daemon_allows_environment_provider_auth(headers: &HeaderMap) -> bool {
@@ -310,11 +339,10 @@ pub(crate) async fn websocket_passthrough(
             .get(&prepared.upstream_url)
             .headers(prepared.headers.clone()),
         prepared.provider,
-        &prepared.headers,
         prepared.authorization.allow_environment_provider_auth,
-        prepared.provider.configured_auth_header(&state.config),
+        &state.config,
     )
-    .build()?
+    .await?
     .headers()
     .clone();
     let mut request = Request::new(Body::empty());
@@ -323,6 +351,8 @@ pub(crate) async fn websocket_passthrough(
     *request.extensions_mut() = extensions;
     websocket::forward_to_provider(
         prepared.client_named_upstream,
+        prepared.authorization.allow_environment_provider_auth
+            && prepared.provider.has_helper(&state.config),
         request,
         &prepared.upstream_url,
         state.hold_websocket(),
@@ -381,6 +411,7 @@ enum CapturedUpstreamFailure {
         bytes: Bytes,
     },
     Transport(reqwest::Error),
+    Authentication(CliError),
 }
 
 #[derive(Default)]
@@ -464,6 +495,7 @@ async fn run_unmanaged_gateway(
     }
     let response = forward_upstream_request(
         upstream_client(&state, prepared.client_named_upstream),
+        &state.http_helper,
         UpstreamForwardRequest {
             method: &prepared.method,
             url: &prepared.upstream_url,
@@ -648,6 +680,7 @@ fn build_buffered_func(
     operational: OperationalContext,
 ) -> LlmExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
+    let helper_http = state.http_helper.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -656,6 +689,7 @@ fn build_buffered_func(
         ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config);
     Arc::new(move |request| {
         let http = http.clone();
+        let helper_http = helper_http.clone();
         let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
@@ -667,6 +701,7 @@ fn build_buffered_func(
             let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
                 &http,
+                &helper_http,
                 UpstreamForwardRequest {
                     method: &method,
                     url: &url,
@@ -681,12 +716,17 @@ fn build_buffered_func(
             .await
             {
                 Ok(response) => response,
-                Err(error) if retry_aware => {
+                Err(CliError::Upstream(error)) if retry_aware => {
                     return Err(FlowError::Upstream(transport_failure(&error)));
+                }
+                Err(CliError::Upstream(error)) => {
+                    return Err(
+                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                    );
                 }
                 Err(error) => {
                     return Err(
-                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                        upstream_failures.capture(CapturedUpstreamFailure::Authentication(error))
                     );
                 }
             };
@@ -864,6 +904,7 @@ fn build_streaming_func(
     operational: OperationalContext,
 ) -> LlmStreamExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
+    let helper_http = state.http_helper.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -872,6 +913,7 @@ fn build_streaming_func(
         ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config);
     Arc::new(move |request| {
         let http = http.clone();
+        let helper_http = helper_http.clone();
         let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
@@ -883,6 +925,7 @@ fn build_streaming_func(
             let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
                 &http,
+                &helper_http,
                 UpstreamForwardRequest {
                     method: &method,
                     url: &url,
@@ -897,12 +940,17 @@ fn build_streaming_func(
             .await
             {
                 Ok(response) => response,
-                Err(error) if retry_aware => {
+                Err(CliError::Upstream(error)) if retry_aware => {
                     return Err(FlowError::Upstream(transport_failure(&error)));
+                }
+                Err(CliError::Upstream(error)) => {
+                    return Err(
+                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                    );
                 }
                 Err(error) => {
                     return Err(
-                        upstream_failures.capture(CapturedUpstreamFailure::Transport(error))
+                        upstream_failures.capture(CapturedUpstreamFailure::Authentication(error))
                     );
                 }
             };
@@ -1220,8 +1268,9 @@ fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> Bytes {
 // Source authentication is normalized at ingress, before interceptors can select a target.
 async fn forward_upstream_request(
     http: &reqwest::Client,
+    helper_http: &reqwest::Client,
     request: UpstreamForwardRequest<'_>,
-) -> Result<reqwest::Response, reqwest::Error> {
+) -> Result<reqwest::Response, CliError> {
     let UpstreamForwardRequest {
         method,
         url,
@@ -1246,7 +1295,15 @@ async fn forward_upstream_request(
         url,
         forwarding.source_route,
     );
-    let configured_auth_header = forwarding.configured_auth_header(effective.target_route);
+    let allow_configured_auth = matches!(
+        effective.credential_policy,
+        TargetCredentialPolicy::SourceOrEnvironment
+    ) && forwarding.authorization.allow_environment_provider_auth;
+    let http = if allow_configured_auth && effective.target_route.has_helper(&forwarding.config) {
+        helper_http
+    } else {
+        http
+    };
     let mut upstream = http
         .request(method.clone(), &effective.url)
         .body(effective.body_bytes.clone());
@@ -1255,19 +1312,16 @@ async fn forward_upstream_request(
             upstream = upstream.header(name, value);
         }
     }
-    upstream = inject_provider_auth(
+    let upstream = inject_provider_auth(
         upstream,
         effective.target_route,
-        &effective.headers,
-        matches!(
-            effective.credential_policy,
-            TargetCredentialPolicy::SourceOrEnvironment
-        ) && forwarding.authorization.allow_environment_provider_auth,
-        configured_auth_header,
-    );
+        allow_configured_auth,
+        &forwarding.config,
+    )
+    .await?;
     if let Some(operational) = operational {
         operational::upstream_started(operational, streaming);
-        let request = upstream.send();
+        let request = http.execute(upstream);
         tokio::pin!(request);
         let response = tokio::select! {
             response = &mut request => response,
@@ -1285,9 +1339,9 @@ async fn forward_upstream_request(
         } else {
             operational::upstream_failed(operational, "transport");
         }
-        response
+        response.map_err(CliError::from)
     } else {
-        upstream.send().await
+        http.execute(upstream).await.map_err(CliError::from)
     }
 }
 
@@ -1499,89 +1553,21 @@ fn json_header_value(value: &Value) -> Option<HeaderValue> {
 // the provider's standard API key env var and attach it to the outbound request. Alignment may
 // have already normalized agent-native auth material; this function remains provider-generic and
 // only handles standard upstream auth injection.
-fn inject_provider_auth(
+async fn inject_provider_auth(
     builder: reqwest::RequestBuilder,
     route: ProviderRoute,
-    inbound: &HeaderMap,
-    allow_environment_provider_auth: bool,
-    configured_auth_header: Option<&str>,
-) -> reqwest::RequestBuilder {
-    inject_provider_auth_with_env(
-        builder,
-        route,
-        inbound,
-        allow_environment_provider_auth,
-        configured_auth_header,
-        |key| std::env::var(key).ok(),
+    allow_configured_auth: bool,
+    config: &crate::configuration::GatewayConfig,
+) -> Result<reqwest::Request, CliError> {
+    let mut request = builder.build()?;
+    crate::upstream_auth::apply(
+        request.headers_mut(),
+        route.is_anthropic(),
+        allow_configured_auth,
+        config,
     )
-}
-
-// Pure variant exposed for tests. The env lookup is injected so cases can be exercised without
-// mutating process env state (which races with parallel test execution).
-fn inject_provider_auth_with_env<F>(
-    builder: reqwest::RequestBuilder,
-    route: ProviderRoute,
-    inbound: &HeaderMap,
-    allow_environment_provider_auth: bool,
-    configured_auth_header: Option<&str>,
-    env_lookup: F,
-) -> reqwest::RequestBuilder
-where
-    F: Fn(&str) -> Option<String>,
-{
-    if !allow_environment_provider_auth {
-        return builder;
-    }
-    let already_authed = inbound.contains_key(http::header::AUTHORIZATION)
-        || inbound.contains_key("x-api-key")
-        || inbound.contains_key("api-key")
-        || inbound.contains_key("anthropic-api-key");
-    if already_authed {
-        return builder;
-    }
-    if let Some(value) = configured_auth_header {
-        return builder.header(http::header::AUTHORIZATION, value);
-    }
-    let (env_var, header_name) = match route {
-        ProviderRoute::OpenAiResponses
-        | ProviderRoute::OpenAiChatCompletions
-        | ProviderRoute::OpenAiResponsesCompact
-        | ProviderRoute::OpenAiRealtime
-        | ProviderRoute::OpenAiRealtimeCalls
-        | ProviderRoute::OpenAiLive
-        | ProviderRoute::OpenAiImagesGenerations
-        | ProviderRoute::OpenAiImagesEdits
-        | ProviderRoute::OpenAiMemoriesSummarize
-        | ProviderRoute::OpenAiStandaloneSearch
-        | ProviderRoute::OpenAiModels => ("OPENAI_API_KEY", http::header::AUTHORIZATION.as_str()),
-        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
-            ("ANTHROPIC_API_KEY", "x-api-key")
-        }
-    };
-    let Some(value) = env_lookup(env_var) else {
-        return builder;
-    };
-    // Trim before testing emptiness — a value of "   " is no more useful than "" and sending
-    // `Bearer ` with leading whitespace can confuse upstream auth parsers further down.
-    let value = value.trim().to_string();
-    if value.is_empty() {
-        return builder;
-    }
-    let header_value = match route {
-        ProviderRoute::OpenAiResponses
-        | ProviderRoute::OpenAiChatCompletions
-        | ProviderRoute::OpenAiResponsesCompact
-        | ProviderRoute::OpenAiRealtime
-        | ProviderRoute::OpenAiRealtimeCalls
-        | ProviderRoute::OpenAiLive
-        | ProviderRoute::OpenAiImagesGenerations
-        | ProviderRoute::OpenAiImagesEdits
-        | ProviderRoute::OpenAiMemoriesSummarize
-        | ProviderRoute::OpenAiStandaloneSearch
-        | ProviderRoute::OpenAiModels => format!("Bearer {value}"),
-        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => value,
-    };
-    builder.header(header_name, header_value)
+    .await?;
+    Ok(request)
 }
 
 // Plain byte passthrough used for streaming routes that lack a typed codec. The managed pipeline
@@ -1594,6 +1580,7 @@ async fn passthrough_streaming(
 ) -> Result<Response<Body>, CliError> {
     let response = forward_upstream_request(
         upstream_client(&state, prepared.client_named_upstream),
+        &state.http_helper,
         UpstreamForwardRequest {
             method: &prepared.method,
             url: &prepared.upstream_url,
@@ -1701,6 +1688,7 @@ fn selected_upstream_failure(failure: CapturedUpstreamFailure) -> Result<Respons
             bytes,
         } => build_response(status, headers, Body::from(bytes)),
         CapturedUpstreamFailure::Transport(error) => Err(CliError::Upstream(error)),
+        CapturedUpstreamFailure::Authentication(error) => Err(error),
     }
 }
 
@@ -1825,7 +1813,6 @@ pub(crate) async fn models(
         );
     }
     let provider = ProviderRoute::OpenAiModels;
-    let configured_auth_header = provider.configured_auth_header(&state.config);
     let request_path = parts.uri.path().to_string();
     let (authorization, provider_path) =
         state.authorize_provider_request(&mut parts.headers, &request_path)?;
@@ -1870,26 +1857,31 @@ pub(crate) async fn models(
         &parts.headers,
         provider,
         allow_environment_provider_auth,
-        configured_auth_header,
+        if provider.has_replacement(&state.config) {
+            Some("configured")
+        } else {
+            None
+        },
     );
-    let mut upstream = if named_by_client {
-        state.http_no_redirect.get(upstream_url)
+    let http = if allow_environment_provider_auth && provider.has_helper(&state.config) {
+        &state.http_helper
     } else {
-        state.http.get(upstream_url)
+        upstream_client(&state, named_by_client)
     };
+    let mut upstream = http.get(upstream_url);
     for (name, value) in &sanitized {
         if should_forward_request_header(name, &sanitized) {
             upstream = upstream.header(name, value);
         }
     }
-    upstream = inject_provider_auth(
+    let upstream = inject_provider_auth(
         upstream,
         provider,
-        &sanitized,
         allow_environment_provider_auth,
-        configured_auth_header,
-    );
-    let upstream_response = upstream.send().await?;
+        &state.config,
+    )
+    .await?;
+    let upstream_response = http.execute(upstream).await?;
     let status = upstream_response.status();
     let headers = response_headers(upstream_response.headers());
     let bytes = upstream_response.bytes().await?;

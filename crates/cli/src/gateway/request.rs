@@ -125,8 +125,24 @@ pub(super) async fn prepare_gateway_request(
         &parts.headers,
         provider,
         authorization.allow_environment_provider_auth,
-        provider.configured_auth_header(config),
+        if provider.has_replacement(config) {
+            Some("configured")
+        } else {
+            None
+        },
     );
+    if authorization.allow_environment_provider_auth
+        && provider.has_replacement(config)
+        && (if provider.is_anthropic() {
+            config.anthropic_api_key_helper.is_some()
+        } else {
+            config.openai_api_key_helper.is_some()
+        })
+    {
+        for name in ["authorization", "x-api-key", "api-key", "anthropic-api-key"] {
+            parts.headers.remove(name);
+        }
+    }
     authorization.source_credential = authorization
         .source_credential
         .after_source_normalization(&parts.headers);

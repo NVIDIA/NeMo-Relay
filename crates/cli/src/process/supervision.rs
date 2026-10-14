@@ -132,3 +132,17 @@ pub(super) fn combine_cleanup_results<const N: usize>(
         Err(std::io::Error::other(errors.join("; ")))
     }
 }
+
+/// The private helper job closes with its request and terminates every remaining descendant.
+#[cfg(windows)]
+pub(crate) struct HelperProcessTree {
+    _tree: platform::ProcessTree,
+}
+
+#[cfg(windows)]
+pub(crate) async fn spawn_helper(
+    command: &mut tokio::process::Command,
+) -> std::io::Result<(tokio::process::Child, HelperProcessTree)> {
+    let (child, tree) = platform::spawn_helper(command).await?;
+    Ok((child, HelperProcessTree { _tree: tree }))
+}

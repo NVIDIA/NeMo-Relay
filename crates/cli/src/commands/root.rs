@@ -78,7 +78,7 @@ pub(crate) enum Command {
         after_help = "Examples:\n  \
                       nemo-relay codex\n  \
                       nemo-relay codex -- exec \"fix the bug in foo.rs\"\n  \
-                      nemo-relay --openai-base-url https://inference-api.nvidia.com codex"
+                      nemo-relay --openai-base-url https://gateway.example.com/v1 codex"
     )]
     Codex(EasyPathCommand),
     /// Run pi with observability (setup on first use; the extension must already be installed)

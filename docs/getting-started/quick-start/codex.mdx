@@ -82,7 +82,8 @@ Before you start, make sure you have:
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 - Permission to download the NeMo Relay version used by this guide
 
-On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+On Unix, the verification step also uses `jq` 1.6 or newer; check your version
+with `jq --version`. PowerShell uses its built-in JSON parser.
 
 <Note icon="circle-info">
 Use Codex's configured model; Relay does not select or require one. For example,
@@ -95,6 +96,12 @@ the run. Also add an `[upstream]` section with
 `openai_base_url = "https://YOUR_GATEWAY/v1"` to the Relay `config.toml` below;
 Codex's custom base URL is not carried over when Relay replaces its provider.
 Refer to [Codex authentication](https://developers.openai.com/codex/auth).
+</Note>
+
+<Note icon="circle-info">
+Install commands target the Relay version documented here. If that version has
+not been released, its pinned packages and downloads are not available yet.
+Select a released documentation version to try Relay now.
 </Note>
 
 <Steps toc={true}>
@@ -203,9 +210,10 @@ jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt 
 jq -se '
   . as $events |
   def closed($category):
-    any($events[]; .kind == "scope" and .scope_category == "end" and
+    any($events[]; . as $end_event |
+      .kind == "scope" and .scope_category == "end" and
       .category == $category and
-      ($category != "custom" or .name == "codex-turn") and . as $end_event |
+      ($category != "custom" or .name == "codex-turn") and
       any($events[]; .kind == "scope" and .scope_category == "start" and
         .uuid == $end_event.uuid and .name == $end_event.name and
         .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));
