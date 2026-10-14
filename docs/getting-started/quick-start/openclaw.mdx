@@ -26,7 +26,7 @@ SPDX-License-Identifier: Apache-2.0 */}
   },
   "setup": [
     "Authenticated model provider with tool-use permissions",
-    "Disposable test agent and managed gateway service; do not change a shared gateway"
+    "Disposable test agent and gateway; do not change a shared gateway"
   ],
   "inputs": {
     "RELAY_LOG_DIR": {
@@ -77,7 +77,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 ## Goal
 
 Observe one gateway-backed OpenClaw agent turn and write its session, model, and
-tool lifecycle to a local ATOF event file.
+tool lifecycle to a local Agent Trajectory Observability Format (ATOF) file.
 
 For NVIDIA inference in this guide, use a custom provider ID such
 as `relay-nvidia`, rather than the built-in `nvidia` provider ID. In your
@@ -95,12 +95,14 @@ underlying missing-hook behavior.
 
 ## Prerequisites
 
+Before you start, make sure you have:
+
 - OpenClaw 2026.9.3 or newer
 - Node.js 24.16 or newer within the 24.x release line, and npm
 - A configured OpenClaw agent with a writable workspace and a selected model
 - Inference access through that provider's API key or a supported authenticated session
 - Permission to install plugins, restart, and stop your disposable OpenClaw gateway
-- A managed gateway service for the `gateway restart` and `gateway stop` commands below
+- A managed gateway service, or a second terminal for a foreground gateway
 
 On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
 
@@ -114,8 +116,8 @@ installing the Relay plugin.
 
 ## Install
 
-Install the pinned NeMo Relay plugin. OpenClaw registers the plugin ID
-and adds it to an existing `plugins.allow` list automatically:
+Install the NeMo Relay plugin version for these docs. OpenClaw registers the
+plugin ID and adds it to an existing `plugins.allow` list automatically:
 
 {/* quickstart-block {"id":"install","role":"manual","cwd":".","shells":["bash","powershell"],"session":"main","reason":"Review OpenClaw package-source confirmation separately from capability consent"} */}
 ```bash
@@ -254,7 +256,7 @@ openclaw gateway stop
 ```
 
 Wait for the stop command to finish successfully before verifying.
-For a foreground gateway, press **Ctrl+C** in its terminal instead of running
+For a foreground gateway, press Ctrl+C in its terminal instead of running
 `gateway stop`, and wait for that process to exit before verifying.
 
 <Note icon="circle-info">
@@ -264,7 +266,7 @@ resume use.
 
 ## Verify
 
-Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+The verification command prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
 
 <details>
 <summary>Run the verification checks</summary>
@@ -323,7 +325,7 @@ Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
 </Tab>
 </Tabs>
 
-Expected output from the verification command:
+The verification command prints the following output when its checks pass:
 
 {/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
 ```text
