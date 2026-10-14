@@ -84,6 +84,15 @@ class QuickstartVersionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "expected Relay 0.11.0"):
                 VERSIONS.check(root)
 
+    def test_check_rejects_prerelease_install_pins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs/getting-started").mkdir(parents=True)
+            (root / "Cargo.toml").write_text('[workspace.package]\nversion = "0.11.0-rc.1"\n')
+            (root / "docs/getting-started/installation.mdx").write_text("uv add nemo-relay==0.11.0-rc.1\n")
+            with self.assertRaisesRegex(ValueError, "expected Relay 0.11.0, found 0.11.0-rc.1"):
+                VERSIONS.check(root)
+
 
 if __name__ == "__main__":
     unittest.main()

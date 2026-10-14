@@ -6,7 +6,7 @@
 
 This deliberately does not execute documentation or provision authenticated hosts.
 Commands, fixtures, and assertions belong in the page; this tool only interprets
-the small shared annotation format. Requires Python 3.11+, no third-party packages.
+the small shared annotation format. Requires Python 3.11+ and the dev dependencies.
 """
 
 from __future__ import annotations
@@ -19,8 +19,13 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from jsonschema import Draft202012Validator
+
 ROOT = Path(__file__).resolve().parents[1]
 PAGES = ROOT / "docs/getting-started/quick-start"
+SCHEMA = json.loads((ROOT / "scripts/quickstarts/schema.json").read_text(encoding="utf-8"))
+Draft202012Validator.check_schema(SCHEMA)
+VALIDATORS = {kind: Draft202012Validator({**SCHEMA, "$ref": f"#/$defs/{kind}"}) for kind in ("scenario", "block")}
 SCENARIO = re.compile(r"\{/\* quickstart-scenario\s+(.*?)\*/\}", re.DOTALL)
 BLOCK = re.compile(r"\{/\* quickstart-block\s+(.*?)\*/\}\s*$", re.DOTALL)
 FENCE = re.compile(r"^```([\w+-]+)\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
@@ -35,12 +40,19 @@ CODE = re.compile(
 # form used by these guides, not arbitrary MDX or remote code execution.
 DISPLAY = re.compile(FENCE.pattern + "|" + CODE.pattern, re.MULTILINE | re.DOTALL)
 CODE_MARKER = re.compile(r"^[ \t]*<Code\b", re.MULTILINE)
-ROLES = {"file", "run", "expected", "input", "manual"}
 
 
 def require(condition: Any, message: str) -> None:
     if not condition:
         raise ValueError(message)
+
+
+def validate_metadata(value: Any, kind: str, location: str) -> None:
+    """The committed schema owns field types; Python owns cross-file relationships."""
+    error = next(VALIDATORS[kind].iter_errors(value), None)
+    if error is not None:
+        path = ".".join(str(part) for part in error.absolute_path) or "<root>"
+        raise ValueError(f"{location}: {kind}.{path}: {error.message}")
 
 
 def relative_path(value: str) -> bool:
@@ -57,31 +69,20 @@ def extract(page: Path, shell: str | None = None) -> dict[str, Any]:
     scenarios = SCENARIO.findall(text)
     require(len(scenarios) == 1, f"{page.name}: expected one scenario")
     scenario = json.loads(scenarios[0])
-    require(scenario.get("schema") == 1, "unsupported quickstart schema")
+    validate_metadata(scenario, "scenario", page.name)
     require(scenario.get("id") == page.stem, "scenario id must match the page filename")
-    require(scenario.get("mode") in {"local", "live"}, "declare local or live execution")
-    shells = scenario.get("shells", [])
-    require(shells and len(shells) == len(set(shells)), "declare unique shell variants")
-    require(set(shells) <= {"bash", "powershell"}, "unknown shell variant")
+    shells = scenario["shells"]
     require(shell is None or shell in shells, f"shell {shell!r} is not supported by this page")
     require(relative_path(scenario.get("cwd", "")), "unsafe scenario cwd")
-    require(isinstance(scenario.get("requires"), dict), "declare prerequisite versions")
-    require(isinstance(scenario.get("setup"), list), "declare external setup")
-    require(isinstance(scenario.get("fresh"), list) and scenario["fresh"], "declare fresh artifacts")
     inputs = scenario.get("inputs", {})
-    require(isinstance(inputs, dict), "inputs must be an object")
     scenario["inputs"] = inputs
-    for name, spec in inputs.items():
-        require(re.fullmatch(r"[A-Z][A-Z0-9_]*", name), "invalid input name")
-        require(spec.get("kind") in {"env", "path", "argument"}, "unknown input kind")
-        if spec["kind"] != "env":
-            require(bool(spec.get("token")), "non-environment inputs require a literal token")
 
     blocks = []
     previous = 0
     fence_count = 0
     code_count = 0
     for display in DISPLAY.finditer(text):
+        line = text[: display.start()].count("\n") + 1
         # Search only between fences: code content can never become an annotation.
         prefix = text[previous : display.start()]
         annotations = list(re.finditer(r"\{/\* quickstart-block\s+", prefix))
@@ -90,7 +91,7 @@ def extract(page: Path, shell: str | None = None) -> dict[str, Any]:
         if annotation is None:
             raise ValueError("block annotation must immediately precede its displayed block")
         block = json.loads(annotation.group(1))
-        require(block.get("role") in ROLES, "unknown block role")
+        validate_metadata(block, "block", f"{page.name}:{line}")
         if display.group("src") is not None:
             require(block["role"] == "file", "Code components must declare file artifacts")
             source = display.group("src")
@@ -104,41 +105,19 @@ def extract(page: Path, shell: str | None = None) -> dict[str, Any]:
         else:
             language, content = display.group(1), display.group(2)
             fence_count += 1
-        require(re.fullmatch(r"[a-z][a-z0-9-]*", block.get("id", "")), "invalid block id")
         require(relative_path(block.get("cwd", "")), "unsafe block cwd")
         variants = block.get("shells", shells)
-        require(
-            variants and len(variants) == len(set(variants)) and set(variants) <= set(shells),
-            "invalid block shell variants",
-        )
+        require(set(variants) <= set(shells), "invalid block shell variants")
         role = block["role"]
         if role == "file":
             require(relative_path(block.get("path", "")), "unsafe artifact path")
         elif role == "run":
-            require(
-                isinstance(block.get("timeout_seconds"), int) and block["timeout_seconds"] > 0,
-                "commands need a bounded timeout",
-            )
-            require(bool(block.get("session")), "commands need an explicit shell session")
             require(language in {"bash", "powershell"}, "commands must be shell blocks")
-            if "background" in block:
-                process = block["background"]
-                require(
-                    process.get("stop") == "interrupt" and process.get("shutdown_timeout_seconds", 0) > 0,
-                    "background processes need bounded graceful cleanup",
-                )
-                require(
-                    process.get("ready", {}).get("tcp") and process["ready"].get("timeout_seconds", 0) > 0,
-                    "background processes need bounded readiness",
-                )
         elif role == "input":
             require(inputs.get(block.get("env"), {}).get("kind") == "env", "undeclared environment input")
-        elif role == "manual":
-            require(bool(block.get("reason")), "manual setup needs an explicit reason")
-        else:
-            require(block.get("match") == "exact-lines" and language == "text", "unknown output matcher")
-            require(bool(block.get("from")), "expected output must name its producing command")
-        block.update(language=language, content=content, line=text[: display.start()].count("\n") + 1)
+        elif role == "expected":
+            require(language == "text", "expected output must be a text block")
+        block.update(language=language, content=content, line=line)
         blocks.append(block)
         previous = display.end()
     # Reject fences that the extractor cannot pair with a contract, including
@@ -161,17 +140,7 @@ def extract(page: Path, shell: str | None = None) -> dict[str, Any]:
     checks = scenario.get("checks", [])
     require(checks and any(check.get("kind") == "atof" for check in checks), "declare ATOF success criteria")
     for check in checks:
-        require(check.get("kind") in {"file-equals", "atof", "json-response"}, "unknown artifact check")
         validate_artifact_path(check.get("path", ""), inputs)
-        if check["kind"] == "atof":
-            require(check.get("version") == "0.1", "unsupported ATOF version")
-            require(check.get("paired_scopes") or check.get("marks"), "ATOF check has no lifecycle assertions")
-            for selector in check.get("paired_scopes", []):
-                require(selector and set(selector) <= {"category", "name"}, "invalid scope selector")
-        elif check["kind"] == "file-equals":
-            require(isinstance(check.get("value"), str) and check["value"], "empty file assertion")
-        else:
-            require(check.get("role") == "assistant" and check.get("contains"), "declare assistant response assertion")
     for path in scenario["fresh"]:
         validate_artifact_path(path, inputs)
     scenario["blocks"] = [block for block in blocks if shell is None or shell in block.get("shells", shells)]
@@ -274,23 +243,11 @@ def main() -> int:
     parser.add_argument("--input", action="append", default=[], metavar="NAME=PATH", help="non-secret path inputs")
     args = parser.parse_args()
     try:
-        # The extractor lands independently of the guides. Until each guide PR
-        # merges, legacy pages without contracts remain valid documentation.
-        # A page with either annotation token must still be checked, even if
-        # its scenario declaration is malformed or missing.
-        pages = (
-            [args.page]
-            if args.page
-            else sorted(
-                page
-                for page in PAGES.glob("*.mdx")
-                if page.stem != "index"
-                and any(
-                    token in page.read_text(encoding="utf-8") for token in ("quickstart-scenario", "quickstart-block")
-                )
-            )
-        )
+        # Every executable guide must participate. Removing annotations must
+        # not turn a broken guide into a successful zero-coverage check.
+        pages = [args.page] if args.page else sorted(page for page in PAGES.glob("*.mdx") if page.stem != "index")
         require(args.action == "check" or args.page is not None, "this action requires one page")
+        require(bool(pages), "no quickstart guides found")
         scenarios = [extract(page, args.shell) for page in pages]
         if args.action == "check":
             print(f"Validated {len(scenarios)} quickstart contracts (no commands executed)")

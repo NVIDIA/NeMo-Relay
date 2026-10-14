@@ -139,9 +139,32 @@ class QuickstartContractTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 QS.verify_atof(invalid, check)
 
-    def test_default_check_ignores_legacy_pages_but_rejects_partial_contracts(self):
+    def test_schema_rejects_unknown_fields_and_wrong_types(self):
+        source = example_page()
+        cases = {
+            "unknown scenario field": source.replace('"schema": 1', '"schema": 1, "typo_setting": true'),
+            "boolean schema version": source.replace('"schema": 1', '"schema": true'),
+            "missing prerequisite types": source.replace('">=3.11"', "false"),
+            "unknown block field": source.replace('"role":"file"', '"role":"file","typo_setting":true'),
+            "boolean timeout": source.replace('"timeout_seconds":30', '"timeout_seconds":true'),
+            "string timeout": source.replace('"timeout_seconds":30', '"timeout_seconds":"30"'),
+            "zero timeout": source.replace('"timeout_seconds":30', '"timeout_seconds":0'),
+            "unknown assertion field": source.replace('"trim": true', '"trim": true, "typo_setting": true'),
+            "invalid scope selector": source.replace('"category": "agent"', '"category": false'),
+        }
+        for label, changed in cases.items():
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                self.assertNotEqual(source, changed)
+                self.page.write_text(changed, encoding="utf-8")
+                QS.extract(self.page)
+
+    def test_default_check_rejects_missing_and_partial_contracts(self):
         (self.root / "legacy.mdx").write_text("# Legacy guide\n", encoding="utf-8")
+        (self.root / "index.mdx").write_text("# Overview\n", encoding="utf-8")
         with mock.patch.object(QS, "PAGES", self.root), mock.patch.object(sys, "argv", ["check-quickstarts", "check"]):
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(QS.main(), 1)
+            (self.root / "legacy.mdx").unlink()
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 self.assertEqual(QS.main(), 0)
@@ -152,6 +175,17 @@ class QuickstartContractTests(unittest.TestCase):
             )
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(QS.main(), 1)
+
+    def test_default_check_rejects_zero_guides(self):
+        empty = self.root / "empty"
+        empty.mkdir()
+        with (
+            mock.patch.object(QS, "PAGES", empty),
+            mock.patch.object(sys, "argv", ["check-quickstarts", "check"]),
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+        ):
+            self.assertEqual(QS.main(), 1)
+        self.assertIn("no quickstart guides", errors.getvalue())
 
 
 if __name__ == "__main__":
