@@ -624,8 +624,12 @@ fn config() -> GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
         openai_auth_header: None,
+        openai_api_key: None,
+        openai_api_key_helper: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        anthropic_api_key: None,
+        anthropic_api_key_helper: None,
         chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
@@ -5101,4 +5105,117 @@ fn chatgpt_codex_base_url_overrides_preserve_precedence_and_managed_policy() {
         gateway.chatgpt_codex_base_url.as_deref(),
         Some("https://run.example/codex")
     );
+}
+
+#[test]
+fn api_key_helpers_validate_exclusive_sources_and_provider_schemes() {
+    for provider in ["openai", "anthropic"] {
+        let helper = format!(
+            "[upstream.{provider}_api_key_helper]\ncommand = '/bin/helper'\nargs = ['token']\n"
+        );
+        let file: FileConfig = toml::from_str(&helper).unwrap();
+        let mut gateway = GatewayConfig::default();
+        apply_file_upstream_config(&mut gateway, file.upstream).unwrap();
+        for static_name in ["api_key", "auth_header"] {
+            let text = format!("[upstream]\n{provider}_{static_name} = 'static-key'\n{helper}");
+            let file: FileConfig = toml::from_str(&text).unwrap();
+            assert!(
+                apply_file_upstream_config(&mut GatewayConfig::default(), file.upstream)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("mutually exclusive")
+            );
+        }
+        for extra in ["timeout_ms = 0", "command = ''"] {
+            let text = if extra.starts_with("command") {
+                helper.replace("command = '/bin/helper'", extra)
+            } else {
+                format!("{helper}{extra}\n")
+            };
+            let file: FileConfig = toml::from_str(&text).unwrap();
+            assert!(
+                apply_file_upstream_config(&mut GatewayConfig::default(), file.upstream).is_err()
+            );
+        }
+    }
+    let file: FileConfig = toml::from_str(
+        "[upstream.openai_api_key_helper]\ncommand = 'helper'\nauth_scheme = 'api_key'\n",
+    )
+    .unwrap();
+    assert!(apply_file_upstream_config(&mut GatewayConfig::default(), file.upstream).is_err());
+}
+
+#[test]
+fn api_key_helper_layering_rejects_conflicts_and_clears_changed_endpoint_credentials() {
+    for provider in ["openai", "anthropic"] {
+        let mut lower: toml::Value = toml::from_str(&format!("[upstream]\n{provider}_base_url = 'https://original.example/v1'\n[upstream.{provider}_api_key_helper]\ncommand = 'helper'\n")).unwrap();
+        let conflicting: toml::Value =
+            toml::from_str(&format!("[upstream]\n{provider}_api_key = 'key'\n")).unwrap();
+        let mut merged = lower.clone();
+        merge_gateway_config_toml(&mut merged, conflicting);
+        let file: FileConfig = merged.try_into().unwrap();
+        assert!(apply_file_upstream_config(&mut GatewayConfig::default(), file.upstream).is_err());
+        let replacement: toml::Value = toml::from_str(&format!("[upstream]\n{provider}_base_url = 'https://replacement.example/v1'\n{provider}_api_key = 'new-key'\n")).unwrap();
+        merge_gateway_config_toml(&mut lower, replacement);
+        assert!(
+            lower["upstream"]
+                .get(format!("{provider}_api_key_helper"))
+                .is_none()
+        );
+        let file: FileConfig = lower.try_into().unwrap();
+        apply_file_upstream_config(&mut GatewayConfig::default(), file.upstream).unwrap();
+    }
+}
+
+#[test]
+fn replacing_upstream_helpers_does_not_inherit_old_command_arguments() {
+    let mut lower: toml::Value = toml::from_str("[upstream]\nopenai_base_url = 'https://original.example'\n[upstream.openai_api_key_helper]\ncommand = 'old-helper'\nargs = ['old-secret']\ntimeout_ms = 123\n").unwrap();
+    let replacement: toml::Value = toml::from_str("[upstream]\nopenai_base_url = 'https://replacement.example'\n[upstream.openai_api_key_helper]\ncommand = 'new-helper'\n").unwrap();
+    merge_gateway_config_toml(&mut lower, replacement);
+    let file: FileConfig = lower.try_into().unwrap();
+    let mut gateway = GatewayConfig::default();
+    apply_file_upstream_config(&mut gateway, file.upstream).unwrap();
+    let helper = gateway.openai_api_key_helper.unwrap();
+    assert_eq!(helper.command, "new-helper");
+    assert!(helper.args.is_empty());
+    assert_eq!(helper.timeout_ms, 10_000);
+}
+
+#[test]
+fn restating_default_endpoints_preserves_inherited_credentials() {
+    let defaults = GatewayConfig::default();
+    for (provider, default_url) in [
+        ("openai", defaults.openai_base_url.as_str()),
+        ("anthropic", defaults.anthropic_base_url.as_str()),
+    ] {
+        for source in ["api_key", "auth_header", "api_key_helper"] {
+            let credential = if source == "api_key_helper" {
+                format!("[upstream.{provider}_{source}]\ncommand = 'helper'\nargs = ['token']\n")
+            } else {
+                format!("[upstream]\n{provider}_{source} = 'credential'\n")
+            };
+            let lower: toml::Value = toml::from_str(&credential).unwrap();
+            for (url, retained) in [(default_url, true), ("https://replacement.example", false)] {
+                let mut merged = lower.clone();
+                let higher =
+                    toml::from_str(&format!("[upstream]\n{provider}_base_url = '{url}'\n"))
+                        .unwrap();
+                merge_gateway_config_toml(&mut merged, higher);
+                assert_eq!(
+                    merged["upstream"]
+                        .get(format!("{provider}_{source}"))
+                        .is_some(),
+                    retained,
+                    "{provider} {source} with {url}"
+                );
+                let file: FileConfig = merged.try_into().unwrap();
+                let mut gateway = GatewayConfig::default();
+                apply_file_upstream_config(&mut gateway, file.upstream).unwrap();
+                assert_eq!(
+                    crate::upstream_auth::has_replacement(&gateway, provider == "anthropic"),
+                    retained
+                );
+            }
+        }
+    }
 }

@@ -1026,8 +1026,8 @@ async fn prepared_request_enforces_body_limit_and_normalizes_non_json_payloads()
     assert!(!prepared.streaming);
 }
 
-#[test]
-fn managed_request_helpers_cover_overrides_streaming_and_provider_credentials() {
+#[tokio::test]
+async fn managed_request_helpers_cover_overrides_streaming_and_provider_credentials() {
     let _environment = EnvScope::set(&[
         ("OPENAI_API_KEY", Some(OsStr::new("  openai-env-key  "))),
         ("ANTHROPIC_API_KEY", Some(OsStr::new("anthropic-env-key"))),
@@ -1077,21 +1077,27 @@ fn managed_request_helpers_cover_overrides_streaming_and_provider_credentials() 
         &mut headers,
         ProviderRoute::OpenAi,
         &GatewayConfig::default(),
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(headers[AUTHORIZATION], "Bearer openai-env-key");
     headers.clear();
     inject_provider_auth(
         &mut headers,
         ProviderRoute::Anthropic,
         &GatewayConfig::default(),
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(headers["x-api-key"], "anthropic-env-key");
     headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer caller"));
     inject_provider_auth(
         &mut headers,
         ProviderRoute::OpenAi,
         &GatewayConfig::default(),
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(headers[AUTHORIZATION], "Bearer caller");
 
     let accepts_sse = HeaderMap::from_iter([(
@@ -2374,8 +2380,8 @@ fn managed_header_and_observation_helpers_cover_ignored_and_invalid_values() {
 }
 
 #[cfg(unix)]
-#[test]
-fn managed_observation_and_provider_environment_values_reject_invalid_inputs() {
+#[tokio::test]
+async fn managed_observation_and_provider_environment_values_reject_invalid_inputs() {
     use std::os::unix::ffi::OsStrExt;
 
     let _environment = EnvScope::set(&[
@@ -2387,8 +2393,6 @@ fn managed_observation_and_provider_environment_values_reject_invalid_inputs() {
         ("ANTHROPIC_API_KEY", None),
     ]);
     assert!(observation_capture_limit_from_environment().is_err());
-    assert!(environment_value("OPENAI_API_KEY").is_none());
-    assert!(environment_value("ANTHROPIC_API_KEY").is_none());
     let mut headers = HeaderMap::new();
     inject_provider_auth(
         &mut headers,
@@ -2397,7 +2401,9 @@ fn managed_observation_and_provider_environment_values_reject_invalid_inputs() {
             openai_auth_header: Some("bad\nvalue".into()),
             ..GatewayConfig::default()
         },
-    );
+    )
+    .await
+    .unwrap_err();
     assert!(headers.is_empty());
 }
 
@@ -2645,4 +2651,95 @@ async fn malformed_permission_hooks_fail_closed_in_each_native_response_shape() 
     );
 
     runtime.close().await.expect("close managed runtime");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unmanaged_daemon_dispatch_generates_fresh_helper_tokens() {
+    let seen = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
+    let capture = seen.clone();
+    let app = Router::new().route(
+        "/v1/messages/count_tokens",
+        post(move |headers: HeaderMap| {
+            let capture = capture.clone();
+            async move {
+                capture.lock().unwrap().push(headers);
+                "{}"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = GatewayConfig {
+        anthropic_base_url: format!("http://{}", listener.local_addr().unwrap()),
+        anthropic_api_key_helper: Some(crate::upstream_auth::tests::helper("printf 'token-%s' $$")),
+        ..GatewayConfig::default()
+    };
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for _ in 0..2 {
+        let request = Request::post("/v1/messages/count_tokens")
+            .header(AUTHORIZATION, "Bearer caller-token")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = dispatch_unmanaged(
+            pooled_client().unwrap(),
+            request,
+            ProviderRoute::Anthropic,
+            &config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.into_body().collect().await.unwrap();
+    }
+    let captured = seen.lock().unwrap();
+    assert_eq!(captured.len(), 2);
+    assert_ne!(captured[0]["x-api-key"], captured[1]["x-api-key"]);
+    assert!(!captured[0].contains_key(AUTHORIZATION));
+    server.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn regression_backend_alias_still_uses_provider_helper() {
+    let seen = Arc::new(Mutex::new(None::<HeaderMap>));
+    let capture = seen.clone();
+    let app = Router::new().route(
+        "/v1/realtime/calls",
+        post(move |headers: HeaderMap| {
+            let capture = capture.clone();
+            async move {
+                *capture.lock().unwrap() = Some(headers);
+                "{}"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = GatewayConfig {
+        openai_base_url: format!("http://{}", listener.local_addr().unwrap()),
+        openai_api_key_helper: Some(crate::upstream_auth::tests::helper(
+            "printf helper-generated-token",
+        )),
+        ..GatewayConfig::default()
+    };
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let request = Request::post("/backend-api/codex/realtime/calls")
+        .header(AUTHORIZATION, "Bearer stale-client-api-key")
+        .body(Body::from("{}"))
+        .unwrap();
+    let response = dispatch_unmanaged(
+        pooled_client().unwrap(),
+        request,
+        ProviderRoute::OpenAi,
+        &config,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.into_body().collect().await.unwrap();
+    let actual = seen.lock().unwrap().as_ref().unwrap()[AUTHORIZATION].clone();
+    server.abort();
+    assert_eq!(
+        actual, "Bearer helper-generated-token",
+        "A configured enterprise endpoint must receive helper authentication for this alias"
+    );
 }

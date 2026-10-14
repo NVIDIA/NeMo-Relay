@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+#[cfg(test)]
+use axum::http::header::AUTHORIZATION;
+use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
@@ -93,8 +95,8 @@ impl WorkerState {
         let data_token = registration.data_token_digest();
         Ok(Self {
             worker_id,
-            config,
             upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
+            config,
             managed,
             auth: RwLock::new(AuthTokens {
                 data: data_token,
@@ -730,8 +732,11 @@ async fn forward_to_provider(
     route: ProviderRoute,
     in_flight: InFlight,
 ) -> Response<Body> {
-    let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    let allow_environment_provider_auth = crate::gateway::daemon_allows_provider_auth(
+        request.headers(),
+        request.uri().path(),
+        &state.config,
+    );
     let path_and_query = request
         .uri()
         .path_and_query()
@@ -753,13 +758,19 @@ async fn forward_to_provider(
     ) {
         *request.headers_mut() = aligned;
     }
-    if allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, &state.config);
+    if allow_environment_provider_auth
+        && let Err(error) = inject_provider_auth(request.headers_mut(), route, &state.config).await
+    {
+        return error.into_response();
     }
+    let helper_auth = allow_environment_provider_auth
+        && crate::upstream_auth::helper(&state.config, matches!(route, ProviderRoute::Anthropic))
+            .is_some();
     if crate::gateway::websocket::is_websocket(&request) {
         let shutdown_state = Arc::clone(&state);
         return match crate::gateway::websocket::forward_to_provider(
             client_named,
+            helper_auth,
             request,
             &destination,
             in_flight,
@@ -772,6 +783,11 @@ async fn forward_to_provider(
             Err(error) => message(StatusCode::BAD_GATEWAY, &error.to_string()),
         };
     }
+    let upstream =
+        match crate::daemon::common::transport::provider_client(&state.upstream, helper_auth) {
+            Ok(client) => client,
+            Err(error) => return CliError::Launch(error.to_string()).into_response(),
+        };
     let destination = match destination.parse::<Uri>() {
         Ok(destination) => destination,
         Err(_) => {
@@ -789,14 +805,11 @@ async fn forward_to_provider(
         Ok(request) => request.map(box_body),
         Err(error) => return message(StatusCode::BAD_REQUEST, &error.to_string()),
     };
-    let request = match super::super::common::transport::request_provider(
-        &state.upstream,
-        client_named,
-        request,
-    ) {
-        Ok(request) => request,
-        Err(error) => return message(StatusCode::BAD_GATEWAY, &error.to_string()),
-    };
+    let request =
+        match super::super::common::transport::request_provider(&upstream, client_named, request) {
+            Ok(request) => request,
+            Err(error) => return message(StatusCode::BAD_GATEWAY, &error.to_string()),
+        };
     let response = match state.config.wait_for_response(request).await {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
@@ -858,47 +871,18 @@ fn log_worker_upstream_request_failed(
     );
 }
 
-fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &GatewayConfig) {
-    if crate::provider_auth::has_provider_credential(headers) {
-        return;
-    }
-    let configured = match route {
-        ProviderRoute::OpenAi => config.openai_auth_header.as_deref(),
-        ProviderRoute::Anthropic => config.anthropic_auth_header.as_deref(),
-    };
-    if let Some(configured) = configured.and_then(header_value) {
-        headers.insert(AUTHORIZATION, configured);
-        return;
-    }
-    match route {
-        ProviderRoute::OpenAi => {
-            let Some(key) = nonempty_environment("OPENAI_API_KEY") else {
-                return;
-            };
-            if let Some(value) = header_value(&format!("Bearer {key}")) {
-                headers.insert(AUTHORIZATION, value);
-            }
-        }
-        ProviderRoute::Anthropic => {
-            let Some(key) = nonempty_environment("ANTHROPIC_API_KEY") else {
-                return;
-            };
-            if let Some(value) = header_value(&key) {
-                headers.insert(HeaderName::from_static("x-api-key"), value);
-            }
-        }
-    }
-}
-
-fn nonempty_environment(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
-fn header_value(value: &str) -> Option<HeaderValue> {
-    HeaderValue::from_str(value).ok()
+async fn inject_provider_auth(
+    headers: &mut HeaderMap,
+    route: ProviderRoute,
+    config: &GatewayConfig,
+) -> Result<(), CliError> {
+    crate::upstream_auth::apply(
+        headers,
+        matches!(route, ProviderRoute::Anthropic),
+        true,
+        config,
+    )
+    .await
 }
 
 fn begin_drain(state: &WorkerState, request: &WorkerDrainRequest) {

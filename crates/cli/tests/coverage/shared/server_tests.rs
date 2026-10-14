@@ -342,8 +342,12 @@ fn test_config() -> GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
         openai_auth_header: None,
+        openai_api_key: None,
+        openai_api_key_helper: None,
         anthropic_base_url: "http://127.0.0.1".into(),
         anthropic_auth_header: None,
+        anthropic_api_key: None,
+        anthropic_api_key_helper: None,
         chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
@@ -379,7 +383,7 @@ async fn gateway_clients_allow_active_streams_past_the_idle_timeout() {
             socket.write_all(b"0\r\n\r\n").await.unwrap();
         });
 
-        let response = gateway_http_client(Some(Duration::from_millis(300)), no_redirect)
+        let response = gateway_http_client(Some(Duration::from_millis(300)), no_redirect, false)
             .get(format!("http://{address}"))
             .send()
             .await
@@ -418,11 +422,15 @@ async fn default_gateway_clients_allow_long_headers_and_silent_streams() {
             socket.write_all(b"done").await.unwrap();
         });
         let request = tokio::spawn(async move {
-            gateway_http_client(GatewayConfig::default().response_timeout(), no_redirect)
-                .get(format!("http://{address}"))
-                .send()
-                .await
-                .unwrap()
+            gateway_http_client(
+                GatewayConfig::default().response_timeout(),
+                no_redirect,
+                false,
+            )
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap()
         });
         tokio::time::timeout(Duration::from_secs(5), started_rx)
             .await
@@ -476,7 +484,7 @@ async fn gateway_clients_reject_stalled_streams_after_the_idle_timeout() {
             tokio::time::sleep(Duration::from_millis(500)).await;
         });
 
-        let response = gateway_http_client(Some(Duration::from_millis(200)), no_redirect)
+        let response = gateway_http_client(Some(Duration::from_millis(200)), no_redirect, false)
             .get(format!("http://{address}"))
             .send()
             .await
