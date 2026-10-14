@@ -1,0 +1,100 @@
+---
+title: "Struct Evaluated Dynamic Plugin Trust"
+sidebar-title: "EvaluatedDynamicPluginTrust"
+description: "Result of integrity and authenticity verification."
+position: 29
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EvaluatedDynamicPluginTrust &#123;\n    pub integrity: <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>,\n    pub authenticity: <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>,\n    pub failure: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-dynamicplugintrustfailure\">DynamicPluginTrustFailure</a>&gt;,\n&#125;"}} /></pre>
+
+Result of integrity and authenticity verification.
+
+## Fields
+
+### `integrity: DynamicPluginCheckState`
+
+Digest verification state.
+
+### `authenticity: DynamicPluginCheckState`
+
+Signature verification state.
+
+### `failure: Option<DynamicPluginTrustFailure>`
+
+Failure when required trust cannot be established.
+
+## Implementations
+
+### `impl EvaluatedDynamicPluginTrust`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-evaluateddynamicplugintrust\">EvaluatedDynamicPluginTrust</a>"}} /></pre>
+
+#### `is_satisfied`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_satisfied(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Whether every required trust check succeeded.
+
+#### `failure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn failure(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"enum-dynamicplugintrustfailure\">DynamicPluginTrustFailure</a>&gt;"}} /></pre>
+
+Returns the trust failure, if required verification failed.
+
+#### `refusal_code`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn refusal_code(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Returns the stable refusal code, if any.
+
+#### `last_error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn last_error(&amp;self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginfailure\">DynamicPluginFailure</a>&gt;"}} /></pre>
+
+Converts a failed trust check into the canonical failure form.
+
+## Trait Implementations
+
+### `impl Clone for EvaluatedDynamicPluginTrust`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-evaluateddynamicplugintrust\">EvaluatedDynamicPluginTrust</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-evaluateddynamicplugintrust\">EvaluatedDynamicPluginTrust</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for EvaluatedDynamicPluginTrust`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-evaluateddynamicplugintrust\">EvaluatedDynamicPluginTrust</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl PartialEq for EvaluatedDynamicPluginTrust`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-evaluateddynamicplugintrust\">EvaluatedDynamicPluginTrust</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-evaluateddynamicplugintrust\">EvaluatedDynamicPluginTrust</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Eq for EvaluatedDynamicPluginTrust`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-evaluateddynamicplugintrust\">EvaluatedDynamicPluginTrust</a>"}} /></pre>
+
+### `impl StructuralPartialEq for EvaluatedDynamicPluginTrust`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-evaluateddynamicplugintrust\">EvaluatedDynamicPluginTrust</a>"}} /></pre>

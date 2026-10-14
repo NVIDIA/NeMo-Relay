@@ -1,0 +1,69 @@
+---
+title: "About"
+description: "Choose a local or remote NeMo Relay daemon deployment."
+position: 1
+---
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use daemon mode to give coding agents a shared entry point for model requests
+and hooks. A **coding harness** is the application that runs the agent, such as
+Codex, Claude Code, or Pi. A **daemon** is a background process that stays running
+between sessions. Each user-machine identity gets its own worker and runtime state.
+
+## Start Here When
+
+Use this section to:
+
+- Run Relay at login or system startup.
+- Share one local daemon across users on a computer.
+- Connect client computers to a daemon on a Linux server.
+- Distribute the same administrator-owned settings to every user.
+- Operate workers, diagnose failed connections, and preserve streamed responses.
+
+For a personal integration managed by `nemo-relay install`, use
+[Coding Agent Installation](/nemo-relay-cli/plugin-installation). Managed daemon
+mode uses different lifecycle commands and administrator-owned configuration.
+
+## Choose a Deployment
+
+| Deployment | Daemon runs as | Available when | Guide |
+| --- | --- | --- | --- |
+| Windows user task | Signed-in user | User is logged in | [Windows](/daemon/windows) |
+| Windows system task or service | System service account | Computer is running | [Windows](/daemon/windows) |
+| macOS LaunchAgent | Signed-in user | User is logged in | [macOS](/daemon/macos) |
+| macOS LaunchDaemon | Dedicated service account | Computer is running | [macOS](/daemon/macos) |
+| Linux user service | User | User manager is running; optional lingering starts it at boot | [Linux](/daemon/linux) |
+| Linux system service | Dedicated service account | Computer is running | [Linux](/daemon/linux) |
+| Remote Linux daemon | Server service account | Server and private network are available | [Server](/daemon/remote-server), [clients](/daemon/remote-clients) |
+
+Choose one service method per daemon endpoint. The default local endpoint is
+`http://127.0.0.1:47632`. A personal Relay sidecar can already occupy that port.
+Stop the existing integration before switching, or assign a different fixed port
+and generate a separate managed bundle for that endpoint. Multiple user services
+on one computer also need separate ports; one system service can serve all users.
+
+## Before You Begin
+
+Install a Relay binary that includes `nemo-relay daemon managed-bundle` on the
+server and every client. Follow [Installation](/getting-started/installation)
+for supported binaries and [Support Matrix](/reference/support-matrix) for
+harness versions. Check `nemo-relay daemon --help` on each target before setup.
+
+An administrator must provision the system configuration, stable executable,
+and managed bundle, even for a user-level daemon. Workers ignore personal Relay
+configuration. Users need a distinct route credential for each machine-user
+identity, plus their normal model-provider authentication.
+
+Remote deployments need a trusted HTTPS certificate and a private IPv4 route
+in both directions: clients contact the daemon, and the daemon contacts client
+workers. A connection that allows only outbound traffic from clients is not enough.
+
+## Reading Order
+
+1. Read [Architecture and Startup](/daemon/architecture).
+2. Prepare [Configuration and Managed Clients](/daemon/configuration).
+3. Follow the deployment guide for your operating system.
+4. Complete [Verify Worker-Backed Operation](/daemon/operations#verify-worker-backed-operation).
+5. Keep [Reference](/daemon/reference) available for command and lifecycle details.

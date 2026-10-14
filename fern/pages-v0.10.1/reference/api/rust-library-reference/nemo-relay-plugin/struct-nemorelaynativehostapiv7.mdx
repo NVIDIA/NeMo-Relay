@@ -1,0 +1,68 @@
+---
+title: "Struct Nemo Relay Native Host ApiV7"
+sidebar-title: "NemoRelayNativeHostApiV7"
+description: "ABI-v7 host table for context-aware LLM execution intercept callbacks."
+position: 48
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayNativeHostApiV7 &#123;\n    pub v6: <a href=\"struct-nemorelaynativehostapiv6\">NemoRelayNativeHostApiV6</a>,\n    pub plugin_context_register_async_llm_execution_intercept: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativeasyncllmexecutioncb\">NemoRelayNativeAsyncLlmExecutionCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_stream_retain: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stream: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncstream\">NemoRelayNativeAsyncStream</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_stream_llm_request_codec_decode: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stream: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncstream\">NemoRelayNativeAsyncStream</a>, request_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub async_stream_llm_request_codec_encode: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stream: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativeasyncstream\">NemoRelayNativeAsyncStream</a>, annotated_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, original_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n&#125;"}} /></pre>
+
+ABI-v7 host table for context-aware LLM execution intercept callbacks.
+
+The inherited function-pointer table has the same fields as ABI v6, but its LLM execution callback typedefs include [`NemoRelayNativeLlmExecutionContext`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmexecutioncontext). The distinct table version prevents either side from invoking a callback compiled with the old argument layout.
+
+## Fields
+
+### `v6: NemoRelayNativeHostApiV6`
+
+ABI-v6 table compiled with the ABI-v7 callback typedefs.
+
+### `plugin_context_register_async_llm_execution_intercept: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeAsyncLlmExecutionCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers a completion-based asynchronous LLM execution intercept.
+
+### `async_stream_retain: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> NemoRelayStatus`
+
+Retains an output stream for an execution codec facade.
+
+### `async_stream_llm_request_codec_decode: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream, request_json: *const NemoRelayNativeString, out: *mut *mut NemoRelayNativeString) -> NemoRelayStatus`
+
+Decodes an LLM request through the request codec owned by `stream`.
+
+The operation fails after the output stream settles or is cancelled.
+
+### `async_stream_llm_request_codec_encode: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream, annotated_json: *const NemoRelayNativeString, original_json: *const NemoRelayNativeString, out: *mut *mut NemoRelayNativeString) -> NemoRelayStatus`
+
+Encodes an annotated request through the request codec owned by `stream`.
+
+The operation fails after the output stream settles or is cancelled.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayNativeHostApiV7`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nemorelaynativehostapiv7\">NemoRelayNativeHostApiV7</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nemorelaynativehostapiv7\">NemoRelayNativeHostApiV7</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Copy for NemoRelayNativeHostApiV7`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nemorelaynativehostapiv7\">NemoRelayNativeHostApiV7</a>"}} /></pre>
+
+### `impl Send for NemoRelayNativeHostApiV7`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> for <a href=\"struct-nemorelaynativehostapiv7\">NemoRelayNativeHostApiV7</a>"}} /></pre>
+
+### `impl Sync for NemoRelayNativeHostApiV7`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> for <a href=\"struct-nemorelaynativehostapiv7\">NemoRelayNativeHostApiV7</a>"}} /></pre>

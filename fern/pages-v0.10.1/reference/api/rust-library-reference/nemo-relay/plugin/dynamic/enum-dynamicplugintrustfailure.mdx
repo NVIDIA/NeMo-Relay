@@ -1,0 +1,168 @@
+---
+title: "Enum Dynamic Plugin Trust Failure"
+sidebar-title: "DynamicPluginTrustFailure"
+description: "A failed artifact trust check."
+position: 51
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum DynamicPluginTrustFailure &#123;\n    MissingArtifact,\n    MissingIntegrityDigest,\n    ArtifactRead &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>,\n        error: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    IntegrityMismatch &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>,\n        expected: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        actual: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    MissingSignature,\n    MissingTrustedKeys,\n    SignatureRead &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>,\n        error: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    SignatureVerification &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>,\n        parse_errors: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n&#125;"}} /></pre>
+
+A failed artifact trust check.
+
+## Variants
+
+### `MissingArtifact`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MissingArtifact"}} /></pre>
+
+The manifest omitted `source.artifact`.
+
+### `MissingIntegrityDigest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MissingIntegrityDigest"}} /></pre>
+
+The manifest omitted `integrity.sha256`.
+
+### `ArtifactRead`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ArtifactRead"}} /></pre>
+
+The artifact could not be safely read.
+
+#### Fields
+
+### `path: PathBuf`
+
+Artifact path.
+
+### `error: String`
+
+Read failure detail.
+
+### `IntegrityMismatch`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "IntegrityMismatch"}} /></pre>
+
+The artifact digest differs from the manifest value.
+
+#### Fields
+
+### `path: PathBuf`
+
+Artifact path.
+
+### `expected: String`
+
+Manifest digest.
+
+### `actual: String`
+
+Observed digest.
+
+### `MissingSignature`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MissingSignature"}} /></pre>
+
+The effective policy requires a signature but none was declared.
+
+### `MissingTrustedKeys`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MissingTrustedKeys"}} /></pre>
+
+Signature verification was requested without trusted keys.
+
+### `SignatureRead`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "SignatureRead"}} /></pre>
+
+The signature cannot be safely read or decoded.
+
+#### Fields
+
+### `path: PathBuf`
+
+Signature path.
+
+### `error: String`
+
+Read or decode failure detail.
+
+### `SignatureVerification`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "SignatureVerification"}} /></pre>
+
+No trusted key verified the signature.
+
+#### Fields
+
+### `path: PathBuf`
+
+Signature path.
+
+### `parse_errors: Vec<String>`
+
+Malformed configured key diagnostics.
+
+## Implementations
+
+### `impl DynamicPluginTrustFailure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-dynamicplugintrustfailure\">DynamicPluginTrustFailure</a>"}} /></pre>
+
+#### `refusal_code`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn refusal_code(&amp;self) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Stable refusal code used in structured reports.
+
+#### `display`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn display(&amp;self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
+
+Human-readable failure description.
+
+## Trait Implementations
+
+### `impl Clone for DynamicPluginTrustFailure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-dynamicplugintrustfailure\">DynamicPluginTrustFailure</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-dynamicplugintrustfailure\">DynamicPluginTrustFailure</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for DynamicPluginTrustFailure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-dynamicplugintrustfailure\">DynamicPluginTrustFailure</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl PartialEq for DynamicPluginTrustFailure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-dynamicplugintrustfailure\">DynamicPluginTrustFailure</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-dynamicplugintrustfailure\">DynamicPluginTrustFailure</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Eq for DynamicPluginTrustFailure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-dynamicplugintrustfailure\">DynamicPluginTrustFailure</a>"}} /></pre>
+
+### `impl StructuralPartialEq for DynamicPluginTrustFailure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-dynamicplugintrustfailure\">DynamicPluginTrustFailure</a>"}} /></pre>

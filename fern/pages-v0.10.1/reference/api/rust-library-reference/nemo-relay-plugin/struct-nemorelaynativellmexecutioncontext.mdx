@@ -1,0 +1,52 @@
+---
+title: "Struct Nemo Relay Native LlmExecution Context"
+sidebar-title: "NemoRelayNativeLlmExecutionContext"
+description: "Codec context passed to native LLM execution intercept callbacks."
+position: 50
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayNativeLlmExecutionContext &#123;\n    pub request_codec: <a href=\"struct-nemorelaynativellmrequestcontext\">NemoRelayNativeLlmRequestContext</a>,\n    pub response_codec: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativellmresponsecontext\">NemoRelayNativeLlmResponseContext</a>,\n&#125;"}} /></pre>
+
+Codec context passed to native LLM execution intercept callbacks.
+
+The context and codec IDs are borrowed for the callback. A synchronous streaming callback may retain the request codec pointer only in the state of its returned [`NemoRelayNativeLlmStreamV1`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmstreamv1); it remains valid until Relay invokes that stream's drop callback. Other raw callbacks must not retain codec pointers. Asynchronous streaming callbacks must instead retain the output stream and use the v7 stream codec functions.
+
+## Fields
+
+### `request_codec: NemoRelayNativeLlmRequestContext`
+
+Request codec context, always present.
+
+### `response_codec: *const NemoRelayNativeLlmResponseContext`
+
+Completed-response codec context, or null for streaming execution.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayNativeLlmExecutionContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nemorelaynativellmexecutioncontext\">NemoRelayNativeLlmExecutionContext</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nemorelaynativellmexecutioncontext\">NemoRelayNativeLlmExecutionContext</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for NemoRelayNativeLlmExecutionContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-nemorelaynativellmexecutioncontext\">NemoRelayNativeLlmExecutionContext</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Copy for NemoRelayNativeLlmExecutionContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nemorelaynativellmexecutioncontext\">NemoRelayNativeLlmExecutionContext</a>"}} /></pre>

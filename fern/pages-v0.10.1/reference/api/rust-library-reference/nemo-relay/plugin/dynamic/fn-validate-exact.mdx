@@ -1,0 +1,16 @@
+---
+title: "Function validate_exact"
+sidebar-title: "validate_exact"
+description: "Validates only the supplied static plugin configuration."
+position: 67
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn validate_exact(config: <a href=\"../struct-pluginconfig\">PluginConfig</a>) -&gt; <a href=\"struct-pluginhostreport\">PluginHostReport</a>"}} /></pre>
+
+Validates only the supplied static plugin configuration.
+
+Unlike [`validate`](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-validate), this does not discover or merge any `plugins.toml` layers. It is intended for component-specific validators whose callers supplied the complete configuration to validate.

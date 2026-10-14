@@ -1,0 +1,33 @@
+---
+title: "Function analyze_stability"
+sidebar-title: "analyze_stability"
+description: "Analyze prompt-block stability across multiple observations."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn analyze_stability(\n    observations: &amp;[<a href=\"../prompt_ir/struct-promptir\">PromptIR</a>],\n    thresholds: &amp;<a href=\"struct-stabilitythresholds\">StabilityThresholds</a>,\n) -&gt; <a href=\"struct-stabilityanalysisresult\">StabilityAnalysisResult</a>"}} /></pre>
+
+Analyze prompt-block stability across multiple observations.
+
+The analysis computes one stability score per span, ordered by the first sequence index at which that span appeared, and derives the length of the stable prefix at the start of the prompt.
+
+The result must not depend on the per-process seed `s` that Rust draws for [`HashMap`](https://doc.rust-lang.org/1.96.1/std/collections/hash/map/struct.HashMap.html) iteration, because a profile persisted by one process is read back by another. Over `N` processes producing outcomes with multiplicities `c_1..c_k`, the cross-process agreement rate is
+
+```rust
+A = sum_i c_i * (c_i - 1) / (N * (N - 1))
+```
+
+the probability that two independent processes agree, and equivalently the probability that a persisted profile satisfies the reuse gate elsewhere. `A = 1` exactly when the analysis is seed-independent, which is what [`canonical_scores`] and [`dominant_prefix_length`] each establish.
+
+## Parameters
+
+- `observations`: Prompt observations to compare.
+- `thresholds`: Thresholds used for stability classification and confidence.
+
+## Returns
+
+A [`StabilityAnalysisResult`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/stability/struct-stabilityanalysisresult) summarizing span-level stability.
