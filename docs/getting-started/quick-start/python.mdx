@@ -54,10 +54,17 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 ## Goal
 
-Instrument one scope, tool call, and LLM call with NeMo Relay, then verify the
-result in a local ATOF event file.
+Instrument one scope, tool call, and large language model (LLM) call with NeMo Relay, then verify the
+result in a local Agent Trajectory Observability Format (ATOF) file.
+
+<Note icon="circle-info">
+This example uses local tool and model callbacks. It does not require an
+inference key or a live model.
+</Note>
 
 ## Prerequisites
+
+Before you start, make sure you have:
 
 - Python 3.11 or newer
 - `uv`
@@ -66,8 +73,8 @@ result in a local ATOF event file.
 
 ## Install
 
-Create a project and install the package version for this docs branch. In an existing
-`uv` project, skip `uv init`.
+Create a project and install the NeMo Relay version for these docs.
+For an existing `uv` project, run only the `uv add` command from its directory.
 
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
 ```bash
@@ -210,8 +217,8 @@ uv run python quickstart.py
 
 ## Verify
 
-The program parses every JSONL record and checks for paired agent, tool, and
-LLM lifecycle records before printing, in order:
+The program checks the event file for paired agent, tool, and LLM lifecycle
+records. A successful run prints these markers in order:
 
 {/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-python-quickstart","from":"run","match":"exact-lines"} */}
 ```text
@@ -221,7 +228,7 @@ RELAY_QUICKSTART_EVENTS_OK
 ```
 
 <Note icon="circle-info">
-The event file contains scope, tool, and LLM records in ATOF JSONL format.
+The file stores ATOF events as newline-delimited JSON (JSONL).
 </Note>
 
 </Steps>
@@ -230,5 +237,5 @@ The event file contains scope, tool, and LLM records in ATOF JSONL format.
 
 For more details, refer to:
 
-- [Installation](/getting-started/installation#python)
+- [Installation Overview](/getting-started/installation#python)
 - [Instrument Application Code](/instrument-applications/code-examples)
