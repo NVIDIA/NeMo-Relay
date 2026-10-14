@@ -1878,6 +1878,14 @@ fn doctor_reports_helpers_and_ignored_environment_without_exposing_secrets() {
             "ANTHROPIC_AUTH_TOKEN",
             Some(std::ffi::OsStr::new("secret-anthropic-token")),
         ),
+        (
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            Some(std::ffi::OsStr::new("secret-openai-header")),
+        ),
+        (
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            Some(std::ffi::OsStr::new("secret-anthropic-header")),
+        ),
     ]);
     let helper = crate::upstream_auth::ApiKeyHelper {
         command: "secret-missing-helper-command".into(),
@@ -1907,6 +1915,8 @@ fn doctor_reports_helpers_and_ignored_environment_without_exposing_secrets() {
             "OPENAI_API_KEY",
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
         ] {
             assert!(output.contains(name));
         }

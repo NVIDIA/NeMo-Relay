@@ -1740,14 +1740,19 @@ fn apply_file_upstream_config(
         )?);
     }
     if let Some(value) = openai_api_key {
-        gateway.openai_api_key = Some(validate_auth_header("upstream.openai_api_key", value)?);
+        gateway.openai_api_key = Some(crate::upstream_auth::validate_api_key(
+            "upstream.openai_api_key",
+            value,
+        )?);
     }
     if let Some(value) = openai_api_key_helper {
         gateway.openai_api_key_helper = Some(value);
     }
     if let Some(value) = anthropic_api_key {
-        gateway.anthropic_api_key =
-            Some(validate_auth_header("upstream.anthropic_api_key", value)?);
+        gateway.anthropic_api_key = Some(crate::upstream_auth::validate_api_key(
+            "upstream.anthropic_api_key",
+            value,
+        )?);
     }
     if let Some(value) = anthropic_api_key_helper {
         gateway.anthropic_api_key_helper = Some(value);
@@ -2035,7 +2040,6 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     {
         config.bind = value;
     }
-    let openai_auth_header = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER").ok();
     if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_BASE_URL") {
         if config.openai_base_url != value {
             config.openai_api_key = None;
@@ -2047,13 +2051,12 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
             value,
         );
     }
-    if let Some(value) = openai_auth_header {
-        config.openai_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_OPENAI_AUTH_HEADER",
-            value,
-        )?);
-    }
-    let anthropic_auth_header = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER").ok();
+    apply_environment_auth_header(
+        "NEMO_RELAY_OPENAI_AUTH_HEADER",
+        &mut config.openai_auth_header,
+        &mut config.openai_api_key,
+        config.openai_api_key_helper.is_some(),
+    )?;
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
         if config.anthropic_base_url != value {
             config.anthropic_api_key = None;
@@ -2065,12 +2068,12 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
             value,
         );
     }
-    if let Some(value) = anthropic_auth_header {
-        config.anthropic_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
-            value,
-        )?);
-    }
+    apply_environment_auth_header(
+        "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+        &mut config.anthropic_auth_header,
+        &mut config.anthropic_api_key,
+        config.anthropic_api_key_helper.is_some(),
+    )?;
     if let Ok(value) = std::env::var("NEMO_RELAY_CHATGPT_CODEX_BASE_URL") {
         config.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
             "NEMO_RELAY_CHATGPT_CODEX_BASE_URL",
@@ -2091,21 +2094,35 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
 
 // Managed workers accept provider secrets from their inherited environment but never allow a
 // user's environment to change administrator-selected endpoints, limits, or listener settings.
-// Ambient provider API keys are ignored only when the provider has an API key helper.
+// Provider environment credentials are ignored when that provider has an API key helper.
 fn apply_managed_worker_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
-    if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER") {
-        config.openai_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_OPENAI_AUTH_HEADER",
-            value,
-        )?);
-    }
-    if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER") {
-        config.anthropic_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
-            value,
-        )?);
-    }
+    apply_environment_auth_header(
+        "NEMO_RELAY_OPENAI_AUTH_HEADER",
+        &mut config.openai_auth_header,
+        &mut config.openai_api_key,
+        config.openai_api_key_helper.is_some(),
+    )?;
+    apply_environment_auth_header(
+        "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+        &mut config.anthropic_auth_header,
+        &mut config.anthropic_api_key,
+        config.anthropic_api_key_helper.is_some(),
+    )?;
     crate::upstream_auth::validate_config(config)?;
+    Ok(())
+}
+
+/// Helpers own provider authentication. Otherwise an environment header replaces a file key.
+fn apply_environment_auth_header(
+    name: &str,
+    header: &mut Option<String>,
+    key: &mut Option<String>,
+    helper_enabled: bool,
+) -> Result<(), CliError> {
+    if !helper_enabled && let Ok(value) = std::env::var(name) {
+        *header = Some(validate_auth_header(name, value)?);
+        *key = None;
+    }
     Ok(())
 }
 
@@ -2241,15 +2258,16 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
                             .unwrap_or(default_url),
                     )
             });
-            if endpoint_changed {
-                for credential in credentials {
-                    // A replacement helper is a new command contract: do not merge old arguments
-                    // or timeout settings into the helper selected for a different endpoint.
-                    if credential.ends_with("_api_key_helper")
-                        || !override_upstream.contains_key(credential)
-                    {
-                        existing.remove(credential);
-                    }
+            for credential in credentials {
+                // Replace a helper as a whole command contract, even when the endpoint is unchanged.
+                let helper = credential.ends_with("_api_key_helper");
+                let clear = if helper {
+                    endpoint_changed || override_upstream.contains_key(credential)
+                } else {
+                    endpoint_changed && !override_upstream.contains_key(credential)
+                };
+                if clear {
+                    existing.remove(credential);
                 }
             }
         }

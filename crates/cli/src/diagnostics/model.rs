@@ -139,7 +139,7 @@ impl UpstreamAuthInfo {
                 gateway.openai_api_key_helper.as_ref(),
                 gateway.openai_api_key.is_some(),
                 gateway.openai_auth_header.is_some(),
-                &["OPENAI_API_KEY"][..],
+                &["OPENAI_API_KEY", "NEMO_RELAY_OPENAI_AUTH_HEADER"][..],
                 AuthScheme::Bearer,
             ),
             (
@@ -147,7 +147,11 @@ impl UpstreamAuthInfo {
                 gateway.anthropic_api_key_helper.as_ref(),
                 gateway.anthropic_api_key.is_some(),
                 gateway.anthropic_auth_header.is_some(),
-                &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"][..],
+                &[
+                    "ANTHROPIC_API_KEY",
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+                ][..],
                 AuthScheme::ApiKey,
             ),
         ] {

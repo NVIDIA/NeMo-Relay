@@ -5169,16 +5169,111 @@ fn api_key_helper_layering_rejects_conflicts_and_clears_changed_endpoint_credent
 
 #[test]
 fn replacing_upstream_helpers_does_not_inherit_old_command_arguments() {
-    let mut lower: toml::Value = toml::from_str("[upstream]\nopenai_base_url = 'https://original.example'\n[upstream.openai_api_key_helper]\ncommand = 'old-helper'\nargs = ['old-secret']\ntimeout_ms = 123\n").unwrap();
-    let replacement: toml::Value = toml::from_str("[upstream]\nopenai_base_url = 'https://replacement.example'\n[upstream.openai_api_key_helper]\ncommand = 'new-helper'\n").unwrap();
-    merge_gateway_config_toml(&mut lower, replacement);
-    let file: FileConfig = lower.try_into().unwrap();
-    let mut gateway = GatewayConfig::default();
-    apply_file_upstream_config(&mut gateway, file.upstream).unwrap();
-    let helper = gateway.openai_api_key_helper.unwrap();
-    assert_eq!(helper.command, "new-helper");
-    assert!(helper.args.is_empty());
-    assert_eq!(helper.timeout_ms, 10_000);
+    for provider in ["openai", "anthropic"] {
+        for endpoint in [
+            "",
+            "https://original.example",
+            "https://replacement.example",
+        ] {
+            let mut lower: toml::Value = toml::from_str(&format!("[upstream]\n{provider}_base_url = 'https://original.example'\n[upstream.{provider}_api_key_helper]\ncommand = 'old-helper'\nargs = ['old-secret']\ntimeout_ms = 123\nauth_scheme = 'bearer'\n")).unwrap();
+            let url = if endpoint.is_empty() {
+                String::new()
+            } else {
+                format!("[upstream]\n{provider}_base_url = '{endpoint}'\n")
+            };
+            let replacement = toml::from_str(&format!(
+                "{url}[upstream.{provider}_api_key_helper]\ncommand = 'new-helper'\n"
+            ))
+            .unwrap();
+            merge_gateway_config_toml(&mut lower, replacement);
+            let file: FileConfig = lower.try_into().unwrap();
+            let mut gateway = GatewayConfig::default();
+            apply_file_upstream_config(&mut gateway, file.upstream).unwrap();
+            let helper = crate::upstream_auth::helper(&gateway, provider == "anthropic").unwrap();
+            assert_eq!(helper.command, "new-helper");
+            assert!(helper.args.is_empty());
+            assert_eq!(helper.timeout_ms, 10_000);
+            assert!(helper.auth_scheme.is_none());
+        }
+    }
+}
+
+#[test]
+fn static_api_keys_are_validated_before_requests_without_exposing_values() {
+    for anthropic in [false, true] {
+        for value in [
+            "",
+            "secret invalid",
+            "secret\tinvalid",
+            "secret\ninvalid",
+            "secret\0invalid",
+        ] {
+            let mut upstream = FileUpstreamConfig::default();
+            let name = if anthropic {
+                upstream.anthropic_api_key = Some(value.into());
+                "upstream.anthropic_api_key"
+            } else {
+                upstream.openai_api_key = Some(value.into());
+                "upstream.openai_api_key"
+            };
+            let error = apply_file_upstream_config(&mut GatewayConfig::default(), Some(upstream))
+                .unwrap_err();
+            assert!(matches!(error, CliError::Config(_)));
+            assert!(error.to_string().contains(name));
+            assert!(!error.to_string().contains("secret"));
+            assert!(!error.to_string().contains("helper"));
+        }
+    }
+}
+
+#[test]
+fn environment_headers_override_static_keys_but_not_helpers() {
+    let _environment = crate::test_support::EnvScope::set(&[
+        (
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            Some(std::ffi::OsStr::new("Bearer environment-openai")),
+        ),
+        (
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            Some(std::ffi::OsStr::new("Bearer environment-anthropic")),
+        ),
+        ("NEMO_RELAY_OPENAI_BASE_URL", None),
+        ("NEMO_RELAY_ANTHROPIC_BASE_URL", None),
+    ]);
+    for apply in [apply_env_config, apply_managed_worker_env_config] {
+        let mut gateway = GatewayConfig {
+            openai_api_key: Some("file-openai".into()),
+            anthropic_api_key: Some("file-anthropic".into()),
+            ..GatewayConfig::default()
+        };
+        apply(&mut gateway).unwrap();
+        assert!(gateway.openai_api_key.is_none());
+        assert!(gateway.anthropic_api_key.is_none());
+        assert_eq!(
+            gateway.openai_auth_header.as_deref(),
+            Some("Bearer environment-openai")
+        );
+        assert_eq!(
+            gateway.anthropic_auth_header.as_deref(),
+            Some("Bearer environment-anthropic")
+        );
+        let helper = crate::upstream_auth::ApiKeyHelper {
+            command: "not-executed".into(),
+            args: vec![],
+            timeout_ms: 10000,
+            auth_scheme: None,
+        };
+        let mut gateway = GatewayConfig {
+            openai_api_key_helper: Some(helper.clone()),
+            anthropic_api_key_helper: Some(helper),
+            ..GatewayConfig::default()
+        };
+        apply(&mut gateway).unwrap();
+        assert!(gateway.openai_api_key_helper.is_some());
+        assert!(gateway.anthropic_api_key_helper.is_some());
+        assert!(gateway.openai_auth_header.is_none());
+        assert!(gateway.anthropic_auth_header.is_none());
+    }
 }
 
 #[test]

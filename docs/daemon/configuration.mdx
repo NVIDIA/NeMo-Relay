@@ -821,9 +821,10 @@ a custom authorization header. Refer to
 [Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request)
 for examples, supported authentication methods, limits, and error handling.
 
-With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY`.
-With an Anthropic helper, it warns about and ignores `ANTHROPIC_AUTH_TOKEN` and
-`ANTHROPIC_API_KEY`. Without a helper, Relay can still use `OPENAI_API_KEY` and
+With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and
+`NEMO_RELAY_OPENAI_AUTH_HEADER`. With an Anthropic helper, it warns about and
+ignores `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use `OPENAI_API_KEY` and
 `ANTHROPIC_API_KEY` to authenticate upstream requests.
 
 The daemon's access rules still control which requests can use its credentials.

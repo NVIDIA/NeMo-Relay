@@ -92,11 +92,15 @@ pub(crate) fn warn_ignored_environment(config: &GatewayConfig) {
     for (enabled, names) in [
         (
             config.openai_api_key_helper.is_some(),
-            &["OPENAI_API_KEY"][..],
+            &["OPENAI_API_KEY", "NEMO_RELAY_OPENAI_AUTH_HEADER"][..],
         ),
         (
             config.anthropic_api_key_helper.is_some(),
-            &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"][..],
+            &[
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            ][..],
         ),
     ] {
         if enabled {
@@ -218,6 +222,16 @@ pub(crate) async fn apply(
     Ok(())
 }
 
+/// Validate configured keys with the same token rules used at request dispatch.
+pub(crate) fn validate_api_key(name: &str, value: String) -> Result<String, CliError> {
+    token_header(&value, AuthScheme::Bearer).map_err(|_| {
+        CliError::Config(format!(
+            "{name} must contain one valid bare token without whitespace"
+        ))
+    })?;
+    Ok(value.trim().to_owned())
+}
+
 fn token_header(token: &str, scheme: AuthScheme) -> Result<(HeaderName, HeaderValue), CliError> {
     let token = token.trim();
     if token.is_empty()
@@ -225,15 +239,16 @@ fn token_header(token: &str, scheme: AuthScheme) -> Result<(HeaderName, HeaderVa
         || token.chars().any(char::is_whitespace)
     {
         return Err(CliError::Launch(
-            "API key helper returned an invalid token; expected one bare token".into(),
+            "Upstream API key is invalid. Expected one bare token without whitespace.".into(),
         ));
     }
     let (name, value) = match scheme {
         AuthScheme::Bearer => (AUTHORIZATION, format!("Bearer {token}")),
         AuthScheme::ApiKey => (HeaderName::from_static("x-api-key"), token.to_owned()),
     };
-    let value = HeaderValue::from_str(&value)
-        .map_err(|_| CliError::Launch("API key helper returned an invalid header value".into()))?;
+    let value = HeaderValue::from_str(&value).map_err(|_| {
+        CliError::Launch("Upstream API key contains an invalid header value.".into())
+    })?;
     Ok((name, value))
 }
 
@@ -281,7 +296,9 @@ impl ApiKeyHelper {
             let output = String::from_utf8(output).map_err(|_| fail("output is not UTF-8"))?;
             let token = output.trim();
             // Validate without ever including the output in an error.
-            token_header(token, AuthScheme::Bearer)?;
+            token_header(token, AuthScheme::Bearer).map_err(|_| {
+                fail("returned an invalid token. Expected one bare token without whitespace")
+            })?;
             Ok(token.to_owned())
         })
         .await;

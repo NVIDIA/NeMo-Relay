@@ -6598,6 +6598,14 @@ fn configured_api_key_helpers_warn_about_ignored_environment_without_executing()
         .env("OPENAI_API_KEY", "private-openai-env-sentinel")
         .env("ANTHROPIC_API_KEY", "private-anthropic-key-sentinel")
         .env("ANTHROPIC_AUTH_TOKEN", "private-anthropic-token-sentinel")
+        .env(
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            "private-openai-header-sentinel\ninvalid",
+        )
+        .env(
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            "private-anthropic-header-sentinel\ninvalid",
+        )
         .args(["--config", config.to_str().unwrap(), "doctor", "--json"])
         .output()
         .unwrap();
@@ -6607,6 +6615,8 @@ fn configured_api_key_helpers_warn_about_ignored_environment_without_executing()
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
+        "NEMO_RELAY_OPENAI_AUTH_HEADER",
+        "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
     ] {
         assert!(stderr.contains(name), "{stderr}");
     }

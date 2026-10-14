@@ -397,9 +397,10 @@ For ordinary provider requests, Relay resolves credentials in this order:
 4. If no credential is configured, Relay uses `OPENAI_API_KEY` or
    `ANTHROPIC_API_KEY` with the provider's standard authentication scheme.
 
-With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY`.
-With an Anthropic helper, it warns about and ignores `ANTHROPIC_AUTH_TOKEN` and
-`ANTHROPIC_API_KEY`. Without a helper, Relay can still use environment API keys.
+With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and
+`NEMO_RELAY_OPENAI_AUTH_HEADER`. With an Anthropic helper, it warns about and
+ignores `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use environment API keys.
 
 ### Generate API Keys Per Request
 
@@ -459,12 +460,19 @@ to settings inherited from other configuration layers. OpenAI and Anthropic can
 use different credential sources.
 
 For a static API key, set `openai_api_key` or `anthropic_api_key` under
-`[upstream]`. Keep static keys in private user configuration.
+`[upstream]`. The key must be one token with no whitespace inside it.
+Relay rejects invalid keys when it loads configuration. Keep static keys in
+private user configuration. Without a helper, an environment authorization
+header replaces a static key from a configuration file.
 
 A higher-priority configuration layer that changes a provider's base URL clears
 its inherited API key and helper. Add the replacement credential in that same
 layer. Restating the same URL, including the default URL, keeps inherited
 credentials.
+
+A helper table in a higher-priority file replaces the entire inherited helper.
+Include `command` in the new table. Omitted arguments, timeout, and
+authentication settings use their defaults.
 
 Relay uses helpers only for the configured upstream. It does not send helper
 tokens to endpoints named by a client or an interceptor. ChatGPT voice calls

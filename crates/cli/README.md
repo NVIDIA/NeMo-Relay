@@ -246,8 +246,9 @@ Choose one credential source for each provider. You can use a helper, a static
 API key, or a custom authorization header. If the helper fails, Relay stops the
 request before sending it upstream.
 
-With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY`.
-With an Anthropic helper, it warns about and ignores `ANTHROPIC_AUTH_TOKEN` and
-`ANTHROPIC_API_KEY`. Without a helper, Relay can still use environment API keys.
+With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and
+`NEMO_RELAY_OPENAI_AUTH_HEADER`. With an Anthropic helper, it warns about and
+ignores `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use environment API keys.
 Refer to [Generate API Keys Per Request](../../docs/nemo-relay-cli/basic-usage.mdx#generate-api-keys-per-request)
 for examples and credential routing rules.
