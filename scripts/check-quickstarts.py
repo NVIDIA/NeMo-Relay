@@ -25,6 +25,16 @@ SCENARIO = re.compile(r"\{/\* quickstart-scenario\s+(.*?)\*/\}", re.DOTALL)
 BLOCK = re.compile(r"\{/\* quickstart-block\s+(.*?)\*/\}\s*$", re.DOTALL)
 FENCE = re.compile(r"^```([\w+-]+)\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
 FENCE_MARKER = re.compile(r"^[ \t]*(?:`{3,}|~{3,})", re.MULTILINE)
+CODE = re.compile(
+    r'^<Code\s+src="(?P<src>[^"\n]+)"\s+language="(?P<code_language>[\w+-]+)"'
+    r'\s+title="[^"\n]+"\s*/>[ \t]*$',
+    re.MULTILINE,
+)
+# Match a whole fence before looking for components, so code content cannot
+# become another documentation block. This supports the controlled local-file
+# form used by these guides, not arbitrary MDX or remote code execution.
+DISPLAY = re.compile(FENCE.pattern + "|" + CODE.pattern, re.MULTILINE | re.DOTALL)
+CODE_MARKER = re.compile(r"^[ \t]*<Code\b", re.MULTILINE)
 ROLES = {"file", "run", "expected", "input", "manual"}
 
 
@@ -69,16 +79,31 @@ def extract(page: Path, shell: str | None = None) -> dict[str, Any]:
 
     blocks = []
     previous = 0
-    for fence in FENCE.finditer(text):
+    fence_count = 0
+    code_count = 0
+    for display in DISPLAY.finditer(text):
         # Search only between fences: code content can never become an annotation.
-        prefix = text[previous : fence.start()]
+        prefix = text[previous : display.start()]
         annotations = list(re.finditer(r"\{/\* quickstart-block\s+", prefix))
-        require(len(annotations) == 1, f"{page.name}: each fence needs exactly one block annotation")
+        require(len(annotations) == 1, f"{page.name}: each displayed block needs exactly one annotation")
         annotation = BLOCK.fullmatch(prefix[annotations[0].start() :].rstrip())
         if annotation is None:
-            raise ValueError("block annotation must immediately precede its fence")
+            raise ValueError("block annotation must immediately precede its displayed block")
         block = json.loads(annotation.group(1))
         require(block.get("role") in ROLES, "unknown block role")
+        if display.group("src") is not None:
+            require(block["role"] == "file", "Code components must declare file artifacts")
+            source = display.group("src")
+            require(relative_path(source), "Code sources must be local relative paths")
+            path = (page.parent / source).resolve()
+            require(path.is_relative_to(page.parent.resolve()), "Code source escapes the page directory")
+            require(path.is_file(), f"missing Code source: {source}")
+            content = path.read_text(encoding="utf-8")
+            language = display.group("code_language")
+            code_count += 1
+        else:
+            language, content = display.group(1), display.group(2)
+            fence_count += 1
         require(re.fullmatch(r"[a-z][a-z0-9-]*", block.get("id", "")), "invalid block id")
         require(relative_path(block.get("cwd", "")), "unsafe block cwd")
         variants = block.get("shells", shells)
@@ -95,7 +120,7 @@ def extract(page: Path, shell: str | None = None) -> dict[str, Any]:
                 "commands need a bounded timeout",
             )
             require(bool(block.get("session")), "commands need an explicit shell session")
-            require(fence.group(1) in {"bash", "powershell"}, "commands must be shell blocks")
+            require(language in {"bash", "powershell"}, "commands must be shell blocks")
             if "background" in block:
                 process = block["background"]
                 require(
@@ -111,14 +136,15 @@ def extract(page: Path, shell: str | None = None) -> dict[str, Any]:
         elif role == "manual":
             require(bool(block.get("reason")), "manual setup needs an explicit reason")
         else:
-            require(block.get("match") == "exact-lines" and fence.group(1) == "text", "unknown output matcher")
+            require(block.get("match") == "exact-lines" and language == "text", "unknown output matcher")
             require(bool(block.get("from")), "expected output must name its producing command")
-        block.update(language=fence.group(1), content=fence.group(2), line=text[: fence.start()].count("\n") + 1)
+        block.update(language=language, content=content, line=text[: display.start()].count("\n") + 1)
         blocks.append(block)
-        previous = fence.end()
+        previous = display.end()
     # Reject fences that the extractor cannot pair with a contract, including
     # indented, tilde, or longer-backtick variants that Markdown still renders.
-    require(len(FENCE_MARKER.findall(text)) == len(blocks) * 2, "unsupported or unclosed code fence")
+    require(len(FENCE_MARKER.findall(text)) == fence_count * 2, "unsupported or unclosed code fence")
+    require(len(CODE_MARKER.findall(text)) == code_count, "unsupported Code component")
     require("quickstart-block" not in text[previous:], "orphan block annotation")
     require(bool(blocks), "no annotated code blocks")
     for variant in shells:

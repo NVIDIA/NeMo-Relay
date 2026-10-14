@@ -17,9 +17,11 @@ sharing the root environment.
 
 ## Quick Start Contracts
 
-The quick starts store commands, artifacts, and expected output in their MDX
-pages. From the repository root, validate the available contracts and run the
-checker unit tests:
+The quick starts store commands and expected output in their MDX pages. Sample
+files are committed beside the pages and displayed with Fern's `Code` component.
+The checker reads the referenced files, so displayed and tested content share
+the same source. From the repository root, validate the available contracts
+and run the checker unit tests:
 
 ```bash
 python3 scripts/check-quickstarts.py check

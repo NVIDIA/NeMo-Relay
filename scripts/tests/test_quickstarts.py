@@ -98,6 +98,39 @@ class QuickstartContractTests(unittest.TestCase):
                 self.page.write_text(changed, encoding="utf-8")
                 QS.extract(self.page)
 
+    def test_extracts_committed_file_from_fern_code_component(self):
+        source = example_page().replace(
+            "```python\nprint('OK')\n```",
+            '<Code src="_code/demo.py" language="python" title="demo.py" />',
+        )
+        snippets = self.root / "_code"
+        snippets.mkdir()
+        content = "# A committed sample.\nprint('OK')\n"
+        (snippets / "demo.py").write_text(content, encoding="utf-8")
+        self.page.write_text(source, encoding="utf-8")
+        block = QS.extract(self.page, "bash")["blocks"][0]
+        self.assertEqual(block["content"], content)
+        self.assertEqual(block["language"], "python")
+        self.assertEqual(block["path"], "demo.py")
+
+    def test_rejects_missing_unsafe_or_untracked_code_sources(self):
+        snippets = self.root / "_code"
+        snippets.mkdir()
+        (snippets / "demo.py").write_text("print('OK')\n", encoding="utf-8")
+        component = '<Code src="_code/demo.py" language="python" title="demo.py" />'
+        source = example_page().replace("```python\nprint('OK')\n```", component)
+        for label, changed in {
+            "missing source": source.replace("_code/demo.py", "_code/missing.py"),
+            "parent traversal": source.replace("_code/demo.py", "../demo.py"),
+            "remote source": source.replace("_code/demo.py", "https://example.com/demo.py"),
+            "untracked component": example_page() + "\n" + component,
+            "unsupported attributes": source.replace('language="python"', 'lines="1"'),
+            "command component": source.replace('"role":"file"', '"role":"run"'),
+        }.items():
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                self.page.write_text(changed, encoding="utf-8")
+                QS.extract(self.page)
+
     def test_atof_requires_matching_lifecycle_not_payload_text(self):
         check = QS.extract(self.page)["checks"][1]
         valid = agent_events()
