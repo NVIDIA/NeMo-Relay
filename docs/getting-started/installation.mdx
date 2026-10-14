@@ -349,8 +349,9 @@ configuration and verification steps.
 Install a Hermes Agent build with native NeMo Relay support by following the
 [official Hermes Agent installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation).
 Check that `hermes setup` offers NeMo Relay and `hermes doctor` reports its
-status. Older Hermes builds may not expose these features. No separate Relay
-CLI or external observability plugin package is required; select the built-in
+status. Older Hermes builds can lack these features. Hermes manages its supported
+Relay dependency version. No separate Relay CLI or external observability plugin
+package is required; select the built-in
 observability configuration using the [Hermes Quick Start](/getting-started/quick-start/hermes).
 
 ### Python Framework Integrations

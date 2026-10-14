@@ -60,18 +60,20 @@ SPDX-License-Identifier: Apache-2.0 */}
 ## Goal
 
 Run one Hermes Agent turn and write its session, model, and tool lifecycle to a
-local ATOF event file.
+local Agent Trajectory Observability Format (ATOF) file.
 
 Use a Hermes installation with native NeMo Relay integration on a platform
 with a supported Relay native wheel. Do not install the former Hermes Relay
 observability plugin or launch Hermes through the `nemo-relay` CLI.
 
-This quickstart configures local Relay event export, not Hermes shared-metrics
-collection or sending to Nous; those have separate consent controls.
+This quick start configures local Relay event export. Hermes shared-metrics
+collection and transmission to Nous have separate consent controls.
 
 ## Prerequisites
 
-- Linux, macOS, or Windows Subsystem for Linux 2 (WSL2)
+Before you start, make sure you have:
+
+- Linux, Apple Silicon macOS, or Windows Subsystem for Linux 2 (WSL2)
 - Hermes with native Relay support, plugin diagnostics in `hermes doctor`, and `chat --oneshot`
 - A configured Hermes model with inference access: a provider API key or a supported authenticated session
 - `jq` for the JSON event check
@@ -90,7 +92,7 @@ curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 
 Complete the setup prompts and confirm that `hermes` can use your model
 provider before continuing. Check that `hermes chat --help` lists `--oneshot`;
-older builds may not support this recipe.
+older builds can lack support for this recipe.
 
 If Hermes does not yet have a working provider and model, select the NVIDIA
 provider in `hermes model`, supply an
@@ -99,7 +101,8 @@ available [build.nvidia.com model](https://build.nvidia.com/explore/discover).
 
 <Note icon="circle-info">
 Relay does not choose the model. If Hermes already has a working provider and
-model, keep that configuration.
+model, keep that configuration. Hermes manages its supported Relay dependency
+version.
 </Note>
 
 ## Configure
@@ -169,11 +172,11 @@ applies. Relay plugins affect every profile hosted in the same Hermes process.
 Use separate processes when profiles require different plugin policies.
 </Note>
 
-<Note icon="circle-info">
+<Warning>
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Working-directory paths can reveal usernames and repository names.
 Protect `logs/events.jsonl` even when full payload export is disabled.
-</Note>
+</Warning>
 
 ## Run
 
@@ -191,10 +194,12 @@ observability records to finish writing.
 
 ## Verify
 
-Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+The verification command prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
 
 <details>
 <summary>Run the verification checks</summary>
+
+Run these checks after Hermes exits:
 
 {/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
@@ -214,7 +219,7 @@ jq -se '
 printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
 ```
 
-Expected output from the verification command:
+The verification command prints the following output when its checks pass:
 
 {/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
 ```text
