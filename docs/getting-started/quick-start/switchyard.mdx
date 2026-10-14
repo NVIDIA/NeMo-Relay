@@ -174,65 +174,12 @@ while Relay uses the plugin. The Unix commands also keep Relay in the project's
 Save this file as `config.toml` in `relay-switchyard-quickstart`:
 
 {/* quickstart-block {"id":"config","role":"file","cwd":"relay-switchyard-quickstart","path":"config.toml"} */}
-```toml
-[upstream]
-openai_base_url = "https://integrate.api.nvidia.com/v1"
-```
+<Code src="_code/switchyard/config.toml" language="toml" title="config.toml" />
 
 Save this sibling file as `plugins.toml`:
 
 {/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-switchyard-quickstart","path":"plugins.toml"} */}
-```toml
-version = 1
-
-[policy]
-unknown_component = "error"
-unknown_field = "error"
-unsupported_value = "error"
-
-[[components]]
-kind = "observability"
-enabled = true
-
-[components.config]
-version = 4
-enable_full_payloads = false
-
-[components.config.atof]
-enabled = true
-
-[[components.config.atof.sinks]]
-type = "file"
-output_directory = "logs"
-filename = "events.jsonl"
-mode = "overwrite"
-
-[[plugins.dynamic]]
-manifest = "./switchyard-plugin/relay-plugin.toml"
-
-[plugins.dynamic.config]
-priority = 0
-
-[plugins.dynamic.config.switchyard_config]
-schema_version = 1
-
-[plugins.dynamic.config.switchyard_config.llm_clients.nvidia]
-format = "openai_chat"
-base_url = "https://integrate.api.nvidia.com/v1"
-api_key_env = "NVIDIA_API_KEY"
-
-[plugins.dynamic.config.switchyard_config.targets.default]
-id = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
-llm_client = "nvidia"
-
-[plugins.dynamic.config.switchyard_config.routes.default]
-id = "switchyard/quickstart"
-type = "passthrough"
-target = "default"
-
-[plugins.policy.overrides."nvidia.switchyard"]
-attestation = "integrity_only"
-```
+<Code src="_code/switchyard/plugins.toml" language="toml" title="plugins.toml" />
 
 <Warning>
 The checksum and `integrity_only` policy check artifact integrity, not independent
