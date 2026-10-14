@@ -64,7 +64,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 ## Goal
 
 Run one local pi task through NeMo Relay and write its agent, model, and tool
-lifecycle to a local ATOF event file.
+lifecycle to a local Agent Trajectory Observability Format (ATOF) file.
 
 <Warning>
 The pi integration is a proof of concept. This guide pins pi 0.84.0. pi can
@@ -73,6 +73,8 @@ that exact version.
 </Warning>
 
 ## Prerequisites
+
+Before you start, make sure you have:
 
 - Node.js 24 or newer and npm (the selected runtime for this guide)
 - A configured pi model with inference access: a provider API key or a supported authenticated session
@@ -96,7 +98,7 @@ Messages; Gemini and Vertex APIs are not supported by this Relay gateway.
 
 ## Install
 
-Install the pinned pi and NeMo Relay releases:
+Install the pinned pi release and the NeMo Relay version for these docs:
 
 <Tabs>
 <Tab title="Unix shell">
@@ -243,7 +245,7 @@ confirm the endpoint and exact model ID before changing credentials.
 
 ## Verify
 
-Success prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+The verification command prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
 
 <details>
 <summary>Run the verification checks</summary>
@@ -299,7 +301,7 @@ Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
 </Tab>
 </Tabs>
 
-Expected output from the verification command:
+The verification command prints the following output when its checks pass:
 
 {/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
 ```text
