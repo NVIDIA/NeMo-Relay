@@ -344,6 +344,7 @@ fn test_config() -> GatewayConfig {
         openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
         anthropic_auth_header: None,
+        chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -6955,4 +6956,44 @@ async fn pi_hooks_require_credentials_and_reject_cross_owner_injection() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn gateway_preserves_remote_guardrails_http_error_statuses() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    for status in [StatusCode::FORBIDDEN, StatusCode::NOT_FOUND] {
+        let _ = nemo_relay::plugin::test_close_plugin_host();
+        let (upstream, upstream_calls) =
+            spawn_mock_upstream(status, "application/json", "backend error").await;
+        let mut config = test_config();
+        config.plugin_config = Some(json!({
+            "version": 1,
+            "components": [{ "kind": "nemo_guardrails", "enabled": true, "config": {
+                "mode": "remote", "codec": "openai_chat",
+                "remote": { "endpoint": upstream, "config_id": "default" }
+            }}]
+        }));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let handle =
+            tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+        wait_for_gateway(&url).await;
+        for stream in [false, true] {
+            let response = test_http_client().post(format!("{url}/v1/chat/completions"))
+                .json(&json!({"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}], "stream": stream}))
+                .send().await.unwrap();
+            assert_eq!(response.status(), status);
+            let body: Value = response.json().await.unwrap();
+            assert_eq!(body["error"]["type"], "nemo_relay_gateway_error");
+        }
+        assert_eq!(
+            upstream_calls.load(Ordering::SeqCst),
+            2,
+            "one remote attempt per request"
+        );
+        shutdown_tx.send(()).unwrap();
+        handle.await.unwrap().unwrap();
+        let _ = nemo_relay::plugin::test_close_plugin_host();
+    }
 }

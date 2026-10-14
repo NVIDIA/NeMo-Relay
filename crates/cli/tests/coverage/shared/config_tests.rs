@@ -239,6 +239,7 @@ struct PluginConfigDiscoveryScope {
     previous_openai_base_url: Option<OsString>,
     previous_openai_auth_header: Option<OsString>,
     previous_anthropic_base_url: Option<OsString>,
+    previous_chatgpt_codex_base_url: Option<OsString>,
     previous_anthropic_auth_header: Option<OsString>,
     previous_bootstrap_fingerprint: Option<OsString>,
     previous_plugin_idle_timeout: Option<OsString>,
@@ -258,6 +259,7 @@ impl PluginConfigDiscoveryScope {
         let previous_openai_base_url = std::env::var_os("NEMO_RELAY_OPENAI_BASE_URL");
         let previous_openai_auth_header = std::env::var_os("NEMO_RELAY_OPENAI_AUTH_HEADER");
         let previous_anthropic_base_url = std::env::var_os("NEMO_RELAY_ANTHROPIC_BASE_URL");
+        let previous_chatgpt_codex_base_url = std::env::var_os("NEMO_RELAY_CHATGPT_CODEX_BASE_URL");
         let previous_anthropic_auth_header = std::env::var_os("NEMO_RELAY_ANTHROPIC_AUTH_HEADER");
         let previous_bootstrap_fingerprint = std::env::var_os(BOOTSTRAP_FINGERPRINT_ENV);
         let previous_plugin_idle_timeout = std::env::var_os(PLUGIN_IDLE_TIMEOUT_ENV);
@@ -270,6 +272,7 @@ impl PluginConfigDiscoveryScope {
             std::env::remove_var("NEMO_RELAY_OPENAI_BASE_URL");
             std::env::remove_var("NEMO_RELAY_OPENAI_AUTH_HEADER");
             std::env::remove_var("NEMO_RELAY_ANTHROPIC_BASE_URL");
+            std::env::remove_var("NEMO_RELAY_CHATGPT_CODEX_BASE_URL");
             std::env::remove_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER");
             std::env::remove_var(BOOTSTRAP_FINGERPRINT_ENV);
             std::env::remove_var(PLUGIN_IDLE_TIMEOUT_ENV);
@@ -286,6 +289,7 @@ impl PluginConfigDiscoveryScope {
             previous_openai_base_url,
             previous_openai_auth_header,
             previous_anthropic_base_url,
+            previous_chatgpt_codex_base_url,
             previous_anthropic_auth_header,
             previous_bootstrap_fingerprint,
             previous_plugin_idle_timeout,
@@ -350,6 +354,10 @@ impl Drop for PluginConfigDiscoveryScope {
                 Some(value) => std::env::set_var("NEMO_RELAY_ANTHROPIC_BASE_URL", value),
                 None => std::env::remove_var("NEMO_RELAY_ANTHROPIC_BASE_URL"),
             }
+            match self.previous_chatgpt_codex_base_url.take() {
+                Some(value) => std::env::set_var("NEMO_RELAY_CHATGPT_CODEX_BASE_URL", value),
+                None => std::env::remove_var("NEMO_RELAY_CHATGPT_CODEX_BASE_URL"),
+            }
             match self.previous_anthropic_auth_header.take() {
                 Some(value) => std::env::set_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER", value),
                 None => std::env::remove_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER"),
@@ -409,6 +417,7 @@ response_timeout_secs = 180
 openai_auth_header = "Bearer admin-file-openai"
 anthropic_base_url = "https://admin.example/anthropic"
 anthropic_auth_header = "Basic admin-file-anthropic"
+chatgpt_codex_base_url = "https://admin.example/chatgpt"
 "#,
     )
     .unwrap();
@@ -458,6 +467,10 @@ anthropic_auth_header = "Basic admin-file-anthropic"
     assert_eq!(
         managed.resolved.gateway.anthropic_base_url,
         "https://admin.example/anthropic"
+    );
+    assert_eq!(
+        managed.resolved.gateway.chatgpt_codex_base_url.as_deref(),
+        Some("https://admin.example/chatgpt")
     );
     assert_eq!(
         managed.resolved.gateway.openai_auth_header.as_deref(),
@@ -613,6 +626,7 @@ fn config() -> GatewayConfig {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -951,6 +965,7 @@ command = "codex --approval-mode never"
     )
     .unwrap();
     let command = RunOverrides {
+        chatgpt_codex_base_url: None,
         agent: None,
         config: Some(path),
         openai_base_url: None,
@@ -1231,6 +1246,7 @@ fn explicit_config_must_exist() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("missing-config.toml");
     let command = RunOverrides {
+        chatgpt_codex_base_url: None,
         agent: None,
         config: Some(path.clone()),
         openai_base_url: None,
@@ -1313,6 +1329,7 @@ fn unreadable_config_errors_include_the_source_path() {
     std::fs::write(&config_path, "").unwrap();
     std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o000)).unwrap();
     let command = RunOverrides {
+        chatgpt_codex_base_url: None,
         agent: None,
         config: Some(config_path.clone()),
         openai_base_url: None,
@@ -1371,6 +1388,7 @@ fn legacy_observability_config_sections_fail_clearly() {
         let path = temp.path().join(name);
         std::fs::write(&path, contents).unwrap();
         let command = RunOverrides {
+            chatgpt_codex_base_url: None,
             agent: None,
             config: Some(path),
             openai_base_url: None,
@@ -1425,6 +1443,7 @@ mode = "overwrite"
     )
     .unwrap();
     let command = RunOverrides {
+        chatgpt_codex_base_url: None,
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
         openai_base_url: None,
@@ -2479,6 +2498,7 @@ fn plugin_config_path_overrides_sibling_plugin_file() {
     )
     .unwrap();
     let command = RunOverrides {
+        chatgpt_codex_base_url: None,
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
         openai_base_url: None,
@@ -2516,6 +2536,7 @@ openai_auth_header = "Bearer file-openai"
     )
     .unwrap();
     let command = RunOverrides {
+        chatgpt_codex_base_url: None,
         agent: Some(CodingAgent::Codex),
         config: Some(path),
         openai_base_url: Some("http://cli-openai".into()),
@@ -2554,6 +2575,7 @@ openai_auth_header = "Bearer file-openai"
         ..GatewayOverrides::default()
     };
     let command = RunOverrides {
+        chatgpt_codex_base_url: None,
         agent: Some(CodingAgent::Codex),
         config: None,
         openai_base_url: None,
@@ -2594,6 +2616,7 @@ anthropic_auth_header = "Basic file-anthropic"
         bind: Some("127.0.0.1:0".parse().unwrap()),
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: Some("http://cli-anthropic".into()),
+        chatgpt_codex_base_url: None,
         plugin_config_path: None,
         ready_file: None,
         max_hook_payload_bytes: Some(222),
@@ -3131,7 +3154,7 @@ fn persistent_server_resolution_excludes_project_config_and_fingerprints_credent
 }
 
 #[test]
-fn persistent_fingerprint_tracks_provider_auth_headers_and_response_timeout() {
+fn persistent_fingerprint_tracks_upstream_settings() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let xdg = temp.path().join("xdg");
@@ -3181,6 +3204,16 @@ fn persistent_fingerprint_tracks_provider_auth_headers_and_response_timeout() {
         .bootstrap_fingerprint
         .unwrap();
     assert_ne!(anthropic_changed, timeout_changed);
+    std::fs::write(
+        &config_path,
+        "[upstream]\nopenai_auth_header = \"Bearer two\"\nanthropic_auth_header = \"Basic two\"\nresponse_timeout_secs = 90\nchatgpt_codex_base_url = \"https://chatgpt-proxy.example\"\n",
+    )
+    .unwrap();
+    let chatgpt_base_changed = resolve_persistent_server_config(&GatewayOverrides::default())
+        .unwrap()
+        .bootstrap_fingerprint
+        .unwrap();
+    assert_ne!(timeout_changed, chatgpt_base_changed);
 }
 
 #[test]
@@ -3993,6 +4026,7 @@ fn run_resolution_applies_all_run_overrides() {
     let config_path = isolated_config_path(&temp);
     std::fs::write(&config_path, "").unwrap();
     let command = RunOverrides {
+        chatgpt_codex_base_url: None,
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
         openai_base_url: Some("http://run-openai".into()),
@@ -4035,6 +4069,7 @@ allowed = false
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
     let command = RunOverrides {
+        chatgpt_codex_base_url: None,
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
         openai_base_url: None,
@@ -4934,4 +4969,136 @@ fn dynamic_plugin_identity_allows_worker_without_manifest() {
     assert_eq!(identity["plugin_id"], "acme.manual-worker");
     assert_eq!(identity["manifest"], Value::Null);
     assert_eq!(identity["lifecycle_generation"], 7);
+}
+
+#[test]
+fn chatgpt_codex_base_url_rejects_unsafe_values_from_every_source() {
+    let _env = crate::test_support::EnvScope::set(&[("NEMO_RELAY_CHATGPT_CODEX_BASE_URL", None)]);
+    for value in [
+        "",
+        " ",
+        "not a URL",
+        "/relative",
+        "http://proxy.example/codex",
+        "ftp://localhost/codex",
+        "https://proxy.example/codex?token=x",
+        "https://proxy.example/codex#fragment",
+        "https://user:password@proxy.example/codex",
+    ] {
+        let mut gateway = GatewayConfig::default();
+        assert!(
+            apply_file_upstream_config(
+                &mut gateway,
+                Some(FileUpstreamConfig {
+                    chatgpt_codex_base_url: Some(value.into()),
+                    ..Default::default()
+                })
+            )
+            .is_err(),
+            "file accepted {value:?}"
+        );
+        unsafe {
+            std::env::set_var("NEMO_RELAY_CHATGPT_CODEX_BASE_URL", value);
+        }
+        assert!(
+            apply_env_config(&mut gateway).is_err(),
+            "environment accepted {value:?}"
+        );
+        assert!(
+            apply_server_overrides(
+                &mut gateway,
+                &GatewayOverrides {
+                    chatgpt_codex_base_url: Some(value.into()),
+                    ..Default::default()
+                }
+            )
+            .is_err(),
+            "flag accepted {value:?}"
+        );
+        let command = RunOverrides {
+            chatgpt_codex_base_url: Some(value.into()),
+            agent: None,
+            config: None,
+            openai_base_url: None,
+            anthropic_base_url: None,
+            session_metadata: None,
+            plugin_config_path: None,
+            dry_run: true,
+            print: false,
+            command: vec![],
+        };
+        assert!(
+            apply_run_overrides(&mut gateway, &command).is_err(),
+            "run accepted {value:?}"
+        );
+        assert!(gateway.chatgpt_codex_base_url.is_none());
+    }
+}
+
+#[test]
+fn chatgpt_codex_base_url_overrides_preserve_precedence_and_managed_policy() {
+    let _env = crate::test_support::EnvScope::set(&[(
+        "NEMO_RELAY_CHATGPT_CODEX_BASE_URL",
+        Some(std::ffi::OsStr::new("https://env.example/codex")),
+    )]);
+    for value in [
+        "https://proxy.example/codex",
+        "http://localhost:4142/codex",
+        "http://127.0.0.1:4142/codex",
+        "http://[::1]:4142/codex",
+    ] {
+        assert_eq!(
+            validate_chatgpt_codex_base_url("test", format!(" {value} ")).unwrap(),
+            value
+        );
+    }
+    let mut gateway = GatewayConfig::default();
+    apply_file_upstream_config(
+        &mut gateway,
+        Some(FileUpstreamConfig {
+            chatgpt_codex_base_url: Some("https://file.example/codex".into()),
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    let mut managed = gateway.clone();
+    apply_managed_worker_env_config(&mut managed).unwrap();
+    assert_eq!(
+        managed.chatgpt_codex_base_url.as_deref(),
+        Some("https://file.example/codex")
+    );
+    apply_env_config(&mut gateway).unwrap();
+    assert_eq!(
+        gateway.chatgpt_codex_base_url.as_deref(),
+        Some("https://env.example/codex")
+    );
+    apply_server_overrides(
+        &mut gateway,
+        &GatewayOverrides {
+            chatgpt_codex_base_url: Some("https://flag.example/codex".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        gateway.chatgpt_codex_base_url.as_deref(),
+        Some("https://flag.example/codex")
+    );
+    let command = RunOverrides {
+        chatgpt_codex_base_url: Some("https://run.example/codex".into()),
+        agent: None,
+        config: None,
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config_path: None,
+        dry_run: true,
+        print: false,
+        command: vec![],
+    };
+    apply_run_overrides(&mut gateway, &command).unwrap();
+    assert_eq!(
+        gateway.chatgpt_codex_base_url.as_deref(),
+        Some("https://run.example/codex")
+    );
 }
