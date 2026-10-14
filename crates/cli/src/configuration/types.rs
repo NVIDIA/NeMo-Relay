@@ -34,6 +34,9 @@ pub(crate) struct GatewayConfig {
     pub(crate) openai_auth_header: Option<String>,
     pub(crate) anthropic_base_url: String,
     pub(crate) anthropic_auth_header: Option<String>,
+    /// Replaces the ChatGPT backend for Codex requests that carry ChatGPT auth and have no
+    /// replacement OpenAI credential. The caller's ChatGPT credential is forwarded to this endpoint.
+    pub(crate) chatgpt_codex_base_url: Option<String>,
     /// Provider response wait in seconds; zero leaves cancellation to the caller.
     pub(crate) response_timeout_secs: u64,
     pub(crate) metadata: Option<Value>,
@@ -144,6 +147,7 @@ impl Default for GatewayConfig {
             openai_auth_header: None,
             anthropic_base_url: "https://api.anthropic.com".into(),
             anthropic_auth_header: None,
+            chatgpt_codex_base_url: None,
             response_timeout_secs: 0,
             metadata: None,
             launched_agent: None,

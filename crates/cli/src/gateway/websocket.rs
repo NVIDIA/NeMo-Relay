@@ -9,12 +9,14 @@ use axum::http::{
 };
 use axum::response::IntoResponse;
 use base64::Engine;
+use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::Connect;
 use hyper_util::rt::TokioIo;
 
 use crate::configuration::GatewayConfig;
 use crate::daemon::common::transport::{
-    PooledClient, box_body, prepare_forward_request, prepare_forward_response,
-    strip_hop_by_hop_headers,
+    RelayBody, TransportError, box_body, named_upstream_websocket_client, pooled_websocket_client,
+    prepare_forward_request, prepare_forward_response, strip_hop_by_hop_headers,
 };
 
 pub(crate) fn is_websocket(request: &Request<Body>) -> bool {
@@ -69,17 +71,38 @@ pub(super) fn strip_private_headers(headers: &mut HeaderMap, keep_named_upstream
     }
 }
 
+/// Forwards to a provider, through the named-upstream pool when the caller chose the destination.
+pub(crate) async fn forward_to_provider<H: Send + 'static>(
+    client_named: bool,
+    request: Request<Body>,
+    destination: &str,
+    hold: H,
+    config: &GatewayConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<Response<Body>, TransportError> {
+    Ok(if client_named {
+        let client = named_upstream_websocket_client()?;
+        forward(&client, request, destination, None, hold, config, shutdown).await
+    } else {
+        let client = pooled_websocket_client()?;
+        forward(&client, request, destination, None, hold, config, shutdown).await
+    })
+}
+
 /// Establishes the upstream handshake before acknowledging the downstream upgrade. The guard
 /// owns the selected worker/admission for the entire tunnel, rather than the empty 101 body.
-pub(crate) async fn forward<H: Send + 'static>(
-    client: &PooledClient,
+pub(crate) async fn forward<C, H: Send + 'static>(
+    client: &Client<C, RelayBody>,
     mut request: Request<Body>,
     destination: &str,
     authentication: Option<(HeaderName, String)>,
     hold: H,
     config: &GatewayConfig,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
-) -> Response<Body> {
+) -> Response<Body>
+where
+    C: Connect + Clone + Send + Sync + 'static,
+{
     let key = request.headers().get(header::SEC_WEBSOCKET_KEY).cloned();
     if !is_websocket(&request)
         || !token(request.headers(), header::CONNECTION, "upgrade")

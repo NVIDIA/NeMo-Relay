@@ -520,6 +520,7 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic/".into(),
         anthropic_auth_header: None,
+        chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -571,6 +572,7 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -607,6 +609,7 @@ fn anthropic_upstream_url_accepts_origin_or_v1_base() {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -2380,6 +2383,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -2422,6 +2426,7 @@ async fn models_rejects_non_get_requests_directly() {
         openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
         anthropic_auth_header: None,
+        chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -2830,6 +2835,7 @@ async fn models_refuses_an_unusable_named_upstream() {
         openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1:1".into(),
         anthropic_auth_header: None,
+        chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -2957,6 +2963,58 @@ fn unmanaged_provider_routes_use_codex_auth_routing_and_preserve_query() {
                 .then(|| expected.to_owned()),
         );
     }
+}
+
+#[test]
+fn chatgpt_routes_use_the_configured_chatgpt_base() {
+    let chatgpt_only = GatewayConfig {
+        chatgpt_codex_base_url: Some("https://chatgpt-proxy.example/codex".into()),
+        ..GatewayConfig::default()
+    };
+    let with_replacement = GatewayConfig {
+        openai_auth_header: Some("Bearer api-replacement".into()),
+        chatgpt_codex_base_url: Some("https://chatgpt-proxy.example/codex/".into()),
+        ..GatewayConfig::default()
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer at-codex-token"),
+    );
+
+    assert_eq!(
+        gateway_upstream_url_override(
+            ProviderRoute::OpenAiResponses,
+            &headers,
+            "/v1/responses?client=codex",
+            false,
+            &chatgpt_only,
+        )
+        .as_deref(),
+        Some("https://chatgpt-proxy.example/codex/responses?client=codex"),
+    );
+    // A replacement credential still sends Responses to `openai_base_url`, not the ChatGPT base.
+    assert_eq!(
+        gateway_upstream_url_override(
+            ProviderRoute::OpenAiResponses,
+            &headers,
+            "/v1/responses?client=codex",
+            true,
+            &with_replacement,
+        ),
+        None,
+    );
+    assert_eq!(
+        gateway_upstream_url_override(
+            ProviderRoute::OpenAiRealtimeCalls,
+            &headers,
+            "/backend-api/codex/realtime/calls?model=voice",
+            true,
+            &with_replacement,
+        )
+        .as_deref(),
+        Some("https://chatgpt-proxy.example/codex/realtime/calls?model=voice"),
+    );
 }
 
 #[tokio::test]

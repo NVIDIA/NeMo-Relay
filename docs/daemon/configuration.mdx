@@ -306,7 +306,12 @@ x-nemo-relay-client-token: <base64url-encoded-256-bit-credential>
 Pi provider registrations also preserve Pi's runtime-selected endpoint in
 `x-nemo-relay-upstream-base-url`. The authenticated daemon consumes that
 routing header and removes it before contacting the provider. It is runtime
-model metadata, not part of the managed settings artifact.
+model metadata, not part of the managed settings artifact. A named endpoint
+must use `https` unless it is loopback, and must be a public or loopback
+address: the daemon refuses private, link-local, shared, and other special-use
+addresses, including any a hostname resolves to when the daemon connects.
+Provider endpoints on a private network must be configured as the daemon's
+upstream rather than named.
 
 Enterprise bootstrap can provide the credential through this environment
 variable. Managed hooks and MCP also read the
@@ -760,8 +765,21 @@ uses the administrator's configured OpenAI-compatible upstream instead.
 
 ChatGPT voice call creation is an exception. Requests to
 `POST /backend-api/codex/realtime/calls` keep the caller's ChatGPT credential
-and use the native ChatGPT backend even when a replacement OpenAI credential
+and use the ChatGPT backend even when a replacement OpenAI credential
 is configured. This preserves ChatGPT's JSON call format.
+
+Set `[upstream] chatgpt_codex_base_url` to send ChatGPT requests, including
+voice call creation, to an approved endpoint instead of the default
+`https://chatgpt.com/backend-api/codex`. Relay appends the Codex request path,
+such as `/responses` or `/realtime/calls`, to that base and forwards the
+caller's ChatGPT credential to it, so use only an endpoint you trust with
+users' ChatGPT credentials.
+
+The base URL must use HTTPS for remote hosts. HTTP is allowed only for loopback
+hosts. Managed workers read this endpoint from system TOML configuration and
+ignore `NEMO_RELAY_CHATGPT_CODEX_BASE_URL`, consistent with the other managed
+provider endpoint settings. Personal gateways also accept that environment
+variable and `--chatgpt-codex-base-url`; CLI flags take precedence.
 
 Live and Realtime connections use the configured OpenAI upstream and keep the
 caller's provider credential. By default, that upstream is `api.openai.com`, which matches Codex's WebRTC sideband destination.
