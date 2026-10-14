@@ -6,10 +6,39 @@ navigation:
   title: About NVIDIA NeMo Relay
   slug: about-nemo-relay
   title-source: frontmatter
-- folder: ../pages-dev/getting-started
-  title: Getting Started
+- section: Getting Started
   slug: getting-started
-  title-source: frontmatter
+  contents:
+  - page: About
+    path: ../pages-dev/getting-started/about.mdx
+    slug: about
+  - page: Installation Overview
+    path: ../pages-dev/getting-started/installation.mdx
+    slug: installation
+  - page: Configuration / Setup Overview
+    path: ../pages-dev/getting-started/configuration.mdx
+    slug: configuration
+  - section: Quick Starts
+    path: ../pages-dev/getting-started/quick-start/index.mdx
+    slug: quick-start
+    collapsed: open-by-default
+    contents:
+    - section: Application APIs
+      skip-slug: true
+      collapsed: open-by-default
+      contents:
+      - page: Python
+        icon: fa-brands fa-python
+        path: ../pages-dev/getting-started/quick-start/python.mdx
+        slug: python
+      - page: Node.js
+        icon: fa-brands fa-node-js
+        path: ../pages-dev/getting-started/quick-start/nodejs.mdx
+        slug: nodejs
+      - page: Rust
+        icon: fa-brands fa-rust
+        path: ../pages-dev/getting-started/quick-start/rust.mdx
+        slug: rust
 - folder: ../pages-dev/nemo-relay-cli
   title: NVIDIA NeMo Relay CLI
   slug: nemo-relay-cli
