@@ -825,7 +825,12 @@ async fn forward_to_provider(
 
 fn managed_upstream_failure_reason(error: &CliError) -> Option<&'static str> {
     match error {
-        CliError::Upstream(_) => Some("transport_error"),
+        CliError::Upstream(_) | CliError::UpstreamTransport(_) => Some("transport_error"),
+        CliError::ProviderFailure(failure) => match failure.class {
+            nemo_relay::error::UpstreamFailureClass::Timeout => Some("response_head_timeout"),
+            nemo_relay::error::UpstreamFailureClass::Connection => Some("transport_error"),
+            _ => None,
+        },
         CliError::Io(_) => Some("io_error"),
         CliError::Http(_) => Some("invalid_response"),
         CliError::Launch(message) if message.contains("response-head timeout") => {

@@ -1002,3 +1002,28 @@ async fn websocket_drain_cancels_a_pending_upstream_handshake() {
     task.abort();
     provider_task.abort();
 }
+
+#[test]
+fn managed_provider_transport_failures_preserve_operational_reasons() {
+    use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
+    for (class, reason) in [
+        (UpstreamFailureClass::Connection, Some("transport_error")),
+        (UpstreamFailureClass::Timeout, Some("response_head_timeout")),
+        (UpstreamFailureClass::Authentication, None),
+    ] {
+        let error = CliError::ProviderFailure(UpstreamFailure {
+            status: None,
+            body: "provider failure".into(),
+            headers: Default::default(),
+            class,
+        });
+        assert_eq!(managed_upstream_failure_reason(&error), reason);
+    }
+    let error = CliError::UpstreamTransport(
+        crate::daemon::common::transport::TransportError::InsecureDestination,
+    );
+    assert_eq!(
+        managed_upstream_failure_reason(&error),
+        Some("transport_error")
+    );
+}
