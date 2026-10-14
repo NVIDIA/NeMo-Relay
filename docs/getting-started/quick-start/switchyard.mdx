@@ -59,9 +59,11 @@ SPDX-License-Identifier: Apache-2.0 */}
 ## Goal
 
 Route one OpenAI-compatible request through Switchyard inside NeMo Relay, then
-confirm the response and routing event in a local ATOF file.
+confirm the response and routing event in a local Agent Trajectory Observability Format (ATOF) file.
 
 ## Prerequisites
+
+Before you start, make sure you have:
 
 - A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
 - On Linux, a glibc-based distribution and Relay's GNU binary
@@ -70,8 +72,8 @@ confirm the response and routing event in a local ATOF file.
 
 <Warning>
 This guide pins Switchyard plugin `0.3.1` and NeMo Relay `0.11.0` separately.
-On Linux, use Relay's GNU binary with the glibc plugin bundle: the static musl
-binary cannot load this native plugin. The plugin is a
+On Linux, use Relay's GNU binary with the glibc plugin bundle. The bundle
+cannot load in Relay's musl binary because the C libraries must match. The plugin is a
 native library loaded into the Relay process; use a bundle from a source you
 trust.
 </Warning>
@@ -238,7 +240,7 @@ publisher authenticity: the archive and checksum come from the same source.
 Only load a bundle whose publisher you trust. The example uses a server-owned
 API key: the native plugin does not
 support forwarding each caller's credential to the provider. Protect
-`logs/events.jsonl`; Relay events may contain request or response data even
+`logs/events.jsonl`; Relay events can contain request or response data even
 with full payload export disabled.
 </Warning>
 
@@ -254,6 +256,8 @@ enable the configured plugin, and validate it:
 export NVIDIA_API_KEY="your-api-key"
 ```
 
+Enable and validate the plugin, then start Relay:
+
 {/* quickstart-block {"id":"gateway","role":"run","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"gateway","timeout_seconds":300,"background":{"ready":{"tcp":"127.0.0.1:4040","timeout_seconds":60},"stop_before":"verify","stop":"interrupt","shutdown_timeout_seconds":15}} */}
 ```bash
 export PATH="$PWD/bin:$PATH"
@@ -268,6 +272,8 @@ nemo-relay --config "$PWD/config.toml" --bind 127.0.0.1:4040
 ```powershell
 $env:NVIDIA_API_KEY = 'your-api-key'
 ```
+
+Enable and validate the plugin, then start Relay:
 
 {/* quickstart-block {"id":"gateway","role":"run","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"gateway","timeout_seconds":300,"background":{"ready":{"tcp":"127.0.0.1:4040","timeout_seconds":60},"stop_before":"verify","stop":"interrupt","shutdown_timeout_seconds":15}} */}
 ```powershell
@@ -312,14 +318,14 @@ $response | ConvertTo-Json -Depth 50 | Set-Content response.json -Encoding utf8
 
 ## Verify
 
-Success prints `RELAY_QUICKSTART_RESPONSE_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+The verification command prints `RELAY_QUICKSTART_RESPONSE_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
 
 <details>
 <summary>Run the verification checks</summary>
 
-After the request finishes, stop Relay with **Ctrl+C** in its terminal to flush
-the event file. Then check the assistant response and the routing mark's
-structured fields, rather than searching arbitrary event payload text:
+After the request finishes, stop Relay with Ctrl+C in its terminal to flush
+the event file. Then check the assistant response and confirm that Relay recorded a mark
+named `switchyard.routing.decision`:
 
 <Tabs>
 <Tab title="Unix shell">
@@ -355,7 +361,7 @@ Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
 </Tab>
 </Tabs>
 
-Expected verification output:
+The verification command prints the following output when its checks pass:
 
 {/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-switchyard-quickstart","from":"verify","match":"exact-lines"} */}
 ```text
@@ -376,5 +382,5 @@ timestamps, token counts, or event UUIDs.
 
 For more details, refer to:
 
-- [Switchyard plugin setup](https://github.com/NVIDIA-NeMo/Switchyard/tree/v0.3.0/crates/switchyard-nemo-relay-plugin#configure-relay)
+- [Switchyard Plugin Setup](https://github.com/NVIDIA/NeMo-Relay-Plugins/tree/switchyard-plugin-0.3.1/plugins/switchyard-plugin)
 - [NeMo Relay discoverable plugins](/configure-plugins/discoverable-plugins)
