@@ -85,13 +85,11 @@ async fn managed_provider_wait_has_no_default_deadline_and_honors_configuration(
                 "compaction complete"
             );
         } else {
-            assert!(
-                task.await
-                    .unwrap()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("response-head timeout")
-            );
+            let error = task.await.unwrap().unwrap_err();
+            assert!(matches!(&error, CliError::ProviderFailure(failure)
+                if failure.class == UpstreamFailureClass::Timeout));
+            assert!(error.to_string().contains("response-head timeout"));
+            assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
         }
         server.abort();
     }
@@ -1562,7 +1560,8 @@ async fn managed_runtime_closes_the_llm_lifecycle_when_provider_dispatch_fails()
         .await
         .expect_err("unreachable provider must fail");
     assert!(
-        matches!(error, CliError::Launch(_)),
+        matches!(&error, CliError::ProviderFailure(failure)
+            if failure.class == UpstreamFailureClass::Connection),
         "unexpected dispatch error: {error:?}"
     );
     runtime.close().await.expect("close managed runtime");
@@ -2742,4 +2741,105 @@ async fn regression_backend_alias_still_uses_provider_helper() {
         actual, "Bearer helper-generated-token",
         "A configured enterprise endpoint must receive helper authentication for this alias"
     );
+}
+
+#[tokio::test]
+async fn managed_forwarding_rejects_remote_http_as_an_upstream_error() {
+    let config = GatewayConfig {
+        openai_base_url: "http://172.16.0.223:30919/v1".into(),
+        ..Default::default()
+    };
+    let error = dispatch_unmanaged(
+        pooled_client().unwrap(),
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        &config,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CliError::UpstreamTransport(TransportError::InsecureDestination)
+    ));
+    assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
+
+    let error = dispatch_unbuffered_observed(
+        pooled_client().unwrap(),
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        &config,
+        1024,
+        OperationalContext::new(),
+    )
+    .await
+    .err()
+    .expect("remote HTTP must be rejected before connecting");
+    assert!(matches!(
+        error,
+        CliError::UpstreamTransport(TransportError::InsecureDestination)
+    ));
+    assert!(!error.to_string().contains("hook payload"));
+}
+
+#[tokio::test]
+async fn provider_connection_failures_return_bad_gateway_for_both_forwarding_paths() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let destination = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let config = GatewayConfig {
+        openai_base_url: destination.clone(),
+        ..Default::default()
+    };
+    let unmanaged = dispatch_unmanaged(
+        pooled_client().unwrap(),
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        &config,
+    )
+    .await
+    .unwrap_err();
+    let managed = request_worker_upstream(
+        pooled_client().unwrap(),
+        false,
+        Request::post(destination)
+            .body(box_body(Body::empty()))
+            .unwrap(),
+        &OperationalContext::new(),
+        false,
+        &config,
+    )
+    .await
+    .unwrap_err();
+    for error in [unmanaged, managed] {
+        assert!(matches!(&error, CliError::ProviderFailure(failure)
+            if failure.class == UpstreamFailureClass::Connection && failure.status.is_none()));
+        assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
+    }
+}
+
+#[tokio::test]
+async fn unmanaged_provider_response_head_timeout_returns_bad_gateway() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = GatewayConfig {
+        openai_base_url: format!("http://{}", listener.local_addr().unwrap()),
+        response_timeout_secs: 1,
+        ..Default::default()
+    };
+    let provider = tokio::spawn(async move {
+        let (_connection, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let error = dispatch_unmanaged(
+        pooled_client().unwrap(),
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        &config,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(&error, CliError::ProviderFailure(failure)
+        if failure.class == UpstreamFailureClass::Timeout && failure.status.is_none()));
+    assert!(error.to_string().contains("response-head timeout"));
+    assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
+    provider.abort();
 }

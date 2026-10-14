@@ -192,7 +192,12 @@ async fn forward(
     operational: &OperationalContext,
 ) -> Result<Vec<u8>, CliError> {
     let endpoint = hook_endpoint(&options.daemon_address, options.agent)?;
+    // Hook delivery dials the daemon directly, like the gateway hook client and the MCP control
+    // connection. reqwest would otherwise apply the process's `HTTP_PROXY`/`ALL_PROXY` environment
+    // to the daemon's `http://127.0.0.1` address unless `NO_PROXY` happens to list that IP, and a
+    // proxy that cannot reach the client's own loopback then fails every fail-closed hook.
     let response = reqwest::Client::builder()
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(HOOK_FORWARD_TIMEOUT)
         .build()?
