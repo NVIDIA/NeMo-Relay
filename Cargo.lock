@@ -2064,6 +2064,7 @@ dependencies = [
  "futures",
  "log",
  "nemo-relay",
+ "opentelemetry",
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
