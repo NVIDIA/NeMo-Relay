@@ -151,7 +151,7 @@ uv run pre-commit install
 The hooks enforce:
 
 - **General**: trailing whitespace removal, end-of-file fixup, YAML/TOML/JSON validity, merge conflict marker detection, large file check (500 KB max)
-- **Docs**: Fern validation for `docs/` and `fern/`, plus external Markdown/MDX link checking for `README.md`, `CONTRIBUTING.md`, and `docs/` via `lychee`
+- **Docs**: external Markdown/MDX link checking for `README.md`, `CONTRIBUTING.md`, and `docs/` via `lychee`. Fern validation runs separately through `just docs`.
 - **Python**: Ruff linting and formatting, ty type checking
 - **Rust**: FFI header sync for `crates/ffi/nemo_relay.h` through Cargo/build.rs, `cargo fmt` formatting check, `cargo clippy` lints, `cargo deny` auditing
 - **Go**: `gofmt` formatting, `go vet` static analysis

@@ -20,16 +20,27 @@ sharing the root environment.
 The quick starts store commands and expected output in their MDX pages. Sample
 files are committed beside the pages and displayed with Fern's `Code` component.
 The checker reads the referenced files, so displayed and tested content share
-the same source. From the repository root, validate the available contracts
-and run the checker unit tests:
+the same source. From the repository root, validate contracts, check Relay
+version pins, and run the checker unit tests:
 
 ```bash
-python3 scripts/check-quickstarts.py check
-python3 -m unittest discover -s scripts/tests -p 'test_*quickstart*.py'
+just check-quickstarts
 ```
 
-For a guide with contract annotations, use
-`python3 scripts/check-quickstarts.py extract <page> --shell bash` to inspect
+The existing CI `Check / Run` job runs this command without inference
+credentials. Every guide in `docs/getting-started/quick-start/`, except
+`index.mdx`, must have a contract. Missing contracts and an empty guide
+directory fail validation.
+
+The committed `scripts/quickstarts/schema.json` defines scenario and block
+metadata, including field types, required fields, and permitted values. Unknown
+fields fail validation. The `schema: 1` field versions this testing format,
+not the Relay release; ordinary Relay version bumps do not change it.
+The Python checker additionally validates relationships such as referenced
+files, command IDs, shell variants, and lifecycle assertions.
+
+After installing the dev dependencies with the command above, use
+`uv run --no-sync python scripts/check-quickstarts.py extract <page> --shell bash` to inspect
 its commands. Replace `<page>` with the guide's MDX path.
 
 The `preflight` mode rejects stale artifacts. The `verify` mode checks expected
@@ -40,11 +51,16 @@ Relay installation version pins follow the Cargo workspace version through
 `just set-version`. Check for version drift with this command:
 
 ```bash
-python3 scripts/docs/docs_version_pins.py check
+uv run --no-sync python scripts/docs/docs_version_pins.py check
 ```
 
 The external Switchyard bundle and its tested Relay version are pinned
 independently.
+
+These are static document and checker tests, not quickstart execution tests.
+A passing check does not establish that packages have been published, that a
+provider accepts the example, or that the guide runs on every supported system.
+Live execution and cross-platform quickstart validation remain separate work.
 
 ## Testing Rule
 

@@ -1031,6 +1031,17 @@ is_true() {
 }
 '''
 
+# validate quickstart metadata, referenced files, version pins, and checker tests (no guide execution)
+check-quickstarts:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
+    python_executable="$(project_python_executable)"
+    "$python_executable" -m unittest discover -s scripts/tests -p 'test_*quickstart*.py'
+    "$python_executable" scripts/docs/docs_version_pins.py check
+    "$python_executable" scripts/check-quickstarts.py check
+
 # validate the documentation site, links, navigation, and generated references
 docs:
     #!/usr/bin/env bash
