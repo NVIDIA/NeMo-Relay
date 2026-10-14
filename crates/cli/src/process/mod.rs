@@ -280,6 +280,8 @@ fn command_program(program: &str) -> PathBuf {
 
 mod supervision;
 pub(crate) use supervision::SupervisedChild;
+#[cfg(windows)]
+pub(crate) use supervision::spawn_helper;
 
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/agent_process_tests.rs"]

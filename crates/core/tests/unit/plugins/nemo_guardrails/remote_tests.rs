@@ -549,9 +549,10 @@ async fn remote_non_streaming_http_errors_are_reported_and_marked() {
 
     assert!(!original_called.load(Ordering::SeqCst));
     match error {
-        crate::error::FlowError::Internal(message) => {
-            assert!(message.contains("status 502"));
-            assert!(message.contains("backend unavailable"));
+        crate::error::FlowError::Upstream(failure) => {
+            assert_eq!(failure.status, Some(502));
+            assert!(!failure.is_retryable());
+            assert!(failure.body.contains("backend unavailable"));
         }
         other => panic!("unexpected error: {other}"),
     }
@@ -644,9 +645,10 @@ async fn remote_streaming_http_errors_are_reported_and_marked() {
 
     assert!(!original_called.load(Ordering::SeqCst));
     match error {
-        crate::error::FlowError::Internal(message) => {
-            assert!(message.contains("status 503"));
-            assert!(message.contains("stream backend unavailable"));
+        crate::error::FlowError::Upstream(failure) => {
+            assert_eq!(failure.status, Some(503));
+            assert!(!failure.is_retryable());
+            assert!(failure.body.contains("stream backend unavailable"));
         }
         other => panic!("unexpected error: {other}"),
     }

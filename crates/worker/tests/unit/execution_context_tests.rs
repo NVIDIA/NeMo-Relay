@@ -234,3 +234,32 @@ fn streaming_execution_context_has_no_response_codec() {
     assert!(context.request_codec().resolve_codec().is_some());
     assert!(context.response_codec().is_none());
 }
+
+#[test]
+fn worker_sdk_http_error_prefix_survives_callback_and_next_round_trip() {
+    for status in 400..=599 {
+        let message = http_error_message(status, "provider failure").unwrap();
+        let wire = sdk_error_to_worker(WorkerSdkError::Callback(message.clone()));
+        assert_eq!(wire.message, message);
+        assert!(!wire.retryable);
+        let returned = sdk_error_to_worker(worker_error_to_sdk(wire));
+        assert_eq!(returned.message, message);
+    }
+    let ordinary = sdk_error_to_worker(WorkerSdkError::Callback("plain failure".into()));
+    assert_eq!(ordinary.message, "callback failed: plain failure");
+}
+
+#[test]
+fn worker_sdk_cancellation_keeps_its_code_even_with_http_prefix() {
+    let wire = WorkerError {
+        code: "worker.cancelled".into(),
+        message: "HTTP 403: denied".into(),
+        retryable: false,
+    };
+    let returned = sdk_error_to_worker(worker_error_to_sdk(wire));
+    assert!(
+        returned
+            .message
+            .starts_with("callback failed: worker.cancelled:")
+    );
+}

@@ -22,6 +22,7 @@ def emit_marker() -> str:
 
 @wrap_model_call
 async def require_marker_tool(request, handler):
+    """Require the marker tool once, then allow the model's final response."""
     # Require a real tool call before the final answer; a prompt alone can be ignored.
     tool_used = any(getattr(message, "type", None) == "tool" for message in request.messages)
     return await handler(request.override(tool_choice="none" if tool_used else "emit_marker"))
@@ -36,6 +37,7 @@ agent = create_agent(
 
 
 async def main() -> None:
+    """Run the instrumented agent and verify its response and event lifecycle."""
     async with nemo_relay.plugin.activate({}, "plugins.toml"):
         try:
             with nemo_relay.scope.scope("langchain-request", nemo_relay.ScopeType.Agent):
