@@ -283,6 +283,12 @@ impl NativePlugin for FixtureNativePlugin {
             "fixture_llm_execution",
             0,
             |_name, request, _context, next| async move {
+                if request.content["native_http_error"].as_bool() == Some(true) {
+                    return Err(nemo_relay_plugin::http_error_message(
+                        403,
+                        "provider denied access",
+                    )?);
+                }
                 let response = next
                     .call(mark_llm_request(
                         request,
@@ -296,6 +302,12 @@ impl NativePlugin for FixtureNativePlugin {
             "fixture_llm_stream_execution",
             0,
             |_name, request, _context, next| async move {
+                if request.content["native_http_error"].as_bool() == Some(true) {
+                    return Err(nemo_relay_plugin::http_error_message(
+                        403,
+                        "provider denied access",
+                    )?);
+                }
                 let stream = next
                     .call(mark_llm_request(
                         request,
