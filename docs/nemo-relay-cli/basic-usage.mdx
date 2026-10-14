@@ -408,21 +408,24 @@ The following example configures separate helpers for OpenAI and Anthropic:
 
 ```toml
 [upstream]
-openai_base_url = "https://inference-api.nvidia.com/v1"
-anthropic_base_url = "https://inference-api.nvidia.com"
+openai_base_url = "https://gateway.example.com/v1"
+anthropic_base_url = "https://gateway.example.com"
 
 [upstream.openai_api_key_helper]
-command = "/bin/sh"
-args = ["-lc", "/home/nvmetrics/serviceToken/serviceToken token <service-id> | sed -E 's/^Bearer[[:space:]]+//'"]
+command = "/path/to/api-key-helper"
+args = ["--provider", "openai"]
 timeout_ms = 10000
 auth_scheme = "bearer"
 
 [upstream.anthropic_api_key_helper]
-command = "/bin/sh"
-args = ["-lc", "/home/nvmetrics/serviceToken/serviceToken token <service-id> | sed -E 's/^Bearer[[:space:]]+//'"]
+command = "/path/to/api-key-helper"
+args = ["--provider", "anthropic"]
 timeout_ms = 10000
 auth_scheme = "bearer"
 ```
+
+Replace the example URLs, helper path, and arguments with values for your setup.
+The helper must accept the arguments you provide.
 
 Relay runs `command` with `args`. Use a shell such as `/bin/sh` if the command
 needs pipes or shell expansion. The helper must exit successfully and write one
