@@ -19,8 +19,9 @@ use crate::agents::shared::alignment::{
 use crate::events::{AgentKind, SessionEvent, SubagentEvent};
 
 // ChatGPT backend base URL used by Codex when authenticated with ChatGPT. This mirrors Codex's own
-// `CHATGPT_CODEX_BASE_URL`; API-key auth continues through the normal OpenAI base.
-const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+// `CHATGPT_CODEX_BASE_URL`; API-key auth continues through the normal OpenAI base. The gateway
+// replaces this base with `[upstream] chatgpt_codex_base_url` when it is set.
+pub(crate) const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 // The Codex fields needed to turn a child thread into a parent-owned subagent scope. Optional
 // display fields are copied through because they make Phoenix traces easier to inspect, but only
@@ -88,8 +89,8 @@ fn has_codex_client_metadata(body: &Value) -> bool {
 }
 
 // Gives the gateway a Codex-native upstream only when the inbound token is a recognized ChatGPT
-// auth token and no `OPENAI_API_KEY` is available to substitute. The gateway stays generic by
-// asking alignment for an optional override instead of knowing Codex backend URLs.
+// auth token and no `OPENAI_API_KEY` is available to substitute. The gateway asks alignment for
+// this decision and only swaps the configured base for `CHATGPT_CODEX_BASE_URL`.
 pub(crate) fn chatgpt_upstream_url_if_needed(
     headers: &HeaderMap,
     route: GatewayRouteKind,

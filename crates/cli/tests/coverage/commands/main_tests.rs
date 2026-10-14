@@ -1433,3 +1433,44 @@ fn doctor_accepts_a_managed_bundle_without_changing_personal_install_flags() {
         assert!(Cli::try_parse_from(arguments).is_err());
     }
 }
+
+#[test]
+fn chatgpt_codex_base_url_cli_accepts_flags_and_environment() {
+    let _env = crate::test_support::EnvScope::set(&[(
+        "NEMO_RELAY_CHATGPT_CODEX_BASE_URL",
+        Some(std::ffi::OsStr::new("https://env.example/codex")),
+    )]);
+    let cli = Cli::try_parse_from(["nemo-relay"]).unwrap();
+    assert_eq!(
+        cli.server.to_runtime().chatgpt_codex_base_url.as_deref(),
+        Some("https://env.example/codex")
+    );
+    assert!(cli.server.to_runtime().requested_daemon_mode());
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "--chatgpt-codex-base-url",
+        "https://flag.example/codex",
+    ])
+    .unwrap();
+    assert_eq!(
+        cli.server.to_runtime().chatgpt_codex_base_url.as_deref(),
+        Some("https://flag.example/codex")
+    );
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "run",
+        "--chatgpt-codex-base-url",
+        "https://run.example/codex",
+        "--dry-run",
+        "--",
+        "codex",
+    ])
+    .unwrap();
+    let Some(Command::Run(run)) = cli.command else {
+        panic!("expected run command")
+    };
+    assert_eq!(
+        run.chatgpt_codex_base_url.as_deref(),
+        Some("https://run.example/codex")
+    );
+}

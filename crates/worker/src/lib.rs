@@ -56,6 +56,7 @@ pub use nemo_relay_types::codec::optimization::{
 };
 pub use nemo_relay_types::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+pub use nemo_relay_types::plugin::http_error_message;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
 use nemo_relay_worker_proto::v1::relay_host_runtime_client::RelayHostRuntimeClient;
@@ -3356,7 +3357,14 @@ fn infallible_json_envelope<T: serde::Serialize>(schema: &str, value: &T) -> Jso
 fn sdk_error_to_worker(error: WorkerSdkError) -> WorkerError {
     WorkerError {
         code: "worker.error".into(),
-        message: error.to_string(),
+        message: match &error {
+            WorkerSdkError::Callback(message)
+                if nemo_relay_types::plugin::parse_http_error_message(message).is_some() =>
+            {
+                message.clone()
+            }
+            _ => error.to_string(),
+        },
         retryable: false,
     }
 }
@@ -3433,7 +3441,13 @@ fn cancellation_aware_worker_stream(
 }
 
 fn worker_error_to_sdk(error: WorkerError) -> WorkerSdkError {
-    WorkerSdkError::Callback(format!("{}: {}", error.code, error.message))
+    if error.code != "worker.cancelled"
+        && nemo_relay_types::plugin::parse_http_error_message(&error.message).is_some()
+    {
+        WorkerSdkError::Callback(error.message)
+    } else {
+        WorkerSdkError::Callback(format!("{}: {}", error.code, error.message))
+    }
 }
 
 fn status_from_sdk(error: WorkerSdkError) -> Status {
