@@ -383,7 +383,7 @@ impl Drop for PluginConfigDiscoveryScope {
 }
 
 #[tokio::test]
-async fn managed_worker_configuration_ignores_user_files_and_non_secret_environment() {
+async fn managed_worker_configuration_merges_user_files_and_ignores_non_secret_environment() {
     let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let user_home = temp.path().join("user");
@@ -393,12 +393,30 @@ async fn managed_worker_configuration_ignores_user_files_and_non_secret_environm
     std::fs::create_dir_all(&system_directory).unwrap();
     std::fs::write(
         user_directory.join("config.toml"),
-        "invalid user config = [",
+        r#"[upstream]
+openai_base_url = "https://user.example/openai"
+[gateway]
+max_hook_payload_bytes = 9
+"#,
     )
     .unwrap();
     std::fs::write(
         user_directory.join(PLUGINS_TOML),
-        "invalid user plugins = [",
+        r#"version = 1
+[[components]]
+kind = "observability"
+enabled = true
+[components.config]
+version = 4
+[components.config.opentelemetry]
+enabled = true
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "http://localhost:5000/v1/traces"
+transport = "http_binary"
+[components.config.opentelemetry.endpoints.headers]
+"x-mlflow-experiment-id" = "0"
+"#,
     )
     .unwrap();
 
@@ -421,10 +439,30 @@ chatgpt_codex_base_url = "https://admin.example/chatgpt"
 "#,
     )
     .unwrap();
-    std::fs::write(&system_plugins, "version = 1\ncomponents = []\n").unwrap();
+    std::fs::write(
+        &system_plugins,
+        r#"version = 1
+[[components]]
+kind = "observability"
+enabled = true
+[components.config]
+version = 4
+[components.config.opentelemetry]
+enabled = true
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "https://admin.example/v1/traces"
+service_name = "admin-service"
+"#,
+    )
+    .unwrap();
 
     let _environment = crate::test_support::EnvScope::set(&[
         ("XDG_CONFIG_HOME", Some(user_home.as_os_str())),
+        (
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            Some(system_directory.as_os_str()),
+        ),
         ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
         (
             "NEMO_RELAY_GATEWAY_BIND",
@@ -457,9 +495,13 @@ chatgpt_codex_base_url = "https://admin.example/chatgpt"
     ]);
 
     let managed =
-        resolve_managed_worker_config_from_paths(system_config, system_plugins.clone()).unwrap();
+        resolve_managed_worker_config_from_paths(system_config.clone(), system_plugins.clone())
+            .unwrap();
 
-    assert_eq!(managed.plugin_config_path, system_plugins);
+    assert_eq!(
+        managed.plugin_config_path,
+        user_directory.join(PLUGINS_TOML)
+    );
     assert_eq!(
         managed.resolved.gateway.openai_base_url,
         "https://admin.example/openai"
@@ -490,15 +532,28 @@ chatgpt_codex_base_url = "https://admin.example/chatgpt"
         managed.resolved.gateway.response_timeout(),
         Some(Duration::from_secs(180))
     );
-    assert_eq!(
-        managed.resolved.gateway.plugin_config,
-        Some(json!({ "components": [], "version": 1 }))
-    );
+    let config = managed.resolved.gateway.plugin_config.as_ref().unwrap();
+    let endpoints = config["components"][0]["config"]["opentelemetry"]["endpoints"]
+        .as_array()
+        .unwrap();
+    assert_eq!(endpoints.len(), 2);
+    assert_eq!(endpoints[0]["endpoint"], "https://admin.example/v1/traces");
+    assert_eq!(endpoints[1]["endpoint"], "http://localhost:5000/v1/traces");
+    assert_eq!(endpoints[1]["headers"]["x-mlflow-experiment-id"], "0");
     assert!(managed.resolved.dynamic_plugins.is_empty());
+
+    std::fs::write(&system_config, "").unwrap();
+    let user_defaults =
+        resolve_managed_worker_config_from_paths(system_config, system_plugins).unwrap();
+    assert_eq!(
+        user_defaults.resolved.gateway.openai_base_url,
+        "https://user.example/openai"
+    );
+    assert_eq!(user_defaults.resolved.gateway.max_hook_payload_bytes, 9);
 }
 
 #[tokio::test]
-async fn managed_worker_dynamic_plugin_loading_ignores_user_lifecycle_state() {
+async fn managed_worker_dynamic_plugin_loading_reads_user_lifecycle_state() {
     let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let user_home = temp.path().join("user");
@@ -508,49 +563,52 @@ async fn managed_worker_dynamic_plugin_loading_ignores_user_lifecycle_state() {
     std::fs::create_dir_all(&system_directory).unwrap();
     let _environment = crate::test_support::EnvScope::set(&[
         ("XDG_CONFIG_HOME", Some(user_home.as_os_str())),
+        (
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            Some(system_directory.as_os_str()),
+        ),
         ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
         ("NEMO_RELAY_OPENAI_AUTH_HEADER", None),
         ("NEMO_RELAY_ANTHROPIC_AUTH_HEADER", None),
     ]);
-    std::fs::write(
-        user_directory.join(".dynamic-plugins.json"),
-        "invalid user lifecycle state",
-    )
-    .unwrap();
-
+    for (directory, id) in [
+        (&user_directory, "acme.user-worker"),
+        (&system_directory, "acme.managed-worker"),
+    ] {
+        let plugin_directory = directory.join("plugins/worker");
+        std::fs::create_dir_all(&plugin_directory).unwrap();
+        let manifest_path = write_dynamic_manifest(&plugin_directory, id);
+        let (manifest, manifest_ref) =
+            DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
+        let mut record = manifest.into_record(Some(manifest_ref)).unwrap();
+        record.spec.enabled = true;
+        let environment = directory.join("plugin-environment");
+        write_attested_python_environment(&environment, &manifest_path);
+        record.source.environment_ref = Some(environment.to_string_lossy().into_owned());
+        std::fs::write(
+            directory.join(".dynamic-plugins.json"),
+            serde_json::to_vec_pretty(&json!({ "schema_version": 1, "records": [record] }))
+                .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(directory.join(PLUGINS_TOML), format!(
+            "version = 1\ncomponents = []\n\n[[plugins.dynamic]]\nmanifest = \"plugins/worker/relay-plugin.toml\"\n\n[plugins.policy.overrides.\"{id}\"]\nattestation = \"integrity_only\"\n",
+        )).unwrap();
+    }
     let system_config = system_directory.join("config.toml");
     let system_plugins = system_directory.join(PLUGINS_TOML);
-    let plugin_directory = system_directory.join("plugins/worker");
-    std::fs::create_dir_all(&plugin_directory).unwrap();
-    let manifest_path = write_dynamic_manifest(&plugin_directory, "acme.managed-worker");
-    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
-    let mut record = manifest.into_record(Some(manifest_ref)).unwrap();
-    record.spec.enabled = true;
-    let environment = system_directory.join("plugin-environment");
-    write_attested_python_environment(&environment, &manifest_path);
-    record.source.environment_ref = Some(environment.to_string_lossy().into_owned());
-    std::fs::write(
-        system_directory.join(".dynamic-plugins.json"),
-        serde_json::to_vec_pretty(&json!({
-            "schema_version": 1,
-            "records": [record],
-        }))
-        .unwrap(),
-    )
-    .unwrap();
     std::fs::write(&system_config, "").unwrap();
-    std::fs::write(
-        &system_plugins,
-        "version = 1\ncomponents = []\n\n[[plugins.dynamic]]\nmanifest = \"plugins/worker/relay-plugin.toml\"\n\n[plugins.policy.overrides.\"acme.managed-worker\"]\nattestation = \"integrity_only\"\n",
-    )
-    .unwrap();
     let managed = resolve_managed_worker_config_from_paths(system_config, system_plugins).unwrap();
     let active =
         active_dynamic_plugin_components(Some(&managed.plugin_config_path), &managed.resolved)
             .unwrap();
 
-    assert_eq!(active.len(), 1);
-    assert_eq!(active[0].plugin_id, "acme.managed-worker");
+    let mut ids = active
+        .iter()
+        .map(|plugin| plugin.plugin_id.as_str())
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, ["acme.managed-worker", "acme.user-worker"]);
 }
 
 #[cfg(feature = "__skip-implicit-config")]

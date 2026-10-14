@@ -539,11 +539,16 @@ of the configured provider response-header wait. Exceeding the observation
 deadline marks only the observation copy as incomplete. It does not stop
 the stream delivered to the caller.
 
-The managed worker loads only the administrator's system configuration and
-plugin manifest. It ignores per-user Relay configuration, plugin directories,
-and lifecycle state. Provider secrets can still use their documented
-authentication environment variables. This keeps plugin configuration and
-coding-agent artifact bytes the same across users.
+The managed worker loads the current user's Relay configuration and plugin
+manifest, then merges the administrator's system layer with higher precedence.
+OpenTelemetry endpoint lists concatenate with system endpoints first, so a user
+can add a local trace destination while retaining the system destinations.
+Dynamic plugins use the corresponding user and system lifecycle state. Restart
+the worker after changing configuration to load the new layers.
+
+Provider secrets can still use their documented authentication environment
+variables. Other provider and gateway environment overrides do not apply to
+managed workers.
 
 ### Configure a Trusted Reverse Proxy
 

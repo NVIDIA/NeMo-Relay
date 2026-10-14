@@ -115,18 +115,17 @@ pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedC
     Ok(resolved)
 }
 
-/// Administrator-controlled configuration for a daemon-managed worker.
+/// Layered configuration for a daemon-managed, machine-user worker.
 ///
-/// The worker must be identical for every user routed through the same managed deployment, so it
-/// cannot consult the per-user configuration layer. `plugin_config_path` is retained so dynamic
-/// plugin lifecycle state is loaded from the same system scope as the resolved plugin document.
+/// System configuration retains precedence over the user's configuration. `plugin_config_path`
+/// selects the user layer for dynamic plugin lifecycle loading; the system layer still applies.
 #[derive(Debug, Clone)]
 pub(crate) struct ManagedWorkerConfig {
     pub(crate) resolved: ResolvedConfig,
     pub(crate) plugin_config_path: PathBuf,
 }
 
-/// Resolves daemon-worker configuration exclusively from the platform system configuration.
+/// Resolves daemon-worker configuration from user and system layers.
 pub(crate) fn resolve_managed_worker_config() -> Result<ManagedWorkerConfig, CliError> {
     let system_directory = system_config_dir();
     resolve_managed_worker_config_from_paths(
@@ -139,11 +138,20 @@ fn resolve_managed_worker_config_from_paths(
     config_path: PathBuf,
     plugin_config_path: PathBuf,
 ) -> Result<ManagedWorkerConfig, CliError> {
-    let resolved = load_config_from_paths(
-        vec![(config_path, false)],
-        vec![plugin_config_path.clone()],
-        apply_managed_worker_env_config,
-    )?;
+    let mut config_paths = Vec::new();
+    if let Some(user_path) = user_config_path() {
+        config_paths.push((user_path, false));
+    }
+    config_paths.push((config_path, false));
+    let mut plugin_paths = Vec::new();
+    let selected_plugin_path = user_plugin_config_path().unwrap_or(plugin_config_path.clone());
+    if selected_plugin_path != plugin_config_path {
+        plugin_paths.push(selected_plugin_path.clone());
+    }
+    plugin_paths.push(plugin_config_path);
+    let plugin_config_path = selected_plugin_path;
+    let resolved =
+        load_config_from_paths(config_paths, plugin_paths, apply_managed_worker_env_config)?;
     enforce_required_dynamic_plugin_startup(Some(&plugin_config_path), &resolved)?;
     log::info!(
         target: "nemo_relay.configuration",

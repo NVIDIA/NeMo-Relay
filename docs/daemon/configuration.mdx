@@ -29,7 +29,9 @@ Relay resolves identity state in this order on every platform, including Windows
 On Windows, `HOME` takes precedence over `USERPROFILE`. Check the environment of
 the actual daemon or client process before backing up its keys and trust pins.
 The service runbooks set an explicit `XDG_CONFIG_HOME` for the daemon. It does
-not change the managed worker's system configuration path.
+not change the managed worker's system configuration path. The worker also
+loads the user configuration and plugins from the resolved user directory;
+system settings retain higher precedence when the layers merge.
 </Note>
 
 Client identities stay with the user and must not be shared or copied into a
