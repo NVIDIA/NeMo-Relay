@@ -334,6 +334,9 @@ meaning of scope parentage, event UUIDs, codec annotations, and exporter-local
 lineage rules without becoming the source of truth for runtime ownership,
 middleware ordering, or provider payload decoding.
 
+A step message whose content parts are all text is emitted as one string that
+joins them with newlines.
+
 When a step message or observation result is emitted as a content-part array,
 each part contains only ATIF fields: text parts keep `type` and `text`, and
 image parts keep `type` and a `source` with `media_type` and `path`. Fields

@@ -8937,3 +8937,87 @@ symbol = "never_call"
         "integrity_failed"
     );
 }
+
+#[test]
+fn native_http_error_prefix_preserves_status_through_continuations() {
+    for status in 400..=599 {
+        let original = FlowError::Upstream(crate::error::UpstreamFailure {
+            status: Some(status),
+            body: "provider failure".into(),
+            headers: Default::default(),
+            class: crate::error::UpstreamFailureClass::RetryableStatus,
+        });
+        let native_status = status_from_flow_error(original);
+        assert_eq!(native_status, NemoRelayStatus::Internal);
+        let returned = flow_error_from_status(native_status, "fallback");
+        let FlowError::Upstream(failure) = returned else {
+            panic!("status was lost");
+        };
+        assert_eq!(failure.status, Some(status));
+        assert_eq!(failure.body, "provider failure");
+        assert!(!failure.is_retryable());
+    }
+    set_native_last_error("wrapped: HTTP 403: denied");
+    assert!(matches!(
+        flow_error_from_status(NemoRelayStatus::Internal, "fallback"),
+        FlowError::Internal(_)
+    ));
+    set_native_last_error("HTTP 403: denied");
+    assert!(matches!(
+        flow_error_from_status(NemoRelayStatus::GuardrailRejected, "fallback"),
+        FlowError::GuardrailRejected(_)
+    ));
+    clear_native_last_error();
+}
+
+#[tokio::test]
+async fn native_async_http_error_rejection_preserves_status() {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
+        next_abort: Mutex::new(None),
+        continuation_aborts: Mutex::new(HashMap::new()),
+        request_codec: None,
+        response_codec: None,
+        before_settlement_lock: None,
+        _callback_user_data: None,
+    });
+    let message = native_string("HTTP 404: missing model");
+    assert_eq!(
+        unsafe { native_async_completion_reject(Arc::as_ptr(&completion).cast(), message) },
+        NemoRelayStatus::Ok
+    );
+    unsafe { native_string_free(message) };
+    let error = receiver.await.unwrap().unwrap_err();
+    assert!(
+        matches!(error, FlowError::Upstream(failure) if failure.status == Some(404) && failure.body == "missing model" && !failure.is_retryable())
+    );
+}
+
+#[tokio::test]
+async fn native_async_stream_http_error_rejection_preserves_status() {
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let stream = Arc::new(NativeAsyncStream {
+        sender: Mutex::new(Some(sender)),
+        cancelled: AtomicBool::new(false),
+        settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
+        settlement: Mutex::new(()),
+        request_codec: None,
+        before_settlement_lock: None,
+        _callback_user_data: None,
+    });
+    let message = native_string("HTTP 503: unavailable");
+    assert_eq!(
+        unsafe { native_async_stream_reject(Arc::as_ptr(&stream).cast(), message) },
+        NemoRelayStatus::Ok
+    );
+    unsafe { native_string_free(message) };
+    let error = receiver.recv().await.unwrap().unwrap_err();
+    assert!(
+        matches!(error, FlowError::Upstream(failure) if failure.status == Some(503) && !failure.is_retryable())
+    );
+}

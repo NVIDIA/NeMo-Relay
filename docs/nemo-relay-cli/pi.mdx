@@ -428,11 +428,9 @@ credential, which the launcher mints per run and gives only to the process it
 starts, and strips it before forwarding.
 
 **A named endpoint receives only the credential the request already carried.**
-Naming a destination does not obtain one: the gateway never attaches its own
-configured `Authorization` value, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` to an
-endpoint the client chose — those belong to the upstream it was configured for.
-pi sends the provider's own key for the provider it named, and that key travels;
-nothing else does.
+The gateway forwards the provider key that pi sends for that endpoint.
+It does not add its own authorization header, API key, or helper token.
+Those credentials belong to the upstream configured for the gateway.
 
 **A named endpoint must use `https`, unless it is loopback.** Because that
 credential travels to it, plain `http` to anything reachable from off the machine
