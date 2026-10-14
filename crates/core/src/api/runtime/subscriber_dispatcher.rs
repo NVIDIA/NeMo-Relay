@@ -170,7 +170,6 @@ mod native {
         Flush {
             done: Sender<()>,
             include_pending: bool,
-            exclude: Option<Arc<PublicationLineage>>,
         },
         RegisterPending {
             lineage: Arc<PublicationLineage>,
@@ -211,10 +210,7 @@ mod native {
 
     type DispatcherState = Option<std::result::Result<Sender<DispatcherMessage>, String>>;
     type SanitizerRuntimeState = Option<std::result::Result<tokio::runtime::Runtime, String>>;
-    type BackgroundPublication = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-    type BackgroundPublicationState = Option<
-        std::result::Result<tokio::sync::mpsc::UnboundedSender<BackgroundPublication>, String>,
-    >;
+    type BackgroundPublicationState = Option<std::result::Result<tokio::runtime::Runtime, String>>;
 
     /// Opaque routing handle for publications emitted on foreign callback threads.
     #[derive(Clone)]
@@ -296,6 +292,7 @@ mod native {
     static PROCESS_STATE: AtomicPtr<ProcessState> = AtomicPtr::new(std::ptr::null_mut());
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
+        static ON_PUBLICATION_EXECUTOR: Cell<bool> = const { Cell::new(false) };
         static PREPARED_FORK_STATE: Cell<*mut ProcessState> = const { Cell::new(std::ptr::null_mut()) };
         static THREAD_PUBLICATION_BUFFER: RefCell<Option<PublicationBuffer>> = const { RefCell::new(None) };
         static THREAD_PUBLICATION_LINEAGE: RefCell<Option<Arc<PublicationLineage>>> = const { RefCell::new(None) };
@@ -475,23 +472,15 @@ mod native {
     }
 
     fn start_background_publication_executor()
-    -> std::result::Result<tokio::sync::mpsc::UnboundedSender<BackgroundPublication>, String> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+    -> std::result::Result<tokio::runtime::Runtime, String> {
+        // One worker keeps finalization serial while a blocking flush can hand it off.
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("nemo-relay-background-publication")
+            .on_thread_start(|| ON_PUBLICATION_EXECUTOR.with(|flag| flag.set(true)))
             .enable_all()
             .build()
-            .map_err(|error| error.to_string())?;
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        std::thread::Builder::new()
-            .name("nemo-relay-background-publication".into())
-            .spawn(move || {
-                runtime.block_on(async move {
-                    while let Some(publication) = receiver.recv().await {
-                        tokio::spawn(publication);
-                    }
-                });
-            })
-            .map_err(|error| error.to_string())?;
-        Ok(sender)
+            .map_err(|error| error.to_string())
     }
 
     pub(super) fn spawn_background_publication<F>(future: F) -> bool
@@ -499,24 +488,14 @@ mod native {
         F: Future<Output = ()> + Send + 'static,
     {
         let state = process_state();
-        let sender = {
-            let mut executor = state
-                .background_publications
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            executor
-                .get_or_insert_with(start_background_publication_executor)
-                .clone()
-        };
-        match sender {
-            Ok(sender) if sender.send(Box::pin(future)).is_ok() => true,
-            Ok(_) => {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "background_publication_executor_stopped";
-                    "Background publication executor stopped before accepting stream finalization"
-                );
-                false
+        let mut executor = state
+            .background_publications
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match executor.get_or_insert_with(start_background_publication_executor) {
+            Ok(runtime) => {
+                runtime.spawn(future);
+                true
             }
             Err(error)
                 if !state
@@ -803,13 +782,14 @@ mod native {
                 .map_err(|error| FlowError::Internal(error.clone()))?
                 .clone()
         };
+        // A pending publication's own work must not wait on unfinished terminal publications.
+        let include_pending = include_pending
+            && !current_publication_lineage().is_some_and(|lineage| lineage.pending_terminal);
         let (done_tx, done_rx) = mpsc::channel();
         sender
             .send(DispatcherMessage::Flush {
                 done: done_tx,
                 include_pending,
-                // A pending publication's own work must not wait on it.
-                exclude: current_publication_lineage(),
             })
             .map_err(|error| {
                 FlowError::Internal(format!("failed to queue subscriber flush: {error}"))
@@ -817,8 +797,13 @@ mod native {
         if let Some(started) = started {
             let _ = started.send(());
         }
-        done_rx
-            .recv()
+        let acknowledged = if ON_PUBLICATION_EXECUTOR.with(Cell::get) {
+            // The publications this flush waits on may need the executor.
+            tokio::task::block_in_place(|| done_rx.recv())
+        } else {
+            done_rx.recv()
+        };
+        acknowledged
             .map_err(|error| FlowError::Internal(format!("subscriber flush failed: {error}")))?;
         Ok(())
     }
@@ -998,18 +983,12 @@ mod native {
             }
         }
 
-        fn defer_or_complete_flush(
-            &mut self,
-            done: Sender<()>,
-            include_pending: bool,
-            exclude: Option<&Arc<PublicationLineage>>,
-        ) {
+        fn defer_or_complete_flush(&mut self, done: Sender<()>, include_pending: bool) {
             let lineages = self
                 .active_lineages
                 .iter()
                 .filter_map(Weak::upgrade)
                 .filter(|lineage| include_pending || !lineage.pending_terminal)
-                .filter(|lineage| exclude.is_none_or(|excluded| !Arc::ptr_eq(lineage, excluded)))
                 .filter(|lineage| lineage.outstanding.load(Ordering::Acquire) > 0)
                 .collect::<Vec<_>>();
             if lineages.is_empty() {
@@ -1058,9 +1037,8 @@ mod native {
             DispatcherMessage::Flush {
                 done,
                 include_pending,
-                exclude,
             } => {
-                state.defer_or_complete_flush(done, include_pending, exclude.as_ref());
+                state.defer_or_complete_flush(done, include_pending);
                 return;
             }
             DispatcherMessage::RegisterPending { lineage } => {
@@ -1523,7 +1501,8 @@ pub(crate) fn register_pending_publication() -> Option<native::PendingPublicatio
 
 /// Run asynchronous work as part of a registered pending publication and
 /// release it when the work completes or is dropped. A flush issued by the
-/// work waits for earlier publications but not for this one.
+/// work waits for queued publications but not for unfinished terminal
+/// publications, including this one.
 pub(crate) async fn with_pending_publication<F: Future>(
     pending: Option<PendingPublication>,
     future: F,
@@ -1545,7 +1524,7 @@ pub(crate) async fn with_async_publication_context<F: Future>(
 }
 
 /// Schedule detached stream-finalization publication on the process-local
-/// executor. The executor uses one shared OS thread and is reset after fork.
+/// executor. The executor uses one worker thread and is reset after fork.
 pub(crate) fn spawn_background_publication<F>(future: F) -> bool
 where
     F: Future<Output = ()> + Send + 'static,

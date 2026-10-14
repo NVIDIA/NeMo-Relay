@@ -10,12 +10,15 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v20";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v27";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
   const eventSanitizerContext = new AsyncLocalStorage();
   const publicationStates = new Map();
+  const streamQueues = new WeakMap();
+  const streamCloses = new WeakMap();
+  const pinnedStreams = new Map();
   let nextPublicationContextId = 0;
 
   function callbackStore(
@@ -142,14 +145,60 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     return combined;
   }
 
-  async function settleEnvelope(fn, encode, complete, fallbackMessage) {
+  function isThenable(value) {
+    return (
+      value !== null
+      && (typeof value === 'object' || typeof value === 'function')
+      && typeof value.then === 'function'
+    );
+  }
+
+  // Return a synchronous callback's envelope to a direct caller so a chunk is delivered in
+  // the same poll.
+  function settleEnvelope(fn, encode, complete, fallbackMessage, direct) {
+    const envelopeFor = (value) => {
+      try {
+        return { ok: true, value: encode(value) };
+      } catch (error) {
+        return failureEnvelope(error, fallbackMessage);
+      }
+    };
     let envelope;
     try {
-      envelope = { ok: true, value: encode(await fn()) };
+      const value = fn();
+      if (isThenable(value)) {
+        Promise.resolve(value).then(
+          (resolved) => complete(envelopeFor(resolved)),
+          (error) => complete(failureEnvelope(error, fallbackMessage)),
+        );
+        return undefined;
+      }
+      envelope = envelopeFor(value);
     } catch (error) {
       envelope = failureEnvelope(error, fallbackMessage);
     }
+    if (direct) {
+      return envelope;
+    }
     complete(envelope);
+    return undefined;
+  }
+
+  async function driveStream(poll, close) {
+    for (;;) {
+      const step = poll(close);
+      if (!(step instanceof Promise)) {
+        return step;
+      }
+      const settled = await step;
+      if (settled === null) {
+        continue;
+      }
+      if (settled.error != null) {
+        throw new Error(settled.error);
+      }
+      return close ? undefined : null;
+    }
   }
 
   function callPromise(
@@ -336,27 +385,106 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       };
     },
 
+    // Chaining through a resolved promise stores the queue tail before a poll runs, so a
+    // next() from inside a poll queues behind it.
+    streamNext(poll) {
+      const run = () => driveStream(poll, false);
+      const current = (streamQueues.get(poll) ?? Promise.resolve()).then(run, run);
+      streamQueues.set(poll, current);
+      return current;
+    },
+
+    streamClose(poll) {
+      const existing = streamCloses.get(poll);
+      if (existing !== undefined) {
+        return existing;
+      }
+      const closing = Promise.resolve().then(() => driveStream(poll, true));
+      streamCloses.set(poll, closing);
+      return closing;
+    },
+
+    // Keep a handle reachable while its next() or close() is pending so collection does
+    // not cut a read short.
+    pinStreamMethods(prototype) {
+      for (const name of ['next', 'close']) {
+        const native = prototype[name];
+        Object.defineProperty(prototype, name, {
+          configurable: true,
+          writable: true,
+          value: {
+            [name]() {
+              const promise = native.call(this);
+              pinnedStreams.set(this, (pinnedStreams.get(this) ?? 0) + 1);
+              const unpin = () => {
+                const left = pinnedStreams.get(this) - 1;
+                if (left > 0) {
+                  pinnedStreams.set(this, left);
+                } else {
+                  pinnedStreams.delete(this);
+                }
+              };
+              // Return a derived promise so an ignored rejection stays unhandled.
+              return promise.then(
+                (value) => {
+                  unpin();
+                  return value;
+                },
+                (error) => {
+                  unpin();
+                  throw error;
+                },
+              );
+            },
+          }[name],
+        });
+      }
+    },
+
     collector(fn) {
-      return function __nemo_relay_collector_wrapper(chunk, complete) {
-        settleEnvelope(() => fn(chunk), () => null, complete, 'JavaScript collector callback failed');
+      return function __nemo_relay_collector_wrapper(chunk, complete, direct) {
+        // A direct call runs inside a consumer's context. Pin a bare store like the
+        // threadsafe path does.
+        const token = callbackStore({ active: false }, undefined, undefined, undefined, undefined);
+        const envelope = eventSanitizerContext.run(token, () =>
+          settleEnvelope(
+            () => fn(chunk),
+            () => null,
+            (settled) => {
+              expireCallbackStore(token);
+              complete(settled);
+            },
+            'JavaScript collector callback failed',
+            direct,
+          ),
+        );
+        if (envelope !== undefined) {
+          expireCallbackStore(token);
+        }
+        return envelope;
       };
     },
 
     finalizer(fn) {
-      return function __nemo_relay_finalizer_wrapper(complete) {
+      return function __nemo_relay_finalizer_wrapper(complete, direct) {
         // The finalizer is part of the END publication, so a flush inside it is re-entrant.
         const token = callbackStore({ active: true }, undefined, undefined, undefined, undefined);
-        eventSanitizerContext.run(token, () =>
+        const envelope = eventSanitizerContext.run(token, () =>
           settleEnvelope(
             fn,
             (value) => jsonValue(value === undefined ? null : value),
-            (envelope) => {
+            (settled) => {
               expireCallbackStore(token);
-              complete(envelope);
+              complete(settled);
             },
             'JavaScript finalizer callback failed',
+            direct,
           ),
         );
+        if (envelope !== undefined) {
+          expireCallbackStore(token);
+        }
+        return envelope;
       };
     },
 
@@ -525,6 +653,28 @@ fn wrap_callback(env: &Env, func: &JsFunction, factory_name: &str) -> napi::Resu
     let factory: JsFunction = factories.get_named_property(factory_name)?;
     let wrapper = factory.call(None, &[as_unknown(env, func)])?;
     Ok(unsafe { wrapper.cast::<JsFunction>() })
+}
+
+fn drive_stream(env: &Env, helper: &str, poll: &JsFunction) -> napi::Result<JsObject> {
+    let factories = callback_factories(env)?;
+    let helper: JsFunction = factories.get_named_property(helper)?;
+    let promise = helper.call(None, &[as_unknown(env, poll)])?;
+    Ok(unsafe { promise.cast::<JsObject>() })
+}
+
+pub(crate) fn stream_next(env: &Env, poll: &JsFunction) -> napi::Result<JsObject> {
+    drive_stream(env, "streamNext", poll)
+}
+
+pub(crate) fn stream_close(env: &Env, poll: &JsFunction) -> napi::Result<JsObject> {
+    drive_stream(env, "streamClose", poll)
+}
+
+pub(crate) fn pin_stream_methods(env: &Env, prototype: &JsObject) -> napi::Result<()> {
+    let factories = callback_factories(env)?;
+    let helper: JsFunction = factories.get_named_property("pinStreamMethods")?;
+    helper.call(None, &[as_unknown(env, prototype)])?;
+    Ok(())
 }
 
 pub(crate) fn wrap_execution_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {

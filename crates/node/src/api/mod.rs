@@ -25,7 +25,6 @@ use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as Json;
-use tokio_stream::StreamExt;
 
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
@@ -651,6 +650,7 @@ fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::R
     #[cfg(windows)]
     pin_native_module()?;
     register_node_environment().map_err(to_napi_err)?;
+    crate::promise_call::reset_env_teardown();
     if let Err(error) = env.add_env_cleanup_hook((), |_| cleanup_node_environment()) {
         cleanup_node_environment();
         return Err(error);
@@ -664,6 +664,10 @@ fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::R
     let close: JsFunction = prototype.get_named_property("close")?;
     prototype.set_property(async_dispose, close)?;
     prototype.delete_named_property("[Symbol.asyncDispose]")?;
+    let stream: JsFunction = exports.get_named_property("LlmStream")?;
+    let stream = stream.coerce_to_object()?;
+    let prototype: JsObject = stream.get_named_property("prototype")?;
+    crate::callback_factory::pin_stream_methods(&env, &prototype)?;
     Ok(())
 }
 
@@ -1046,56 +1050,18 @@ fn build_atof_config(
 
 type RustJsonStream = LlmJsonStream;
 
-async fn forward_stream_to_channel(
-    mut stream: RustJsonStream,
-    tx: tokio::sync::mpsc::Sender<FlowResult<Json>>,
-    mut cancel: tokio::sync::watch::Receiver<bool>,
-    closed: tokio::sync::watch::Sender<Option<std::result::Result<(), String>>>,
-) {
-    // Reserve before pulling so a cancel never consumes a chunk or error it cannot deliver.
-    loop {
-        let permit = tokio::select! {
-            biased;
-            _ = cancel.changed() => break,
-            permit = tx.reserve() => match permit {
-                Ok(permit) => permit,
-                Err(_) => break,
-            },
-        };
-        let item = tokio::select! {
-            biased;
-            _ = cancel.changed() => break,
-            item = stream.next() => item,
-        };
-        let Some(item) = item else {
-            break;
-        };
-        permit.send(item);
-    }
-    closed.send_replace(Some(
-        stream.close().await.map_err(|error| error.to_string()),
-    ));
-}
-
-pub(crate) fn llm_stream_from_rust_stream(rust_stream: RustJsonStream) -> LlmStream {
-    let (tx, rx) = tokio::sync::mpsc::channel(LLM_STREAM_BRIDGE_CAPACITY);
-    let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
-    let (closed, closed_rx) = tokio::sync::watch::channel(None);
-    tokio::spawn(forward_stream_to_channel(
+pub(crate) fn llm_stream_from_rust_stream(
+    rust_stream: RustJsonStream,
+    publication_context_id: Option<String>,
+) -> LlmStream {
+    LlmStream::new(
         rust_stream,
-        tx,
-        cancel_rx,
-        closed,
-    ));
-    LlmStream {
-        receiver: tokio::sync::Mutex::new(rx),
-        cancel,
-        closed: closed_rx,
-        codec_references: Vec::new(),
-        finalizer_error: Default::default(),
-        close_result: tokio::sync::Mutex::new(None),
-        producers: Default::default(),
-    }
+        Vec::new(),
+        Default::default(),
+        Default::default(),
+        publication_context_id,
+        None,
+    )
 }
 
 /// # Safety
@@ -2087,7 +2053,7 @@ unsafe extern "C" fn persistent_js_function_cleanup_call(
 }
 
 impl PersistentJsFunction {
-    fn new(env: &Env, func: &JsFunction) -> napi::Result<Self> {
+    pub(crate) fn new(env: &Env, func: &JsFunction) -> napi::Result<Self> {
         let mut reference = ptr::null_mut();
         // SAFETY: `env.raw()` and `func.raw()` are live N-API handles provided
         // by napi-rs for the current environment. `reference` points to valid
@@ -2162,6 +2128,33 @@ impl PersistentJsFunction {
             reference,
             cleanup,
         })
+    }
+
+    pub(crate) fn env(&self) -> Env {
+        // SAFETY: the environment handle was captured live at creation, and
+        // callers use it on the registration thread only.
+        unsafe { Env::from_raw(self.env) }
+    }
+
+    pub(crate) fn function(&self) -> napi::Result<JsFunction> {
+        let mut value = ptr::null_mut();
+        // SAFETY: `self.reference` is a live reference created in `self.env`,
+        // and `value` is writable storage for the borrowed function.
+        let status =
+            unsafe { napi::sys::napi_get_reference_value(self.env, self.reference, &mut value) };
+        if status != napi::sys::Status::napi_ok {
+            return Err(napi::Error::from_reason(format!(
+                "failed to borrow JS function reference: {:?}",
+                napi::Status::from(status)
+            )));
+        }
+        // SAFETY: `value` resolved from this struct's function reference, so it
+        // is a live function handle in `self.env`.
+        Ok(unsafe { JsFunction::from_raw_unchecked(self.env, value) })
+    }
+
+    pub(crate) fn call_unknowns(&self, args: &[JsUnknown]) -> napi::Result<JsUnknown> {
+        self.function()?.call(None, args)
     }
 
     fn call_validate(&self, plugin_config: &Json) -> napi::Result<Json> {
@@ -2934,12 +2927,18 @@ fn settled_now<T>(mut future: Pin<Box<dyn Future<Output = T> + Send>>) -> Result
     }
 }
 
+/// Internal test helper: route streams through the Tokio forwarding task.
+#[napi(js_name = "__testForceStreamForwarding")]
+pub fn test_force_stream_forwarding(enabled: bool) {
+    crate::stream::set_force_forwarding(enabled);
+}
+
 /// Internal test helper: invoke a closed JS collector wrapper and surface the queue failure.
 #[napi(js_name = "__testClosedCollectorCallback")]
 pub fn test_closed_collector_callback(env: Env, callback: JsFunction, chunk: Json) -> Result<()> {
     clear_recorded_callback_error();
-    let callback = callable::js_collector_tsfn(&env, &callback)?;
-    let _ = callback.clone().abort();
+    let callback = callable::js_collector_tsfn(&env, &callback)?.without_direct();
+    callback.abort_tsfn();
     let LlmCollector::Async(mut wrapped) = callable::wrap_js_collector_fn(callback) else {
         return Err(napi::Error::from_reason("JS collectors are asynchronous"));
     };
@@ -2950,8 +2949,8 @@ pub fn test_closed_collector_callback(env: Env, callback: JsFunction, chunk: Jso
 #[napi(js_name = "__testClosedFinalizerCallback")]
 pub fn test_closed_finalizer_callback(env: Env, callback: JsFunction) -> Result<Json> {
     clear_recorded_callback_error();
-    let callback = callable::js_finalizer_tsfn(&env, &callback)?;
-    let _ = callback.clone().abort();
+    let callback = callable::js_finalizer_tsfn(&env, &callback)?.without_direct();
+    callback.abort_tsfn();
     let LlmFinalizer::Async(wrapped) = callable::wrap_js_finalizer_fn(callback, Default::default())
     else {
         return Err(napi::Error::from_reason("JS finalizers are asynchronous"));
@@ -3892,24 +3891,14 @@ pub fn llm_stream_call_execute(
                                     .await
                                     .map_err(to_napi_err)?;
 
-                            let (tx, rx) = tokio::sync::mpsc::channel(32);
-                            let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
-                            let (closed, closed_rx) = tokio::sync::watch::channel(None);
-                            tokio::spawn(with_publication_callback_context(
-                                publication_context_id,
-                                publication_buffer,
-                                forward_stream_to_channel(rust_stream, tx, cancel_rx, closed),
-                            ));
-
-                            Ok(LlmStream {
-                                receiver: tokio::sync::Mutex::new(rx),
-                                cancel,
-                                closed: closed_rx,
+                            Ok(LlmStream::new(
+                                rust_stream,
                                 codec_references,
                                 finalizer_error,
-                                close_result: tokio::sync::Mutex::new(None),
                                 producers,
-                            })
+                                publication_context_id,
+                                publication_buffer,
+                            ))
                         })
                         .await
                 },

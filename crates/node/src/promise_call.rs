@@ -18,12 +18,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use napi::bindgen_prelude::ToNapiValue;
-use napi::threadsafe_function::{ThreadSafeCallContext, ThreadsafeFunction};
+use napi::threadsafe_function::{ErrorStrategy, ThreadSafeCallContext, ThreadsafeFunction};
 use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
 use serde_json::Value as Json;
 
 use nemo_relay::api::runtime::subscriber_dispatcher::{
-    PublicationBuffer, capture_nested_publication_buffer, with_task_nested_publication_buffer,
+    PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
+    with_task_nested_publication_buffer,
 };
 use nemo_relay::api::runtime::{
     LlmStreamInner, MiddlewareContinuationContext, PropagationContext as CorePropagationContext,
@@ -52,7 +53,17 @@ pub(crate) async fn with_publication_callback_context<F: Future>(
     .await
 }
 
-fn publication_callback_context_id() -> Option<String> {
+pub(crate) fn with_publication_callback_context_sync<T>(
+    context_id: Option<String>,
+    publication_buffer: Option<PublicationBuffer>,
+    f: impl FnOnce() -> T,
+) -> T {
+    with_nested_publication_buffer(publication_buffer, || {
+        PUBLICATION_CALLBACK_CONTEXT_ID.sync_scope(context_id, f)
+    })
+}
+
+pub(crate) fn publication_callback_context_id() -> Option<String> {
     PUBLICATION_CALLBACK_CONTEXT_ID
         .try_with(Clone::clone)
         .unwrap_or(None)
@@ -139,10 +150,13 @@ struct StreamCompletion {
     chunks: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Json>>>>,
     terminal_error: std::sync::Mutex<Option<FlowError>>,
     closed: tokio::sync::watch::Sender<Option<FlowResult<()>>>,
+    finished: Arc<AtomicBool>,
+    parked: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl StreamCompletion {
     fn finish(&self, result: FlowResult<()>) {
+        self.finished.store(true, Ordering::Release);
         self.chunks.lock().unwrap().take();
         self.closed.send_replace(Some(result));
     }
@@ -176,6 +190,8 @@ impl CallCompletion {
             chunks: std::sync::Mutex::new(Some(chunks)),
             terminal_error: std::sync::Mutex::new(None),
             closed,
+            finished: Arc::default(),
+            parked: std::sync::Mutex::new(None),
         });
         (
             Self {
@@ -216,17 +232,25 @@ impl CallCompletion {
 #[derive(Clone, Default)]
 struct CallCancellation {
     requested: Arc<AtomicBool>,
-    abort: Arc<std::sync::Mutex<Option<ThreadsafeFunction<()>>>>,
+    abort: Arc<std::sync::Mutex<Option<TeardownTsfn<()>>>>,
+    finished: Arc<AtomicBool>,
 }
 
 impl CallCancellation {
+    fn for_stream(completion: &StreamCompletion) -> Self {
+        Self {
+            finished: completion.finished.clone(),
+            ..Self::default()
+        }
+    }
+
     fn register(&self, env: &Env, abort: &JsFunction) -> napi::Result<()> {
         let mut abort = abort.create_threadsafe_function(0, |_ctx: ThreadSafeCallContext<()>| {
             Ok(Vec::<JsUnknown>::new())
         })?;
         abort.unref(env)?;
         let mut registered = self.abort.lock().unwrap();
-        *registered = Some(abort);
+        *registered = Some(TeardownTsfn::new(env, abort)?);
         if self.requested.load(Ordering::Acquire) {
             Self::call_abort(registered.as_ref());
         }
@@ -234,12 +258,15 @@ impl CallCancellation {
     }
 
     fn cancel(&self) {
+        if self.finished.load(Ordering::Acquire) {
+            return;
+        }
         self.requested.store(true, Ordering::Release);
         Self::call_abort(self.abort.lock().unwrap().as_ref());
     }
 
     // A clone of a finalized threadsafe function panics, so call through the stored handle.
-    fn call_abort(abort: Option<&ThreadsafeFunction<()>>) {
+    fn call_abort(abort: Option<&TeardownTsfn<()>>) {
         if let Some(abort) = abort {
             let _ = abort.call(
                 Ok(()),
@@ -328,6 +355,12 @@ impl Stream for JsCallbackStream {
 }
 
 impl LlmStreamInner for JsCallbackStream {
+    fn terminalize(self: Pin<&mut Self>) {
+        let this = self.get_mut();
+        this.cancellation.cancel();
+        this.receiver.close();
+    }
+
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
         let this = self.get_mut();
         this.cancellation.cancel();
@@ -341,6 +374,10 @@ impl LlmStreamInner for JsCallbackStream {
                 .map_err(|_| FlowError::Internal("JavaScript stream cleanup ended early".into()))?
                 .as_ref()
                 .is_some_and(Result::is_ok);
+            let parked = completion.parked.lock().unwrap().take();
+            if let Some(parked) = parked {
+                let _ = parked.await;
+            }
             if cleanup_ok {
                 return Ok(());
             }
@@ -449,6 +486,7 @@ fn build_next_unknown(
                 }
                 .map_err(|error| napi::Error::from_reason(error.to_string()))?;
                 let publication_context_id = publication_context_id.clone();
+                let stream_context_id = publication_context_id.clone();
                 ctx.env.execute_tokio_future(
                     async move {
                         let stream = with_publication_callback_context(
@@ -465,7 +503,10 @@ fn build_next_unknown(
                             },
                         )
                         .await?;
-                        Ok(crate::api::llm_stream_from_rust_stream(stream))
+                        Ok(crate::api::llm_stream_from_rust_stream(
+                            stream,
+                            stream_context_id,
+                        ))
                     },
                     |_env, value| Ok(value),
                 )
@@ -531,18 +572,53 @@ fn build_completion_unknowns(
         let chunk = ctx.get::<Json>(0).map_err(|error| {
             napi::Error::from_reason(format!("stream chunk is not JSON-compatible: {error}"))
         })?;
-        let chunks = push_stream
-            .as_ref()
-            .and_then(|stream| stream.chunks.lock().unwrap().as_ref().cloned());
-        ctx.env.execute_tokio_future(
-            async move {
-                if let Some(chunks) = chunks {
-                    let _ = chunks.send(Ok(chunk)).await;
-                }
-                Ok(())
-            },
-            |_env, ()| Ok(()),
-        )
+        let Some(stream) = push_stream.as_ref() else {
+            return undefined_to_unknown(ctx.env);
+        };
+        let Some(chunks) = stream.chunks.lock().unwrap().as_ref().cloned() else {
+            return undefined_to_unknown(ctx.env);
+        };
+        // Skip a promise when the bridge can take the chunk at once.
+        match chunks.try_send(Ok(chunk)) {
+            Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                undefined_to_unknown(ctx.env)
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(chunk)) => {
+                let promise: JsFunction = ctx.env.get_global()?.get_named_property("Promise")?;
+                let parked = std::sync::Mutex::new(Some((chunks, chunk, Arc::clone(stream))));
+                let executor = ctx.env.create_function_from_closure(
+                    "__nemo_relay_stream_push_wait",
+                    move |ctx| {
+                        let Some((chunks, chunk, stream)) = parked.lock().unwrap().take() else {
+                            return ctx.env.get_undefined();
+                        };
+                        let resolve = ctx.get::<JsFunction>(0)?;
+                        let mut settle = resolve.create_threadsafe_function(
+                            0,
+                            |_ctx: ThreadSafeCallContext<()>| Ok(Vec::<JsUnknown>::new()),
+                        )?;
+                        settle.unref(ctx.env)?;
+                        let settle: TeardownTsfn<()> = TeardownTsfn::new(ctx.env, settle)?;
+                        let task = napi::bindgen_prelude::within_runtime_if_available(|| {
+                            tokio::spawn(async move {
+                                let _ = chunks.send(chunk).await;
+                                if !settle.torn_down() {
+                                    let _ = settle.call(
+                                        Ok(()),
+                                        napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
+                                    );
+                                }
+                            })
+                        });
+                        *stream.parked.lock().unwrap() = Some(task);
+                        ctx.env.get_undefined()
+                    },
+                )?;
+                promise
+                    .new_instance(&[executor])
+                    .map(|promise| promise.into_unknown())
+            }
+        }
     })?;
 
     let end = env.create_function_from_closure("__nemo_relay_stream_end", move |ctx| {
@@ -572,10 +648,132 @@ fn build_abort_registration_unknown(
     Ok(function_to_unknown(env, &register))
 }
 
+thread_local! {
+    static ENV_TEARDOWN: std::cell::RefCell<Option<Arc<AtomicBool>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Flag raised by an environment cleanup hook. A hook registered after napi-rs's runtime
+/// hook runs before the runtime drops.
+pub(crate) fn env_teardown_flag(env: &Env) -> napi::Result<Arc<AtomicBool>> {
+    ENV_TEARDOWN.with(|slot| {
+        if let Some(flag) = slot.borrow().as_ref() {
+            return Ok(flag.clone());
+        }
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut env = *env;
+        env.add_env_cleanup_hook(flag.clone(), |flag| flag.store(true, Ordering::Release))?;
+        slot.replace(Some(flag.clone()));
+        Ok(flag)
+    })
+}
+
+pub(crate) fn reset_env_teardown() {
+    ENV_TEARDOWN.with(|slot| slot.replace(None));
+}
+
+/// Threadsafe function left to Node once it is closing or its environment tears down.
+///
+/// A call on a closing function consumes its thread count, so a release that
+/// follows would assert inside napi-rs.
+pub(crate) struct TeardownTsfn<T: 'static, ES: ErrorStrategy::T = ErrorStrategy::CalleeHandled> {
+    tsfn: Option<ThreadsafeFunction<T, ES>>,
+    teardown: Arc<AtomicBool>,
+    closing: Arc<AtomicBool>,
+}
+
+impl<T: 'static, ES: ErrorStrategy::T> TeardownTsfn<T, ES> {
+    pub(crate) fn new(env: &Env, tsfn: ThreadsafeFunction<T, ES>) -> napi::Result<Self> {
+        Ok(Self {
+            tsfn: Some(tsfn),
+            teardown: env_teardown_flag(env)?,
+            closing: Arc::default(),
+        })
+    }
+
+    pub(crate) fn torn_down(&self) -> bool {
+        self.teardown.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn teardown(&self) -> Arc<AtomicBool> {
+        self.teardown.clone()
+    }
+
+    fn released(&self) -> bool {
+        self.torn_down() || self.closing.load(Ordering::Acquire)
+    }
+
+    fn note(&self, status: napi::Status) -> napi::Status {
+        if status == napi::Status::Closing {
+            self.closing.store(true, Ordering::Release);
+        }
+        status
+    }
+
+    pub(crate) fn abort(mut self) -> napi::Result<()> {
+        match self.tsfn.take() {
+            Some(tsfn) if self.released() => {
+                std::mem::forget(tsfn);
+                Ok(())
+            }
+            Some(tsfn) => tsfn.abort(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl<T: 'static> TeardownTsfn<T, ErrorStrategy::CalleeHandled> {
+    pub(crate) fn call(
+        &self,
+        value: napi::Result<T>,
+        mode: napi::threadsafe_function::ThreadsafeFunctionCallMode,
+    ) -> napi::Status {
+        self.note((**self).call(value, mode))
+    }
+}
+
+impl<T: 'static> TeardownTsfn<T, ErrorStrategy::Fatal> {
+    pub(crate) fn call(
+        &self,
+        value: T,
+        mode: napi::threadsafe_function::ThreadsafeFunctionCallMode,
+    ) -> napi::Status {
+        self.note((**self).call(value, mode))
+    }
+}
+
+impl<T: 'static, ES: ErrorStrategy::T> Clone for TeardownTsfn<T, ES> {
+    fn clone(&self) -> Self {
+        Self {
+            tsfn: self.tsfn.clone(),
+            teardown: self.teardown.clone(),
+            closing: self.closing.clone(),
+        }
+    }
+}
+
+impl<T: 'static, ES: ErrorStrategy::T> std::ops::Deref for TeardownTsfn<T, ES> {
+    type Target = ThreadsafeFunction<T, ES>;
+
+    fn deref(&self) -> &Self::Target {
+        self.tsfn
+            .as_ref()
+            .expect("threadsafe function is present until drop")
+    }
+}
+
+impl<T: 'static, ES: ErrorStrategy::T> Drop for TeardownTsfn<T, ES> {
+    fn drop(&mut self) {
+        if self.released() {
+            std::mem::forget(self.tsfn.take());
+        }
+    }
+}
+
 /// A wrapper around a JS function that can be called from any thread and
 /// transparently handles both synchronous and Promise return values.
 pub struct PromiseAwareFn {
-    tsfn: std::sync::Mutex<Option<ThreadsafeFunction<CallArgs>>>,
+    tsfn: std::sync::Mutex<Option<TeardownTsfn<CallArgs>>>,
 }
 
 impl PromiseAwareFn {
@@ -700,7 +898,7 @@ impl PromiseAwareFn {
         tsfn.unref(env)?;
 
         Ok(Self {
-            tsfn: std::sync::Mutex::new(Some(tsfn)),
+            tsfn: std::sync::Mutex::new(Some(TeardownTsfn::new(env, tsfn)?)),
         })
     }
 
@@ -835,7 +1033,7 @@ impl PromiseAwareFn {
             tokio::sync::mpsc::channel(crate::api::LLM_STREAM_BRIDGE_CAPACITY);
         let (completion, stream_completion, closed) =
             CallCompletion::stream(ready_sender, chunk_sender);
-        let cancellation = CallCancellation::default();
+        let cancellation = CallCancellation::for_stream(&stream_completion);
         if let Some(stream_cancellation) = stream_cancellation {
             stream_cancellation.attach(&cancellation);
         }

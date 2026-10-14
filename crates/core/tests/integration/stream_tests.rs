@@ -8,8 +8,10 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
@@ -19,6 +21,7 @@ use nemo_relay::api::registry::{
     deregister_llm_sanitize_response_guardrail, register_llm_sanitize_response_guardrail,
 };
 use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
 use nemo_relay::api::runtime::{
     LlmCollector, LlmFinalizer, LlmJsonStream, LlmStreamInner, NemoRelayContextState,
 };
@@ -1724,6 +1727,117 @@ async fn flush_inside_async_finalizer_waits_for_earlier_publications_only() {
     let events = captured_snapshot(&events);
     assert_eq!(end_event(&events).data().unwrap()["flushed"], json!(true));
     assert!(deregister_subscriber("async_finalizer_real_flush").unwrap());
+}
+
+#[tokio::test]
+async fn flush_inside_an_async_finalizer_lets_a_queued_end_publication_finish() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_finalizer_flush_executor");
+
+    // This END publication parks in a response sanitizer while its barrier holds the dispatcher.
+    let (release_sanitizer, sanitizer_gate) = tokio::sync::oneshot::channel::<()>();
+    let sanitizer_gate = Arc::new(Mutex::new(Some(sanitizer_gate)));
+    register_llm_sanitize_response_guardrail(
+        "async_finalizer_flush_executor",
+        1,
+        Arc::new(move |response, _context| {
+            let gate = sanitizer_gate.lock().unwrap().take();
+            Box::pin(async move {
+                if let Some(gate) = gate {
+                    let _ = gate.await;
+                }
+                Ok(Some(response))
+            })
+        }),
+    )
+    .unwrap();
+    drop(LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "parked"}))]),
+        make_llm_handle("parked-sanitizer-stream"),
+        Box::new(|_| Ok(())),
+        Box::new(|| json!({"parked": true})),
+        None,
+        None,
+        None,
+    ));
+
+    // Release the sanitizer only once the flush behind that barrier is queued.
+    let (flushed_tx, flushed_rx) = mpsc::channel::<()>();
+    let finalizer = LlmFinalizer::new_async(move || async move {
+        let (started_tx, started_rx) = mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            let _ = started_rx.recv();
+            let _ = release_sanitizer.send(());
+        });
+        flush_subscribers_with_started_signal(started_tx)?;
+        let _ = flushed_tx.send(());
+        Ok(json!({"flushed": true}))
+    });
+    drop(LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "flushing"}))]),
+        make_llm_handle("flushing-finalizer-stream"),
+        Box::new(|_| Ok(())),
+        finalizer,
+        None,
+        None,
+        None,
+    ));
+
+    flushed_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the flush inside the async finalizer stalled the parked END publication");
+
+    let events = captured_snapshot(&events);
+    for name in ["parked-sanitizer-stream", "flushing-finalizer-stream"] {
+        assert!(
+            events
+                .iter()
+                .any(|event| is_llm_end(event) && event.name() == name),
+            "{name} END event was not delivered"
+        );
+    }
+    assert!(deregister_llm_sanitize_response_guardrail("async_finalizer_flush_executor").unwrap());
+    assert!(deregister_subscriber("async_finalizer_flush_executor").unwrap());
+}
+
+#[tokio::test]
+async fn concurrent_async_finalizers_that_flush_do_not_wait_on_each_other() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_finalizers_mutual_flush");
+
+    let rendezvous = Arc::new(tokio::sync::Barrier::new(2));
+    let (flushed_tx, flushed_rx) = mpsc::channel::<&'static str>();
+    for name in ["first-flushing-finalizer", "second-flushing-finalizer"] {
+        let rendezvous = Arc::clone(&rendezvous);
+        let flushed_tx = flushed_tx.clone();
+        drop(LlmStreamWrapper::new(
+            make_stream(vec![Ok(json!({"token": name}))]),
+            make_llm_handle(name),
+            Box::new(|_| Ok(())),
+            LlmFinalizer::new_async(move || async move {
+                // Both finalizers hold a pending END permit while they flush.
+                rendezvous.wait().await;
+                flush_subscribers()?;
+                let _ = flushed_tx.send(name);
+                Ok(json!({"flushed": name}))
+            }),
+            None,
+            None,
+            None,
+        ));
+    }
+
+    for _ in 0..2 {
+        flushed_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a flush inside one async finalizer waited on the other finalizer's END");
+    }
+
+    let events = captured_snapshot(&events);
+    assert_eq!(events.iter().filter(|event| is_llm_end(event)).count(), 2);
+    assert!(deregister_subscriber("async_finalizers_mutual_flush").unwrap());
 }
 
 #[tokio::test]

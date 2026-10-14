@@ -694,7 +694,8 @@ pub enum LlmFinalizer {
     Sync(LlmFinalizerFn),
     /// Returns the aggregate or a failure.
     Fallible(LlmFallibleFinalizerFn),
-    /// Awaited before the END publication, so a flush on its own task does not wait on this stream.
+    /// Awaited before the END publication, so a flush inside it does not wait on this
+    /// stream or other unfinished terminal publications.
     Async(LlmAsyncFinalizerFn),
 }
 

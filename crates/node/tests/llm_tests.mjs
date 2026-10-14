@@ -14,6 +14,7 @@ const lib = require('../index.js');
 const nodeDir = fileURLToPath(new URL('..', import.meta.url));
 
 const {
+  __testForceStreamForwarding,
   pushScope,
   popScope,
   llmCall,
@@ -2534,61 +2535,86 @@ describe('LLM intercepts', () => {
     await assert.rejects(() => stream.close(), /cleanup boom/);
   });
 
-  it('close aborts the provider while an async collector is waiting', async () => {
-    let signal;
-    let collectorEntered;
-    const entered = new Promise((resolve) => {
-      collectorEntered = resolve;
-    });
-    const stream = await llmStreamCallExecute(
-      'collector_waits_for_abort_llm',
-      makeNative(),
-      async function* (_request, abortSignal) {
-        signal = abortSignal;
-        yield { token: 'first' };
-        if (!signal.aborted) {
-          await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
-        }
-      },
-      async () => {
-        collectorEntered();
-        if (!signal.aborted) {
-          await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
-        }
-      },
-    );
-    await entered;
-    await assertCompletesWithin(stream.close(), 'close did not abort the provider while the collector waited');
-    assert.equal(signal.aborted, true);
+  it('close aborts the provider while an async collector is waiting, in both modes', async () => {
+    for (const forwarded of [false, true]) {
+      __testForceStreamForwarding(forwarded);
+      try {
+        let signal;
+        let collectorEntered;
+        const entered = new Promise((resolve) => {
+          collectorEntered = resolve;
+        });
+        const stream = await llmStreamCallExecute(
+          `collector_waits_for_abort_${forwarded ? 'forwarded' : 'pump'}_llm`,
+          makeNative(),
+          async function* (_request, abortSignal) {
+            signal = abortSignal;
+            yield { token: 'first' };
+            if (!signal.aborted) {
+              await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            }
+          },
+          async () => {
+            collectorEntered();
+            if (!signal.aborted) {
+              await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            }
+          },
+        );
+        const pending = stream.next();
+        await entered;
+        await assertCompletesWithin(stream.close(), 'close did not abort the provider while the collector waited');
+        assert.equal(signal.aborted, true);
+        assert.equal(await pending, null);
+      } finally {
+        __testForceStreamForwarding(false);
+      }
+    }
   });
 
-  it('close reports a buffered collector error when producer cleanup also fails', async () => {
-    let collected;
-    const collectorCalled = new Promise((resolve) => {
-      collected = resolve;
-    });
-    const stream = await llmStreamCallExecute(
-      'collector_then_cleanup_error_llm',
-      makeNative(),
-      async function* (_request, signal) {
-        try {
-          yield { token: 'first' };
-          await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
-        } finally {
-          throw new Error('cleanup boom');
-        }
-      },
-      () => {
-        collected();
-        throw new RangeError('collector boom');
-      },
-      () => ({}),
-    );
-    await collectorCalled;
-    await assert.rejects(
-      () => stream.close(),
-      (error) => /collector boom/.test(error.message) && !/cleanup boom/.test(error.message),
-    );
+  it('close reports a collector error ahead of a producer cleanup failure, in both modes', async () => {
+    for (const forwarded of [false, true]) {
+      __testForceStreamForwarding(forwarded);
+      try {
+        let signal;
+        let collectorEntered;
+        const entered = new Promise((resolve) => {
+          collectorEntered = resolve;
+        });
+        const stream = await llmStreamCallExecute(
+          `collector_then_cleanup_error_${forwarded ? 'forwarded' : 'pump'}_llm`,
+          makeNative(),
+          async function* (_request, abortSignal) {
+            signal = abortSignal;
+            try {
+              yield { token: 'first' };
+              if (!signal.aborted) {
+                await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+              }
+            } finally {
+              throw new Error('cleanup boom');
+            }
+          },
+          async () => {
+            collectorEntered();
+            if (!signal.aborted) {
+              await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            }
+            throw new RangeError('collector boom');
+          },
+          () => ({}),
+        );
+        const pending = stream.next();
+        await entered;
+        await assert.rejects(
+          () => stream.close(),
+          (error) => /collector boom/.test(error.message) && !/cleanup boom/.test(error.message),
+        );
+        assert.equal(await pending, null);
+      } finally {
+        __testForceStreamForwarding(false);
+      }
+    }
   });
 
   it('collector errors terminate the stream with the collector error', async () => {
@@ -2617,6 +2643,131 @@ describe('LLM intercepts', () => {
     } finally {
       await stream?.close().catch(() => {});
       deregisterSubscriber('node_collector_error');
+    }
+  });
+
+  it('a collector error reaches next() while the finalizer waits for producer cleanup, in both modes', async () => {
+    for (const forwarded of [false, true]) {
+      __testForceStreamForwarding(forwarded);
+      let stream;
+      try {
+        let producerClosed;
+        const cleanedUp = new Promise((resolve) => {
+          producerClosed = resolve;
+        });
+        stream = await llmStreamCallExecute(
+          `collector_error_finalizer_cleanup_${forwarded ? 'forwarded' : 'pump'}_llm`,
+          makeNative(),
+          async function* (_request, signal) {
+            try {
+              yield { token: 'first' };
+              await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            } finally {
+              producerClosed();
+            }
+          },
+          () => {
+            throw new RangeError('collector boom');
+          },
+          async () => {
+            await cleanedUp;
+            return {};
+          },
+        );
+        const hung = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('next() hung behind the finalizer')), 5000).unref();
+        });
+        await assert.rejects(() => Promise.race([stream.next(), hung]), /collector boom/);
+        await stream.close();
+      } finally {
+        await stream?.close().catch(() => {});
+        __testForceStreamForwarding(false);
+      }
+    }
+  });
+
+  it('a collector error reaches next() while the producer waits on a full buffer, in both modes', async () => {
+    for (const forwarded of [false, true]) {
+      __testForceStreamForwarding(forwarded);
+      let stream;
+      try {
+        let producerClosed;
+        const cleanedUp = new Promise((resolve) => {
+          producerClosed = resolve;
+        });
+        let producerStarted;
+        const started = new Promise((resolve) => {
+          producerStarted = resolve;
+        });
+        stream = await llmStreamCallExecute(
+          `collector_error_full_buffer_${forwarded ? 'forwarded' : 'pump'}_llm`,
+          makeNative(),
+          async function* () {
+            try {
+              for (let index = 0; index < 64; index += 1) {
+                if (index === 1) producerStarted();
+                yield { index };
+              }
+            } finally {
+              producerClosed();
+            }
+          },
+          async () => {
+            // Let the producer run ahead until a push parks on the full buffer.
+            await started;
+            await new Promise((resolve) => setImmediate(resolve));
+            throw new RangeError('collector boom');
+          },
+          async () => {
+            await cleanedUp;
+            return {};
+          },
+        );
+        let hungTimer;
+        const hung = new Promise((_, reject) => {
+          hungTimer = setTimeout(() => reject(new Error('next() hung behind the parked producer')), 5000);
+        });
+        try {
+          await assert.rejects(() => Promise.race([stream.next(), hung]), /collector boom/);
+        } finally {
+          clearTimeout(hungTimer);
+        }
+        await stream.close();
+      } finally {
+        await stream?.close().catch(() => {});
+        __testForceStreamForwarding(false);
+      }
+    }
+  });
+
+  it('a provider that finishes on its own is not aborted, in both modes', async () => {
+    for (const forwarded of [false, true]) {
+      __testForceStreamForwarding(forwarded);
+      let stream;
+      try {
+        let signal;
+        stream = await llmStreamCallExecute(
+          `clean_end_no_abort_${forwarded ? 'forwarded' : 'pump'}_llm`,
+          makeNative(),
+          async function* (_request, abortSignal) {
+            signal = abortSignal;
+            yield { token: 'first' };
+            yield { token: 'second' };
+          },
+          () => {},
+          () => ({}),
+        );
+        for (;;) {
+          const chunk = await stream.next();
+          if (chunk === null) break;
+        }
+        assert.equal(signal.aborted, false);
+        await stream.close();
+        assert.equal(signal.aborted, false);
+      } finally {
+        await stream?.close().catch(() => {});
+        __testForceStreamForwarding(false);
+      }
     }
   });
 
@@ -2822,6 +2973,428 @@ describe('LLM intercepts', () => {
     } finally {
       deregisterSubscriber('node_finalizer_flush');
     }
+  });
+
+  it('concurrent next() calls resolve in order', async () => {
+    const stream = await llmStreamCallExecute(
+      'concurrent_next_llm',
+      makeNative(),
+      async function* () {
+        for (let index = 0; index < 5; index++) {
+          await new Promise((resolve) => setImmediate(resolve));
+          yield { index };
+        }
+      },
+      null,
+      () => ({}),
+    );
+    try {
+      const chunks = await Promise.all([stream.next(), stream.next(), stream.next(), stream.next(), stream.next()]);
+      assert.deepEqual(
+        chunks.map((chunk) => chunk.index),
+        [0, 1, 2, 3, 4],
+      );
+      assert.equal(await stream.next(), null);
+    } finally {
+      await stream.close();
+    }
+  });
+
+  it('a collector may call next() on its own stream', async () => {
+    let inner;
+    const stream = await llmStreamCallExecute(
+      'reentrant_next_llm',
+      makeNative(),
+      async function* () {
+        yield { token: 'first' };
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield { token: 'second' };
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield { token: 'third' };
+      },
+      (chunk) => {
+        if (chunk.token === 'first') {
+          inner = stream.next();
+        }
+      },
+      () => ({}),
+    );
+    try {
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      const later = stream.next();
+      assert.deepEqual(await inner, { token: 'second' });
+      assert.deepEqual(await later, { token: 'third' });
+      assert.equal(await stream.next(), null);
+    } finally {
+      await stream.close();
+    }
+  });
+
+  it('streams fall back to the forwarding task without stack headroom', async () => {
+    __testForceStreamForwarding(true);
+    const events = [];
+    registerSubscriber('node_forwarded_stream', (event) => events.push(event));
+    try {
+      const collected = [];
+      const stream = await llmStreamCallExecute(
+        'forwarded_stream_llm',
+        makeNative(),
+        async function* () {
+          yield { token: 'first' };
+          yield { token: 'second' };
+        },
+        async (chunk) => {
+          await new Promise((resolve) => setImmediate(resolve));
+          collected.push(chunk.token);
+        },
+        () => ({ text: collected.join(' ') }),
+      );
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      assert.deepEqual(await stream.next(), { token: 'second' });
+      assert.equal(await stream.next(), null);
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find((event) => event.name === 'forwarded_stream_llm' && event.scope_category === 'end');
+      assert.deepEqual(end.data, { text: 'first second' });
+    } finally {
+      __testForceStreamForwarding(false);
+      deregisterSubscriber('node_forwarded_stream');
+    }
+  });
+
+  it('overlapping close() calls settle with the same result', async () => {
+    const stream = await llmStreamCallExecute(
+      'overlapping_close_llm',
+      makeNative(),
+      async function* (_request, signal) {
+        yield { token: 'first' };
+        await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+      },
+      null,
+      () => {
+        throw new Error('finalizer boom');
+      },
+    );
+    assert.deepEqual(await stream.next(), { token: 'first' });
+    const first = stream.close();
+    const second = stream.close();
+    await assert.rejects(first, /finalizer boom/);
+    await assert.rejects(second, /finalizer boom/);
+  });
+
+  it('close reports a cleanup error before a finalizer failure in both modes', async () => {
+    for (const forwarded of [false, true]) {
+      __testForceStreamForwarding(forwarded);
+      try {
+        const stream = await llmStreamCallExecute(
+          `cleanup_then_finalizer_${forwarded ? 'forwarded' : 'pump'}_llm`,
+          makeNative(),
+          async function* (_request, signal) {
+            try {
+              yield { token: 'first' };
+              await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            } finally {
+              throw new Error('cleanup boom');
+            }
+          },
+          null,
+          () => {
+            throw new Error('finalizer boom');
+          },
+        );
+        assert.deepEqual(await stream.next(), { token: 'first' });
+        await assert.rejects(() => stream.close(), /cleanup boom; stream finalizer also failed: .*finalizer boom/);
+      } finally {
+        __testForceStreamForwarding(false);
+      }
+    }
+  });
+
+  it('terminating a worker with a pending next() leaves the process running', () => {
+    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const script = `
+      import { Worker } from 'node:worker_threads';
+      const worker = new Worker(
+        \`
+          import { parentPort, workerData } from 'node:worker_threads';
+          import { createRequire } from 'node:module';
+          const require = createRequire(import.meta.url);
+          const lib = require(workerData.modulePath);
+          const stream = await lib.llmStreamCallExecute(
+            'worker-terminate-llm',
+            { headers: {}, content: { messages: [], model: 'test-model' } },
+            async function* () {
+              yield { token: 'first' };
+              await new Promise(() => {});
+            },
+            null,
+            () => ({}),
+          );
+          await stream.next();
+          const pending = stream.next();
+          setInterval(() => {}, 1000);
+          parentPort.postMessage('ready');
+          await pending;
+        \`,
+        { eval: true, workerData: { modulePath: ${modulePath} } },
+      );
+      await new Promise((resolve) => worker.on('message', resolve));
+      await worker.terminate();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    `;
+
+    execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
+      stdio: 'inherit',
+      timeout: 10_000,
+    });
+  });
+
+  it('ignored next() and close() rejections stay unhandled', () => {
+    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const script = `
+      import { createRequire } from 'node:module';
+      const require = createRequire(import.meta.url);
+      const lib = require(${modulePath});
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const request = {
+        headers: {},
+        content: { messages: [], model: 'test-model' },
+      };
+      const unhandled = [];
+      process.on('unhandledRejection', (error) => unhandled.push(error.message));
+      for (const forwarded of [false, true]) {
+        lib.__testForceStreamForwarding(forwarded);
+        const failing = await lib.llmStreamCallExecute(
+          'unhandled-next-llm',
+          request,
+          async function* () {
+            yield { token: 'first' };
+            throw new Error('provider boom');
+          },
+          null,
+          () => ({}),
+        );
+        await failing.next();
+        void failing.next();
+        const closing = await lib.llmStreamCallExecute(
+          'unhandled-close-llm',
+          request,
+          async function* (_request, signal) {
+            try {
+              yield { token: 'first' };
+              await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            } finally {
+              throw new Error('cleanup boom');
+            }
+          },
+          null,
+          () => ({}),
+        );
+        await closing.next();
+        void closing.close();
+        await sleep(100);
+      }
+      const expected = ['provider boom', 'cleanup boom', 'provider boom', 'cleanup boom'];
+      if (!unhandled.every((message, index) => message.includes(expected[index])) || unhandled.length !== 4) {
+        throw new Error('unhandled rejections were ' + JSON.stringify(unhandled));
+      }
+    `;
+
+    execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
+      stdio: 'inherit',
+      timeout: 10_000,
+    });
+  });
+
+  it('a pending next() keeps a collected handle alive until it settles', () => {
+    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const script = `
+      import { createRequire } from 'node:module';
+      const require = createRequire(import.meta.url);
+      const lib = require(${modulePath});
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const request = {
+        headers: {},
+        content: { messages: [], model: 'test-model' },
+      };
+      for (const forwarded of [false, true]) {
+        lib.__testForceStreamForwarding(forwarded);
+        const log = [];
+        let pending;
+        (() => {
+          const stream = lib.llmStreamCallExecute(
+            'process-exit-pinned-llm',
+            request,
+            async function* (_request, signal) {
+              signal.addEventListener('abort', () => log.push('aborted'), { once: true });
+              yield { token: 'first' };
+              await sleep(200);
+              yield { token: 'second' };
+            },
+            null,
+            () => ({}),
+          );
+          pending = stream.then(async (handle) => {
+            await handle.next();
+            return handle.next();
+          });
+        })();
+        await sleep(50);
+        globalThis.gc();
+        await sleep(50);
+        globalThis.gc();
+        const chunk = await pending;
+        if (chunk === null || chunk.token !== 'second' || log.length !== 0) {
+          throw new Error('pending next() settled with ' + JSON.stringify(chunk) + ' ' + JSON.stringify(log));
+        }
+      }
+    `;
+
+    execFileSync(process.execPath, ['--expose-gc', '--input-type=module', '--eval', script], {
+      stdio: 'inherit',
+      timeout: 10_000,
+    });
+  });
+
+  it('collectors run only when the consumer polls, in both modes', async () => {
+    for (const forwarded of [false, true]) {
+      __testForceStreamForwarding(forwarded);
+      try {
+        let collected = 0;
+        const stream = await llmStreamCallExecute(
+          `lazy_collect_${forwarded ? 'forwarded' : 'pump'}_llm`,
+          makeNative(),
+          async function* () {
+            yield { token: 'first' };
+            yield { token: 'second' };
+          },
+          () => {
+            collected++;
+          },
+          () => ({}),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        assert.equal(collected, 0);
+        assert.deepEqual(await stream.next(), { token: 'first' });
+        assert.equal(collected, 1);
+        assert.deepEqual(await stream.next(), { token: 'second' });
+        assert.equal(collected, 2);
+        await stream.close();
+      } finally {
+        __testForceStreamForwarding(false);
+      }
+    }
+  });
+
+  it('a collected stream handle closes its stream before END', () => {
+    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const script = `
+      import { createRequire } from 'node:module';
+      const require = createRequire(import.meta.url);
+      const lib = require(${modulePath});
+      const request = {
+        headers: {},
+        content: { messages: [], model: 'test-model' },
+      };
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const events = [];
+      lib.registerSubscriber('collected_close', (event) => events.push(event));
+      const log = [];
+      (() => {
+        const stream = lib.llmStreamCallExecute(
+          'process-exit-collected-close-llm',
+          request,
+          async function* (_request, signal) {
+            yield { token: 'first' };
+            await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            log.push('provider aborted');
+          },
+          async () => {
+            await sleep(100);
+            log.push('collector done');
+          },
+          () => {
+            log.push('finalizer');
+            return { log: [...log] };
+          },
+        );
+        stream.then((handle) => handle.next());
+      })();
+      // A pending next() pins its handle. Collect after the collector has settled it.
+      await sleep(150);
+      globalThis.gc();
+      await sleep(50);
+      globalThis.gc();
+      await sleep(300);
+      await lib.flushSubscribers();
+      const end = events.find(
+        (event) => event.name === 'process-exit-collected-close-llm' && event.scope_category === 'end',
+      );
+      const expected = ['collector done', 'provider aborted', 'finalizer'];
+      if (JSON.stringify(end?.data?.log) !== JSON.stringify(expected)) {
+        throw new Error('END recorded ' + JSON.stringify(end?.data) + ' instead of a closed stream');
+      }
+      lib.deregisterSubscriber('collected_close');
+    `;
+
+    execFileSync(process.execPath, ['--expose-gc', '--input-type=module', '--eval', script], {
+      stdio: 'inherit',
+      timeout: 10_000,
+    });
+  });
+
+  it('a collected stream handle keeps the outcome of its pending close()', () => {
+    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const script = `
+      import { createRequire } from 'node:module';
+      const require = createRequire(import.meta.url);
+      const lib = require(${modulePath});
+      const request = {
+        headers: {},
+        content: { messages: [], model: 'test-model' },
+      };
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      let pending;
+      (() => {
+        const stream = lib.llmStreamCallExecute(
+          'process-exit-collected-pending-close-llm',
+          request,
+          async function* (_request, signal) {
+            try {
+              yield { token: 'first' };
+              await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+            } finally {
+              await sleep(300);
+              throw new Error('cleanup boom');
+            }
+          },
+          null,
+          () => ({}),
+        );
+        pending = stream.then(async (handle) => {
+          await handle.next();
+          return handle.close();
+        });
+      })();
+      await sleep(30);
+      globalThis.gc();
+      await sleep(50);
+      globalThis.gc();
+      let outcome = 'resolved';
+      try {
+        await pending;
+      } catch (error) {
+        outcome = error.message;
+      }
+      if (!/cleanup boom/.test(outcome)) {
+        throw new Error('close() settled with ' + outcome + ' instead of the cleanup error');
+      }
+    `;
+
+    execFileSync(process.execPath, ['--expose-gc', '--input-type=module', '--eval', script], {
+      stdio: 'inherit',
+      timeout: 10_000,
+    });
   });
 
   it('stream execution next honors concurrent per-call scope-stack replacements', async () => {
@@ -3058,6 +3631,43 @@ describe('LLM intercepts', () => {
       stdio: 'inherit',
       timeout: 5_000,
     });
+  });
+
+  it('a producer parked on a full buffer does not keep Node alive, in both modes', () => {
+    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    for (const forwarded of [false, true]) {
+      const script = `
+        import { createRequire } from 'node:module';
+        const require = createRequire(import.meta.url);
+        const lib = require(${modulePath});
+        lib.__testForceStreamForwarding(${forwarded});
+        const request = {
+          headers: {},
+          content: { messages: [], model: 'test-model' },
+        };
+        const stream = await lib.llmStreamCallExecute(
+          'process-exit-full-buffer-llm',
+          request,
+          async function* () {
+            for (let index = 0; index < 100; index += 1) {
+              yield { index };
+            }
+          },
+          () => {},
+          () => ({}),
+        );
+        globalThis.retainedStream = stream;
+        const first = await stream.next();
+        if (first?.index !== 0) {
+          throw new Error('expected the first chunk before retaining the stream');
+        }
+      `;
+
+      execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
+        stdio: 'inherit',
+        timeout: 5_000,
+      });
+    }
   });
 
   it('stream execution intercept rejects invalid next request payloads', async () => {
