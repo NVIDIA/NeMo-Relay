@@ -113,31 +113,7 @@ Save the following configuration as `plugins.toml` in the directory where you
 will start Hermes:
 
 {/* quickstart-block {"id":"plugins","role":"file","cwd":".","path":"plugins.toml"} */}
-```toml
-version = 1
-
-[policy]
-unknown_component = "error"
-unknown_field = "error"
-unsupported_value = "error"
-
-[[components]]
-kind = "observability"
-enabled = true
-
-[components.config]
-version = 4
-enable_full_payloads = false
-
-[components.config.atof]
-enabled = true
-
-[[components.config.atof.sinks]]
-type = "file"
-output_directory = "logs"
-filename = "events.jsonl"
-mode = "overwrite"
-```
+<Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
 
 Select that file in the shell that will start Hermes:
 
