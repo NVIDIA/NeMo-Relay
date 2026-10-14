@@ -2646,3 +2646,41 @@ async fn malformed_permission_hooks_fail_closed_in_each_native_response_shape() 
 
     runtime.close().await.expect("close managed runtime");
 }
+
+#[tokio::test]
+async fn managed_forwarding_rejects_remote_http_as_an_upstream_error() {
+    let config = GatewayConfig {
+        openai_base_url: "http://172.16.0.223:30919/v1".into(),
+        ..Default::default()
+    };
+    let error = dispatch_unmanaged(
+        pooled_client().unwrap(),
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        &config,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CliError::UpstreamTransport(TransportError::InsecureDestination)
+    ));
+    assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
+
+    let error = dispatch_unbuffered_observed(
+        pooled_client().unwrap(),
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        &config,
+        1024,
+        OperationalContext::new(),
+    )
+    .await
+    .err()
+    .expect("remote HTTP must be rejected before connecting");
+    assert!(matches!(
+        error,
+        CliError::UpstreamTransport(TransportError::InsecureDestination)
+    ));
+    assert!(!error.to_string().contains("hook payload"));
+}

@@ -351,12 +351,17 @@ anthropic_base_url = "https://api.anthropic.com"
 chatgpt_codex_base_url = "https://chatgpt.com/backend-api/codex"
 ```
 
+All provider base URLs must use HTTPS, except that HTTP is allowed for loopback
+hosts such as `localhost`, `127.0.0.1`, and `::1`. This applies to the personal
+gateway and managed daemon workers. Relay validates TOML values, environment
+variables, and command-line overrides at startup. Base URLs must not include
+user information, query strings, or fragments. Remote endpoints, including
+private Kubernetes service addresses, require HTTPS.
+
 For the ChatGPT Codex upstream, `--chatgpt-codex-base-url` overrides
 `NEMO_RELAY_CHATGPT_CODEX_BASE_URL`, which overrides the TOML value. The flag
 is available at the top level and on `run`; an explicit `run` flag overrides
-an inherited top-level flag. The URL must use HTTPS, except that HTTP is
-allowed for loopback hosts such as `localhost`, `127.0.0.1`, and `::1`.
-User information, query strings, and fragments are not allowed in the base URL.
+an inherited top-level flag.
 
 
 Provider waits have no deadline by default so long compaction can finish. Caller

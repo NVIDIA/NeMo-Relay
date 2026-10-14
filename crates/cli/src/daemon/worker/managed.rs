@@ -37,8 +37,8 @@ use super::super::common::control::{
 };
 use super::super::common::routes::{HookRoute, ProviderRoute};
 use super::super::common::transport::{
-    BoxError, PooledClient, RelayBody, box_body, prepare_forward_request, prepare_forward_response,
-    request_provider,
+    BoxError, PooledClient, RelayBody, TransportError, box_body, prepare_forward_request,
+    prepare_forward_response, request_provider,
 };
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::GatewayConfig;
@@ -718,7 +718,7 @@ async fn dispatch_unmanaged(
         crate::gateway::daemon_provider_upstream_url(request.headers(), &path_and_query, config)?
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
             .parse::<Uri>()
-            .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))?;
+            .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))?;
     if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
         request.headers(),
         request.uri().path(),
@@ -736,7 +736,7 @@ async fn dispatch_unmanaged(
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
     let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+        .map_err(CliError::UpstreamTransport)?
         .map(box_body);
     let request = request_provider(&upstream, client_named, request)
         .map_err(|error| CliError::Launch(error.to_string()))?;
@@ -772,7 +772,7 @@ async fn dispatch_unbuffered_observed(
         crate::gateway::daemon_provider_upstream_url(request.headers(), &path_and_query, config)?
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
             .parse::<Uri>()
-            .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))?;
+            .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))?;
     if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
         request.headers(),
         request.uri().path(),
@@ -791,7 +791,7 @@ async fn dispatch_unbuffered_observed(
     ];
     let streaming = request_streaming_hint(request.headers());
     let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+        .map_err(CliError::UpstreamTransport)?
         .map(box_body);
     let response = request_worker_upstream(
         upstream,
@@ -908,7 +908,7 @@ async fn dispatch_observed(
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
     let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+        .map_err(CliError::UpstreamTransport)?
         .map(box_body);
     let response = request_worker_upstream(
         upstream,
@@ -1006,7 +1006,7 @@ fn effective_destination(
     };
     destination
         .parse::<Uri>()
-        .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))
+        .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))
 }
 
 fn effective_request(

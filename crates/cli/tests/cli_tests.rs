@@ -3974,9 +3974,9 @@ fn cli_doctor_json_reports_effective_upstream_auth_presence() {
         &user_config,
         r#"
 [upstream]
-openai_base_url = "http://project-openai"
+openai_base_url = "https://project-openai"
 openai_auth_header = "Bearer project-openai"
-anthropic_base_url = "http://project-anthropic"
+anthropic_base_url = "https://project-anthropic"
 anthropic_auth_header = "Basic project-anthropic"
 "#,
     )
@@ -3986,7 +3986,7 @@ anthropic_auth_header = "Basic project-anthropic"
         .current_dir(&nested)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "https://env-openai")
         .args(["doctor", "--json"])
         .output()
         .unwrap();
@@ -4241,8 +4241,8 @@ fn cli_run_dry_run_resolves_config_and_command() {
         &config,
         r#"
 [upstream]
-openai_base_url = "http://file-openai"
-anthropic_base_url = "http://file-anthropic"
+openai_base_url = "https://file-openai"
+anthropic_base_url = "https://file-anthropic"
 
 [agents.codex]
 command = "codex exec"
@@ -4268,7 +4268,7 @@ command = "codex exec"
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("agent = codex"));
-    assert!(stdout.contains("openai_base_url = http://file-openai"));
+    assert!(stdout.contains("openai_base_url = https://file-openai"));
     let argv = stdout
         .lines()
         .find(|line| line.starts_with("argv = "))
@@ -4641,7 +4641,7 @@ fn cli_run_dry_run_ignores_project_and_uses_user_and_env_config() {
         project.join(".nemo-relay/config.toml"),
         r#"
 [upstream]
-openai_base_url = "http://project-openai"
+openai_base_url = "https://project-openai"
 "#,
     )
     .unwrap();
@@ -4649,7 +4649,7 @@ openai_base_url = "http://project-openai"
         xdg.join("config.toml"),
         r#"
 [upstream]
-anthropic_base_url = "http://user-anthropic"
+anthropic_base_url = "https://user-anthropic"
 
 [agents.codex]
 command = "codex --full-auto"
@@ -4686,8 +4686,8 @@ mode = "append"
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
         .env("NEMO_RELAY_GATEWAY_BIND", "127.0.0.1:0")
-        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
-        .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "http://env-anthropic")
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "https://env-openai")
+        .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "https://env-anthropic")
         .env("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", "444")
         .env("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", "555")
         .env("NEMO_RELAY_PLUGIN_CONFIG_PATH", &plugin_config)
@@ -4697,8 +4697,8 @@ mode = "append"
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("openai_base_url = http://env-openai"));
-    assert!(stdout.contains("anthropic_base_url = http://env-anthropic"));
+    assert!(stdout.contains("openai_base_url = https://env-openai"));
+    assert!(stdout.contains("anthropic_base_url = https://env-anthropic"));
     assert!(stdout.contains("max_hook_payload_bytes = 444"));
     assert!(stdout.contains("max_passthrough_body_bytes = 555"));
     assert!(!stdout.contains("atif_dir"));
@@ -4721,9 +4721,9 @@ fn cli_run_dry_run_reports_effective_upstream_auth_presence() {
         user_config,
         r#"
 [upstream]
-openai_base_url = "http://project-openai"
+openai_base_url = "https://project-openai"
 openai_auth_header = "Bearer project-openai"
-anthropic_base_url = "http://project-anthropic"
+anthropic_base_url = "https://project-anthropic"
 anthropic_auth_header = "Basic project-anthropic"
 "#,
     )
@@ -4733,7 +4733,7 @@ anthropic_auth_header = "Basic project-anthropic"
         .current_dir(&nested)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "https://env-openai")
         .args(["run", "--agent", "codex", "--dry-run"])
         .output()
         .unwrap();
@@ -4742,7 +4742,7 @@ anthropic_auth_header = "Basic project-anthropic"
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("Bearer project-openai"));
     assert!(!stdout.contains("Basic project-anthropic"));
-    assert!(stdout.contains("openai_base_url = http://env-openai"));
+    assert!(stdout.contains("openai_base_url = https://env-openai"));
     assert!(stdout.contains("openai_auth = unset"));
     assert!(stdout.contains("anthropic_auth = configured"));
 }
