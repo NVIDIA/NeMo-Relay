@@ -671,7 +671,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         .await
         .unwrap_err();
         assert!(
-            matches!(error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "provider denied access" && !failure.is_retryable())
+            matches!(error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "Reported by plugin 'fixture_native': provider denied access" && !failure.is_retryable())
         );
     }
     let callback_error = llm_call_execute(
@@ -689,7 +689,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     .await
     .unwrap_err();
     assert!(
-        matches!(callback_error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(403))
+        matches!(callback_error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
     );
     let stream_error = llm_stream_call_execute(
         LlmStreamCallExecuteParams::builder()
@@ -712,7 +712,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     .expect("stream reports the callback failure")
     .unwrap_err();
     assert!(
-        matches!(stream_error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(403))
+        matches!(stream_error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
     );
     flush_subscribers().expect("HTTP error events should flush");
 

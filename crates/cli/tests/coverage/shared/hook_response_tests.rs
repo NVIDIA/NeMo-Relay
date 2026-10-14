@@ -34,13 +34,21 @@ async fn truncated_hook_error_bodies_preserve_status_and_failure_policy() {
             )
             .await;
             if fail_closed {
-                let response = result.unwrap_err().into_response();
+                let error = result.unwrap_err();
+                assert_eq!(error.log_kind(), "hook_http");
+                let response = error.into_response();
                 assert_eq!(response.status().as_u16(), status);
                 let body = axum::body::to_bytes(response.into_body(), usize::MAX)
                     .await
                     .unwrap();
                 let body: Value = serde_json::from_slice(&body).unwrap();
                 assert_eq!(body["error"]["type"], "nemo_relay_gateway_error");
+                assert!(
+                    body["error"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("nemo-relay hook forward failed: hook gateway returned HTTP")
+                );
             } else {
                 assert_eq!(result.unwrap(), HookDeliveryOutcome::FailedOpen);
             }

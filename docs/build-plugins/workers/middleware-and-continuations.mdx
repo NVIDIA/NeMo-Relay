@@ -534,3 +534,10 @@ Relay reads the prefix from `WorkerError.message`; the existing error code and
 protobuf fields remain unchanged. SDKs preserve recognized continuation error
 messages without adding text before the prefix. Worker cancellation retains
 its existing handling even when its message starts with this prefix.
+
+Relay adds `Reported by plugin '<plugin-id>': ` to recognized HTTP error
+messages using the plugin identity verified by the host. This identifies the
+reporting component; a provider or another downstream component may have
+produced the original failure. Reporting context survives continuations,
+without repeating the same leading plugin identity. Structured process logs
+include `plugin_id`, the native or worker boundary, and the HTTP status.

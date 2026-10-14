@@ -859,7 +859,7 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         .await
         .unwrap_err();
         assert!(
-            matches!(error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "provider failure" && !failure.is_retryable())
+            matches!(error, nemo_relay::error::FlowError::Upstream(failure) if failure.status == Some(status) && failure.body == "Reported by plugin 'fixture_worker': provider failure" && !failure.is_retryable())
         );
     }
     flush_subscribers().expect("worker HTTP errors should flush");

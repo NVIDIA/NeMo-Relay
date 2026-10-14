@@ -199,3 +199,10 @@ prefix. Wrapping it with additional text before `HTTP ` prevents recognition.
 The native async streaming SDK opens its output stream before polling the
 callback. A callback failure is therefore delivered as a typed stream error;
 it does not change an HTTP status that the gateway has already sent.
+
+Relay adds `Reported by plugin '<plugin-id>': ` to recognized HTTP error
+messages using the plugin identity verified by the host. This identifies the
+reporting component; a provider or another downstream component may have
+produced the original failure. Reporting context survives continuations,
+without repeating the same leading plugin identity. Structured process logs
+include `plugin_id`, the native or worker boundary, and the HTTP status.

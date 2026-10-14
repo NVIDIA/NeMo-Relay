@@ -116,6 +116,8 @@ pub(crate) enum CliError {
     Upstream(#[from] reqwest::Error),
     #[error("{0}")]
     ProviderFailure(UpstreamFailure),
+    #[error("hook gateway returned HTTP {status}: {message}")]
+    HookHttpFailure { status: StatusCode, message: String },
     #[error("http error: {0}")]
     Http(#[from] http::Error),
     #[error("io error: {0}")]
@@ -176,6 +178,7 @@ impl CliError {
             Self::RouteCredentialRejected(_) => "route_credential_rejected",
             Self::Upstream(_) => "upstream",
             Self::ProviderFailure(_) => "provider_failure",
+            Self::HookHttpFailure { .. } => "hook_http",
             Self::Http(_) => "http",
             Self::Io(_) => "io",
             Self::Install(_) => "install",
@@ -255,6 +258,7 @@ fn response_status(error: &CliError) -> StatusCode {
             StatusCode::UNAUTHORIZED
         }
         CliError::InvalidPayload(_) => StatusCode::BAD_REQUEST,
+        CliError::HookHttpFailure { status, .. } => *status,
         CliError::Upstream(_) => StatusCode::BAD_GATEWAY,
         CliError::ProviderFailure(failure) | CliError::Flow(FlowError::Upstream(failure)) => {
             failure

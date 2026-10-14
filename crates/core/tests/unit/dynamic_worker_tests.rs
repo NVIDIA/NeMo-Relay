@@ -5001,3 +5001,31 @@ fn worker_http_error_prefix_preserves_status_through_continuations() {
         FlowError::Internal(_)
     ));
 }
+
+#[test]
+fn worker_http_errors_include_the_verified_reporting_plugin() {
+    let response = InvokeResponse {
+        result: Some(InvokeResult::Error(WorkerError {
+            code: "worker.error".into(),
+            message: "HTTP 403: denied".into(),
+            retryable: false,
+        })),
+    };
+    let response = report_worker_response(response, "verified.worker");
+    let FlowError::Upstream(failure) = json_from_invoke_response(response).unwrap_err() else {
+        panic!("expected upstream failure");
+    };
+    assert_eq!(failure.status, Some(403));
+    assert_eq!(failure.body, "Reported by plugin 'verified.worker': denied");
+    let cancelled = InvokeResponse {
+        result: Some(InvokeResult::Error(WorkerError {
+            code: "worker.cancelled".into(),
+            message: "HTTP 403: denied".into(),
+            retryable: false,
+        })),
+    };
+    assert!(matches!(
+        json_from_invoke_response(report_worker_response(cancelled, "verified.worker")),
+        Err(FlowError::Internal(_))
+    ));
+}

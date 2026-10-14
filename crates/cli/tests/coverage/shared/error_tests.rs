@@ -19,6 +19,13 @@ fn log_kinds_cover_every_operational_error_class() {
         .expect_err("invalid URI should produce an HTTP error");
     let errors = [
         (
+            CliError::HookHttpFailure {
+                status: StatusCode::FORBIDDEN,
+                message: "denied".into(),
+            },
+            "hook_http",
+        ),
+        (
             CliError::GuardrailRejected("blocked".into()),
             "guardrail_rejected",
         ),
