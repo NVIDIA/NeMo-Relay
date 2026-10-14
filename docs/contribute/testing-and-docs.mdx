@@ -9,29 +9,40 @@ SPDX-License-Identifier: Apache-2.0 */}
 This page describes the validation and documentation checks expected for repository
 changes.
 
-## Quickstart Contracts
+Rust and Python examples, plugin test fixtures, and benchmark tools are workspace
+members. Dependency versions are locked in the repository-root `Cargo.lock` and
+`uv.lock`; npm workspaces use the root `package-lock.json`. Run Python example
+commands with `uv run --package <example-package>` to select the example while
+sharing the root environment.
 
-The Quick Starts store commands, artifacts, and expected output in their MDX
-pages. The checker extracts these contracts without executing commands or
-calling an inference provider:
+## Quick Start Contracts
+
+The quick starts store commands, artifacts, and expected output in their MDX
+pages. From the repository root, validate the available contracts and run the
+checker unit tests:
 
 ```bash
 python3 scripts/check-quickstarts.py check
 python3 -m unittest discover -s scripts/tests -p 'test_*quickstart*.py'
 ```
 
-Use `extract <page> --shell bash` to inspect one executable branch, and
-`preflight` and `verify` to check a disposable run's outputs. Live execution
-and operating-system coverage remain separate validation work. Copyable Relay
-install pins follow the Cargo workspace version through `just set-version`;
-`python3 scripts/docs/docs_version_pins.py check` detects drift. The external
-Switchyard bundle and its tested Relay pairing are pinned independently.
+For a guide with contract annotations, use
+`python3 scripts/check-quickstarts.py extract <page> --shell bash` to inspect
+its commands. Replace `<page>` with the guide's MDX path.
 
-Rust and Python examples, plugin test fixtures, and benchmark tools are workspace
-members. Dependency versions are locked in the repository-root `Cargo.lock` and
-`uv.lock`; npm workspaces use the root `package-lock.json`. Run Python example
-commands with `uv run --package <example-package>` to select the example while
-sharing the root environment.
+The `preflight` mode rejects stale artifacts. The `verify` mode checks expected
+output and artifacts after a successful run. These modes do not execute commands,
+provision credentials, or test operating-system compatibility.
+
+Relay installation version pins follow the Cargo workspace version through
+`just set-version`. Check for version drift with this command:
+
+```bash
+python3 scripts/docs/docs_version_pins.py check
+```
+
+The external Switchyard bundle and its tested Relay version are pinned
+independently.
 
 ## Testing Rule
 
