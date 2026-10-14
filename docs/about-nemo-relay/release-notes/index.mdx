@@ -32,15 +32,15 @@ For the full release history, refer to
 
 NeMo Relay 0.10.1 expands daemon-worker middleware support and fixes hook
 authentication and delivery, plugin verification, request editing, Python typed
-values, Anthropic streaming storage, and Go handle lifetimes. It also updates a
-CLI dependency.
+values, Anthropic streaming storage, and Go handle lifetimes. It also adds a
+configurable ChatGPT Codex endpoint, preserves HTTP error statuses, and updates
+a CLI dependency.
 
 ### Highlights
 
-This release expands large language model (LLM) middleware support in daemon
-workers:
+This release adds the following capabilities:
 
-- Daemon workers support all six LLM middleware types for OpenAI Chat
+- Daemon workers support all six large language model (LLM) middleware types for OpenAI Chat
   Completions, OpenAI Responses, and Anthropic Messages. This includes calls
   with and without streaming. Request intercepts can change requests, and
   execution intercepts can change or replace responses. Conditional execution
@@ -48,6 +48,16 @@ workers:
   default limit for the observation copy increases from 4 MiB to 16 MiB. This
   limit does not cut off the client's stream. Refer to
   [LLM Middleware](/daemon/reference#llm-middleware).
+
+- Personal gateways and managed daemon workers can route ChatGPT Codex
+  requests to a configured `chatgpt_codex_base_url`, including voice call
+  creation. The default remains `https://chatgpt.com/backend-api/codex`.
+  Remote endpoints require HTTPS; HTTP is allowed for loopback hosts. Refer to
+  [Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
+- Rust native and worker SDKs and the Python worker SDK provide
+  `http_error_message` to report HTTP errors through the existing plugin
+  interfaces. Refer to [Build Native Plugins](/build-plugins/native/about) and
+  [Worker Middleware and Continuations](/build-plugins/workers/middleware-and-continuations).
 
 ### Compatibility and Migration
 
@@ -76,6 +86,12 @@ Review these behavior changes when upgrading from 0.10.0:
   plugin trust failures and native plugins that depend on files beside their
   loaded library. For stored Python typed values, select an explicit codec
   instead of relying on automatic type reconstruction.
+- Pi named upstreams must be public or loopback addresses. Configure private
+  provider endpoints as gateway or daemon upstreams instead. If you configure
+  a ChatGPT Codex endpoint, use one trusted with users' ChatGPT credentials.
+- Review error handling that depends on generic HTTP statuses or
+  `FlowError::Internal`. Recognized plugin HTTP error strings and remote NeMo
+  Guardrails failures now preserve HTTP error statuses.
 
 For the patch-upgrade steps, refer to
 [Update from NeMo Relay 0.10.0 to 0.10.1](/reference/migration-guides#update-from-nemo-relay-0100-to-0101).
@@ -132,6 +148,23 @@ This release includes the following fixes and dependency update:
 - The experimental Go binding keeps handle wrappers and parent scopes alive
   until native calls finish, preventing garbage collection from releasing
   handles while a call still uses them. Public API signatures remain unchanged.
+- Pi named upstreams reject private, link-local, shared, and other special-use
+  addresses, including addresses resolved when the gateway connects. Public
+  and loopback endpoints remain supported. Refer to
+  [Model Redirection](/nemo-relay-cli/pi#model-redirection).
+- LangChain request intercepts can now edit function-tool descriptions and
+  input schemas and provider-specific tool definitions passed to managed model
+  calls. The model adapter prepares the edited definitions for its provider.
+  Tool count, order, and function-tool names must remain unchanged. Refer to
+  [LangChain](/supported-integrations/langchain).
+- Remote NeMo Guardrails and forwarded lifecycle-hook errors preserve received
+  HTTP statuses from `400` through `599`, including when reading an error body
+  fails. Plugins can preserve those statuses with an error string beginning
+  exactly with `HTTP <status>: <message>`. Relay adds the reporting plugin's
+  verified identity to recognized error messages. Existing hook failure
+  policies remain unchanged; errors after streaming headers are sent cannot
+  change the HTTP response status. Refer to
+  [NeMo Guardrails](/configure-plugins/nemo-guardrails/about).
 - The CLI replaces the deprecated `serde_yaml` dependency with `serde-saphyr`
   for YAML output from plugin inspection. The release also updates its Rust
   dependency attribution file.

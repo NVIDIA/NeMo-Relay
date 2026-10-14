@@ -19,7 +19,7 @@ from the 0.9 patch releases.
 
 Update the Relay packages you use to 0.10.1. Review the following steps for
 hook delivery and authentication, daemon workers, request intercepts, dynamic
-plugins, and Python typed values.
+plugins, Python typed values, provider endpoints, and HTTP errors.
 
 #### Restore Credentials for Fail-Closed Daemon Hooks
 
@@ -112,6 +112,12 @@ arrays. Refer to
 [Editing Arrays and Mappings](/integrate-into-frameworks/provider-codecs#editing-arrays-and-mappings)
 for matching rules and the limited fallback for a single edit.
 
+For LangChain managed model calls, request intercepts can edit function-tool
+descriptions and input schemas or provider-specific tool definitions. Keep
+tool count, order, and function-tool names unchanged. Review intercepts that
+modify those fields, and verify that the selected model adapter accepts the
+edited definitions. Refer to [LangChain](/supported-integrations/langchain).
+
 #### Refresh Pi Extensions for Authenticated Hooks
 
 After upgrading the gateway, refresh a Relay-managed Pi extension with
@@ -125,6 +131,57 @@ or set `NEMO_RELAY_PI_COMMAND` to its path. Use a loopback HTTP gateway URL and
 run Pi as the same local user as the gateway so the forwarder can load bootstrap
 credentials. The Relay launcher sets the executable path automatically.
 Refer to [Pi](/nemo-relay-cli/pi).
+
+#### Review Pi Named Provider Endpoints
+
+Pi named upstreams must use public or loopback addresses. Private, link-local,
+shared, and other special-use addresses are refused, including addresses a
+hostname resolves to when the gateway connects. Remote endpoints require HTTPS;
+HTTP is allowed only for loopback hosts.
+
+If a Pi model uses a private provider endpoint, configure it as the gateway's
+upstream with `--openai-base-url` or `--anthropic-base-url`, or in the daemon's
+system upstream configuration. Do not pass it as a named endpoint. Refer to
+[Model Redirection](/nemo-relay-cli/pi#model-redirection).
+
+#### Review the ChatGPT Codex Endpoint
+
+The default ChatGPT Codex endpoint is unchanged. To use another endpoint, set
+`chatgpt_codex_base_url` under `[upstream]`. Relay forwards the caller's ChatGPT
+credential to that endpoint, including for voice call creation, so use only an
+endpoint trusted with those credentials. Remote hosts require HTTPS; HTTP is
+allowed for loopback hosts.
+
+Personal gateways also accept `NEMO_RELAY_CHATGPT_CODEX_BASE_URL` and
+`--chatgpt-codex-base-url`, with CLI flags taking precedence. Managed workers
+read the endpoint from system TOML configuration and ignore that environment
+variable. Refer to
+[Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
+
+#### Review HTTP Error Handling
+
+Remote NeMo Guardrails failures now use `FlowError::Upstream` with the received
+HTTP status instead of `FlowError::Internal`. Update Rust matches that handle
+these errors. Gateway and forwarded lifecycle-hook errors preserve received
+statuses from `400` through `599`, including failures to read an error body.
+Existing response envelopes and hook failure policies remain unchanged.
+
+Plugin error strings beginning exactly with `HTTP <status>: <message>` now
+carry HTTP meaning. The status must be three ASCII digits from `400` through
+`599`, followed by a colon and a space. Review existing callback error strings
+that match this form. To adopt it, use `http_error_message` in the Rust native
+SDK, Rust worker SDK, or Python worker SDK. Relay adds the host-verified
+reporting plugin identity to recognized messages. Returning a continuation
+error unchanged preserves its prefix; adding text before `HTTP ` prevents
+recognition.
+
+Recognized plugin errors use `FlowError::Upstream` with empty headers and
+non-retryable `Other` classification. Callback signatures, the native ABI, and
+worker protobuf fields remain unchanged. Errors after streaming headers have
+been sent remain stream errors and cannot change the HTTP response status.
+Refer to [Build Native Plugins](/build-plugins/native/about),
+[Worker Middleware and Continuations](/build-plugins/workers/middleware-and-continuations),
+and [NeMo Guardrails](/configure-plugins/nemo-guardrails/about).
 
 #### Review Dynamic Plugin Trust and Native Dependencies
 
