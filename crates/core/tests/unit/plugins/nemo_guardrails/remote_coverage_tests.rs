@@ -765,7 +765,7 @@ async fn remote_execute_reports_non_stream_success_http_errors_and_invalid_json(
     ));
     assert_flow_error_contains(
         http_error.execute(simple_chat_request(), false).await,
-        "status 502",
+        "HTTP 502",
     );
     assert_eq!(http_error.access_state.load(Ordering::Acquire), 1);
 }
@@ -804,7 +804,7 @@ async fn remote_execute_transport_and_stream_status_errors_are_reported() {
         stream_status_error
             .execute_stream(simple_chat_request())
             .await,
-        "status 503",
+        "HTTP 503",
     );
 }
 
@@ -1124,7 +1124,7 @@ async fn tool_remote_check_http_status_failures_are_reported() {
         input_status_error
             .check_tool_input("weather_lookup", &json!({"city": "Phoenix"}))
             .await,
-        "status 429",
+        "HTTP 429",
     );
 
     let output_status_error = runtime_with_endpoint(spawn_http_response(
@@ -1140,7 +1140,7 @@ async fn tool_remote_check_http_status_failures_are_reported() {
                 &json!({"forecast": "sunny"}),
             )
             .await,
-        "status 503",
+        "HTTP 503",
     );
 
     let permission_error = runtime_with_endpoint(spawn_http_response(
@@ -1152,7 +1152,7 @@ async fn tool_remote_check_http_status_failures_are_reported() {
         permission_error
             .check_tool_input("weather_lookup", &json!({"city": "Phoenix"}))
             .await,
-        "status 403",
+        "HTTP 403",
     );
 }
 
@@ -1222,4 +1222,54 @@ async fn registered_remote_tool_input_intercept_rewrites_args_and_skips_output_c
     assert_eq!(result.result, json!({"forecast": "sunny"}));
 
     crate::plugin::rollback_registrations(&mut registrations);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn remote_http_errors_preserve_status_on_every_surface() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    crate::api::runtime::set_thread_scope_stack(crate::api::runtime::create_scope_stack());
+    for status in [
+        "403 Forbidden",
+        "404 Not Found",
+        "422 Unprocessable Entity",
+        "429 Too Many Requests",
+        "500 Internal Server Error",
+        "503 Service Unavailable",
+    ] {
+        for truncated in [false, true] {
+            for surface in 0..4 {
+                let endpoint = if truncated {
+                    spawn_truncated_http_response(status, "application/json")
+                } else {
+                    spawn_http_response(status, "application/json", "backend error")
+                };
+                let runtime = runtime_with_endpoint(endpoint);
+                let error = match surface {
+                    0 => runtime.execute(simple_chat_request(), false).await.err(),
+                    1 => runtime.execute_stream(simple_chat_request()).await.err(),
+                    2 => runtime.check_tool_input("weather", &json!({})).await.err(),
+                    _ => runtime
+                        .check_tool_output("weather", &json!({}), &json!({}))
+                        .await
+                        .err(),
+                }
+                .expect("remote failure");
+                let FlowError::Upstream(failure) = error else {
+                    panic!("expected structured failure: {error}");
+                };
+                assert_eq!(failure.status, Some(status[..3].parse().unwrap()));
+                assert!(!failure.is_retryable());
+                assert!(failure.headers.is_empty());
+                assert!(failure.body.contains(if truncated {
+                    "failed to read"
+                } else {
+                    "backend error"
+                }));
+            }
+        }
+    }
 }

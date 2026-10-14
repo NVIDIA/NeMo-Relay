@@ -164,3 +164,45 @@ in an isolated target directory, materializes and integrity-checks its manifest,
 a valid component, executes a managed tool call, observes the runtime mark, and clears
 registrations before the library unloads. The focused configuration tests cover rejected
 input and schema shape; the scenario pages show the remaining callback contracts.
+
+## Forward HTTP error statuses
+
+An execution callback can return an error string beginning with
+`HTTP <status>: <message>` to preserve an upstream HTTP error status through
+Relay. The prefix must appear at the start, use exactly three ASCII digits
+from 400 through 599, and include a space after the colon. Other error strings
+keep their existing handling.
+
+Relay converts a recognized prefix to `FlowError::Upstream` with classification
+`Other`, an empty header map, and the message after the prefix. This convention
+does not enable retries. Use the final provider failure after routing and
+fallback attempts, and redact credentials and sensitive payloads before
+returning the message.
+
+Recognized errors survive execution continuations and stream callbacks. Errors
+after response headers have been sent remain stream errors and cannot change
+the HTTP response status. No native ABI or worker protobuf change is required;
+older hosts treat the prefix as an ordinary error string.
+
+The Rust native SDK exports `http_error_message`, which validates the status
+and returns the formatted string:
+
+```rust
+let message = nemo_relay_plugin::http_error_message(403, "Provider denied access")?;
+return Err(message);
+```
+
+Existing plugins can also return a literal such as `HTTP 404: Model not found`.
+Returning a downstream `next.call(...).await` error unchanged preserves the
+prefix. Wrapping it with additional text before `HTTP ` prevents recognition.
+
+The native async streaming SDK opens its output stream before polling the
+callback. A callback failure is therefore delivered as a typed stream error;
+it does not change an HTTP status that the gateway has already sent.
+
+Relay adds `Reported by plugin '<plugin-id>': ` to recognized HTTP error
+messages using the plugin identity verified by the host. This identifies the
+reporting component; a provider or another downstream component may have
+produced the original failure. Reporting context survives continuations,
+without repeating the same leading plugin identity. Structured process logs
+include `plugin_id`, the native or worker boundary, and the HTTP status.

@@ -89,6 +89,7 @@ Public authoring types:
     LlmStreamNext: Continuation for a streaming LLM execution intercept.
 
 Public functions:
+    http_error_message: Format an upstream HTTP error status for forwarding.
     serve_plugin: Run a local ``grpc-v1`` worker until host shutdown.
 """
 
@@ -155,6 +156,7 @@ from ._api import (
     WorkerRequestCodec,
     WorkerResponseCodec,
     WorkerSdkError,
+    http_error_message,
     serve_plugin,
 )
 
@@ -221,5 +223,6 @@ __all__ = [
     "WorkerResponseCodec",
     "WorkerPlugin",
     "WorkerSdkError",
+    "http_error_message",
     "serve_plugin",
 ]

@@ -76,6 +76,7 @@ struct FileUpstreamConfig {
     openai_auth_header: Option<String>,
     anthropic_base_url: Option<String>,
     anthropic_auth_header: Option<String>,
+    chatgpt_codex_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -321,6 +322,7 @@ fn persistent_bootstrap_fingerprint(
         "openai_auth_header": gateway.openai_auth_header,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
+        "chatgpt_codex_base_url": gateway.chatgpt_codex_base_url,
         "response_timeout_secs": gateway.response_timeout_secs,
         "metadata": gateway.metadata,
         "plugin_config": gateway.plugin_config,
@@ -1320,14 +1322,16 @@ pub(crate) fn resolve_run_config(
 // Applies subcommand-specific `run` overrides after inherited top-level flags. JSON-bearing fields
 // are parsed here so invalid metadata or plugin config fails before the gateway binds a port.
 fn apply_run_overrides(config: &mut GatewayConfig, command: &RunOverrides) -> Result<(), CliError> {
-    apply_run_url_overrides(config, command);
+    apply_run_url_overrides(config, command)?;
     apply_run_json_overrides(config, command)?;
     Ok(())
 }
 
-// Applies plain string/path run overrides. These fields do not need parsing, so they stay separate
-// from JSON options whose errors should include field context.
-fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunOverrides) {
+// Applies upstream URL overrides before parsing JSON-bearing options.
+fn apply_run_url_overrides(
+    config: &mut GatewayConfig,
+    command: &RunOverrides,
+) -> Result<(), CliError> {
     if let Some(value) = &command.openai_base_url {
         replace_upstream_base_url(
             &mut config.openai_base_url,
@@ -1342,6 +1346,13 @@ fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunOverrides) {
             value.clone(),
         );
     }
+    if let Some(value) = &command.chatgpt_codex_base_url {
+        config.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
+            "--chatgpt-codex-base-url",
+            value.clone(),
+        )?);
+    }
+    Ok(())
 }
 
 // Parses JSON-bearing run overrides after simple values. Invalid metadata or plugin config fails
@@ -1378,6 +1389,12 @@ fn apply_server_overrides(
             &mut config.anthropic_auth_header,
             value.clone(),
         );
+    }
+    if let Some(value) = &args.chatgpt_codex_base_url {
+        config.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
+            "--chatgpt-codex-base-url",
+            value.clone(),
+        )?);
     }
     if let Some(value) = args.max_hook_payload_bytes {
         config.max_hook_payload_bytes = validate_body_limit("max hook payload bytes", value)?;
@@ -1653,6 +1670,7 @@ fn apply_file_upstream_config(
         openai_auth_header,
         anthropic_base_url,
         anthropic_auth_header,
+        chatgpt_codex_base_url,
     } = upstream;
     if let Some(value) = response_timeout_secs {
         gateway.response_timeout_secs = value;
@@ -1676,6 +1694,12 @@ fn apply_file_upstream_config(
     if let Some(value) = anthropic_auth_header {
         gateway.anthropic_auth_header = Some(validate_auth_header(
             "upstream.anthropic_auth_header",
+            value,
+        )?);
+    }
+    if let Some(value) = chatgpt_codex_base_url {
+        gateway.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
+            "upstream.chatgpt_codex_base_url",
             value,
         )?);
     }
@@ -1983,6 +2007,12 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
             value,
         )?);
     }
+    if let Ok(value) = std::env::var("NEMO_RELAY_CHATGPT_CODEX_BASE_URL") {
+        config.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
+            "NEMO_RELAY_CHATGPT_CODEX_BASE_URL",
+            value,
+        )?);
+    }
     if let Ok(value) = std::env::var("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES") {
         config.max_hook_payload_bytes =
             parse_env_body_limit("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", &value)?;
@@ -2022,6 +2052,40 @@ fn replace_upstream_base_url(
         *auth_header = None;
     }
     *base_url = replacement;
+}
+
+// ChatGPT credentials may only travel over TLS, except to a loopback proxy. Reject URL
+// components that would change the meaning of the request path appended by the gateway.
+fn validate_chatgpt_codex_base_url(name: &str, value: String) -> Result<String, CliError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(CliError::Config(format!("{name} must not be empty")));
+    }
+    let url = reqwest::Url::parse(value)
+        .map_err(|_| CliError::Config(format!("{name} must be a valid URL")))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| CliError::Config(format!("{name} must include a host")))?;
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+        return Err(CliError::Config(format!(
+            "{name} must use https unless the host is loopback"
+        )));
+    }
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(CliError::Config(format!(
+            "{name} must not include user information, a query, or a fragment"
+        )));
+    }
+    Ok(url.to_string())
 }
 
 fn validate_auth_header(name: &str, value: String) -> Result<String, CliError> {
