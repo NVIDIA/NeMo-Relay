@@ -151,59 +151,7 @@ writable absolute directory. On Windows, use forward slashes, for example
 `C:/Users/alice/.openclaw/nemo-relay-quickstart`.
 
 {/* quickstart-block {"id":"config","role":"file","cwd":".","path":"relay-openclaw.patch.json5"} */}
-```json5
-{
-  plugins: {
-    entries: {
-      "nemo-relay": {
-        enabled: true,
-        hooks: {
-          allowConversationAccess: true,
-        },
-        config: {
-          enabled: true,
-          backend: "hooks",
-          plugins: {
-            version: 1,
-            policy: {
-              unknown_component: "error",
-              unknown_field: "error",
-              unsupported_value: "error",
-            },
-            components: [
-              {
-                kind: "observability",
-                enabled: true,
-                config: {
-                  version: 4,
-                  enable_full_payloads: false,
-                  atof: {
-                    enabled: true,
-                    sinks: [
-                      {
-                        type: "file",
-                        output_directory: "/absolute/path/to/relay-logs",
-                        filename: "events.jsonl",
-                        mode: "overwrite",
-                      },
-                    ],
-                  },
-                },
-              },
-            ],
-          },
-          capture: {
-            includePrompts: false,
-            includeResponses: false,
-            stripToolArgs: true,
-            stripToolResults: true,
-          },
-        },
-      },
-    },
-  },
-}
-```
+<Code src="_code/openclaw/relay-openclaw.patch.json5" language="json5" title="relay-openclaw.patch.json5" />
 
 <Warning>
 This starting configuration records lifecycle metadata while excluding prompt,

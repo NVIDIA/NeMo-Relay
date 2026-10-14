@@ -1,0 +1,54 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+{
+  plugins: {
+    entries: {
+      "nemo-relay": {
+        enabled: true,
+        hooks: {
+          allowConversationAccess: true,
+        },
+        config: {
+          enabled: true,
+          backend: "hooks",
+          plugins: {
+            version: 1,
+            policy: {
+              unknown_component: "error",
+              unknown_field: "error",
+              unsupported_value: "error",
+            },
+            components: [
+              {
+                kind: "observability",
+                enabled: true,
+                config: {
+                  version: 4,
+                  enable_full_payloads: false,
+                  atof: {
+                    enabled: true,
+                    sinks: [
+                      {
+                        type: "file",
+                        output_directory: "/absolute/path/to/relay-logs",
+                        filename: "events.jsonl",
+                        mode: "overwrite",
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+          capture: {
+            includePrompts: false,
+            includeResponses: false,
+            stripToolArgs: true,
+            stripToolResults: true,
+          },
+        },
+      },
+    },
+  },
+}
