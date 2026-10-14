@@ -137,39 +137,12 @@ Save and run the remaining files from this directory.
 Save this file as `config.toml` in the directory where you will run the agent:
 
 {/* quickstart-block {"id":"config","role":"file","cwd":"relay-codex-quickstart","path":"config.toml"} */}
-```toml
-[agents.codex]
-command = "codex"
-```
+<Code src="_code/codex/config.toml" language="toml" title="config.toml" />
 
 Save this sibling file as `plugins.toml`:
 
 {/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-codex-quickstart","path":"plugins.toml"} */}
-```toml
-version = 1
-
-[policy]
-unknown_component = "error"
-unknown_field = "error"
-unsupported_value = "error"
-
-[[components]]
-kind = "observability"
-enabled = true
-
-[components.config]
-version = 4
-enable_full_payloads = false
-
-[components.config.atof]
-enabled = true
-
-[[components.config.atof.sinks]]
-type = "file"
-output_directory = "logs"
-filename = "events.jsonl"
-mode = "overwrite"
-```
+<Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
 
 <Warning>
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
