@@ -54,6 +54,17 @@ impl ProviderForwarding {
 }
 
 impl ProviderRoute {
+    /// Only managed provider routes may spend Relay-owned credentials.
+    pub(super) const fn allows_relay_auth(self) -> bool {
+        matches!(
+            self,
+            Self::OpenAiResponses
+                | Self::OpenAiChatCompletions
+                | Self::AnthropicMessages
+                | Self::AnthropicCountTokens
+        )
+    }
+
     // Maps public gateway paths to known upstream provider routes. Unsupported paths return `None`
     // so the caller can fail as a bad hook/gateway payload instead of constructing arbitrary URLs.
     pub(super) fn from_path(path: &str) -> Option<Self> {
@@ -432,6 +443,7 @@ fn has_openai_replacement_auth(
     configured_auth_header: Option<&str>,
 ) -> bool {
     allow_environment_provider_auth
+        && route.allows_relay_auth()
         && matches!(
             route,
             ProviderRoute::OpenAiResponses

@@ -731,7 +731,8 @@ async fn forward_to_provider(
     in_flight: InFlight,
 ) -> Response<Body> {
     let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+        crate::gateway::daemon_allows_environment_provider_auth(request.headers())
+            && crate::gateway::provider_route_allows_relay_auth(request.uri().path());
     let path_and_query = request
         .uri()
         .path_and_query()

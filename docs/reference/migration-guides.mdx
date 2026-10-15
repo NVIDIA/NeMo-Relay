@@ -572,15 +572,16 @@ the parent prepares its final response. Refer to
 
 ### Review Managed Provider Credentials
 
-Managed Codex routes now forward ChatGPT OAuth to the native ChatGPT Codex
-backend when no administrator OpenAI credential is configured. If the daemon
-has `openai_auth_header` or `OPENAI_API_KEY`, Relay replaces the incoming OAuth
-credential and uses the administrator's configured OpenAI-compatible upstream.
-ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
-They keep the caller's ChatGPT credential and use the native ChatGPT backend
-even when a replacement credential is configured. Review this exception if
-your deployment relies on administrator credentials to select the upstream.
-Review those settings to choose the intended provider and credential source.
+Managed Codex routes use the native ChatGPT Codex backend when no administrator
+OpenAI credential is configured. Relay keeps the caller's ChatGPT OAuth
+credential. If the daemon has `openai_auth_header` or `OPENAI_API_KEY`, Relay
+uses that credential for managed routes. It sends those requests to the
+administrator's OpenAI-compatible upstream.
+
+Unmanaged routes keep the caller's ChatGPT credential. They follow the configured
+OpenAI and ChatGPT backend settings. These routes include compaction, model
+discovery, and voice calls. Relay never adds its own provider credentials to unmanaged requests.
+Review these routes if you use administrator credentials to select the upstream.
 Refer to [Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
 
 Managed Claude model routing requires an Anthropic API key or an

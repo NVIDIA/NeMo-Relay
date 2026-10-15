@@ -2030,11 +2030,6 @@ fn configured_auth_headers_are_provider_specific_and_precede_environment_keys() 
     for (route, expected) in [
         (ProviderRoute::OpenAiResponses, "Basic openai-custom"),
         (ProviderRoute::OpenAiChatCompletions, "Basic openai-custom"),
-        (
-            ProviderRoute::OpenAiImagesGenerations,
-            "Basic openai-custom",
-        ),
-        (ProviderRoute::OpenAiModels, "Basic openai-custom"),
         (ProviderRoute::AnthropicMessages, "Bearer anthropic-custom"),
         (
             ProviderRoute::AnthropicCountTokens,
@@ -3250,4 +3245,36 @@ async fn prepared_gateway_request_strips_untrusted_dispatch_controls() {
         prepared.provider,
     );
     assert_eq!(effective.url, "http://trusted.invalid/v1/chat/completions");
+}
+
+#[test]
+fn unmanaged_routes_never_inject_configured_or_environment_credentials() {
+    for route in [
+        ProviderRoute::OpenAiResponsesCompact,
+        ProviderRoute::OpenAiRealtime,
+        ProviderRoute::OpenAiRealtimeCalls,
+        ProviderRoute::OpenAiLive,
+        ProviderRoute::OpenAiImagesGenerations,
+        ProviderRoute::OpenAiImagesEdits,
+        ProviderRoute::OpenAiMemoriesSummarize,
+        ProviderRoute::OpenAiStandaloneSearch,
+        ProviderRoute::OpenAiModels,
+    ] {
+        for configured in [None, Some("Bearer relay-configured-secret")] {
+            let request = inject_provider_auth_with_env(
+                test_http_client().post("http://upstream"),
+                route,
+                &HeaderMap::new(),
+                true,
+                configured,
+                |_| panic!("unmanaged routes must not read provider key environment variables"),
+            )
+            .build()
+            .unwrap();
+            assert!(
+                !crate::provider_auth::has_provider_credential(request.headers()),
+                "{route:?}"
+            );
+        }
+    }
 }

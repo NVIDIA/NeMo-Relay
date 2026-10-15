@@ -1862,7 +1862,8 @@ async fn forward_to_provider(
     // on a loopback listener. The listener's bind address controls this check.
     let allow_environment_provider_auth = (invocation_authenticated
         || (state.pass_through && state.loopback_listener))
-        && crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+        && crate::gateway::daemon_allows_environment_provider_auth(request.headers())
+        && crate::gateway::provider_route_allows_relay_auth(request.uri().path());
     let path_and_query = request
         .uri()
         .path_and_query()

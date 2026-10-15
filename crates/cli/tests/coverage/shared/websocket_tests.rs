@@ -38,7 +38,11 @@ pub(crate) async fn provider() -> (String, tokio::task::JoinHandle<()>, Arc<Atom
             let active = active.clone();
             let sessions = Arc::clone(&sessions);
             async move {
-                assert_eq!(headers[header::AUTHORIZATION], "Bearer caller-voice-key");
+                if uri.query() == Some("model=voice&credential=absent") {
+                    assert!(!crate::provider_auth::has_provider_credential(&headers));
+                } else {
+                    assert_eq!(headers[header::AUTHORIZATION], "Bearer caller-voice-key");
+                }
                 assert!(
                     headers
                         .keys()
@@ -72,7 +76,10 @@ pub(crate) async fn provider() -> (String, tokio::task::JoinHandle<()>, Arc<Atom
                         return StatusCode::NOT_FOUND.into_response();
                     }
                 } else {
-                    assert_eq!(uri.query(), Some("model=voice"));
+                    assert!(matches!(
+                        uri.query(),
+                        Some("model=voice" | "model=voice&credential=absent")
+                    ));
                     assert!(matches!(uri.path(), "/v1/live" | "/v1/realtime"));
                 }
                 ws.protocols(["voice"])
@@ -312,6 +319,23 @@ async fn sideband_path(response: reqwest::Response, prefix: &str, mode: u8) -> S
 }
 
 pub(crate) async fn exercise(origin: &str, token: Option<&str>, active: &AtomicUsize) {
+    for path in ["/v1/live", "/v1/realtime"] {
+        let mut request = format!(
+            "{}{path}?model=voice&credential=absent",
+            origin.replacen("http", "ws", 1)
+        )
+        .into_client_request()
+        .unwrap();
+        if let Some(token) = token {
+            request
+                .headers_mut()
+                .insert("x-nemo-relay-client-token", token.parse().unwrap());
+        }
+        let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        exchange_frames(&mut socket).await;
+        drop(socket);
+        wait_disconnected(active).await;
+    }
     for path in ["/live", "/v1/live", "/realtime", "/v1/realtime"] {
         let url = format!("{}{path}?model=voice", origin.replacen("http", "ws", 1));
         let mut request = url.into_client_request().unwrap();
@@ -465,6 +489,7 @@ async fn standalone_websocket_proxy_preserves_frames_and_handshake_failures() {
     let (upstream, provider_task, active) = provider().await;
     let config = GatewayConfig {
         openai_base_url: upstream,
+        openai_auth_header: Some("Bearer relay-owned-secret".into()),
         ..GatewayConfig::default()
     };
     let (origin, task) = serve(crate::server::router(config)).await;

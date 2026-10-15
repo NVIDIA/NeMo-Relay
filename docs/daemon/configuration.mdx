@@ -429,6 +429,9 @@ guardrails are skipped for that request; the coding agent keeps working:
   `--pass-through --bind 127.0.0.1`. With `--bind 0.0.0.0`, requests need a
   bound route to use daemon credentials. This rule also applies to requests
   sent to `127.0.0.1`.
+- Unmanaged routes forward only the provider credentials that the caller sends.
+  This rule includes WebSocket upgrades. It also applies to bound routes,
+  workers, and daemons started with `--pass-through`.
 - A provider request that names its own upstream with
   `x-nemo-relay-upstream-base-url`, as the managed Pi extension does, is
   honored only with a bound credential. Without one it receives `503` with
@@ -765,18 +768,22 @@ does not add a managed daemon route.
 
 ### Codex Responses Compatibility
 
-Both the personal gateway and managed daemon recognize Codex ChatGPT OAuth on
-OpenAI routes, including the managed provider's `/v1/responses` and `/v1/models`
-requests. When no administrator OpenAI credential is configured, Relay preserves
-the OAuth credential and sends the request to the native ChatGPT Codex backend.
-When `openai_auth_header` or `OPENAI_API_KEY` is configured for the daemon, Relay
-removes the ChatGPT OAuth credential, injects that replacement credential, and
-uses the administrator's configured OpenAI-compatible upstream instead.
+The personal gateway and managed daemon recognize Codex ChatGPT OAuth on OpenAI
+routes. These routes include `/v1/responses` and `/v1/models`.
 
-ChatGPT voice call creation is an exception. Requests to
-`POST /backend-api/codex/realtime/calls` keep the caller's ChatGPT credential
-and use the ChatGPT backend even when a replacement OpenAI credential
-is configured. This preserves ChatGPT's JSON call format.
+On managed OpenAI routes, Relay can replace the caller's ChatGPT OAuth credential.
+It uses `openai_auth_header` or `OPENAI_API_KEY` when the client has Relay access.
+It then sends the request to the configured OpenAI-compatible upstream.
+
+Unmanaged OpenAI routes keep the caller's ChatGPT credential. These routes
+include model discovery, compaction, and voice call creation. Relay never adds
+its own provider credentials to unmanaged requests.
+
+Requests without a replacement credential follow the configured upstream settings.
+With the default `openai_base_url`, Relay sends ChatGPT requests to the native
+ChatGPT Codex backend. With a custom `openai_base_url`, Relay uses that URL.
+ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` always use the
+ChatGPT backend and keep the caller's credential.
 
 Set `[upstream] chatgpt_codex_base_url` to send ChatGPT requests, including
 voice call creation, to an approved endpoint instead of the default

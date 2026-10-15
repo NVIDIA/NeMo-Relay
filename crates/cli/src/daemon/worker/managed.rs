@@ -706,7 +706,8 @@ async fn dispatch_unmanaged(
     config: &GatewayConfig,
 ) -> Result<Response<RelayBody>, CliError> {
     let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+        crate::gateway::daemon_allows_environment_provider_auth(request.headers())
+            && crate::gateway::provider_route_allows_relay_auth(request.uri().path());
     strip_worker_headers(request.headers_mut());
     strip_untrusted_dispatch_headers(request.headers_mut());
     let path_and_query = request
@@ -767,7 +768,8 @@ async fn dispatch_unbuffered_observed(
     operational: OperationalContext,
 ) -> Result<(Response<RelayBody>, ObservationReceiver, bool), CliError> {
     let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+        crate::gateway::daemon_allows_environment_provider_auth(request.headers())
+            && crate::gateway::provider_route_allows_relay_auth(request.uri().path());
     strip_worker_headers(request.headers_mut());
     strip_untrusted_dispatch_headers(request.headers_mut());
     let path_and_query = request

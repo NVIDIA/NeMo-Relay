@@ -163,9 +163,15 @@ pub(crate) fn daemon_provider_forward_headers_with_access(
     Some(strip_replaceable_agent_auth_headers(
         headers,
         provider,
-        allow_provider_auth && path != "/backend-api/codex/realtime/calls",
+        allow_provider_auth && provider.allows_relay_auth(),
         provider.configured_auth_header(config),
     ))
+}
+
+/// Unmanaged provider routes forward only caller-supplied credentials, including in daemon mode.
+pub(crate) fn provider_route_allows_relay_auth(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    ProviderRoute::from_path(path).is_some_and(ProviderRoute::allows_relay_auth)
 }
 
 pub(crate) fn daemon_allows_environment_provider_auth(headers: &HeaderMap) -> bool {
@@ -1530,7 +1536,7 @@ fn inject_provider_auth_with_env<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
-    if !allow_environment_provider_auth {
+    if !allow_environment_provider_auth || !route.allows_relay_auth() {
         return builder;
     }
     let already_authed = inbound.contains_key(http::header::AUTHORIZATION)

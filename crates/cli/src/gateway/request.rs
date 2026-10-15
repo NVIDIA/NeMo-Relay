@@ -59,6 +59,8 @@ pub(super) async fn prepare_gateway_request(
         );
         CliError::InvalidPayload(format!("unsupported gateway path {provider_path}"))
     })?;
+    // Restrict auth before alignment can replace a caller's credential or select an upstream.
+    authorization.allow_environment_provider_auth &= provider.allows_relay_auth();
     let body_bytes = axum::body::to_bytes(body, config.max_passthrough_body_bytes)
         .await
         .map_err(passthrough_body_error)?;
