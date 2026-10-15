@@ -34,11 +34,16 @@ nemo-relay daemon \
 
 Set `NEMO_RELAY_CLIENT_TOKEN` or create the per-user token file in client
 environments only. Keep an MCP connection active before sending LLM or hook
-requests, including in `--pass-through` mode. Requests without a credential
-header, or with a well-formed credential that is not bound, use pass-through
-without daemon-held provider credentials (unless the daemon runs with
-`--pass-through`). Malformed or repeated credential headers return `401`, and
-`--require-worker` rejects missing and unbound credentials with `401`.
+requests, including in `--pass-through` mode.
+
+Requests with no credential header use pass-through. Requests with a valid
+credential format but no bound route also use pass-through. These requests use
+only provider credentials sent by the client. The exception is a daemon started
+with `--pass-through --bind 127.0.0.1`. With `--bind 0.0.0.0`, anonymous
+requests never receive daemon credentials.
+
+Malformed or repeated credential headers return `401`. The `--require-worker`
+flag rejects missing and unbound credentials with `401`.
 Registered routes without an active MCP reference also use pass-through, or
 return `503` with `--require-worker`. After a daemon
 restart, MCP must register again to restore the route bindings stored in
@@ -178,9 +183,13 @@ Start a daemon that never creates workers with:
 nemo-relay daemon --pass-through
 ```
 
-The daemon still validates a presented route credential, and requests without a
-bound credential also pass through. In this mode only, configured provider
-credentials apply to those requests too. MCP registration can only receive
+The daemon still validates route credentials. Requests without a bound
+credential also pass through. In this mode, they can use the daemon's provider
+credentials only with `--bind 127.0.0.1`. With `--bind 0.0.0.0`, they use
+only provider credentials sent by the client. Requests with a bound route can
+use daemon credentials on either bind address.
+
+MCP registration can only receive
 `UsePassThrough`, and the daemon cannot issue an activation grant or
 accept worker registration. LLM requests use the same streaming transport
 directly to the configured provider. Hook requests return the existing no-op
@@ -270,21 +279,29 @@ nemo-relay daemon hook pi --daemon-address https://relay.example.com:8443 --fail
 The hook process performs the following actions:
 
 1. Reads the agent's native hook payload from standard input.
-2. Resolves the route credential from `NEMO_RELAY_CLIENT_TOKEN`, then from the
-   per-user token file. Without a usable credential it does not contact the
-   daemon: a fail-open hook writes the agent's pass-through response and exits
-   `0`. A fail-closed hook reports a delivery failure, writes no allow response,
-   and exits `2`.
-3. Posts to the existing agent-specific hook path at the daemon root.
+2. Looks for the route credential in `NEMO_RELAY_CLIENT_TOKEN`, then in the
+   user token file. Without a valid credential, it does not contact the daemon.
+   A fail-open hook exits with code `0`. It sends a pass-through response only
+   for named events that do not require a permission check. A fail-closed hook
+   reports an error and exits with code `2`. It does not send an allow response.
+3. Checks the daemon's identity before sending the hook payload. For local
+   HTTP addresses, the daemon must run as the same user. Relay uses an
+   encrypted TLS connection and a saved certificate for that user account.
+   For remote HTTPS addresses, Relay checks the certificate against the
+   trusted certificates on your system. It sends the payload to the agent's
+   hook path at the daemon root.
 4. Adds `x-nemo-relay-client-token` exactly once.
 5. Writes a successful, nonempty hook response to standard output without
    changing its bytes.
 
-The hook process does not start a daemon or worker and does not perform an MCP
-handshake. Use `--fail-open` for events that must not block the agent when the
-daemon is unavailable. Use `--fail-closed` for policy events that must reject
-the operation when delivery or evaluation fails. If neither option is present,
-the existing event-specific failure policy applies.
+The hook process does not start a daemon or worker. It does not perform an
+MCP handshake. Use `--fail-open` for events that must not block the agent
+when the daemon is unavailable. Use `--fail-closed` to block an operation
+when Relay cannot deliver or check its hook.
+
+Without a policy flag, the event determines the failure policy. Hooks fail
+closed if Relay cannot read the payload, parse its JSON, or find an event
+name. Restart the daemon after upgrading to use the new local hook transport.
 
 
 ## Manage the Client Token File

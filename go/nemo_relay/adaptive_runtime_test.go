@@ -196,7 +196,7 @@ func assertResponseCacheConstructorDefaults(t *testing.T, config ResponseCacheCo
 	if config.TTLSeconds == nil || *config.TTLSeconds != 3600 {
 		t.Fatalf("constructor TTL default mismatch: %#v", config.TTLSeconds)
 	}
-	if config.Priority == nil || *config.Priority != 50 {
+	if config.Priority == nil || *config.Priority != 150 {
 		t.Fatalf("constructor priority default mismatch: %#v", config.Priority)
 	}
 	if config.KeyStrategy != ResponseCacheKeyStrategyExactRequest {
@@ -267,7 +267,7 @@ func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
 	rc := NewResponseCacheConfig()
 	rc.Namespace = "tool-cache-go-test"
 	tools := NewResponseCacheToolsConfig()
-	if tools.Priority == nil || *tools.Priority != 100 {
+	if tools.Priority == nil || *tools.Priority != 150 {
 		t.Fatalf("constructor tools priority default mismatch: %#v", tools.Priority)
 	}
 	if tools.CacheErrors {

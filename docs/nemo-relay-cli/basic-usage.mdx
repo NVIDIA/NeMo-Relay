@@ -391,7 +391,7 @@ follows:
 | `/models`, `/v1/models` | `openai_base_url` |
 | `/v1/messages`, `/v1/messages/count_tokens` | `anthropic_base_url` |
 
-For ordinary provider requests, Relay resolves credentials in this order:
+For managed provider requests, Relay resolves credentials in this order:
 
 1. If a helper is configured, Relay runs it for each outbound request attempt.
    The helper's token replaces any provider credential from the client.
@@ -493,6 +493,17 @@ The credential checks do not display API keys, helper commands, or helper
 arguments. Add `--json` to read these checks under
 `configuration.upstream_auth.checks`.
 
+Unmanaged routes forward only the provider credentials that the client sends.
+These routes include compaction, images, realtime, live sessions, search,
+memory summarization, and model discovery. Relay never adds its configured
+provider credentials or API keys from environment variables to these requests.
+This rule also covers WebSocket upgrades, authenticated clients, and daemon
+requests.
+
+Relay still forwards requests that have no provider credentials. The upstream
+provider decides whether to accept them. Unmanaged routes do not run managed
+guardrails or use the managed cache. They also do not emit LLM lifecycle events.
+
 Set `openai_auth_header` or `anthropic_auth_header` under `[upstream]` only when
 an enterprise gateway, proxy, or compatible endpoint requires a complete
 `Authorization` value such as `Bearer ...` or `Basic ...`. Prefer the
@@ -520,28 +531,58 @@ changes the URL clears the lower header unless that same layer supplies a
 replacement, preventing credentials for one endpoint from being sent to
 another.
 
-An MCP-managed gateway uses its configured credentials and environment API keys
-only after the client proves that it belongs to that gateway.
+Foreground gateways and MCP-managed gateways require Relay authentication
+before they use provider credentials from their configuration or environment.
+Clients can authenticate with a Relay client token, a provider capability URL,
+or a credential from a managed invocation. A missing or invalid client token
+does not grant access to the gateway's provider credentials.
+This requirement also applies when Relay replaces a Codex ChatGPT credential.
 
-Codex ChatGPT credentials are an exception to the order above.
-On OpenAI routes, Relay recognizes `Bearer eyJ...` JWTs and `Bearer at-...`
-access tokens. Relay replaces these credentials if any of these sources is
-available:
+Without Relay authentication, requests use only provider credentials sent by
+the client. If the client sends no credentials, the upstream provider receives
+the request without credentials.
 
-- `openai_auth_header` under `[upstream]`, or the
-  `NEMO_RELAY_OPENAI_AUTH_HEADER` environment variable
-- `openai_api_key` under `[upstream]`
-- `[upstream.openai_api_key_helper]`
-- A nonempty `OPENAI_API_KEY` environment variable
+For direct gateway use without Relay authentication, set the provider API key
+in the client. To use `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or a custom auth
+header from the gateway, the client must authenticate to Relay.
+Use `nemo-relay run` to let Relay set up client authentication.
 
-Relay removes the ChatGPT credential and adds the replacement. It then sends
-the request to `openai_base_url`. Without a replacement, Relay keeps the ChatGPT
-credential and sends the request to the Codex ChatGPT backend.
+Relay handles Codex ChatGPT credentials differently from other provider credentials.
+On ordinary OpenAI paths, Relay treats either of these as a ChatGPT credential:
 
-Set `chatgpt_codex_base_url` under `[upstream]` to choose a different backend.
-The default is `https://chatgpt.com/backend-api/codex`. Relay forwards the
-caller's ChatGPT credential to this URL. Use only an endpoint you trust with
-those credentials.
+- A JSON Web Token (JWT) with an `iss` claim set to `https://auth.openai.com`.
+- A `Bearer at-...` access token with a `chatgpt-account-id` header that is not empty.
+
+On these paths, a token's prefix alone does not tell Relay to use the ChatGPT
+backend or replace the token.
+
+Explicit Codex paths such as `/backend-api/codex/responses` also support token
+prefixes for routing.
+They accept `Bearer at-...` without an account header and `Bearer eyJ...` without
+an issuer check. With the default OpenAI base and no replacement key, these
+prefixes select the ChatGPT backend. A custom `openai_base_url` still applies.
+Voice calls use the exception described below.
+
+On managed OpenAI routes, Relay can replace a ChatGPT credential with a provider
+credential. The replacement can come from `openai_auth_header`,
+`NEMO_RELAY_OPENAI_AUTH_HEADER`, `openai_api_key`,
+`[upstream.openai_api_key_helper]`, or `OPENAI_API_KEY`. The value must not be
+empty. Relay then sends the request to `openai_base_url`.
+
+Without a replacement, Relay keeps the ChatGPT credential. It uses the ChatGPT
+backend only if `openai_base_url` is `https://api.openai.com/v1`, the default value.
+If you set a different `openai_base_url`, Relay uses that URL. ChatGPT voice calls
+use a separate rule, described below.
+
+The default ChatGPT backend is `https://chatgpt.com/backend-api/codex`. To use a
+different backend, set `chatgpt_codex_base_url` under `[upstream]`. Relay sends the
+caller's ChatGPT credential to this URL. Use a backend you trust with that
+credential.
+
+Unmanaged OpenAI routes keep the caller's ChatGPT credential. These routes
+include compaction, model discovery, and voice calls. They follow the upstream
+settings described above. Relay never adds its own provider credentials to
+these requests.
 
 ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
 They keep the caller's ChatGPT credential and use the ChatGPT backend
@@ -551,6 +592,13 @@ the caller's provider credential, even when an administrator credential is
 configured. Refer to
 [Known Issues in 0.11.0](/about-nemo-relay/release-notes#known-issues-in-0110)
 before routing a ChatGPT voice sideband through Relay with a replacement key.
+
+Relay does not follow HTTP redirects from upstream servers. This stops Relay
+from sending provider credentials and request bodies to another destination.
+Relay keeps the upstream redirect status but removes its `Location` header.
+This stops callers from following the redirect and resending a prompt.
+Successful responses keep their `Location` headers. Managed requests treat the
+redirect as an upstream failure. Configure the final provider URL directly.
 
 ### Operational Logging
 
@@ -834,9 +882,20 @@ longer than two seconds; configure their evaluation timeouts to leave room for
 hook transport within that limit. Delivery timeouts follow the hook's failure
 policy, and timed-out requests are not retried.
 
-Manually authored commands fail open when neither policy flag is present.
-`NEMO_RELAY_FAIL_CLOSED=1` changes that default for compatibility, while an
-explicit flag takes precedence over the environment.
+Without a policy flag, gateway and daemon hooks fail closed for events that
+check permissions or run tools. These events include `PreToolUse` and
+`PermissionRequest`. Hooks also fail closed if Relay cannot read the payload,
+parse its JSON, or find an event name. Payloads that exceed the size limit
+also fail closed. Other named events fail open.
+
+Set `NEMO_RELAY_FAIL_CLOSED=1` to make all events fail closed. An explicit
+`--fail-open` or `--fail-closed` flag overrides the environment and event defaults.
+
+For local hook requests, Relay checks the server's identity before sending
+credentials or payloads. It uses an encrypted TLS connection and a saved
+certificate for your user account. Gateway health checks also verify the
+server's address and running instance. Restart Relay gateways and daemons
+after upgrading to use this transport.
 
 Fail-closed delivery failures return exit code `2`, including connection errors,
 timeouts, and HTTP errors such as a daemon's `503` response when a required

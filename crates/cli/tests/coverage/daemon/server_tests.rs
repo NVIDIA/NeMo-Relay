@@ -1610,6 +1610,7 @@ pub(super) fn test_daemon_state_at(
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: "public-proxy-test-daemon".into(),
         pass_through,
+        loopback_listener: true,
         public_origin,
         config,
         upstream: pooled_client().expect("daemon client"),
@@ -2050,6 +2051,22 @@ async fn daemon_plain_listener_starts_and_reports_address_conflicts() {
     })
     .await
     .expect("daemon starts");
+    let hook = tokio::task::spawn_blocking(move || {
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7_u8; 32]);
+        crate::gateway::client::post_daemon_verified(
+            &format!("http://127.0.0.1:{running_port}"),
+            "/hooks/claude-code",
+            &[(CLIENT_TOKEN_HEADER.to_owned(), token)],
+            br#"{"hook_event_name":"PreToolUse"}"#,
+            Duration::from_secs(5),
+            1024,
+        )
+    })
+    .await
+    .unwrap()
+    .expect("daemon serves hooks through pinned TLS");
+    assert_eq!(hook.status, 200);
+    assert_eq!(hook.body, br#"{"continue":true}"#);
     running.abort();
     let _ = running.await;
 
@@ -3541,29 +3558,151 @@ async fn requests_without_a_bound_credential_pass_through_without_daemon_provide
     provider_task.abort();
 }
 
+/// Provider redirects lose their targets, while creation responses keep their resource URL.
 #[tokio::test]
-async fn global_pass_through_lends_daemon_provider_auth_to_anonymous_requests() {
-    let (provider_origin, captured, provider_task) = capturing_provider().await;
-    let state = test_daemon_state(
+async fn daemon_provider_responses_do_not_expose_redirect_targets() {
+    let sink = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let location = format!("http://{}/collect", sink.local_addr().unwrap());
+    let expected_location = location.clone();
+    let provider = Router::new().fallback(move |request: Request<Body>| {
+        let location = location.clone();
+        async move {
+            let status =
+                StatusCode::from_u16(request.uri().query().unwrap().parse().unwrap()).unwrap();
+            let body = axum::body::to_bytes(request.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(body, "private prompt");
+            Response::builder()
+                .status(status)
+                .header(http::header::LOCATION, location)
+                .body(Body::from("provider response"))
+                .unwrap()
+        }
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    let app = router(test_daemon_state(
         true,
         "",
         GatewayConfig {
-            openai_base_url: provider_origin,
-            openai_auth_header: Some("Bearer configured-provider".into()),
+            openai_base_url: origin,
+            response_timeout_secs: 2,
             ..GatewayConfig::default()
         },
+    ));
+    for status in [301, 302, 303, 307, 308, 201] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/responses?{status}"))
+                    .header(AUTHORIZATION, "Bearer caller-owned")
+                    .body(Body::from("private prompt"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), status);
+        if status == 201 {
+            assert_eq!(
+                response.headers()[http::header::LOCATION],
+                expected_location
+            );
+        } else {
+            assert!(!response.headers().contains_key(http::header::LOCATION));
+        }
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "provider response"
+        );
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), sink.accept())
+            .await
+            .is_err()
     );
-    let response = router(state)
-        .oneshot(
-            Request::post("/v1/responses")
-                .body(Body::from("anonymous request"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let (headers, _) = take_provider_request(&captured);
-    assert_eq!(headers[AUTHORIZATION], "Bearer configured-provider");
+    server.abort();
+}
+
+#[tokio::test]
+async fn pass_through_lends_daemon_provider_auth_only_on_loopback_or_to_bound_routes() {
+    let (provider_origin, captured, provider_task) = capturing_provider().await;
+    let _environment = EnvScope::set(&[(
+        "OPENAI_API_KEY",
+        Some(std::ffi::OsStr::new("daemon-env-secret")),
+    )]);
+    for configured in [None, Some("Bearer configured-provider")] {
+        for loopback_listener in [false, true] {
+            let mut state = test_daemon_state(
+                true,
+                "",
+                GatewayConfig {
+                    openai_base_url: provider_origin.clone(),
+                    openai_auth_header: configured.map(str::to_owned),
+                    ..GatewayConfig::default()
+                },
+            );
+            Arc::get_mut(&mut state).unwrap().loopback_listener = loopback_listener;
+            let expected = configured.unwrap_or("Bearer daemon-env-secret");
+            let app = router(Arc::clone(&state));
+            // The router must not promote a missing or unbound credential to a bound route.
+            let unbound = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x31_u8; 32]);
+            for token in [None, Some(unbound.as_str())] {
+                for caller_auth in [None, Some("Bearer caller-owned")] {
+                    let mut request = Request::post("/v1/responses");
+                    if let Some(token) = token {
+                        request = request.header(CLIENT_TOKEN_HEADER, token);
+                    }
+                    if let Some(auth) = caller_auth {
+                        request = request.header(AUTHORIZATION, auth);
+                    }
+                    let response = app
+                        .clone()
+                        .oneshot(request.body(Body::empty()).unwrap())
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let (headers, _) = take_provider_request(&captured);
+                    let expected = caller_auth.or(loopback_listener.then_some(expected));
+                    assert_eq!(
+                        headers.get(AUTHORIZATION).map(|v| v.to_str().unwrap()),
+                        expected
+                    );
+                    assert!(!headers.contains_key(CLIENT_TOKEN_HEADER));
+                }
+            }
+            // Bound routes keep access to daemon credentials on either listener setting.
+            let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x32_u8; 32]);
+            let credential = RouteCredential::parse(token.clone()).unwrap();
+            let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
+            state
+                .registry
+                .register_mcp(
+                    McpRegistration {
+                        fingerprint,
+                        token_digest: credential.digest(),
+                        session_id: McpSessionId::new("bound-provider-route").unwrap(),
+                        lease_expires_at_unix_ms: u64::MAX,
+                    },
+                    fresh_launch(WorkerNetworkHint::new("127.0.0.1", None).unwrap()).unwrap(),
+                )
+                .unwrap();
+            let response = app
+                .oneshot(
+                    Request::post("/v1/responses")
+                        .header(CLIENT_TOKEN_HEADER, &token)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let (headers, _) = take_provider_request(&captured);
+            assert_eq!(headers[AUTHORIZATION], expected);
+            assert!(!headers.contains_key(CLIENT_TOKEN_HEADER));
+        }
+    }
     provider_task.abort();
 }
 
@@ -4204,6 +4343,7 @@ async fn daemon_websocket_proxy_preserves_frames_and_worker_ownership() {
         let through_worker = mode != 0;
         let config = GatewayConfig {
             openai_base_url: upstream.clone(),
+            openai_auth_header: Some("Bearer relay-owned-secret".into()),
             ..GatewayConfig::default()
         };
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x73_u8; 32]);
@@ -4455,4 +4595,68 @@ async fn unmatched_routes_log_each_boundary_without_reporting_upstream_404s() {
         assert!(!content.contains(secret), "{content}");
     }
     provider_task.abort();
+}
+
+#[tokio::test]
+async fn unmanaged_routes_forward_only_client_credentials() {
+    let _env = crate::test_support::EnvScope::set(&[(
+        "OPENAI_API_KEY",
+        Some(std::ffi::OsStr::new("relay-environment-secret")),
+    )]);
+    for configured in [None, Some("Bearer relay-owned-secret")] {
+        async fn echo(request: Request<Body>) -> Response<Body> {
+            Response::builder()
+                .status(StatusCode::CREATED)
+                .body(Body::from(
+                    request
+                        .headers()
+                        .get("authorization")
+                        .map_or("absent", |value| value.to_str().unwrap())
+                        .to_owned(),
+                ))
+                .unwrap()
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = GatewayConfig {
+            openai_base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            chatgpt_codex_base_url: Some(format!("http://{}", listener.local_addr().unwrap())),
+            openai_auth_header: configured.map(str::to_owned),
+            ..GatewayConfig::default()
+        };
+        let provider = axum::Router::new().fallback(echo);
+        let task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+        let app = router(test_daemon_state(true, "", config));
+        for path in [
+            "/v1/responses/compact",
+            "/v1/images/generations",
+            "/v1/realtime/calls",
+            "/v1/live/sessions",
+            "/v1/images/edits",
+            "/v1/alpha/search",
+            "/v1/memories/trace_summarize",
+        ] {
+            for credential in [
+                None,
+                Some("Bearer caller-key"),
+                Some("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+            ] {
+                let mut request = Request::post(path)
+                    .header("content-type", "application/json")
+                    .header("x-nemo-relay-worker-token", "data-secret");
+                if let Some(credential) = credential {
+                    request = request.header("authorization", credential);
+                }
+                let request = request.body(Body::from("{}")).unwrap();
+                let response = app.clone().oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::CREATED, "{path}");
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                assert_eq!(
+                    bytes.as_ref(),
+                    credential.unwrap_or("absent").as_bytes(),
+                    "{path}"
+                );
+            }
+        }
+        task.abort();
+    }
 }

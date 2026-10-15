@@ -2699,7 +2699,7 @@ async fn unmanaged_daemon_dispatch_generates_fresh_helper_tokens() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn regression_backend_alias_still_uses_provider_helper() {
+async fn regression_backend_alias_preserves_caller_credentials_with_helper() {
     let seen = Arc::new(Mutex::new(None::<HeaderMap>));
     let capture = seen.clone();
     let app = Router::new().route(
@@ -2715,9 +2715,7 @@ async fn regression_backend_alias_still_uses_provider_helper() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let config = GatewayConfig {
         openai_base_url: format!("http://{}", listener.local_addr().unwrap()),
-        openai_api_key_helper: Some(crate::upstream_auth::tests::helper(
-            "printf helper-generated-token",
-        )),
+        openai_api_key_helper: Some(crate::upstream_auth::tests::helper("exit 9")),
         ..GatewayConfig::default()
     };
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -2738,8 +2736,8 @@ async fn regression_backend_alias_still_uses_provider_helper() {
     let actual = seen.lock().unwrap().as_ref().unwrap()[AUTHORIZATION].clone();
     server.abort();
     assert_eq!(
-        actual, "Bearer helper-generated-token",
-        "A configured enterprise endpoint must receive helper authentication for this alias"
+        actual, "Bearer stale-client-api-key",
+        "An unmanaged backend alias must retain caller credentials without executing the helper"
     );
 }
 
@@ -2842,4 +2840,75 @@ async fn unmanaged_provider_response_head_timeout_returns_bad_gateway() {
     assert!(error.to_string().contains("response-head timeout"));
     assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
     provider.abort();
+}
+
+#[tokio::test]
+async fn unmanaged_routes_forward_only_client_credentials() {
+    let _env = crate::test_support::EnvScope::set(&[(
+        "OPENAI_API_KEY",
+        Some(std::ffi::OsStr::new("relay-environment-secret")),
+    )]);
+    for configured in [None, Some("Bearer relay-owned-secret")] {
+        async fn echo(request: Request<Body>) -> Response<Body> {
+            Response::builder()
+                .status(StatusCode::CREATED)
+                .body(Body::from(
+                    request
+                        .headers()
+                        .get("authorization")
+                        .map_or("absent", |value| value.to_str().unwrap())
+                        .to_owned(),
+                ))
+                .unwrap()
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = GatewayConfig {
+            openai_base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            chatgpt_codex_base_url: Some(format!("http://{}", listener.local_addr().unwrap())),
+            openai_auth_header: configured.map(str::to_owned),
+            ..GatewayConfig::default()
+        };
+        let provider = axum::Router::new().fallback(echo);
+        let task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+
+        for path in [
+            "/v1/responses/compact",
+            "/v1/images/generations",
+            "/v1/realtime/calls",
+            "/v1/live/sessions",
+            "/v1/images/edits",
+            "/v1/alpha/search",
+            "/v1/memories/trace_summarize",
+        ] {
+            for credential in [
+                None,
+                Some("Bearer caller-key"),
+                Some("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+            ] {
+                let mut request = Request::post(path)
+                    .header("content-type", "application/json")
+                    .header("x-nemo-relay-worker-token", "data-secret");
+                if let Some(credential) = credential {
+                    request = request.header("authorization", credential);
+                }
+                let request = request.body(Body::from("{}")).unwrap();
+                let response = dispatch_unmanaged(
+                    pooled_client().unwrap(),
+                    request,
+                    ProviderRoute::OpenAi,
+                    &config,
+                )
+                .await
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::CREATED, "{path}");
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                assert_eq!(
+                    bytes.as_ref(),
+                    credential.unwrap_or("absent").as_bytes(),
+                    "{path}"
+                );
+            }
+        }
+        task.abort();
+    }
 }

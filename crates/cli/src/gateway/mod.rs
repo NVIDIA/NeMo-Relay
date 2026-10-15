@@ -9,6 +9,7 @@ pub(crate) mod tls;
 pub(crate) mod websocket;
 
 use request::*;
+pub(crate) use response::strip_redirect_location;
 use response::*;
 use routes::*;
 
@@ -162,7 +163,7 @@ pub(crate) fn daemon_provider_forward_headers_with_access(
     Some(strip_replaceable_agent_auth_headers(
         headers,
         provider,
-        allow_provider_auth && !is_chatgpt_voice_call(headers, path, config),
+        allow_provider_auth && provider.allows_relay_auth(),
         if provider.has_replacement(config) {
             Some("configured")
         } else {
@@ -174,26 +175,15 @@ pub(crate) fn daemon_provider_forward_headers_with_access(
 pub(crate) fn daemon_allows_provider_auth(
     headers: &HeaderMap,
     path: &str,
-    config: &crate::configuration::GatewayConfig,
+    _config: &crate::configuration::GatewayConfig,
 ) -> bool {
-    daemon_allows_environment_provider_auth(headers)
-        && !is_chatgpt_voice_call(headers, path, config)
+    daemon_allows_environment_provider_auth(headers) && provider_route_allows_relay_auth(path)
 }
 
-fn is_chatgpt_voice_call(
-    headers: &HeaderMap,
-    path: &str,
-    config: &crate::configuration::GatewayConfig,
-) -> bool {
-    path.split('?').next() == Some("/backend-api/codex/realtime/calls")
-        && gateway_upstream_url_override(
-            ProviderRoute::OpenAiRealtimeCalls,
-            headers,
-            path,
-            true,
-            config,
-        )
-        .is_some()
+/// Unmanaged provider routes forward only caller-supplied credentials, including in daemon mode.
+pub(crate) fn provider_route_allows_relay_auth(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    ProviderRoute::from_path(path).is_some_and(ProviderRoute::allows_relay_auth)
 }
 
 pub(crate) fn daemon_allows_environment_provider_auth(headers: &HeaderMap) -> bool {
@@ -1563,7 +1553,7 @@ async fn inject_provider_auth(
     crate::upstream_auth::apply(
         request.headers_mut(),
         route.is_anthropic(),
-        allow_configured_auth,
+        allow_configured_auth && route.allows_relay_auth(),
         config,
     )
     .await?;
@@ -1694,10 +1684,9 @@ fn selected_upstream_failure(failure: CapturedUpstreamFailure) -> Result<Respons
 
 /// The HTTP client to dispatch with, chosen by where the destination came from.
 ///
-/// A caller-named destination gets the client that does not follow redirects. Validation
-/// applies to the URL that was named; a redirect names a different one, and following it would
-/// carry the caller's provider credential to a host nothing checked -- possibly over plain
-/// http, which the named URL itself would have been refused for.
+/// Both clients stop at redirects to keep credentials and prompts at the chosen destination.
+/// The client for caller-named destinations also checks resolved addresses. The client for
+/// configured destinations keeps the operator's network access.
 fn upstream_client(state: &AppState, client_named_upstream: bool) -> &reqwest::Client {
     if client_named_upstream {
         &state.http_no_redirect
@@ -1817,7 +1806,8 @@ pub(crate) async fn models(
     let (authorization, provider_path) =
         state.authorize_provider_request(&mut parts.headers, &request_path)?;
     let path_and_query = request::provider_path_and_query(&provider_path, parts.uri.query());
-    let mut allow_environment_provider_auth = authorization.allow_environment_provider_auth;
+    let mut allow_environment_provider_auth =
+        authorization.allow_environment_provider_auth && provider.allows_relay_auth();
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
     let mut named_by_client = false;
     let agent_override = gateway_upstream_url_override(

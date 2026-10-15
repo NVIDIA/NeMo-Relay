@@ -176,6 +176,7 @@ where
         return match prepare_forward_response(response, &[]) {
             Ok(mut response) => {
                 strip_private_headers(response.headers_mut(), false);
+                super::strip_redirect_location(&mut response);
                 response.map(Body::new)
             }
             Err(_) => StatusCode::BAD_GATEWAY.into_response(),

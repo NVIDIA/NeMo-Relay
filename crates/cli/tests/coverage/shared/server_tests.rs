@@ -938,14 +938,17 @@ async fn healthz_returns_ok() {
 #[tokio::test]
 async fn healthz_accepts_a_different_persistent_gateway_fingerprint() {
     let challenge_key = BootstrapChallengeKey::from_bytes(b"test challenge key");
-    let app = router_with_state(AppState::new_with_bootstrap(
+    let mut state = AppState::new_with_bootstrap(
         test_config(),
         Some("expected-fingerprint".into()),
         Some(challenge_key.clone()),
         false,
         None,
         None,
-    ));
+    );
+    state.local_address = Some("127.0.0.1:1".parse().unwrap());
+    let instance_id = state.instance_id.clone();
+    let app = router_with_state(state);
     let response = app
         .oneshot(
             Request::builder()
@@ -973,7 +976,11 @@ async fn healthz_accepts_a_different_persistent_gateway_fingerprint() {
             .unwrap(),
         challenge_key
             .proof(
-                "different-fingerprint",
+                &crate::gateway::client::listener_fingerprint(
+                    "different-fingerprint",
+                    "127.0.0.1:1".parse().unwrap(),
+                    &instance_id
+                ),
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             )
             .as_str()
@@ -1022,7 +1029,7 @@ async fn healthz_rejects_a_missing_bootstrap_nonce() {
 }
 
 #[tokio::test]
-async fn bootstrap_tls_tunnel_requires_a_client_token_for_a_different_fingerprint() {
+async fn bootstrap_tls_tunnel_does_not_require_a_cleartext_credential() {
     let temp = tempfile::tempdir().unwrap();
     let _environment = EnvScope::set(&[
         ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
@@ -1040,6 +1047,9 @@ async fn bootstrap_tls_tunnel_requires_a_client_token_for_a_different_fingerprin
     );
     state.bootstrap_tls = Some(identity.server_config().unwrap());
     state.local_address = Some("127.0.0.1:1".parse().unwrap());
+    let permits = Arc::new(Semaphore::new(1));
+    state.bootstrap_handshake_permits = Arc::clone(&permits);
+    let instance_id = state.instance_id.clone();
     let app = router_with_state(state);
     let nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -1058,7 +1068,9 @@ async fn bootstrap_tls_tunnel_requires_a_client_token_for_a_different_fingerprin
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    // In-process requests have no transport to upgrade; that error releases the slot.
+    wait_for_bootstrap_handshake_slot(&permits).await;
 
     let response = app
         .oneshot(
@@ -1084,12 +1096,137 @@ async fn bootstrap_tls_tunnel_requires_a_client_token_for_a_different_fingerprin
             .headers()
             .get("x-nemo-relay-bootstrap-proof")
             .unwrap(),
-        key.proof("caller-fingerprint", nonce).as_str()
+        key.proof(
+            &crate::gateway::client::listener_fingerprint(
+                "caller-fingerprint",
+                "127.0.0.1:1".parse().unwrap(),
+                &instance_id
+            ),
+            nonce
+        )
+        .as_str()
     );
 }
 
+/// Read only the HTTP headers so TLS bytes remain available to the connector.
+async fn read_bootstrap_response_head(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> String {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(stream.read_u8().await.unwrap());
+            assert!(head.len() < 16 * 1024);
+        }
+        String::from_utf8(head).unwrap()
+    })
+    .await
+    .expect("server returns response headers")
+}
+
+/// Exercise the foreground tunnel through a real HTTP upgrade.
+async fn open_bootstrap_test_tunnel(address: SocketAddr) -> (tokio::net::TcpStream, String) {
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    stream.write_all(format!(
+        "GET /bootstrap/tunnel HTTP/1.1\r\nHost: {address}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nx-nemo-relay-bootstrap-fingerprint: test\r\nx-nemo-relay-bootstrap-nonce: {}\r\n\r\n",
+        "a".repeat(64)
+    ).as_bytes()).await.unwrap();
+    let response = read_bootstrap_response_head(&mut stream).await;
+    (stream, response)
+}
+
+/// Wait for the handshake task to release its admission slot.
+async fn wait_for_bootstrap_handshake_slot(permits: &Semaphore) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while permits.available_permits() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("handshake slot is released");
+}
+
 #[tokio::test]
-async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials() {
+async fn bootstrap_tls_tunnel_limits_handshakes_and_recovers_after_timeout() {
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
+    let identity = RelayTlsIdentity::load_or_create().unwrap();
+    let mut state = AppState::new_with_bootstrap(
+        test_config(),
+        Some("test".into()),
+        Some(BootstrapChallengeKey::from_bytes(b"test key")),
+        false,
+        None,
+        None,
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    state.local_address = Some(address);
+    state.bootstrap_tls = Some(identity.server_config().unwrap());
+    let permits = Arc::new(Semaphore::new(1));
+    state.bootstrap_handshake_permits = Arc::clone(&permits);
+    let app = router_with_state(state);
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let (mut idle, response) = open_bootstrap_test_tunnel(address).await;
+    assert!(response.starts_with("HTTP/1.1 101"), "{response}");
+    let (_excess, response) = open_bootstrap_test_tunnel(address).await;
+    assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+    // An idle client is disconnected by the production handshake timeout.
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(
+            TLS_HANDSHAKE_TIMEOUT + Duration::from_secs(5),
+            idle.read(&mut byte)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        0
+    );
+    wait_for_bootstrap_handshake_slot(&permits).await;
+
+    let (mut malformed, response) = open_bootstrap_test_tunnel(address).await;
+    assert!(response.starts_with("HTTP/1.1 101"), "{response}");
+    malformed.write_all(b"invalid TLS header").await.unwrap();
+    wait_for_bootstrap_handshake_slot(&permits).await;
+
+    let (stream, response) = open_bootstrap_test_tunnel(address).await;
+    assert!(response.starts_with("HTTP/1.1 101"), "{response}");
+    let connector = tokio_rustls::TlsConnector::from(identity.client_config().unwrap());
+    let mut encrypted = tokio::time::timeout(
+        Duration::from_secs(5),
+        connector.connect(
+            rustls::pki_types::ServerName::try_from("localhost").unwrap(),
+            stream,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    wait_for_bootstrap_handshake_slot(&permits).await;
+    encrypted
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    assert!(
+        read_bootstrap_response_head(&mut encrypted)
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
+    // Established tunnels must not consume handshake slots.
+    let (pending, response) = open_bootstrap_test_tunnel(address).await;
+    assert!(response.starts_with("HTTP/1.1 101"), "{response}");
+    drop(pending);
+    wait_for_bootstrap_handshake_slot(&permits).await;
+    drop(encrypted);
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn gateways_require_private_client_proof_for_forwarded_credentials() {
     let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
     let state = AppState::new_with_bootstrap(
         test_config(),
@@ -1132,7 +1269,7 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
 
     let foreground = AppState::new(test_config());
     assert!(
-        foreground
+        !foreground
             .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .unwrap()
             .0
@@ -1140,9 +1277,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
 
     let explicit_daemon =
-        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), false, None, None);
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
     assert!(
-        explicit_daemon
+        !explicit_daemon
             .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .unwrap()
             .0
@@ -1175,6 +1312,86 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         !transparent_headers
             .contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
     );
+}
+
+#[tokio::test]
+async fn foreground_listener_requires_client_proof_before_lending_provider_credentials() {
+    use crate::gateway::websocket::tests::serve;
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+        (
+            "OPENAI_API_KEY",
+            Some(std::ffi::OsStr::new("foreground-env-secret")),
+        ),
+    ]);
+    let key = BootstrapChallengeKey::load().unwrap();
+    for configured in [None, Some("Bearer configured-provider")] {
+        let captured = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
+        let recorder = Arc::clone(&captured);
+        let upstream_app = Router::new().route(
+            "/v1/chat/completions",
+            post(move |headers: HeaderMap| {
+                let recorder = Arc::clone(&recorder);
+                async move {
+                    recorder.lock().unwrap().push(headers);
+                    Json(completion_body("provider answered"))
+                }
+            }),
+        );
+        let (upstream_url, upstream_task) = serve(upstream_app).await;
+        let mut config = test_config();
+        config.openai_base_url = format!("{upstream_url}/v1");
+        config.openai_auth_header = configured.map(str::to_owned);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let task = tokio::spawn(serve_listener(listener, config, Some(shutdown_rx)));
+        let client = reqwest::Client::new();
+        for (token, caller_auth, expected) in [
+            (None, None, None),
+            (Some("hmac-sha256:wrong".to_string()), None, None),
+            (
+                Some(key.client_token()),
+                None,
+                Some(configured.unwrap_or("Bearer foreground-env-secret")),
+            ),
+            (
+                None,
+                Some("Bearer caller-owned"),
+                Some("Bearer caller-owned"),
+            ),
+        ] {
+            let mut request = client.post(&url).json(&json!({
+                "model": "nvidia/nemotron-test",
+                "messages": [{"role": "user", "content": "hi"}]
+            }));
+            if let Some(token) = token {
+                request = request.header(BOOTSTRAP_CLIENT_TOKEN_HEADER, token);
+            }
+            if let Some(auth) = caller_auth {
+                request = request.header(header::AUTHORIZATION, auth);
+            }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            response.bytes().await.unwrap();
+            let headers = captured.lock().unwrap().last().unwrap().clone();
+            assert_eq!(
+                headers
+                    .get(header::AUTHORIZATION)
+                    .map(|v| v.to_str().unwrap()),
+                expected
+            );
+            assert!(!headers.contains_key(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+        }
+        shutdown_tx.send(()).unwrap();
+        task.await.unwrap().unwrap();
+        upstream_task.abort();
+    }
 }
 
 #[tokio::test]
@@ -1352,7 +1569,7 @@ async fn explicit_daemon_hook_authentication_is_internal_and_rejects_bad_tokens(
 #[tokio::test]
 async fn healthz_only_refreshes_idle_activity_for_an_authenticated_heartbeat() {
     let challenge_key = BootstrapChallengeKey::from_bytes(b"test challenge key");
-    let state = AppState::new_with_bootstrap(
+    let mut state = AppState::new_with_bootstrap(
         test_config(),
         Some("expected-fingerprint".into()),
         Some(challenge_key.clone()),
@@ -1363,6 +1580,8 @@ async fn healthz_only_refreshes_idle_activity_for_an_authenticated_heartbeat() {
     let activity = state.last_activity.clone();
     let baseline = std::time::Instant::now() - Duration::from_secs(30);
     *activity.lock().unwrap() = baseline;
+    state.local_address = Some("127.0.0.1:1".parse().unwrap());
+    let instance_id = state.instance_id.clone();
     let app = router_with_state(state);
 
     for fingerprint in [
@@ -1406,7 +1625,11 @@ async fn healthz_only_refreshes_idle_activity_for_an_authenticated_heartbeat() {
             .unwrap(),
         challenge_key
             .proof(
-                "expected-fingerprint",
+                &crate::gateway::client::listener_fingerprint(
+                    "expected-fingerprint",
+                    "127.0.0.1:1".parse().unwrap(),
+                    &instance_id
+                ),
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             )
             .as_str()
@@ -6579,6 +6802,7 @@ async fn a_named_upstream_redirect_is_not_followed() {
         StatusCode::TEMPORARY_REDIRECT,
         "the redirect is surfaced to the caller rather than followed"
     );
+    assert!(!response.headers().contains_key(header::LOCATION));
 
     redirector.abort();
 }
@@ -7003,5 +7227,196 @@ async fn gateway_preserves_remote_guardrails_http_error_statuses() {
         shutdown_tx.send(()).unwrap();
         handle.await.unwrap().unwrap();
         let _ = nemo_relay::plugin::test_close_plugin_host();
+    }
+}
+
+#[tokio::test]
+async fn gateway_clients_never_replay_credentials_or_prompts_on_redirect() {
+    for client_named in [false, true] {
+        let sink = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let location = format!("http://{}/collect", sink.local_addr().unwrap());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_location = location.clone();
+        let app = Router::new().fallback(move |request: Request<Body>| {
+            let location = location.clone();
+            async move {
+                assert_eq!(request.headers()["x-api-key"], "placeholder-provider-key");
+                assert_eq!(request.headers()["authorization"], "Bearer placeholder");
+                assert_eq!(
+                    axum::body::to_bytes(request.into_body(), 1024)
+                        .await
+                        .unwrap(),
+                    "private prompt"
+                );
+                (
+                    StatusCode::TEMPORARY_REDIRECT,
+                    [(header::LOCATION, location)],
+                )
+            }
+        });
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let response = gateway_http_client(Some(Duration::from_secs(2)), client_named, false)
+            .post(format!("http://{address}/v1/messages"))
+            .header("x-api-key", "placeholder-provider-key")
+            .bearer_auth("placeholder")
+            .body("private prompt")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(response.headers()[header::LOCATION], expected_location);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), sink.accept())
+                .await
+                .is_err()
+        );
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn gateway_configured_upstream_redirect_does_not_export_injected_key() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _env = EnvScope::set(&[(
+        "ANTHROPIC_API_KEY",
+        Some(std::ffi::OsStr::new("sk-ant-placeholder")),
+    )]);
+    let sink = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let location = format!("http://{}/collect", sink.local_addr().unwrap());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (captured, mut requests) = tokio::sync::mpsc::unbounded_channel();
+    let upstream = Router::new().fallback(move |request: Request<Body>| {
+        let location = location.clone();
+        let captured = captured.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let bytes = axum::body::to_bytes(body, 4096).await.unwrap();
+            captured.send((parts.headers, bytes)).unwrap();
+            (
+                StatusCode::TEMPORARY_REDIRECT,
+                [(header::LOCATION, location)],
+            )
+        }
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let mut config = test_config();
+    config.anthropic_base_url = format!("http://{address}");
+    let key = BootstrapChallengeKey::from_bytes(b"redirect test challenge key");
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        None,
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
+    let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_url = format!("http://{}", gateway_listener.local_addr().unwrap());
+    let gateway = tokio::spawn(async move {
+        axum::serve(gateway_listener, app).await.unwrap();
+    });
+    let caller = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(Duration::from_secs(5))
+        .no_proxy()
+        .build()
+        .unwrap();
+    for streaming in [false, true] {
+        let response = caller
+            .post(format!("{gateway_url}/v1/messages"))
+            .header(
+                crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+                key.client_token(),
+            )
+            .json(&json!({
+                "model": "claude-test", "max_tokens": 1, "stream": streaming,
+                "messages": [{"role": "user", "content": "private prompt"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert!(!response.headers().contains_key(header::LOCATION));
+        assert_eq!(
+            response.url().as_str(),
+            format!("{gateway_url}/v1/messages")
+        );
+        let (headers, bytes) = requests.recv().await.unwrap();
+        assert_eq!(headers["x-api-key"], "sk-ant-placeholder");
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["messages"][0]["content"], "private prompt");
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), sink.accept())
+            .await
+            .is_err()
+    );
+    gateway.abort();
+    server.abort();
+}
+
+#[tokio::test]
+async fn unmanaged_routes_forward_only_client_credentials() {
+    let _env = crate::test_support::EnvScope::set(&[(
+        "OPENAI_API_KEY",
+        Some(std::ffi::OsStr::new("relay-environment-secret")),
+    )]);
+    for configured in [None, Some("Bearer relay-owned-secret")] {
+        async fn echo(request: Request<Body>) -> Response<Body> {
+            Response::builder()
+                .status(StatusCode::CREATED)
+                .body(Body::from(
+                    request
+                        .headers()
+                        .get("authorization")
+                        .map_or("absent", |value| value.to_str().unwrap())
+                        .to_owned(),
+                ))
+                .unwrap()
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = GatewayConfig {
+            openai_base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            chatgpt_codex_base_url: Some(format!("http://{}", listener.local_addr().unwrap())),
+            openai_auth_header: configured.map(str::to_owned),
+            ..GatewayConfig::default()
+        };
+        let provider = axum::Router::new().fallback(echo);
+        let task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+        let app = router_with_state(AppState::new(config));
+        for path in [
+            "/v1/responses/compact",
+            "/v1/images/generations",
+            "/v1/realtime/calls",
+            "/v1/live/sessions",
+            "/v1/images/edits",
+            "/v1/alpha/search",
+            "/v1/memories/trace_summarize",
+        ] {
+            for credential in [
+                None,
+                Some("Bearer caller-key"),
+                Some("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+            ] {
+                let mut request = Request::post(path)
+                    .header("content-type", "application/json")
+                    .header("x-nemo-relay-worker-token", "data-secret");
+                if let Some(credential) = credential {
+                    request = request.header("authorization", credential);
+                }
+                let request = request.body(Body::from("{}")).unwrap();
+                let response = app.clone().oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::CREATED, "{path}");
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                assert_eq!(
+                    bytes.as_ref(),
+                    credential.unwrap_or("absent").as_bytes(),
+                    "{path}"
+                );
+            }
+        }
+        task.abort();
     }
 }

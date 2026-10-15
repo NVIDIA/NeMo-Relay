@@ -147,6 +147,7 @@ struct DaemonState {
     descriptor: crate::daemon::common::protocol::ComponentDescriptor,
     instance_id: String,
     pass_through: bool,
+    loopback_listener: bool,
     public_origin: String,
     config: GatewayConfig,
     upstream: PooledClient,
@@ -182,6 +183,7 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: uuid::Uuid::now_v7().to_string(),
         pass_through: options.pass_through,
+        loopback_listener: local.ip().is_loopback(),
         public_origin,
         upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
         config: resolved.gateway,
@@ -205,7 +207,23 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
     }
     socket::recover_after_restart(Arc::clone(&state));
     spawn_maintenance(Arc::clone(&state));
-    let app = router(Arc::clone(&state));
+    let mut app = router(Arc::clone(&state));
+    if options.tls_cert.is_none() {
+        let tls = crate::gateway::tls::RelayTlsIdentity::load_or_create()
+            .and_then(|identity| identity.server_config())
+            .map_err(CliError::Launch)?;
+        let inner = app.clone();
+        let handshake_permits = Arc::new(Semaphore::new(MAX_CONCURRENT_TLS_HANDSHAKES));
+        app = app.route(
+            "/bootstrap/tunnel",
+            get(move |request: Request<Body>| {
+                let tls = Arc::clone(&tls);
+                let inner = inner.clone();
+                let handshake_permits = Arc::clone(&handshake_permits);
+                async move { crate::gateway::tls::upgrade(request, tls, inner, handshake_permits) }
+            }),
+        );
+    }
     let address = local.to_string();
     log::info!(
         target: "nemo_relay.daemon",
@@ -1691,7 +1709,7 @@ async fn public_proxy_inner(
             Err(ResolveError::Unavailable(_)) => return unavailable_response(),
         },
     };
-    match (target, route) {
+    let mut response = match (target, route) {
         (ResolvedTarget::PassThrough, PublicRoute::Hook(hook)) => {
             let mut response = Response::new(Body::from(hook.pass_through_body()));
             response
@@ -1719,7 +1737,11 @@ async fn public_proxy_inner(
             }
             forward_to_worker(Arc::clone(&state), request, worker).await
         }
+    };
+    if matches!(route, PublicRoute::Provider(_)) {
+        crate::gateway::strip_redirect_location(&mut response);
     }
+    response
 }
 
 fn responses_websocket_probe(request: &Request<Body>) -> bool {
@@ -1854,9 +1876,10 @@ async fn forward_to_provider(
 ) -> Response<Body> {
     let invocation_authenticated = access == ProviderAccess::BoundRoute;
     // Daemon-held provider credentials (configured auth headers or the daemon's own API key
-    // environment) are only lent to requests attributed to a bound route, or to every request
-    // when the operator explicitly deployed the daemon in global pass-through mode.
-    let allow_environment_provider_auth = (invocation_authenticated || state.pass_through)
+    // environment) are only lent to requests attributed to a bound route, or to requests on
+    // a loopback listener when the operator explicitly deployed global pass-through mode.
+    let allow_environment_provider_auth = (invocation_authenticated
+        || (state.pass_through && state.loopback_listener))
         && crate::gateway::daemon_allows_provider_auth(
             request.headers(),
             request.uri().path(),
