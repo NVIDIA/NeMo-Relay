@@ -17,9 +17,10 @@ open with the daemon. It provides no tools. The daemon's **broker** decides
 whether the user-machine route needs a new worker or can share an existing one.
 
 The MCP process starts a worker on the **client computer** only when the broker
-instructs it to. The worker loads the administrator's system configuration and
-plugins. Install the daemon as a service. The harness starts MCP, and the broker
-controls worker startup and shutdown.
+instructs it to. The worker merges the user's configuration and plugins with
+administrator-owned system settings, which retain higher precedence. Install
+the daemon as a service. The harness starts MCP, and the broker controls worker
+startup and shutdown.
 
 The diagram shows how these processes communicate:
 

@@ -55,6 +55,8 @@ pub(crate) enum TransportError {
     UnsupportedTunnel,
     #[error("forward destination must contain an HTTP or HTTPS scheme and an authority")]
     InvalidDestination,
+    #[error("plain HTTP upstreams are allowed only for loopback hosts; use https")]
+    InsecureDestination,
     #[error("invalid Connection header value")]
     InvalidConnectionHeader,
     #[error("forward destination authority is not a valid Host header")]
@@ -177,7 +179,7 @@ pub(crate) fn prepare_forward_request<B>(
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback())
     {
-        return Err(TransportError::InvalidDestination);
+        return Err(TransportError::InsecureDestination);
     }
     let host = HeaderValue::from_str(authority.as_str()).map_err(TransportError::InvalidHost)?;
 

@@ -3,7 +3,7 @@
 
 //! Managed worker execution with raw forwarding or JSON middleware delivery.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as _;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -30,7 +30,7 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::runtime::TASK_SCOPE_STACK;
 use nemo_relay::codec::resolve::{ProviderSurface, request_codec, response_codec, streaming_codec};
 use nemo_relay::codec::streaming::SseEventDecoder;
-use nemo_relay::error::FlowError;
+use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
 
@@ -39,8 +39,8 @@ use super::super::common::control::{
 };
 use super::super::common::routes::{HookRoute, ProviderRoute};
 use super::super::common::transport::{
-    BoxError, PooledClient, RelayBody, box_body, prepare_forward_request, prepare_forward_response,
-    request_provider,
+    BoxError, PooledClient, RelayBody, TransportError, box_body, prepare_forward_request,
+    prepare_forward_response, request_provider,
 };
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::GatewayConfig;
@@ -723,7 +723,7 @@ async fn dispatch_unmanaged(
         crate::gateway::daemon_provider_upstream_url(request.headers(), &path_and_query, config)?
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
             .parse::<Uri>()
-            .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))?;
+            .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))?;
     if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
         request.headers(),
         request.uri().path(),
@@ -748,15 +748,22 @@ async fn dispatch_unmanaged(
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
     let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+        .map_err(CliError::UpstreamTransport)?
         .map(box_body);
-    let request = request_provider(&upstream, client_named, request)
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+    let request =
+        request_provider(&upstream, client_named, request).map_err(CliError::UpstreamTransport)?;
     let response = config
         .wait_for_response(request)
         .await
-        .map_err(|_| CliError::Launch("provider response-head timeout".into()))?
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+        .map_err(|_| {
+            provider_transport_failure(
+                UpstreamFailureClass::Timeout,
+                "provider response-head timeout",
+            )
+        })?
+        .map_err(|error| {
+            provider_transport_failure(UpstreamFailureClass::Connection, error.to_string())
+        })?;
     let response = prepare_forward_response(response, &strip)
         .map_err(|error| CliError::Launch(error.to_string()))?;
     let (parts, body) = response.into_parts();
@@ -787,7 +794,7 @@ async fn dispatch_unbuffered_observed(
         crate::gateway::daemon_provider_upstream_url(request.headers(), &path_and_query, config)?
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
             .parse::<Uri>()
-            .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))?;
+            .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))?;
     if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
         request.headers(),
         request.uri().path(),
@@ -813,7 +820,7 @@ async fn dispatch_unbuffered_observed(
     ];
     let streaming = request_streaming_hint(request.headers());
     let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+        .map_err(CliError::UpstreamTransport)?
         .map(box_body);
     let response = request_worker_upstream(
         upstream,
@@ -938,7 +945,7 @@ async fn dispatch_observed(
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
     let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+        .map_err(CliError::UpstreamTransport)?
         .map(box_body);
     let response = request_worker_upstream(
         upstream,
@@ -972,7 +979,7 @@ async fn request_worker_upstream(
     operational::upstream_started(operational, streaming);
     let request = request_provider(&upstream, client_named, request).map_err(|error| {
         operational::upstream_failed(operational, "transport");
-        CliError::Launch(error.to_string())
+        CliError::UpstreamTransport(error)
     })?;
     let request = config.wait_for_response(request);
     tokio::pin!(request);
@@ -997,13 +1004,29 @@ async fn request_worker_upstream(
         }
         Ok(Err(error)) => {
             operational::upstream_failed(operational, "transport");
-            Err(CliError::Launch(error.to_string()))
+            Err(provider_transport_failure(
+                UpstreamFailureClass::Connection,
+                error.to_string(),
+            ))
         }
         Err(_) => {
             operational::upstream_failed(operational, "transport");
-            Err(CliError::Launch("provider response-head timeout".into()))
+            Err(provider_transport_failure(
+                UpstreamFailureClass::Timeout,
+                "provider response-head timeout",
+            ))
         }
     }
+}
+
+/// Classifies a provider failure that occurred before receiving an HTTP response head.
+fn provider_transport_failure(class: UpstreamFailureClass, message: impl Into<String>) -> CliError {
+    CliError::ProviderFailure(UpstreamFailure {
+        status: None,
+        body: message.into(),
+        headers: BTreeMap::new(),
+        class,
+    })
 }
 
 /// The destination a request intercept set through the internal dispatch header, if any.
@@ -1036,7 +1059,7 @@ fn effective_destination(
     };
     destination
         .parse::<Uri>()
-        .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))
+        .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))
 }
 
 fn effective_request(
