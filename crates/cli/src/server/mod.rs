@@ -542,7 +542,7 @@ impl AppState {
         idle_read_timeout: Option<Duration>,
     ) -> Self {
         let http = gateway_http_client(idle_read_timeout, false);
-        // A second client for destinations the caller named, which must not follow redirects.
+        // A second client enforces the address policy for destinations the caller named.
         //
         // Validation applies to the URL that was named; a redirect names a different one, and
         // reqwest would follow up to ten of them. Its sensitive-header stripping does not help
@@ -720,20 +720,20 @@ impl AppState {
     }
 }
 
-fn gateway_http_client(idle_read_timeout: Option<Duration>, no_redirect: bool) -> Client {
-    let builder = Client::builder().connect_timeout(HTTP_CONNECT_TIMEOUT);
+fn gateway_http_client(idle_read_timeout: Option<Duration>, client_named: bool) -> Client {
+    // Redirects can replay provider credentials and prompts to an unapproved destination.
+    let builder = Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none());
     let builder = match idle_read_timeout {
         Some(timeout) => builder.read_timeout(timeout),
         None => builder,
     };
-    // The no-redirect client serves only caller-named destinations, so it is also the one that
-    // resolves through the named-upstream address policy.
-    let builder = if no_redirect {
-        builder
-            .redirect(reqwest::redirect::Policy::none())
-            .dns_resolver(Arc::new(
-                crate::agents::pi::alignment::NamedUpstreamResolver::with_environment_proxies(),
-            ))
+    // Caller-named destinations also resolve through the named-upstream address policy.
+    let builder = if client_named {
+        builder.dns_resolver(Arc::new(
+            crate::agents::pi::alignment::NamedUpstreamResolver::with_environment_proxies(),
+        ))
     } else {
         builder
     };

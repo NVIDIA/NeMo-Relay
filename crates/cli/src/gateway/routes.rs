@@ -264,6 +264,13 @@ pub(super) fn gateway_upstream_url_override(
     allow_environment_provider_auth: bool,
     config: &crate::configuration::GatewayConfig,
 ) -> Option<String> {
+    // Explicit ChatGPT voice calls keep their separate backend. Keep the custom OpenAI endpoint
+    // for other calls, even when the gateway cannot supply a replacement credential.
+    if !path_and_query.starts_with("/backend-api/codex/realtime/calls")
+        && config.openai_base_url.trim_end_matches('/') != "https://api.openai.com/v1"
+    {
+        return None;
+    }
     gateway_upstream_url_override_with_openai_key_state(
         route,
         headers,
@@ -289,7 +296,7 @@ pub(super) fn gateway_upstream_url_override(
 //
 // Separate from `gateway_upstream_url_override` because the two answer different questions: that
 // one asks alignment which upstream a *harness* implies, from evidence the client did not choose
-// (a ChatGPT token's shape); this one is the client stating a destination outright, which is only
+// (ChatGPT credential metadata); this one is the client stating a destination outright, which is only
 // honored when it proved it is this invocation's own agent. Composition stays here so the OpenAI
 // `/v1` normalization has one home.
 // Composed by plain concatenation, deliberately *not* through `upstream_url_with_base`.
@@ -371,7 +378,11 @@ pub(super) fn gateway_upstream_url_override_with_openai_key_state(
     // An explicit Codex backend call URL preserves ChatGPT's request format and credentials.
     let has_openai_replacement_key = has_openai_replacement_key
         && !path_and_query.starts_with("/backend-api/codex/realtime/calls");
-    let path_and_query = route.canonical_path_and_query(path_and_query);
+    let path_and_query = if path_and_query.starts_with("/backend-api/codex/") {
+        path_and_query.to_owned()
+    } else {
+        route.canonical_path_and_query(path_and_query)
+    };
     alignment::gateway_upstream_url_override(
         headers,
         route.alignment_route(),

@@ -6997,3 +6997,108 @@ async fn gateway_preserves_remote_guardrails_http_error_statuses() {
         let _ = nemo_relay::plugin::test_close_plugin_host();
     }
 }
+
+#[tokio::test]
+async fn gateway_clients_never_replay_credentials_or_prompts_on_redirect() {
+    for client_named in [false, true] {
+        let sink = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let location = format!("http://{}/collect", sink.local_addr().unwrap());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_location = location.clone();
+        let app = Router::new().fallback(move |request: Request<Body>| {
+            let location = location.clone();
+            async move {
+                assert_eq!(request.headers()["x-api-key"], "placeholder-provider-key");
+                assert_eq!(request.headers()["authorization"], "Bearer placeholder");
+                assert_eq!(
+                    axum::body::to_bytes(request.into_body(), 1024)
+                        .await
+                        .unwrap(),
+                    "private prompt"
+                );
+                (
+                    StatusCode::TEMPORARY_REDIRECT,
+                    [(header::LOCATION, location)],
+                )
+            }
+        });
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let response = gateway_http_client(Some(Duration::from_secs(2)), client_named)
+            .post(format!("http://{address}/v1/messages"))
+            .header("x-api-key", "placeholder-provider-key")
+            .bearer_auth("placeholder")
+            .body("private prompt")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(response.headers()[header::LOCATION], expected_location);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), sink.accept())
+                .await
+                .is_err()
+        );
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn gateway_configured_upstream_redirect_does_not_export_injected_key() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _env = EnvScope::set(&[(
+        "ANTHROPIC_API_KEY",
+        Some(std::ffi::OsStr::new("sk-ant-placeholder")),
+    )]);
+    let sink = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let location = format!("http://{}/collect", sink.local_addr().unwrap());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (captured, mut requests) = tokio::sync::mpsc::unbounded_channel();
+    let upstream = Router::new().fallback(move |request: Request<Body>| {
+        let location = location.clone();
+        let captured = captured.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let bytes = axum::body::to_bytes(body, 4096).await.unwrap();
+            captured.send((parts.headers, bytes)).unwrap();
+            (
+                StatusCode::TEMPORARY_REDIRECT,
+                [(header::LOCATION, location)],
+            )
+        }
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    let mut config = test_config();
+    config.anthropic_base_url = format!("http://{address}");
+    let app = router(config);
+    for streaming in [false, true] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "claude-test", "max_tokens": 1, "stream": streaming,
+                            "messages": [{"role": "user", "content": "private prompt"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        let (headers, bytes) = requests.recv().await.unwrap();
+        assert_eq!(headers["x-api-key"], "sk-ant-placeholder");
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["messages"][0]["content"], "private prompt");
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), sink.accept())
+            .await
+            .is_err()
+    );
+    server.abort();
+}

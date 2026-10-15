@@ -1706,10 +1706,9 @@ fn selected_upstream_failure(failure: CapturedUpstreamFailure) -> Result<Respons
 
 /// The HTTP client to dispatch with, chosen by where the destination came from.
 ///
-/// A caller-named destination gets the client that does not follow redirects. Validation
-/// applies to the URL that was named; a redirect names a different one, and following it would
-/// carry the caller's provider credential to a host nothing checked -- possibly over plain
-/// http, which the named URL itself would have been refused for.
+/// Both clients stop at redirects to keep credentials and prompts at the chosen destination.
+/// The client for caller-named destinations also checks resolved addresses. The client for
+/// configured destinations keeps the operator's network access.
 fn upstream_client(state: &AppState, client_named_upstream: bool) -> &reqwest::Client {
     if client_named_upstream {
         &state.http_no_redirect
