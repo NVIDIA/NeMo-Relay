@@ -836,6 +836,7 @@ async def test_scope_stack_snapshot_preserves_agent_while_streaming_and_after_fa
                 raise ValueError("expected streaming failure")
 
             collected = []
+            received_chunks = []
             response_stream = await nemo_relay.llm.stream_execute(
                 "snapshot-stream",
                 nemo_relay.LLMRequest({}, {"messages": []}),
@@ -848,7 +849,10 @@ async def test_scope_stack_snapshot_preserves_agent_while_streaming_and_after_fa
                     snapshot = nemo_relay.current_scope_stack_snapshot()
                     assert snapshot is not None
                     assert snapshot.scopes[-1].scope_id == agent.uuid
-                    assert chunk == {"number": len(collected) - 1}
+                    received_chunks.append(chunk)
+            expected_chunks = [{"number": 0}, {"number": 1}]
+            assert received_chunks == expected_chunks
+            assert collected == expected_chunks
             assert observed_identifiers == [agent.uuid, agent.uuid]
             after = nemo_relay.current_scope_stack_snapshot()
             assert after is not None
