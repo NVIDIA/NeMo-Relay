@@ -580,24 +580,34 @@ batch sizes count spans, not bytes.
 
 ## Completed Scope Lineage Retention
 
-Trace endpoints retain a completed scope's trace and parent span context for
-`completed_span_context_ttl_millis` after its scope-end event. A late mark in
-that window remains attached to the original trace and parent span. When the
-TTL expires, Relay emits subsequent marks as orphan spans and records the
-`otel.completed_span_context_expired` runtime diagnostic when it purges expired
-contexts.
+Trace endpoints keep a closed scope's trace context in a cache. This context
+includes the IDs needed to link later events to the same trace and parent span.
+`completed_span_context_ttl_millis` sets how long Relay keeps this context after
+the scope ends. This is its time to live (TTL). Marks that arrive during this
+time stay linked to the original trace and parent span.
 
-Keep closed scope handles only for short deferred follow-up work. Prefer
-emitting an event before the scope closes, or create a new active scope for
-later work. Increasing the TTL retains more completed contexts: memory grows
-with the completed-scope rate, TTL, and number of configured trace endpoints.
+Relay checks the cache when it processes another event. It uses that event's
+timestamp to find entries older than the TTL. Entries at the exact TTL boundary
+stay in the cache. When Relay removes expired entries, it records the
+`otel.completed_span_context_expired` runtime diagnostic. Without a new event,
+Relay does not remove entries or report their expiry.
 
-OTLP logs use the same TTL-based completed-scope lineage behavior. Configure
-`opentelemetry.logs.completed_span_context_ttl_millis` independently when log
-export is enabled. Metrics retain completed resource routes for 60 seconds when
-resource promotion is enabled, but do not retain trace-correlation context. Do not
-rely on a closed scope handle for long-running follow-up work; emit the mark
-before closing the scope or use an active/new scope instead.
+This is normal cache cleanup. It does not delete completed or exported spans.
+
+Late marks and child scopes can still link to the original parent. Their events
+must include matching W3C trace context or Relay root and parent IDs. Without
+matching context, late marks become orphan spans. They have no link to the
+original parent.
+
+Keep closed scope handles only for short follow-up tasks. For later work, send
+events before the scope closes or create a new scope. A longer TTL uses more
+memory. Memory use also grows as more scopes close during that time or as you
+add trace endpoints.
+
+OTLP logs use the same cache rules. When you export logs, set their TTL separately
+with `opentelemetry.logs.completed_span_context_ttl_millis`. Metrics cache
+resource routes for 60 seconds after a scope closes when resource promotion is
+enabled. They do not cache the context used to link traces.
 
 If an endpoint's explicit batch settings are invalid, Relay skips that endpoint
 and records an `observability.invalid_otel_endpoint` configuration warning with
@@ -1171,6 +1181,19 @@ the server or succeeded. Permission-denied calls retain their denial and error
 metadata. The server segment is a configured alias; Relay does not derive
 `server.address`, `mcp.session.id`, or connection status from it. Hook duration
 measures the harness tool scope, not necessarily MCP transport latency.
+
+When Relay receives a tool failure hook or an MCP hook result with `isError: true`,
+it sets the span status to `ERROR`. It sets `error.type = "tool_execution_failed"`.
+
+Codex can skip the end hook when an MCP call fails. Relay can still close the call
+if a later model request includes its result. That request does not say whether the tool succeeded,
+so Relay marks the outcome as unknown. The measured duration can be longer than
+the tool's actual run time.
+
+If Relay closes a call without an end hook or a result in a model request, it marks
+the call as incomplete. A timeout alone does not prove that the tool failed. Refer to
+[Codex captured events](/nemo-relay-cli/codex#captured-events) for the fields that
+Relay records and the limits of this recovery method.
 
 ### Error Type Mapping
 

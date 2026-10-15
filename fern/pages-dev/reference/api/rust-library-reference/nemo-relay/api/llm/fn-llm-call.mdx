@@ -27,6 +27,7 @@ If a sanitizer errors or panics, Relay omits the payload and request annotation 
 - `metadata`: Optional JSON metadata recorded on the start event.
 - `model_name`: Optional normalized model name recorded separately from the request payload.
 - `annotated_request`: Optional normalized request annotation produced by a codec.
+- `codec`: Optional codec for sanitizing the request copy saved in telemetry. Relay also uses it to create or update that copy's request annotation.
 - `timestamp`: Optional timestamp recorded as the handle start time and on the emitted start event. When `None`, the current UTC time is used.
 
 ## Returns
@@ -39,4 +40,4 @@ Returns an error when the runtime owner check fails or when internal state canno
 
 ## Notes
 
-The runtime removes standard credential headers (`authorization`, `proxy-authorization`, `cookie`, `x-api-key`, `api-key`, `anthropic-api-key`, and `x-goog-api-key`) from the event-only request copy before sanitize-request guardrails run. This does not change the caller-owned [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest). By default, when the owning agent is not fresh, the emitted request annotation is limited to the current user turn. Managed calls with a request codec also apply that projection to the event input, without changing the request used for provider execution. The observability plugin's `enable_full_payloads` option disables this projection.
+The runtime removes standard credential headers (`authorization`, `proxy-authorization`, `cookie`, `x-api-key`, `api-key`, `anthropic-api-key`, and `x-goog-api-key`) from the event-only request copy before sanitize-request guardrails run. This does not change the caller-owned [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest). By default, Relay records the full request history for the first LLM call in an agent scope and the first call after compaction. For later calls, Relay limits the request annotation to the current user turn. With a request codec, Relay applies the same limit to the request copy saved in the event. Both managed and manual calls use this rule. The provider request stays unchanged. Set the observability plugin's `enable_full_payloads` option to keep the full request history in events.
