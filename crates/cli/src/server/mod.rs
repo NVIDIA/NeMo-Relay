@@ -926,15 +926,10 @@ async fn bootstrap_tls_tunnel(
     let Some(key) = state.bootstrap_challenge_key.as_ref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let token_is_valid = headers
-        .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+    if headers
+        .get(http::header::UPGRADE)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|token| key.verify_client_token(token));
-    if !token_is_valid
-        || headers
-            .get(http::header::UPGRADE)
-            .and_then(|value| value.to_str().ok())
-            != Some("nemo-relay-tls")
+        != Some("nemo-relay-tls")
     {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -942,7 +937,14 @@ async fn bootstrap_tls_tunnel(
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let proof = key.proof(fingerprint, nonce);
+    let proof = key.proof(
+        &crate::gateway::client::listener_fingerprint(
+            fingerprint,
+            local_address,
+            &state.instance_id,
+        ),
+        nonce,
+    );
     let upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(async move {
         let Ok(upgraded) = upgrade.await else {
@@ -965,6 +967,7 @@ async fn bootstrap_tls_tunnel(
         .header(http::header::CONNECTION, "upgrade")
         .header(http::header::UPGRADE, "nemo-relay-tls")
         .header("x-nemo-relay-bootstrap-proof", proof)
+        .header("x-nemo-relay-instance-id", &state.instance_id)
         .header(http::header::CONTENT_LENGTH, "0")
         .body(Body::empty())
         .expect("bootstrap TLS upgrade response is valid")
@@ -1018,19 +1021,28 @@ async fn healthz(State(state): State<AppState>, headers: HeaderMap) -> Response 
     let compatible = match presented_fingerprint {
         None => true,
         Some(fingerprint) => {
-            // Persistent configuration does not determine whether an existing
-            // gateway can serve this MCP connection. Bind the caller's
-            // fingerprint into the proof without requiring it to match the
-            // gateway's configuration fingerprint.
+            // Persistent and transparent clients can share a listener. Proofs bind the
+            // caller context to this actual listener and instance, never the Host header.
             let nonce = headers
                 .get("x-nemo-relay-bootstrap-nonce")
                 .and_then(|value| value.to_str().ok())
                 .filter(|nonce| {
                     nonce.len() == 64 && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
                 });
-            match (nonce, state.bootstrap_challenge_key.as_ref()) {
-                (Some(nonce), Some(key)) => {
-                    let proof = key.proof(fingerprint, nonce);
+            match (
+                nonce,
+                state.bootstrap_challenge_key.as_ref(),
+                state.local_address,
+            ) {
+                (Some(nonce), Some(key), Some(address)) => {
+                    let proof = key.proof(
+                        &crate::gateway::client::listener_fingerprint(
+                            fingerprint,
+                            address,
+                            &state.instance_id,
+                        ),
+                        nonce,
+                    );
                     response_headers.insert(
                         "x-nemo-relay-bootstrap-proof",
                         HeaderValue::from_str(&proof).expect("bootstrap proof is an ASCII value"),

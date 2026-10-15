@@ -270,21 +270,29 @@ nemo-relay daemon hook pi --daemon-address https://relay.example.com:8443 --fail
 The hook process performs the following actions:
 
 1. Reads the agent's native hook payload from standard input.
-2. Resolves the route credential from `NEMO_RELAY_CLIENT_TOKEN`, then from the
-   per-user token file. Without a usable credential it does not contact the
-   daemon: a fail-open hook writes the agent's pass-through response and exits
-   `0`. A fail-closed hook reports a delivery failure, writes no allow response,
-   and exits `2`.
-3. Posts to the existing agent-specific hook path at the daemon root.
+2. Looks for the route credential in `NEMO_RELAY_CLIENT_TOKEN`, then in the
+   user token file. Without a valid credential, it does not contact the daemon.
+   A fail-open hook exits with code `0`. It sends a pass-through response only
+   for named events that do not require a permission check. A fail-closed hook
+   reports an error and exits with code `2`. It does not send an allow response.
+3. Checks the daemon's identity before sending the hook payload. For local
+   HTTP addresses, the daemon must run as the same user. Relay uses an
+   encrypted TLS connection and a saved certificate for that user account.
+   For remote HTTPS addresses, Relay checks the certificate against the
+   trusted certificates on your system. It sends the payload to the agent's
+   hook path at the daemon root.
 4. Adds `x-nemo-relay-client-token` exactly once.
 5. Writes a successful, nonempty hook response to standard output without
    changing its bytes.
 
-The hook process does not start a daemon or worker and does not perform an MCP
-handshake. Use `--fail-open` for events that must not block the agent when the
-daemon is unavailable. Use `--fail-closed` for policy events that must reject
-the operation when delivery or evaluation fails. If neither option is present,
-the existing event-specific failure policy applies.
+The hook process does not start a daemon or worker. It does not perform an
+MCP handshake. Use `--fail-open` for events that must not block the agent
+when the daemon is unavailable. Use `--fail-closed` to block an operation
+when Relay cannot deliver or check its hook.
+
+Without a policy flag, the event determines the failure policy. Hooks fail
+closed if Relay cannot read the payload, parse its JSON, or find an event
+name. Restart the daemon after upgrading to use the new local hook transport.
 
 
 ## Manage the Client Token File

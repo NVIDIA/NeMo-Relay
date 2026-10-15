@@ -70,6 +70,11 @@ fn missing_hook_credential_honors_flags_events_and_environment() {
                 if blocks {
                     assert!(output.stdout.is_empty());
                     assert!(stderr.contains("client credential"), "{stderr}");
+                } else if matches!(event, "PreToolUse" | "pre_tool_call") {
+                    assert!(
+                        output.stdout.is_empty(),
+                        "permission events must not receive an allow response"
+                    );
                 } else {
                     assert_eq!(output.stdout, pass_through);
                 }

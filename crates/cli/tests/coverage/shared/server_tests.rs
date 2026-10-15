@@ -930,14 +930,17 @@ async fn healthz_returns_ok() {
 #[tokio::test]
 async fn healthz_accepts_a_different_persistent_gateway_fingerprint() {
     let challenge_key = BootstrapChallengeKey::from_bytes(b"test challenge key");
-    let app = router_with_state(AppState::new_with_bootstrap(
+    let mut state = AppState::new_with_bootstrap(
         test_config(),
         Some("expected-fingerprint".into()),
         Some(challenge_key.clone()),
         false,
         None,
         None,
-    ));
+    );
+    state.local_address = Some("127.0.0.1:1".parse().unwrap());
+    let instance_id = state.instance_id.clone();
+    let app = router_with_state(state);
     let response = app
         .oneshot(
             Request::builder()
@@ -965,7 +968,11 @@ async fn healthz_accepts_a_different_persistent_gateway_fingerprint() {
             .unwrap(),
         challenge_key
             .proof(
-                "different-fingerprint",
+                &crate::gateway::client::listener_fingerprint(
+                    "different-fingerprint",
+                    "127.0.0.1:1".parse().unwrap(),
+                    &instance_id
+                ),
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             )
             .as_str()
@@ -1014,7 +1021,7 @@ async fn healthz_rejects_a_missing_bootstrap_nonce() {
 }
 
 #[tokio::test]
-async fn bootstrap_tls_tunnel_requires_a_client_token_for_a_different_fingerprint() {
+async fn bootstrap_tls_tunnel_does_not_require_a_cleartext_credential() {
     let temp = tempfile::tempdir().unwrap();
     let _environment = EnvScope::set(&[
         ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
@@ -1032,6 +1039,7 @@ async fn bootstrap_tls_tunnel_requires_a_client_token_for_a_different_fingerprin
     );
     state.bootstrap_tls = Some(identity.server_config().unwrap());
     state.local_address = Some("127.0.0.1:1".parse().unwrap());
+    let instance_id = state.instance_id.clone();
     let app = router_with_state(state);
     let nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -1050,7 +1058,7 @@ async fn bootstrap_tls_tunnel_requires_a_client_token_for_a_different_fingerprin
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
 
     let response = app
         .oneshot(
@@ -1076,7 +1084,15 @@ async fn bootstrap_tls_tunnel_requires_a_client_token_for_a_different_fingerprin
             .headers()
             .get("x-nemo-relay-bootstrap-proof")
             .unwrap(),
-        key.proof("caller-fingerprint", nonce).as_str()
+        key.proof(
+            &crate::gateway::client::listener_fingerprint(
+                "caller-fingerprint",
+                "127.0.0.1:1".parse().unwrap(),
+                &instance_id
+            ),
+            nonce
+        )
+        .as_str()
     );
 }
 
@@ -1344,7 +1360,7 @@ async fn explicit_daemon_hook_authentication_is_internal_and_rejects_bad_tokens(
 #[tokio::test]
 async fn healthz_only_refreshes_idle_activity_for_an_authenticated_heartbeat() {
     let challenge_key = BootstrapChallengeKey::from_bytes(b"test challenge key");
-    let state = AppState::new_with_bootstrap(
+    let mut state = AppState::new_with_bootstrap(
         test_config(),
         Some("expected-fingerprint".into()),
         Some(challenge_key.clone()),
@@ -1355,6 +1371,8 @@ async fn healthz_only_refreshes_idle_activity_for_an_authenticated_heartbeat() {
     let activity = state.last_activity.clone();
     let baseline = std::time::Instant::now() - Duration::from_secs(30);
     *activity.lock().unwrap() = baseline;
+    state.local_address = Some("127.0.0.1:1".parse().unwrap());
+    let instance_id = state.instance_id.clone();
     let app = router_with_state(state);
 
     for fingerprint in [
@@ -1398,7 +1416,11 @@ async fn healthz_only_refreshes_idle_activity_for_an_authenticated_heartbeat() {
             .unwrap(),
         challenge_key
             .proof(
-                "expected-fingerprint",
+                &crate::gateway::client::listener_fingerprint(
+                    "expected-fingerprint",
+                    "127.0.0.1:1".parse().unwrap(),
+                    &instance_id
+                ),
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             )
             .as_str()

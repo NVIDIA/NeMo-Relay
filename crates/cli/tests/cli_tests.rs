@@ -24,7 +24,7 @@ fn gateway_bin() -> &'static str {
 }
 
 const ACTIVE_GENERATION_TOKEN: &str = "active-generation";
-const BOOTSTRAP_PROTOCOL_VERSION: u64 = 3;
+const BOOTSTRAP_PROTOCOL_VERSION: u64 = 4;
 const CHILD_PROCESS_TIMEOUT_SECONDS: u64 = 5;
 const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1106,7 +1106,7 @@ fn bootstrap_request_header<'a>(request: &'a str, name: &str) -> Option<&'a str>
 fn fake_bootstrap_proof(key: &[u8], fingerprint: &str, nonce: &str) -> String {
     let key = hmac::Key::new(hmac::HMAC_SHA256, key);
     let mut context = hmac::Context::with_key(&key);
-    context.update(b"nemo-relay/bootstrap-health/v1\0");
+    context.update(b"nemo-relay/bootstrap-health/v2\0");
     context.update(fingerprint.as_bytes());
     context.update(&[0]);
     context.update(nonce.as_bytes());
@@ -1266,6 +1266,7 @@ fn fake_bootstrap_proof_header(
     key_path: &Path,
     fingerprint: &str,
     nonce: &str,
+    address: std::net::SocketAddr,
 ) -> String {
     match proof {
         FakeBootstrapProof::Missing => String::new(),
@@ -1276,7 +1277,7 @@ fn fake_bootstrap_proof_header(
             "X-NeMo-Relay-Bootstrap-Proof: {}\r\n",
             fake_bootstrap_proof(
                 &std::fs::read(key_path).unwrap(),
-                fingerprint,
+                &format!("nemo-relay/listener/v2\0{fingerprint}\0{address}\0test-instance"),
                 nonce
             )
         ),
@@ -1292,7 +1293,13 @@ fn write_fake_bootstrap_health(
     let fingerprint =
         bootstrap_request_header(request, "x-nemo-relay-bootstrap-fingerprint").unwrap();
     let nonce = bootstrap_request_header(request, "x-nemo-relay-bootstrap-nonce").unwrap();
-    let proof_header = fake_bootstrap_proof_header(proof, key_path, fingerprint, nonce);
+    let proof_header = fake_bootstrap_proof_header(
+        proof,
+        key_path,
+        fingerprint,
+        nonce,
+        stream.local_addr().unwrap(),
+    );
     let body = format!(
         r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
         env!("CARGO_PKG_VERSION"),
@@ -1322,11 +1329,17 @@ fn handle_fake_bootstrap_tunnel(
     let fingerprint =
         bootstrap_request_header(request, "x-nemo-relay-bootstrap-fingerprint").unwrap();
     let nonce = bootstrap_request_header(request, "x-nemo-relay-bootstrap-nonce").unwrap();
-    let proof_header = fake_bootstrap_proof_header(proof, key_path, fingerprint, nonce);
+    let proof_header = fake_bootstrap_proof_header(
+        proof,
+        key_path,
+        fingerprint,
+        nonce,
+        stream.local_addr().unwrap(),
+    );
     stream
         .write_all(
             format!(
-                "HTTP/1.1 101 Switching Protocols\r\n{proof_header}Connection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
+                "HTTP/1.1 101 Switching Protocols\r\n{proof_header}X-NeMo-Relay-Instance-Id: test-instance\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
             )
             .as_bytes(),
         )
@@ -1349,7 +1362,7 @@ fn handle_fake_bootstrap_tunnel(
                 "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
                 fake_bootstrap_proof(
                     &std::fs::read(key_path).unwrap(),
-                    fingerprint,
+                    &format!("nemo-relay/listener/v2\0{fingerprint}\0{}\0test-instance", stream.sock.local_addr().unwrap()),
                     nonce
                 ),
                 body.len()
@@ -1500,7 +1513,7 @@ fn cli_codex_hook_launch_resolution_error_respects_forwarding_policy() {
     for fail_closed in [false, true] {
         let output =
             run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, b"{}", true);
-        assert_eq!(output.status.code(), Some(if fail_closed { 2 } else { 0 }));
+        assert_eq!(output.status.code(), Some(2));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS"));
         assert!(output.stdout.is_empty());
@@ -1571,7 +1584,7 @@ fn cli_codex_hook_launch_resolution_error_retains_default_payload_cap() {
         let output =
             run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, &payload, false);
 
-        assert_eq!(output.status.success(), !fail_closed);
+        assert_eq!(output.status.code(), Some(2));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("hook payload exceeds the 20971520-byte limit"));
         assert!(!stderr.contains("sidecar recovery"));
@@ -5166,7 +5179,9 @@ fn assert_process_exits(pid: i32, signal_name: &str) {
 
 #[test]
 fn cli_hook_forward_posts_payload_headers_and_prints_response() {
-    let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
+    let temp = tempfile::tempdir().unwrap();
+    let (server_url, received) =
+        spawn_verified_hook_server(temp.path(), 200, r#"{"continue":true}"#);
     let mut child = Command::new(gateway_bin())
         .args([
             "hook-forward",
@@ -5180,6 +5195,8 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
             "--fail-closed",
         ])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5209,7 +5226,8 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
 fn cli_hook_forward_debug_records_are_safe_and_do_not_include_hook_details() {
     let temp = tempfile::tempdir().unwrap();
     let (config_path, log_path) = write_debug_jsonl_logging_config(temp.path());
-    let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
+    let (server_url, received) =
+        spawn_verified_hook_server(temp.path(), 200, r#"{"continue":true}"#);
     let sentinels = [
         "NEMO_RELAY_TOOL_SENTINEL",
         "NEMO_RELAY_ARGUMENT_SENTINEL",
@@ -5244,6 +5262,8 @@ fn cli_hook_forward_debug_records_are_safe_and_do_not_include_hook_details() {
             "--fail-closed",
         ])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5353,11 +5373,18 @@ fn cli_forward_only_never_reconnects_payload_after_authenticated_connection_clos
             .ok_or_else(|| "tunnel omitted its fingerprint".to_string())?;
         let nonce = bootstrap_request_header(&request, "x-nemo-relay-bootstrap-nonce")
             .ok_or_else(|| "tunnel omitted its nonce".to_string())?;
-        let proof = fake_bootstrap_proof(&key, fingerprint, nonce);
+        let proof = fake_bootstrap_proof(
+            &key,
+            &format!(
+                "nemo-relay/listener/v2\0{fingerprint}\0{}\0test-instance",
+                stream.local_addr().unwrap()
+            ),
+            nonce,
+        );
         stream
             .write_all(
                 format!(
-                    "HTTP/1.1 101 Switching Protocols\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
+                    "HTTP/1.1 101 Switching Protocols\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nX-NeMo-Relay-Instance-Id: test-instance\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
                 )
                 .as_bytes(),
             )
@@ -5441,7 +5468,14 @@ fn write_phase_health_response(
         .ok_or_else(|| "health probe omitted its fingerprint".to_string())?;
     let nonce = bootstrap_request_header(request, "x-nemo-relay-bootstrap-nonce")
         .ok_or_else(|| "health probe omitted its nonce".to_string())?;
-    let proof = fake_bootstrap_proof(key, fingerprint, nonce);
+    let proof = fake_bootstrap_proof(
+        key,
+        &format!(
+            "nemo-relay/listener/v2\0{fingerprint}\0{}\0phase-health",
+            stream.local_addr().unwrap()
+        ),
+        nonce,
+    );
     let body = format!(
         r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"phase-health"}}"#,
         env!("CARGO_PKG_VERSION"),
@@ -5513,6 +5547,8 @@ fn cli_transparent_run_suppresses_persistent_hooks_and_rejects_a_foreign_gateway
     assert!(persistent.stdout.is_empty());
     assert!(persistent.stderr.is_empty());
 
+    let temp = tempfile::tempdir().unwrap();
+    write_test_tls_identity(&temp.path().join("xdg/nemo-relay/bootstrap"));
     let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
     let owned = Command::new(gateway_bin())
         .args([
@@ -5524,6 +5560,8 @@ fn cli_transparent_run_suppresses_persistent_hooks_and_rejects_a_foreign_gateway
         .env("NEMO_RELAY_TRANSPARENT_RUN", "1")
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
         .env("NEMO_RELAY_PROXY_CREDENTIAL", "nrp_foreign-test-credential")
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5546,14 +5584,20 @@ fn cli_transparent_run_suppresses_persistent_hooks_and_rejects_a_foreign_gateway
     let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(request.starts_with("GET /bootstrap/tunnel "));
     assert!(!request.contains(r#"{"session_id":"owned"}"#));
+    assert!(!request.to_lowercase().contains("x-nemo-relay-client-token"));
+    assert!(!request.contains("nrp_foreign-test-credential"));
 }
 
 #[test]
 fn cli_hook_forward_bypasses_ambient_proxies_for_loopback_delivery() {
-    let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
+    let temp = tempfile::tempdir().unwrap();
+    let (server_url, received) =
+        spawn_verified_hook_server(temp.path(), 200, r#"{"continue":true}"#);
     let mut child = Command::new(gateway_bin())
         .args(["hook-forward", "codex", "--fail-closed"])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HTTP_PROXY", "http://127.0.0.1:1")
         .env("HTTPS_PROXY", "http://127.0.0.1:1")
         .env("ALL_PROXY", "http://127.0.0.1:1")
@@ -5577,10 +5621,13 @@ fn cli_hook_forward_bypasses_ambient_proxies_for_loopback_delivery() {
 
 #[test]
 fn cli_hook_forward_reports_http_failure_when_fail_closed() {
-    let (server_url, received) = spawn_single_request_server(503, "unavailable");
+    let temp = tempfile::tempdir().unwrap();
+    let (server_url, received) = spawn_verified_hook_server(temp.path(), 503, "unavailable");
     let mut child = Command::new(gateway_bin())
         .args(["hook-forward", "codex", "--fail-closed"])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5597,13 +5644,17 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
 
 #[test]
 fn cli_hook_forward_exits_two_for_guardrail_rejection() {
-    let (server_url, received) = spawn_single_request_server(
+    let temp = tempfile::tempdir().unwrap();
+    let (server_url, received) = spawn_verified_hook_server(
+        temp.path(),
         403,
         r#"{"error":{"message":"guardrail rejected: blocked by policy","type":"nemo_relay_guardrail_rejected","reason":"blocked by policy"}}"#,
     );
     let mut child = Command::new(gateway_bin())
         .args(["hook-forward", "codex"])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -5668,19 +5719,24 @@ fn cli_hook_delivery_transport_failures_respect_policy_in_gateway_and_daemon_mod
 
 #[test]
 fn cli_hook_forward_bounds_responses_under_both_failure_policies() {
+    let temp = tempfile::tempdir().unwrap();
     const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
     for fail_closed in [false, true] {
         let (server_url, received) =
-            spawn_single_request_server(200, "x".repeat(MAX_HOOK_RESPONSE_BYTES + 1));
+            spawn_verified_hook_server(temp.path(), 200, "x".repeat(MAX_HOOK_RESPONSE_BYTES + 1));
         let mut command = Command::new(gateway_bin());
         command
             .args(["hook-forward", "codex"])
             .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if fail_closed {
             command.arg("--fail-closed");
+        } else {
+            command.arg("--fail-open");
         }
         let mut child = command.spawn().unwrap();
         child.stdin.take().unwrap().write_all(b"{}").unwrap();
@@ -5690,10 +5746,56 @@ fn cli_hook_forward_bounds_responses_under_both_failure_policies() {
         assert!(output.stdout.is_empty());
         assert!(
             String::from_utf8_lossy(&output.stderr)
-                .contains("hook forward response exceeds the 1048576-byte limit")
+                .contains("HTTP response exceeds the 1048576-byte Relay limit")
         );
         assert!(received.recv_timeout(Duration::from_secs(2)).is_ok());
     }
+}
+
+fn spawn_verified_hook_server(
+    temp: &Path,
+    status: u16,
+    body: impl Into<String>,
+) -> (String, mpsc::Receiver<String>) {
+    let body = body.into();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = temp.join("xdg/nemo-relay/bootstrap");
+    let tls = write_test_tls_identity(&state);
+    let key = [0x5a_u8; 32];
+    std::fs::write(state.join("fingerprint-hmac.key"), key).unwrap();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let request = read_http_request(&mut socket);
+        assert!(request.starts_with("GET /bootstrap/tunnel "));
+        assert!(bootstrap_request_header(&request, "x-nemo-relay-client-token").is_none());
+        let fingerprint =
+            bootstrap_request_header(&request, "x-nemo-relay-bootstrap-fingerprint").unwrap();
+        let nonce = bootstrap_request_header(&request, "x-nemo-relay-bootstrap-nonce").unwrap();
+        let proof = fake_bootstrap_proof(
+            &key,
+            &format!("nemo-relay/listener/v2\0{fingerprint}\0{address}\0test-instance"),
+            nonce,
+        );
+        write!(socket, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: nemo-relay-tls\r\nX-NeMo-Relay-Instance-Id: test-instance\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Length: 0\r\n\r\n").unwrap();
+        let connection = rustls::ServerConnection::new(tls).unwrap();
+        let mut stream = rustls::StreamOwned::new(connection, socket);
+        let _health = read_http_request(&mut stream);
+        let health_body = serde_json::json!({"status":"ok", "service":"nemo-relay", "bootstrap_protocol":BOOTSTRAP_PROTOCOL_VERSION, "instance_id":"test-instance"}).to_string();
+        write!(stream, "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Length: {}\r\n\r\n{health_body}", health_body.len()).unwrap();
+        let request = read_http_request(&mut stream);
+        sender.send(request).unwrap();
+        let _ = write!(
+            stream,
+            "HTTP/1.1 {status} Response\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+    });
+    (format!("http://{address}"), receiver)
 }
 
 fn spawn_single_request_server(
@@ -6571,4 +6673,43 @@ fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verd
     assert_eq!(started["body"], "{}");
     assert_eq!(forward("attacker", "session_shutdown")["status"], 401);
     assert_eq!(forward("victim", "session_shutdown")["status"], 200);
+}
+
+#[test]
+fn cli_legacy_hook_default_blocks_permission_delivery_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let (gateway, requests) = spawn_single_request_server(200, "{}");
+    let mut child = Command::new(gateway_bin())
+        .args([
+            "hook-forward",
+            "claude",
+            "--forward-only",
+            "--gateway-url",
+            &gateway,
+        ])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env_remove("NEMO_RELAY_FAIL_CLOSED")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"hook_event_name":"PreToolUse"}"#)
+        .unwrap();
+    let output = wait_child_with_output(child);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(request.starts_with("GET /healthz "));
+    assert!(!request.to_lowercase().contains("x-nemo-relay-client-token"));
 }

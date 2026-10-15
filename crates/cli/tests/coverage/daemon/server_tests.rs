@@ -2044,6 +2044,22 @@ async fn daemon_plain_listener_starts_and_reports_address_conflicts() {
     })
     .await
     .expect("daemon starts");
+    let hook = tokio::task::spawn_blocking(move || {
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7_u8; 32]);
+        crate::gateway::client::post_daemon_verified(
+            &format!("http://127.0.0.1:{running_port}"),
+            "/hooks/claude-code",
+            &[(CLIENT_TOKEN_HEADER.to_owned(), token)],
+            br#"{"hook_event_name":"PreToolUse"}"#,
+            Duration::from_secs(5),
+            1024,
+        )
+    })
+    .await
+    .unwrap()
+    .expect("daemon serves hooks through pinned TLS");
+    assert_eq!(hook.status, 200);
+    assert_eq!(hook.body, br#"{"continue":true}"#);
     running.abort();
     let _ = running.await;
 

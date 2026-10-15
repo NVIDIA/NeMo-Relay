@@ -734,9 +734,20 @@ longer than two seconds; configure their evaluation timeouts to leave room for
 hook transport within that limit. Delivery timeouts follow the hook's failure
 policy, and timed-out requests are not retried.
 
-Manually authored commands fail open when neither policy flag is present.
-`NEMO_RELAY_FAIL_CLOSED=1` changes that default for compatibility, while an
-explicit flag takes precedence over the environment.
+Without a policy flag, gateway and daemon hooks fail closed for events that
+check permissions or run tools. These events include `PreToolUse` and
+`PermissionRequest`. Hooks also fail closed if Relay cannot read the payload,
+parse its JSON, or find an event name. Payloads that exceed the size limit
+also fail closed. Other named events fail open.
+
+Set `NEMO_RELAY_FAIL_CLOSED=1` to make all events fail closed. An explicit
+`--fail-open` or `--fail-closed` flag overrides the environment and event defaults.
+
+For local hook requests, Relay checks the server's identity before sending
+credentials or payloads. It uses an encrypted TLS connection and a saved
+certificate for your user account. Gateway health checks also verify the
+server's address and running instance. Restart Relay gateways and daemons
+after upgrading to use this transport.
 
 Fail-closed delivery failures return exit code `2`, including connection errors,
 timeouts, and HTTP errors such as a daemon's `503` response when a required

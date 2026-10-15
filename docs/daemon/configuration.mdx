@@ -438,15 +438,22 @@ guardrails are skipped for that request; the coding agent keeps working:
   `reason = "unbound_credential"`, or `reason = "no_live_session"`,
   rate-limited, without the credential.
 
-On the client side, `nemo-relay daemon hook` with no resolvable credential does
-not contact the daemon. It honors the same hook failure policy in daemon and
-daemon-worker deployments: `--fail-closed` reports a delivery failure, writes no
-allow response, and exits nonzero. Without an explicit flag, policy events such
-as `PreToolUse` and `pre_tool_call`, or `NEMO_RELAY_FAIL_CLOSED=1`, also fail
-closed. `--fail-open` overrides the default policy; fail-open hooks write the
-same pass-through response, exit `0`, and log a warning. Restore the credential
-through `NEMO_RELAY_CLIENT_TOKEN` or the client token file before retrying a
-fail-closed hook.
+If `nemo-relay daemon hook` cannot find a valid credential, it does not contact
+the daemon. The same failure policy applies in daemon and daemon-worker
+setups. With `--fail-closed`, the hook reports an error and exits with code `2`.
+It does not send an allow response.
+
+Without a policy flag, events such as `PreToolUse` and `pre_tool_call` also
+fail closed. Hooks also fail closed if Relay cannot read the payload, parse
+its JSON, or find an event name. Payloads that exceed the size limit fail
+closed too. Set `NEMO_RELAY_FAIL_CLOSED=1` to make all events fail closed.
+
+The `--fail-open` flag overrides these defaults. The hook exits with code `0`
+and logs a warning. It sends a pass-through response only for named events
+that do not require a permission check. Restore the credential through
+`NEMO_RELAY_CLIENT_TOKEN` or the client token file before retrying a fail-closed
+hook.
+
 `nemo-relay daemon mcp` with no resolvable credential keeps serving the MCP
 protocol without registering a route, so hosts that require the server keep
 running. It does the same, without retrying, when the daemon rejects its
