@@ -477,6 +477,21 @@ pub(crate) async fn forward_stream_to_channel(
 // Scope stack creation
 // ---------------------------------------------------------------------------
 
+/// Inspect a selected Python binding without synchronizing or activating a stack.
+#[pyfunction]
+#[pyo3(signature = (stack=None))]
+pub fn current_scope_stack_snapshot(
+    stack: Option<&PyScopeStack>,
+) -> PyResult<Option<crate::py_types::PyScopeStackSnapshot>> {
+    let snapshot = match stack {
+        Some(stack) => nemo_relay::api::runtime::scope_stack_snapshot(&stack.inner).map(Some),
+        None => nemo_relay::api::runtime::current_scope_stack_snapshot(),
+    };
+    snapshot
+        .map(|snapshot| snapshot.map(|inner| crate::py_types::PyScopeStackSnapshot { inner }))
+        .map_err(flow_error_to_py_err)
+}
+
 /// Create a new isolated scope stack with its own root scope.
 ///
 /// Returns:
@@ -2361,6 +2376,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_collect_resource_metrics, m)?)?;
 
     // Scope stack creation / binding / query
+    m.add_function(wrap_pyfunction!(current_scope_stack_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(capture_propagation_context, m)?)?;
     m.add_function(wrap_pyfunction!(capture_rootless_propagation_context, m)?)?;

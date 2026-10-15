@@ -61,6 +61,8 @@ Public data types:
     RuntimeRegistrationIdentity: Structured identity of a runtime registration.
     ConditionalMiddlewareGuardrailHandle: Opaque handle for a registered guardrail.
     ScopeType: Semantic category for a Relay execution scope.
+    ScopeStackEntry: Scope UUID and semantic category in a detached snapshot.
+    ScopeStackSnapshot: Immutable root-to-top scope entries for an active binding.
     WorkerSdkError: SDK, host-call, or worker protocol error.
 
 Public callback aliases:
@@ -142,6 +144,8 @@ from ._api import (
     RuntimeRegistrationKind,
     RuntimeRegistrationOwner,
     RuntimeRegistrationOwnerKind,
+    ScopeStackEntry,
+    ScopeStackSnapshot,
     ScopeType,
     SubscriberCallback,
     ToolConditionalCallback,
@@ -210,6 +214,8 @@ __all__ = [
     "RuntimeRegistrationOwnerKind",
     "PendingMarkSpec",
     "ScopeType",
+    "ScopeStackEntry",
+    "ScopeStackSnapshot",
     "SubscriberCallback",
     "ToolConditionalCallback",
     "ToolExecutionCallback",

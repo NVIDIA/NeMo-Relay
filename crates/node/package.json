@@ -69,8 +69,8 @@
     "format": "prettier --write \"*.{js,ts,d.ts}\" \"tests/**/*.{mjs,cjs,js,mts,cts,ts,tsx}\"",
     "format:check": "prettier --check \"*.{js,ts,d.ts}\" \"tests/**/*.{mjs,cjs,js,mts,cts,ts,tsx}\"",
     "precommit:format": "node ../../scripts/lint/prettier-precommit.mjs",
-    "precoverage": "npm run build-debug",
-    "pretest": "npm run build-debug",
+    "precoverage": "npm run build-debug -- --features __skip-implicit-config",
+    "pretest": "npm run build-debug -- --features __skip-implicit-config",
     "test": "node --test --test-force-exit tests/*.mjs",
     "coverage": "c8 --reporter=text --reporter=json-summary --reporter=cobertura --reports-dir coverage node --test --test-force-exit --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=junit.xml tests/*.mjs"
   },

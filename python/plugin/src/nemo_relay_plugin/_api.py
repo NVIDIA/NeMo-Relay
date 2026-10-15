@@ -83,6 +83,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
+from uuid import UUID
 
 grpc: Any = importlib.import_module("grpc")
 pb: Any = importlib.import_module("._proto.plugin_worker_pb2", __package__)
@@ -1009,6 +1010,21 @@ class ScopeType(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class ScopeStackEntry:
+    """Canonical scope UUID and semantic type from the visible stack."""
+
+    scope_id: str
+    scope_type: ScopeType
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeStackSnapshot:
+    """Detached root-to-top entries including implicit and synthetic roots."""
+
+    scopes: tuple[ScopeStackEntry, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _BoundScopeContext:
     scope_stack_id: str
     parent_scope_id: str | None = None
@@ -1879,6 +1895,44 @@ class PluginRuntime:
             )
         )
         _ack_to_result(response)
+
+    async def current_scope_stack_snapshot(self) -> ScopeStackSnapshot | None:
+        """Return owned scope UUIDs/types, or None when no context is bound.
+
+        Raises:
+            WorkerSdkError: Unsupported hosts, invalid/expired bindings, or
+                malformed snapshot responses. Inspection never creates a stack.
+        """
+        try:
+            response = await self._host_stub.GetCurrentScopeStackSnapshot(
+                pb.GetCurrentScopeStackSnapshotRequest(
+                    activation_id=self._activation_id,
+                    auth_token=self._auth_token,
+                    scope=self._scope_context(),
+                )
+            )
+        except grpc.aio.AioRpcError as error:
+            if error.code() == grpc.StatusCode.UNIMPLEMENTED:
+                raise WorkerSdkError(
+                    "scope stack snapshots are unsupported by this host; require the grpc-v1 snapshot extension"
+                ) from error
+            raise WorkerSdkError(f"GetCurrentScopeStackSnapshot failed: {error.details()}") from error
+        if response.HasField("error"):
+            raise _worker_error_to_sdk(response.error)
+        if not response.HasField("snapshot"):
+            return None
+        categories = tuple(ScopeType)
+        entries = []
+        for entry in response.snapshot.scopes:
+            try:
+                identifier = str(UUID(entry.scope_id))
+            except ValueError as error:
+                raise WorkerSdkError("invalid snapshot scope UUID") from error
+            category = (
+                categories[entry.scope_type - 1] if 1 <= entry.scope_type <= len(categories) else ScopeType.UNKNOWN
+            )
+            entries.append(ScopeStackEntry(identifier, category))
+        return ScopeStackSnapshot(tuple(entries))
 
     async def runtime_diagnostics(self) -> RuntimeDiagnostics:
         """Return a bounded snapshot of active host runtime diagnostics.

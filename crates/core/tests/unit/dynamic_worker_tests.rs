@@ -5029,3 +5029,299 @@ fn worker_http_errors_include_the_verified_reporting_plugin() {
         Err(FlowError::Internal(_))
     ));
 }
+
+fn snapshot_request(
+    scope: Option<ScopeContext>,
+) -> Request<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest> {
+    Request::new(
+        nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope,
+        },
+    )
+}
+
+fn snapshot_context(scope_stack_id: &str) -> ScopeContext {
+    ScopeContext {
+        scope_stack_id: scope_stack_id.into(),
+        parent_scope_id: String::new(),
+    }
+}
+
+#[tokio::test]
+async fn scope_stack_snapshot_requires_explicit_context_and_authenticated_ownership() {
+    let service = WorkerHostRuntimeService {
+        state: Arc::new(WorkerHostRuntimeState::new(
+            ACTIVATION_ID.into(),
+            AUTH_TOKEN.into(),
+        )),
+    };
+    crate::api::runtime::TASK_SCOPE_STACK
+        .scope(crate::api::runtime::create_scope_stack(), async {
+            let response = service
+                .get_current_scope_stack_snapshot(snapshot_request(None))
+                .await
+                .unwrap()
+                .into_inner();
+            assert!(response.snapshot.is_none());
+            assert!(response.error.is_none());
+            for identifier in ["", "   ", "expired-or-foreign"] {
+                let error = service
+                    .get_current_scope_stack_snapshot(snapshot_request(Some(snapshot_context(
+                        identifier,
+                    ))))
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    error.code(),
+                    if identifier.trim().is_empty() {
+                        tonic::Code::InvalidArgument
+                    } else {
+                        tonic::Code::NotFound
+                    }
+                );
+            }
+            for (activation_id, auth_token) in [
+                ("foreign-activation", AUTH_TOKEN),
+                (ACTIVATION_ID, "foreign-token"),
+            ] {
+                let mut request = snapshot_request(None).into_inner();
+                request.activation_id = activation_id.into();
+                request.auth_token = auth_token.into();
+                assert_eq!(
+                    service
+                        .get_current_scope_stack_snapshot(Request::new(request))
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    tonic::Code::PermissionDenied
+                );
+            }
+        })
+        .await;
+    let foreign_state = WorkerHostRuntimeState::new("foreign-activation".into(), AUTH_TOKEN.into());
+    let foreign_identifier = foreign_state
+        .insert_invocation_scope_stack(crate::api::runtime::create_scope_stack(), None)
+        .unwrap();
+    assert_eq!(
+        service
+            .get_current_scope_stack_snapshot(snapshot_request(Some(snapshot_context(
+                &foreign_identifier
+            ))))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    foreign_state.cleanup_invocation_scope_stack(&foreign_identifier);
+}
+
+#[tokio::test]
+async fn scope_stack_snapshot_preserves_real_ids_and_rejects_foreign_parent() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let source_stack = crate::api::runtime::create_scope_stack();
+    let agent = crate::api::runtime::with_scope_stack(source_stack.clone(), || {
+        push_scope(
+            PushScopeParams::builder()
+                .name("snapshot-agent")
+                .scope_type(ScopeType::Agent)
+                .build(),
+        )
+    })
+    .unwrap();
+    let expected = crate::api::runtime::scope_stack_snapshot(&source_stack).unwrap();
+    let scope_stack_id = state
+        .insert_invocation_scope_stack(source_stack, None)
+        .unwrap();
+    let context = snapshot_context(&scope_stack_id);
+    let first = service
+        .get_current_scope_stack_snapshot(snapshot_request(Some(context.clone())))
+        .await
+        .unwrap()
+        .into_inner()
+        .snapshot
+        .unwrap();
+    assert_eq!(first.scopes.len(), expected.scopes.len());
+    for (actual, expected) in first.scopes.iter().zip(&expected.scopes) {
+        assert_eq!(actual.scope_id, expected.scope_id.to_string());
+        assert_eq!(
+            actual.scope_type,
+            snapshot_scope_type_to_proto(expected.scope_type)
+        );
+    }
+    assert_eq!(
+        first.scopes.last().unwrap().scope_id,
+        agent.uuid.to_string()
+    );
+    let second_identifier = state
+        .insert_invocation_scope_stack(crate::api::runtime::create_scope_stack(), None)
+        .unwrap();
+    let pushed = service
+        .push_scope(Request::new(PushScopeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope: Some(snapshot_context(&second_identifier)),
+            name: "foreign-parent".into(),
+            scope_type: ProtoScopeType::Function as i32,
+            data: None,
+            metadata: None,
+            input: None,
+            timestamp_unix_micros: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(pushed.error.is_none());
+    let mut foreign_parent = context.clone();
+    foreign_parent.parent_scope_id = pushed.scope_handle_id.clone();
+    assert_eq!(
+        service
+            .get_current_scope_stack_snapshot(snapshot_request(Some(foreign_parent)))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    let owned_parent = ScopeContext {
+        scope_stack_id: second_identifier.clone(),
+        parent_scope_id: pushed.scope_handle_id,
+    };
+    let owned = service
+        .get_current_scope_stack_snapshot(snapshot_request(Some(owned_parent)))
+        .await
+        .unwrap()
+        .into_inner()
+        .snapshot
+        .unwrap();
+    assert_eq!(
+        owned.scopes.last().unwrap().scope_type,
+        ProtoScopeType::Function as i32
+    );
+    let repeated = service
+        .get_current_scope_stack_snapshot(snapshot_request(Some(context)))
+        .await
+        .unwrap()
+        .into_inner()
+        .snapshot
+        .unwrap();
+    assert_eq!(repeated, first);
+    state.cleanup_invocation_scope_stack(&scope_stack_id);
+    state.cleanup_invocation_scope_stack(&second_identifier);
+}
+
+#[tokio::test]
+async fn scope_stack_snapshot_revokes_before_cancellation_rpc_and_expires_after_cleanup() {
+    // The mock worker isolates the real host invocation guard and inspection service.
+    let (callback, _shutdown, _cancellations) = fake_callback_service_with_handlers(
+        |_| Box::pin(std::future::pending()),
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let request = callback
+        .base_request(
+            "snapshot-cancel",
+            RegistrationSurface::ToolRequestIntercept,
+            None,
+            Some(invoke_request_payload_tool("tool", json!({}), None)),
+        )
+        .unwrap();
+    let context = request.scope.clone().unwrap();
+    let service = WorkerHostRuntimeService {
+        state: callback.host_state.clone(),
+    };
+    let mut guard = WorkerInvocationGuard::new(&callback, &request);
+    assert!(
+        service
+            .get_current_scope_stack_snapshot(snapshot_request(Some(context.clone())))
+            .await
+            .unwrap()
+            .into_inner()
+            .snapshot
+            .is_some()
+    );
+    assert!(guard.cancellation("snapshot cancellation test").is_some());
+    assert_eq!(
+        service
+            .get_current_scope_stack_snapshot(snapshot_request(Some(context.clone())))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Cancelled
+    );
+    let dropped = service
+        .drop_scope_stack(Request::new(DropScopeStackRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            scope_stack_id: context.scope_stack_id.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(dropped.ok);
+    assert!(dropped.error.is_none());
+    guard.cleanup();
+    assert_eq!(
+        service
+            .get_current_scope_stack_snapshot(snapshot_request(Some(context)))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scope_stack_snapshot_cleanup_races_return_complete_values_or_explicit_errors() {
+    for _ in 0..32 {
+        let state = Arc::new(WorkerHostRuntimeState::new(
+            ACTIVATION_ID.into(),
+            AUTH_TOKEN.into(),
+        ));
+        let source_stack = crate::api::runtime::create_scope_stack();
+        let scope_stack_id = state
+            .insert_invocation_scope_stack(source_stack, None)
+            .unwrap();
+        let stack = state.stack(&scope_stack_id).unwrap().unwrap();
+        crate::api::runtime::with_scope_stack(stack.clone(), || {
+            push_scope(
+                PushScopeParams::builder()
+                    .name("snapshot-before-cleanup")
+                    .scope_type(ScopeType::Function)
+                    .build(),
+            )
+        })
+        .unwrap();
+        let expected = crate::api::runtime::scope_stack_snapshot(&stack).unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let read_state = state.clone();
+        let read_identifier = scope_stack_id.clone();
+        let read_barrier = barrier.clone();
+        let read = tokio::spawn(async move {
+            read_barrier.wait().await;
+            WorkerHostRuntimeService { state: read_state }
+                .get_current_scope_stack_snapshot(snapshot_request(Some(snapshot_context(
+                    &read_identifier,
+                ))))
+                .await
+        });
+        barrier.wait().await;
+        state.cleanup_invocation_scope_stack(&scope_stack_id);
+        match read.await.unwrap() {
+            Ok(response) => {
+                let snapshot = response.into_inner().snapshot.unwrap();
+                assert_eq!(snapshot.scopes.len(), expected.scopes.len());
+                for (actual, expected) in snapshot.scopes.iter().zip(&expected.scopes) {
+                    assert_eq!(actual.scope_id, expected.scope_id.to_string());
+                }
+            }
+            Err(error) => assert_eq!(error.code(), tonic::Code::NotFound),
+        }
+    }
+}
