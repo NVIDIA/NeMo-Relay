@@ -255,7 +255,8 @@ pub(super) fn normalize_v1_path_for_base(base: &str, path_and_query: &str) -> St
 
 // Gives alignment adapters a chance to choose an agent-native upstream before default provider
 // routing runs. Today this supports Codex ChatGPT auth; future harness fallbacks should stay in
-// alignment rather than adding provider-shaped checks here.
+// alignment rather than adding provider-shaped checks here. The one exception is rebasing the
+// Codex ChatGPT backend onto `chatgpt_codex_base_url`, because only the gateway holds config.
 pub(super) fn gateway_upstream_url_override(
     route: ProviderRoute,
     headers: &HeaderMap,
@@ -273,6 +274,15 @@ pub(super) fn gateway_upstream_url_override(
             route.configured_auth_header(config),
         ),
     )
+    .map(|url| {
+        match (
+            &config.chatgpt_codex_base_url,
+            url.strip_prefix(alignment::codex::CHATGPT_CODEX_BASE_URL),
+        ) {
+            (Some(base), Some(path)) => format!("{}{path}", base.trim_end_matches('/')),
+            _ => url,
+        }
+    })
 }
 
 // The upstream this request names for itself, composed with the request path.
@@ -304,12 +314,51 @@ pub(super) fn client_named_upstream_url(
         invocation_authenticated,
     ) {
         crate::agents::pi::alignment::NamedUpstream::Named(base) => {
+            log_named_upstream(&base);
             crate::agents::pi::alignment::NamedUpstream::Named(format!(
                 "{}{path_and_query}",
                 base.trim_end_matches('/')
             ))
         }
+        crate::agents::pi::alignment::NamedUpstream::Rejected(reason) => {
+            log::warn!(
+                target: "nemo_relay.gateway",
+                event = "named_upstream_rejected",
+                reason = reason;
+                "Rejected a client-named upstream"
+            );
+            crate::agents::pi::alignment::NamedUpstream::Rejected(reason)
+        }
         other => other,
+    }
+}
+
+/// Records each distinct origin a caller sends traffic to, once per process, so an operator can
+/// audit where named upstreams went without a log line on every model call.
+///
+/// The set is bounded so a caller cycling through fresh hostnames cannot grow it without limit;
+/// past the bound, new origins are logged on every use instead of being remembered.
+fn log_named_upstream(base: &str) {
+    const MAX_REMEMBERED: usize = 1024;
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+    let Ok(origin) = reqwest::Url::parse(base).map(|url| url.origin().ascii_serialization()) else {
+        return;
+    };
+    let first = {
+        let mut seen = SEEN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let seen = seen.get_or_insert_default();
+        !seen.contains(&origin) && (seen.len() >= MAX_REMEMBERED || seen.insert(origin.clone()))
+    };
+    if first {
+        log::info!(
+            target: "nemo_relay.gateway",
+            event = "named_upstream_used",
+            origin = origin.as_str();
+            "Forwarding to a client-named upstream"
+        );
     }
 }
 

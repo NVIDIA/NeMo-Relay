@@ -1,16 +1,37 @@
 ---
 title: "About"
-description: "Choose the right NeMo Relay getting-started path for your agent system."
+description: "Choose where NeMo Relay attaches to your agent system."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use Getting Started to choose the smallest NeMo Relay path that matches the
-boundary you want to observe or control. Relay can run beside a local
-coding-agent harness, wrap application-owned tool or LLM calls, connect through
-a maintained framework integration, or activate reusable plugin behavior from
-configuration.
+NeMo Relay observes and controls agent work at the boundary where it runs.
+Choose the path that matches the agent runtime, framework, or application you
+already use.
+
+## Choose Where Relay Attaches
+
+Use the boundary that owns the model request or tool execution:
+
+- **Agent runtime:** Observe a coding agent without changing application code.
+- **Framework:** Use a maintained integration when the framework owns callbacks
+  and tool execution.
+- **Application:** Instrument Python, Node.js, or Rust code when your
+  application owns the tool or model call.
+
+You do not need a Rust compiler, a source checkout, or repository development
+tools to install a published CLI binary.
+
+## Try Relay Now
+
+<CardGroup cols={1}>
+<Card title="Quick Starts" icon="fa-solid fa-bolt" href="/getting-started/quick-start">
+Choose the shortest path for your runtime or application, then verify its output.
+</Card>
+</CardGroup>
+
+## Using an AI Coding Assistant
 
 <CardGroup cols={1}>
 <Card
@@ -53,52 +74,30 @@ plugins, or validating emitted events.
 </Card>
 </CardGroup>
 
-## Find the Right Starting Point
+## Go Beyond the First Run
 
-Start with the fastest path that can prove Relay is working, then move toward
-more involved integration and development workflows only when you need them.
+After a working first run, choose an advanced path to build reusable behavior
+or operate Relay as a long-running service:
 
-- **Try now with the CLI:** Use [NeMo Relay CLI](/nemo-relay-cli/about) when a
-  local Claude Code or Codex coding-agent harness owns invocation.
-  Relay can observe hooks, gateway-routed model traffic, and exporter output
-  without changing application code.
-- **Use Hermes Agent's native integration:** NeMo Relay is built into Hermes
-  Agent, and Hermes Agent understands NeMo Relay plugin configurations. No
-  separate Relay installation, observability plugin, or Relay CLI setup is
-  required.
-- **Use a supported integration:** Start with
-  [Supported Integrations](/supported-integrations/about) when LangChain,
-  LangGraph, Deep Agents, or OpenClaw already owns scheduling, callbacks, tool
-  execution, provider payloads, or agent lifecycle hooks.
-- **Instrument application-owned calls:** Start with
-  [Quick Start](/getting-started/quick-start), then use
-  [Instrument Applications](/instrument-applications/about) when your Python,
-  Node.js, or Rust application owns the tool or LLM call site.
-- **Build a custom framework or provider integration:** Use
-  [Integrate into Frameworks](/integrate-into-frameworks/about) when a new
-  framework, orchestration layer, SDK, or provider adapter owns scheduling,
-  retries, callbacks, and provider payloads.
-- **Package reusable runtime behavior:** Use
-  [Build Plugins](/build-plugins/about) for shared middleware, subscribers,
-  exporters, model pricing, policy, or adaptive behavior. Use
-  [Observability](/configure-plugins/observability/about) for export setup and
-  [Adaptive](/configure-plugins/adaptive/about) after baseline instrumentation
-  is working.
+<CardGroup cols={2}>
+<Card title="Build a Plugin" icon="fa-solid fa-puzzle-piece" href="/build-plugins/about">
+Create reusable behavior that observes or controls agent work.
+</Card>
 
-## Getting Started Process
+<Card title="Deploy a Daemon" icon="fa-solid fa-server" href="/daemon/about">
+Run Relay as a managed service for local users or remote clients.
+</Card>
+</CardGroup>
 
-Use the pages in this section in order when you are setting up Relay for the
-first time:
+For deeper guidance, refer to:
 
-1. Review [Prerequisites](/getting-started/prerequisites) for language,
-   package, and repository tooling.
-2. Use [Installation](/getting-started/installation) to install the CLI,
-   language binding, or integration package that matches your boundary.
-3. Use [Configuration](/getting-started/configuration) when you need runtime,
-   plugin, observability, or adaptive setup guidance.
-4. Use [Quick Start](/getting-started/quick-start) to run the smallest
-   working path and confirm Relay emits the expected output.
-
-If you need the conceptual model before setup, read
-[Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer) and
-[Concepts](/about-nemo-relay/concepts).
+- [Installation Overview](/getting-started/installation): Compare packages,
+  supported platforms, and alternative installers.
+- [Configuration / Setup Overview](/getting-started/configuration): Configure
+  runtime behavior and plugins in more detail.
+- [Development Setup](/contribute/development-setup): Build from source or
+  contribute to the repository.
+- [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer) and
+  [Concepts](/about-nemo-relay/concepts): Understand the runtime model.
+- [Integrate into Frameworks](/integrate-into-frameworks/about): Build custom
+  framework integrations.

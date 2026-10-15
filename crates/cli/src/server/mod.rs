@@ -726,8 +726,14 @@ fn gateway_http_client(idle_read_timeout: Option<Duration>, no_redirect: bool) -
         Some(timeout) => builder.read_timeout(timeout),
         None => builder,
     };
+    // The no-redirect client serves only caller-named destinations, so it is also the one that
+    // resolves through the named-upstream address policy.
     let builder = if no_redirect {
-        builder.redirect(reqwest::redirect::Policy::none())
+        builder
+            .redirect(reqwest::redirect::Policy::none())
+            .dns_resolver(Arc::new(
+                crate::agents::pi::alignment::NamedUpstreamResolver::with_environment_proxies(),
+            ))
     } else {
         builder
     };

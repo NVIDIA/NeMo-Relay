@@ -736,6 +736,7 @@ async fn forward_to_provider(
         .uri()
         .path_and_query()
         .map_or("/", |value| value.as_str());
+    let client_named = crate::gateway::daemon_destination_is_client_named(request.headers(), true);
     let destination = match crate::gateway::daemon_provider_upstream_url(
         request.headers(),
         path_and_query,
@@ -756,21 +757,20 @@ async fn forward_to_provider(
         inject_provider_auth(request.headers_mut(), route, &state.config);
     }
     if crate::gateway::websocket::is_websocket(&request) {
-        let client = match super::super::common::transport::pooled_websocket_client() {
-            Ok(client) => client,
-            Err(error) => return message(StatusCode::BAD_GATEWAY, &error.to_string()),
-        };
         let shutdown_state = Arc::clone(&state);
-        return crate::gateway::websocket::forward(
-            &client,
+        return match crate::gateway::websocket::forward_to_provider(
+            client_named,
             request,
             &destination,
-            None,
             in_flight,
             &state.config,
             async move { shutdown_state.wait_until_stopped().await },
         )
-        .await;
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => message(StatusCode::BAD_GATEWAY, &error.to_string()),
+        };
     }
     let destination = match destination.parse::<Uri>() {
         Ok(destination) => destination,
@@ -789,11 +789,15 @@ async fn forward_to_provider(
         Ok(request) => request.map(box_body),
         Err(error) => return message(StatusCode::BAD_REQUEST, &error.to_string()),
     };
-    let response = match state
-        .config
-        .wait_for_response(state.upstream.request(request))
-        .await
-    {
+    let request = match super::super::common::transport::request_provider(
+        &state.upstream,
+        client_named,
+        request,
+    ) {
+        Ok(request) => request,
+        Err(error) => return message(StatusCode::BAD_GATEWAY, &error.to_string()),
+    };
+    let response = match state.config.wait_for_response(request).await {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
             log_worker_upstream_request_failed(&state, route, "transport_error");

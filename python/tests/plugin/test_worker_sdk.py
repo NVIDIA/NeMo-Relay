@@ -3774,3 +3774,39 @@ async def test_tool_execution_intercept_tool_call_id_is_none_when_absent() -> No
     )
 
     assert seen["tool_call_id"] is None
+
+
+@pytest.mark.parametrize("status", range(400, 600))
+def test_http_error_prefix_survives_worker_and_next_round_trip(status: int) -> None:
+    from nemo_relay_plugin import http_error_message
+    from nemo_relay_plugin._api import _sdk_error_to_worker, _worker_error_to_sdk
+
+    message = http_error_message(status, "provider failure")
+    wire = _sdk_error_to_worker(WorkerSdkError(message))
+    assert wire.message == message
+    assert not wire.retryable
+    assert _sdk_error_to_worker(_worker_error_to_sdk(wire)).message == message
+
+
+@pytest.mark.parametrize("message", ["plain failure", "http 403: denied", "HTTP 200: success", "HTTP ４０３: denied"])
+def test_unrecognized_http_error_prefix_keeps_worker_error_code(message: str) -> None:
+    from nemo_relay_plugin._api import _sdk_error_to_worker, _worker_error_to_sdk
+
+    wire = _sdk_error_to_worker(WorkerSdkError(message))
+    assert str(_worker_error_to_sdk(wire)) == f"{wire.code}: {message}"
+
+
+@pytest.mark.parametrize("status", [0, 200, 399, 600, 403.0, True])
+def test_http_error_message_rejects_invalid_status(status: Any) -> None:
+    from nemo_relay_plugin import http_error_message
+
+    with pytest.raises(ValueError, match="between 400 and 599"):
+        http_error_message(status, "invalid")
+
+
+def test_worker_cancellation_keeps_code_even_with_http_prefix() -> None:
+    from nemo_relay_plugin._api import _sdk_error_to_worker, _worker_error_to_sdk
+
+    wire = _sdk_error_to_worker(WorkerSdkError("HTTP 403: denied"))
+    wire.code = "worker.cancelled"
+    assert str(_worker_error_to_sdk(wire)) == "worker.cancelled: HTTP 403: denied"

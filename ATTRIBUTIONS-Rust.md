@@ -41684,7 +41684,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## rustls - 0.23.45
+## rustls - 0.23.46
 
 **Repository URL**: https://github.com/rustls/rustls
 **License Type(s)**: Apache-2.0

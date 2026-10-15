@@ -348,7 +348,16 @@ compatible requests to a proxy, enterprise endpoint, or another provider host:
 [upstream]
 openai_base_url = "https://api.openai.com/v1"
 anthropic_base_url = "https://api.anthropic.com"
+chatgpt_codex_base_url = "https://chatgpt.com/backend-api/codex"
 ```
+
+For the ChatGPT Codex upstream, `--chatgpt-codex-base-url` overrides
+`NEMO_RELAY_CHATGPT_CODEX_BASE_URL`, which overrides the TOML value. The flag
+is available at the top level and on `run`; an explicit `run` flag overrides
+an inherited top-level flag. The URL must use HTTPS, except that HTTP is
+allowed for loopback hosts such as `localhost`, `127.0.0.1`, and `::1`.
+User information, query strings, and fragments are not allowed in the base URL.
+
 
 Provider waits have no deadline by default so long compaction can finish. Caller
 cancellation ends the request. Set `[upstream] response_timeout_secs` to a
@@ -424,12 +433,17 @@ nonempty `OPENAI_API_KEY` is available, Relay removes the ChatGPT credential,
 applies the replacement, and forwards the request to the configured
 `openai_base_url`. Without a replacement, Relay preserves the ChatGPT credential
 and routes the request to the Codex ChatGPT backend instead of
-`openai_base_url`.
+`openai_base_url`. Set `chatgpt_codex_base_url` under `[upstream]` to replace
+that backend, which defaults to `https://chatgpt.com/backend-api/codex`. Relay
+forwards the caller's ChatGPT credential to this URL, so use only an endpoint
+you trust with those credentials.
 
 ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
-They keep the caller's ChatGPT credential and use the native ChatGPT backend
-even when a replacement credential is configured. Sideband attachment routes
-still follow the replacement rules above. Refer to
+They keep the caller's ChatGPT credential and use the ChatGPT backend
+(`chatgpt_codex_base_url` when set) even when a replacement credential is
+configured. Sideband attachment routes use `openai_base_url` and preserve
+the caller's provider credential, even when an administrator credential is
+configured. Refer to
 [Known Issues in 0.11.0](/about-nemo-relay/release-notes#known-issues-in-0110)
 before routing a ChatGPT voice sideband through Relay with a replacement key.
 

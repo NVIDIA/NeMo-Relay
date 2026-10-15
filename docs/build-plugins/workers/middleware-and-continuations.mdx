@@ -500,3 +500,44 @@ Success means Python and Rust exhibit the same Relay semantics despite their dif
 callback syntax. The code examples show each callback contract, while the atomic Python
 example tests and worker SDK integration suites verify callback behavior, authenticated
 transport, and host invocation.
+
+## Forward HTTP error statuses
+
+An execution callback can return an error string beginning with
+`HTTP <status>: <message>` to preserve an upstream HTTP error status through
+Relay. The prefix must appear at the start, use exactly three ASCII digits
+from 400 through 599, and include a space after the colon. Other error strings
+keep their existing handling.
+
+Relay converts a recognized prefix to `FlowError::Upstream` with classification
+`Other`, an empty header map, and the message after the prefix. This convention
+does not enable retries. Use the final provider failure after routing and
+fallback attempts, and redact credentials and sensitive payloads before
+returning the message.
+
+Recognized errors survive execution continuations and stream callbacks. Errors
+after response headers have been sent remain stream errors and cannot change
+the HTTP response status. No native ABI or worker protobuf change is required;
+older hosts treat the prefix as an ordinary error string.
+
+The Rust worker SDK exports `http_error_message`. Return its formatted string
+in `WorkerSdkError::Callback`. In the Python SDK, raise `WorkerSdkError` with
+the result of the same helper:
+
+```python
+from nemo_relay_plugin import WorkerSdkError, http_error_message
+
+raise WorkerSdkError(http_error_message(403, "Provider denied access"))
+```
+
+Relay reads the prefix from `WorkerError.message`; the existing error code and
+protobuf fields remain unchanged. SDKs preserve recognized continuation error
+messages without adding text before the prefix. Worker cancellation retains
+its existing handling even when its message starts with this prefix.
+
+Relay adds `Reported by plugin '<plugin-id>': ` to recognized HTTP error
+messages using the plugin identity verified by the host. This identifies the
+reporting component; a provider or another downstream component may have
+produced the original failure. Reporting context survives continuations,
+without repeating the same leading plugin identity. Structured process logs
+include `plugin_id`, the native or worker boundary, and the HTTP status.

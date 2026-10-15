@@ -1,14 +1,18 @@
 ---
-title: "Installation"
-description: ""
+title: "Installation Overview"
+description: "Compare NeMo Relay packages, supported platforms, and installation methods."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use this page when you are consuming a published NeMo Relay release from a
-package manager.
+For the fastest first run, choose the path for your runtime or language from
+[Quick Starts](/getting-started/quick-start).
+
+Use this page to compare published NeMo Relay installation methods, supported
+platforms, and removal options. Versioned examples match this documentation version;
+unversioned commands install the latest stable release.
 
 If you are working from a source checkout, validating unpublished changes, or
 contributing to the repository, use
@@ -16,14 +20,14 @@ contributing to the repository, use
 
 Choose the package by the boundary you want NeMo Relay to own or observe:
 
-- Install the CLI when a local coding-agent harness owns the invocation
-- Install a language binding when your application owns the tool or LLM call
+- Install the CLI when a local coding-agent harness owns the invocation.
+- Install a language binding when your application owns the tool or large language
+  model (LLM) call.
 - Install an integration package when a supported framework or agent harness
-  owns the boundary
+  owns the boundary.
 
-After installation, use [Quick Start](/getting-started/quick-start) to choose
-the matching runtime path. If a supported framework or agent harness owns the
-boundary, start from [Supported Integrations](/supported-integrations/about).
+For integration behavior beyond the first run, refer to
+[Supported Integrations](/supported-integrations/about).
 
 ## CLI
 
@@ -38,7 +42,7 @@ Install the latest stable release:
 pip install nemo-relay-cli-bin
 ```
 
-To install the Python API and matching CLI together:
+Install the Python API and matching CLI together:
 
 ```bash
 pip install "nemo-relay[cli]"
@@ -96,7 +100,9 @@ user `PATH`; the Unix installer does not edit shell configuration.
 
 ### Supported Platforms
 
-| Operating system | Architecture | Release target |
+The CLI provides prebuilt binaries for these platforms:
+
+| Operating System | Architecture | Release Target |
 | --- | --- | --- |
 | Linux (glibc) | x86_64 | `x86_64-unknown-linux-gnu` |
 | Linux (musl) | x86_64 | `x86_64-unknown-linux-musl` |
@@ -300,8 +306,9 @@ JavaScript API and owns the tool or LLM call boundary.
 npm install nemo-relay-node@0.11.0
 ```
 
-On supported x64 and ARM64 Linux systems, npm automatically installs the native
-package for the host C library, including the musl package on Alpine Linux.
+Use Node.js 24 or newer. On supported x64 and ARM64 Linux systems, npm
+automatically installs the native package for the host C library, including
+the musl package on Alpine Linux.
 
 ## Rust
 
@@ -311,6 +318,8 @@ Add the Rust crates when your application uses NeMo Relay directly from Rust.
 cargo add nemo-relay@0.11.0
 cargo add nemo-relay-adaptive@0.11.0
 ```
+
+The crates provide these capabilities:
 
 - `nemo-relay` provides the core runtime APIs for scopes, middleware, subscribers, plugins, tool calls, and LLM calls.
 - `nemo-relay-adaptive` provides adaptive runtime primitives and Redis-backed learning components when you want adaptive tuning behavior in Rust.
@@ -332,7 +341,7 @@ openclaw gateway restart
 
 Use the package name `nemo-relay-openclaw` for installation. Use the plugin ID
 `nemo-relay` in OpenClaw configuration, inspection, and gateway status commands.
-See the [OpenClaw Plugin Guide](/supported-integrations/openclaw-plugin) for
+Refer to the [OpenClaw Plugin Guide](/supported-integrations/openclaw-plugin) for
 configuration and verification steps.
 
 ### Hermes Agent
@@ -353,6 +362,6 @@ uv add "nemo-relay[langchain,langgraph,deepagents]==0.11.0"
 ```
 
 The extras install the NeMo Relay Python package plus the dependencies needed by
-the maintained public integrations. See
+the maintained public integrations. Refer to
 [Supported Integrations](/supported-integrations/about) for guide links and support
 levels.
