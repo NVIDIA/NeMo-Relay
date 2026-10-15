@@ -771,10 +771,10 @@ fn build_buffered_func(
     })
 }
 
-// Runs a streaming gateway request through `llm_stream_call_execute`. The runtime wraps the
-// upstream byte stream as `LlmJsonStream`; the gateway then re-encodes the parsed events back into
-// SSE frames for the client (Option B trade-off: simpler chunk-level observability, one extra
-// JSON parse/serialize per chunk).
+/// Runs a gateway stream through its provider codec and the managed LLM lifecycle.
+///
+/// The codec checks completion before the runtime finalizes the call. The gateway then
+/// encodes each parsed event as an SSE frame for the client.
 async fn run_managed_streaming(
     state: AppState,
     prepared: PreparedGatewayRequest,
@@ -806,6 +806,13 @@ async fn run_managed_streaming(
             .await;
         return passthrough_streaming(state, prepared, Some(operational)).await;
     };
+    let streaming_codec: Arc<dyn StreamingCodec> = Arc::from(streaming_codec);
+    let codec_for_stream = Arc::clone(&streaming_codec);
+    let func: LlmStreamExecutionNextFn = Arc::new(move |request| {
+        let future = func(request);
+        let codec = Arc::clone(&codec_for_stream);
+        Box::pin(async move { Ok(codec.validate_stream(future.await?)) })
+    });
     let collector = streaming_codec.collector();
     let final_response = Arc::new(Mutex::new(None));
     let final_response_for_finalizer = final_response.clone();

@@ -9181,15 +9181,28 @@ async fn an_inline_shell_span_closes_even_when_its_end_never_arrives() {
     deregister_subscriber(subscriber_name).unwrap();
 }
 
+/// Hook completions keep MCP identity and status in raw events and exported spans.
 #[tokio::test]
 async fn mcp_harness_metadata_reaches_tool_events_and_promoted_spans() {
     for kind in [AgentKind::ClaudeCode, AgentKind::Codex] {
-        for ending in ["paired", "post-only", "failure", "permission-denied"] {
+        for ending in [
+            "paired",
+            "post-only",
+            "failure",
+            "mcp-error",
+            "interrupted",
+            "Interrupted",
+            "Cancelled",
+            "CANCELED",
+            "ERROR",
+            "permission-denied",
+        ] {
             assert_mcp_harness_metadata(kind, ending).await;
         }
     }
 }
 
+/// Check raw MCP completion fields and the matching OpenTelemetry spans.
 async fn assert_mcp_harness_metadata(kind: AgentKind, ending: &str) {
     let session_id = format!("mcp-{}-{ending}", kind.as_str());
     let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
@@ -9231,6 +9244,26 @@ async fn assert_mcp_harness_metadata(kind: AgentKind, ending: &str) {
         assert_eq!(end.metadata().unwrap()["status"], "denied");
         assert_eq!(end.metadata().unwrap()["error.type"], "guardrail_rejected");
     }
+    if ["interrupted", "Interrupted", "Cancelled", "CANCELED"].contains(&ending) {
+        assert_eq!(
+            end.metadata().unwrap()["tool_completion_outcome"],
+            "interrupted"
+        );
+        assert_eq!(end.metadata().unwrap()["status"], ending);
+    }
+    assert_mcp_genai_projection(&events, ending);
+    if ["failure", "mcp-error", "ERROR"].contains(&ending) {
+        assert_eq!(end.metadata().unwrap()["otel.status_code"], "ERROR");
+        assert_eq!(
+            end.metadata().unwrap()["error.type"],
+            "tool_execution_failed"
+        );
+        assert_mcp_failure_projections(&events);
+    }
+}
+
+/// Check MCP identity and completion status in the GenAI span.
+fn assert_mcp_genai_projection(events: &[Event], ending: &str) {
     let exporter = InMemorySpanExporterBuilder::new().build();
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_simple_exporter(exporter.clone())
@@ -9259,7 +9292,10 @@ async fn assert_mcp_harness_metadata(kind: AgentKind, ending: &str) {
     assert_eq!(attrs["gen_ai.tool.call.id"], "mcp-call");
     assert!(!attrs.contains_key("server.address"));
     assert!(!attrs.contains_key("mcp.session.id"));
-    if ending == "permission-denied" {
+    if ["interrupted", "Interrupted", "Cancelled", "CANCELED"].contains(&ending) {
+        assert!(matches!(tool.status, opentelemetry::trace::Status::Unset));
+    }
+    if ["permission-denied", "failure", "mcp-error", "ERROR"].contains(&ending) {
         assert!(matches!(
             tool.status,
             opentelemetry::trace::Status::Error { .. }
@@ -9268,6 +9304,36 @@ async fn assert_mcp_harness_metadata(kind: AgentKind, ending: &str) {
     subscriber.shutdown().unwrap();
 }
 
+/// Confirm that Full and OpenInference spans retain the tool failure status.
+fn assert_mcp_failure_projections(events: &[Event]) {
+    for projection in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
+        let exporter = InMemorySpanExporterBuilder::new().build();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+            provider,
+            "tool-failure",
+            projection,
+        );
+        for event in events.iter() {
+            subscriber.subscriber()(event);
+        }
+        subscriber.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        let tool = spans
+            .iter()
+            .find(|span| span.name.ends_with("mcp__docs__search"))
+            .unwrap();
+        assert!(matches!(
+            tool.status,
+            opentelemetry::trace::Status::Error { .. }
+        ));
+        subscriber.shutdown().unwrap();
+    }
+}
+
+/// Send MCP hook fixtures through the real adapter and session manager.
 async fn apply_mcp_harness_hooks(
     manager: &SessionManager,
     session_id: &str,
@@ -9295,7 +9361,7 @@ async fn apply_mcp_harness_hooks(
                 .unwrap();
             continue;
         }
-        let hook = if ending == "failure" && hook == "PostToolUse" {
+        let hook = if matches!(ending, "failure" | "interrupted") && hook == "PostToolUse" {
             if kind == AgentKind::Codex {
                 "toolFailed"
             } else {
@@ -9308,7 +9374,13 @@ async fn apply_mcp_harness_hooks(
             json!({
                 "session_id": session_id, "hook_event_name": hook,
                 "tool_name": "mcp__docs__search", "tool_use_id": "mcp-call",
-                "tool_input": {"query": "example"}, "tool_response": {"ok": true},
+                "tool_input": {"query": "example"}, "is_interrupt": ending == "interrupted",
+                "status": if ["Interrupted", "Cancelled", "CANCELED", "ERROR"].contains(&ending) {
+                    Some(ending)
+                } else { None },
+                "tool_response": if ending == "mcp-error" {
+                    json!({"isError": true, "content": [{"type": "text", "text": "fixture failure"}]})
+                } else { json!({"ok": true}) },
             }),
             &headers,
         );
@@ -9918,6 +9990,224 @@ async fn apply_owned_codex_hook(manager: &SessionManager, payload: Value) {
         .apply_authenticated_events(&HeaderMap::new(), outcome.events, "lineage-owner")
         .await
         .unwrap();
+}
+
+/// A result closes a call only if its MCP call ID and owning agent match.
+#[tokio::test]
+async fn codex_gateway_results_recover_missing_mcp_completions_by_id_and_owner() {
+    for child_request in [false, true] {
+        let session_id = if child_request {
+            "mcp-recovery-child"
+        } else {
+            "mcp-recovery-root"
+        };
+        let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+        let capture = Arc::clone(&captured);
+        register_filtered_session_subscriber(
+            session_id,
+            tracked_sessions(&[session_id]),
+            Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+        );
+        let manager = SessionManager::new(session_test_config());
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": session_id, "hook_event_name": "UserPromptSubmit",
+            }),
+        )
+        .await;
+        for id in ["root-call", "other-call", "shell-call", "success-call"] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": session_id, "hook_event_name": "PreToolUse", "tool_use_id": id,
+                    "tool_name": if id == "shell-call" { "Bash" } else { "mcp__fixture__tool" },
+                    "tool_input": {"id": id},
+                }),
+            )
+            .await;
+        }
+        apply_owned_codex_hook(&manager, json!({
+            "session_id": session_id, "hook_event_name": "PostToolUse", "tool_use_id": "success-call",
+            "tool_name": "mcp__fixture__tool", "tool_input": {"id": "success-call"},
+            "tool_response": {"isError": false}, "status": "success",
+        })).await;
+        apply_owned_codex_hook(
+            &manager,
+            json!({
+                "session_id": session_id, "hook_event_name": "SubagentStart", "agent_id": "child",
+            }),
+        )
+        .await;
+        for id in ["child-call", "child-other-call"] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": session_id, "hook_event_name": "PreToolUse", "agent_id": "child",
+                    "tool_use_id": id, "tool_name": "mcp__fixture__tool", "tool_input": {},
+                }),
+            )
+            .await;
+        }
+        // Codex sends the result to the model but skips PostToolUse on failure.
+        // The request has results from both agents. Only the agent making this
+        // request can close its calls.
+        let mut start = llm_start_with_content(
+            session_id,
+            "openai.responses",
+            "gpt-test",
+            json!({
+                "client_metadata": {"thread_id": session_id, "x-codex-installation-id": "fixture"},
+                "input": [
+                    {"type": "function_call_output", "call_id": "root-call", "output": "error: fixture failed"},
+                    {"type": "function_call_output", "call_id": "child-call", "output": "error: fixture failed"},
+                    {"type": "function_call_output", "call_id": "shell-call", "output": "process still running"},
+                    {"type": "function_call_output", "call_id": "success-call", "output": "ok"},
+                    {"type": "function_call_output", "call_id": "unmatched", "output": "ok"},
+                    {"type": "function_call_output", "call_id": "other-call"},
+                ],
+            }),
+        );
+        if child_request {
+            start.subagent_id = Some("child".into());
+        }
+        let recovered = if child_request {
+            "child-call"
+        } else {
+            "root-call"
+        };
+        let retained = if child_request {
+            "root-call"
+        } else {
+            "child-call"
+        };
+        for _ in 0..2 {
+            let prep = manager
+                .prepare_gateway_call(&HeaderMap::new(), start.clone())
+                .await
+                .unwrap();
+            {
+                let sessions = manager.inner.lock().await;
+                let session = &sessions[session_id];
+                assert!(!session.tools.contains_key(recovered));
+                for id in [retained, "shell-call", "other-call", "child-other-call"] {
+                    assert!(session.tools.contains_key(id));
+                }
+            }
+            manager
+                .finish_gateway_call(
+                    &prep.session_id,
+                    prep.owner_subagent_id.as_deref(),
+                    prep.session_finish,
+                )
+                .await;
+        }
+        // A late end hook must not close the child's other call with the same arguments.
+        // A repeated start hook must not reopen the recovered span.
+        for hook in ["PreToolUse", "PostToolUse"] {
+            apply_owned_codex_hook(
+                &manager,
+                json!({
+                    "session_id": session_id, "hook_event_name": hook,
+                    "agent_id": if child_request { Some("child") } else { None },
+                    "tool_use_id": recovered, "tool_name": "mcp__fixture__tool", "tool_input": {},
+                    "tool_response": {"isError": true},
+                }),
+            )
+            .await;
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            assert!(!sessions[session_id].tools.contains_key(recovered));
+            assert!(sessions[session_id].tools.contains_key("child-other-call"));
+        }
+        flush_subscribers().unwrap();
+        {
+            let events = captured.lock().unwrap();
+            let ends: Vec<_> = events
+                .iter()
+                .filter(|event| {
+                    event.tool_call_id() == Some(recovered)
+                        && event.scope_category() == Some(ScopeCategory::End)
+                })
+                .collect();
+            assert_eq!(ends.len(), 1);
+            let metadata = ends[0].metadata().unwrap();
+            let raw_atof = serde_json::to_value(ends[0]).unwrap();
+            assert_eq!(raw_atof["metadata"]["tool_completion_outcome"], "unknown");
+            assert_eq!(metadata["tool_completion_source"], "gateway_request");
+            assert_eq!(metadata["tool_completion_outcome"], "unknown");
+            assert_eq!(metadata["tool_completion_timing"], "upper_bound");
+            assert!(metadata.get("otel.status_code").is_none());
+            assert!(metadata.get("error.type").is_none());
+            // Successful calls keep their original end event and timing.
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| event.tool_call_id() == Some("success-call")
+                        && event.scope_category() == Some(ScopeCategory::End))
+                    .count(),
+                1
+            );
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+        flush_subscribers().unwrap();
+        let events = captured.lock().unwrap();
+        let incomplete = events
+            .iter()
+            .find(|event| {
+                event.tool_call_id() == Some(retained)
+                    && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .unwrap();
+        assert_eq!(
+            incomplete.metadata().unwrap()["tool_completion_outcome"],
+            "incomplete"
+        );
+        assert!(
+            incomplete
+                .metadata()
+                .unwrap()
+                .get("otel.status_code")
+                .is_none()
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.tool_call_id() == Some(recovered)
+                    && event.scope_category() == Some(ScopeCategory::End))
+                .count(),
+            1
+        );
+        let exporter = InMemorySpanExporterBuilder::new().build();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+            provider,
+            "mcp-recovery",
+            OpenTelemetryType::GenAi,
+        );
+        for event in events.iter() {
+            subscriber.subscriber()(event);
+        }
+        subscriber.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        let recovered_span = spans
+            .iter()
+            .find(|span| {
+                attr_map(&span.attributes)
+                    .get("gen_ai.tool.call.id")
+                    .is_some_and(|id| id == recovered)
+            })
+            .unwrap();
+        assert!(matches!(
+            recovered_span.status,
+            opentelemetry::trace::Status::Unset
+        ));
+        subscriber.shutdown().unwrap();
+        deregister_subscriber(session_id).unwrap();
+    }
 }
 
 /// Verify retained delegation closes on inactivity, shutdown, or final parent completion.

@@ -475,6 +475,33 @@ Codex session opens a separate task and trace.
 Relay maps delivered events to agent, turn, subagent, tool, and mark lifecycle
 events. Prompt and stop payloads also provide LLM correlation context.
 
+Codex can skip `PostToolUse` for failed MCP calls. Relay can still close a call
+if a later OpenAI Responses request includes its result. Both the call ID and
+the agent that owns the call must match.
+
+Relay records these fields on the end event:
+
+- `tool_completion_source = "gateway_request"`: Relay found the result in a model request.
+- `tool_completion_timing = "upper_bound"`: Relay ended the span when it received the result.
+  The measured duration can be longer than the tool's actual run time.
+- `tool_completion_outcome = "unknown"`: The request does not say whether the tool succeeded.
+  Relay does not guess from the output text.
+
+Model requests must pass through Relay for this recovery to work. Relay does not
+use this method for shell tools. A shell tool can return output while its process
+keeps running.
+
+When a tool failure hook arrives, or an MCP hook result has `isError: true`, Relay
+closes the matching call with OpenTelemetry status `ERROR`. It sets
+`error.type = "tool_execution_failed"`.
+
+If Relay closes a call without an end hook or a result in a model request, it records
+`tool_completion_outcome = "incomplete"`. The measured duration can be longer than
+the tool's actual run time. A timeout alone does not prove that the tool failed.
+The `trajectory_context` sanitizer keeps these completion fields. To add them to
+OpenTelemetry span attributes, add `"tool_completion_"` to
+`promote_metadata_prefixes` on the configured trace endpoint.
+
 Relay emits an observed `skill.load` mark when it sees a complete file read
 through `cat`, `bat`, `batcat`, or PowerShell `Get-Content`. The final path
 component must equal `SKILL.md` under an ASCII case-insensitive comparison.

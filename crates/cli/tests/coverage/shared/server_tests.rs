@@ -4434,6 +4434,66 @@ async fn gateway_preserves_streaming_body() {
     );
 }
 
+/// A clean upstream EOF still fails if the Responses stream has no final event.
+#[tokio::test]
+async fn gateway_rejects_responses_streams_without_final_events() {
+    for body in [
+        "",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"early\"}}\n\n",
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/v1/responses",
+                post(move || async move { ([(header::CONTENT_TYPE, "text/event-stream")], body) }),
+            );
+            axum::serve(listener, app).await.unwrap();
+        });
+        let mut config = test_config();
+        config.openai_base_url = format!("http://{address}");
+        let response = router(config)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "gpt-test", "input": "hello", "stream": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut response_body = response.into_body();
+        if !body.is_empty() {
+            let first = response_body
+                .frame()
+                .await
+                .unwrap()
+                .unwrap()
+                .into_data()
+                .unwrap();
+            assert!(
+                std::str::from_utf8(&first)
+                    .unwrap()
+                    .contains("response.created")
+            );
+        }
+        let error = response_body.frame().await.unwrap().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("stream ended before its final response event")
+        );
+        handle.abort();
+    }
+}
+
 #[tokio::test]
 async fn gateway_preserves_streaming_provider_error_response() {
     async fn rate_limited() -> impl IntoResponse {

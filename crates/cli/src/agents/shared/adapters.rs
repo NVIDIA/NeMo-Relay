@@ -614,6 +614,7 @@ fn agent_llm_hint(payload: &Value, subagent_id: Option<String>) -> ExtractedLlmH
     }
 }
 
+/// Read tool IDs, arguments, results, and status from a hook.
 fn agent_tool_call(
     payload: &Value,
     subagent_id: Option<String>,
@@ -621,15 +622,34 @@ fn agent_tool_call(
     paths: &ToolPathSet,
 ) -> ExtractedToolCall {
     let normalized_event = normalize_name(event_name);
+    let tool_name = first_string_at(payload, paths.name);
+    let result = first_value_at(payload, paths.result)
+        .or_else(|| event_detail_result(payload, &normalized_event));
+    let status =
+        first_string_at(payload, paths.status).or_else(|| derived_tool_status(&normalized_event));
+    // An MCP request can succeed even when its tool fails.
+    // Read `isError` only for MCP tools.
+    let mcp_failure = tool_name
+        .as_deref()
+        .is_some_and(|name| name.starts_with("mcp__"))
+        && result
+            .as_ref()
+            .and_then(|result| result.get("isError"))
+            .and_then(Value::as_bool)
+            == Some(true);
     ExtractedToolCall {
         tool_call_id: first_string_at(payload, paths.call_id),
-        tool_name: first_string_at(payload, paths.name),
+        tool_name,
         subagent_id,
         arguments: first_value_at(payload, paths.arguments),
-        result: first_value_at(payload, paths.result)
-            .or_else(|| event_detail_result(payload, &normalized_event)),
-        status: first_string_at(payload, paths.status)
-            .or_else(|| derived_tool_status(&normalized_event)),
+        result,
+        status: if payload.get("is_interrupt").and_then(Value::as_bool) == Some(true) {
+            Some("interrupted".into())
+        } else if mcp_failure {
+            Some("error".into())
+        } else {
+            status
+        },
     }
 }
 
