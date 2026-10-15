@@ -37,6 +37,7 @@ use sha2::{Digest, Sha256};
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
     has_configured_headers, validate_header_files, validate_header_http_endpoint,
+    validate_insecure_http_hosts,
 };
 use super::otel::{
     DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, OpenTelemetryError, OtlpTransport, Result,
@@ -112,6 +113,7 @@ pub struct OpenTelemetryMetricConfig {
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
+    insecure_http_hosts: Vec<String>,
     resource_attributes: HashMap<String, String>,
     service_name: Option<String>,
     promote_resource_metadata_prefixes: Vec<String>,
@@ -136,6 +138,7 @@ impl OpenTelemetryMetricConfig {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             header_file: HashMap::new(),
+            insecure_http_hosts: Vec::new(),
             resource_attributes: HashMap::new(),
             service_name: None,
             promote_resource_metadata_prefixes: Vec::new(),
@@ -176,6 +179,16 @@ impl OpenTelemetryMetricConfig {
     /// Map an exporter header name to the environment variable supplying its value.
     pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
         self.header_env.insert(key.into(), variable.into());
+        self
+    }
+
+    /// Trust plain HTTP to these non-loopback hosts for configured headers.
+    pub fn with_insecure_http_hosts<I, S>(mut self, hosts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.insecure_http_hosts = hosts.into_iter().map(Into::into).collect();
         self
     }
 
@@ -302,7 +315,7 @@ impl OpenTelemetryMetricConfig {
                                 .to_string(),
                         )
                     })?;
-                validate_header_http_endpoint(&endpoint)
+                validate_header_http_endpoint(&endpoint, &[])
                     .map_err(OpenTelemetryError::ExporterBuild)?;
             }
         } else {
@@ -311,8 +324,10 @@ impl OpenTelemetryMetricConfig {
             validate_telemetry_sdk_resource_attributes(&self.resource_attributes)?;
             reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
             validate_signal_headers(&self.headers)?;
+            validate_insecure_http_hosts(&self.insecure_http_hosts)
+                .map_err(OpenTelemetryError::ExporterBuild)?;
             if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
-                validate_header_http_endpoint(&self.endpoint)
+                validate_header_http_endpoint(&self.endpoint, &self.insecure_http_hosts)
                     .map_err(OpenTelemetryError::ExporterBuild)?;
             }
         }
@@ -695,6 +710,7 @@ fn build_metric_provider(
                     builder.with_http_client(HeaderFileHttpClient::new(
                         client,
                         HeaderFileResolver::new(config.header_file.clone()),
+                        config.insecure_http_hosts.clone(),
                     ))
                 };
                 if !config.headers.is_empty() {

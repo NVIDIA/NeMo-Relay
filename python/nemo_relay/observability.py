@@ -240,6 +240,7 @@ class OpenTelemetryEndpointConfig:
     promote_metadata_prefixes: list[str] = field(default_factory=list)
     promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
     header_file: dict[str, str] = field(default_factory=dict)
+    insecure_http_hosts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize this endpoint to the canonical plugin shape."""
@@ -265,6 +266,7 @@ class OpenTelemetryEndpointConfig:
                 "headers": self.headers,
                 "header_env": self.header_env,
                 "header_file": self.header_file or None,
+                "insecure_http_hosts": self.insecure_http_hosts or None,
                 "resource_attributes": self.resource_attributes,
             }
         )
@@ -286,6 +288,7 @@ class OpenTelemetrySignalEndpointConfig:
     timeout_millis: int = 3000
     header_file: dict[str, str] = field(default_factory=dict)
     promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
+    insecure_http_hosts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize this signal endpoint to the canonical plugin shape."""
@@ -296,6 +299,7 @@ class OpenTelemetrySignalEndpointConfig:
                 "headers": self.headers,
                 "header_env": self.header_env,
                 "header_file": self.header_file or None,
+                "insecure_http_hosts": self.insecure_http_hosts or None,
                 "resource_attributes": self.resource_attributes,
                 "promote_resource_metadata_prefixes": self.promote_resource_metadata_prefixes or None,
                 "service_name": self.service_name,

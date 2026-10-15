@@ -1349,6 +1349,7 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
         headers: HashMap::new(),
         header_env: HashMap::new(),
         header_file: HashMap::new(),
+        insecure_http_hosts: Vec::new(),
         resource_attributes: HashMap::new(),
         promote_resource_metadata_prefixes: Vec::new(),
         service_name: default_otel_service_name(),
@@ -1406,6 +1407,7 @@ fn signal_endpoint_resolution_rejects_explicit_wrong_signal_paths() {
         headers: HashMap::new(),
         header_env: HashMap::new(),
         header_file: HashMap::new(),
+        insecure_http_hosts: Vec::new(),
         resource_attributes: HashMap::new(),
         promote_resource_metadata_prefixes: Vec::new(),
         service_name: default_otel_service_name(),
@@ -1600,6 +1602,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             header_file: HashMap::new(),
+            insecure_http_hosts: Vec::new(),
             resource_attributes: HashMap::new(),
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
@@ -1796,6 +1799,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             headers: HashMap::new(),
             header_env: HashMap::from([("authorization".to_string(), variable.to_string())]),
             header_file: HashMap::new(),
+            insecure_http_hosts: Vec::new(),
             resource_attributes: HashMap::new(),
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
@@ -1827,6 +1831,7 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         headers: HashMap::new(),
         header_env: HashMap::new(),
         header_file: HashMap::new(),
+        insecure_http_hosts: Vec::new(),
         resource_attributes: HashMap::new(),
         mark_projection: MarkProjection::default(),
         mark_exclude_names: default_mark_exclude_names(),
@@ -1887,6 +1892,7 @@ fn test_signal_endpoint() -> OpenTelemetrySignalEndpointConfig {
         headers: HashMap::new(),
         header_env: HashMap::new(),
         header_file: HashMap::new(),
+        insecure_http_hosts: Vec::new(),
         resource_attributes: HashMap::new(),
         promote_resource_metadata_prefixes: Vec::new(),
         service_name: default_otel_service_name(),
@@ -2175,6 +2181,57 @@ fn all_invalid_trace_batch_configs_still_block_activation() {
             .contains("requires at least one valid trace, log, or metric endpoint")
     );
     assert!(crate::plugin::test_plugin_host_report().is_none());
+}
+
+#[test]
+fn plain_http_trace_endpoint_activates_only_when_host_is_listed() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = |insecure_http_hosts: Json| {
+        plugin_config(json!({
+            "version": 4,
+            "opentelemetry": {
+                "enabled": true,
+                "traces": [{
+                    "type": "gen_ai",
+                    "endpoint": "http://host.docker.internal:8082/v1/traces",
+                    "headers": {"authorization": "Bearer token"},
+                    "insecure_http_hosts": insecure_http_hosts
+                }]
+            }
+        }))
+    };
+
+    let listed = config(json!(["HOST.DOCKER.INTERNAL"]));
+    assert!(!test_validate_static_plugin_config(&listed).has_errors());
+    futures::executor::block_on(test_initialize_plugin_host_exact(listed)).unwrap();
+    test_close_plugin_host().unwrap();
+
+    reset_runtime();
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(config(json!([]))))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("requires at least one valid trace, log, or metric endpoint"),
+        "{error}"
+    );
+    assert!(
+        error.contains("traces[0] (http://host.docker.internal:8082)"),
+        "{error}"
+    );
+    assert!(
+        error.contains("OTLP trace endpoints require HTTPS"),
+        "{error}"
+    );
+    assert!(!error.contains("Bearer token"), "{error}");
+
+    reset_runtime();
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(config(json!([
+        "http://host.docker.internal"
+    ]))))
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("bare hostname or IP address"), "{error}");
 }
 
 #[test]

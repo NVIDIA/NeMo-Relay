@@ -80,6 +80,8 @@ export interface OpenTelemetryEndpointConfig {
   headers?: Record<string, string>;
   header_env?: Record<string, string>;
   header_file?: Record<string, string>;
+  /** Non-loopback hosts trusted for plain HTTP; spans and headers travel unencrypted. */
+  insecure_http_hosts?: string[];
   resource_attributes?: Record<string, string>;
   service_name?: string;
   service_namespace?: string;
@@ -98,6 +100,8 @@ export interface OpenTelemetrySignalEndpointConfig {
   headers?: Record<string, string>;
   header_env?: Record<string, string>;
   header_file?: Record<string, string>;
+  /** Non-loopback hosts trusted for plain HTTP; spans and headers travel unencrypted. */
+  insecure_http_hosts?: string[];
   resource_attributes?: Record<string, string>;
   service_name?: string;
   service_namespace?: string;

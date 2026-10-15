@@ -216,6 +216,9 @@ pub struct OpenTelemetrySignalEndpointConfig {
     /// Exporter headers mapped to files read immediately before each export.
     #[serde(default)]
     pub header_file: HashMap<String, String>,
+    /// Non-loopback hosts trusted to receive plain HTTP exports, including configured headers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub insecure_http_hosts: Vec<String>,
     /// Extra resource attributes.
     #[serde(default)]
     pub resource_attributes: HashMap<String, String>,
@@ -364,6 +367,9 @@ pub struct OpenTelemetryEndpointConfig {
     /// Exporter headers mapped to files read immediately before each export.
     #[serde(default)]
     pub header_file: HashMap<String, String>,
+    /// Non-loopback hosts trusted to receive plain HTTP exports, including configured headers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub insecure_http_hosts: Vec<String>,
     /// Extra resource attributes.
     #[serde(default)]
     pub resource_attributes: HashMap<String, String>,
@@ -910,6 +916,7 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 otel_editor_field("headers", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_env", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_file", EditorFieldKind::StringMap, &[], false),
+                otel_editor_field("insecure_http_hosts", EditorFieldKind::List, &[], true),
                 otel_editor_field(
                     "resource_attributes",
                     EditorFieldKind::StringMap,
@@ -1019,6 +1026,7 @@ impl EditorConfig for OpenTelemetrySignalEndpointConfig {
                 otel_editor_field("headers", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_env", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_file", EditorFieldKind::StringMap, &[], false),
+                otel_editor_field("insecure_http_hosts", EditorFieldKind::List, &[], true),
                 otel_editor_field(
                     "resource_attributes",
                     EditorFieldKind::StringMap,
@@ -1778,6 +1786,14 @@ fn register_opentelemetry(
     if let Some(resolution) = &metric_resolution {
         warn_skipped_signal_endpoints("metrics", &resolution.endpoints);
     }
+    let trace_destinations = endpoints
+        .iter()
+        .map(|endpoint| super::otel::trace_endpoint_log_identity(&endpoint.endpoint))
+        .collect::<Vec<_>>();
+    let log_destinations =
+        signal_destination_identities(log_resolution.as_ref(), &trace_destinations);
+    let metric_destinations =
+        signal_destination_identities(metric_resolution.as_ref(), &trace_destinations);
     let mut trace_subscribers = build_opentelemetry_subscribers(endpoints)?;
     // Signals are built before the file sinks: an overwrite-mode sink truncates
     // its file as it opens, and a signal that fails registration would leave
@@ -1789,6 +1805,18 @@ fn register_opentelemetry(
         metric_resolution,
         &trace_subscribers,
     )?;
+    let mut skipped_endpoints =
+        skipped_opentelemetry_endpoints("traces", &trace_subscribers, &trace_destinations);
+    skipped_endpoints.extend(skipped_opentelemetry_endpoints(
+        "logs",
+        &signal_subscribers.logs,
+        &log_destinations,
+    ));
+    skipped_endpoints.extend(skipped_opentelemetry_endpoints(
+        "metrics",
+        &signal_subscribers.metrics,
+        &metric_destinations,
+    ));
     // File sinks join the trace fan-out: they receive the same projected spans
     // an endpoint would, so logs and metrics derive from endpoints only.
     let file_sink_subscribers =
@@ -1802,7 +1830,10 @@ fn register_opentelemetry(
         && !has_active_opentelemetry_resource(&log_subscribers)
         && !has_active_opentelemetry_resource(&metric_subscribers)
     {
-        return Err(no_active_opentelemetry_destination_error(ctx));
+        return Err(no_active_opentelemetry_destination_error(
+            ctx,
+            skipped_endpoints,
+        ));
     }
     register_opentelemetry_resources(
         "opentelemetry",
@@ -2324,7 +2355,54 @@ fn build_opentelemetry_file_sink_subscribers(
     Ok(subscribers)
 }
 
-fn no_active_opentelemetry_destination_error(ctx: &PluginRegistrationContext) -> PluginError {
+fn signal_destination_identities(
+    resolution: Option<&ResolvedSignalEndpoints>,
+    trace_destinations: &[String],
+) -> Vec<String> {
+    let Some(resolution) = resolution else {
+        return Vec::new();
+    };
+    resolution
+        .endpoints
+        .iter()
+        .map(|endpoint| match &endpoint.value {
+            OpenTelemetryResource::Active(config) => {
+                super::otel::trace_endpoint_log_identity(&config.endpoint)
+            }
+            OpenTelemetryResource::Skipped(_) => trace_destinations
+                .get(endpoint.index)
+                .cloned()
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn skipped_opentelemetry_endpoints<T>(
+    signal: &str,
+    resources: &[IndexedOpenTelemetryResource<T>],
+    destinations: &[String],
+) -> Vec<String> {
+    resources
+        .iter()
+        .filter_map(|resource| {
+            let OpenTelemetryResource::Skipped(reason) = &resource.value else {
+                return None;
+            };
+            let destination = destinations
+                .get(resource.index)
+                .map_or("an unknown OTLP endpoint", String::as_str);
+            Some(format!(
+                "{signal}[{}] ({destination}): {reason}",
+                resource.index
+            ))
+        })
+        .collect()
+}
+
+fn no_active_opentelemetry_destination_error(
+    ctx: &PluginRegistrationContext,
+    skipped_endpoints: Vec<String>,
+) -> PluginError {
     let file_sink_failures = ctx
         .activation_diagnostics()
         .iter()
@@ -2337,16 +2415,22 @@ fn no_active_opentelemetry_destination_error(ctx: &PluginRegistrationContext) ->
             )
         })
         .collect::<Vec<_>>();
-    if file_sink_failures.is_empty() {
-        PluginError::InvalidConfig(
-            "enabled OpenTelemetry section requires at least one valid trace, log, or metric endpoint"
-                .to_string(),
-        )
-    } else {
-        PluginError::InvalidConfig(format!(
+    if !file_sink_failures.is_empty() {
+        let failures = skipped_endpoints
+            .into_iter()
+            .chain(file_sink_failures)
+            .collect::<Vec<_>>();
+        return PluginError::InvalidConfig(format!(
             "enabled OpenTelemetry section has no active destination: {}",
-            file_sink_failures.join("; ")
-        ))
+            failures.join("; ")
+        ));
+    }
+    let message =
+        "enabled OpenTelemetry section requires at least one valid trace, log, or metric endpoint";
+    if skipped_endpoints.is_empty() {
+        PluginError::InvalidConfig(message.to_string())
+    } else {
+        PluginError::InvalidConfig(format!("{message}: {}", skipped_endpoints.join("; ")))
     }
 }
 
@@ -2461,6 +2545,7 @@ fn derive_signal_endpoint(
         headers: trace.headers.clone(),
         header_env: trace.header_env.clone(),
         header_file: trace.header_file.clone(),
+        insecure_http_hosts: trace.insecure_http_hosts.clone(),
         resource_attributes: trace.resource_attributes.clone(),
         promote_resource_metadata_prefixes: trace.promote_resource_metadata_prefixes.clone(),
         service_name: trace.service_name.clone(),
@@ -2680,6 +2765,7 @@ fn build_log_config(
         .with_completed_span_context_ttl(Duration::from_millis(
             section.completed_span_context_ttl_millis,
         ))
+        .with_insecure_http_hosts(endpoint.insecure_http_hosts.clone())
         .with_promote_resource_metadata_prefixes(
             endpoint.promote_resource_metadata_prefixes.clone(),
         );
@@ -2706,6 +2792,7 @@ fn build_metric_config(
         .with_temporality(temporality)
         .with_max_instruments(section.max_instruments)
         .with_cardinality_limit(section.cardinality_limit)
+        .with_insecure_http_hosts(endpoint.insecure_http_hosts.clone())
         .with_promote_resource_metadata_prefixes(
             endpoint.promote_resource_metadata_prefixes.clone(),
         );
@@ -3800,7 +3887,11 @@ fn build_otel_config(
             "OpenTelemetry endpoint must be a nonblank string".to_string(),
         ));
     }
-    super::otel::validate_trace_endpoint(&section.endpoint)
+    crate::observability::header_file::validate_insecure_http_hosts(&section.insecure_http_hosts)
+        .map_err(|error| {
+        PluginError::InvalidConfig(format!("OpenTelemetry endpoints[{index}] {error}"))
+    })?;
+    super::otel::validate_trace_endpoint(&section.endpoint, &section.insecure_http_hosts)
         .map_err(|error| PluginError::InvalidConfig(error.to_string()))?;
     let transport = match section.transport.as_str() {
         "http_binary" => OtlpTransport::HttpBinary,
@@ -3823,6 +3914,7 @@ fn build_otel_config(
     validate_otel_batch_config(index, &section)?;
     let mut config = CoreOpenTelemetryConfig::new(section.otel_type, section.endpoint)
         .with_transport(transport)
+        .with_insecure_http_hosts(section.insecure_http_hosts)
         .with_timeout(Duration::from_millis(section.timeout_millis))
         .with_instrumentation_scope(section.instrumentation_scope)
         .with_mark_projection(section.mark_projection)
@@ -4269,6 +4361,7 @@ fn validate_opentelemetry_signal_fields(
         "headers",
         "header_env",
         "header_file",
+        "insecure_http_hosts",
         "resource_attributes",
         "promote_resource_metadata_prefixes",
         "service_name",
@@ -4351,6 +4444,7 @@ fn validate_opentelemetry_endpoint_fields(
         "headers",
         "header_env",
         "header_file",
+        "insecure_http_hosts",
         "resource_attributes",
         "service_name",
         "service_namespace",
@@ -6498,7 +6592,7 @@ impl HttpUploadConfig {
             &http.header_env,
             &http.header_file,
         ) {
-            crate::observability::header_file::validate_header_http_endpoint(endpoint)
+            crate::observability::header_file::validate_header_http_endpoint(endpoint, &[])
                 .map_err(std::io::Error::other)?;
         }
         let mut headers = http.headers.clone();

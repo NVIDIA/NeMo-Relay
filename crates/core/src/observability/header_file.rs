@@ -22,6 +22,64 @@ fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
+fn canonical_host(host: &str) -> Option<String> {
+    let bracketed = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    let url = reqwest::Url::parse(&format!("http://{bracketed}/")).ok()?;
+    let canonical = url
+        .host_str()?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let bare = url.port().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.username().is_empty()
+        && url.password().is_none();
+    (bare && !canonical.is_empty()).then_some(canonical)
+}
+
+/// Reject `insecure_http_hosts` entries that are not a bare hostname or IP address.
+pub(crate) fn validate_insecure_http_hosts(hosts: &[String]) -> Result<(), String> {
+    for host in hosts {
+        let malformed = host.contains("://")
+            || host.contains('*')
+            || host.chars().any(char::is_whitespace)
+            || canonical_host(host).is_none();
+        if malformed {
+            return Err(format!(
+                "insecure_http_hosts entry {host:?} must be a bare hostname or IP address without a scheme, port, path, or wildcard"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn plaintext_host_allowed(host: &str, insecure_http_hosts: &[String]) -> bool {
+    is_loopback_host(host)
+        || canonical_host(host).is_some_and(|host| {
+            insecure_http_hosts
+                .iter()
+                .any(|trusted| canonical_host(trusted).as_deref() == Some(host.as_str()))
+        })
+}
+
+/// Return whether a URL uses HTTPS or plain HTTP to loopback or an explicitly trusted host.
+pub(crate) fn is_protected_http_endpoint(endpoint: &str, insecure_http_hosts: &[String]) -> bool {
+    reqwest::Url::parse(endpoint).is_ok_and(|url| {
+        url.scheme() == "https"
+            || (url.scheme() == "http"
+                && url
+                    .host_str()
+                    .is_some_and(|host| plaintext_host_allowed(host, insecure_http_hosts)))
+    })
+}
+
 /// Return whether any configured header source adds request credentials or metadata.
 pub(crate) fn has_configured_headers(
     headers: &HashMap<String, String>,
@@ -35,29 +93,40 @@ fn validate_header_destination(
     endpoint: &str,
     protected_scheme: &str,
     plaintext_scheme: &str,
+    insecure_http_hosts: &[String],
 ) -> Result<(), String> {
     let protected = reqwest::Url::parse(endpoint).is_ok_and(|url| {
         url.scheme() == protected_scheme
-            || (url.scheme() == plaintext_scheme && url.host_str().is_some_and(is_loopback_host))
+            || (url.scheme() == plaintext_scheme
+                && url
+                    .host_str()
+                    .is_some_and(|host| plaintext_host_allowed(host, insecure_http_hosts)))
     });
     if protected {
         Ok(())
-    } else {
+    } else if insecure_http_hosts.is_empty() {
         Err(format!(
             "configured headers require {protected_scheme} for remote endpoints; {plaintext_scheme} is allowed only for localhost or loopback IP addresses"
+        ))
+    } else {
+        Err(format!(
+            "configured headers require {protected_scheme} for remote endpoints; {plaintext_scheme} is allowed only for localhost, loopback IP addresses, or hosts listed in insecure_http_hosts"
         ))
     }
 }
 
 /// Require protected HTTP transport before attaching configured headers.
-pub(crate) fn validate_header_http_endpoint(endpoint: &str) -> Result<(), String> {
-    validate_header_destination(endpoint, "https", "http")
+pub(crate) fn validate_header_http_endpoint(
+    endpoint: &str,
+    insecure_http_hosts: &[String],
+) -> Result<(), String> {
+    validate_header_destination(endpoint, "https", "http", insecure_http_hosts)
 }
 
 /// Require protected WebSocket transport before attaching configured headers.
 #[cfg_attr(not(feature = "atof-streaming"), allow(dead_code))]
 pub(crate) fn validate_header_websocket_endpoint(endpoint: &str) -> Result<(), String> {
-    validate_header_destination(endpoint, "wss", "ws")
+    validate_header_destination(endpoint, "wss", "ws", &[])
 }
 
 /// Validate header source names and require configured files to exist.
@@ -133,18 +202,28 @@ impl HeaderFileResolver {
 pub(crate) struct HeaderFileHttpClient {
     inner: reqwest::Client,
     resolver: HeaderFileResolver,
+    insecure_http_hosts: Vec<String>,
 }
 
 impl HeaderFileHttpClient {
-    pub(crate) fn new(inner: reqwest::Client, resolver: HeaderFileResolver) -> Self {
-        Self { inner, resolver }
+    pub(crate) fn new(
+        inner: reqwest::Client,
+        resolver: HeaderFileResolver,
+        insecure_http_hosts: Vec<String>,
+    ) -> Self {
+        Self {
+            inner,
+            resolver,
+            insecure_http_hosts,
+        }
     }
 }
 
 #[async_trait]
 impl HttpClient for HeaderFileHttpClient {
     async fn send_bytes(&self, request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
-        validate_header_http_endpoint(&request.uri().to_string()).map_err(std::io::Error::other)?;
+        validate_header_http_endpoint(&request.uri().to_string(), &self.insecure_http_hosts)
+            .map_err(std::io::Error::other)?;
         let mut request = request;
         let resolver = self.resolver.clone();
         let headers = tokio::task::spawn_blocking(move || resolver.resolve())

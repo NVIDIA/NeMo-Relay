@@ -27,7 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
-    validate_header_files,
+    is_protected_http_endpoint, validate_header_files, validate_insecure_http_hosts,
 };
 use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 use super::otel_signal::{
@@ -223,7 +223,7 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
 /// userinfo, path, query, or fragment. HTTP(S) origins remain sufficient to
 /// distinguish independently configured collectors without exposing a token
 /// embedded in a URL.
-fn trace_endpoint_log_identity(endpoint: &str) -> String {
+pub(super) fn trace_endpoint_log_identity(endpoint: &str) -> String {
     if endpoint == AUTOMATIC_OTLP_ENDPOINT_MARKER {
         return "the environment-configured OTLP endpoint".to_string();
     }
@@ -248,24 +248,21 @@ fn trace_endpoint_log_identity(endpoint: &str) -> String {
 }
 
 /// Require protected transport for remote OTLP trace exports, regardless of projection.
-pub(super) fn validate_trace_endpoint(endpoint: &str) -> Result<()> {
-    let protected = reqwest::Url::parse(endpoint).is_ok_and(|url| {
-        let host = url.host_str().unwrap_or_default();
-        let loopback = host.eq_ignore_ascii_case("localhost")
-            || host
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback());
-        url.scheme() == "https" || (url.scheme() == "http" && loopback)
-    });
-    if !protected {
-        return Err(OpenTelemetryError::ExporterBuild(
-            "OTLP trace endpoints require HTTPS; HTTP is allowed only for localhost or loopback IP addresses"
-                .to_string(),
-        ));
+pub(super) fn validate_trace_endpoint(
+    endpoint: &str,
+    insecure_http_hosts: &[String],
+) -> Result<()> {
+    if is_protected_http_endpoint(endpoint, insecure_http_hosts) {
+        return Ok(());
     }
-    Ok(())
+    let allowed = if insecure_http_hosts.is_empty() {
+        "localhost or loopback IP addresses"
+    } else {
+        "localhost, loopback IP addresses, or hosts listed in insecure_http_hosts"
+    };
+    Err(OpenTelemetryError::ExporterBuild(format!(
+        "OTLP trace endpoints require HTTPS; HTTP is allowed only for {allowed}"
+    )))
 }
 
 /// Open mode used when a trace file sink creates its output file.
@@ -468,6 +465,7 @@ pub struct OpenTelemetryConfig {
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
+    insecure_http_hosts: Vec<String>,
     timeout: Duration,
 }
 
@@ -698,6 +696,7 @@ impl OpenTelemetryConfig {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             header_file: HashMap::new(),
+            insecure_http_hosts: Vec::new(),
             timeout: Duration::from_secs(3),
         }
     }
@@ -759,6 +758,16 @@ impl OpenTelemetryConfig {
         path: impl Into<String>,
     ) -> Self {
         self.header_file.insert(key.into(), path.into());
+        self
+    }
+
+    /// Trusts plain HTTP to these non-loopback hosts for spans and configured headers.
+    pub fn with_insecure_http_hosts<I, S>(mut self, hosts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.insecure_http_hosts = hosts.into_iter().map(Into::into).collect();
         self
     }
 
@@ -950,14 +959,16 @@ impl OpenTelemetrySubscriber {
                                 .to_string(),
                         )
                     })?;
-                validate_trace_endpoint(&resolved)?;
+                validate_trace_endpoint(&resolved, &[])?;
             } else {
                 if endpoint.endpoint.trim().is_empty() {
                     return Err(OpenTelemetryError::ExporterBuild(
                         "endpoint must be a nonblank string".to_string(),
                     ));
                 }
-                validate_trace_endpoint(&endpoint.endpoint)?;
+                validate_insecure_http_hosts(&endpoint.insecure_http_hosts)
+                    .map_err(OpenTelemetryError::ExporterBuild)?;
+                validate_trace_endpoint(&endpoint.endpoint, &endpoint.insecure_http_hosts)?;
                 reject_global_header_environment()?;
                 validate_headers(&endpoint.headers)?;
                 validate_header_files(
@@ -1462,6 +1473,7 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
                 builder = builder.with_http_client(HeaderFileHttpClient::new(
                     client,
                     HeaderFileResolver::new(settings.header_file.clone()),
+                    settings.insecure_http_hosts.clone(),
                 ));
             } else {
                 builder = builder.with_http_client(client);

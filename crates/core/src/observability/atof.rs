@@ -802,7 +802,7 @@ fn validate_endpoint_config(config: AtofEndpointConfig) -> Result<ActivatedAtofE
     if has_configured_headers(&config.headers, &config.header_env, &config.header_file) {
         let validation = match config.transport {
             AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => {
-                validate_header_http_endpoint(&config.url)
+                validate_header_http_endpoint(&config.url, &[])
             }
             AtofEndpointTransport::Websocket => validate_header_websocket_endpoint(&config.url),
         };

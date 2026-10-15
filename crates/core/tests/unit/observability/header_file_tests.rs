@@ -83,12 +83,79 @@ fn activation_requires_existing_files_and_unique_sources() {
     assert!(!error.contains(&directory.path().display().to_string()));
 }
 
+fn hosts(entries: &[&str]) -> Vec<String> {
+    entries.iter().map(|entry| entry.to_string()).collect()
+}
+
+#[test]
+fn insecure_http_hosts_trust_only_exact_listed_hosts() {
+    let trusted = hosts(&[
+        "Host.Docker.Internal.",
+        "release-api",
+        "10.0.0.5",
+        "fd00::1",
+    ]);
+    for endpoint in [
+        "http://host.docker.internal:8082/v1/traces",
+        "http://HOST.DOCKER.INTERNAL./v1/traces",
+        "http://release-api:8080/anything",
+        "http://10.0.0.5:4318/v1/traces",
+        "http://[fd00::1]:4318/v1/traces",
+        "http://localhost:4318/v1/traces",
+    ] {
+        assert!(is_protected_http_endpoint(endpoint, &trusted), "{endpoint}");
+        assert!(
+            validate_header_http_endpoint(endpoint, &trusted).is_ok(),
+            "{endpoint}"
+        );
+    }
+    for endpoint in [
+        "http://api.release-api:8080/",
+        "http://release-api.example:8080/",
+        "http://10.0.0.6:4318/v1/traces",
+        "http://host.docker.internal@collector.example/v1/traces",
+        "ftp://release-api/",
+    ] {
+        assert!(
+            !is_protected_http_endpoint(endpoint, &trusted),
+            "{endpoint}"
+        );
+        let error = validate_header_http_endpoint(endpoint, &trusted).unwrap_err();
+        assert!(error.contains("insecure_http_hosts"), "{error}");
+    }
+}
+
+#[test]
+fn insecure_http_hosts_reject_entries_that_are_not_bare_hosts() {
+    assert!(
+        validate_insecure_http_hosts(&hosts(&["host.docker.internal", "10.0.0.5", "[fd00::1]"]))
+            .is_ok()
+    );
+    for entry in [
+        "",
+        ".",
+        "http://release-api",
+        "release-api:8080",
+        "release-api/v1",
+        "*.svc.cluster.local",
+        "user@release-api",
+        " release-api",
+        "release-api?x",
+    ] {
+        let error = validate_insecure_http_hosts(&hosts(&[entry])).unwrap_err();
+        assert!(
+            error.contains("bare hostname or IP address"),
+            "{entry:?}: {error}"
+        );
+    }
+}
+
 #[test]
 fn configured_headers_require_protected_remote_destinations() {
-    assert!(validate_header_http_endpoint("https://collector.example/v1/logs").is_ok());
-    assert!(validate_header_http_endpoint("http://localhost:4318/v1/logs").is_ok());
-    assert!(validate_header_http_endpoint("http://127.0.0.1:4318/v1/logs").is_ok());
-    assert!(validate_header_http_endpoint("http://collector.example/v1/logs").is_err());
+    assert!(validate_header_http_endpoint("https://collector.example/v1/logs", &[]).is_ok());
+    assert!(validate_header_http_endpoint("http://localhost:4318/v1/logs", &[]).is_ok());
+    assert!(validate_header_http_endpoint("http://127.0.0.1:4318/v1/logs", &[]).is_ok());
+    assert!(validate_header_http_endpoint("http://collector.example/v1/logs", &[]).is_err());
 
     assert!(validate_header_websocket_endpoint("wss://collector.example/events").is_ok());
     assert!(validate_header_websocket_endpoint("ws://[::1]:4318/events").is_ok());
@@ -210,6 +277,7 @@ fn http_client_reads_current_values_and_stops_before_network_on_resolution_failu
     let client = HeaderFileHttpClient::new(
         reqwest::Client::builder().build().unwrap(),
         HeaderFileResolver::new(files),
+        Vec::new(),
     );
     let endpoint = format!("http://{address}/v1/logs");
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -278,6 +346,7 @@ async fn http_client_resolves_file_backed_headers_in_a_tokio_runtime() {
     let client = HeaderFileHttpClient::new(
         reqwest::Client::builder().build().unwrap(),
         HeaderFileResolver::new(files),
+        Vec::new(),
     );
 
     client

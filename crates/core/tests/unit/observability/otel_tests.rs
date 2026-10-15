@@ -4024,7 +4024,7 @@ fn all_trace_projections_require_protected_remote_transport() {
         "http://127.0.0.2:4318/v1/traces",
         "http://[::1]:4318/v1/traces",
     ] {
-        assert!(validate_trace_endpoint(endpoint).is_ok(), "{endpoint}");
+        assert!(validate_trace_endpoint(endpoint, &[]).is_ok(), "{endpoint}");
     }
     for endpoint in [
         "http://collector.example/v1/traces",
@@ -4051,6 +4051,33 @@ fn all_trace_projections_require_protected_remote_transport() {
             }
         }
     }
+}
+
+#[test]
+fn trace_endpoints_allow_plain_http_only_to_listed_insecure_hosts() {
+    let trusted = vec!["host.docker.internal".to_string()];
+    assert!(
+        validate_trace_endpoint("http://host.docker.internal:8082/v1/traces", &trusted).is_ok()
+    );
+    let error = validate_trace_endpoint("http://collector.example/v1/traces", &trusted)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("hosts listed in insecure_http_hosts"),
+        "{error}"
+    );
+
+    let error = OpenTelemetrySubscriber::new(
+        OpenTelemetryConfig::new(
+            OpenTelemetryType::GenAi,
+            "http://release-api:8080/v1/traces",
+        )
+        .with_insecure_http_hosts(["release-api:8080"]),
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(error.contains("bare hostname or IP address"), "{error}");
 }
 
 #[test]
