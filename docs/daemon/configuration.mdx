@@ -38,7 +38,9 @@ Relay resolves identity state in this order on every platform, including Windows
 On Windows, `HOME` takes precedence over `USERPROFILE`. Check the environment of
 the actual daemon or client process before backing up its keys and trust pins.
 The service runbooks set an explicit `XDG_CONFIG_HOME` for the daemon. It does
-not change the managed worker's system configuration path.
+not change the managed worker's system configuration path. The worker also
+loads the user configuration and plugins from the resolved user directory;
+system settings retain higher precedence when the layers merge.
 </Note>
 
 Client identities stay with the user and must not be shared or copied into a
@@ -57,6 +59,12 @@ level = "info"
 stderr_enabled = true
 stderr_format = "jsonl"
 ```
+
+Provider base URLs must use HTTPS for remote hosts, including private Kubernetes
+service addresses. Plain HTTP is allowed only for loopback hosts such as
+`localhost`, `127.0.0.1`, or `::1`. Managed workers validate these URLs when
+loading configuration and check destination transport requirements when forwarding
+requests. Base URLs must not include user information, query strings, or fragments.
 
 Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/basic-usage).
 Use your approved provider URLs when they differ from these defaults. Set the same

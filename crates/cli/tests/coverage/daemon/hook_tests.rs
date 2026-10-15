@@ -375,3 +375,103 @@ async fn present_credential_still_honors_fail_closed_delivery_failures() {
     assert!(matches!(error, CliError::HookDelivery { .. }), "{error}");
     assert!(output.is_empty());
 }
+
+/// Points every proxy environment variable reqwest consults at a closed loopback port and clears
+/// `NO_PROXY`, so a client that still applied the system proxy could not reach the daemon.
+struct ProxyEnvScope {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+impl ProxyEnvScope {
+    const NAMES: [&'static str; 8] = [
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ];
+
+    fn pointing_at(proxy: &str) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = Self::NAMES
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        for name in Self::NAMES {
+            unsafe {
+                if name.eq_ignore_ascii_case("NO_PROXY") {
+                    std::env::remove_var(name);
+                } else {
+                    std::env::set_var(name, proxy);
+                }
+            }
+        }
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for ProxyEnvScope {
+    fn drop(&mut self) {
+        for (name, value) in self.previous.drain(..) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hook_forward_ignores_proxy_environment_for_the_daemon_address() {
+    let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    let _environment = ProxyEnvScope::pointing_at(&proxy);
+
+    let response_body = b"{\"continue\":true}\n";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        response_body.len(),
+        String::from_utf8_lossy(response_body)
+    );
+    let (daemon_address, captured, server) = capture_server(response.into_bytes());
+    let options = Options {
+        agent: CodingAgent::ClaudeCode,
+        daemon_address,
+        failure_policy: HookFailurePolicy::FailClosed,
+    };
+
+    // A current-thread runtime keeps the environment scope held across the delivery without
+    // awaiting while holding its lock.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let body = runtime
+        .block_on(forward(
+            &options,
+            b"{\"hook_event_name\":\"PreToolUse\"}".to_vec(),
+            route_token(&valid_token()).unwrap(),
+            &crate::operational::OperationalContext::new(),
+        ))
+        .expect("delivery to the daemon must not go through the configured proxy");
+    server.join().unwrap();
+
+    assert_eq!(body, response_body);
+    let request = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    assert!(
+        request.starts_with("POST /hooks/claude-code HTTP/1.1\r\n"),
+        "{request}"
+    );
+}
