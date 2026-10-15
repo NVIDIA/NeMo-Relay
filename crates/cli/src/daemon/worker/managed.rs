@@ -441,6 +441,7 @@ impl ManagedRuntime {
             .await
     }
 
+    /// Forward an undecoded request and observe its response for telemetry.
     async fn proxy_unbuffered(
         &self,
         upstream: PooledClient,
@@ -552,6 +553,7 @@ impl ManagedRuntime {
         Ok(response)
     }
 
+    /// Forward a decoded request after request middleware runs, then observe its response.
     async fn proxy_managed(
         &self,
         upstream: PooledClient,

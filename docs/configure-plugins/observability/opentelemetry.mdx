@@ -586,9 +586,13 @@ includes the IDs needed to link later events to the same trace and parent span.
 the scope ends. This is its time to live (TTL). Marks that arrive during this
 time stay linked to the original trace and parent span.
 
-When this time ends, Relay removes the cached context and records the
-`otel.completed_span_context_expired` runtime diagnostic. This is normal cache
-cleanup. It does not delete completed or exported spans.
+Relay checks the cache when it processes another event. It uses that event's
+timestamp to find entries older than the TTL. Entries at the exact TTL boundary
+stay in the cache. When Relay removes expired entries, it records the
+`otel.completed_span_context_expired` runtime diagnostic. Without a new event,
+Relay does not remove entries or report their expiry.
+
+This is normal cache cleanup. It does not delete completed or exported spans.
 
 Late marks and child scopes can still link to the original parent. Their events
 must include matching W3C trace context or Relay root and parent IDs. Without
