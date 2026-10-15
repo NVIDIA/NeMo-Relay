@@ -1039,6 +1039,8 @@ async fn bootstrap_tls_tunnel_does_not_require_a_cleartext_credential() {
     );
     state.bootstrap_tls = Some(identity.server_config().unwrap());
     state.local_address = Some("127.0.0.1:1".parse().unwrap());
+    let permits = Arc::new(Semaphore::new(1));
+    state.bootstrap_handshake_permits = Arc::clone(&permits);
     let instance_id = state.instance_id.clone();
     let app = router_with_state(state);
     let nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -1059,6 +1061,8 @@ async fn bootstrap_tls_tunnel_does_not_require_a_cleartext_credential() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    // In-process requests have no transport to upgrade; that error releases the slot.
+    wait_for_bootstrap_handshake_slot(&permits).await;
 
     let response = app
         .oneshot(
@@ -1094,6 +1098,123 @@ async fn bootstrap_tls_tunnel_does_not_require_a_cleartext_credential() {
         )
         .as_str()
     );
+}
+
+/// Read only the HTTP headers so TLS bytes remain available to the connector.
+async fn read_bootstrap_response_head(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> String {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(stream.read_u8().await.unwrap());
+            assert!(head.len() < 16 * 1024);
+        }
+        String::from_utf8(head).unwrap()
+    })
+    .await
+    .expect("server returns response headers")
+}
+
+/// Exercise the foreground tunnel through a real HTTP upgrade.
+async fn open_bootstrap_test_tunnel(address: SocketAddr) -> (tokio::net::TcpStream, String) {
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    stream.write_all(format!(
+        "GET /bootstrap/tunnel HTTP/1.1\r\nHost: {address}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nx-nemo-relay-bootstrap-fingerprint: test\r\nx-nemo-relay-bootstrap-nonce: {}\r\n\r\n",
+        "a".repeat(64)
+    ).as_bytes()).await.unwrap();
+    let response = read_bootstrap_response_head(&mut stream).await;
+    (stream, response)
+}
+
+/// Wait for the handshake task to release its admission slot.
+async fn wait_for_bootstrap_handshake_slot(permits: &Semaphore) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while permits.available_permits() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("handshake slot is released");
+}
+
+#[tokio::test]
+async fn bootstrap_tls_tunnel_limits_handshakes_and_recovers_after_timeout() {
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
+    let identity = RelayTlsIdentity::load_or_create().unwrap();
+    let mut state = AppState::new_with_bootstrap(
+        test_config(),
+        Some("test".into()),
+        Some(BootstrapChallengeKey::from_bytes(b"test key")),
+        false,
+        None,
+        None,
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    state.local_address = Some(address);
+    state.bootstrap_tls = Some(identity.server_config().unwrap());
+    let permits = Arc::new(Semaphore::new(1));
+    state.bootstrap_handshake_permits = Arc::clone(&permits);
+    let app = router_with_state(state);
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let (mut idle, response) = open_bootstrap_test_tunnel(address).await;
+    assert!(response.starts_with("HTTP/1.1 101"), "{response}");
+    let (_excess, response) = open_bootstrap_test_tunnel(address).await;
+    assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+    // An idle client is disconnected by the production handshake timeout.
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(
+            TLS_HANDSHAKE_TIMEOUT + Duration::from_secs(5),
+            idle.read(&mut byte)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        0
+    );
+    wait_for_bootstrap_handshake_slot(&permits).await;
+
+    let (mut malformed, response) = open_bootstrap_test_tunnel(address).await;
+    assert!(response.starts_with("HTTP/1.1 101"), "{response}");
+    malformed.write_all(b"invalid TLS header").await.unwrap();
+    wait_for_bootstrap_handshake_slot(&permits).await;
+
+    let (stream, response) = open_bootstrap_test_tunnel(address).await;
+    assert!(response.starts_with("HTTP/1.1 101"), "{response}");
+    let connector = tokio_rustls::TlsConnector::from(identity.client_config().unwrap());
+    let mut encrypted = tokio::time::timeout(
+        Duration::from_secs(5),
+        connector.connect(
+            rustls::pki_types::ServerName::try_from("localhost").unwrap(),
+            stream,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    wait_for_bootstrap_handshake_slot(&permits).await;
+    encrypted
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    assert!(
+        read_bootstrap_response_head(&mut encrypted)
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
+    // Established tunnels must not consume handshake slots.
+    let (pending, response) = open_bootstrap_test_tunnel(address).await;
+    assert!(response.starts_with("HTTP/1.1 101"), "{response}");
+    drop(pending);
+    wait_for_bootstrap_handshake_slot(&permits).await;
+    drop(encrypted);
+    server.abort();
+    let _ = server.await;
 }
 
 #[tokio::test]

@@ -31,7 +31,7 @@ use reqwest::Client;
 use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::{
@@ -43,6 +43,9 @@ use crate::gateway;
 use crate::operational::{self, OperationalContext};
 use crate::plugins::lifecycle::{ActiveDynamicPluginComponent, DynamicPluginActivationSnapshot};
 use crate::sessions::SessionManager;
+
+pub(crate) const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -64,6 +67,7 @@ pub(crate) struct AppState {
     pub(crate) bootstrap_shutdown: Option<BootstrapShutdown>,
     pub(crate) instance_id: String,
     pub(crate) bootstrap_tls: Option<Arc<rustls::ServerConfig>>,
+    pub(crate) bootstrap_handshake_permits: Arc<Semaphore>,
     pub(crate) local_address: Option<SocketAddr>,
 }
 
@@ -564,6 +568,7 @@ impl AppState {
             bootstrap_shutdown: None,
             instance_id: uuid::Uuid::now_v7().to_string(),
             bootstrap_tls: None,
+            bootstrap_handshake_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_TLS_HANDSHAKES)),
             local_address: None,
         }
     }
@@ -937,6 +942,10 @@ async fn bootstrap_tls_tunnel(
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    let Ok(handshake_permit) = Arc::clone(&state.bootstrap_handshake_permits).try_acquire_owned()
+    else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
     let proof = key.proof(
         &crate::gateway::client::listener_fingerprint(
             fingerprint,
@@ -951,10 +960,13 @@ async fn bootstrap_tls_tunnel(
             return;
         };
         let acceptor = tokio_rustls::TlsAcceptor::from(tls);
-        let Ok(mut encrypted) = acceptor
-            .accept(hyper_util::rt::TokioIo::new(upgraded))
-            .await
-        else {
+        let handshake = tokio::time::timeout(
+            TLS_HANDSHAKE_TIMEOUT,
+            acceptor.accept(hyper_util::rt::TokioIo::new(upgraded)),
+        )
+        .await;
+        drop(handshake_permit);
+        let Ok(Ok(mut encrypted)) = handshake else {
             return;
         };
         let Ok(mut local) = tokio::net::TcpStream::connect(local_address).await else {

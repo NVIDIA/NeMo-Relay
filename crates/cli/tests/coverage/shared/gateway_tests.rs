@@ -2404,6 +2404,9 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         bootstrap_shutdown: None,
         instance_id: "test-instance".into(),
         bootstrap_tls: None,
+        bootstrap_handshake_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(
+            crate::server::MAX_CONCURRENT_TLS_HANDSHAKES,
+        )),
         local_address: None,
     };
     let request = Request::builder()
@@ -2447,6 +2450,9 @@ async fn models_rejects_non_get_requests_directly() {
         bootstrap_shutdown: None,
         instance_id: "test-instance".into(),
         bootstrap_tls: None,
+        bootstrap_handshake_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(
+            crate::server::MAX_CONCURRENT_TLS_HANDSHAKES,
+        )),
         local_address: None,
     };
     let request = Request::builder()
@@ -2858,6 +2864,9 @@ async fn models_refuses_an_unusable_named_upstream() {
         bootstrap_shutdown: None,
         instance_id: "test-instance".into(),
         bootstrap_tls: None,
+        bootstrap_handshake_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(
+            crate::server::MAX_CONCURRENT_TLS_HANDSHAKES,
+        )),
         local_address: None,
     };
     let request = Request::builder()
