@@ -15,10 +15,15 @@
 //!   `instructions` (top-level) instead of system message.
 //! - **Max tokens**: `max_output_tokens` instead of `max_tokens`.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use serde::Deserialize;
+use tokio_stream::Stream;
 
 use crate::api::llm::LlmRequest;
-use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity, LlmJsonStream, LlmStreamInner};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
@@ -1494,6 +1499,9 @@ impl LlmCodec for OpenAIResponsesCodec {
 ///    because their content is redelivered in the matching `output_item.done` event. Skipping
 ///    deltas keeps the codec resilient to schema additions and avoids double-accumulation.
 ///
+/// Use [`StreamingCodec::validate_stream`](super::streaming::StreamingCodec::validate_stream)
+/// with this instance's collector and finalizer to report streams that end before a final event.
+///
 /// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer
 /// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
 /// finalize step.
@@ -1522,6 +1530,16 @@ impl Default for OpenAIResponsesStreamingCodec {
 }
 
 impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
+    /// Reports an error at EOF if this codec's collector did not receive a final response.
+    fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
+        LlmJsonStream::from_closeable(ResponsesCompletionStream {
+            inner: stream,
+            state: std::sync::Arc::clone(&self.state),
+            ended: false,
+        })
+    }
+
+    /// Collects response snapshots and output items into this codec's shared state.
     fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
@@ -1533,6 +1551,7 @@ impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
         })
     }
 
+    /// Takes the collected state and returns the final provider response.
     fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move || -> Json {
@@ -1541,6 +1560,69 @@ impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             std::mem::take(&mut *guard).finalize()
         })
+    }
+}
+
+/// Checks completion for the paired Responses collector while preserving producer cleanup.
+struct ResponsesCompletionStream {
+    inner: LlmJsonStream,
+    state: std::sync::Arc<std::sync::Mutex<OpenAIResponsesStreamingState>>,
+    ended: bool,
+}
+
+impl Stream for ResponsesCompletionStream {
+    type Item = Result<Json>;
+
+    /// Forwards events and emits at most one error when the source ends early.
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.ended {
+            return Poll::Ready(None);
+        }
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(None) => {
+                this.ended = true;
+                let completed = this
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .terminal_response_received;
+                if completed {
+                    Poll::Ready(None)
+                } else {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "llm_stream_incomplete",
+                        reason = "missing_terminal_response";
+                        "Responses stream ended before its final response event"
+                    );
+                    Poll::Ready(Some(Err(FlowError::Internal(
+                        "stream ended before its final response event".to_string(),
+                    ))))
+                }
+            }
+            Poll::Ready(Some(Err(error))) => {
+                this.ended = true;
+                Poll::Ready(Some(Err(error)))
+            }
+            result => result,
+        }
+    }
+}
+
+impl LlmStreamInner for ResponsesCompletionStream {
+    /// Releases the source's lifecycle guards when the managed stream ends.
+    fn terminalize(self: Pin<&mut Self>) {
+        let this = self.get_mut();
+        this.ended = true;
+        this.inner.terminalize();
+    }
+
+    /// Stops the source and waits for its cleanup.
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.ended = true;
+        Box::pin(this.inner.close())
     }
 }
 
@@ -1556,6 +1638,7 @@ struct OpenAIResponsesStreamingState {
 }
 
 impl OpenAIResponsesStreamingState {
+    /// Records a supported response snapshot or output item.
     fn observe(&mut self, event: &Json) {
         let event_type = event.get("type").and_then(Json::as_str).unwrap_or("");
         match event_type {
@@ -1574,6 +1657,7 @@ impl OpenAIResponsesStreamingState {
         }
     }
 
+    /// Keeps the latest snapshot until the first final response arrives.
     fn observe_response_snapshot(&mut self, event: &Json) {
         if self.terminal_response_received {
             return;
@@ -1587,6 +1671,7 @@ impl OpenAIResponsesStreamingState {
         }
     }
 
+    /// Stores the latest output item at its provider index.
     fn observe_output_item(&mut self, event: &Json) {
         let Some(index) = event.get("output_index").and_then(Json::as_u64) else {
             return;
@@ -1597,6 +1682,7 @@ impl OpenAIResponsesStreamingState {
         self.items.insert(index as usize, item.clone());
     }
 
+    /// Builds a response, filling missing output from the collected items.
     fn finalize(self) -> Json {
         let mut output = self.response.unwrap_or_default();
         // If the latest snapshot lacked `output` (or has an empty array because it came from an
@@ -1616,7 +1702,8 @@ impl OpenAIResponsesStreamingState {
     }
 }
 
-pub(crate) fn is_terminal_response_event(event: &Json) -> bool {
+/// Returns whether the event contains a final response snapshot.
+fn is_terminal_response_event(event: &Json) -> bool {
     matches!(
         event.get("type").and_then(Json::as_str),
         Some("response.completed" | "response.failed" | "response.incomplete")

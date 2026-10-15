@@ -579,6 +579,92 @@ async fn test_stream_wrapper_drop_emits_end_event_for_partial_stream() {
     deregister_subscriber("stream_drop_end_test").unwrap();
 }
 
+/// The built-in collector rejects early EOF and forwards producer cleanup.
+#[tokio::test]
+async fn responses_stream_validation_checks_completion_and_preserves_close() {
+    let completed = json!({"type": "response.completed", "response": {"status": "completed"}});
+    let failed = json!({"type": "response.failed", "response": {"status": "failed"}});
+    let incomplete = json!({"type": "response.incomplete", "response": {"status": "incomplete"}});
+    let created = json!({"type": "response.created", "response": {"status": "in_progress"}});
+    for (chunks, expected_error) in [
+        (vec![], true),
+        (vec![created], true),
+        (
+            vec![json!({"type": "response.completed", "response": null})],
+            true,
+        ),
+        (vec![completed], false),
+        (vec![failed], false),
+        (vec![incomplete], false),
+    ] {
+        let codec = OpenAIResponsesStreamingCodec::new();
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+            stream: Box::pin(tokio_stream::iter(chunks.clone().into_iter().map(Ok))),
+            close_calls: close_calls.clone(),
+            close_error: None,
+            closed: false,
+        });
+        let mut stream = codec.validate_stream(source);
+        let mut collector = codec.collector();
+        for expected in chunks {
+            let chunk = stream.next().await.unwrap().unwrap();
+            assert_eq!(chunk, expected);
+            collector(chunk).unwrap();
+        }
+        if expected_error {
+            let error = stream.next().await.unwrap().unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                FlowError::Internal("stream ended before its final response event".into())
+                    .to_string()
+            );
+        }
+        assert!(stream.next().await.is_none());
+        // The finalizer resets state. Further polls must still stay at EOF.
+        let _ = codec.finalizer()();
+        assert!(stream.next().await.is_none());
+        assert!(stream.next().await.is_none());
+        stream.close().await.unwrap();
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    }
+
+    let codec = OpenAIResponsesStreamingCodec::new();
+    let error = FlowError::Internal("upstream read failed".into());
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(tokio_stream::iter(vec![Err(error.clone())])),
+        close_calls: close_calls.clone(),
+        close_error: Some(error.clone()),
+        closed: false,
+    });
+    let mut stream = codec.validate_stream(source);
+    assert_eq!(
+        stream.next().await.unwrap().unwrap_err().to_string(),
+        error.to_string()
+    );
+    assert!(stream.next().await.is_none());
+    assert_eq!(
+        stream.close().await.unwrap_err().to_string(),
+        error.to_string()
+    );
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+
+    // Closing a pending stream must not wait for an event or report an early EOF.
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(tokio_stream::pending()),
+        close_calls: close_calls.clone(),
+        close_error: None,
+        closed: false,
+    });
+    let mut stream = OpenAIResponsesStreamingCodec::new().validate_stream(source);
+    stream.close().await.unwrap();
+    assert!(stream.next().await.is_none());
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// Sessions keep final usage and mark only calls that end early as errors.
 #[tokio::test]
 async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
     let _lock = TEST_MUTEX.lock().unwrap();
@@ -648,7 +734,7 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
             .unwrap();
             let expected_chunks = chunks.clone();
             let mut wrapper = LlmStreamWrapper::new(
-                make_stream(chunks.into_iter().map(Ok).collect()),
+                codec.validate_stream(make_stream(chunks.into_iter().map(Ok).collect())),
                 handle,
                 codec.collector(),
                 codec.finalizer(),
@@ -658,6 +744,9 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
             );
             for expected in expected_chunks {
                 assert_eq!(wrapper.next().await.unwrap().unwrap(), expected);
+            }
+            if affected && scenario == "missing_terminal" {
+                assert!(wrapper.next().await.unwrap().is_err());
             }
             assert!(wrapper.next().await.is_none());
         }
@@ -680,7 +769,8 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
             if missing_terminal {
                 assert_eq!(
                     metadata["otel.status_description"],
-                    "stream ended before its final response event"
+                    FlowError::Internal("stream ended before its final response event".into())
+                        .to_string()
                 );
             }
             let response = end.annotated_response().unwrap();
@@ -703,6 +793,7 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
     deregister_subscriber("responses_session_completion").unwrap();
 }
 
+/// A custom collector sets its own completion rules even for response-prefixed chunks.
 #[tokio::test]
 async fn responses_response_codec_does_not_require_sse_events_for_custom_collectors() {
     let _lock = TEST_MUTEX.lock().unwrap();
@@ -716,7 +807,13 @@ async fn responses_response_codec_does_not_require_sse_events_for_custom_collect
     .unwrap();
 
     // A response codec decodes the final response. It does not define the format of each chunk.
-    for chunks in [vec![], vec![Ok(json!({"text": "custom chunk"}))]] {
+    for chunks in [
+        vec![],
+        vec![Ok(json!({"text": "custom chunk"}))],
+        vec![Ok(
+            json!({"type": "response.created", "response": {"status": "in_progress"}}),
+        )],
+    ] {
         let mut wrapper = LlmStreamWrapper::new(
             make_stream(chunks),
             make_llm_handle("custom-responses-stream"),
@@ -734,7 +831,7 @@ async fn responses_response_codec_does_not_require_sse_events_for_custom_collect
     }
     let captured = captured_snapshot(&events);
     let ends: Vec<_> = captured.iter().filter(|event| is_llm_end(event)).collect();
-    assert_eq!(ends.len(), 2);
+    assert_eq!(ends.len(), 3);
     for end in ends {
         assert_eq!(end.metadata().unwrap()["otel.status_code"], "OK");
         assert_eq!(

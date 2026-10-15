@@ -1586,6 +1586,7 @@ fn assert_responses_tool_and_choice_branches() {
 
 use super::super::streaming::StreamingCodec;
 
+/// Later lifecycle and terminal events cannot replace the first final snapshot.
 #[test]
 fn openai_responses_streaming_codec_retains_first_terminal_snapshot() {
     for terminal_type in [
