@@ -1591,6 +1591,170 @@ impl Drop for LlmGuardrailRegistration {
 }
 
 #[tokio::test]
+async fn observed_responses_preserve_sanitized_payloads_and_usage_without_a_fallback_codec() {
+    use nemo_relay::api::event::{Event, ScopeCategory};
+    use nemo_relay::api::subscriber::{flush_subscribers, register_subscriber};
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const SUBSCRIBER: &str = "daemon-worker-responses-pii";
+    let _registration = LlmGuardrailRegistration(SUBSCRIBER);
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::<Event>::new()));
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new({
+            let recorded = recorded.clone();
+            move |event| recorded.lock().unwrap().push(event.clone())
+        }),
+    )
+    .unwrap();
+
+    let provider_response = json!({
+        "id": "resp_pii", "model": "test", "status": "completed",
+        "output": [{"type": "message", "role": "assistant", "content": [
+            {"type": "output_text", "text": "sk-response-secret"}
+        ]}],
+        "usage": {"input_tokens": 17, "output_tokens": 5, "total_tokens": 22}
+    });
+    let app = Router::new().route(
+        "/v1/responses",
+        post({
+            let provider_response = provider_response.clone();
+            move |request: Request<Body>| {
+                let provider_response = provider_response.clone();
+                async move {
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let request: Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(request["input"], "sk-request-secret");
+                    let (content_type, body) = if request["stream"] == true {
+                        (
+                            "text/event-stream",
+                            format!(
+                                "data: {}\n\n",
+                                json!({
+                                    "type": "response.completed", "response": provider_response
+                                })
+                            ),
+                        )
+                    } else {
+                        ("application/json", provider_response.to_string())
+                    };
+                    Response::builder()
+                        .header(CONTENT_TYPE, content_type)
+                        .body(Body::from(body))
+                        .unwrap()
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let runtime = ManagedRuntime::initialize(
+        GatewayConfig {
+            openai_base_url: format!("http://{address}"),
+            plugin_config: Some(json!({
+                "version": 1,
+                "components": [{
+                    "kind": "pii_redaction", "enabled": true,
+                    "config": {
+                        "mode": "builtin", "tool_input": false, "tool_output": false,
+                        "builtin": {
+                            "action": "regex_replace", "pattern": "sk-[A-Za-z0-9_-]+",
+                            "replacement": "[REDACTED]",
+                            "target_paths": ["/messages/0/content", "/message"]
+                        }
+                    }
+                }]
+            })),
+            ..GatewayConfig::default()
+        },
+        Vec::new(),
+        "machine-owner".into(),
+    )
+    .await
+    .unwrap();
+    let requirements = runtime.provider_middleware_requirements().unwrap();
+    assert!(requirements.request_body_decode_required);
+    assert!(!requirements.managed_execution_required);
+    for streaming in [false, true] {
+        let response = runtime
+            .proxy_provider(
+                pooled_client().unwrap(),
+                Request::post("/v1/responses")
+                    .body(Body::from(
+                        json!({
+                            "model": "test", "input": "sk-request-secret", "stream": streaming
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+                ProviderRoute::OpenAi,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&body).contains("sk-response-secret"));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            flush_subscribers().unwrap();
+            let end_count = recorded
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    event.scope_category() == Some(ScopeCategory::End)
+                        && event.annotated_response().is_some()
+                })
+                .count();
+            if end_count == 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both observed responses must finish");
+    {
+        let events = recorded.lock().unwrap();
+        let starts = events
+            .iter()
+            .filter(|event| {
+                event.scope_category() == Some(ScopeCategory::Start)
+                    && event.annotated_request().is_some()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(starts.len(), 2);
+        for start in starts {
+            assert_eq!(start.input().unwrap()["content"]["input"], "[REDACTED]");
+            assert!(
+                !start
+                    .to_json_string()
+                    .unwrap()
+                    .contains("sk-request-secret")
+            );
+        }
+        for end in events
+            .iter()
+            .filter(|event| event.annotated_response().is_some())
+        {
+            let annotated = end.annotated_response().unwrap();
+            assert_eq!(annotated.response_text(), Some("[REDACTED]"));
+            let usage = serde_json::to_value(annotated.usage.as_ref().unwrap()).unwrap();
+            assert_eq!(usage["prompt_tokens"], 17);
+            assert_eq!(usage["completion_tokens"], 5);
+            assert_eq!(usage["total_tokens"], 22);
+            assert!(!end.to_json_string().unwrap().contains("sk-response-secret"));
+        }
+    }
+    runtime.close().await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
 async fn managed_runtime_accepts_execution_middleware_and_replaces_response() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     const INTERCEPT: &str = "daemon-worker-execution-replacement";

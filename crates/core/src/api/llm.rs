@@ -224,6 +224,10 @@ pub struct LlmCallParams<'a> {
     /// Optional normalized request annotation produced by a codec.
     #[builder(default)]
     pub annotated_request: Option<Arc<AnnotatedLlmRequest>>,
+    /// Optional codec for sanitizing and annotating the request copy saved in telemetry.
+    /// Relay leaves the caller's request unchanged.
+    #[builder(default)]
+    pub codec: Option<Arc<dyn LlmCodec>>,
     /// Optional timestamp captured as the handle start time and reused by the
     /// emitted start event. When omitted, the current UTC time is used.
     #[builder(default)]
@@ -850,6 +854,8 @@ fn emit_optimization_marks_with<F>(
 ///   request payload.
 /// - `annotated_request`: Optional normalized request annotation produced by a
 ///   codec.
+/// - `codec`: Optional codec for sanitizing the request copy saved in telemetry.
+///   Relay also uses it to create or update that copy's request annotation.
 /// - `timestamp`: Optional timestamp recorded as the handle start time and on
 ///   the emitted start event. When `None`, the current UTC time is used.
 ///
@@ -867,11 +873,13 @@ fn emit_optimization_marks_with<F>(
 /// `proxy-authorization`, `cookie`, `x-api-key`, `api-key`,
 /// `anthropic-api-key`, and `x-goog-api-key`) from the event-only request copy
 /// before sanitize-request guardrails run. This does not change the
-/// caller-owned [`LlmRequest`]. By default, when the owning agent is not fresh,
-/// the emitted request annotation is limited to the current user turn. Managed
-/// calls with a request codec also apply that projection to the event input,
-/// without changing the request used for provider execution. The observability
-/// plugin's `enable_full_payloads` option disables this projection.
+/// caller-owned [`LlmRequest`]. By default, Relay records the full request
+/// history for the first LLM call in an agent scope and the first call after
+/// compaction. For later calls, Relay limits the request annotation to the
+/// current user turn. With a request codec, Relay applies the same limit to the
+/// request copy saved in the event. Both managed and manual calls use this rule.
+/// The provider request stays unchanged. Set the observability plugin's
+/// `enable_full_payloads` option to keep the full request history in events.
 pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
     let handle_params = CreateLlmHandleParams::builder()
         .name(params.name)
@@ -911,6 +919,7 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
     // Keep `params.request` untouched: it remains the caller/provider request.
     let request = remove_observability_credential_headers(params.request.clone());
     let annotated_request = params.annotated_request;
+    let request_codec = params.codec;
     let event = {
         let context = global_context();
         let state = context
@@ -927,17 +936,21 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
                 let mut sanitized_request =
                     NemoRelayContextState::llm_sanitize_request_snapshot_chain(
                         request.clone(),
-                        LlmSanitizeRequestContext::default(),
+                        LlmSanitizeRequestContext::for_request_codec(request_codec.clone()),
                         &entries,
                     )
                     .await;
                 let request_changed = sanitized_request
                     .as_ref()
                     .is_some_and(|sanitized| sanitized != &request);
-                let mut annotation = if sanitized_request.is_none() || request_changed {
-                    None
-                } else {
-                    annotated_request
+                let mut annotation = match (sanitized_request.as_ref(), request_codec.as_deref()) {
+                    (Some(sanitized), Some(codec))
+                        if request_changed || annotated_request.is_none() =>
+                    {
+                        codec.decode(sanitized).ok().map(Arc::new)
+                    }
+                    (Some(_), _) if !request_changed => annotated_request,
+                    _ => None,
                 };
                 if !full_payloads_enabled
                     && !agent_is_fresh
@@ -946,7 +959,7 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
                     project_llm_request_to_current_user_turn(
                         sanitized_request,
                         &mut annotation,
-                        None,
+                        request_codec.as_deref(),
                     );
                 }
                 let input = sanitized_request
