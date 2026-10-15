@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, cast
+from types import UnionType
+from typing import TYPE_CHECKING, Any, Union, cast, get_args, get_origin
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.structured_output import AutoStrategy, ProviderStrategy, ToolStrategy
@@ -29,6 +30,15 @@ if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
 
     from nemo_relay.codecs import LlmCodec, LlmResponseCodec
+
+
+def _schema_types(schema: Any) -> list[type[object]]:
+    """Return the classes declared by a schema or a union of schemas."""
+    if isinstance(schema, type):
+        return [schema]
+    if get_origin(schema) in (Union, UnionType):
+        return [cls for member in get_args(schema) for cls in _schema_types(member)]
+    return []
 
 
 class NemoRelayMiddleware(AgentMiddleware):
@@ -74,10 +84,12 @@ class NemoRelayMiddleware(AgentMiddleware):
         response_format = request.response_format
         if isinstance(response_format, ToolStrategy):
             schemas = [spec.schema for spec in response_format.schema_specs]
-        elif isinstance(response_format, (ProviderStrategy, AutoStrategy)):
+        elif isinstance(response_format, ProviderStrategy):
             schemas = [response_format.schema]
+        elif isinstance(response_format, AutoStrategy):
+            schemas = _schema_types(response_format.schema)
         else:
-            schemas = [response_format]
+            schemas = _schema_types(response_format)
         object_codec = nemo_relay.typed.BestEffortAnyCodec(
             allowed_types=[schema for schema in schemas if isinstance(schema, type)]
         )

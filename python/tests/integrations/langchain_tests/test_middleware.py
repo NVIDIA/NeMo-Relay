@@ -1691,10 +1691,27 @@ def test_tool_arguments_remain_json(use_async: bool, tag: str) -> None:
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-@pytest.mark.parametrize("strategy", ["schema", "auto", "provider", "tool", "union", "none"])
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        "schema",
+        "auto",
+        "provider",
+        "tool",
+        "union",
+        "raw_union",
+        "auto_union",
+        "raw_typing_union",
+        "auto_typing_union",
+        "none",
+    ],
+)
+@pytest.mark.parametrize("answer_kind", ["first", "second"])
 def test_structured_response_uses_declared_schema(
-    use_async: bool, strategy: str, model_request: ModelRequest[Any]
+    use_async: bool, strategy: str, answer_kind: str, model_request: ModelRequest[Any]
 ) -> None:
+    from typing import Union
+
     from langchain.agents.middleware import ModelResponse
     from langchain.agents.structured_output import AutoStrategy, ProviderStrategy, ToolStrategy
     from langchain_core.messages import AIMessage
@@ -1714,10 +1731,14 @@ def test_structured_response_uses_declared_schema(
         "provider": ProviderStrategy(Answer),
         "tool": ToolStrategy(Answer),
         "union": ToolStrategy(Answer | OtherAnswer),
+        "raw_union": Answer | OtherAnswer,
+        "auto_union": AutoStrategy(Answer | OtherAnswer),
+        "raw_typing_union": Union[Answer, OtherAnswer],
+        "auto_typing_union": AutoStrategy(Union[Answer, OtherAnswer]),
         "none": None,
     }
     request = model_request.override(response_format=formats[strategy])
-    answer = Answer(value="done")
+    answer = Answer(value="done") if answer_kind == "first" else OtherAnswer(count=1)
 
     def handler(_request):
         return ModelResponse(result=[AIMessage(content="done")], structured_response=answer)
@@ -1732,9 +1753,9 @@ def test_structured_response_uses_declared_schema(
             if use_async
             else middleware.wrap_model_call(request, handler)
         )
-    if strategy == "none":
+    if strategy == "none" or ("union" not in strategy and answer_kind == "second"):
         assert isinstance(result.structured_response, dict)
-        assert result.structured_response["data"] == {"value": "done"}
+        assert result.structured_response["data"] == answer.model_dump(mode="json")
     else:
-        assert isinstance(result.structured_response, Answer)
+        assert isinstance(result.structured_response, type(answer))
         assert result.structured_response == answer
