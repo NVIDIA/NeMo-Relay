@@ -7071,12 +7071,24 @@ async fn gateway_configured_upstream_redirect_does_not_export_injected_key() {
     let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
     let mut config = test_config();
     config.anthropic_base_url = format!("http://{address}");
-    let app = router(config);
+    let key = BootstrapChallengeKey::from_bytes(b"redirect test challenge key");
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        None,
+        Some(key.clone()),
+        true,
+        None,
+        None,
+    ));
     for streaming in [false, true] {
         let response = app
             .clone()
             .oneshot(
                 Request::post("/v1/messages")
+                    .header(
+                        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+                        key.client_token(),
+                    )
                     .header("content-type", "application/json")
                     .body(Body::from(
                         json!({
