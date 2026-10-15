@@ -37,6 +37,63 @@ fn environment_authorization() -> crate::provider_auth::ProviderRequestAuthoriza
     }
 }
 
+#[tokio::test]
+async fn custom_openai_upstream_preserves_corporate_tokens_and_prompts() {
+    for token in [
+        "Bearer eyJhbGciOiJSUzI1NiJ9.FAKE.FAKE",
+        "Bearer at-corporate-token",
+    ] {
+        for allow_provider_auth in [false, true] {
+            let config = GatewayConfig {
+                openai_base_url: "https://corporate.example/v1".into(),
+                openai_auth_header: Some("Bearer administrator-key".into()),
+                ..GatewayConfig::default()
+            };
+            let body =
+                r#"{"model":"internal","messages":[{"role":"user","content":"private prompt"}]}"#;
+            let request = Request::post("/v1/chat/completions?trace=private")
+                .header("authorization", token)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            let mut authorization = environment_authorization();
+            authorization.allow_environment_provider_auth = allow_provider_auth;
+            let prepared =
+                prepare_gateway_request(&config, request, authorization, "/v1/chat/completions")
+                    .await
+                    .unwrap();
+            assert_eq!(
+                prepared.upstream_url,
+                "https://corporate.example/v1/chat/completions?trace=private"
+            );
+            assert_eq!(prepared.headers["authorization"], token);
+            assert_eq!(prepared.body_bytes, body);
+            assert_eq!(
+                daemon_provider_upstream_url_with_access(
+                    &prepared.headers,
+                    "/v1/chat/completions?trace=private",
+                    &config,
+                    false,
+                    allow_provider_auth,
+                )
+                .unwrap()
+                .as_deref(),
+                Some(prepared.upstream_url.as_str()),
+            );
+            assert_eq!(
+                daemon_provider_forward_headers_with_access(
+                    &prepared.headers,
+                    "/v1/chat/completions",
+                    &config,
+                    allow_provider_auth,
+                )
+                .unwrap()["authorization"],
+                token,
+            );
+        }
+    }
+}
+
 #[test]
 fn removes_hop_by_hop_headers() {
     let headers = HeaderMap::new();
@@ -3129,63 +3186,6 @@ async fn voice_connections_preserve_configured_upstream_and_chatgpt_credentials(
                 .unwrap();
                 assert_eq!(headers["authorization"], "Bearer at-chatgpt-voice");
             }
-        }
-    }
-}
-
-#[tokio::test]
-async fn custom_openai_upstream_preserves_corporate_tokens_and_prompts() {
-    for token in [
-        "Bearer eyJhbGciOiJSUzI1NiJ9.FAKE.FAKE",
-        "Bearer at-corporate-token",
-    ] {
-        for allow_provider_auth in [false, true] {
-            let config = GatewayConfig {
-                openai_base_url: "https://corporate.example/v1".into(),
-                openai_auth_header: Some("Bearer administrator-key".into()),
-                ..GatewayConfig::default()
-            };
-            let body =
-                r#"{"model":"internal","messages":[{"role":"user","content":"private prompt"}]}"#;
-            let request = Request::post("/v1/chat/completions?trace=private")
-                .header("authorization", token)
-                .header("content-type", "application/json")
-                .body(Body::from(body))
-                .unwrap();
-            let mut authorization = environment_authorization();
-            authorization.allow_environment_provider_auth = allow_provider_auth;
-            let prepared =
-                prepare_gateway_request(&config, request, authorization, "/v1/chat/completions")
-                    .await
-                    .unwrap();
-            assert_eq!(
-                prepared.upstream_url,
-                "https://corporate.example/v1/chat/completions?trace=private"
-            );
-            assert_eq!(prepared.headers["authorization"], token);
-            assert_eq!(prepared.body_bytes, body);
-            assert_eq!(
-                daemon_provider_upstream_url_with_access(
-                    &prepared.headers,
-                    "/v1/chat/completions?trace=private",
-                    &config,
-                    false,
-                    allow_provider_auth,
-                )
-                .unwrap()
-                .as_deref(),
-                Some(prepared.upstream_url.as_str()),
-            );
-            assert_eq!(
-                daemon_provider_forward_headers_with_access(
-                    &prepared.headers,
-                    "/v1/chat/completions",
-                    &config,
-                    allow_provider_auth,
-                )
-                .unwrap()["authorization"],
-                token,
-            );
         }
     }
 }
