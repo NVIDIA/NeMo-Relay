@@ -39,11 +39,13 @@ mod completion;
 mod correlation;
 mod idle;
 mod routing;
+mod tool_completion;
 mod types;
 
 use correlation::*;
 use idle::*;
 use routing::*;
+use tool_completion::*;
 pub(crate) use types::*;
 
 use crate::events::{
@@ -512,6 +514,7 @@ pub(super) struct Session {
     completed_subagents: HashSet<String>,
     llms: HashMap<String, LlmHandle>,
     tools: HashMap<String, ActiveTool>,
+    recovered_tool_completions: completion::CompletionCache,
     pending_llm_hints: Vec<PendingLlmHint>,
     pending_tool_hints: Vec<PendingToolHint>,
     // Maps stable user-task text from confidently owned LLM requests to the subagent that owns
@@ -1659,6 +1662,7 @@ impl Session {
             completed_subagents: HashSet::new(),
             llms: HashMap::new(),
             tools: HashMap::new(),
+            recovered_tool_completions: completion::CompletionCache::default(),
             pending_llm_hints: Vec::new(),
             pending_tool_hints: Vec::new(),
             llm_request_affinity: HashMap::new(),
@@ -1958,6 +1962,7 @@ impl Session {
         TASK_SCOPE_STACK
             .scope(stack.clone(), async move {
                 let mut owner = self.resolve_llm_owner(&start);
+                self.close_codex_mcp_results(&start, owner.subagent_id.as_deref())?;
                 self.ensure_turn_started_for_gateway(&start, &mut owner)?;
                 let mut attributes = LlmAttributes::empty();
                 if start.streaming {
@@ -2029,6 +2034,7 @@ impl Session {
                     self.resolve_llm_owner(&start)
                 };
                 if !policy.bypasses_managed_pipeline() {
+                    self.close_codex_mcp_results(&start, owner.subagent_id.as_deref())?;
                     self.ensure_turn_started_for_gateway(&start, &mut owner)?;
                 }
                 self.touch_subagent_activity(owner.subagent_id.as_deref());
@@ -2472,7 +2478,7 @@ impl Session {
                 ToolCallEndParams::builder()
                     .handle(&tool.handle)
                     .execution_result(json!({ "status": reason }).into())
-                    .metadata(json!({ "status": reason }))
+                    .metadata(incomplete_tool_metadata(reason))
                     .build(),
             )?;
         }
@@ -2787,7 +2793,7 @@ impl Session {
                 ToolCallEndParams::builder()
                     .handle(&handle)
                     .execution_result(json!({ "status": reason }).into())
-                    .metadata(json!({ "status": reason }))
+                    .metadata(incomplete_tool_metadata(reason))
                     .build(),
             )?;
         }
@@ -3113,6 +3119,15 @@ impl Session {
     // scope. Duplicate tool IDs are ignored so repeated pre-tool hooks do not create parallel
     // handles for one agent tool invocation.
     async fn start_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
+        if self
+            .recovered_tool_completions
+            .contains(&completion::recovered_tool_key(
+                &self.session_id,
+                &event.tool_call_id,
+            ))
+        {
+            return Ok(());
+        }
         if self.tools.contains_key(&event.tool_call_id) {
             return Ok(());
         }
@@ -3226,10 +3241,21 @@ impl Session {
 
     // A post-only observation is a mark: no invented execution start or duration.
     async fn end_tool(&mut self, event: ToolEvent) -> Result<Option<SubscriberDelivery>, CliError> {
+        // A late end hook must not close another call with the same name and arguments.
+        if self
+            .recovered_tool_completions
+            .contains(&completion::recovered_tool_key(
+                &self.session_id,
+                &event.tool_call_id,
+            ))
+        {
+            return Ok(None);
+        }
         let completed_agent_subagent_id = alignment::completed_subagent_from_tool(&event);
         let Some(handle) = self.remove_tool_handle_for_event(&event) else {
             let mut metadata = self.event_identity_metadata(event.metadata.clone());
             self.apply_tool_execution_metadata(&mut metadata, event.subagent_id.as_deref());
+            let metadata = tool_end_metadata(metadata, event.status.as_deref());
             self.completion_mark(
                 "tool_end_without_start",
                 json!({
@@ -3251,7 +3277,7 @@ impl Session {
             ToolCallEndParams::builder()
                 .handle(&handle)
                 .execution_result(event.result.clone().into())
-                .metadata(merge_metadata(metadata, json!({ "status": event.status })))
+                .metadata(tool_end_metadata(metadata, event.status.as_deref()))
                 .build(),
         )?;
         self.set_last_tool_owner(
