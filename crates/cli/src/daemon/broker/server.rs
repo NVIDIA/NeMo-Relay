@@ -1689,7 +1689,7 @@ async fn public_proxy_inner(
             Err(ResolveError::Unavailable(_)) => return unavailable_response(),
         },
     };
-    match (target, route) {
+    let mut response = match (target, route) {
         (ResolvedTarget::PassThrough, PublicRoute::Hook(hook)) => {
             let mut response = Response::new(Body::from(hook.pass_through_body()));
             response
@@ -1717,7 +1717,11 @@ async fn public_proxy_inner(
             }
             forward_to_worker(Arc::clone(&state), request, worker).await
         }
+    };
+    if matches!(route, PublicRoute::Provider(_)) {
+        crate::gateway::strip_redirect_location(&mut response);
     }
+    response
 }
 
 fn responses_websocket_probe(request: &Request<Body>) -> bool {

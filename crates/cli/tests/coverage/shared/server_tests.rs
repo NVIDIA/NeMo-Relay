@@ -6571,6 +6571,7 @@ async fn a_named_upstream_redirect_is_not_followed() {
         StatusCode::TEMPORARY_REDIRECT,
         "the redirect is surfaced to the caller rather than followed"
     );
+    assert!(!response.headers().contains_key(header::LOCATION));
 
     redirector.abort();
 }
@@ -7080,28 +7081,37 @@ async fn gateway_configured_upstream_redirect_does_not_export_injected_key() {
         None,
         None,
     ));
+    let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_url = format!("http://{}", gateway_listener.local_addr().unwrap());
+    let gateway = tokio::spawn(async move {
+        axum::serve(gateway_listener, app).await.unwrap();
+    });
+    let caller = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(Duration::from_secs(5))
+        .no_proxy()
+        .build()
+        .unwrap();
     for streaming in [false, true] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post("/v1/messages")
-                    .header(
-                        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
-                        key.client_token(),
-                    )
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "model": "claude-test", "max_tokens": 1, "stream": streaming,
-                            "messages": [{"role": "user", "content": "private prompt"}]
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
+        let response = caller
+            .post(format!("{gateway_url}/v1/messages"))
+            .header(
+                crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+                key.client_token(),
             )
+            .json(&json!({
+                "model": "claude-test", "max_tokens": 1, "stream": streaming,
+                "messages": [{"role": "user", "content": "private prompt"}]
+            }))
+            .send()
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert!(!response.headers().contains_key(header::LOCATION));
+        assert_eq!(
+            response.url().as_str(),
+            format!("{gateway_url}/v1/messages")
+        );
         let (headers, bytes) = requests.recv().await.unwrap();
         assert_eq!(headers["x-api-key"], "sk-ant-placeholder");
         let body: Value = serde_json::from_slice(&bytes).unwrap();
@@ -7112,5 +7122,6 @@ async fn gateway_configured_upstream_redirect_does_not_export_injected_key() {
             .await
             .is_err()
     );
+    gateway.abort();
     server.abort();
 }

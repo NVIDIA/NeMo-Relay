@@ -39,10 +39,12 @@ fn environment_authorization() -> crate::provider_auth::ProviderRequestAuthoriza
 
 #[tokio::test]
 async fn custom_openai_upstream_preserves_corporate_tokens_and_prompts() {
-    for token in [
-        "Bearer eyJhbGciOiJSUzI1NiJ9.FAKE.FAKE",
-        "Bearer at-corporate-token",
-    ] {
+    use base64::Engine;
+
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(br#"{"iss":"https://login.corporate.example"}"#);
+    let corporate_token = format!("Bearer eyJhbGciOiJSUzI1NiJ9.{payload}.c2lnbmF0dXJl");
+    for token in [corporate_token.as_str(), "Bearer at-corporate-token"] {
         for allow_provider_auth in [false, true] {
             let config = GatewayConfig {
                 openai_base_url: "https://corporate.example/v1".into(),

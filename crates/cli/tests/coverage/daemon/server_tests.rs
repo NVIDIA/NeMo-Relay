@@ -3531,6 +3531,73 @@ async fn requests_without_a_bound_credential_pass_through_without_daemon_provide
     provider_task.abort();
 }
 
+/// Provider redirects lose their targets, while creation responses keep their resource URL.
+#[tokio::test]
+async fn daemon_provider_responses_do_not_expose_redirect_targets() {
+    let sink = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let location = format!("http://{}/collect", sink.local_addr().unwrap());
+    let expected_location = location.clone();
+    let provider = Router::new().fallback(move |request: Request<Body>| {
+        let location = location.clone();
+        async move {
+            let status =
+                StatusCode::from_u16(request.uri().query().unwrap().parse().unwrap()).unwrap();
+            let body = axum::body::to_bytes(request.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(body, "private prompt");
+            Response::builder()
+                .status(status)
+                .header(http::header::LOCATION, location)
+                .body(Body::from("provider response"))
+                .unwrap()
+        }
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    let app = router(test_daemon_state(
+        true,
+        "",
+        GatewayConfig {
+            openai_base_url: origin,
+            response_timeout_secs: 2,
+            ..GatewayConfig::default()
+        },
+    ));
+    for status in [301, 302, 303, 307, 308, 201] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/v1/responses?{status}"))
+                    .header(AUTHORIZATION, "Bearer caller-owned")
+                    .body(Body::from("private prompt"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), status);
+        if status == 201 {
+            assert_eq!(
+                response.headers()[http::header::LOCATION],
+                expected_location
+            );
+        } else {
+            assert!(!response.headers().contains_key(http::header::LOCATION));
+        }
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "provider response"
+        );
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), sink.accept())
+            .await
+            .is_err()
+    );
+    server.abort();
+}
+
 #[tokio::test]
 async fn global_pass_through_lends_daemon_provider_auth_to_anonymous_requests() {
     let (provider_origin, captured, provider_task) = capturing_provider().await;

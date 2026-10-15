@@ -473,6 +473,54 @@ async fn standalone_websocket_proxy_preserves_frames_and_handshake_failures() {
     provider_task.abort();
 }
 
+/// A failed WebSocket handshake cannot redirect the caller and its provider credential.
+#[tokio::test]
+async fn websocket_proxy_removes_upstream_redirect_targets() {
+    let sink = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let location = format!("http://{}/collect", sink.local_addr().unwrap());
+    let app = Router::new().fallback(move || {
+        let location = location.clone();
+        async move {
+            (
+                StatusCode::TEMPORARY_REDIRECT,
+                [(header::LOCATION, location)],
+            )
+        }
+    });
+    let (upstream, provider_task) = serve(app).await;
+    let (origin, task) = serve(crate::server::router(GatewayConfig {
+        openai_base_url: upstream,
+        ..GatewayConfig::default()
+    }))
+    .await;
+    let mut request = format!("{}/v1/live", origin.replacen("http", "ws", 1))
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer caller-owned"),
+    );
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio_tungstenite::connect_async(request),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+        panic!("{error}");
+    };
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert!(!response.headers().contains_key(header::LOCATION));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), sink.accept())
+            .await
+            .is_err()
+    );
+    task.abort();
+    provider_task.abort();
+}
+
 #[tokio::test]
 async fn websocket_proxy_rejects_invalid_upstream_handshake_before_upgrading() {
     for invalid in [

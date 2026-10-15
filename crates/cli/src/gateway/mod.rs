@@ -9,6 +9,7 @@ pub(crate) mod tls;
 pub(crate) mod websocket;
 
 use request::*;
+pub(crate) use response::strip_redirect_location;
 use response::*;
 use routes::*;
 

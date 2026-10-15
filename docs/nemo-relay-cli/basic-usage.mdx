@@ -432,13 +432,20 @@ An MCP-managed gateway uses custom or environment credentials only after the
 client proves that it belongs to that managed gateway.
 
 Relay handles Codex ChatGPT credentials differently from other provider credentials.
-On OpenAI routes, Relay treats either of these as a ChatGPT credential:
+On ordinary OpenAI paths, Relay treats either of these as a ChatGPT credential:
 
 - A JSON Web Token (JWT) with an `iss` claim set to `https://auth.openai.com`.
 - A `Bearer at-...` access token with a `chatgpt-account-id` header that is not empty.
 
-A token's prefix alone does not tell Relay to use the ChatGPT backend or replace
-the token.
+On these paths, a token's prefix alone does not tell Relay to use the ChatGPT
+backend or replace the token.
+
+Explicit Codex paths such as `/backend-api/codex/responses` also support token
+prefixes for routing.
+They accept `Bearer at-...` without an account header and `Bearer eyJ...` without
+an issuer check. With the default OpenAI base and no replacement key, these
+prefixes select the ChatGPT backend. A custom `openai_base_url` still applies.
+Voice calls use the exception described below.
 
 Relay can replace a ChatGPT credential with a provider credential. The replacement
 must come from `openai_auth_header`, `NEMO_RELAY_OPENAI_AUTH_HEADER`, or
@@ -466,9 +473,10 @@ before routing a ChatGPT voice sideband through Relay with a replacement key.
 
 Relay does not follow HTTP redirects from upstream servers. This stops Relay
 from sending provider credentials and request bodies to another destination.
-Passthrough requests return the upstream redirect response to the caller.
-Managed requests treat the redirect as an upstream failure. Configure the final
-provider URL directly.
+Relay keeps the upstream redirect status but removes its `Location` header.
+This stops callers from following the redirect and resending a prompt.
+Successful responses keep their `Location` headers. Managed requests treat the
+redirect as an upstream failure. Configure the final provider URL directly.
 
 ### Operational Logging
 
