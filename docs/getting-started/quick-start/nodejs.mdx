@@ -1,131 +1,136 @@
 ---
 title: "Node.js Quick Start"
-description: ""
-position: 2
+sidebar-title: "Node.js"
+slug: getting-started/quick-start/nodejs
+description: "Instrument one Node.js workflow and write its Relay events to a local ATOF file."
+position: 11
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-This quick start shows the smallest Node.js workflow that emits scope, tool, and LLM
-events.
-
-## Choose an Install Path
-
-Pick the installation path that matches whether you are using a published package or a
-local checkout.
-
-### Install from a Package Manager
-
-Use this path when you want the published package for application development.
-
-```bash
-npm install nemo-relay-node@0.11.0
-```
-
-### Install from the Repository
-
-Use this path when you are working from a local checkout and need editable source
-behavior.
-
-```bash
-npm install --ignore-scripts
-npm run build --workspace=nemo-relay-node
-```
-
-This path is for local source development when you need to build the binding from the repository checkout.
-
-## Run One Scope, One Tool Call, and One LLM Call
-
-The example below runs one minimal instrumented workflow through the binding.
-Save it as `quickstart.js` in the same project where you installed
-`nemo-relay-node`, then run `node quickstart.js`.
-
-```js
-const {
-  ScopeType,
-  registerSubscriber,
-  deregisterSubscriber,
-  flushSubscribers,
-  LlmRequest,
-  withScope,
-  event,
-  toolCallExecute,
-  llmCallExecute,
-} = require("nemo-relay-node");
-
-async function main() {
-  registerSubscriber("quickstart-printer", (runtimeEvent) => {
-    console.log(`event=${runtimeEvent.kind} name=${runtimeEvent.name}`);
-  });
-
-  await withScope("demo-agent", ScopeType.Agent, async (handle) => {
-    event("initialized", handle, { binding: "node" }, null);
-
-    const toolResult = await toolCallExecute(
-      "search",
-      { query: "hello" },
-      (args) => ({ result: { echo: args.query } }),
-      handle,
-      null,
-      null,
-      null,
-    );
-
-    const llmResult = await llmCallExecute(
-      "demo-provider",
-      new LlmRequest({}, { messages: [{ role: "user", content: "hi" }] }),
-      (request) => ({ ok: true, messages: request.content.messages }),
-      handle,
-      null,
-      null,
-      null,
-      null,
-    );
-
-    console.log(toolResult.result);
-    console.log(llmResult);
-  });
-
-  await flushSubscribers();
-  await new Promise((resolve) => setImmediate(resolve));
-  deregisterSubscriber("quickstart-printer");
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "nodejs",
+  "mode": "local",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-node-quickstart",
+  "requires": {
+    "node": ">=24",
+    "npm": "available"
+  },
+  "setup": [],
+  "inputs": {},
+  "fresh": [
+    "logs/events.jsonl"
+  ],
+  "checks": [
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent",
+          "name": "demo-agent"
+        },
+        {
+          "category": "tool",
+          "name": "emit_marker"
+        },
+        {
+          "category": "llm",
+          "name": "demo-provider"
+        }
+      ],
+      "marks": []
+    }
+  ]
 }
+*/}
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+## Goal
+
+Instrument one scope, tool call, and large language model (LLM) call with NeMo Relay, then verify the
+result in a local Agent Trajectory Observability Format (ATOF) file.
+
+<Note icon="circle-info">
+This example uses local tool and model callbacks. It does not require an
+inference key or a live model.
+</Note>
+
+## Prerequisites
+
+Before you start, make sure you have:
+
+- Node.js 24 or newer
+- npm
+
+<Steps toc={true}>
+
+## Install
+
+Create a project and install the NeMo Relay version for these docs.
+For an existing Node.js project, run only the `npm install` command from its directory.
+
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
+```bash
+mkdir relay-node-quickstart
+cd relay-node-quickstart
+npm init -y
+npm install --save-exact nemo-relay-node@0.11.0
 ```
 
-The managed tool callback returns `{ result, annotation? }`, and application
-code reads `toolResult.result`. The optional annotation carries opaque JSON
-metadata without changing the business result.
+## Configure
 
-## What Success Looks Like
+Save the following configuration as `plugins.toml` in your project directory:
 
-You should see:
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-node-quickstart","path":"plugins.toml"} */}
+<Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
 
-- Event lines for the scope, tool, and LLM lifecycles, plus the `initialized` mark event
-- `{ echo: 'hello' }` from the tool call's `result` field
-- An object containing `ok: true` and the echoed message payload from the LLM callback
+<Warning>
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+</Warning>
 
-That combination tells you both the business callbacks and the instrumentation
-pipeline are working.
+## Run
 
-## Where the Node.js Surface Lives
+Save this file as `quickstart.js` beside `plugins.toml`:
 
-These package entry points are the main Node.js APIs to use from applications and
-integrations.
+{/* quickstart-block {"id":"program","role":"file","cwd":"relay-node-quickstart","path":"quickstart.js"} */}
+<Code src="_code/nodejs/quickstart.js" language="js" title="quickstart.js" />
 
-- Runtime lifecycle APIs are exported from the package root.
-- Typed wrappers live in `nemo-relay-node/typed`.
-- Plugin helpers live in `nemo-relay-node/plugin`.
-- Adaptive helpers live in `nemo-relay-node/adaptive`.
+Run it from the project directory so the relative output path resolves there:
 
-## What to Learn Next
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-node-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+node quickstart.js
+```
 
-Use these links to continue from the quick start into the core runtime concepts.
+## Verify
 
-- [Instrument Applications Code Examples](/instrument-applications/code-examples)
-- [Subscribers](/about-nemo-relay/concepts/subscribers)
-- [Using Codecs](/integrate-into-frameworks/using-codecs)
+The program checks the event file for paired agent, tool, and LLM lifecycle
+records. A successful run prints these markers in order:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-node-quickstart","from":"run","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+<Note icon="circle-info">
+The file stores ATOF events as newline-delimited JSON (JSONL).
+</Note>
+
+</Steps>
+
+## For More Details
+
+For more details, refer to:
+
+- [Installation Overview](/getting-started/installation#nodejs)
+- [Instrument Application Code](/instrument-applications/code-examples)

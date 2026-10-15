@@ -74,8 +74,12 @@ struct FileUpstreamConfig {
     response_timeout_secs: Option<u64>,
     openai_base_url: Option<String>,
     openai_auth_header: Option<String>,
+    openai_api_key: Option<String>,
+    openai_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
     anthropic_base_url: Option<String>,
     anthropic_auth_header: Option<String>,
+    anthropic_api_key: Option<String>,
+    anthropic_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
     chatgpt_codex_base_url: Option<String>,
 }
 
@@ -112,21 +116,21 @@ pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedC
         dynamic_plugin_count = resolved.dynamic_plugins.len();
         "Runtime configuration resolved"
     );
+    crate::upstream_auth::warn_ignored_environment(&resolved.gateway);
     Ok(resolved)
 }
 
-/// Administrator-controlled configuration for a daemon-managed worker.
+/// Layered configuration for a daemon-managed, machine-user worker.
 ///
-/// The worker must be identical for every user routed through the same managed deployment, so it
-/// cannot consult the per-user configuration layer. `plugin_config_path` is retained so dynamic
-/// plugin lifecycle state is loaded from the same system scope as the resolved plugin document.
+/// System configuration retains precedence over the user's configuration. `plugin_config_path`
+/// selects the user layer for dynamic plugin lifecycle loading; the system layer still applies.
 #[derive(Debug, Clone)]
 pub(crate) struct ManagedWorkerConfig {
     pub(crate) resolved: ResolvedConfig,
     pub(crate) plugin_config_path: PathBuf,
 }
 
-/// Resolves daemon-worker configuration exclusively from the platform system configuration.
+/// Resolves daemon-worker configuration from user and system layers.
 pub(crate) fn resolve_managed_worker_config() -> Result<ManagedWorkerConfig, CliError> {
     let system_directory = system_config_dir();
     resolve_managed_worker_config_from_paths(
@@ -139,11 +143,20 @@ fn resolve_managed_worker_config_from_paths(
     config_path: PathBuf,
     plugin_config_path: PathBuf,
 ) -> Result<ManagedWorkerConfig, CliError> {
-    let resolved = load_config_from_paths(
-        vec![(config_path, false)],
-        vec![plugin_config_path.clone()],
-        apply_managed_worker_env_config,
-    )?;
+    let mut config_paths = Vec::new();
+    if let Some(user_path) = user_config_path() {
+        config_paths.push((user_path, false));
+    }
+    config_paths.push((config_path, false));
+    let mut plugin_paths = Vec::new();
+    let selected_plugin_path = user_plugin_config_path().unwrap_or(plugin_config_path.clone());
+    if selected_plugin_path != plugin_config_path {
+        plugin_paths.push(selected_plugin_path.clone());
+    }
+    plugin_paths.push(plugin_config_path);
+    let plugin_config_path = selected_plugin_path;
+    let resolved =
+        load_config_from_paths(config_paths, plugin_paths, apply_managed_worker_env_config)?;
     enforce_required_dynamic_plugin_startup(Some(&plugin_config_path), &resolved)?;
     log::info!(
         target: "nemo_relay.configuration",
@@ -152,6 +165,7 @@ fn resolve_managed_worker_config_from_paths(
         dynamic_plugin_count = resolved.dynamic_plugins.len();
         "Managed worker configuration resolved"
     );
+    crate::upstream_auth::warn_ignored_environment(&resolved.gateway);
     Ok(ManagedWorkerConfig {
         resolved,
         plugin_config_path,
@@ -231,6 +245,7 @@ pub(crate) fn resolve_persistent_server_config(
         &resolved,
         &active_dynamic_plugins,
     )?);
+    crate::upstream_auth::warn_ignored_environment(&resolved.gateway);
     Ok(resolved)
 }
 
@@ -320,8 +335,12 @@ fn persistent_bootstrap_fingerprint(
         "relay_version": env!("CARGO_PKG_VERSION"),
         "openai_base_url": gateway.openai_base_url,
         "openai_auth_header": gateway.openai_auth_header,
+        "openai_api_key": gateway.openai_api_key,
+        "openai_api_key_helper": gateway.openai_api_key_helper,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
+        "anthropic_api_key": gateway.anthropic_api_key,
+        "anthropic_api_key_helper": gateway.anthropic_api_key_helper,
         "chatgpt_codex_base_url": gateway.chatgpt_codex_base_url,
         "response_timeout_secs": gateway.response_timeout_secs,
         "metadata": gateway.metadata,
@@ -1316,6 +1335,7 @@ pub(crate) fn resolve_run_config(
         dynamic_plugin_count = resolved.dynamic_plugins.len();
         "Runtime configuration resolved"
     );
+    crate::upstream_auth::warn_ignored_environment(&resolved.gateway);
     Ok(resolved)
 }
 
@@ -1333,17 +1353,25 @@ fn apply_run_url_overrides(
     command: &RunOverrides,
 ) -> Result<(), CliError> {
     if let Some(value) = &command.openai_base_url {
+        if config.openai_base_url != *value {
+            config.openai_api_key = None;
+            config.openai_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.openai_base_url,
             &mut config.openai_auth_header,
-            value.clone(),
+            validate_upstream_base_url("--openai-base-url", value.clone())?,
         );
     }
     if let Some(value) = &command.anthropic_base_url {
+        if config.anthropic_base_url != *value {
+            config.anthropic_api_key = None;
+            config.anthropic_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
             &mut config.anthropic_auth_header,
-            value.clone(),
+            validate_upstream_base_url("--anthropic-base-url", value.clone())?,
         );
     }
     if let Some(value) = &command.chatgpt_codex_base_url {
@@ -1352,6 +1380,7 @@ fn apply_run_url_overrides(
             value.clone(),
         )?);
     }
+    crate::upstream_auth::validate_config(config)?;
     Ok(())
 }
 
@@ -1377,17 +1406,25 @@ fn apply_server_overrides(
         config.bind = value;
     }
     if let Some(value) = &args.openai_base_url {
+        if config.openai_base_url != *value {
+            config.openai_api_key = None;
+            config.openai_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.openai_base_url,
             &mut config.openai_auth_header,
-            value.clone(),
+            validate_upstream_base_url("--openai-base-url", value.clone())?,
         );
     }
     if let Some(value) = &args.anthropic_base_url {
+        if config.anthropic_base_url != *value {
+            config.anthropic_api_key = None;
+            config.anthropic_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
             &mut config.anthropic_auth_header,
-            value.clone(),
+            validate_upstream_base_url("--anthropic-base-url", value.clone())?,
         );
     }
     if let Some(value) = &args.chatgpt_codex_base_url {
@@ -1403,6 +1440,7 @@ fn apply_server_overrides(
         config.max_passthrough_body_bytes =
             validate_body_limit("max passthrough body bytes", value)?;
     }
+    crate::upstream_auth::validate_config(config)?;
     Ok(())
 }
 
@@ -1668,15 +1706,23 @@ fn apply_file_upstream_config(
         response_timeout_secs,
         openai_base_url,
         openai_auth_header,
+        openai_api_key,
+        openai_api_key_helper,
         anthropic_base_url,
         anthropic_auth_header,
+        anthropic_api_key,
+        anthropic_api_key_helper,
         chatgpt_codex_base_url,
     } = upstream;
     if let Some(value) = response_timeout_secs {
         gateway.response_timeout_secs = value;
     }
     if let Some(value) = openai_base_url {
-        gateway.openai_base_url = value;
+        if gateway.openai_base_url != value {
+            gateway.openai_api_key = None;
+            gateway.openai_api_key_helper = None;
+        }
+        gateway.openai_base_url = validate_upstream_base_url("upstream.openai_base_url", value)?;
         if openai_auth_header.is_none() {
             gateway.openai_auth_header = None;
         }
@@ -1686,7 +1732,12 @@ fn apply_file_upstream_config(
             Some(validate_auth_header("upstream.openai_auth_header", value)?);
     }
     if let Some(value) = anthropic_base_url {
-        gateway.anthropic_base_url = value;
+        if gateway.anthropic_base_url != value {
+            gateway.anthropic_api_key = None;
+            gateway.anthropic_api_key_helper = None;
+        }
+        gateway.anthropic_base_url =
+            validate_upstream_base_url("upstream.anthropic_base_url", value)?;
         if anthropic_auth_header.is_none() {
             gateway.anthropic_auth_header = None;
         }
@@ -1697,12 +1748,31 @@ fn apply_file_upstream_config(
             value,
         )?);
     }
+    if let Some(value) = openai_api_key {
+        gateway.openai_api_key = Some(crate::upstream_auth::validate_api_key(
+            "upstream.openai_api_key",
+            value,
+        )?);
+    }
+    if let Some(value) = openai_api_key_helper {
+        gateway.openai_api_key_helper = Some(value);
+    }
+    if let Some(value) = anthropic_api_key {
+        gateway.anthropic_api_key = Some(crate::upstream_auth::validate_api_key(
+            "upstream.anthropic_api_key",
+            value,
+        )?);
+    }
+    if let Some(value) = anthropic_api_key_helper {
+        gateway.anthropic_api_key_helper = Some(value);
+    }
     if let Some(value) = chatgpt_codex_base_url {
         gateway.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
             "upstream.chatgpt_codex_base_url",
             value,
         )?);
     }
+    crate::upstream_auth::validate_config(gateway)?;
     Ok(())
 }
 
@@ -1979,34 +2049,40 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     {
         config.bind = value;
     }
-    let openai_auth_header = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER").ok();
     if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_BASE_URL") {
+        if config.openai_base_url != value {
+            config.openai_api_key = None;
+            config.openai_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.openai_base_url,
             &mut config.openai_auth_header,
-            value,
+            validate_upstream_base_url("NEMO_RELAY_OPENAI_BASE_URL", value)?,
         );
     }
-    if let Some(value) = openai_auth_header {
-        config.openai_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_OPENAI_AUTH_HEADER",
-            value,
-        )?);
-    }
-    let anthropic_auth_header = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER").ok();
+    apply_environment_auth_header(
+        "NEMO_RELAY_OPENAI_AUTH_HEADER",
+        &mut config.openai_auth_header,
+        &mut config.openai_api_key,
+        config.openai_api_key_helper.is_some(),
+    )?;
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
+        if config.anthropic_base_url != value {
+            config.anthropic_api_key = None;
+            config.anthropic_api_key_helper = None;
+        }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
             &mut config.anthropic_auth_header,
-            value,
+            validate_upstream_base_url("NEMO_RELAY_ANTHROPIC_BASE_URL", value)?,
         );
     }
-    if let Some(value) = anthropic_auth_header {
-        config.anthropic_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
-            value,
-        )?);
-    }
+    apply_environment_auth_header(
+        "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+        &mut config.anthropic_auth_header,
+        &mut config.anthropic_api_key,
+        config.anthropic_api_key_helper.is_some(),
+    )?;
     if let Ok(value) = std::env::var("NEMO_RELAY_CHATGPT_CODEX_BASE_URL") {
         config.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
             "NEMO_RELAY_CHATGPT_CODEX_BASE_URL",
@@ -2021,24 +2097,40 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         config.max_passthrough_body_bytes =
             parse_env_body_limit("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", &value)?;
     }
+    crate::upstream_auth::validate_config(config)?;
     Ok(())
 }
 
 // Managed workers accept provider secrets from their inherited environment but never allow a
 // user's environment to change administrator-selected endpoints, limits, or listener settings.
-// `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are intentionally read later at request forwarding time.
+// Provider environment credentials are ignored when that provider has an API key helper.
 fn apply_managed_worker_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
-    if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER") {
-        config.openai_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_OPENAI_AUTH_HEADER",
-            value,
-        )?);
-    }
-    if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER") {
-        config.anthropic_auth_header = Some(validate_auth_header(
-            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
-            value,
-        )?);
+    apply_environment_auth_header(
+        "NEMO_RELAY_OPENAI_AUTH_HEADER",
+        &mut config.openai_auth_header,
+        &mut config.openai_api_key,
+        config.openai_api_key_helper.is_some(),
+    )?;
+    apply_environment_auth_header(
+        "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+        &mut config.anthropic_auth_header,
+        &mut config.anthropic_api_key,
+        config.anthropic_api_key_helper.is_some(),
+    )?;
+    crate::upstream_auth::validate_config(config)?;
+    Ok(())
+}
+
+/// Helpers own provider authentication. Otherwise an environment header replaces a file key.
+fn apply_environment_auth_header(
+    name: &str,
+    header: &mut Option<String>,
+    key: &mut Option<String>,
+    helper_enabled: bool,
+) -> Result<(), CliError> {
+    if !helper_enabled && let Ok(value) = std::env::var(name) {
+        *header = Some(validate_auth_header(name, value)?);
+        *key = None;
     }
     Ok(())
 }
@@ -2054,9 +2146,20 @@ fn replace_upstream_base_url(
     *base_url = replacement;
 }
 
-// ChatGPT credentials may only travel over TLS, except to a loopback proxy. Reject URL
-// components that would change the meaning of the request path appended by the gateway.
+// Preserve Codex's normalized URL serialization, including a bare host's trailing slash.
 fn validate_chatgpt_codex_base_url(name: &str, value: String) -> Result<String, CliError> {
+    Ok(parse_upstream_base_url(name, &value)?.to_string())
+}
+
+// Preserve the trimmed spelling used to compare OpenAI and Anthropic credential destinations.
+fn validate_upstream_base_url(name: &str, value: String) -> Result<String, CliError> {
+    parse_upstream_base_url(name, &value)?;
+    Ok(value.trim().to_string())
+}
+
+// Provider credentials may only travel over TLS, except to a loopback proxy. Reject URL
+// components that would change the meaning of the request path appended by the gateway.
+fn parse_upstream_base_url(name: &str, value: &str) -> Result<reqwest::Url, CliError> {
     let value = value.trim();
     if value.is_empty() {
         return Err(CliError::Config(format!("{name} must not be empty")));
@@ -2085,7 +2188,7 @@ fn validate_chatgpt_codex_base_url(name: &str, value: String) -> Result<String, 
             "{name} must not include user information, a query, or a fragment"
         )));
     }
-    Ok(url.to_string())
+    Ok(url)
 }
 
 fn validate_auth_header(name: &str, value: String) -> Result<String, CliError> {
@@ -2145,15 +2248,47 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
         left.get_mut("upstream").and_then(toml::Value::as_table_mut),
         right.get("upstream").and_then(toml::Value::as_table),
     ) {
-        for (base_url, auth_header) in [
-            ("openai_base_url", "openai_auth_header"),
-            ("anthropic_base_url", "anthropic_auth_header"),
+        let defaults = GatewayConfig::default();
+        for (base_url, default_url, credentials) in [
+            (
+                "openai_base_url",
+                defaults.openai_base_url.as_str(),
+                [
+                    "openai_auth_header",
+                    "openai_api_key",
+                    "openai_api_key_helper",
+                ],
+            ),
+            (
+                "anthropic_base_url",
+                defaults.anthropic_base_url.as_str(),
+                [
+                    "anthropic_auth_header",
+                    "anthropic_api_key",
+                    "anthropic_api_key_helper",
+                ],
+            ),
         ] {
-            let endpoint_changed = override_upstream
-                .get(base_url)
-                .is_some_and(|value| existing.get(base_url) != Some(value));
-            if endpoint_changed && !override_upstream.contains_key(auth_header) {
-                existing.remove(auth_header);
+            let endpoint_changed = override_upstream.get(base_url).is_some_and(|value| {
+                value.as_str()
+                    != Some(
+                        existing
+                            .get(base_url)
+                            .and_then(toml::Value::as_str)
+                            .unwrap_or(default_url),
+                    )
+            });
+            for credential in credentials {
+                // Replace a helper as a whole command contract, even when the endpoint is unchanged.
+                let helper = credential.ends_with("_api_key_helper");
+                let clear = if helper {
+                    endpoint_changed || override_upstream.contains_key(credential)
+                } else {
+                    endpoint_changed && !override_upstream.contains_key(credential)
+                };
+                if clear {
+                    existing.remove(credential);
+                }
             }
         }
     }

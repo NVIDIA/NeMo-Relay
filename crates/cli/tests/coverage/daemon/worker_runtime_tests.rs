@@ -468,19 +468,23 @@ fn control_loss_rejects_new_admissions_without_touching_existing_one() {
     assert_eq!(state.in_flight.load(Ordering::Acquire), 0);
 }
 
-#[test]
-fn configured_provider_auth_never_replaces_caller_auth() {
+#[tokio::test]
+async fn configured_provider_auth_never_replaces_caller_auth() {
     let config = GatewayConfig {
         openai_auth_header: Some("Bearer configured".into()),
         ..GatewayConfig::default()
     };
     let mut headers = HeaderMap::new();
     headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer caller"));
-    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config);
+    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config)
+        .await
+        .unwrap();
     assert_eq!(headers.get(AUTHORIZATION).expect("auth"), "Bearer caller");
 
     headers.remove(AUTHORIZATION);
-    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config);
+    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config)
+        .await
+        .unwrap();
     assert_eq!(
         headers.get(AUTHORIZATION).expect("configured auth"),
         "Bearer configured"
@@ -704,8 +708,8 @@ async fn provider_routing_reports_invalid_destinations_and_connection_failures()
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
 }
 
-#[test]
-fn provider_auth_supports_both_configured_and_environment_credentials() {
+#[tokio::test]
+async fn provider_auth_supports_both_configured_and_environment_credentials() {
     let _environment = EnvScope::set(&[
         ("OPENAI_API_KEY", Some(std::ffi::OsStr::new(" openai-env "))),
         (
@@ -718,7 +722,9 @@ fn provider_auth_supports_both_configured_and_environment_credentials() {
         &mut openai,
         ProviderRoute::OpenAi,
         &GatewayConfig::default(),
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(openai[AUTHORIZATION], "Bearer openai-env");
 
     let mut anthropic = HeaderMap::new();
@@ -726,7 +732,9 @@ fn provider_auth_supports_both_configured_and_environment_credentials() {
         &mut anthropic,
         ProviderRoute::Anthropic,
         &GatewayConfig::default(),
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(anthropic["x-api-key"], "anthropic-env");
 
     let mut configured = HeaderMap::new();
@@ -737,9 +745,10 @@ fn provider_auth_supports_both_configured_and_environment_credentials() {
             anthropic_auth_header: Some("configured-anthropic".into()),
             ..GatewayConfig::default()
         },
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(configured[AUTHORIZATION], "configured-anthropic");
-    assert!(header_value("bad\nheader").is_none());
 }
 
 #[test]
@@ -1001,4 +1010,29 @@ async fn websocket_drain_cancels_a_pending_upstream_handshake() {
     assert_eq!(state.in_flight.load(Ordering::SeqCst), 0);
     task.abort();
     provider_task.abort();
+}
+
+#[test]
+fn managed_provider_transport_failures_preserve_operational_reasons() {
+    use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
+    for (class, reason) in [
+        (UpstreamFailureClass::Connection, Some("transport_error")),
+        (UpstreamFailureClass::Timeout, Some("response_head_timeout")),
+        (UpstreamFailureClass::Authentication, None),
+    ] {
+        let error = CliError::ProviderFailure(UpstreamFailure {
+            status: None,
+            body: "provider failure".into(),
+            headers: Default::default(),
+            class,
+        });
+        assert_eq!(managed_upstream_failure_reason(&error), reason);
+    }
+    let error = CliError::UpstreamTransport(
+        crate::daemon::common::transport::TransportError::InsecureDestination,
+    );
+    assert_eq!(
+        managed_upstream_failure_reason(&error),
+        Some("transport_error")
+    );
 }

@@ -3974,9 +3974,9 @@ fn cli_doctor_json_reports_effective_upstream_auth_presence() {
         &user_config,
         r#"
 [upstream]
-openai_base_url = "http://project-openai"
+openai_base_url = "https://project-openai"
 openai_auth_header = "Bearer project-openai"
-anthropic_base_url = "http://project-anthropic"
+anthropic_base_url = "https://project-anthropic"
 anthropic_auth_header = "Basic project-anthropic"
 "#,
     )
@@ -3986,7 +3986,7 @@ anthropic_auth_header = "Basic project-anthropic"
         .current_dir(&nested)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "https://env-openai")
         .args(["doctor", "--json"])
         .output()
         .unwrap();
@@ -4241,8 +4241,8 @@ fn cli_run_dry_run_resolves_config_and_command() {
         &config,
         r#"
 [upstream]
-openai_base_url = "http://file-openai"
-anthropic_base_url = "http://file-anthropic"
+openai_base_url = "https://file-openai"
+anthropic_base_url = "https://file-anthropic"
 
 [agents.codex]
 command = "codex exec"
@@ -4268,7 +4268,7 @@ command = "codex exec"
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("agent = codex"));
-    assert!(stdout.contains("openai_base_url = http://file-openai"));
+    assert!(stdout.contains("openai_base_url = https://file-openai"));
     let argv = stdout
         .lines()
         .find(|line| line.starts_with("argv = "))
@@ -4641,7 +4641,7 @@ fn cli_run_dry_run_ignores_project_and_uses_user_and_env_config() {
         project.join(".nemo-relay/config.toml"),
         r#"
 [upstream]
-openai_base_url = "http://project-openai"
+openai_base_url = "https://project-openai"
 "#,
     )
     .unwrap();
@@ -4649,7 +4649,7 @@ openai_base_url = "http://project-openai"
         xdg.join("config.toml"),
         r#"
 [upstream]
-anthropic_base_url = "http://user-anthropic"
+anthropic_base_url = "https://user-anthropic"
 
 [agents.codex]
 command = "codex --full-auto"
@@ -4686,8 +4686,8 @@ mode = "append"
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
         .env("NEMO_RELAY_GATEWAY_BIND", "127.0.0.1:0")
-        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
-        .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "http://env-anthropic")
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "https://env-openai")
+        .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "https://env-anthropic")
         .env("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", "444")
         .env("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", "555")
         .env("NEMO_RELAY_PLUGIN_CONFIG_PATH", &plugin_config)
@@ -4697,8 +4697,8 @@ mode = "append"
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("openai_base_url = http://env-openai"));
-    assert!(stdout.contains("anthropic_base_url = http://env-anthropic"));
+    assert!(stdout.contains("openai_base_url = https://env-openai"));
+    assert!(stdout.contains("anthropic_base_url = https://env-anthropic"));
     assert!(stdout.contains("max_hook_payload_bytes = 444"));
     assert!(stdout.contains("max_passthrough_body_bytes = 555"));
     assert!(!stdout.contains("atif_dir"));
@@ -4721,9 +4721,9 @@ fn cli_run_dry_run_reports_effective_upstream_auth_presence() {
         user_config,
         r#"
 [upstream]
-openai_base_url = "http://project-openai"
+openai_base_url = "https://project-openai"
 openai_auth_header = "Bearer project-openai"
-anthropic_base_url = "http://project-anthropic"
+anthropic_base_url = "https://project-anthropic"
 anthropic_auth_header = "Basic project-anthropic"
 "#,
     )
@@ -4733,7 +4733,7 @@ anthropic_auth_header = "Basic project-anthropic"
         .current_dir(&nested)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "https://env-openai")
         .args(["run", "--agent", "codex", "--dry-run"])
         .output()
         .unwrap();
@@ -4742,7 +4742,7 @@ anthropic_auth_header = "Basic project-anthropic"
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("Bearer project-openai"));
     assert!(!stdout.contains("Basic project-anthropic"));
-    assert!(stdout.contains("openai_base_url = http://env-openai"));
+    assert!(stdout.contains("openai_base_url = https://env-openai"));
     assert!(stdout.contains("openai_auth = unset"));
     assert!(stdout.contains("anthropic_auth = configured"));
 }
@@ -6571,4 +6571,136 @@ fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verd
     assert_eq!(started["body"], "{}");
     assert_eq!(forward("attacker", "session_shutdown")["status"], 401);
     assert_eq!(forward("victim", "session_shutdown")["status"], 200);
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn configured_api_key_helpers_warn_about_ignored_environment_without_executing() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[upstream.openai_api_key_helper]\ncommand = 'helper-that-does-not-exist'\n\n[upstream.anthropic_api_key_helper]\ncommand = 'helper-that-does-not-exist'\n",
+    ).unwrap();
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .env(
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            temp.path().join("system"),
+        )
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
+        .env("NEMO_RELAY_LOG", "warn")
+        .env("NEMO_RELAY_LOG_STDERR", "true")
+        .env("NEMO_RELAY_LOG_STDERR_FORMAT", "json")
+        .env("OPENAI_API_KEY", "private-openai-env-sentinel")
+        .env("ANTHROPIC_API_KEY", "private-anthropic-key-sentinel")
+        .env("ANTHROPIC_AUTH_TOKEN", "private-anthropic-token-sentinel")
+        .env(
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            "private-openai-header-sentinel\ninvalid",
+        )
+        .env(
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            "private-anthropic-header-sentinel\ninvalid",
+        )
+        .args(["--config", config.to_str().unwrap(), "doctor", "--json"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    for name in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "NEMO_RELAY_OPENAI_AUTH_HEADER",
+        "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+    ] {
+        assert!(stderr.contains(name), "{stderr}");
+    }
+    assert!(
+        stderr.contains("provider_environment_auth_ignored"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("private-"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let checks = report["configuration"]["upstream_auth"]["checks"]
+        .as_array()
+        .unwrap();
+    assert_eq!(checks.len(), 2);
+    for check in checks {
+        assert_eq!(check["status"], "warn");
+        assert!(
+            check["details"]
+                .as_str()
+                .unwrap()
+                .contains("API key helper configured")
+        );
+        assert!(
+            check["details"]
+                .as_str()
+                .unwrap()
+                .contains("Doctor does not run the helper")
+        );
+    }
+}
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn overridden_api_key_helpers_do_not_warn_about_environment_authentication() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[upstream.openai_api_key_helper]\ncommand = 'helper-that-does-not-exist'\n\n[upstream.anthropic_api_key_helper]\ncommand = 'helper-that-does-not-exist'\n",
+    ).unwrap();
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+        .env(
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            temp.path().join("system"),
+        )
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
+        .env("NEMO_RELAY_LOG", "warn")
+        .env("NEMO_RELAY_LOG_STDERR", "true")
+        .env("NEMO_RELAY_LOG_STDERR_FORMAT", "json")
+        .env("OPENAI_API_KEY", "private-openai-env-sentinel")
+        .env("ANTHROPIC_API_KEY", "private-anthropic-key-sentinel")
+        .env("ANTHROPIC_AUTH_TOKEN", "private-anthropic-token-sentinel")
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--openai-base-url",
+            "https://replacement-openai.example/v1",
+            "--anthropic-base-url",
+            "https://replacement-anthropic.example",
+            "doctor",
+            "--json",
+            "--offline",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        !stderr.contains("provider_environment_auth_ignored"),
+        "{stderr}"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["resolution"]["status"], "pass");
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["openai"],
+        "configured"
+    );
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["anthropic"],
+        "configured"
+    );
+    assert!(!stderr.contains("private-"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-"));
 }

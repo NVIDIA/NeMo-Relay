@@ -383,7 +383,7 @@ impl Drop for PluginConfigDiscoveryScope {
 }
 
 #[tokio::test]
-async fn managed_worker_configuration_ignores_user_files_and_non_secret_environment() {
+async fn managed_worker_configuration_merges_user_files_and_ignores_non_secret_environment() {
     let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let user_home = temp.path().join("user");
@@ -393,12 +393,30 @@ async fn managed_worker_configuration_ignores_user_files_and_non_secret_environm
     std::fs::create_dir_all(&system_directory).unwrap();
     std::fs::write(
         user_directory.join("config.toml"),
-        "invalid user config = [",
+        r#"[upstream]
+openai_base_url = "https://user.example/openai"
+[gateway]
+max_hook_payload_bytes = 9
+"#,
     )
     .unwrap();
     std::fs::write(
         user_directory.join(PLUGINS_TOML),
-        "invalid user plugins = [",
+        r#"version = 1
+[[components]]
+kind = "observability"
+enabled = true
+[components.config]
+version = 4
+[components.config.opentelemetry]
+enabled = true
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "http://localhost:5000/v1/traces"
+transport = "http_binary"
+[components.config.opentelemetry.endpoints.headers]
+"x-mlflow-experiment-id" = "0"
+"#,
     )
     .unwrap();
 
@@ -421,10 +439,30 @@ chatgpt_codex_base_url = "https://admin.example/chatgpt"
 "#,
     )
     .unwrap();
-    std::fs::write(&system_plugins, "version = 1\ncomponents = []\n").unwrap();
+    std::fs::write(
+        &system_plugins,
+        r#"version = 1
+[[components]]
+kind = "observability"
+enabled = true
+[components.config]
+version = 4
+[components.config.opentelemetry]
+enabled = true
+[[components.config.opentelemetry.endpoints]]
+type = "gen_ai"
+endpoint = "https://admin.example/v1/traces"
+service_name = "admin-service"
+"#,
+    )
+    .unwrap();
 
     let _environment = crate::test_support::EnvScope::set(&[
         ("XDG_CONFIG_HOME", Some(user_home.as_os_str())),
+        (
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            Some(system_directory.as_os_str()),
+        ),
         ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
         (
             "NEMO_RELAY_GATEWAY_BIND",
@@ -457,9 +495,13 @@ chatgpt_codex_base_url = "https://admin.example/chatgpt"
     ]);
 
     let managed =
-        resolve_managed_worker_config_from_paths(system_config, system_plugins.clone()).unwrap();
+        resolve_managed_worker_config_from_paths(system_config.clone(), system_plugins.clone())
+            .unwrap();
 
-    assert_eq!(managed.plugin_config_path, system_plugins);
+    assert_eq!(
+        managed.plugin_config_path,
+        user_directory.join(PLUGINS_TOML)
+    );
     assert_eq!(
         managed.resolved.gateway.openai_base_url,
         "https://admin.example/openai"
@@ -490,15 +532,28 @@ chatgpt_codex_base_url = "https://admin.example/chatgpt"
         managed.resolved.gateway.response_timeout(),
         Some(Duration::from_secs(180))
     );
-    assert_eq!(
-        managed.resolved.gateway.plugin_config,
-        Some(json!({ "components": [], "version": 1 }))
-    );
+    let config = managed.resolved.gateway.plugin_config.as_ref().unwrap();
+    let endpoints = config["components"][0]["config"]["opentelemetry"]["endpoints"]
+        .as_array()
+        .unwrap();
+    assert_eq!(endpoints.len(), 2);
+    assert_eq!(endpoints[0]["endpoint"], "https://admin.example/v1/traces");
+    assert_eq!(endpoints[1]["endpoint"], "http://localhost:5000/v1/traces");
+    assert_eq!(endpoints[1]["headers"]["x-mlflow-experiment-id"], "0");
     assert!(managed.resolved.dynamic_plugins.is_empty());
+
+    std::fs::write(&system_config, "").unwrap();
+    let user_defaults =
+        resolve_managed_worker_config_from_paths(system_config, system_plugins).unwrap();
+    assert_eq!(
+        user_defaults.resolved.gateway.openai_base_url,
+        "https://user.example/openai"
+    );
+    assert_eq!(user_defaults.resolved.gateway.max_hook_payload_bytes, 9);
 }
 
 #[tokio::test]
-async fn managed_worker_dynamic_plugin_loading_ignores_user_lifecycle_state() {
+async fn managed_worker_dynamic_plugin_loading_reads_user_lifecycle_state() {
     let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let user_home = temp.path().join("user");
@@ -508,49 +563,52 @@ async fn managed_worker_dynamic_plugin_loading_ignores_user_lifecycle_state() {
     std::fs::create_dir_all(&system_directory).unwrap();
     let _environment = crate::test_support::EnvScope::set(&[
         ("XDG_CONFIG_HOME", Some(user_home.as_os_str())),
+        (
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            Some(system_directory.as_os_str()),
+        ),
         ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
         ("NEMO_RELAY_OPENAI_AUTH_HEADER", None),
         ("NEMO_RELAY_ANTHROPIC_AUTH_HEADER", None),
     ]);
-    std::fs::write(
-        user_directory.join(".dynamic-plugins.json"),
-        "invalid user lifecycle state",
-    )
-    .unwrap();
-
+    for (directory, id) in [
+        (&user_directory, "acme.user-worker"),
+        (&system_directory, "acme.managed-worker"),
+    ] {
+        let plugin_directory = directory.join("plugins/worker");
+        std::fs::create_dir_all(&plugin_directory).unwrap();
+        let manifest_path = write_dynamic_manifest(&plugin_directory, id);
+        let (manifest, manifest_ref) =
+            DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
+        let mut record = manifest.into_record(Some(manifest_ref)).unwrap();
+        record.spec.enabled = true;
+        let environment = directory.join("plugin-environment");
+        write_attested_python_environment(&environment, &manifest_path);
+        record.source.environment_ref = Some(environment.to_string_lossy().into_owned());
+        std::fs::write(
+            directory.join(".dynamic-plugins.json"),
+            serde_json::to_vec_pretty(&json!({ "schema_version": 1, "records": [record] }))
+                .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(directory.join(PLUGINS_TOML), format!(
+            "version = 1\ncomponents = []\n\n[[plugins.dynamic]]\nmanifest = \"plugins/worker/relay-plugin.toml\"\n\n[plugins.policy.overrides.\"{id}\"]\nattestation = \"integrity_only\"\n",
+        )).unwrap();
+    }
     let system_config = system_directory.join("config.toml");
     let system_plugins = system_directory.join(PLUGINS_TOML);
-    let plugin_directory = system_directory.join("plugins/worker");
-    std::fs::create_dir_all(&plugin_directory).unwrap();
-    let manifest_path = write_dynamic_manifest(&plugin_directory, "acme.managed-worker");
-    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
-    let mut record = manifest.into_record(Some(manifest_ref)).unwrap();
-    record.spec.enabled = true;
-    let environment = system_directory.join("plugin-environment");
-    write_attested_python_environment(&environment, &manifest_path);
-    record.source.environment_ref = Some(environment.to_string_lossy().into_owned());
-    std::fs::write(
-        system_directory.join(".dynamic-plugins.json"),
-        serde_json::to_vec_pretty(&json!({
-            "schema_version": 1,
-            "records": [record],
-        }))
-        .unwrap(),
-    )
-    .unwrap();
     std::fs::write(&system_config, "").unwrap();
-    std::fs::write(
-        &system_plugins,
-        "version = 1\ncomponents = []\n\n[[plugins.dynamic]]\nmanifest = \"plugins/worker/relay-plugin.toml\"\n\n[plugins.policy.overrides.\"acme.managed-worker\"]\nattestation = \"integrity_only\"\n",
-    )
-    .unwrap();
     let managed = resolve_managed_worker_config_from_paths(system_config, system_plugins).unwrap();
     let active =
         active_dynamic_plugin_components(Some(&managed.plugin_config_path), &managed.resolved)
             .unwrap();
 
-    assert_eq!(active.len(), 1);
-    assert_eq!(active[0].plugin_id, "acme.managed-worker");
+    let mut ids = active
+        .iter()
+        .map(|plugin| plugin.plugin_id.as_str())
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, ["acme.managed-worker", "acme.user-worker"]);
 }
 
 #[cfg(feature = "__skip-implicit-config")]
@@ -566,13 +624,13 @@ fn test_hook_skips_implicit_config_but_retains_explicit_config_and_environment()
     std::fs::create_dir_all(explicit_config.parent().unwrap()).unwrap();
     std::fs::write(
         &user_config,
-        "[upstream]\nopenai_base_url = 'http://user'\n",
+        "[upstream]\nopenai_base_url = 'https://user'\n",
     )
     .unwrap();
     std::fs::write(&user_plugins, "not valid TOML = [").unwrap();
     std::fs::write(
         &explicit_config,
-        "[upstream]\nopenai_base_url = 'http://explicit'\n",
+        "[upstream]\nopenai_base_url = 'https://explicit'\n",
     )
     .unwrap();
     let explicit_plugin_dir = explicit_config.parent().unwrap().join("plugins/acme");
@@ -591,7 +649,7 @@ manifest = "plugins/acme/relay-plugin.toml"
     .unwrap();
 
     let scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
-    scope.set_base_urls("http://environment", "http://environment-anthropic");
+    scope.set_base_urls("https://environment", "https://environment-anthropic");
     scope.skip_implicit_config();
 
     assert!(config_paths(None).is_empty());
@@ -607,9 +665,9 @@ manifest = "plugins/acme/relay-plugin.toml"
     );
 
     let implicit = load_shared_config(None, None).unwrap();
-    assert_eq!(implicit.gateway.openai_base_url, "http://environment");
+    assert_eq!(implicit.gateway.openai_base_url, "https://environment");
     let explicit = load_shared_config(Some(&explicit_config), None).unwrap();
-    assert_eq!(explicit.gateway.openai_base_url, "http://environment");
+    assert_eq!(explicit.gateway.openai_base_url, "https://environment");
     let explicit_plugin_config = load_shared_config(None, Some(&explicit_plugins)).unwrap();
     assert_eq!(explicit_plugin_config.dynamic_plugins.len(), 1);
     assert_eq!(
@@ -622,10 +680,14 @@ fn config() -> GatewayConfig {
     GatewayConfig {
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
-        openai_base_url: "http://openai".into(),
+        openai_base_url: "https://openai".into(),
         openai_auth_header: None,
-        anthropic_base_url: "http://anthropic".into(),
+        openai_api_key: None,
+        openai_api_key_helper: None,
+        anthropic_base_url: "https://anthropic".into(),
         anthropic_auth_header: None,
+        anthropic_api_key: None,
+        anthropic_api_key_helper: None,
         chatgpt_codex_base_url: None,
         metadata: None,
         plugin_config: None,
@@ -945,10 +1007,10 @@ fn explicit_toml_config_maps_supported_sections() {
         &path,
         r#"
 [upstream]
-openai_base_url = "http://openai"
+openai_base_url = "https://openai"
 response_timeout_secs = 120
 openai_auth_header = "Bearer openai-file"
-anthropic_base_url = "http://anthropic"
+anthropic_base_url = "https://anthropic"
 anthropic_auth_header = "Basic anthropic-file"
 
 [gateway]
@@ -980,7 +1042,7 @@ command = "codex --approval-mode never"
     let resolved = resolve_run_config(&command, None).unwrap();
 
     assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
-    assert_eq!(resolved.gateway.openai_base_url, "http://openai");
+    assert_eq!(resolved.gateway.openai_base_url, "https://openai");
     assert_eq!(
         resolved.gateway.response_timeout(),
         Some(Duration::from_secs(120))
@@ -989,7 +1051,7 @@ command = "codex --approval-mode never"
         resolved.gateway.openai_auth_header.as_deref(),
         Some("Bearer openai-file")
     );
-    assert_eq!(resolved.gateway.anthropic_base_url, "http://anthropic");
+    assert_eq!(resolved.gateway.anthropic_base_url, "https://anthropic");
     assert_eq!(
         resolved.gateway.anthropic_auth_header.as_deref(),
         Some("Basic anthropic-file")
@@ -1066,8 +1128,8 @@ fn ignored_project_endpoints_do_not_clear_user_provider_auth_headers() {
         project.join(".nemo-relay/config.toml"),
         r#"
 [upstream]
-openai_base_url = "http://project-openai"
-anthropic_base_url = "http://project-anthropic"
+openai_base_url = "https://project-openai"
+anthropic_base_url = "https://project-anthropic"
 "#,
     )
     .unwrap();
@@ -1075,9 +1137,9 @@ anthropic_base_url = "http://project-anthropic"
         xdg.join("nemo-relay/config.toml"),
         r#"
 [upstream]
-openai_base_url = "http://user-openai"
+openai_base_url = "https://user-openai"
 openai_auth_header = "Bearer user-openai"
-anthropic_base_url = "http://user-anthropic"
+anthropic_base_url = "https://user-anthropic"
 anthropic_auth_header = "Basic user-anthropic"
 "#,
     )
@@ -1086,12 +1148,15 @@ anthropic_auth_header = "Basic user-anthropic"
 
     let resolved = resolve_server_config(&GatewayOverrides::default()).unwrap();
 
-    assert_eq!(resolved.gateway.openai_base_url, "http://user-openai");
+    assert_eq!(resolved.gateway.openai_base_url, "https://user-openai");
     assert_eq!(
         resolved.gateway.openai_auth_header.as_deref(),
         Some("Bearer user-openai")
     );
-    assert_eq!(resolved.gateway.anthropic_base_url, "http://user-anthropic");
+    assert_eq!(
+        resolved.gateway.anthropic_base_url,
+        "https://user-anthropic"
+    );
     assert_eq!(
         resolved.gateway.anthropic_auth_header.as_deref(),
         Some("Basic user-anthropic")
@@ -1114,7 +1179,10 @@ anthropic_auth_header = "Basic file-anthropic"
 "#,
     )
     .unwrap();
-    scope.set_base_urls("http://environment-openai", "http://environment-anthropic");
+    scope.set_base_urls(
+        "https://environment-openai",
+        "https://environment-anthropic",
+    );
 
     let resolved = resolve_server_config(&GatewayOverrides {
         config: Some(path),
@@ -1124,12 +1192,12 @@ anthropic_auth_header = "Basic file-anthropic"
 
     assert_eq!(
         resolved.gateway.openai_base_url,
-        "http://environment-openai"
+        "https://environment-openai"
     );
     assert!(resolved.gateway.openai_auth_header.is_none());
     assert_eq!(
         resolved.gateway.anthropic_base_url,
-        "http://environment-anthropic"
+        "https://environment-anthropic"
     );
     assert!(resolved.gateway.anthropic_auth_header.is_none());
 }
@@ -1145,14 +1213,14 @@ fn matching_endpoint_environment_overrides_preserve_file_provider_auth_headers()
         &path,
         r#"
 [upstream]
-openai_base_url = "http://same-openai"
+openai_base_url = "https://same-openai"
 openai_auth_header = "Bearer file-openai"
-anthropic_base_url = "http://same-anthropic"
+anthropic_base_url = "https://same-anthropic"
 anthropic_auth_header = "Basic file-anthropic"
 "#,
     )
     .unwrap();
-    scope.set_base_urls("http://same-openai", "http://same-anthropic");
+    scope.set_base_urls("https://same-openai", "https://same-anthropic");
 
     let resolved = resolve_server_config(&GatewayOverrides {
         config: Some(path),
@@ -1418,7 +1486,7 @@ fn explicit_plugins_toml_maps_root_plugin_config() {
         &config_path,
         r#"
 [upstream]
-openai_base_url = "http://openai"
+openai_base_url = "https://openai"
 "#,
     )
     .unwrap();
@@ -2530,7 +2598,7 @@ fn cli_run_overrides_config_values() {
         &path,
         r#"
 [upstream]
-openai_base_url = "http://file-openai"
+openai_base_url = "https://file-openai"
 openai_auth_header = "Bearer file-openai"
 "#,
     )
@@ -2539,7 +2607,7 @@ openai_auth_header = "Bearer file-openai"
         chatgpt_codex_base_url: None,
         agent: Some(CodingAgent::Codex),
         config: Some(path),
-        openai_base_url: Some("http://cli-openai".into()),
+        openai_base_url: Some("https://cli-openai".into()),
         anthropic_base_url: None,
         session_metadata: Some(r#"{"team":"cli"}"#.into()),
         plugin_config_path: None,
@@ -2550,7 +2618,7 @@ openai_auth_header = "Bearer file-openai"
 
     let resolved = resolve_run_config(&command, None).unwrap();
 
-    assert_eq!(resolved.gateway.openai_base_url, "http://cli-openai");
+    assert_eq!(resolved.gateway.openai_base_url, "https://cli-openai");
     assert!(resolved.gateway.openai_auth_header.is_none());
     assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "cli" })));
 }
@@ -2564,14 +2632,14 @@ fn run_inherits_top_level_server_flags_when_subcommand_flags_are_absent() {
         &path,
         r#"
 [upstream]
-openai_base_url = "http://file-openai"
+openai_base_url = "https://file-openai"
 openai_auth_header = "Bearer file-openai"
 "#,
     )
     .unwrap();
     let server = GatewayOverrides {
         config: Some(path),
-        openai_base_url: Some("http://top-level-openai".into()),
+        openai_base_url: Some("https://top-level-openai".into()),
         ..GatewayOverrides::default()
     };
     let command = RunOverrides {
@@ -2589,7 +2657,7 @@ openai_auth_header = "Bearer file-openai"
 
     let resolved = resolve_run_config(&command, Some(&server)).unwrap();
 
-    assert_eq!(resolved.gateway.openai_base_url, "http://top-level-openai");
+    assert_eq!(resolved.gateway.openai_base_url, "https://top-level-openai");
     assert!(resolved.gateway.openai_auth_header.is_none());
 }
 
@@ -2604,9 +2672,9 @@ fn server_resolution_applies_all_server_overrides() {
         &config_path,
         r#"
 [upstream]
-openai_base_url = "http://file-openai"
+openai_base_url = "https://file-openai"
 openai_auth_header = "Bearer file-openai"
-anthropic_base_url = "http://file-anthropic"
+anthropic_base_url = "https://file-anthropic"
 anthropic_auth_header = "Basic file-anthropic"
 "#,
     )
@@ -2614,8 +2682,8 @@ anthropic_auth_header = "Basic file-anthropic"
     let args = GatewayOverrides {
         config: Some(config_path),
         bind: Some("127.0.0.1:0".parse().unwrap()),
-        openai_base_url: Some("http://cli-openai".into()),
-        anthropic_base_url: Some("http://cli-anthropic".into()),
+        openai_base_url: Some("https://cli-openai".into()),
+        anthropic_base_url: Some("https://cli-anthropic".into()),
         chatgpt_codex_base_url: None,
         plugin_config_path: None,
         ready_file: None,
@@ -2626,9 +2694,9 @@ anthropic_auth_header = "Basic file-anthropic"
     let resolved = resolve_server_config(&args).unwrap();
 
     assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
-    assert_eq!(resolved.gateway.openai_base_url, "http://cli-openai");
+    assert_eq!(resolved.gateway.openai_base_url, "https://cli-openai");
     assert!(resolved.gateway.openai_auth_header.is_none());
-    assert_eq!(resolved.gateway.anthropic_base_url, "http://cli-anthropic");
+    assert_eq!(resolved.gateway.anthropic_base_url, "https://cli-anthropic");
     assert!(resolved.gateway.anthropic_auth_header.is_none());
     assert_eq!(resolved.gateway.max_hook_payload_bytes, 222);
     assert_eq!(resolved.gateway.max_passthrough_body_bytes, 333);
@@ -3115,7 +3183,7 @@ fn persistent_server_resolution_excludes_project_config_and_fingerprints_credent
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::write(
         project.join(".nemo-relay/config.toml"),
-        "[upstream]\nopenai_base_url = \"http://project-only\"\n",
+        "[upstream]\nopenai_base_url = \"https://project-only\"\n",
     )
     .unwrap();
     let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
@@ -3126,7 +3194,7 @@ fn persistent_server_resolution_excludes_project_config_and_fingerprints_credent
 
     unsafe { std::env::set_var("OPENAI_API_KEY", "credential-one") };
     let first = resolve_persistent_server_config(&args).unwrap();
-    assert_ne!(first.gateway.openai_base_url, "http://project-only");
+    assert_ne!(first.gateway.openai_base_url, "https://project-only");
     assert!(
         first
             .bootstrap_fingerprint
@@ -4029,8 +4097,8 @@ fn run_resolution_applies_all_run_overrides() {
         chatgpt_codex_base_url: None,
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
-        openai_base_url: Some("http://run-openai".into()),
-        anthropic_base_url: Some("http://run-anthropic".into()),
+        openai_base_url: Some("https://run-openai".into()),
+        anthropic_base_url: Some("https://run-anthropic".into()),
         session_metadata: Some(r#"{"team":"run"}"#.into()),
         plugin_config_path: None,
         dry_run: false,
@@ -4040,8 +4108,8 @@ fn run_resolution_applies_all_run_overrides() {
 
     let resolved = resolve_run_config(&command, None).unwrap();
 
-    assert_eq!(resolved.gateway.openai_base_url, "http://run-openai");
-    assert_eq!(resolved.gateway.anthropic_base_url, "http://run-anthropic");
+    assert_eq!(resolved.gateway.openai_base_url, "https://run-openai");
+    assert_eq!(resolved.gateway.anthropic_base_url, "https://run-anthropic");
     assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "run" })));
 }
 
@@ -4163,8 +4231,8 @@ fn malformed_shared_config_reports_context() {
 fn recursive_toml_merge_replaces_scalars_and_preserves_tables() {
     let mut left: toml::Value = r#"
 [upstream]
-openai_base_url = "http://old"
-anthropic_base_url = "http://anthropic"
+openai_base_url = "https://old"
+anthropic_base_url = "https://anthropic"
 
 [runtime.policy]
 version = 1
@@ -4175,7 +4243,7 @@ policy = { unknown_component = "warn", unknown_field = "warn" }
     .unwrap();
     let right: toml::Value = r#"
 [upstream]
-openai_base_url = "http://new"
+openai_base_url = "https://new"
 
 [runtime.policy.policy]
 unknown_component = "error"
@@ -4188,11 +4256,11 @@ unknown_component = "error"
 
     assert_eq!(
         left["upstream"]["openai_base_url"].as_str(),
-        Some("http://new")
+        Some("https://new")
     );
     assert_eq!(
         left["upstream"]["anthropic_base_url"].as_str(),
-        Some("http://anthropic")
+        Some("https://anthropic")
     );
     assert_eq!(
         left["runtime"]["policy"]["policy"]["unknown_component"].as_str(),
@@ -5036,6 +5104,19 @@ fn chatgpt_codex_base_url_rejects_unsafe_values_from_every_source() {
 }
 
 #[test]
+fn provider_base_url_validation_preserves_provider_specific_serialization() {
+    let value = " https://proxy.example ";
+    assert_eq!(
+        validate_chatgpt_codex_base_url("test", value.into()).unwrap(),
+        "https://proxy.example/"
+    );
+    assert_eq!(
+        validate_upstream_base_url("test", value.into()).unwrap(),
+        "https://proxy.example"
+    );
+}
+
+#[test]
 fn chatgpt_codex_base_url_overrides_preserve_precedence_and_managed_policy() {
     let _env = crate::test_support::EnvScope::set(&[(
         "NEMO_RELAY_CHATGPT_CODEX_BASE_URL",
@@ -5101,4 +5182,309 @@ fn chatgpt_codex_base_url_overrides_preserve_precedence_and_managed_policy() {
         gateway.chatgpt_codex_base_url.as_deref(),
         Some("https://run.example/codex")
     );
+}
+
+#[test]
+fn api_key_helpers_validate_exclusive_sources_and_provider_schemes() {
+    for provider in ["openai", "anthropic"] {
+        let helper = format!(
+            "[upstream.{provider}_api_key_helper]\ncommand = '/bin/helper'\nargs = ['token']\n"
+        );
+        let file: FileConfig = toml::from_str(&helper).unwrap();
+        let mut gateway = GatewayConfig::default();
+        apply_file_upstream_config(&mut gateway, file.upstream).unwrap();
+        for static_name in ["api_key", "auth_header"] {
+            let text = format!("[upstream]\n{provider}_{static_name} = 'static-key'\n{helper}");
+            let file: FileConfig = toml::from_str(&text).unwrap();
+            assert!(
+                apply_file_upstream_config(&mut GatewayConfig::default(), file.upstream)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("mutually exclusive")
+            );
+        }
+        for extra in ["timeout_ms = 0", "command = ''"] {
+            let text = if extra.starts_with("command") {
+                helper.replace("command = '/bin/helper'", extra)
+            } else {
+                format!("{helper}{extra}\n")
+            };
+            let file: FileConfig = toml::from_str(&text).unwrap();
+            assert!(
+                apply_file_upstream_config(&mut GatewayConfig::default(), file.upstream).is_err()
+            );
+        }
+    }
+    let file: FileConfig = toml::from_str(
+        "[upstream.openai_api_key_helper]\ncommand = 'helper'\nauth_scheme = 'api_key'\n",
+    )
+    .unwrap();
+    assert!(apply_file_upstream_config(&mut GatewayConfig::default(), file.upstream).is_err());
+}
+
+#[test]
+fn api_key_helper_layering_rejects_conflicts_and_clears_changed_endpoint_credentials() {
+    for provider in ["openai", "anthropic"] {
+        let mut lower: toml::Value = toml::from_str(&format!("[upstream]\n{provider}_base_url = 'https://original.example/v1'\n[upstream.{provider}_api_key_helper]\ncommand = 'helper'\n")).unwrap();
+        let conflicting: toml::Value =
+            toml::from_str(&format!("[upstream]\n{provider}_api_key = 'key'\n")).unwrap();
+        let mut merged = lower.clone();
+        merge_gateway_config_toml(&mut merged, conflicting);
+        let file: FileConfig = merged.try_into().unwrap();
+        assert!(apply_file_upstream_config(&mut GatewayConfig::default(), file.upstream).is_err());
+        let replacement: toml::Value = toml::from_str(&format!("[upstream]\n{provider}_base_url = 'https://replacement.example/v1'\n{provider}_api_key = 'new-key'\n")).unwrap();
+        merge_gateway_config_toml(&mut lower, replacement);
+        assert!(
+            lower["upstream"]
+                .get(format!("{provider}_api_key_helper"))
+                .is_none()
+        );
+        let file: FileConfig = lower.try_into().unwrap();
+        apply_file_upstream_config(&mut GatewayConfig::default(), file.upstream).unwrap();
+    }
+}
+
+#[test]
+fn replacing_upstream_helpers_does_not_inherit_old_command_arguments() {
+    for provider in ["openai", "anthropic"] {
+        for endpoint in [
+            "",
+            "https://original.example",
+            "https://replacement.example",
+        ] {
+            let mut lower: toml::Value = toml::from_str(&format!("[upstream]\n{provider}_base_url = 'https://original.example'\n[upstream.{provider}_api_key_helper]\ncommand = 'old-helper'\nargs = ['old-secret']\ntimeout_ms = 123\nauth_scheme = 'bearer'\n")).unwrap();
+            let url = if endpoint.is_empty() {
+                String::new()
+            } else {
+                format!("[upstream]\n{provider}_base_url = '{endpoint}'\n")
+            };
+            let replacement = toml::from_str(&format!(
+                "{url}[upstream.{provider}_api_key_helper]\ncommand = 'new-helper'\n"
+            ))
+            .unwrap();
+            merge_gateway_config_toml(&mut lower, replacement);
+            let file: FileConfig = lower.try_into().unwrap();
+            let mut gateway = GatewayConfig::default();
+            apply_file_upstream_config(&mut gateway, file.upstream).unwrap();
+            let helper = crate::upstream_auth::helper(&gateway, provider == "anthropic").unwrap();
+            assert_eq!(helper.command, "new-helper");
+            assert!(helper.args.is_empty());
+            assert_eq!(helper.timeout_ms, 10_000);
+            assert!(helper.auth_scheme.is_none());
+        }
+    }
+}
+
+#[test]
+fn static_api_keys_are_validated_before_requests_without_exposing_values() {
+    for anthropic in [false, true] {
+        for value in [
+            "",
+            "secret invalid",
+            "secret\tinvalid",
+            "secret\ninvalid",
+            "secret\0invalid",
+        ] {
+            let mut upstream = FileUpstreamConfig::default();
+            let name = if anthropic {
+                upstream.anthropic_api_key = Some(value.into());
+                "upstream.anthropic_api_key"
+            } else {
+                upstream.openai_api_key = Some(value.into());
+                "upstream.openai_api_key"
+            };
+            let error = apply_file_upstream_config(&mut GatewayConfig::default(), Some(upstream))
+                .unwrap_err();
+            assert!(matches!(error, CliError::Config(_)));
+            assert!(error.to_string().contains(name));
+            assert!(!error.to_string().contains("secret"));
+            assert!(!error.to_string().contains("helper"));
+        }
+    }
+}
+
+#[test]
+fn environment_headers_override_static_keys_but_not_helpers() {
+    let _environment = crate::test_support::EnvScope::set(&[
+        (
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            Some(std::ffi::OsStr::new("Bearer environment-openai")),
+        ),
+        (
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            Some(std::ffi::OsStr::new("Bearer environment-anthropic")),
+        ),
+        ("NEMO_RELAY_OPENAI_BASE_URL", None),
+        ("NEMO_RELAY_ANTHROPIC_BASE_URL", None),
+    ]);
+    for apply in [apply_env_config, apply_managed_worker_env_config] {
+        let mut gateway = GatewayConfig {
+            openai_api_key: Some("file-openai".into()),
+            anthropic_api_key: Some("file-anthropic".into()),
+            ..GatewayConfig::default()
+        };
+        apply(&mut gateway).unwrap();
+        assert!(gateway.openai_api_key.is_none());
+        assert!(gateway.anthropic_api_key.is_none());
+        assert_eq!(
+            gateway.openai_auth_header.as_deref(),
+            Some("Bearer environment-openai")
+        );
+        assert_eq!(
+            gateway.anthropic_auth_header.as_deref(),
+            Some("Bearer environment-anthropic")
+        );
+        let helper = crate::upstream_auth::ApiKeyHelper {
+            command: "not-executed".into(),
+            args: vec![],
+            timeout_ms: 10000,
+            auth_scheme: None,
+        };
+        let mut gateway = GatewayConfig {
+            openai_api_key_helper: Some(helper.clone()),
+            anthropic_api_key_helper: Some(helper),
+            ..GatewayConfig::default()
+        };
+        apply(&mut gateway).unwrap();
+        assert!(gateway.openai_api_key_helper.is_some());
+        assert!(gateway.anthropic_api_key_helper.is_some());
+        assert!(gateway.openai_auth_header.is_none());
+        assert!(gateway.anthropic_auth_header.is_none());
+    }
+}
+
+#[test]
+fn restating_default_endpoints_preserves_inherited_credentials() {
+    let defaults = GatewayConfig::default();
+    for (provider, default_url) in [
+        ("openai", defaults.openai_base_url.as_str()),
+        ("anthropic", defaults.anthropic_base_url.as_str()),
+    ] {
+        for source in ["api_key", "auth_header", "api_key_helper"] {
+            let credential = if source == "api_key_helper" {
+                format!("[upstream.{provider}_{source}]\ncommand = 'helper'\nargs = ['token']\n")
+            } else {
+                format!("[upstream]\n{provider}_{source} = 'credential'\n")
+            };
+            let lower: toml::Value = toml::from_str(&credential).unwrap();
+            for (url, retained) in [(default_url, true), ("https://replacement.example", false)] {
+                let mut merged = lower.clone();
+                let higher =
+                    toml::from_str(&format!("[upstream]\n{provider}_base_url = '{url}'\n"))
+                        .unwrap();
+                merge_gateway_config_toml(&mut merged, higher);
+                assert_eq!(
+                    merged["upstream"]
+                        .get(format!("{provider}_{source}"))
+                        .is_some(),
+                    retained,
+                    "{provider} {source} with {url}"
+                );
+                let file: FileConfig = merged.try_into().unwrap();
+                let mut gateway = GatewayConfig::default();
+                apply_file_upstream_config(&mut gateway, file.upstream).unwrap();
+                assert_eq!(
+                    crate::upstream_auth::has_replacement(&gateway, provider == "anthropic"),
+                    retained
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn provider_base_urls_are_validated_for_every_configuration_source() {
+    let _env = crate::test_support::EnvScope::set(&[
+        ("NEMO_RELAY_OPENAI_BASE_URL", None),
+        ("NEMO_RELAY_ANTHROPIC_BASE_URL", None),
+        ("NEMO_RELAY_CHATGPT_CODEX_BASE_URL", None),
+    ]);
+    for anthropic in [false, true] {
+        let env_name = if anthropic {
+            "NEMO_RELAY_ANTHROPIC_BASE_URL"
+        } else {
+            "NEMO_RELAY_OPENAI_BASE_URL"
+        };
+        for (value, allowed) in [
+            ("", false),
+            ("not a URL", false),
+            ("/relative", false),
+            ("ftp://localhost/v1", false),
+            ("http://api.anthropic.com", false),
+            ("http://172.16.0.223:30919", false),
+            ("https://user:password@provider.example/v1", false),
+            ("https://provider.example/v1?token=x", false),
+            ("https://provider.example/v1#fragment", false),
+            ("https://provider.example/v1", true),
+            ("https://172.16.0.223:30443", true),
+            ("http://localhost:8080", true),
+            ("http://127.0.0.1:8080/v1", true),
+            ("http://[::1]:8080", true),
+        ] {
+            let openai_base_url = (!anthropic).then(|| value.to_string());
+            let anthropic_base_url = anthropic.then(|| value.to_string());
+            let mut gateway = GatewayConfig::default();
+            let file_result = apply_file_upstream_config(
+                &mut gateway,
+                Some(FileUpstreamConfig {
+                    openai_base_url: openai_base_url.clone(),
+                    anthropic_base_url: anthropic_base_url.clone(),
+                    ..Default::default()
+                }),
+            );
+            assert_eq!(file_result.is_ok(), allowed, "file: {env_name} = {value:?}");
+            if value == "http://172.16.0.223:30919" {
+                assert!(
+                    file_result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("must use https unless the host is loopback")
+                );
+            }
+            assert_eq!(
+                apply_server_overrides(
+                    &mut gateway,
+                    &GatewayOverrides {
+                        openai_base_url: openai_base_url.clone(),
+                        anthropic_base_url: anthropic_base_url.clone(),
+                        ..Default::default()
+                    }
+                )
+                .is_ok(),
+                allowed,
+                "flag: {env_name} = {value:?}"
+            );
+            assert_eq!(
+                apply_run_url_overrides(
+                    &mut gateway,
+                    &RunOverrides {
+                        openai_base_url,
+                        anthropic_base_url,
+                        agent: None,
+                        config: None,
+                        chatgpt_codex_base_url: None,
+                        session_metadata: None,
+                        plugin_config_path: None,
+                        dry_run: true,
+                        print: false,
+                        command: vec![],
+                    }
+                )
+                .is_ok(),
+                allowed,
+                "run: {env_name} = {value:?}"
+            );
+            unsafe {
+                std::env::set_var(env_name, value);
+            }
+            assert_eq!(
+                apply_env_config(&mut gateway).is_ok(),
+                allowed,
+                "env: {env_name} = {value:?}"
+            );
+            unsafe {
+                std::env::remove_var(env_name);
+            }
+        }
+    }
 }

@@ -55,6 +55,8 @@ pub(crate) enum TransportError {
     UnsupportedTunnel,
     #[error("forward destination must contain an HTTP or HTTPS scheme and an authority")]
     InvalidDestination,
+    #[error("plain HTTP upstreams are allowed only for loopback hosts; use https")]
+    InsecureDestination,
     #[error("invalid Connection header value")]
     InvalidConnectionHeader,
     #[error("forward destination authority is not a valid Host header")]
@@ -177,7 +179,7 @@ pub(crate) fn prepare_forward_request<B>(
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback())
     {
-        return Err(TransportError::InvalidDestination);
+        return Err(TransportError::InsecureDestination);
     }
     let host = HeaderValue::from_str(authority.as_str()).map_err(TransportError::InvalidHost)?;
 
@@ -228,6 +230,42 @@ pub(crate) fn pooled_client() -> Result<PooledClient, TransportError> {
     let connector = pooled_connector(false)?;
     let builder = pooled_builder();
     Ok(builder.build(connector))
+}
+
+/// Use a separate pool only for requests whose helper credential was resolved at dispatch.
+pub(crate) fn provider_client(
+    upstream: &PooledClient,
+    helper_auth: bool,
+) -> Result<PooledClient, TransportError> {
+    if !helper_auth {
+        return Ok(upstream.clone());
+    }
+    helper_provider_client(false)
+}
+
+/// HTTP/1-only helper handshakes cannot retry with an already-resolved credential.
+pub(crate) fn helper_websocket_client() -> Result<PooledClient, TransportError> {
+    helper_provider_client(true)
+}
+
+fn helper_provider_client(http1_only: bool) -> Result<PooledClient, TransportError> {
+    static HTTP: OnceLock<PooledClient> = OnceLock::new();
+    static WEBSOCKET: OnceLock<PooledClient> = OnceLock::new();
+    static INITIALIZE: Mutex<()> = Mutex::new(());
+    let cell = if http1_only { &WEBSOCKET } else { &HTTP };
+    if let Some(client) = cell.get() {
+        return Ok(client.clone());
+    }
+    let _initializing = INITIALIZE.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(client) = cell.get() {
+        return Ok(client.clone());
+    }
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut builder = pooled_builder();
+    builder.retry_canceled_requests(false);
+    let client = builder.build(pooled_connector(http1_only)?);
+    let _ = cell.set(client.clone());
+    Ok(client)
 }
 
 /// Builds a pooled cleartext HTTP/1.1 client with persistent connections and `TCP_NODELAY`.

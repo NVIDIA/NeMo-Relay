@@ -473,6 +473,142 @@ async fn standalone_websocket_proxy_preserves_frames_and_handshake_failures() {
     provider_task.abort();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn websocket_helper_auth_generates_fresh_tokens_for_each_handshake() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let capture = Arc::clone(&seen);
+    let upstream = Router::new().route(
+        "/v1/realtime",
+        get(move |ws: WebSocketUpgrade, headers: HeaderMap| {
+            let capture = Arc::clone(&capture);
+            async move {
+                assert!(!headers.contains_key("x-api-key"));
+                capture
+                    .lock()
+                    .unwrap()
+                    .push(headers[header::AUTHORIZATION].clone());
+                ws.on_upgrade(|mut socket| async move {
+                    let _ = socket.send(AxumMessage::Text("ready".into())).await;
+                })
+            }
+        }),
+    );
+    let (upstream_url, upstream_task) = serve(upstream).await;
+    let config = GatewayConfig {
+        openai_base_url: upstream_url,
+        openai_api_key_helper: Some(crate::upstream_auth::tests::helper("printf 'token-%s' $$")),
+        ..GatewayConfig::default()
+    };
+    let (origin, relay_task) = serve(crate::server::router(config)).await;
+    for _ in 0..2 {
+        let mut request = format!("{}/v1/realtime", origin.replacen("http", "ws", 1))
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer stale-caller-token"),
+        );
+        request
+            .headers_mut()
+            .insert("x-api-key", HeaderValue::from_static("stale-key"));
+        let (mut socket, response) = tokio_tungstenite::connect_async(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Text("ready".into())
+        );
+    }
+    let tokens = seen.lock().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_ne!(tokens[0], tokens[1]);
+    assert!(
+        tokens
+            .iter()
+            .all(|token| token.to_str().unwrap().starts_with("Bearer token-"))
+    );
+    relay_task.abort();
+    upstream_task.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn websocket_helpers_use_a_separate_pool_from_ordinary_handshakes() {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let capture = Arc::clone(&seen);
+    let app = Router::new().route(
+        "/v1/realtime",
+        get(
+            move |ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap| {
+                let capture = Arc::clone(&capture);
+                async move {
+                    capture
+                        .lock()
+                        .unwrap()
+                        .push((peer, headers[header::AUTHORIZATION].clone()));
+                    // A rejected handshake leaves a reusable HTTP/1 connection in the pool.
+                    StatusCode::UNAUTHORIZED
+                }
+            },
+        ),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream_task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let config = GatewayConfig {
+        openai_base_url: upstream_url,
+        ..GatewayConfig::default()
+    };
+    let (ordinary_origin, ordinary_task) = serve(crate::server::router(config.clone())).await;
+    let helper_config = GatewayConfig {
+        openai_api_key_helper: Some(crate::upstream_auth::tests::helper("printf 'token-%s' $$")),
+        ..config
+    };
+    let (helper_origin, helper_task) = serve(crate::server::router(helper_config)).await;
+    for origin in [&ordinary_origin, &helper_origin, &helper_origin] {
+        let mut request = format!("{}/v1/realtime", origin.replacen("http", "ws", 1))
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer caller-key"),
+        );
+        let error = tokio_tungstenite::connect_async(request).await.unwrap_err();
+        let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+            panic!("{error}");
+        };
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].1, "Bearer caller-key");
+    assert_ne!(
+        requests[0].0, requests[1].0,
+        "helper traffic must use its own pool"
+    );
+    assert_eq!(
+        requests[1].0, requests[2].0,
+        "helper pool should reuse connections"
+    );
+    assert_ne!(
+        requests[1].1, requests[2].1,
+        "connection reuse must still resolve fresh tokens"
+    );
+    ordinary_task.abort();
+    helper_task.abort();
+    upstream_task.abort();
+}
+
 #[tokio::test]
 async fn websocket_proxy_rejects_invalid_upstream_handshake_before_upgrading() {
     for invalid in [

@@ -22,22 +22,36 @@ use tokio::task::JoinHandle;
 use super::*;
 
 #[test]
-fn forwarding_rejects_remote_cleartext_destinations() {
-    let request = Request::get("/")
-        .body(box_body(Empty::<Bytes>::new()))
-        .expect("request");
-    let remote = "http://provider.example/v1/responses"
-        .parse()
-        .expect("remote URI");
-    assert!(prepare_forward_request(request, remote, &[]).is_err());
-
-    let request = Request::get("/")
-        .body(box_body(Empty::<Bytes>::new()))
-        .expect("request");
-    let loopback = "http://127.0.0.1:8080/v1/responses"
-        .parse()
-        .expect("loopback URI");
-    assert!(prepare_forward_request(request, loopback, &[]).is_ok());
+fn forwarding_distinguishes_insecure_and_malformed_destinations() {
+    for destination in [
+        "http://provider.example/v1/responses",
+        "http://172.16.0.223:30919/v1/responses",
+    ] {
+        let error = prepare_forward_request(Request::new(()), destination.parse().unwrap(), &[])
+            .unwrap_err();
+        assert!(matches!(error, TransportError::InsecureDestination));
+        assert_eq!(
+            error.to_string(),
+            "plain HTTP upstreams are allowed only for loopback hosts; use https"
+        );
+    }
+    for destination in ["/v1/responses", "ftp://provider.example/v1/responses"] {
+        assert!(matches!(
+            prepare_forward_request(Request::new(()), destination.parse().unwrap(), &[]),
+            Err(TransportError::InvalidDestination)
+        ));
+    }
+    for destination in [
+        "https://provider.example/v1/responses",
+        "https://172.16.0.223:30443/v1/responses",
+        "http://localhost:8080/v1/responses",
+        "http://127.0.0.1:8080/v1/responses",
+        "http://[::1]:8080/v1/responses",
+    ] {
+        assert!(
+            prepare_forward_request(Request::new(()), destination.parse().unwrap(), &[]).is_ok()
+        );
+    }
 }
 
 struct CausalBody {

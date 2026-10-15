@@ -6,10 +6,14 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, cast
+from types import UnionType
+from typing import TYPE_CHECKING, Any, Union, cast, get_args, get_origin
 
 from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.structured_output import AutoStrategy, ProviderStrategy, ToolStrategy
+from langchain_core.messages import ToolMessage
 from langgraph.errors import GraphBubbleUp
+from langgraph.types import Command
 
 import nemo_relay
 from nemo_relay.integrations.langchain._serialization import (
@@ -24,10 +28,17 @@ from nemo_relay.utils import run_sync
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
-    from langchain_core.messages import ToolMessage
-    from langgraph.types import Command
 
     from nemo_relay.codecs import LlmCodec, LlmResponseCodec
+
+
+def _schema_types(schema: Any) -> list[type[object]]:
+    """Return the classes declared by a schema or a union of schemas."""
+    if isinstance(schema, type):
+        return [schema]
+    if get_origin(schema) in (Union, UnionType):
+        return [cls for member in get_args(schema) for cls in _schema_types(member)]
+    return []
 
 
 class NemoRelayMiddleware(AgentMiddleware):
@@ -70,7 +81,18 @@ class NemoRelayMiddleware(AgentMiddleware):
 
     def _prepare_model_call(self, request: ModelRequest[Any]) -> tuple:
         """Boilerplate code common to both wrap_model_call and awrap_model_call"""
-        object_codec = nemo_relay.typed.BestEffortAnyCodec()
+        response_format = request.response_format
+        if isinstance(response_format, ToolStrategy):
+            schemas = [spec.schema for spec in response_format.schema_specs]
+        elif isinstance(response_format, ProviderStrategy):
+            schemas = [response_format.schema]
+        elif isinstance(response_format, AutoStrategy):
+            schemas = _schema_types(response_format.schema)
+        else:
+            schemas = _schema_types(response_format)
+        object_codec = nemo_relay.typed.BestEffortAnyCodec(
+            allowed_types=[schema for schema in schemas if isinstance(schema, type)]
+        )
         model_name = get_model_name(request.model)
         llm_request = nemo_relay.LLMRequest({}, model_request_to_payload(model_name, request))
         model_codec = LangChainCodec()
@@ -123,7 +145,7 @@ class NemoRelayMiddleware(AgentMiddleware):
     def _prepare_tool_call(self, request: ToolCallRequest) -> tuple:
         """Boilerplate code common to both wrap_tool_call and awrap_tool_call"""
         parent = nemo_relay.scope.get_handle()
-        codec = nemo_relay.typed.BestEffortAnyCodec()
+        codec = nemo_relay.typed.BestEffortAnyCodec(allowed_types=(ToolMessage, Command))
         tool_name = request.tool_call["name"]
         tool_args = request.tool_call.get("args") or {}
         tool_call_id = request.tool_call.get("id")
