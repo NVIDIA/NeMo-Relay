@@ -428,17 +428,31 @@ changes the URL clears the lower header unless that same layer supplies a
 replacement, preventing credentials for one endpoint from being sent to
 another.
 
-An MCP-managed gateway uses custom or environment credentials only after the
-client proves that it belongs to that managed gateway.
+Foreground gateways and MCP-managed gateways require Relay authentication
+before they use provider credentials from their configuration or environment.
+Clients can authenticate with a Relay client token, a provider capability URL,
+or a credential from a managed invocation. A missing or invalid client token
+does not grant access to the gateway's provider credentials.
+
+Without Relay authentication, requests use only provider credentials sent by
+the client. If the client sends no credentials, the upstream provider receives
+the request without credentials.
+
+For direct gateway use, set the provider API key in the client.
+Setting `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or a custom auth header only in the
+gateway does not give clients access to that key.
+Use `nemo-relay run` to let Relay set up client authentication.
 
 Codex ChatGPT credentials are the exception to the normal inbound precedence.
 On OpenAI routes, Relay recognizes `Bearer eyJ...` JWTs and `Bearer at-...`
-access tokens. If `openai_auth_header`, `NEMO_RELAY_OPENAI_AUTH_HEADER`, or a
-nonempty `OPENAI_API_KEY` is available, Relay removes the ChatGPT credential,
-applies the replacement, and forwards the request to the configured
-`openai_base_url`. Without a replacement, Relay preserves the ChatGPT credential
-and routes the request to the Codex ChatGPT backend instead of
-`openai_base_url`. Set `chatgpt_codex_base_url` under `[upstream]` to replace
+access tokens. Relay can replace these credentials only after the client
+authenticates to Relay. It uses `openai_auth_header` or its environment override,
+`NEMO_RELAY_OPENAI_AUTH_HEADER`. If no custom value is set, it uses a nonempty
+`OPENAI_API_KEY`. With a replacement, Relay sends the request to the configured
+`openai_base_url`. Without a replacement, Relay keeps the ChatGPT credential
+and uses the Codex ChatGPT backend.
+
+Set `chatgpt_codex_base_url` under `[upstream]` to replace
 that backend, which defaults to `https://chatgpt.com/backend-api/codex`. Relay
 forwards the caller's ChatGPT credential to this URL, so use only an endpoint
 you trust with those credentials.

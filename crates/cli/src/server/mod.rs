@@ -293,8 +293,7 @@ async fn serve_listener_with_dynamic_inner(
     .map(|identity| identity.server_config())
     .transpose()
     .map_err(CliError::Launch)?;
-    let require_provider_client_token =
-        bootstrap_fingerprint.is_some() && transparent_proxy_credential.is_none();
+    let require_provider_client_token = transparent_proxy_credential.is_none();
     let plugin_activation =
         activate_server_plugins(config.plugin_config.clone(), dynamic_plugins).await?;
     let (bootstrap_shutdown, bootstrap_shutdown_rx) =
@@ -507,7 +506,7 @@ pub(crate) fn router(config: GatewayConfig) -> Router {
 impl AppState {
     #[cfg(test)]
     pub(crate) fn new(config: GatewayConfig) -> Self {
-        Self::new_with_bootstrap(config, None, None, false, None, None)
+        Self::new_with_bootstrap(config, None, None, true, None, None)
     }
 
     fn new_with_bootstrap(
@@ -584,10 +583,9 @@ impl AppState {
             || self.sessions.has_open_sessions().await
     }
 
-    /// Authenticate an invocation-owned transparent client before interceptors can rewrite its
-    /// route. Foreground gateways retain their existing provider-credential behavior; managed
-    /// sidecars still require their stable client proof before ambient provider credentials may be
-    /// used.
+    /// Authenticate transparent clients before interceptors can change the route.
+    /// Foreground gateways and managed sidecars require client proof before they use
+    /// provider credentials from the server. Requests can still use credentials sent by the client.
     pub(crate) fn authorize_provider_request(
         &self,
         headers: &mut HeaderMap,

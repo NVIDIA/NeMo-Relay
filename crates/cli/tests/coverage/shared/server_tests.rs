@@ -1081,7 +1081,7 @@ async fn bootstrap_tls_tunnel_requires_a_client_token_for_a_different_fingerprin
 }
 
 #[tokio::test]
-async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials() {
+async fn gateways_require_private_client_proof_for_forwarded_credentials() {
     let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
     let state = AppState::new_with_bootstrap(
         test_config(),
@@ -1124,7 +1124,7 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
 
     let foreground = AppState::new(test_config());
     assert!(
-        foreground
+        !foreground
             .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .unwrap()
             .0
@@ -1132,9 +1132,9 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     );
 
     let explicit_daemon =
-        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), false, None, None);
+        AppState::new_with_bootstrap(test_config(), None, Some(key.clone()), true, None, None);
     assert!(
-        explicit_daemon
+        !explicit_daemon
             .authorize_provider_request(&mut HeaderMap::new(), "/v1/responses")
             .unwrap()
             .0
@@ -1167,6 +1167,86 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         !transparent_headers
             .contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
     );
+}
+
+#[tokio::test]
+async fn foreground_listener_requires_client_proof_before_lending_provider_credentials() {
+    use crate::gateway::websocket::tests::serve;
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+        (
+            "OPENAI_API_KEY",
+            Some(std::ffi::OsStr::new("foreground-env-secret")),
+        ),
+    ]);
+    let key = BootstrapChallengeKey::load().unwrap();
+    for configured in [None, Some("Bearer configured-provider")] {
+        let captured = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
+        let recorder = Arc::clone(&captured);
+        let upstream_app = Router::new().route(
+            "/v1/chat/completions",
+            post(move |headers: HeaderMap| {
+                let recorder = Arc::clone(&recorder);
+                async move {
+                    recorder.lock().unwrap().push(headers);
+                    Json(completion_body("provider answered"))
+                }
+            }),
+        );
+        let (upstream_url, upstream_task) = serve(upstream_app).await;
+        let mut config = test_config();
+        config.openai_base_url = format!("{upstream_url}/v1");
+        config.openai_auth_header = configured.map(str::to_owned);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let task = tokio::spawn(serve_listener(listener, config, Some(shutdown_rx)));
+        let client = reqwest::Client::new();
+        for (token, caller_auth, expected) in [
+            (None, None, None),
+            (Some("hmac-sha256:wrong".to_string()), None, None),
+            (
+                Some(key.client_token()),
+                None,
+                Some(configured.unwrap_or("Bearer foreground-env-secret")),
+            ),
+            (
+                None,
+                Some("Bearer caller-owned"),
+                Some("Bearer caller-owned"),
+            ),
+        ] {
+            let mut request = client.post(&url).json(&json!({
+                "model": "nvidia/nemotron-test",
+                "messages": [{"role": "user", "content": "hi"}]
+            }));
+            if let Some(token) = token {
+                request = request.header(BOOTSTRAP_CLIENT_TOKEN_HEADER, token);
+            }
+            if let Some(auth) = caller_auth {
+                request = request.header(header::AUTHORIZATION, auth);
+            }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            response.bytes().await.unwrap();
+            let headers = captured.lock().unwrap().last().unwrap().clone();
+            assert_eq!(
+                headers
+                    .get(header::AUTHORIZATION)
+                    .map(|v| v.to_str().unwrap()),
+                expected
+            );
+            assert!(!headers.contains_key(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+        }
+        shutdown_tx.send(()).unwrap();
+        task.await.unwrap().unwrap();
+        upstream_task.abort();
+    }
 }
 
 #[tokio::test]

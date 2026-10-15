@@ -1604,6 +1604,7 @@ pub(super) fn test_daemon_state_at(
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: "public-proxy-test-daemon".into(),
         pass_through,
+        loopback_listener: true,
         public_origin,
         config,
         upstream: pooled_client().expect("daemon client"),
@@ -3532,28 +3533,65 @@ async fn requests_without_a_bound_credential_pass_through_without_daemon_provide
 }
 
 #[tokio::test]
-async fn global_pass_through_lends_daemon_provider_auth_to_anonymous_requests() {
+async fn pass_through_lends_daemon_provider_auth_only_on_loopback_or_to_bound_routes() {
     let (provider_origin, captured, provider_task) = capturing_provider().await;
-    let state = test_daemon_state(
-        true,
-        "",
-        GatewayConfig {
-            openai_base_url: provider_origin,
-            openai_auth_header: Some("Bearer configured-provider".into()),
-            ..GatewayConfig::default()
-        },
-    );
-    let response = router(state)
-        .oneshot(
-            Request::post("/v1/responses")
-                .body(Body::from("anonymous request"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let (headers, _) = take_provider_request(&captured);
-    assert_eq!(headers[AUTHORIZATION], "Bearer configured-provider");
+    let _environment = EnvScope::set(&[(
+        "OPENAI_API_KEY",
+        Some(std::ffi::OsStr::new("daemon-env-secret")),
+    )]);
+    for configured in [None, Some("Bearer configured-provider")] {
+        for loopback_listener in [false, true] {
+            let mut state = test_daemon_state(
+                true,
+                "",
+                GatewayConfig {
+                    openai_base_url: provider_origin.clone(),
+                    openai_auth_header: configured.map(str::to_owned),
+                    ..GatewayConfig::default()
+                },
+            );
+            Arc::get_mut(&mut state).unwrap().loopback_listener = loopback_listener;
+            let expected = configured.unwrap_or("Bearer daemon-env-secret");
+            let app = router(Arc::clone(&state));
+            // The router must not promote a missing or unbound credential to a bound route.
+            let unbound = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x31_u8; 32]);
+            for token in [None, Some(unbound.as_str())] {
+                for caller_auth in [None, Some("Bearer caller-owned")] {
+                    let mut request = Request::post("/v1/responses");
+                    if let Some(token) = token {
+                        request = request.header(CLIENT_TOKEN_HEADER, token);
+                    }
+                    if let Some(auth) = caller_auth {
+                        request = request.header(AUTHORIZATION, auth);
+                    }
+                    let response = app
+                        .clone()
+                        .oneshot(request.body(Body::empty()).unwrap())
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let (headers, _) = take_provider_request(&captured);
+                    let expected = caller_auth.or(loopback_listener.then_some(expected));
+                    assert_eq!(
+                        headers.get(AUTHORIZATION).map(|v| v.to_str().unwrap()),
+                        expected
+                    );
+                    assert!(!headers.contains_key(CLIENT_TOKEN_HEADER));
+                }
+            }
+            // Bound-route authorization continues to allow server credentials on either bind.
+            let response = forward_to_provider(
+                &state,
+                Request::post("/v1/responses").body(Body::empty()).unwrap(),
+                ProviderRoute::OpenAi,
+                ProviderAccess::BoundRoute,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let (headers, _) = take_provider_request(&captured);
+            assert_eq!(headers[AUTHORIZATION], expected);
+        }
+    }
     provider_task.abort();
 }
 

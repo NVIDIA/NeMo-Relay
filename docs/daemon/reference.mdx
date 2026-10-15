@@ -34,11 +34,16 @@ nemo-relay daemon \
 
 Set `NEMO_RELAY_CLIENT_TOKEN` or create the per-user token file in client
 environments only. Keep an MCP connection active before sending LLM or hook
-requests, including in `--pass-through` mode. Requests without a credential
-header, or with a well-formed credential that is not bound, use pass-through
-without daemon-held provider credentials (unless the daemon runs with
-`--pass-through`). Malformed or repeated credential headers return `401`, and
-`--require-worker` rejects missing and unbound credentials with `401`.
+requests, including in `--pass-through` mode.
+
+Requests with no credential header use pass-through. Requests with a valid
+credential format but no bound route also use pass-through. These requests use
+only provider credentials sent by the client. The exception is a daemon started
+with `--pass-through --bind 127.0.0.1`. With `--bind 0.0.0.0`, anonymous
+requests never receive daemon credentials.
+
+Malformed or repeated credential headers return `401`. The `--require-worker`
+flag rejects missing and unbound credentials with `401`.
 Registered routes without an active MCP reference also use pass-through, or
 return `503` with `--require-worker`. After a daemon
 restart, MCP must register again to restore the route bindings stored in

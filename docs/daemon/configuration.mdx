@@ -422,11 +422,13 @@ guardrails are skipped for that request; the coding agent keeps working:
 - A malformed credential or a repeated header still returns `401`.
 - A daemon started with `--require-worker` keeps rejecting missing and unbound
   credentials with `401`.
-- A request without a bound credential never receives daemon-held provider
-  credentials (configured provider auth headers or the daemon's own
-  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`), except that a daemon explicitly
-  started with `--pass-through` applies its provider credentials to every
-  request.
+- By default, requests without a bound route use only the client's provider
+  credentials. They do not receive credentials from the daemon's configuration
+  or its `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` environment variables.
+  To allow anonymous requests to use daemon credentials, start the daemon with
+  `--pass-through --bind 127.0.0.1`. With `--bind 0.0.0.0`, requests need a
+  bound route to use daemon credentials. This rule also applies to requests
+  sent to `127.0.0.1`.
 - A provider request that names its own upstream with
   `x-nemo-relay-upstream-base-url`, as the managed Pi extension does, is
   honored only with a bound credential. Without one it receives `503` with

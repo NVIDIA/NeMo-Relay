@@ -145,6 +145,7 @@ struct DaemonState {
     descriptor: crate::daemon::common::protocol::ComponentDescriptor,
     instance_id: String,
     pass_through: bool,
+    loopback_listener: bool,
     public_origin: String,
     config: GatewayConfig,
     upstream: PooledClient,
@@ -180,6 +181,7 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: uuid::Uuid::now_v7().to_string(),
         pass_through: options.pass_through,
+        loopback_listener: local.ip().is_loopback(),
         public_origin,
         config: resolved.gateway,
         upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
@@ -1851,10 +1853,11 @@ async fn forward_to_provider(
     access: ProviderAccess,
 ) -> Response<Body> {
     let invocation_authenticated = access == ProviderAccess::BoundRoute;
-    // Daemon-held provider credentials (configured auth headers or the daemon's own API key
-    // environment) are only lent to requests attributed to a bound route, or to every request
-    // when the operator explicitly deployed the daemon in global pass-through mode.
-    let allow_environment_provider_auth = (invocation_authenticated || state.pass_through)
+    // Requests need a bound route to use provider credentials from the daemon.
+    // Global pass-through mode also allows anonymous requests to use these credentials
+    // on a loopback listener. The listener's bind address controls this check.
+    let allow_environment_provider_auth = (invocation_authenticated
+        || (state.pass_through && state.loopback_listener))
         && crate::gateway::daemon_allows_environment_provider_auth(request.headers());
     let path_and_query = request
         .uri()
