@@ -24,7 +24,7 @@ Master switch; off by default.
 
 ### `priority: i32`
 
-Tool execution-intercept priority. Lower values run earlier and outermost.
+Tool execution-intercept priority. Defaults to `150`. Lower values run first. The default places NeMo Guardrails (`100`) before the cache, so guardrails runs on cache hits.
 
 ### `cache_errors: bool`
 

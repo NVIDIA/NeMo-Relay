@@ -417,6 +417,9 @@ than four tokens at the same time; idle tokens are released automatically.
 
 ### Requests Without a Bound Credential
 
+The rules below apply to HTTP requests that reach the daemon. The hook CLI
+can stop a request before it reaches these routes.
+
 On the daemon's public HTTP routes, a missing credential means telemetry and
 guardrails are skipped for that request; the coding agent keeps working:
 
@@ -431,11 +434,17 @@ guardrails are skipped for that request; the coding agent keeps working:
 - A malformed credential or a repeated header still returns `401`.
 - A daemon started with `--require-worker` keeps rejecting missing and unbound
   credentials with `401`.
-- A request without a bound credential does not receive the daemon's provider
-  credentials. These include custom authorization headers, static API keys,
-  helper tokens, and API keys from the daemon's environment. A daemon started
-  with `--pass-through` can use these credentials for requests without a bound
-  credential.
+- By default, requests without a bound route use only the client's provider
+  credentials. They do not receive static keys, custom authorization headers,
+  or helper tokens from the daemon's configuration, or API keys from its
+  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` environment variables.
+  To allow anonymous requests to use daemon credentials, start the daemon with
+  `--pass-through --bind 127.0.0.1`. With `--bind 0.0.0.0`, requests need a
+  bound route to use daemon credentials. This rule also applies to requests
+  sent to `127.0.0.1`.
+- Unmanaged routes forward only the provider credentials that the caller sends.
+  This rule includes WebSocket upgrades. It also applies to bound routes,
+  workers, and daemons started with `--pass-through`.
 - A provider request that names its own upstream with
   `x-nemo-relay-upstream-base-url`, as the managed Pi extension does, is
   honored only with a bound credential. Without one it receives `503` with
@@ -447,15 +456,23 @@ guardrails are skipped for that request; the coding agent keeps working:
   `reason = "unbound_credential"`, or `reason = "no_live_session"`,
   rate-limited, without the credential.
 
-On the client side, `nemo-relay daemon hook` with no resolvable credential does
-not contact the daemon. It honors the same hook failure policy in daemon and
-daemon-worker deployments: `--fail-closed` reports a delivery failure, writes no
-allow response, and exits nonzero. Without an explicit flag, policy events such
-as `PreToolUse` and `pre_tool_call`, or `NEMO_RELAY_FAIL_CLOSED=1`, also fail
-closed. `--fail-open` overrides the default policy; fail-open hooks write the
-same pass-through response, exit `0`, and log a warning. Restore the credential
-through `NEMO_RELAY_CLIENT_TOKEN` or the client token file before retrying a
-fail-closed hook.
+If `nemo-relay daemon hook` cannot find a valid credential, it does not contact
+the daemon. The same failure policy applies in daemon and daemon-worker
+setups. With `--fail-closed`, the hook reports an error and exits with code `2`.
+It does not send an allow response.
+
+Without a policy flag, events such as `PreToolUse` and `pre_tool_call` also
+fail closed. Hooks also fail closed if Relay cannot read the payload, parse
+its JSON, or find an event name. Payloads that exceed the size limit fail
+closed too. Set `NEMO_RELAY_FAIL_CLOSED=1` to make all events fail closed.
+
+`--fail-open` overrides the default event policy. It also overrides
+`NEMO_RELAY_FAIL_CLOSED=1`. The hook exits with code `0` and logs a warning.
+It sends a pass-through response only for named events that do not require a
+permission check. Restore the credential through
+`NEMO_RELAY_CLIENT_TOKEN` or the client token file before retrying a fail-closed
+hook.
+
 `nemo-relay daemon mcp` with no resolvable credential keeps serving the MCP
 protocol without registering a route, so hosts that require the server keep
 running. It does the same, without retrying, when the daemon rejects its
@@ -772,27 +789,23 @@ does not add a managed daemon route.
 
 ### Codex Responses Compatibility
 
-Both the personal gateway and managed daemon recognize Codex ChatGPT OAuth on
-OpenAI routes, including the managed provider's `/v1/responses` and `/v1/models`
-requests. When no administrator OpenAI credential is configured, Relay preserves
-the OAuth credential and sends the request to the native ChatGPT Codex backend.
+The personal gateway and managed daemon recognize Codex ChatGPT OAuth on OpenAI
+routes. These routes include `/v1/responses` and `/v1/models`.
 
-Relay replaces the ChatGPT OAuth credential when the daemon has any of these
-credential sources:
+On managed OpenAI routes, Relay can replace the caller's ChatGPT OAuth credential.
+It uses `openai_auth_header`, `openai_api_key`,
+`[upstream.openai_api_key_helper]`, or `OPENAI_API_KEY` when the client has Relay access.
+It then sends the request to the configured OpenAI-compatible upstream.
 
-- `openai_auth_header` under `[upstream]`, or the
-  `NEMO_RELAY_OPENAI_AUTH_HEADER` environment variable
-- `openai_api_key` under `[upstream]`
-- `[upstream.openai_api_key_helper]`
-- A nonempty `OPENAI_API_KEY` environment variable
+Unmanaged OpenAI routes keep the caller's ChatGPT credential. These routes
+include model discovery, compaction, and voice call creation. Relay never adds
+its own provider credentials to unmanaged requests.
 
-Relay removes the ChatGPT OAuth credential and adds the replacement. It then
-sends the request to the administrator's configured OpenAI-compatible upstream.
-
-ChatGPT voice call creation is an exception. Requests to
-`POST /backend-api/codex/realtime/calls` keep the caller's ChatGPT credential
-and use the ChatGPT backend even when a replacement OpenAI credential
-is configured. This preserves ChatGPT's JSON call format.
+Requests without a replacement credential follow the configured upstream settings.
+With the default `openai_base_url`, Relay sends ChatGPT requests to the native
+ChatGPT Codex backend. With a custom `openai_base_url`, Relay uses that URL.
+ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` always use the
+ChatGPT backend and keep the caller's credential.
 
 Set `[upstream] chatgpt_codex_base_url` to send ChatGPT requests, including
 voice call creation, to an approved endpoint instead of the default

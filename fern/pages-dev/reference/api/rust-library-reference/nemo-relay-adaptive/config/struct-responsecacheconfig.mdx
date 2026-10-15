@@ -27,7 +27,7 @@ One response-cache namespace must not span mutually untrusted tenants or upstrea
 
 ### `priority: i32`
 
-Execution-intercept priority; lower runs first/outermost (default `50`).
+Execution-intercept priority. Defaults to `150`. Lower values run first. The default places NeMo Guardrails (`100`) before the cache, so guardrails runs on cache hits.
 
 ### `bypass_rate: f64`
 
