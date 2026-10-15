@@ -125,6 +125,7 @@ pub(super) fn should_record_header(name: &HeaderName, headers: &HeaderMap) -> bo
         && name.as_str() != "x-api-key"
         && name.as_str() != "api-key"
         && name.as_str() != "anthropic-api-key"
+        && !name.as_str().starts_with("x-nemo-relay-internal-")
 }
 
 fn named_by_connection_header(name: &HeaderName, headers: &HeaderMap) -> bool {

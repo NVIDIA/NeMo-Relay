@@ -230,7 +230,7 @@ func NewAcgConfig() AcgConfig {
 // or to tune the in-memory budget.
 func NewResponseCacheConfig() ResponseCacheConfig {
 	ttlSeconds := uint64(3600)
-	priority := int32(50)
+	priority := int32(150)
 	return ResponseCacheConfig{
 		TTLSeconds:            &ttlSeconds,
 		Priority:              &priority,
@@ -260,7 +260,7 @@ func NewRedisResponseCacheBackend(url, keyPrefix string) ResponseCacheBackendCon
 
 // NewResponseCacheToolsConfig returns a disabled tool-result cache config.
 func NewResponseCacheToolsConfig() ResponseCacheToolsConfig {
-	priority := int32(100)
+	priority := int32(150)
 	return ResponseCacheToolsConfig{
 		CacheErrors: false,
 		Priority:    &priority,

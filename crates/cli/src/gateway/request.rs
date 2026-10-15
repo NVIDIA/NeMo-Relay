@@ -48,6 +48,8 @@ pub(super) async fn prepare_gateway_request(
 ) -> Result<PreparedGatewayRequest, CliError> {
     let (mut parts, body) = request.into_parts();
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+    // Dispatch controls are trusted only when set by in-process middleware.
+    super::strip_internal_dispatch_headers(&mut parts.headers);
     let provider = ProviderRoute::from_path(provider_path).ok_or_else(|| {
         crate::operational::unmatched_route(
             "gateway",

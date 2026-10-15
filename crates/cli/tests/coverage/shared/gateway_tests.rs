@@ -3102,3 +3102,63 @@ async fn voice_connections_preserve_configured_upstream_and_chatgpt_credentials(
         }
     }
 }
+
+#[tokio::test]
+async fn prepared_gateway_request_strips_untrusted_dispatch_controls() {
+    let controls = [
+        (
+            INTERNAL_DISPATCH_URL_HEADER,
+            "http://attacker.invalid/v1/responses",
+        ),
+        (INTERNAL_DISPATCH_ROUTE_HEADER, "openai_responses"),
+        (INTERNAL_DISPATCH_BACKEND_HEADER, "attacker-backend"),
+        (INTERNAL_RETRY_AWARE_HEADER, "true"),
+    ];
+    let mut builder = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions");
+    let mut wire_headers = HeaderMap::new();
+    for (name, value) in controls {
+        builder = builder.header(name, value);
+        wire_headers.insert(name, HeaderValue::from_static(value));
+        assert!(!should_record_header(
+            &HeaderName::from_static(name),
+            &wire_headers
+        ));
+    }
+    let prepared = prepare_gateway_request(
+        &GatewayConfig::default(),
+        builder.body(Body::from(r#"{"model":"gpt-test"}"#)).unwrap(),
+        environment_authorization(),
+        "/v1/chat/completions",
+    )
+    .await
+    .unwrap();
+    let mut start = build_llm_gateway_start(&prepared);
+    for (name, _) in controls {
+        assert!(!prepared.headers.contains_key(name));
+        assert!(!start.request.headers.contains_key(name));
+    }
+    let effective = effective_dispatch_request(
+        &prepared.body_bytes,
+        &prepared.headers,
+        Some(&start.request),
+        &prepared.upstream_url,
+        prepared.provider,
+    );
+    assert_eq!(effective.url, prepared.upstream_url);
+    assert_eq!(effective.target_route, ProviderRoute::OpenAiChatCompletions);
+    // Trusted middleware can still choose an upstream after headers are recorded.
+    start.request.headers.insert(
+        INTERNAL_DISPATCH_URL_HEADER.to_string(),
+        json!("http://trusted.invalid/v1/chat/completions"),
+    );
+    let effective = effective_dispatch_request(
+        &prepared.body_bytes,
+        &prepared.headers,
+        Some(&start.request),
+        &prepared.upstream_url,
+        prepared.provider,
+    );
+    assert_eq!(effective.url, "http://trusted.invalid/v1/chat/completions");
+}
