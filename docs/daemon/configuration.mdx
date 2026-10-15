@@ -408,6 +408,9 @@ than four tokens at the same time; idle tokens are released automatically.
 
 ### Requests Without a Bound Credential
 
+The rules below apply to HTTP requests that reach the daemon. The hook CLI
+can stop a request before it reaches these routes.
+
 On the daemon's public HTTP routes, a missing credential means telemetry and
 guardrails are skipped for that request; the coding agent keeps working:
 
@@ -448,9 +451,10 @@ fail closed. Hooks also fail closed if Relay cannot read the payload, parse
 its JSON, or find an event name. Payloads that exceed the size limit fail
 closed too. Set `NEMO_RELAY_FAIL_CLOSED=1` to make all events fail closed.
 
-The `--fail-open` flag overrides these defaults. The hook exits with code `0`
-and logs a warning. It sends a pass-through response only for named events
-that do not require a permission check. Restore the credential through
+`--fail-open` overrides the default event policy. It also overrides
+`NEMO_RELAY_FAIL_CLOSED=1`. The hook exits with code `0` and logs a warning.
+It sends a pass-through response only for named events that do not require a
+permission check. Restore the credential through
 `NEMO_RELAY_CLIENT_TOKEN` or the client token file before retrying a fail-closed
 hook.
 

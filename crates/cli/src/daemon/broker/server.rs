@@ -209,12 +209,14 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
             .and_then(|identity| identity.server_config())
             .map_err(CliError::Launch)?;
         let inner = app.clone();
+        let handshake_permits = Arc::new(Semaphore::new(MAX_CONCURRENT_TLS_HANDSHAKES));
         app = app.route(
             "/bootstrap/tunnel",
             get(move |request: Request<Body>| {
                 let tls = Arc::clone(&tls);
                 let inner = inner.clone();
-                async move { crate::gateway::tls::upgrade(request, tls, inner) }
+                let handshake_permits = Arc::clone(&handshake_permits);
+                async move { crate::gateway::tls::upgrade(request, tls, inner, handshake_permits) }
             }),
         );
     }

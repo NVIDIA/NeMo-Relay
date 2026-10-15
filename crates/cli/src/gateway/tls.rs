@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 
 const IDENTITY_FILE: &str = "hook-tls-identity.json";
 
@@ -94,11 +95,12 @@ fn identity_path() -> Result<std::path::PathBuf, String> {
     Ok(crate::bootstrap::state::state_dir()?.join(IDENTITY_FILE))
 }
 
-/// Upgrade an HTTP connection to TLS before serving requests.
+/// Upgrade an HTTP connection to TLS while limiting concurrent handshakes.
 pub(crate) fn upgrade(
     mut request: axum::http::Request<axum::body::Body>,
     tls: Arc<rustls::ServerConfig>,
     app: axum::Router,
+    handshake_permits: Arc<Semaphore>,
 ) -> axum::response::Response {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
@@ -110,18 +112,22 @@ pub(crate) fn upgrade(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let Ok(handshake_permit) = handshake_permits.try_acquire_owned() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
     let upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(async move {
         let Ok(upgraded) = upgrade.await else {
             return;
         };
         let acceptor = tokio_rustls::TlsAcceptor::from(tls);
-        let Ok(Ok(encrypted)) = tokio::time::timeout(
+        let handshake = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             acceptor.accept(hyper_util::rt::TokioIo::new(upgraded)),
         )
-        .await
-        else {
+        .await;
+        drop(handshake_permit);
+        let Ok(Ok(encrypted)) = handshake else {
             return;
         };
         let _ = hyper::server::conn::http1::Builder::new()
