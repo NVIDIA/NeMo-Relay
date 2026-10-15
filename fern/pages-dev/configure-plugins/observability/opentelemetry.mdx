@@ -1091,6 +1091,20 @@ nonstandard uncached field: consumers can use the total
 cache-write counts. An omitted cache or uncached count means unavailable, not
 zero.
 
+The gateway checks streams with the built-in streaming codec for the OpenAI
+Responses API. Relay treats `response.completed`,
+`response.failed`, and `response.incomplete` as final response events.
+
+If the stream ends before a final response event, Relay returns a stream error
+and marks the span as an error. Relay logs `llm_stream_incomplete` with the reason
+`missing_terminal_response`. It keeps any output it has received. If token
+usage is missing, Relay leaves it out. It does not use zero or totals from
+other calls.
+
+After Relay gets the first final response, it keeps that snapshot. Later
+snapshots cannot replace it. Missing usage alone does not mean the stream
+ended early. Custom collectors keep their own completion rules.
+
 For managed streaming LLM calls, the end span also includes
 `gen_ai.response.time_to_first_chunk` in seconds. Relay measures from the
 start of managed stream execution until the first provider protocol chunk is

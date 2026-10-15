@@ -22,9 +22,11 @@ Replays the OpenAI Responses SSE event sequence into the same JSON shape the API
 
 The Responses API is a relatively forgiving streaming target because every event carries either the full `response` snapshot (`response.created`, `response.in_progress`, `response.completed`, `response.failed`, `response.incomplete`) or the final-state output item (`response.output_item.done`). We:
 
-1. Track the latest `response` snapshot - terminal events (`completed`/`failed`/`incomplete`) typically carry the complete state including `output`, so we prefer those when present.
+1. Track the latest `response` snapshot until the first final response event (`completed`, `failed`, or `incomplete`). Keep that snapshot for the rest of the stream.
 2. Track output items by `output_index` - `output_item.done` events deliver the final per-item state, used as a fallback when the terminal `response.output` is missing or empty.
 3. Per-token `output_text.delta` and `function_call_arguments.delta` events are ignored because their content is redelivered in the matching `output_item.done` event. Skipping deltas keeps the codec resilient to schema additions and avoids double-accumulation.
+
+Use [`StreamingCodec::validate_stream`](/reference/api/rust-library-reference/nemo-relay/codec/streaming/trait-streamingcodec) with this instance's collector and finalizer to report streams that end before a final event.
 
 Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer closures share access. Each instance is single-use because [`LlmFinalizerFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmfinalizerfn) consumes the finalize step.
 
@@ -54,10 +56,20 @@ Creates a fresh streaming codec with empty accumulator state.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../streaming/trait-streamingcodec\">StreamingCodec</a> for <a href=\"struct-openairesponsesstreamingcodec\">OpenAIResponsesStreamingCodec</a>"}} /></pre>
 
+#### `validate_stream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">validate_stream</a>(&amp;self, stream: <a href=\"../../api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
+
+Reports an error at EOF if this codec's collector did not receive a final response.
+
 #### `collector`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">collector</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>"}} /></pre>
 
+Collects response snapshots and output items into this codec's shared state.
+
 #### `finalizer`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">finalizer</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>"}} /></pre>
+
+Takes the collected state and returns the final provider response.
