@@ -9125,6 +9125,7 @@ async fn an_inline_shell_span_closes_even_when_its_end_never_arrives() {
     deregister_subscriber(subscriber_name).unwrap();
 }
 
+/// Hook completions keep MCP identity and status in raw events and exported spans.
 #[tokio::test]
 async fn mcp_harness_metadata_reaches_tool_events_and_promoted_spans() {
     for kind in [AgentKind::ClaudeCode, AgentKind::Codex] {
@@ -9134,6 +9135,10 @@ async fn mcp_harness_metadata_reaches_tool_events_and_promoted_spans() {
             "failure",
             "mcp-error",
             "interrupted",
+            "Interrupted",
+            "Cancelled",
+            "CANCELED",
+            "ERROR",
             "permission-denied",
         ] {
             assert_mcp_harness_metadata(kind, ending).await;
@@ -9141,6 +9146,7 @@ async fn mcp_harness_metadata_reaches_tool_events_and_promoted_spans() {
     }
 }
 
+/// Check raw MCP completion fields and the matching OpenTelemetry spans.
 async fn assert_mcp_harness_metadata(kind: AgentKind, ending: &str) {
     let session_id = format!("mcp-{}-{ending}", kind.as_str());
     let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
@@ -9182,14 +9188,15 @@ async fn assert_mcp_harness_metadata(kind: AgentKind, ending: &str) {
         assert_eq!(end.metadata().unwrap()["status"], "denied");
         assert_eq!(end.metadata().unwrap()["error.type"], "guardrail_rejected");
     }
-    if ending == "interrupted" {
+    if ["interrupted", "Interrupted", "Cancelled", "CANCELED"].contains(&ending) {
         assert_eq!(
             end.metadata().unwrap()["tool_completion_outcome"],
             "interrupted"
         );
+        assert_eq!(end.metadata().unwrap()["status"], ending);
     }
     assert_mcp_genai_projection(&events, ending);
-    if matches!(ending, "failure" | "mcp-error") {
+    if ["failure", "mcp-error", "ERROR"].contains(&ending) {
         assert_eq!(end.metadata().unwrap()["otel.status_code"], "ERROR");
         assert_eq!(
             end.metadata().unwrap()["error.type"],
@@ -9199,6 +9206,7 @@ async fn assert_mcp_harness_metadata(kind: AgentKind, ending: &str) {
     }
 }
 
+/// Check MCP identity and completion status in the GenAI span.
 fn assert_mcp_genai_projection(events: &[Event], ending: &str) {
     let exporter = InMemorySpanExporterBuilder::new().build();
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
@@ -9228,10 +9236,10 @@ fn assert_mcp_genai_projection(events: &[Event], ending: &str) {
     assert_eq!(attrs["gen_ai.tool.call.id"], "mcp-call");
     assert!(!attrs.contains_key("server.address"));
     assert!(!attrs.contains_key("mcp.session.id"));
-    if ending == "interrupted" {
+    if ["interrupted", "Interrupted", "Cancelled", "CANCELED"].contains(&ending) {
         assert!(matches!(tool.status, opentelemetry::trace::Status::Unset));
     }
-    if matches!(ending, "permission-denied" | "failure" | "mcp-error") {
+    if ["permission-denied", "failure", "mcp-error", "ERROR"].contains(&ending) {
         assert!(matches!(
             tool.status,
             opentelemetry::trace::Status::Error { .. }
@@ -9240,6 +9248,7 @@ fn assert_mcp_genai_projection(events: &[Event], ending: &str) {
     subscriber.shutdown().unwrap();
 }
 
+/// Confirm that Full and OpenInference spans retain the tool failure status.
 fn assert_mcp_failure_projections(events: &[Event]) {
     for projection in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
         let exporter = InMemorySpanExporterBuilder::new().build();
@@ -9268,6 +9277,7 @@ fn assert_mcp_failure_projections(events: &[Event]) {
     }
 }
 
+/// Send MCP hook fixtures through the real adapter and session manager.
 async fn apply_mcp_harness_hooks(
     manager: &SessionManager,
     session_id: &str,
@@ -9309,6 +9319,9 @@ async fn apply_mcp_harness_hooks(
                 "session_id": session_id, "hook_event_name": hook,
                 "tool_name": "mcp__docs__search", "tool_use_id": "mcp-call",
                 "tool_input": {"query": "example"}, "is_interrupt": ending == "interrupted",
+                "status": if ["Interrupted", "Cancelled", "CANCELED", "ERROR"].contains(&ending) {
+                    Some(ending)
+                } else { None },
                 "tool_response": if ending == "mcp-error" {
                     json!({"isError": true, "content": [{"type": "text", "text": "fixture failure"}]})
                 } else { json!({"ok": true}) },

@@ -1358,6 +1358,7 @@ fn turn_start_and_compaction_rules_stay_inert_for_codex_and_claude() {
     }
 }
 
+/// MCP error results report failure even when the hook has a normal end-event name.
 #[test]
 fn mcp_error_envelopes_do_not_depend_on_failure_hook_names() {
     for adapt in [claude_code::adapt, codex::adapt] {
@@ -1386,6 +1387,7 @@ fn mcp_error_envelopes_do_not_depend_on_failure_hook_names() {
     }
 }
 
+/// An explicit interruption flag takes priority over a failure-event name.
 #[test]
 fn interrupted_failure_hooks_do_not_report_execution_errors() {
     for (adapt, hook) in [

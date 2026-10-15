@@ -614,6 +614,7 @@ fn agent_llm_hint(payload: &Value, subagent_id: Option<String>) -> ExtractedLlmH
     }
 }
 
+/// Read tool IDs, arguments, results, and status from a hook.
 fn agent_tool_call(
     payload: &Value,
     subagent_id: Option<String>,

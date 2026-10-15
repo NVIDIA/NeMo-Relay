@@ -991,6 +991,7 @@ fn sanitize_native_kind(kind: String, replacement: &str) -> String {
     )
 }
 
+/// Keep only known status and tool completion fields in scope metadata.
 fn sanitize_scope_status_metadata(event: &Event, metadata: Json) -> Json {
     let mut sanitized = Map::new();
     if !matches!(event, Event::Scope(_)) {

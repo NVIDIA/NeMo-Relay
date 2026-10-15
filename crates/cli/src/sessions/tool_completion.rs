@@ -5,23 +5,27 @@
 
 use super::*;
 
+/// Add error or interruption fields without changing the reported status.
 pub(super) fn tool_end_metadata(metadata: Value, status: Option<&str>) -> Value {
     let mut completion = json!({ "status": status });
-    if status.is_some_and(|status| {
-        matches!(
-            status.to_ascii_lowercase().as_str(),
-            "error" | "failed" | "failure" | "denied" | "timeout"
-        )
-    }) {
+    let normalized = status.map(str::to_ascii_lowercase);
+    if matches!(
+        normalized.as_deref(),
+        Some("error" | "failed" | "failure" | "denied" | "timeout")
+    ) {
         completion["otel.status_code"] = json!("ERROR");
         completion["error.type"] = json!("tool_execution_failed");
     }
-    if status.is_some_and(|status| matches!(status, "interrupted" | "cancelled" | "canceled")) {
+    if matches!(
+        normalized.as_deref(),
+        Some("interrupted" | "cancelled" | "canceled")
+    ) {
         completion["tool_completion_outcome"] = json!("interrupted");
     }
     merge_metadata(metadata, completion)
 }
 
+/// Mark a call as incomplete when cleanup closes it without a completion signal.
 pub(super) fn incomplete_tool_metadata(reason: &str) -> Value {
     json!({
         "status": reason,

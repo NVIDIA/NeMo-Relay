@@ -1671,6 +1671,7 @@ async fn trajectory_preset_preserves_only_bounded_scope_status_metadata() {
     assert_eq!(sanitized.metadata, Some(json!({})));
 }
 
+/// Tool completion fields survive sanitization only when their values are allowed.
 #[tokio::test]
 async fn trajectory_preset_preserves_bounded_tool_completion_semantics() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));

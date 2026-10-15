@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 const CAPACITY: usize = 4_096;
 const RETENTION: Duration = Duration::from_secs(300);
 
+/// Build the cache key used to ignore late hooks for a recovered call.
 pub(super) fn recovered_tool_key(session: &str, invocation: &str) -> CompletionKey {
     CompletionKey {
         owner: String::new(),
