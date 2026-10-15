@@ -183,9 +183,13 @@ Start a daemon that never creates workers with:
 nemo-relay daemon --pass-through
 ```
 
-The daemon still validates a presented route credential, and requests without a
-bound credential also pass through. In this mode only, configured provider
-credentials apply to those requests too. MCP registration can only receive
+The daemon still validates route credentials. Requests without a bound
+credential also pass through. In this mode, they can use the daemon's provider
+credentials only with `--bind 127.0.0.1`. With `--bind 0.0.0.0`, they use
+only provider credentials sent by the client. Requests with a bound route can
+use daemon credentials on either bind address.
+
+MCP registration can only receive
 `UsePassThrough`, and the daemon cannot issue an activation grant or
 accept worker registration. LLM requests use the same streaming transport
 directly to the configured provider. Hook requests return the existing no-op

@@ -439,9 +439,9 @@ Without Relay authentication, requests use only provider credentials sent by
 the client. If the client sends no credentials, the upstream provider receives
 the request without credentials.
 
-For direct gateway use, set the provider API key in the client.
-Setting `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or a custom auth header only in the
-gateway does not give clients access to that key.
+For direct gateway use without Relay authentication, set the provider API key
+in the client. To use `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or a custom auth
+header from the gateway, the client must authenticate to Relay.
 Use `nemo-relay run` to let Relay set up client authentication.
 
 Codex ChatGPT credentials are the exception to the normal inbound precedence.

@@ -3579,17 +3579,35 @@ async fn pass_through_lends_daemon_provider_auth_only_on_loopback_or_to_bound_ro
                     assert!(!headers.contains_key(CLIENT_TOKEN_HEADER));
                 }
             }
-            // Bound-route authorization continues to allow server credentials on either bind.
-            let response = forward_to_provider(
-                &state,
-                Request::post("/v1/responses").body(Body::empty()).unwrap(),
-                ProviderRoute::OpenAi,
-                ProviderAccess::BoundRoute,
-            )
-            .await;
+            // Bound routes keep access to daemon credentials on either listener setting.
+            let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x32_u8; 32]);
+            let credential = RouteCredential::parse(token.clone()).unwrap();
+            let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
+            state
+                .registry
+                .register_mcp(
+                    McpRegistration {
+                        fingerprint,
+                        token_digest: credential.digest(),
+                        session_id: McpSessionId::new("bound-provider-route").unwrap(),
+                        lease_expires_at_unix_ms: u64::MAX,
+                    },
+                    fresh_launch(WorkerNetworkHint::new("127.0.0.1", None).unwrap()).unwrap(),
+                )
+                .unwrap();
+            let response = app
+                .oneshot(
+                    Request::post("/v1/responses")
+                        .header(CLIENT_TOKEN_HEADER, &token)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             let (headers, _) = take_provider_request(&captured);
             assert_eq!(headers[AUTHORIZATION], expected);
+            assert!(!headers.contains_key(CLIENT_TOKEN_HEADER));
         }
     }
     provider_task.abort();
