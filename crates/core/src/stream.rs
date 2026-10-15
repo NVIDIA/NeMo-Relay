@@ -44,13 +44,14 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{
-    EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK,
-    current_scope_stack,
+    BuiltinLlmCodec, EventSubscriberFn, LlmCodecIdentity, LlmJsonStream, LlmStreamInner,
+    ScopeStackHandle, TASK_SCOPE_STACK, current_scope_stack,
 };
 use crate::api::runtime::{LlmSanitizeResponseContext, LlmSanitizeResponseFn};
 use crate::api::shared::{
     metadata_with_otel_error, metadata_with_otel_status, snapshot_event_sanitizers,
 };
+use crate::codec::openai_responses::is_terminal_response_event;
 use crate::codec::response::{
     AnnotatedLlmResponse, FinishReason, attach_estimated_cost_for_provider,
 };
@@ -90,6 +91,9 @@ pub struct LlmStreamWrapper {
     ended: bool,
     close_result: Option<Result<()>>,
     terminal_result: Option<Result<Json>>,
+    /// Check for a final response event only when using the built-in Responses codec.
+    responses_terminal_received: Option<bool>,
+    responses_event_received: bool,
 }
 
 pub(crate) struct ManagedLlmStreamTelemetry {
@@ -109,6 +113,7 @@ impl ManagedLlmStreamTelemetry {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StreamTermination {
     Complete,
+    Incomplete,
     Failed,
     Dropped,
 }
@@ -188,6 +193,13 @@ impl LlmStreamWrapper {
         let scope_stack = handle.captured_scope_stack().clone();
         let sanitize_context =
             LlmSanitizeResponseContext::for_response_codec(response_codec.clone());
+        let responses_terminal_received = response_codec
+            .as_ref()
+            .is_some_and(|codec| {
+                codec.codec_identity()
+                    == LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
+            })
+            .then_some(false);
         Self {
             inner,
             handle,
@@ -204,6 +216,8 @@ impl LlmStreamWrapper {
             ended: false,
             close_result: None,
             terminal_result: None,
+            responses_terminal_received,
+            responses_event_received: false,
         }
     }
 
@@ -247,8 +261,29 @@ impl LlmStreamWrapper {
         self.handle
             .optimization_recorder
             .close_for_finalization(None);
-        let metadata = metadata_with_otel_status(self.metadata.clone(), "OK", None);
-        self.emit_end_event(metadata, StreamTermination::Complete);
+        let (metadata, termination) =
+            if self.responses_event_received && self.responses_terminal_received == Some(false) {
+                log::warn!(
+                    target: "nemo_relay.runtime",
+                    event = "llm_stream_incomplete",
+                    reason = "missing_terminal_response";
+                    "Responses stream ended before its final response event"
+                );
+                (
+                    metadata_with_otel_status(
+                        self.metadata.clone(),
+                        "ERROR",
+                        Some("stream ended before its final response event".to_string()),
+                    ),
+                    StreamTermination::Incomplete,
+                )
+            } else {
+                (
+                    metadata_with_otel_status(self.metadata.clone(), "OK", None),
+                    StreamTermination::Complete,
+                )
+            };
+        self.emit_end_event(metadata, termination);
     }
 
     fn finish_with_error(&mut self, error: &FlowError) {
@@ -335,8 +370,9 @@ impl LlmStreamWrapper {
             } else {
                 metadata
             };
-            let interruption = (termination.is_interrupted()
-                && !has_authoritative_final_usage(annotated_response.as_ref()))
+            let interruption = (termination == StreamTermination::Incomplete
+                || (termination.is_interrupted()
+                    && !has_authoritative_final_usage(annotated_response.as_ref())))
             .then_some("stream_interrupted");
             handle
                 .optimization_recorder
@@ -490,7 +526,16 @@ impl Stream for LlmStreamWrapper {
                 this.emit_chunk_mark(chunk_index, &raw_chunk);
                 // Feed chunk to the collector; if it returns Err, terminate the stream
                 match (this.collector)(raw_chunk.clone()) {
-                    Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
+                    Ok(()) => {
+                        if let Some(received) = this.responses_terminal_received.as_mut() {
+                            this.responses_event_received |= raw_chunk
+                                .get("type")
+                                .and_then(Json::as_str)
+                                .is_some_and(|kind| kind.starts_with("response."));
+                            *received |= is_terminal_response_event(&raw_chunk);
+                        }
+                        Poll::Ready(Some(Ok(raw_chunk)))
+                    }
                     Err(e) => {
                         this.finish_with_error(&e);
                         this.terminal_result = Some(Err(e));

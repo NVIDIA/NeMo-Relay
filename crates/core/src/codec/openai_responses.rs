@@ -1486,8 +1486,8 @@ impl LlmCodec for OpenAIResponsesCodec {
 /// `response.completed`, `response.failed`, `response.incomplete`) or the final-state output item
 /// (`response.output_item.done`). We:
 ///
-/// 1. Track the latest `response` snapshot — terminal events (`completed`/`failed`/`incomplete`)
-///    typically carry the complete state including `output`, so we prefer those when present.
+/// 1. Track the latest `response` snapshot until the first final response event
+///    (`completed`, `failed`, or `incomplete`). Keep that snapshot for the rest of the stream.
 /// 2. Track output items by `output_index` — `output_item.done` events deliver the final per-item
 ///    state, used as a fallback when the terminal `response.output` is missing or empty.
 /// 3. Per-token `output_text.delta` and `function_call_arguments.delta` events are ignored
@@ -1546,9 +1546,9 @@ impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
 
 #[derive(Debug, Default)]
 struct OpenAIResponsesStreamingState {
-    /// Latest `response` snapshot from any event that carries one. Last write wins, so terminal
-    /// events with the complete state will end up here when they fire.
+    /// Latest response snapshot. Keep the first final response even if more snapshots arrive.
     response: Option<serde_json::Map<String, Json>>,
+    terminal_response_received: bool,
     /// Items keyed by `output_index`. Captured from `response.output_item.added` (initial) and
     /// replaced on `response.output_item.done` (final). Used as a fallback for `output` when the
     /// terminal `response` snapshot lacks it.
@@ -1575,11 +1575,15 @@ impl OpenAIResponsesStreamingState {
     }
 
     fn observe_response_snapshot(&mut self, event: &Json) {
+        if self.terminal_response_received {
+            return;
+        }
         let Some(response) = event.get("response") else {
             return;
         };
         if let Json::Object(map) = response {
             self.response = Some(map.clone());
+            self.terminal_response_received = is_terminal_response_event(event);
         }
     }
 
@@ -1610,6 +1614,13 @@ impl OpenAIResponsesStreamingState {
         }
         Json::Object(output)
     }
+}
+
+pub(crate) fn is_terminal_response_event(event: &Json) -> bool {
+    matches!(
+        event.get("type").and_then(Json::as_str),
+        Some("response.completed" | "response.failed" | "response.incomplete")
+    ) && event.get("response").is_some_and(Json::is_object)
 }
 
 // ---------------------------------------------------------------------------
