@@ -1497,7 +1497,7 @@ fn native_loader_rejects_abi_v3_plugins() {
 
     let error = expect_native_load_error_from_specs(
         [load_spec("fixture_native_v3", &manifest_ref)],
-        "ABI-v3 plugins must be rebuilt for ABI v7",
+        "ABI-v3 plugins must be rebuilt for ABI v8",
     );
     assert!(error.contains("rejected native ABI 8"), "{error}");
     assert!(error.contains("rebuild the plugin"), "{error}");

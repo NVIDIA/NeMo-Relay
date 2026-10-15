@@ -493,11 +493,6 @@ callback boundary, including continuation and streaming polls.
 Native and worker plugins expose the same value contract through their
 [runtime scope APIs](/build-plugins/native/runtime-events-and-scopes) and
 [worker scope APIs](/build-plugins/workers/runtime-events-and-scopes).
-Experimental Go exposes `CurrentScopeStackSnapshot`, returning a nil pointer
-without a binding; use it within `ScopeStack.Run` for goroutine isolation. The
-C operation `nemo_relay_current_scope_stack_snapshot_json` returns a
-host-allocated canonical JSON value, or success with a null output pointer for
-absence; release non-null output with `nemo_relay_string_free`.
 
 ## Practical Guidance
 

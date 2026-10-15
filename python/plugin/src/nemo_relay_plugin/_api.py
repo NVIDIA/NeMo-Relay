@@ -1921,16 +1921,14 @@ class PluginRuntime:
             raise _worker_error_to_sdk(response.error)
         if not response.HasField("snapshot"):
             return None
-        categories = tuple(ScopeType)
+        categories = {_proto_scope_type(category): category for category in ScopeType}
         entries = []
         for entry in response.snapshot.scopes:
             try:
                 identifier = str(UUID(entry.scope_id))
             except ValueError as error:
                 raise WorkerSdkError("invalid snapshot scope UUID") from error
-            category = (
-                categories[entry.scope_type - 1] if 1 <= entry.scope_type <= len(categories) else ScopeType.UNKNOWN
-            )
+            category = categories.get(entry.scope_type, ScopeType.UNKNOWN)
             entries.append(ScopeStackEntry(identifier, category))
         return ScopeStackSnapshot(tuple(entries))
 

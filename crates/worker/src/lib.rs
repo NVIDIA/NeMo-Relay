@@ -1360,16 +1360,27 @@ impl PluginRuntime {
     pub async fn current_scope_stack_snapshot(&self) -> Result<Option<ScopeStackSnapshot>> {
         let scope = self.current_scope_context();
         let mut client = self.host_client().await?;
-        let response = client.get_current_scope_stack_snapshot(Request::new(
-            nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest {
-                activation_id: self.activation_id.clone(),
-                auth_token: self.auth_token.clone(),
-                scope,
-            })).await.map_err(|error| {
+        let response = client
+            .get_current_scope_stack_snapshot(Request::new(
+                nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest {
+                    activation_id: self.activation_id.clone(),
+                    auth_token: self.auth_token.clone(),
+                    scope,
+                },
+            ))
+            .await
+            .map_err(|error| {
                 if error.code() == tonic::Code::Unimplemented {
-                    WorkerSdkError::Callback("scope stack snapshots are unsupported by this host; require the grpc-v1 snapshot extension".into())
-                } else { WorkerSdkError::Transport(error.to_string()) }
-            })?.into_inner();
+                    WorkerSdkError::Callback(
+                        "scope stack snapshots are unsupported by this host; \
+                         require the grpc-v1 snapshot extension"
+                            .into(),
+                    )
+                } else {
+                    WorkerSdkError::Transport(error.to_string())
+                }
+            })?
+            .into_inner();
         if let Some(error) = response.error {
             return Err(worker_error_to_sdk(error));
         }

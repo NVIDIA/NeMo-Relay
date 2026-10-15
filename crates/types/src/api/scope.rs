@@ -45,6 +45,7 @@ pub enum ScopeType {
     /// A caller-defined custom scope category.
     Custom,
     /// A fallback for unknown or unsupported scope categories.
+    #[serde(other)]
     Unknown,
 }
 
@@ -73,7 +74,6 @@ pub struct ScopeStackEntry {
     /// Actual scope handle UUID, never a transport binding identifier.
     pub scope_id: uuid::Uuid,
     /// Canonical semantic category; future encoded categories become Unknown.
-    #[serde(deserialize_with = "deserialize_snapshot_scope_type")]
     pub scope_type: ScopeType,
 }
 
@@ -85,28 +85,6 @@ pub struct ScopeStackEntry {
 pub struct ScopeStackSnapshot {
     /// Ordered scope identities, including the implicit root.
     pub scopes: Vec<ScopeStackEntry>,
-}
-
-fn deserialize_snapshot_scope_type<'de, Deserializer>(
-    deserializer: Deserializer,
-) -> Result<ScopeType, Deserializer::Error>
-where
-    Deserializer: serde::Deserializer<'de>,
-{
-    let category = String::deserialize(deserializer)?;
-    Ok(match category.as_str() {
-        "agent" => ScopeType::Agent,
-        "function" => ScopeType::Function,
-        "tool" => ScopeType::Tool,
-        "llm" => ScopeType::Llm,
-        "retriever" => ScopeType::Retriever,
-        "embedder" => ScopeType::Embedder,
-        "reranker" => ScopeType::Reranker,
-        "guardrail" => ScopeType::Guardrail,
-        "evaluator" => ScopeType::Evaluator,
-        "custom" => ScopeType::Custom,
-        _ => ScopeType::Unknown,
-    })
 }
 
 /// Attribute bitflags attached to a concrete handle kind.
