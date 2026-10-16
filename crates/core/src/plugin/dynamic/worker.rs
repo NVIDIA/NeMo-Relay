@@ -2359,6 +2359,8 @@ impl WorkerPluginCallback {
         result
     }
 
+    /// Invokes a worker callback with an optional deadline.
+    /// On timeout, requests cancellation and reports the surface and callback name.
     async fn invoke_async_with_timeout(
         &self,
         request: InvokeRequest,
