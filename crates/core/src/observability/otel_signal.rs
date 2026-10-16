@@ -24,8 +24,8 @@ use crate::api::event::{
     ValidatedMetricMeasurement,
 };
 use crate::diagnostics::{
-    ComponentRecorder, DiagnosticCorrelation, DiagnosticObservation, DiagnosticOutcome,
-    DiagnosticSeverity, Diagnostics, legacy_component_key, legacy_diagnostic_code,
+    ComponentRecorder, DiagnosticObservation, Diagnostics, legacy_component_key,
+    legacy_diagnostic_code,
 };
 use crate::plugin::{RuntimeDiagnostic, project_active_plugin_runtime_diagnostic};
 
@@ -70,11 +70,11 @@ pub(super) fn telemetry_resource(attributes: impl IntoIterator<Item = KeyValue>)
 /// A bounded aggregate describing an OpenTelemetry runtime problem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenTelemetryRuntimeDiagnostic {
-    /// Stable identifier for the diagnostic condition.
+    /// Stable identifier for the reported problem.
     pub code: String,
-    /// Distinct messages recorded for this condition, retained within a bounded budget.
+    /// Distinct messages recorded for this problem, retained within a bounded budget.
     pub message: String,
-    /// Total number of occurrences recorded for this condition.
+    /// Total number of occurrences recorded for this problem.
     pub count: u64,
 }
 
@@ -142,20 +142,11 @@ impl SignalRuntimeDiagnostics {
         // Existing emitters own their operational log records and rate limiting. Record the
         // underlying observation once, without adding a second operational log projection.
         if let Some(recorder) = &self.recorder {
-            let _ = recorder.record_without_projection(DiagnosticObservation {
-                code: legacy_diagnostic_code(&code),
-                severity: DiagnosticSeverity::Error,
-                outcome: DiagnosticOutcome::Failure,
-                message: message.clone(),
+            let _ = recorder.record_without_projection(DiagnosticObservation::failure(
+                legacy_diagnostic_code(&code),
+                message.clone(),
                 count,
-                correlation: DiagnosticCorrelation::default(),
-                activate_condition: matches!(
-                    code.as_str(),
-                    "otel.traces_export_failed"
-                        | "otel.logs_export_failed"
-                        | "otel.metrics_export_failed"
-                ),
-            });
+            ));
         }
         let mut state = self
             .state
@@ -194,7 +185,7 @@ impl SignalRuntimeDiagnostics {
         };
         drop(state);
 
-        record_signal_runtime_diagnostic(&code, self.plugin_field.clone(), message, count);
+        project_signal_runtime_diagnostic(&code, self.plugin_field.clone(), message, count);
         total
     }
 
@@ -216,13 +207,15 @@ impl SignalRuntimeDiagnostics {
         self.plugin_field.is_some()
     }
 
-    pub(super) fn record_recovery(&self, code: &str) {
+    /// Retain an observed success without changing legacy failure reports or totals.
+    pub(super) fn record_success(&self, code: &str, message: &str) {
         if let Some(recorder) = &self.recorder {
-            let _ = recorder.observe_recovery_without_projection(code);
+            let _ = recorder
+                .record_without_projection(DiagnosticObservation::success(code, message, 1));
         }
     }
 
-    /// Delivery pipelines share their legacy view, but own independent conditions and epochs.
+    /// Delivery pipelines share their legacy view, but own independent evidence and epochs.
     pub(super) fn for_exporter(&self, key: &str) -> Self {
         Self {
             state: Arc::clone(&self.state),
@@ -669,7 +662,7 @@ pub(super) fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<M
     Ok(metadata)
 }
 
-pub(super) fn record_signal_runtime_diagnostic(
+pub(super) fn project_signal_runtime_diagnostic(
     code: &str,
     field: Option<String>,
     message: String,

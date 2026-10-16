@@ -70,7 +70,6 @@ impl LoggingDiagnostics {
             DiagnosticSeverity::Info,
             DiagnosticOutcome::Success,
             "Operational logging initialized",
-            false,
         );
     }
 
@@ -81,7 +80,6 @@ impl LoggingDiagnostics {
             DiagnosticSeverity::Error,
             DiagnosticOutcome::Failure,
             "Operational logging initialization failed",
-            true,
         );
     }
 
@@ -108,7 +106,6 @@ impl LoggingDiagnostics {
             } else {
                 "Operational logging shutdown completed"
             },
-            failed,
         );
     }
 
@@ -119,7 +116,6 @@ impl LoggingDiagnostics {
             DiagnosticSeverity::Warning,
             DiagnosticOutcome::Failure,
             "Operational logging is available but the diagnostic projection could not be attached",
-            true,
         );
     }
 }
@@ -137,7 +133,6 @@ impl SinkDiagnostics {
             DiagnosticSeverity::Info,
             DiagnosticOutcome::Success,
             "Logging sink initialized",
-            false,
         );
     }
 
@@ -148,20 +143,18 @@ impl SinkDiagnostics {
             DiagnosticSeverity::Error,
             DiagnosticOutcome::Failure,
             "Logging sink initialization failed",
-            true,
         );
     }
 
     pub(super) fn runtime_error(&self, error: &spdlog::Error) {
         use spdlog::error::{SendToChannelError, SendToChannelErrorDropped};
-        let (code, message, activate_condition) = match error {
+        let (code, message) = match error {
             spdlog::Error::SendToChannel(
                 SendToChannelError::Full,
                 SendToChannelErrorDropped::Record(_),
             ) => (
                 "logging.sink.record_dropped",
                 "Operational log record dropped because the sink queue is full",
-                false,
             ),
             spdlog::Error::SendToChannel(
                 SendToChannelError::Full,
@@ -169,17 +162,14 @@ impl SinkDiagnostics {
             ) => (
                 "logging.sink.flush_dropped",
                 "Operational log flush request dropped because the sink queue is full",
-                false,
             ),
             spdlog::Error::FlushBuffer(_) => (
                 "logging.sink.flush_failed",
                 "Operational log sink flush failed",
-                true,
             ),
             _ => (
                 "logging.sink.write_failed",
                 "Operational log sink failed to deliver a record",
-                true,
             ),
         };
         // Neither a dropped record's payload nor backend error text belongs in diagnostics.
@@ -189,7 +179,6 @@ impl SinkDiagnostics {
             DiagnosticSeverity::Error,
             DiagnosticOutcome::Failure,
             message,
-            activate_condition,
         );
     }
 
@@ -200,7 +189,6 @@ impl SinkDiagnostics {
             DiagnosticSeverity::Error,
             DiagnosticOutcome::Failure,
             "Operational log sink final drain or flush failed",
-            true,
         );
     }
 }
@@ -211,7 +199,6 @@ fn record(
     severity: DiagnosticSeverity,
     outcome: DiagnosticOutcome,
     message: &str,
-    activate_condition: bool,
 ) {
     let Some(recorder) = recorder else {
         return;
@@ -224,7 +211,6 @@ fn record(
         message: message.into(),
         count: 1,
         correlation: Default::default(),
-        activate_condition,
     });
 }
 

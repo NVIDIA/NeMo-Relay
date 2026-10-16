@@ -10,8 +10,8 @@ use std::sync::{
 use std::thread;
 
 use nemo_relay::diagnostics::{
-    DiagnosticConditionState, DiagnosticCorrelation, DiagnosticError, DiagnosticLimits,
-    DiagnosticObservation, DiagnosticQuery, DiagnosticSeverity, Diagnostics, SourceIdentity,
+    DiagnosticCorrelation, DiagnosticError, DiagnosticLimits, DiagnosticObservation,
+    DiagnosticOutcome, DiagnosticQuery, DiagnosticSeverity, Diagnostics, SourceIdentity,
 };
 use uuid::Uuid;
 
@@ -41,20 +41,13 @@ fn standalone_services_work_before_logging_and_do_not_share_state() {
         )
         .unwrap();
     assert_eq!(receipt.occurrence_count, 5);
-    component
-        .activate_condition(
-            "otel.export_failed",
-            DiagnosticSeverity::Warning,
-            "still unavailable",
-        )
-        .unwrap();
     let view = component.snapshot().unwrap();
     assert_eq!(view.counters[0].occurrences.value.get(), 5);
-    assert_eq!(view.conditions.len(), 1);
-    assert!(matches!(
-        view.conditions[0].state,
-        DiagnosticConditionState::Active
-    ));
+    assert_eq!(view.counters[0].last_message, "unavailable");
+    let observed = first.snapshot(DiagnosticQuery::default()).unwrap();
+    assert_eq!(observed.events.len(), 1);
+    assert_eq!(observed.events[0].outcome, DiagnosticOutcome::Failure);
+    assert_eq!(observed.events[0].count.get(), 5);
     assert_ne!(first.source().instance_id, second.source().instance_id);
     assert!(
         second
@@ -72,7 +65,7 @@ fn standalone_services_work_before_logging_and_do_not_share_state() {
 }
 
 #[test]
-fn recovery_is_explicit_idempotent_and_never_recounts_an_occurrence() {
+fn success_and_failure_observations_keep_independent_counts_and_history() {
     let service = diagnostics(DiagnosticLimits::default());
     let component = service.register_component("exporter.logs").unwrap();
     component
@@ -83,38 +76,15 @@ fn recovery_is_explicit_idempotent_and_never_recounts_an_occurrence() {
             DiagnosticCorrelation::default(),
         )
         .unwrap();
-    let recovery = component
-        .observe_recovery("otel.export_failed")
-        .unwrap()
+    let success = component
+        .observe_success(
+            "otel.export_succeeded",
+            "export completed",
+            3,
+            DiagnosticCorrelation::default(),
+        )
         .unwrap();
-    assert_eq!(recovery.occurrence_count, 2);
-    let sequence = service
-        .snapshot(DiagnosticQuery::default())
-        .unwrap()
-        .sequence;
-    assert!(
-        component
-            .observe_recovery("otel.export_failed")
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        component
-            .observe_recovery("otel.never_failed")
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(
-        service
-            .snapshot(DiagnosticQuery::default())
-            .unwrap()
-            .sequence,
-        sequence
-    );
-    assert!(matches!(
-        component.snapshot().unwrap().conditions[0].state,
-        DiagnosticConditionState::Recovered { .. }
-    ));
+    assert_eq!(success.occurrence_count, 3);
     component
         .observe_failure(
             "otel.export_failed",
@@ -123,21 +93,41 @@ fn recovery_is_explicit_idempotent_and_never_recounts_an_occurrence() {
             DiagnosticCorrelation::default(),
         )
         .unwrap();
+    component
+        .record(DiagnosticObservation::success(
+            "otel.export_succeeded",
+            "another export completed",
+            2,
+        ))
+        .unwrap();
+    let snapshot = service.snapshot(DiagnosticQuery::default()).unwrap();
+    let counters = &snapshot.components[0].counters;
+    assert_eq!(counters.len(), 2);
+    assert_eq!(counters[0].code, "otel.export_failed");
+    assert_eq!(counters[0].occurrences.value.get(), 3);
+    assert_eq!(counters[0].last_message, "failed again");
+    assert_eq!(counters[1].code, "otel.export_succeeded");
+    assert_eq!(counters[1].occurrences.value.get(), 5);
     assert_eq!(
-        component.snapshot().unwrap().counters[0]
-            .occurrences
-            .value
-            .get(),
-        3
+        snapshot
+            .events
+            .iter()
+            .map(|event| event.outcome)
+            .collect::<Vec<_>>(),
+        vec![
+            DiagnosticOutcome::Failure,
+            DiagnosticOutcome::Success,
+            DiagnosticOutcome::Failure,
+            DiagnosticOutcome::Success
+        ]
     );
-    assert!(matches!(
-        component.snapshot().unwrap().conditions[0].state,
-        DiagnosticConditionState::Active
-    ));
+    assert_eq!(snapshot.events[1].severity, DiagnosticSeverity::Info);
+    let json = serde_json::to_value(snapshot).unwrap();
+    assert!(json["components"][0].get("conditions").is_none());
 }
 
 #[test]
-fn last_recording_handle_closes_component_and_retains_unresolved_evidence() {
+fn last_recording_handle_closes_component_and_retains_observation_history() {
     let service = diagnostics(DiagnosticLimits::default());
     let component = service.register_component("exporter.logs").unwrap();
     let id = component.identity().instance_id;
@@ -156,11 +146,15 @@ fn last_recording_handle_closes_component_and_retains_unresolved_evidence() {
     drop(cloned);
     let retained = reader.component_snapshot(id).unwrap();
     assert!(retained.closed_at.is_some());
-    assert!(matches!(
-        retained.conditions[0].state,
-        DiagnosticConditionState::Active
-    ));
     assert_eq!(retained.counters[0].occurrences.value.get(), 1);
+    let history = reader
+        .snapshot(DiagnosticQuery {
+            component_instance_id: Some(id),
+            ..DiagnosticQuery::default()
+        })
+        .unwrap();
+    assert_eq!(history.events.len(), 1);
+    assert_eq!(history.events[0].outcome, DiagnosticOutcome::Failure);
 }
 
 #[test]
@@ -234,7 +228,7 @@ fn concurrent_occurrences_are_counted_once_even_when_recent_events_are_evicted()
 }
 
 #[test]
-fn counter_overflow_is_explicit_and_does_not_wrap_or_change_on_activation() {
+fn counter_overflow_is_explicit_and_other_codes_do_not_change_it() {
     let service = diagnostics(DiagnosticLimits::default());
     let component = service.register_component("exporter.logs").unwrap();
     let first = component
@@ -258,15 +252,18 @@ fn counter_overflow_is_explicit_and_does_not_wrap_or_change_on_activation() {
     assert_eq!(second.occurrence_count, u64::MAX);
     assert!(second.count_saturated);
     component
-        .activate_condition(
-            "otel.export_failed",
-            DiagnosticSeverity::Error,
-            "still failed",
+        .observe_success(
+            "otel.export_succeeded",
+            "export completed",
+            1,
+            DiagnosticCorrelation::default(),
         )
         .unwrap();
     let view = component.snapshot().unwrap();
     assert_eq!(view.counters[0].occurrences.value.get(), u64::MAX);
     assert!(view.counters[0].occurrences.saturated);
+    assert_eq!(view.counters[1].occurrences.value.get(), 1);
+    assert!(!view.counters[1].occurrences.saturated);
     let json = serde_json::to_value(view).unwrap();
     assert_eq!(
         json["counters"][0]["occurrences"]["value"],
@@ -330,7 +327,7 @@ fn queries_filter_evidence_without_changing_counters_lifetimes_or_history() {
     let service = diagnostics(DiagnosticLimits::default());
     let first = service.register_component("exporter.logs").unwrap();
     let second = service.register_component("exporter.metrics").unwrap();
-    first
+    let failure = first
         .observe_failure(
             "otel.export_failed",
             "unavailable",
@@ -338,7 +335,14 @@ fn queries_filter_evidence_without_changing_counters_lifetimes_or_history() {
             DiagnosticCorrelation::default(),
         )
         .unwrap();
-    first.observe_recovery("otel.export_failed").unwrap();
+    first
+        .observe_success(
+            "otel.export_succeeded",
+            "export completed",
+            2,
+            DiagnosticCorrelation::default(),
+        )
+        .unwrap();
     second
         .observe_failure(
             "otel.export_failed",
@@ -352,15 +356,19 @@ fn queries_filter_evidence_without_changing_counters_lifetimes_or_history() {
         .snapshot(DiagnosticQuery {
             component_instance_id: Some(first.identity().instance_id),
             code: Some("otel.export_failed".to_owned()),
-            active_conditions_only: true,
+            after_sequence: Some(failure.sequence),
             ..DiagnosticQuery::default()
         })
         .unwrap();
     assert_eq!(filtered.components.len(), 1);
-    assert!(filtered.components[0].conditions.is_empty());
+    assert_eq!(filtered.components[0].counters.len(), 1);
     assert_eq!(
         filtered.components[0].counters[0].occurrences.value.get(),
         3
+    );
+    assert!(
+        filtered.events.is_empty(),
+        "the event cursor does not reset cumulative counts"
     );
     let after = service.snapshot(DiagnosticQuery::default()).unwrap();
     assert_eq!(before.sequence, after.sequence);
@@ -460,7 +468,7 @@ fn projections_can_read_and_record_without_deadlocks_or_recursive_projection() {
 }
 
 #[test]
-fn retained_byte_rejection_rolls_back_counter_and_condition_together() {
+fn retained_byte_rejection_rolls_back_counter_and_event_together() {
     let service = diagnostics(DiagnosticLimits {
         max_retained_bytes: 600,
         ..DiagnosticLimits::default()
@@ -474,7 +482,6 @@ fn retained_byte_rejection_rolls_back_counter_and_condition_together() {
     );
     assert_eq!(result, Err(DiagnosticError::ByteCapacity));
     let view = service.snapshot(DiagnosticQuery::default()).unwrap();
-    assert!(view.components[0].conditions.is_empty());
     assert!(view.components[0].counters.is_empty());
     assert!(view.events.is_empty());
     assert_eq!(view.coverage.loss.observations_rejected.value.get(), 1);
@@ -560,8 +567,7 @@ fn codes_accept_numeric_segments_and_reject_unbounded_or_empty_segments() {
 }
 
 #[test]
-fn generic_observations_cannot_claim_recovery_or_recount_it() {
-    use nemo_relay::diagnostics::DiagnosticOutcome;
+fn zero_count_observations_are_rejected_without_mutating_evidence() {
     let service = diagnostics(DiagnosticLimits::default());
     let component = service.register_component("exporter.logs").unwrap();
     component
@@ -573,14 +579,19 @@ fn generic_observations_cannot_claim_recovery_or_recount_it() {
         )
         .unwrap();
     let before = service.snapshot(DiagnosticQuery::default()).unwrap();
-    for (count, activate_condition) in [(1, true), (1, false), (0, false)] {
-        let mut invalid =
-            DiagnosticObservation::failure("otel.export_failed", "claims recovery", count);
-        invalid.outcome = DiagnosticOutcome::Recovery;
-        invalid.activate_condition = activate_condition;
+    for observation in [
+        DiagnosticObservation::failure("otel.zero_failure", "no occurrences", 0),
+        DiagnosticObservation::success("otel.zero_success", "no occurrences", 0),
+        DiagnosticObservation::occurrence(
+            "otel.zero_observation",
+            DiagnosticSeverity::Info,
+            "no occurrences",
+            0,
+        ),
+    ] {
         assert_eq!(
-            component.record(invalid),
-            Err(DiagnosticError::InvalidOutcome)
+            component.record(observation),
+            Err(DiagnosticError::InvalidCount)
         );
     }
     let after = service.snapshot(DiagnosticQuery::default()).unwrap();
@@ -588,21 +599,7 @@ fn generic_observations_cannot_claim_recovery_or_recount_it() {
     assert_eq!(before.components, after.components);
     assert_eq!(before.events, after.events);
     assert_eq!(after.coverage.loss.observations_rejected.value.get(), 3);
-    assert!(matches!(
-        after.components[0].conditions[0].state,
-        DiagnosticConditionState::Active
-    ));
-    component
-        .observe_recovery("otel.export_failed")
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        component.snapshot().unwrap().counters[0]
-            .occurrences
-            .value
-            .get(),
-        2
-    );
+    assert_eq!(after.coverage.loss.keys_rejected.value.get(), 0);
 }
 
 #[test]
@@ -736,8 +733,8 @@ fn projection_chain_depth_is_bounded_and_later_independent_delivery_still_works(
 }
 
 #[test]
-fn retained_byte_budget_remains_exact_across_replacements_recovery_and_rollback() {
-    const BUDGET: usize = 4_000;
+fn retained_byte_budget_remains_exact_across_replacements_and_rollback() {
+    const BUDGET: usize = 3_000;
     let service = diagnostics(DiagnosticLimits {
         max_components: 2,
         max_events: 4,
@@ -777,9 +774,6 @@ fn retained_byte_budget_remains_exact_across_replacements_recovery_and_rollback(
                 assert_eq!(count, previous_count);
             }
             unexpected => panic!("unexpected recording outcome: {unexpected:?}"),
-        }
-        if index % 5 == 0 {
-            let _ = component.observe_recovery("test.failed");
         }
         if index % 11 == 0 {
             let slot = index % 2;

@@ -784,7 +784,7 @@ fn ensure_dynamic_metric_pipeline(
     let config = config.clone();
     let max_instruments = config.max_instruments;
     let cardinality_limit = config.cardinality_limit;
-    // Resource providers own independent current conditions. Only their materialized
+    // Resource providers own independent export evidence. Only their materialized
     // legacy failure total is shared with the subscriber's base provider.
     let diagnostics = Arc::new(diagnostics.for_pipeline());
     let (provider, runtime) =
@@ -881,9 +881,10 @@ impl<E: PushMetricExporter> PushMetricExporter for DiagnosticMetricExporter<E> {
                 );
             }
         } else {
-            self.diagnostics
-                .runtime_diagnostics
-                .record_recovery("otel.metrics_export_failed");
+            self.diagnostics.runtime_diagnostics.record_success(
+                "otel.metrics_export_succeeded",
+                "OpenTelemetry metric export succeeded",
+            );
         }
         result
     }

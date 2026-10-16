@@ -4,17 +4,19 @@
 //! Unit tests for Relay OTLP metric routing and recording.
 
 #[test]
-fn metric_resource_pipeline_recovery_is_scoped_while_legacy_totals_are_shared() {
+fn metric_pipeline_success_preserves_failure_evidence_and_legacy_totals() {
     let field = format!("metrics.test.{}", uuid::Uuid::now_v7());
     let shared = SignalRuntimeDiagnostics::new_for_signal("metrics", Some(field.clone()));
     let base = MetricDeliveryDiagnostics::new("collector".into(), shared.clone());
-    let failed = base.for_pipeline();
-    let healthy = base.for_pipeline();
-    failed.record_export_failure(&"first pipeline failed");
-    healthy.record_export_failure(&"second pipeline failed");
-    healthy
-        .runtime_diagnostics
-        .record_recovery("otel.metrics_export_failed");
+    let first = base.for_pipeline();
+    let second = base.for_pipeline();
+    first.record_export_failure(&"first pipeline failed");
+    second.record_export_failure(&"second pipeline failed");
+    let legacy_before = shared.snapshot();
+    second.runtime_diagnostics.record_success(
+        "otel.metrics_export_succeeded",
+        "OpenTelemetry metric export succeeded",
+    );
 
     let query = crate::diagnostics::DiagnosticQuery {
         component_key: Some(crate::diagnostics::legacy_component_key(
@@ -23,55 +25,79 @@ fn metric_resource_pipeline_recovery_is_scoped_while_legacy_totals_are_shared() 
         )),
         ..Default::default()
     };
-    let snapshot = crate::diagnostics::Diagnostics::process_default()
+    let before = crate::diagnostics::Diagnostics::process_default()
         .snapshot(query.clone())
         .unwrap();
-    assert_eq!(snapshot.components.len(), 3);
+    assert_eq!(before.components.len(), 3);
+    let failed_components = before
+        .components
+        .iter()
+        .filter(|component| {
+            component
+                .counters
+                .iter()
+                .any(|counter| counter.code == "otel.metrics_export_failed")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(failed_components.len(), 2);
+    for component in &failed_components {
+        let failure = component
+            .counters
+            .iter()
+            .find(|counter| counter.code == "otel.metrics_export_failed")
+            .unwrap();
+        assert_eq!(failure.occurrences.value.get(), 1);
+        assert_eq!(failure.epoch, component.identity.instance_id);
+    }
     assert_eq!(
-        snapshot
+        before
             .components
             .iter()
-            .flat_map(|component| &component.conditions)
-            .filter(|condition| matches!(
-                condition.state,
-                crate::diagnostics::DiagnosticConditionState::Active
-            ))
-            .count(),
+            .flat_map(|component| &component.counters)
+            .filter(|counter| counter.code == "otel.metrics_export_succeeded")
+            .map(|counter| counter.occurrences.value.get())
+            .sum::<u64>(),
         1
     );
     assert_eq!(
         base.failure_summary().as_deref(),
         Some("otel.metrics_export_failed (2)")
     );
-    assert_eq!(
-        shared
-            .snapshot()
-            .get("otel.metrics_export_failed")
-            .unwrap()
-            .count,
-        2
-    );
+    assert_eq!(shared.snapshot(), legacy_before);
 
-    failed
-        .runtime_diagnostics
-        .record_recovery("otel.metrics_export_failed");
-    let snapshot = crate::diagnostics::Diagnostics::process_default()
+    first.runtime_diagnostics.record_success(
+        "otel.metrics_export_succeeded",
+        "OpenTelemetry metric export succeeded",
+    );
+    let after = crate::diagnostics::Diagnostics::process_default()
         .snapshot(query)
         .unwrap();
-    assert!(
-        snapshot
+    for previous in failed_components {
+        let component = after
             .components
             .iter()
-            .flat_map(|component| &component.conditions)
-            .all(|condition| matches!(
-                condition.state,
-                crate::diagnostics::DiagnosticConditionState::Recovered { .. }
-            ))
-    );
+            .find(|component| component.identity == previous.identity)
+            .unwrap();
+        assert_eq!(component.counters.len(), 2);
+        let failure = component
+            .counters
+            .iter()
+            .find(|counter| counter.code == "otel.metrics_export_failed")
+            .unwrap();
+        assert!(previous.counters.contains(failure));
+        let success = component
+            .counters
+            .iter()
+            .find(|counter| counter.code == "otel.metrics_export_succeeded")
+            .unwrap();
+        assert_eq!(success.occurrences.value.get(), 1);
+        assert_eq!(success.epoch, component.identity.instance_id);
+    }
     assert_eq!(
         base.failure_summary().as_deref(),
         Some("otel.metrics_export_failed (2)")
     );
+    assert_eq!(shared.snapshot(), legacy_before);
 }
 
 use super::*;

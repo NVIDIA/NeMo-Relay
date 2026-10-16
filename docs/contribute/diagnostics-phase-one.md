@@ -22,14 +22,35 @@ phases; daemon collection, language binding exposure, and dynamic-plugin RPC
 extensions are also deferred. The existing worker plugin protocol is distinct
 from the daemon's Relay worker process.
 
+### Evidence and Health Ownership
+
+The embedding application or deployment owner owns health classification,
+readiness, alerting, and recovery policy. Relay records observed operation
+outcomes, occurrence counts, timestamps, registration lifetimes, and coverage.
+A diagnostic code identifies an observation; it is not an open issue that the
+recorder must later close.
+
+This revision removes the earlier active/recovered condition model from the
+phase-one contracts and implementation. Failure recording has no activation
+side effect, and the common service has no recovery operation or active-condition
+query. A subsequent successful operation is independent evidence. It leaves
+earlier failure counts and events intact and does not establish that previously
+lost data was delivered.
+
+| Relay records | The owner decides |
+| --- | --- |
+| An export attempt failed, followed by a successful attempt. | Whether the exporter is sufficiently reliable for this application. |
+| A sink rejected a write or a record was dropped. | Whether that loss affects application health or readiness. |
+| A recording registration was created, closed, or replaced. | Whether the component is required and what action to take. |
+| Evidence is unavailable, truncated, evicted, or saturated. | Whether the available evidence supports a health decision. |
+
 ## Implementation Overview: Shared Contracts in Types
 
 The `nemo-relay-types` package exposes `nemo_relay_types::diagnostics`, the
 vocabulary that producers and consumers share. A producer reports evidence
 about a component; a consumer receives it together with identity and coverage.
-The same snapshot can later be represented in a binding or an HTTP response without
-making those adapters responsible for defining what a failure, count, or
-recovery means.
+The same snapshot can later be represented in a binding or an HTTP response
+while preserving observed outcomes, counting semantics, and evidence coverage.
 
 These contracts are serializable data. Registration, synchronization, storage
 limits, and callback delivery belong to core. Consequently, constructing or
@@ -44,7 +65,7 @@ configuration to initialize.
 | `SourceIdentity` | Identifies one process or explicitly owned runtime incarnation. | A new execution has a different UUID even if its PID is reused. |
 | `ComponentIdentity` | Identifies one registration within that source. | Replacing an exporter preserves its logical key but changes its instance and generation. |
 | `DiagnosticEvent` | Describes one accepted observation, subject to recent-history retention. | An export attempt failed at a particular source sequence. |
-| `DiagnosticCondition` | Tracks an active or explicitly recovered condition. | An exporter failure remains unresolved until success is observed. |
+| `DiagnosticOutcome` | Describes an observed success or failure, or an unspecified outcome. | A successful export describes that attempt; earlier failures remain recorded. |
 | `DiagnosticCounter` | Retains cumulative occurrences within a component's counter epoch. | Ten attempts failed even if only the latest events remain in history. |
 | `DiagnosticCoverage` | Describes availability, retention boundaries, and evidence loss. | An empty event list might reflect eviction or query limits. |
 
@@ -74,15 +95,14 @@ struct ComponentSnapshot {
     identity: ComponentIdentity,
     registered_at: ObservationTime,
     closed_at: Option<ObservationTime>,
-    conditions: Vec<DiagnosticCondition>,
     counters: Vec<DiagnosticCounter>,
 }
 ```
 
-Events, conditions, and counters answer separate questions: what happened
-recently, what remains unresolved, and how often something happened. Reading a
-snapshot does not add another occurrence. An observed recovery changes the
-condition and adds a recovery event without resetting the historical count.
+Events describe recent observations; counters retain cumulative occurrences
+for each component registration and code. Producers use distinct failure and
+success codes when those outcomes need separate counts. Reading a snapshot
+adds no occurrence, and recording a success resets no failure count.
 Repeatedly collecting a cumulative counter replaces the previously collected
 value for that epoch; adding every polled value would count the same failures
 again.
@@ -95,8 +115,8 @@ service produces available or never-observed views; the contracts also provide
 unavailable and unsupported states for future adapters.
 
 Implementation source:
-[identities, evidence, and snapshot contracts](https://github.com/bbednarski9/NeMo-Relay/blob/935b05aa/crates/types/src/diagnostics.rs).
-Source links in this overview refer to the phase-one implementation commit.
+[identities, evidence, and snapshot contracts](https://github.com/bbednarski9/NeMo-Relay/blob/bbednarski/diagnostics-phase-one/crates/types/src/diagnostics.rs).
+Source links in this overview follow the phase-one implementation branch.
 
 ## Implementation Overview: Recording, State, Queries, and Projections in Core
 
@@ -118,7 +138,7 @@ remain in recent history.
 ```mermaid
 flowchart TB
     Recorder["ComponentRecorder"] --> Accept["Validate and accept<br/>under the state lock"]
-    Accept --> State["Bounded component state<br/>conditions, counters,<br/>recent events"]
+    Accept --> State["Bounded evidence<br/>counters, recent events,<br/>registration lifetimes"]
     State --> Reader["DiagnosticsReader<br/>snapshot and coverage"]
     Accept -->|After unlocking| Projection["Optional projection<br/>callbacks"]
 
@@ -156,8 +176,14 @@ let snapshot = reader.snapshot(DiagnosticQuery {
     ..DiagnosticQuery::default()
 })?;
 
-// Invoke only after observing a successful export or explicit recovery signal.
-exporter.observe_recovery("otel.logs_export_failed")?;
+// Record only after observing this successful export attempt.
+exporter.observe_success(
+    "otel.logs_export_succeeded",
+    "The export attempt succeeded",
+    1,
+    DiagnosticCorrelation::default(),
+)?;
+// The earlier failure counter remains unchanged.
 
 drop(exporter);
 // The final recording handle closes this registration.
@@ -165,8 +191,9 @@ drop(exporter);
 ```
 
 Cloned recorders share one registration lease. Explicit `close()` or dropping
-the final recorder closes that registration; neither operation recovers an
-unresolved condition. Registering the same logical key again creates a fresh
+the final recorder closes that recording registration and retains its bounded
+evidence. Closure does not classify the underlying component's health or prove
+that a process exited. Registering the same logical key again creates a fresh
 instance and counter epoch. Explicit ownership supports isolated runtime
 contexts; the optional lazy process default accommodates existing constructors
 that do not yet accept a context.
@@ -178,24 +205,24 @@ wall-clock timestamps coincide or change.
 
 ### One Recording Boundary and Bounded State
 
-An observation contains a code, severity, outcome, safe message, occurrence
-delta, optional correlation, and an explicit condition-activation flag. The
-recording boundary validates that input and updates the component's aggregate
-evidence under one lock.
+An observation contains a code, severity, outcome, safe message, positive
+occurrence delta, and optional correlation. Severity classifies the observation
+for output; it does not establish a component health state. The recording
+boundary validates the input and updates aggregate evidence under one lock.
 
-- `observe_failure` counts the supplied occurrences and activates a condition.
-- `observe_occurrence` counts evidence without asserting a persistent condition.
-- `activate_condition` can update a condition with zero additional occurrences.
-- `observe_recovery` resolves an existing active condition without adding a
-  failure occurrence. Missing or already recovered conditions are a no-op.
+- `observe_failure` records the supplied occurrences with a failure outcome.
+- `observe_success` records the supplied occurrences with a success outcome.
+- `observe_occurrence` records evidence with an unspecified operation outcome.
+- All three require a positive count. Codes remain independent; success does
+  not clear, resolve, or reset any earlier observation.
 
 The service bounds component registrations, distinct codes, recent history,
 text and correlation sizes, retained encoded bytes, snapshot bytes, and
 attached projections. Count and byte budgets work together: history can be
-evicted while cumulative counters and active conditions remain. Closed
+evicted while cumulative counters remain. Closed
 components can be evicted to admit a registration; live registrations are not
 silently displaced. If an observation's component update cannot fit, its
-counter and condition changes are rolled back. Reclaiming space can already
+counter changes are rolled back. Reclaiming space can already
 have evicted history, and reserved coverage counters report those losses.
 
 Recording recalculates encoded size for the changed component and new event,
@@ -209,8 +236,7 @@ and does not redact secrets or application payloads.
 A reader filters a consistent copy of retained evidence into
 `DiagnosticSnapshot`. Component key, registration ID, and diagnostic code
 select the evidence of interest. `after_sequence` filters recent events while
-counters remain cumulative. `active_conditions_only` filters conditions while
-leaving matching events and counters available. Response-size truncation is
+counters remain cumulative. Response-size truncation is
 reported separately from loss in the underlying store. Each read has a new
 capture time and does not mutate producer state.
 
@@ -244,7 +270,7 @@ already copied by a publisher can still finish. Adapters that need stronger
 shutdown ordering must supply their own delivery gate.
 
 Implementation source:
-[diagnostic service](https://github.com/bbednarski9/NeMo-Relay/blob/935b05aa/crates/core/src/diagnostics/mod.rs),
+[diagnostic service](https://github.com/bbednarski9/NeMo-Relay/blob/bbednarski/diagnostics-phase-one/crates/core/src/diagnostics/mod.rs),
 particularly `register_component`, `record_inner`, `DiagnosticsReader::snapshot`,
 and `publish`.
 
@@ -296,11 +322,11 @@ flowchart TB
 The typed-event path respects logger severity and sink filters. Those filters
 control output without undoing the diagnostic observation. Existing ordinary
 operational log calls continue through the logger; they are not parsed into
-diagnostic conditions.
+typed diagnostic observations.
 
 The sink-failure path records directly without invoking projections, preventing
 a failed sink from receiving a new record about its own failure. It still
-updates recent history, counters, and applicable conditions. The diagram's
+updates recent history and counters with the observed outcome. The diagram's
 state-only arrow abbreviates a recorder call rather than a second storage API.
 
 ```rust
@@ -328,8 +354,8 @@ Initialization, write, flush, queue-drop, and shutdown evidence have distinct
 codes. Queue drops are historical losses; a dropped record does not establish
 that the queue remains full. Sink messages exclude raw backend errors, paths,
 and dropped payloads. The sink API provides failure callbacks without
-per-record success acknowledgments, so the adapter cannot infer delivery
-recovery.
+per-record success acknowledgments, so the adapter records only the outcomes
+that interface exposes. Absence of a new sink error establishes no success.
 
 Diagnostic registration and projection attachment are best effort: exhausting
 their budgets cannot prevent an otherwise valid logger from starting.
@@ -339,34 +365,33 @@ logging constructors retain their behavior. Before shutdown drains sinks, a
 logging-specific gate detaches the projection and waits for
 running delivery. An identity check suppresses superseded logger projections
 during reconfiguration. Replacement creates new component identities while old
-unresolved evidence remains retained under its original generation. This phase
+historical evidence remains retained under its original generation. This phase
 adds no whole-process shutdown deadline.
 
 Implementation sources:
-[runtime composition and shutdown](https://github.com/bbednarski9/NeMo-Relay/blob/935b05aa/crates/core/src/logging/mod.rs),
-[sink evidence and typed-event projection](https://github.com/bbednarski9/NeMo-Relay/blob/935b05aa/crates/core/src/logging/diagnostics.rs).
+[runtime composition and shutdown](https://github.com/bbednarski9/NeMo-Relay/blob/bbednarski/diagnostics-phase-one/crates/core/src/logging/mod.rs),
+[sink evidence and typed-event projection](https://github.com/bbednarski9/NeMo-Relay/blob/bbednarski/diagnostics-phase-one/crates/core/src/logging/diagnostics.rs).
 
-### OpenTelemetry Adapter: Pipeline Conditions and Compatibility Totals
+### OpenTelemetry Adapter: Pipeline Observations and Compatibility Totals
 
 `SignalRuntimeDiagnostics` connects subscriber diagnostics and exporter
 delivery observations to core. Exporter pipelines receive independent
 component registrations while sharing the subscriber's existing bounded
 compatibility cache. This lets a subscriber retain its aggregate failure
-report while core identifies which pipeline still has an unresolved failure.
+report while core attributes each observed export outcome to its pipeline.
 
 ```mermaid
 flowchart TB
-    A["Pipeline A"] --> CA["Core component A<br/>condition and epoch"]
-    B["Pipeline B"] --> CB["Core component B<br/>condition and epoch"]
-    A --> Legacy["Subscriber cache<br/>compatibility totals"]
-    B --> Legacy
-    Legacy -->|Input delta, projection only| Plugin["Active plugin report"]
+    Result["Exporter result<br/>one pipeline instance"] --> Core["Attempt shared recording<br/>with pipeline identity"]
+    Core -->|Failure delta only| Legacy["Subscriber failure cache"]
+    Legacy -->|Projection only| Plugin["Active plugin report"]
 
     classDef shared fill:#FFE0B2,stroke:#D97706,color:#111827;
-    class CA,CB shared;
+    class Core shared;
 ```
 
-Each pipeline uses a single shared recording boundary. The adapter then
+Each pipeline uses a single shared recording boundary for observed failures
+and successes. For failures, the adapter then
 updates the existing subscriber cache and, when applicable, mirrors the
 observation into the active plugin report through a projection-only helper.
 The forwarded count is the input occurrence delta, never the cache's cumulative
@@ -381,7 +406,7 @@ let pipeline_a = subscriber_diagnostics.for_exporter("observability.otel.logs.ex
 let pipeline_b = subscriber_diagnostics.for_exporter("observability.otel.logs.exporter");
 
 fn record_export_failure(pipeline, code, message, count) {
-    // Failure activates a condition for known exporter-delivery codes.
+    // Record this failure with no standing fault or health classification.
     try_record_without_projection(pipeline.component, code, message, count);
 
     // These compatibility updates never invoke core recording again.
@@ -392,17 +417,26 @@ fn record_export_failure(pipeline, code, message, count) {
     }
 }
 
-fn on_observed_export_success(pipeline, code) {
-    pipeline.component.observe_recovery_without_projection(code);
-    // Historical compatibility counts remain unchanged.
+fn on_observed_export_success(pipeline) {
+    pipeline.record_success(
+        "otel.logs_export_succeeded",
+        "The export attempt succeeded",
+    );
+    // This state-only observation changes no legacy failure report or total.
 }
 ```
 
-Success in pipeline B resolves only B's condition. It cannot resolve A's
-failure, even when both pipelines contribute to the same subscriber report.
-This ownership also applies to metric providers created for different dynamic
-resources. Other subscriber diagnostics remain counted observations unless the
-adapter explicitly recognizes a persistent export-failure condition.
+Successful trace, log, and metric exports use distinct success codes alongside
+the existing failure codes. A success in pipeline B is evidence about B's
+operation and changes none of A's history or counts. This attribution also
+applies to metric providers created for different dynamic resources.
+
+Success observations bypass the legacy failure cache and plugin-report mirror.
+Each successful exporter call contributes one occurrence and uses the same
+bounded history budget as other observations. Eviction leaves retained
+cumulative counters intact and is visible in coverage metadata.
+They describe the exporter call's successful return; they do not acknowledge
+delivery of a previously failed batch or establish collector durability.
 
 Compatibility caches continue counting input occurrence deltas if shared
 storage rejects a write. Shared coverage reports that rejection; the legacy
@@ -415,8 +449,8 @@ that does not expose it. That remains an exporter instrumentation gap rather
 than an implied guarantee of the common state API.
 
 Implementation sources:
-[signal recorder, compatibility cache, and pipeline ownership](https://github.com/bbednarski9/NeMo-Relay/blob/935b05aa/crates/core/src/observability/otel_signal.rs),
-[metric resource pipelines](https://github.com/bbednarski9/NeMo-Relay/blob/935b05aa/crates/core/src/observability/otel_metrics.rs).
+[signal recorder, compatibility cache, and pipeline ownership](https://github.com/bbednarski9/NeMo-Relay/blob/bbednarski/diagnostics-phase-one/crates/core/src/observability/otel_signal.rs),
+[metric resource pipelines](https://github.com/bbednarski9/NeMo-Relay/blob/bbednarski/diagnostics-phase-one/crates/core/src/observability/otel_metrics.rs).
 
 ### Plugin Adapter: Process Evidence Across Configuration Lifetimes
 
@@ -445,15 +479,13 @@ fn record_active_plugin_runtime_diagnostic(diagnostic) {
     let recorder = resolve_component_lease(&diagnostic.component, diagnostic.field.as_deref());
 
     if let Some(recorder) = recorder {
-        let mut observation = Observation::occurrence(
+        let observation = Observation::failure(
             normalize_legacy_code(&diagnostic.code),
-            DiagnosticSeverity::Error,
             diagnostic.message.clone(),
             diagnostic.count,
         );
-        observation.outcome = DiagnosticOutcome::Failure;
         let _ = recorder.record_without_projection(observation);
-        // An occurrence does not automatically activate a persistent condition.
+        // This records an occurrence without interpreting current health.
     }
 
     // Preserve active-only reports even when shared recording was rejected.
@@ -468,15 +500,15 @@ The projection preserves the existing code-aggregated runtime snapshot and
 the detailed report grouped by code, component, and field. Neither view becomes
 a complete process history. A missing active configuration suppresses report
 updates while still allowing shared evidence to be recorded. Generic plugin
-failure observations do not invent persistent conditions or recovery signals.
+failure observations retain only the supplied evidence and occurrence delta.
 Existing legacy session identifiers remain in their established report fields
 and are not copied into the new shared correlation fields.
 The adapter relies on core's reported registration limits, so it adds no
 silent recorder-capacity boundary of its own.
 
 Implementation sources:
-[recording and report boundaries](https://github.com/bbednarski9/NeMo-Relay/blob/935b05aa/crates/core/src/plugin.rs),
-[legacy identity and code normalization](https://github.com/bbednarski9/NeMo-Relay/blob/935b05aa/crates/core/src/diagnostics/compatibility.rs).
+[recording and report boundaries](https://github.com/bbednarski9/NeMo-Relay/blob/bbednarski/diagnostics-phase-one/crates/core/src/plugin.rs),
+[legacy identity and code normalization](https://github.com/bbednarski9/NeMo-Relay/blob/bbednarski/diagnostics-phase-one/crates/core/src/diagnostics/compatibility.rs).
 
 ## Bounds and Wire Contract
 
@@ -504,17 +536,21 @@ transport negotiation.
 
 Focused contract tests cover lossless integers, schema bounds, UUID/time
 formats, and evidence availability. Core tests cover independent pre-logging
-contexts, component replacement, explicit recovery, concurrency, byte/count
+contexts, component replacement, independent success/failure evidence, concurrency, byte/count
 limits, projection reentrancy and failures, and retained closed evidence.
 Logging and existing producer tests cover strict startup failures, independent
 sink diagnostics, exact queue losses, projection filtering/lifetime, and
 compatibility views without a second recorded occurrence.
 
-The phase-one implementation passed the canonical `just test-rust` suite: 5,961 tests
-passed with none skipped. Focused tests also covered the types schema contract
-(nine tests) and the core foundation (18 tests). The Rust run explicitly unset
-inherited `NEMO_RELAY_LOG` and `NEMO_RELAY_LOG_STDERR_FORMAT` values because
-unrelated CLI tests require their default logging configuration.
+This revision passed the canonical `just test-rust` suite: 5,962 tests passed
+with none skipped. Focused runs also passed nine types/schema contract tests,
+18 core foundation tests, and 89 selected adapter/report tests. They cover
+evidence-only serialization, failures followed by independent successes,
+unchanged failure counts, retained closed registrations, bounded rollback,
+legacy report compatibility, and single recording of rejected metric marks.
+The canonical Rust run unsets inherited `NEMO_RELAY_LOG` and
+`NEMO_RELAY_LOG_STDERR_FORMAT` values because unrelated CLI tests require their
+default logging configuration.
 
 `just docs` generated the ignored API references and passed documentation and
 link checks. Fern skipped its authenticated missing-redirect check because no

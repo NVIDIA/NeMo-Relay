@@ -6,9 +6,9 @@
 use chrono::{DateTime, Utc};
 use nemo_relay_types::diagnostics::{
     ComponentIdentity, ComponentSnapshot, DIAGNOSTIC_SCHEMA_VERSION, DiagnosticAvailability,
-    DiagnosticCondition, DiagnosticConditionState, DiagnosticCorrelation, DiagnosticCount,
-    DiagnosticCounter, DiagnosticCoverage, DiagnosticEvent, DiagnosticNumber, DiagnosticOutcome,
-    DiagnosticRetention, DiagnosticSeverity, DiagnosticSnapshot, SourceIdentity,
+    DiagnosticCorrelation, DiagnosticCount, DiagnosticCounter, DiagnosticCoverage, DiagnosticEvent,
+    DiagnosticNumber, DiagnosticOutcome, DiagnosticRetention, DiagnosticSeverity,
+    DiagnosticSnapshot, SourceIdentity,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -33,14 +33,6 @@ fn snapshot() -> DiagnosticSnapshot {
         last_observed_at: observed_at(),
         last_message: "Collector is unavailable".into(),
     };
-    let condition = DiagnosticCondition {
-        code: counter.code.clone(),
-        severity: DiagnosticSeverity::Error,
-        message: counter.last_message.clone(),
-        first_observed_at: observed_at(),
-        last_observed_at: observed_at(),
-        state: DiagnosticConditionState::Active,
-    };
     DiagnosticSnapshot {
         schema_version: DIAGNOSTIC_SCHEMA_VERSION,
         source: SourceIdentity {
@@ -55,7 +47,6 @@ fn snapshot() -> DiagnosticSnapshot {
             identity: component.clone(),
             registered_at: observed_at(),
             closed_at: Some(observed_at()),
-            conditions: vec![condition],
             counters: vec![counter.clone()],
         }],
         events: vec![DiagnosticEvent {
@@ -139,11 +130,8 @@ fn snapshots_preserve_identity_epochs_correlation_and_lossless_counts() {
         json!(u64::MAX.to_string())
     );
     assert_eq!(wire["events"][0]["count"], json!("9007199254740993"));
-    assert_eq!(
-        wire["components"][0]["conditions"][0]["state"],
-        json!({"status": "active"})
-    );
-    // A closed component can retain an unresolved condition.
+    assert!(wire["components"][0].get("conditions").is_none());
+    // A closed component retains observed evidence and cumulative counters.
     assert!(wire["components"][0]["closed_at"].is_string());
     wire["future_additive_field"] = json!({"producer": "newer"});
     let actual: DiagnosticSnapshot = serde_json::from_value(wire).unwrap();
@@ -151,22 +139,21 @@ fn snapshots_preserve_identity_epochs_correlation_and_lossless_counts() {
 }
 
 #[test]
-fn recovery_requires_a_valid_observed_timestamp() {
-    let recovered = DiagnosticConditionState::Recovered {
-        recovered_at: observed_at(),
-    };
-    let wire = serde_json::to_value(&recovered).unwrap();
-    assert_eq!(wire["status"], json!("recovered"));
-    assert_eq!(
-        serde_json::from_value::<DiagnosticConditionState>(wire).unwrap(),
-        recovered
-    );
-    for invalid in [
-        json!({"status": "recovered"}),
-        json!({"status": "recovered", "recovered_at": "not-a-time"}),
-        json!({"status": "healthy"}),
+fn outcomes_describe_observed_operations_without_condition_state() {
+    for (outcome, wire_name) in [
+        (DiagnosticOutcome::Unknown, "unknown"),
+        (DiagnosticOutcome::Success, "success"),
+        (DiagnosticOutcome::Failure, "failure"),
     ] {
-        assert!(serde_json::from_value::<DiagnosticConditionState>(invalid).is_err());
+        let wire = serde_json::to_value(outcome).unwrap();
+        assert_eq!(wire, json!(wire_name));
+        assert_eq!(
+            serde_json::from_value::<DiagnosticOutcome>(wire).unwrap(),
+            outcome
+        );
+    }
+    for invalid in ["recovery", "healthy", "degraded"] {
+        assert!(serde_json::from_value::<DiagnosticOutcome>(json!(invalid)).is_err());
     }
 }
 
