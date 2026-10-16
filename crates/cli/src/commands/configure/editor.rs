@@ -322,7 +322,8 @@ impl ConfigDocument {
     }
 
     fn sinks_mut(&mut self) -> Result<&mut ArrayOfTables, CliError> {
-        let logging = self.section_mut(self.logging_section)?;
+        let section = self.logging_section;
+        let logging = self.section_mut(section)?;
         if logging.get("sinks").is_none() {
             logging.insert("sinks", Item::ArrayOfTables(ArrayOfTables::new()));
         }
@@ -330,9 +331,9 @@ impl ConfigDocument {
             .get_mut("sinks")
             .and_then(Item::as_array_of_tables_mut)
             .ok_or_else(|| {
-                CliError::Config(
-                    "logging.sinks must be an array of tables before it can be edited".into(),
-                )
+                CliError::Config(format!(
+                    "{section}.sinks must be an array of tables before it can be edited"
+                ))
             })
     }
 

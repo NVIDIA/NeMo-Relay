@@ -146,6 +146,18 @@ fn malformed_sections_and_missing_sinks_report_errors() {
     );
     assert!(malformed.add_sink("relay.log".into()).is_err());
 
+    for section in ["logging", "daemon.logging"] {
+        let mut malformed = document(&format!("[{section}]\nsinks = \"invalid\"\n"));
+        malformed.logging_section = section;
+        let error = malformed.add_sink("relay.log".into()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "configuration error: {section}.sinks must be an array of tables before it can be edited"
+            )
+        );
+    }
+
     let mut document = document("");
     assert!(document.remove_sink(0).is_err());
     assert!(document.sink_has_key(0, "path").is_err());
