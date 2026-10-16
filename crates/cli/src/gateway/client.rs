@@ -251,11 +251,15 @@ fn post_authenticated(
                 )
             })
         });
-    if http_status(&tunnel_headers) != Some(101)
-        || (!daemon && !proof_valid)
+    if http_status(&tunnel_headers) != Some(101) {
+        return Err(VerifiedHttpError::before_readiness(
+            "gateway did not establish an authenticated Relay TLS tunnel",
+        ));
+    }
+    if (!daemon && !proof_valid)
         || http_header(&tunnel_headers, "upgrade") != Some("nemo-relay-tls")
     {
-        return Err(VerifiedHttpError::before_readiness(
+        return Err(VerifiedHttpError::before_payload(
             "gateway did not establish an authenticated Relay TLS tunnel",
         ));
     }

@@ -1131,6 +1131,7 @@ enum FakeBootstrapProof {
     Missing,
     Wrong,
     Valid,
+    ValidWithWrongUpgrade,
 }
 
 fn bootstrap_request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
@@ -1317,7 +1318,7 @@ fn fake_bootstrap_proof_header(
         FakeBootstrapProof::Wrong => {
             "X-NeMo-Relay-Bootstrap-Proof: hmac-sha256:0000000000000000000000000000000000000000000000000000000000000000\r\n".into()
         }
-        FakeBootstrapProof::Valid => format!(
+        FakeBootstrapProof::Valid | FakeBootstrapProof::ValidWithWrongUpgrade => format!(
             "X-NeMo-Relay-Bootstrap-Proof: {}\r\n",
             fake_bootstrap_proof(
                 &std::fs::read(key_path).unwrap(),
@@ -1380,10 +1381,15 @@ fn handle_fake_bootstrap_tunnel(
         nonce,
         stream.local_addr().unwrap(),
     );
+    let upgrade = if matches!(proof, FakeBootstrapProof::ValidWithWrongUpgrade) {
+        "unexpected-protocol"
+    } else {
+        "nemo-relay-tls"
+    };
     stream
         .write_all(
             format!(
-                "HTTP/1.1 101 Switching Protocols\r\n{proof_header}X-NeMo-Relay-Instance-Id: test-instance\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
+                "HTTP/1.1 101 Switching Protocols\r\n{proof_header}X-NeMo-Relay-Instance-Id: test-instance\r\nConnection: upgrade\r\nUpgrade: {upgrade}\r\nContent-Length: 0\r\n\r\n"
             )
             .as_bytes(),
         )
@@ -5292,7 +5298,7 @@ fn cli_hook_forward_preserves_large_utf8_payload_through_verified_tls() {
         .unwrap()
         .write_all(payload.as_bytes())
         .unwrap();
-    let output = child.wait_with_output().unwrap();
+    let output = wait_child_with_output(child);
     assert!(
         output.status.success(),
         "{}",
@@ -5421,12 +5427,26 @@ fn cli_forward_only_preserves_readiness_fallback_before_authentication() {
 }
 
 #[test]
-fn cli_forward_only_unfenced_hook_rejects_a_foreign_listener_before_posting() {
-    let (output, requests) = run_forward_only_fake_bootstrap_listener(FakeBootstrapProof::Missing);
+fn cli_forward_only_rejects_invalid_tunnel_responses_without_readiness_fallback() {
+    for proof in [
+        FakeBootstrapProof::Missing,
+        FakeBootstrapProof::Wrong,
+        FakeBootstrapProof::ValidWithWrongUpgrade,
+    ] {
+        let (output, requests) = run_forward_only_fake_bootstrap_listener(proof);
 
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("not a compatible"));
-    assert!(requests.iter().all(|request| !request.starts_with("POST ")));
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("gateway did not establish an authenticated Relay TLS tunnel")
+        );
+        assert_eq!(
+            requests.len(),
+            1,
+            "invalid tunnel must not retry: {requests:#?}"
+        );
+        assert!(requests[0].starts_with("GET /bootstrap/tunnel "));
+    }
 }
 
 #[test]
