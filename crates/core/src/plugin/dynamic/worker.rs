@@ -500,6 +500,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("unknown panic payload")
 }
 
+/// Starts and validates a worker, then stores its settings for this activation.
 fn load_one_worker_plugin(
     spec: &WorkerPluginLoadSpec,
     defer_registration: bool,
@@ -1558,6 +1559,7 @@ impl WorkerPluginInstance {
         }
     }
 
+    /// Shares the worker connection and copies its callback deadline settings.
     fn clone_for_callback(&self) -> WorkerPluginCallback {
         WorkerPluginCallback {
             callback_timeouts: self.callback_timeouts.clone(),
@@ -1610,6 +1612,7 @@ struct WorkerGateCallback {
 }
 
 impl WorkerGateCallback {
+    /// Calls a worker-owned conditional guardrail while its activation is available.
     fn invoke(
         &self,
         callback_name: &str,
@@ -2338,6 +2341,7 @@ impl WorkerPluginCallback {
         block_on_handle(&self.runtime, self.invoke_async(request))
     }
 
+    /// Runs a callback with its configured deadline unless the caller controls cancellation.
     async fn invoke_async(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
         let callback_name = request.registration_name.clone();
         let surface = request.surface;

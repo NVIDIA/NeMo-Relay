@@ -186,6 +186,7 @@ struct RawDynamicPluginManifestLoad {
 }
 
 impl<'de> Deserialize<'de> for DynamicPluginManifestLoad {
+    /// Reads a load block and rejects mixed native and worker settings.
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -216,6 +217,7 @@ impl<'de> Deserialize<'de> for DynamicPluginManifestLoad {
 }
 
 impl Serialize for DynamicPluginManifestLoad {
+    /// Writes the load settings for the selected plugin type.
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -625,6 +627,7 @@ fn validate_capability_shape(
     Ok(())
 }
 
+/// Checks required load fields and worker callback names.
 fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad) -> Result<()> {
     match (kind, load) {
         (DynamicPluginKind::RustDynamic, DynamicPluginManifestLoad::Worker(_)) => {
@@ -666,6 +669,7 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
 }
 
 impl DynamicPluginManifestLoad {
+    /// Copies validated load settings into the stored plugin record.
     fn into_record_load_contract(self) -> DynamicPluginLoadContract {
         match self {
             Self::Worker(load) => {

@@ -2066,6 +2066,7 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
     assert!(cancellation.reason.contains("timed out"));
 }
 
+/// Checks that execution callbacks ignore short deadlines and honor caller cancellation.
 #[tokio::test]
 async fn execution_callbacks_outlive_short_rpc_deadlines_and_remain_cancellable() {
     for surface in [
@@ -2138,6 +2139,7 @@ async fn execution_callbacks_outlive_short_rpc_deadlines_and_remain_cancellable(
     }
 }
 
+/// Checks deadline selection, worker cancellation, and host cleanup after a timeout.
 #[tokio::test]
 async fn short_callbacks_use_configured_deadlines_and_cancel_on_expiry() {
     for (settings, deadline_ms) in [
@@ -4465,6 +4467,7 @@ async fn fake_callback_service_with_handlers(
     (callback, shutdown_tx, cancel_rx)
 }
 
+/// Builds a callback adapter with default deadlines for a test worker client.
 fn callback_for_client(
     client: PluginWorkerClient<Channel>,
     shutdown_tx: oneshot::Sender<()>,
@@ -4486,6 +4489,7 @@ fn callback_for_client(
     )
 }
 
+/// Builds a worker instance with the registrations needed by a test.
 async fn fake_worker_instance(
     registrations: Vec<Registration>,
 ) -> (WorkerPluginInstance, oneshot::Sender<()>) {
