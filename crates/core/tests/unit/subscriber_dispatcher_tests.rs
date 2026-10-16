@@ -5,7 +5,7 @@ use super::native::{
     dispatch_sanitized_event_with_delivery, dispatcher_sender, enqueue_dispatch_message,
     flush_queued_subscribers, flush_subscribers, prepare_for_fork, register_async_publication,
     register_pending_publication, resume_after_fork_parent, sanitize_event_snapshot,
-    set_sanitizer_runtime_failure_for_test, spawn_background_publication,
+    set_sanitizer_runtime_failure_for_test, spawn_background_publication, with_pending_publication,
 };
 use super::{EventSubscriberFn, SubscriberDelivery, publication_context, with_publication_context};
 use crate::api::event::{BaseEvent, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent};
@@ -255,6 +255,52 @@ fn pending_publication_defers_flush_without_blocking_unrelated_delivery() {
     flush_rx
         .recv_timeout(std::time::Duration::from_secs(1))
         .expect("flush must complete after pending work");
+}
+
+#[test]
+fn pending_publication_flush_excludes_its_own_lineage() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    flush_subscribers().unwrap();
+    let pending = register_pending_publication().expect("pending publication");
+    let (flushed_tx, flushed_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(with_pending_publication(Some(pending), async move {
+                flush_subscribers().expect("flush inside the pending publication");
+                flushed_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            }));
+    });
+    flushed_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("a flush inside the pending publication must not wait on it");
+
+    let (flush_tx, flush_rx) = mpsc::channel();
+    dispatcher_sender()
+        .expect("dispatcher sender")
+        .send(DispatcherMessage::Flush {
+            done: flush_tx,
+            include_pending: true,
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            flush_rx.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "an unrelated flush must wait for the pending publication"
+    );
+
+    release_tx.send(()).unwrap();
+    worker.join().unwrap();
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("flush must complete after the pending publication drops");
 }
 
 #[test]

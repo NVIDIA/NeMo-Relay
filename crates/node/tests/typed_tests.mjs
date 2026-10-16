@@ -839,6 +839,93 @@ describe('typedLlmStreamExecute', () => {
     assert.equal(await stream.next(), null);
   });
 
+  it('propagates iterator errors to the consumer instead of ending the stream', async () => {
+    const passthrough = new JsonPassthrough();
+    async function* failingSource() {
+      yield { token: 'first' };
+      throw new RangeError('typed source boom');
+    }
+
+    const stream = await typedLlmStreamExecute(
+      'stream_iterator_error',
+      makeNative(),
+      failingSource,
+      () => {},
+      () => null,
+      passthrough,
+      passthrough,
+    );
+    assert.deepEqual(await stream.next(), { token: 'first' });
+    await assert.rejects(() => stream.next(), /typed source boom/);
+    await stream.close();
+  });
+
+  it('rejects the call when the producer rejects or returns a non-iterable', async () => {
+    const passthrough = new JsonPassthrough();
+    await assert.rejects(
+      () =>
+        typedLlmStreamExecute(
+          'stream_producer_rejects',
+          makeNative(),
+          async () => {
+            throw new Error('typed producer rejected');
+          },
+          () => {},
+          () => null,
+          passthrough,
+          passthrough,
+        ),
+      /typed producer rejected/,
+    );
+    await assert.rejects(
+      () =>
+        typedLlmStreamExecute(
+          'stream_producer_non_iterable',
+          makeNative(),
+          () => ({ invalid: true }),
+          () => {},
+          () => null,
+          passthrough,
+          passthrough,
+        ),
+      /must return an AsyncIterable/i,
+    );
+  });
+
+  it('awaits async collectors and finalizers', async () => {
+    const passthrough = new JsonPassthrough();
+    const events = [];
+    const collected = [];
+    registerSubscriber('typed_async_collector_finalizer_sub', (event) => events.push(event));
+    try {
+      const stream = await typedLlmStreamExecute(
+        'typed_async_collector_finalizer_llm',
+        makeNative(),
+        async function* () {
+          yield { token: 'first' };
+        },
+        async (chunk) => {
+          await new Promise((resolve) => setImmediate(resolve));
+          collected.push(chunk.token);
+        },
+        async () => ({ text: collected.join('') }),
+        passthrough,
+        passthrough,
+      );
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      assert.deepEqual(collected, ['first']);
+      assert.equal(await stream.next(), null);
+      await stream.close();
+      await flushSubscribers();
+      const end = events.find(
+        (event) => event.scope_category === 'end' && event.name === 'typed_async_collector_finalizer_llm',
+      );
+      assert.deepEqual(end.data, { text: 'first' });
+    } finally {
+      deregisterSubscriber('typed_async_collector_finalizer_sub');
+    }
+  });
+
   it('stream with envelopeCodec for chunks and response', async () => {
     const native = makeNative();
 

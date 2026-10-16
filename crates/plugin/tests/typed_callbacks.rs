@@ -490,7 +490,7 @@ static UNAVAILABLE_CONTEXT_GATE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 7);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 8);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
@@ -3031,7 +3031,8 @@ fn test_host_v6() -> NemoRelayNativeHostApiV6 {
 
 fn test_host_v7() -> NemoRelayNativeHostApiV7 {
     let mut v6 = test_host_v6();
-    v6.v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    v6.v5.v4.v3.v1.abi_version =
+        nemo_relay_plugin::NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT;
     v6.v5.v4.v3.v1.struct_size = size_of::<NemoRelayNativeHostApiV7>();
     NemoRelayNativeHostApiV7 {
         v6,
@@ -6360,7 +6361,10 @@ impl NativePlugin for RegisteringPlugin {
         ctx: &mut PluginContext<'_>,
     ) -> nemo_relay_plugin::Result<()> {
         assert_eq!(plugin_config.get("enabled"), Some(&json!(true)));
-        assert_eq!(ctx.host_api().abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
+        assert_eq!(
+            ctx.host_api().abi_version,
+            nemo_relay_plugin::NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT,
+        );
         assert!(ctx.runtime().scope_stack_active());
         ctx.register_subscriber("registered", |_event: &Event| {})?;
         let status = unsafe {
@@ -7153,4 +7157,85 @@ fn raw_llm_registration_rejections_release_callback_ownership() {
     assert_eq!(RAW_ASYNC_REJECTIONS.load(Ordering::SeqCst), 5);
     assert!(ASYNC_REGISTRATIONS.lock().unwrap().is_empty());
     assert_eq!(live_host_strings(), 0);
+}
+
+static SNAPSHOT_RESPONSE: Mutex<Option<(NemoRelayStatus, Option<Vec<u8>>)>> = Mutex::new(None);
+
+unsafe extern "C" fn snapshot_response(out: *mut *mut NemoRelayNativeString) -> NemoRelayStatus {
+    let (status, payload) = SNAPSHOT_RESPONSE.lock().unwrap().clone().unwrap();
+    unsafe { *out = ptr::null_mut() };
+    if let Some(payload) = payload {
+        unsafe { test_string_new(payload.as_ptr(), payload.len(), out) };
+    }
+    status
+}
+
+#[test]
+fn scope_stack_snapshot_native_extension_is_appended_and_feature_detected() {
+    let _guard = begin_test();
+    use nemo_relay_plugin::NemoRelayNativeHostApiV8;
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV8, v7), 0);
+    assert_eq!(
+        offset_of!(NemoRelayNativeHostApiV8, current_scope_stack_snapshot),
+        size_of::<NemoRelayNativeHostApiV7>()
+    );
+    let legacy = test_host_v7();
+    assert!(
+        PluginRuntime::new(&legacy.v6.v5.v4.v3.v1)
+            .current_scope_stack_snapshot()
+            .unwrap_err()
+            .contains("unsupported")
+    );
+    let mut prefix = test_host_v7();
+    prefix.v6.v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    // A truncated v8 table must never read beyond its prefix.
+    assert!(
+        PluginRuntime::new(&prefix.v6.v5.v4.v3.v1)
+            .current_scope_stack_snapshot()
+            .unwrap_err()
+            .contains("unsupported")
+    );
+}
+
+#[test]
+fn scope_stack_snapshot_native_owned_values_and_buffers_survive_clone_and_failures() {
+    let _guard = begin_test();
+    let mut prefix = test_host_v7();
+    prefix.v6.v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION;
+    prefix.v6.v5.v4.v3.v1.struct_size = size_of::<nemo_relay_plugin::NemoRelayNativeHostApiV8>();
+    let runtime = {
+        let host = Box::new(nemo_relay_plugin::NemoRelayNativeHostApiV8 {
+            v7: prefix,
+            current_scope_stack_snapshot: snapshot_response,
+        });
+        PluginRuntime::new(&host.v7.v6.v5.v4.v3.v1).clone()
+    };
+    let fixture = include_bytes!("../../types/tests/fixtures/scope_stack_snapshot.json").to_vec();
+    let expected: nemo_relay_types::api::scope::ScopeStackSnapshot =
+        serde_json::from_slice(&fixture).unwrap();
+    let baseline = STRING_LIVE_COUNT.load(Ordering::SeqCst);
+    *SNAPSHOT_RESPONSE.lock().unwrap() = Some((NemoRelayStatus::Ok, Some(fixture)));
+    let retained = runtime.current_scope_stack_snapshot().unwrap().unwrap();
+    assert_eq!(retained, expected);
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), baseline);
+    for (status, payload) in [
+        (NemoRelayStatus::Ok, Some(b"{invalid-json".to_vec())),
+        (NemoRelayStatus::Ok, Some(vec![0xff])),
+        (
+            NemoRelayStatus::Ok,
+            Some(br#"{"scopes":[{"scope_id":"bad-id","scope_type":"agent"}]}"#.to_vec()),
+        ),
+        (
+            NemoRelayStatus::Internal,
+            Some(b"owned error buffer".to_vec()),
+        ),
+    ] {
+        *SNAPSHOT_RESPONSE.lock().unwrap() = Some((status, payload));
+        assert!(runtime.current_scope_stack_snapshot().is_err());
+        assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), baseline);
+    }
+    *SNAPSHOT_RESPONSE.lock().unwrap() = Some((NemoRelayStatus::Ok, None));
+    assert_eq!(runtime.current_scope_stack_snapshot().unwrap(), None);
+    assert_eq!(retained, expected);
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), baseline);
 }

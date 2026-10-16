@@ -392,3 +392,45 @@ fn windows_lock_violation_is_normalized_as_contention() {
         LockAttempt::Contended
     );
 }
+
+#[test]
+fn bounded_streams_limit_chunks_propagate_errors_and_reject_length_changes() {
+    use crate::filesystem::bounded::open_bounded_regular_file;
+
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("large.bin");
+    let payload = vec![b'Z'; 3 * 64 * 1024 + 17];
+    std::fs::write(&path, &payload).unwrap();
+    let file = open_bounded_regular_file(&path, "payload").unwrap();
+    assert_eq!(file.len(), payload.len());
+    let mut received = Vec::new();
+    file.stream(|chunk| {
+        assert!(chunk.len() <= 64 * 1024);
+        received.extend_from_slice(chunk);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(received, payload);
+
+    let error = open_bounded_regular_file(&path, "payload")
+        .unwrap()
+        .stream(|_| Err("destination write failed".into()))
+        .unwrap_err();
+    assert_eq!(error, "destination write failed");
+
+    for length in [0, payload.len() + 1] {
+        std::fs::write(&path, &payload).unwrap();
+        let file = open_bounded_regular_file(&path, "payload").unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(length as u64)
+            .unwrap();
+        assert!(
+            file.stream(|_| Ok(()))
+                .unwrap_err()
+                .contains("changed length")
+        );
+    }
+}

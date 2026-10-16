@@ -66,6 +66,11 @@ global deployment mode. `/_nemo_relay/v1/workers`,
 broker's in-memory state without probing workers. Routes without an assigned
 worker, including pass-through routes, do not appear in worker results.
 
+The daemon reads routing and upstream settings. It doesn't load or check plugins.
+Gateways and daemon workers verify plugin files before loading them. Install
+plugin files and any managed Python environments on the hosts that run those
+processes. A host that runs only the daemon doesn't need these files.
+
 ## Local Deployment
 
 The diagram shows the processes on one computer:

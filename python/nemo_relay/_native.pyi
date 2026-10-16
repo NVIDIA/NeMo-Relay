@@ -2844,3 +2844,17 @@ def __getattr__(name: str) -> object:
         Raises ``AttributeError`` when no native attribute exists.
     """
     ...
+
+class ScopeStackEntry:
+    """Immutable UUID and canonical type of one visible scope."""
+    @property
+    def scope_id(self) -> str: ...
+    @property
+    def scope_type(self) -> ScopeType: ...
+
+class ScopeStackSnapshot:
+    """Detached root-to-top scope identities."""
+    @property
+    def scopes(self) -> list[ScopeStackEntry]: ...
+
+def current_scope_stack_snapshot(stack: ScopeStack | None = None) -> ScopeStackSnapshot | None: ...

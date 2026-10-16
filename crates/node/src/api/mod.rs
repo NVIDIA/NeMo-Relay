@@ -16,8 +16,7 @@ use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::task::{Context, Poll};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, Utc};
 use napi::bindgen_prelude::*;
@@ -26,7 +25,6 @@ use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as Json;
-use tokio_stream::{Stream, StreamExt};
 
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
@@ -46,9 +44,8 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
 use nemo_relay::api::runtime::{
-    EventMetadataInjectorFn, EventSanitizeFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmStreamExecutionNextFn, LlmStreamInner, ScopeStackHandle as CoreScopeStackHandle,
-    ToolExecutionNextFn,
+    EventMetadataInjectorFn, EventSanitizeFn, LlmCollector, LlmExecutionNextFn, LlmFinalizer,
+    LlmJsonStream, ScopeStackHandle as CoreScopeStackHandle, ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
@@ -653,6 +650,7 @@ fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::R
     #[cfg(windows)]
     pin_native_module()?;
     register_node_environment().map_err(to_napi_err)?;
+    crate::promise_call::reset_env_teardown();
     if let Err(error) = env.add_env_cleanup_hook((), |_| cleanup_node_environment()) {
         cleanup_node_environment();
         return Err(error);
@@ -666,6 +664,10 @@ fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::R
     let close: JsFunction = prototype.get_named_property("close")?;
     prototype.set_property(async_dispose, close)?;
     prototype.delete_named_property("[Symbol.asyncDispose]")?;
+    let stream: JsFunction = exports.get_named_property("LlmStream")?;
+    let stream = stream.coerce_to_object()?;
+    let prototype: JsObject = stream.get_named_property("prototype")?;
+    crate::callback_factory::pin_stream_methods(&env, &prototype)?;
     Ok(())
 }
 
@@ -1046,176 +1048,20 @@ fn build_atof_config(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Stream channel registry — enables JS async generators to push chunks to Rust
-// ---------------------------------------------------------------------------
-
-static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
-
-type StreamSender = tokio::sync::mpsc::UnboundedSender<FlowResult<Json>>;
 type RustJsonStream = LlmJsonStream;
 
-struct StreamChannel {
-    sender: StreamSender,
-    cancelled: AtomicBool,
-    closed: tokio::sync::watch::Sender<Option<std::result::Result<(), String>>>,
-}
-
-static STREAM_CHANNELS: std::sync::LazyLock<StdMutex<HashMap<u64, Arc<StreamChannel>>>> =
-    std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
-
-fn register_stream_channel(
-    id: u64,
-    tx: StreamSender,
-) -> tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>> {
-    let (closed, closed_rx) = tokio::sync::watch::channel(None);
-    STREAM_CHANNELS.lock().unwrap().insert(
-        id,
-        Arc::new(StreamChannel {
-            sender: tx,
-            cancelled: AtomicBool::new(false),
-            closed,
-        }),
-    );
-    closed_rx
-}
-
-fn finish_stream_channel(id: u64, result: std::result::Result<(), String>) {
-    if let Some(channel) = STREAM_CHANNELS.lock().unwrap().remove(&id) {
-        channel.closed.send_replace(Some(result));
-    }
-}
-
-fn cancel_stream_channel(id: u64) {
-    if let Some(channel) = STREAM_CHANNELS.lock().unwrap().get(&id) {
-        channel.cancelled.store(true, Ordering::Release);
-    }
-}
-
-fn ensure_stream_callback_queued(id: u64, status: napi::Status) -> FlowResult<()> {
-    if status == napi::Status::Ok {
-        return Ok(());
-    }
-
-    finish_stream_channel(
-        id,
-        Err(format!(
-            "failed to queue JS stream producer callback: {status:?}"
-        )),
-    );
-    Err(FlowError::Internal(format!(
-        "failed to queue JS stream producer callback: {status:?}",
-    )))
-}
-
-async fn forward_stream_to_channel(
-    mut stream: RustJsonStream,
-    tx: tokio::sync::mpsc::Sender<FlowResult<Json>>,
-    mut cancel: tokio::sync::watch::Receiver<bool>,
-    closed: tokio::sync::watch::Sender<Option<std::result::Result<(), String>>>,
-) {
-    loop {
-        if *cancel.borrow() {
-            break;
-        }
-        let item = tokio::select! {
-            _ = cancel.changed() => break,
-            item = stream.next() => item,
-        };
-        let Some(item) = item else {
-            break;
-        };
-        tokio::select! {
-            _ = cancel.changed() => break,
-            result = tx.send(item) => {
-                if result.is_err() {
-                    break;
-                }
-            }
-        }
-    }
-    closed.send_replace(Some(
-        stream.close().await.map_err(|error| error.to_string()),
-    ));
-}
-
-pub(crate) fn llm_stream_from_rust_stream(rust_stream: RustJsonStream) -> LlmStream {
-    let (tx, rx) = tokio::sync::mpsc::channel(LLM_STREAM_BRIDGE_CAPACITY);
-    let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
-    let (closed, closed_rx) = tokio::sync::watch::channel(None);
-    tokio::spawn(forward_stream_to_channel(
+pub(crate) fn llm_stream_from_rust_stream(
+    rust_stream: RustJsonStream,
+    publication_context_id: Option<String>,
+) -> LlmStream {
+    LlmStream::new(
         rust_stream,
-        tx,
-        cancel_rx,
-        closed,
-    ));
-    LlmStream {
-        receiver: tokio::sync::Mutex::new(rx),
-        cancel,
-        closed: closed_rx,
-        codec_references: Vec::new(),
-    }
-}
-
-struct NodePushStream {
-    receiver: tokio_stream::wrappers::UnboundedReceiverStream<FlowResult<Json>>,
-    stream_id: u64,
-    closed: tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>>,
-}
-
-impl Stream for NodePushStream {
-    type Item = FlowResult<Json>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.receiver).poll_next(cx)
-    }
-}
-
-impl Drop for NodePushStream {
-    fn drop(&mut self) {
-        cancel_stream_channel(self.stream_id);
-    }
-}
-
-impl LlmStreamInner for NodePushStream {
-    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
-        let stream_id = self.stream_id;
-        let mut closed = self.get_mut().closed.clone();
-        Box::pin(async move {
-            cancel_stream_channel(stream_id);
-            while closed.borrow().is_none() {
-                closed.changed().await.map_err(|_| {
-                    FlowError::Internal("JS stream cleanup task ended early".into())
-                })?;
-            }
-            closed
-                .borrow()
-                .clone()
-                .expect("close state checked above")
-                .map_err(FlowError::Internal)
-        })
-    }
-}
-
-/// Push a chunk into the stream identified by `streamId`.
-/// Called from JavaScript during async generator iteration.
-#[napi]
-pub fn push_stream_chunk(stream_id: f64, chunk: Json) -> bool {
-    let id = stream_id as u64;
-    if let Some(channel) = STREAM_CHANNELS.lock().unwrap().get(&id) {
-        !channel.cancelled.load(Ordering::Acquire) && channel.sender.send(Ok(chunk)).is_ok()
-    } else {
-        false
-    }
-}
-
-/// Signal that a stream is complete. Drops the sender so the Rust
-/// receiver sees the channel as closed.
-#[napi]
-pub fn end_stream(env: Env, stream_id: f64) -> napi::Result<()> {
-    let id = stream_id as u64;
-    finish_stream_channel(id, Ok(()));
-    callback_factory::expire_callback_context(&env)
+        Vec::new(),
+        Default::default(),
+        Default::default(),
+        publication_context_id,
+        None,
+    )
 }
 
 /// # Safety
@@ -1301,16 +1147,6 @@ fn scoped_json_callback_tsfn(
     func: &JsFunction,
 ) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
     scoped_json_callback_tsfn_from_wrapper(env, callback_factory::wrap_scoped_callback(env, func)?)
-}
-
-fn scoped_stream_callback_tsfn(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<ThreadsafeFunction<ScopedJsonCall, ErrorStrategy::Fatal>> {
-    scoped_json_callback_tsfn_from_wrapper(
-        env,
-        callback_factory::wrap_scoped_stream_callback(env, func)?,
-    )
 }
 
 fn scoped_tool_execution_fn(
@@ -2217,7 +2053,7 @@ unsafe extern "C" fn persistent_js_function_cleanup_call(
 }
 
 impl PersistentJsFunction {
-    fn new(env: &Env, func: &JsFunction) -> napi::Result<Self> {
+    pub(crate) fn new(env: &Env, func: &JsFunction) -> napi::Result<Self> {
         let mut reference = ptr::null_mut();
         // SAFETY: `env.raw()` and `func.raw()` are live N-API handles provided
         // by napi-rs for the current environment. `reference` points to valid
@@ -2292,6 +2128,33 @@ impl PersistentJsFunction {
             reference,
             cleanup,
         })
+    }
+
+    pub(crate) fn env(&self) -> Env {
+        // SAFETY: the environment handle was captured live at creation, and
+        // callers use it on the registration thread only.
+        unsafe { Env::from_raw(self.env) }
+    }
+
+    pub(crate) fn function(&self) -> napi::Result<JsFunction> {
+        let mut value = ptr::null_mut();
+        // SAFETY: `self.reference` is a live reference created in `self.env`,
+        // and `value` is writable storage for the borrowed function.
+        let status =
+            unsafe { napi::sys::napi_get_reference_value(self.env, self.reference, &mut value) };
+        if status != napi::sys::Status::napi_ok {
+            return Err(napi::Error::from_reason(format!(
+                "failed to borrow JS function reference: {:?}",
+                napi::Status::from(status)
+            )));
+        }
+        // SAFETY: `value` resolved from this struct's function reference, so it
+        // is a live function handle in `self.env`.
+        Ok(unsafe { JsFunction::from_raw_unchecked(self.env, value) })
+    }
+
+    pub(crate) fn call_unknowns(&self, args: &[JsUnknown]) -> napi::Result<JsUnknown> {
+        self.function()?.call(None, args)
     }
 
     fn call_validate(&self, plugin_config: &Json) -> napi::Result<Json> {
@@ -2951,6 +2814,20 @@ pub fn with_scope_stack(
     })
 }
 
+/// Return owned scope identities, or null without an explicitly active binding.
+#[napi]
+pub fn current_scope_stack_snapshot(
+    env: Env,
+) -> napi::Result<Option<crate::types::ScopeStackSnapshot>> {
+    let snapshot = match callback_factory::callback_scope_stack(&env)? {
+        Some((stack, _)) => nemo_relay::api::runtime::scope_stack_snapshot(&stack).map(Some),
+        None => nemo_relay::api::runtime::current_scope_stack_snapshot(),
+    };
+    snapshot
+        .map(|snapshot| snapshot.map(Into::into))
+        .map_err(to_napi_err)
+}
+
 /// Returns the current execution context's scope stack handle.
 #[napi]
 pub fn current_scope_stack(env: Env) -> napi::Result<ScopeStack> {
@@ -3053,27 +2930,46 @@ pub fn test_closed_llm_response_callback(
     None
 }
 
+/// Resolve a stream callback future whose queue step already failed.
+fn settled_now<T>(mut future: Pin<Box<dyn Future<Output = T> + Send>>) -> Result<T> {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match future.as_mut().poll(&mut context) {
+        std::task::Poll::Ready(value) => Ok(value),
+        std::task::Poll::Pending => Err(napi::Error::from_reason(
+            "stream callback did not settle synchronously",
+        )),
+    }
+}
+
+/// Internal test helper: route streams through the Tokio forwarding task.
+#[napi(js_name = "__testForceStreamForwarding")]
+pub fn test_force_stream_forwarding(enabled: bool) {
+    crate::stream::set_force_forwarding(enabled);
+}
+
 /// Internal test helper: invoke a closed JS collector wrapper and surface the queue failure.
 #[napi(js_name = "__testClosedCollectorCallback")]
-pub fn test_closed_collector_callback(
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-    chunk: Json,
-) -> Result<()> {
+pub fn test_closed_collector_callback(env: Env, callback: JsFunction, chunk: Json) -> Result<()> {
     clear_recorded_callback_error();
-    let _ = callback.clone().abort();
-    let mut wrapped = callable::wrap_js_collector_fn(callback);
-    wrapped(chunk).map_err(to_napi_err)
+    let callback = callable::js_collector_tsfn(&env, &callback)?.without_direct();
+    callback.abort_tsfn();
+    let LlmCollector::Async(mut wrapped) = callable::wrap_js_collector_fn(callback) else {
+        return Err(napi::Error::from_reason("JS collectors are asynchronous"));
+    };
+    settled_now(wrapped(chunk))?.map_err(to_napi_err)
 }
 
 /// Internal test helper: invoke a closed JS finalizer wrapper and return the fallback value.
 #[napi(js_name = "__testClosedFinalizerCallback")]
-pub fn test_closed_finalizer_callback(
-    callback: ThreadsafeFunction<(), ErrorStrategy::Fatal>,
-) -> Json {
+pub fn test_closed_finalizer_callback(env: Env, callback: JsFunction) -> Result<Json> {
     clear_recorded_callback_error();
-    let _ = callback.clone().abort();
-    let wrapped = callable::wrap_js_finalizer_fn(callback);
-    wrapped()
+    let callback = callable::js_finalizer_tsfn(&env, &callback)?.without_direct();
+    callback.abort_tsfn();
+    let LlmFinalizer::Async(wrapped) = callable::wrap_js_finalizer_fn(callback, Default::default())
+    else {
+        return Err(napi::Error::from_reason("JS finalizers are asynchronous"));
+    };
+    Ok(settled_now(wrapped())?.unwrap_or(Json::Null))
 }
 
 /// Internal test helper: exercise PromiseAwareFn queue and conversion failures.
@@ -3897,7 +3793,8 @@ pub fn llm_call_execute_async(
 /// Sanitize-request guardrails only affect the emitted `Start` event payload, and
 /// sanitize-response guardrails only affect the aggregated `End` event payload.
 /// Returns an `LlmStream` whose `next()` method yields response chunks incrementally.
-/// The `func` callback receives the intercepted request as JSON and its response is streamed back.
+/// The `func` callback receives the intercepted request as JSON and an `AbortSignal`,
+/// and returns an `AsyncIterable` of JSON chunks.
 /// Stream-level intercepts are applied to each chunk.
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LlmRequest` schema.
@@ -3905,18 +3802,23 @@ pub fn llm_call_execute_async(
 /// The optional `collector` callback is invoked with each intercepted chunk as JSON,
 /// allowing the caller to accumulate chunks for aggregation. The optional `finalizer`
 /// callback is invoked once when the stream is exhausted or closed early and
-/// must return a JSON value representing the aggregated response. Consumers
-/// that stop reading early must await `stream.close()` to wait for producer
-/// cleanup and surface cleanup errors.
+/// must return a JSON value representing the aggregated response. Both may return a
+/// Promise. If the collector throws or rejects, the stream fails with that error. If
+/// the finalizer throws or rejects, the aggregated response is `null`. Consumers that
+/// stop reading early must await `stream.close()`, which aborts the signal and waits
+/// for producer cleanup.
 #[allow(clippy::too_many_arguments)]
 #[napi(ts_return_type = "Promise<LlmStream>")]
 pub fn llm_stream_call_execute(
     env: Env,
     name: String,
     request: Json,
+    #[napi(
+        ts_arg_type = "(request: Json, signal: AbortSignal) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
+    )]
     func: JsFunction,
-    collector: Option<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>,
-    finalizer: Option<ThreadsafeFunction<(), ErrorStrategy::Fatal>>,
+    #[napi(ts_arg_type = "(chunk: Json) => void | Promise<void>")] collector: Option<JsFunction>,
+    #[napi(ts_arg_type = "() => Json | Promise<Json>")] finalizer: Option<JsFunction>,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
@@ -3935,54 +3837,23 @@ pub fn llm_stream_call_execute(
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
 
-    let wrapped_collector: Box<dyn FnMut(Json) -> FlowResult<()> + Send> = match collector {
-        Some(cb) => callable::wrap_js_collector_fn(cb),
-        None => Box::new(|_: Json| Ok(())),
+    let wrapped_collector = match collector {
+        Some(cb) => callable::wrap_js_collector_fn(callable::js_collector_tsfn(&env, &cb)?),
+        None => LlmCollector::from(|_: Json| Ok(())),
     };
 
-    let wrapped_finalizer: Box<dyn FnOnce() -> Json + Send> = match finalizer {
-        Some(cb) => callable::wrap_js_finalizer_fn(cb),
-        None => Box::new(|| Json::Null),
+    let finalizer_error = callable::FinalizerError::default();
+    let wrapped_finalizer = match finalizer {
+        Some(cb) => callable::wrap_js_finalizer_fn(
+            callable::js_finalizer_tsfn(&env, &cb)?,
+            finalizer_error.clone(),
+        ),
+        None => LlmFinalizer::from(|| Json::Null),
     };
 
-    // Push-based stream bridge: JS iterates the async generator on the
-    // event loop and pushes each chunk into Rust via `pushStreamChunk`.
-    // We create an unbounded channel here and pass the stream ID to JS
-    // so it knows where to send chunks.
-    let func = std::sync::Arc::new(scoped_stream_callback_tsfn(&env, &func)?);
-    let default_fn: LlmStreamExecutionNextFn = std::sync::Arc::new(move |req: LlmRequest| {
-        let context = ScopedCallbackContext::capture();
-        let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let closed = register_stream_channel(stream_id, tx);
-
-        // Serialize the LlmRequest to JSON and wrap with streamId so JS can extract both
-        let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
-        let wrapper = serde_json::json!({
-            "__nemo_relay_native": req_json,
-            "__nemo_relay_stream_id": stream_id,
-        });
-
-        // NonBlocking: queue the call on the JS event loop and return immediately.
-        // The JS function starts async iteration and pushes chunks via pushStreamChunk.
-        let call_status = func.call(
-            ScopedJsonCall {
-                value: wrapper,
-                context,
-            },
-            ThreadsafeFunctionCallMode::NonBlocking,
-        );
-
-        Box::pin(async move {
-            ensure_stream_callback_queued(stream_id, call_status)?;
-
-            Ok(LlmJsonStream::from_closeable(NodePushStream {
-                receiver: tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
-                stream_id,
-                closed,
-            }))
-        })
-    });
+    let provider = Arc::new(PromiseAwareFn::new(&env, &func)?);
+    let producers = crate::promise_call::StreamCancellation::default();
+    let default_fn = callable::wrap_js_llm_stream_fn(provider, producers.clone());
 
     let mut codec_references = Vec::new();
     let codec = match (codec_decode.as_ref(), codec_encode.as_ref()) {
@@ -4034,21 +3905,14 @@ pub fn llm_stream_call_execute(
                                     .await
                                     .map_err(to_napi_err)?;
 
-                            let (tx, rx) = tokio::sync::mpsc::channel(32);
-                            let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
-                            let (closed, closed_rx) = tokio::sync::watch::channel(None);
-                            tokio::spawn(with_publication_callback_context(
+                            Ok(LlmStream::new(
+                                rust_stream,
+                                codec_references,
+                                finalizer_error,
+                                producers,
                                 publication_context_id,
                                 publication_buffer,
-                                forward_stream_to_channel(rust_stream, tx, cancel_rx, closed),
-                            ));
-
-                            Ok(LlmStream {
-                                receiver: tokio::sync::Mutex::new(rx),
-                                cancel,
-                                closed: closed_rx,
-                                codec_references,
-                            })
+                            ))
                         })
                         .await
                 },

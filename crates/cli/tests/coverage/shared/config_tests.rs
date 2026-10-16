@@ -5488,3 +5488,54 @@ fn provider_base_urls_are_validated_for_every_configuration_source() {
         }
     }
 }
+
+#[test]
+fn daemon_configuration_preserves_routing_overrides_without_reading_plugins() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        r#"
+[upstream]
+openai_base_url = "https://file.example/v1"
+response_timeout_secs = 45
+[gateway]
+max_hook_payload_bytes = 4096
+"#,
+    )
+    .unwrap();
+    let plugins = temp.path().join("plugins.toml");
+    scope.set_auth_headers("Bearer daemon-test", "Basic daemon-test");
+    scope.set_base_urls("https://env.example/v1", "https://env.example/anthropic");
+    let mut args = GatewayOverrides {
+        config: Some(config),
+        openai_base_url: Some("https://cli.example/v1".into()),
+        max_passthrough_body_bytes: Some(8192),
+        ..Default::default()
+    };
+    for contents in [
+        "invalid TOML [",
+        "[[plugins.dynamic]]\nmanifest = 'missing/relay-plugin.toml'\n",
+    ] {
+        std::fs::write(&plugins, contents).unwrap();
+        let resolved = resolve_daemon_config(&args).unwrap();
+        assert_eq!(resolved.openai_base_url, "https://cli.example/v1");
+        assert_eq!(resolved.anthropic_base_url, "https://env.example/anthropic");
+        assert_eq!(
+            resolved.anthropic_auth_header.as_deref(),
+            Some("Basic daemon-test")
+        );
+        assert_eq!(resolved.response_timeout_secs, 45);
+        assert_eq!(resolved.max_hook_payload_bytes, 4096);
+        assert_eq!(resolved.max_passthrough_body_bytes, 8192);
+        assert!(resolved.plugin_config.is_none());
+        assert!(resolve_server_config(&args).is_err());
+    }
+    args.plugin_config_path = Some(plugins);
+    assert!(resolve_daemon_config(&args).is_ok());
+    args.config = Some(temp.path().join("missing.toml"));
+    assert!(resolve_daemon_config(&args).is_err());
+}
