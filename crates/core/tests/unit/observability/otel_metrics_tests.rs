@@ -352,6 +352,34 @@ fn metric_config_rejects_blank_and_padded_headers() {
 }
 
 #[test]
+fn metric_configured_headers_allow_plain_http_only_to_listed_insecure_hosts() {
+    let config = |endpoint: &str| {
+        OpenTelemetryMetricConfig::new(endpoint)
+            .with_header("authorization", "Bearer static")
+            .with_insecure_http_hosts(["release-api"])
+    };
+    assert!(
+        config("http://release-api:4318/v1/metrics")
+            .validate()
+            .is_ok()
+    );
+    let error = config("http://collector.example/v1/metrics")
+        .validate()
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("hosts listed in insecure_http_hosts"),
+        "{error}"
+    );
+    let error = OpenTelemetryMetricConfig::new("http://release-api:4318/v1/metrics")
+        .with_insecure_http_hosts(["release-api:4318"])
+        .validate()
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("bare hostname or IP address"), "{error}");
+}
+
+#[test]
 fn metric_configured_headers_require_https_except_for_loopback() {
     for transport in [OtlpTransport::HttpBinary, OtlpTransport::Grpc] {
         for config in [

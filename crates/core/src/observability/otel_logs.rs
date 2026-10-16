@@ -269,6 +269,8 @@ impl OpenTelemetryLogConfig {
                 "completed_span_context_ttl must be greater than 0".to_string(),
             ));
         }
+        validate_insecure_http_hosts(&self.insecure_http_hosts)
+            .map_err(OpenTelemetryError::ExporterBuild)?;
         if self.automatic {
             if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_LOGS_HEADERS") {
                 let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
@@ -277,7 +279,7 @@ impl OpenTelemetryLogConfig {
                             "automatic log exporter requires a nonblank OTLP endpoint".to_string(),
                         )
                     })?;
-                validate_header_http_endpoint(&endpoint, &[])
+                validate_header_http_endpoint(&endpoint, &self.insecure_http_hosts)
                     .map_err(OpenTelemetryError::ExporterBuild)?;
             }
         } else {
@@ -286,8 +288,6 @@ impl OpenTelemetryLogConfig {
             validate_telemetry_sdk_resource_attributes(&self.resource_attributes)?;
             reject_signal_header_environment("OTEL_EXPORTER_OTLP_LOGS_HEADERS")?;
             validate_signal_headers(&self.headers)?;
-            validate_insecure_http_hosts(&self.insecure_http_hosts)
-                .map_err(OpenTelemetryError::ExporterBuild)?;
             if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
                 validate_header_http_endpoint(&self.endpoint, &self.insecure_http_hosts)
                     .map_err(OpenTelemetryError::ExporterBuild)?;

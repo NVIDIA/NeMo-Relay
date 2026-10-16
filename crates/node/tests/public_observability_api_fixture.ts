@@ -20,6 +20,7 @@ const dataSchema: DataSchema = { name: 'example.fixture', version: '1' };
 const logSubscriber = new OpenTelemetryLogSubscriber({
   endpoint: 'http://localhost:4318/v1/logs',
   headerEnv: { authorization: 'OTEL_LOG_AUTHORIZATION' },
+  insecureHttpHosts: ['host.docker.internal'],
   minimumSeverity: LogSeverity.Warn,
 });
 const metricSubscriber = new OpenTelemetryMetricSubscriber({
@@ -71,6 +72,7 @@ if (!logDiagnostics || !metricDiagnostics || !logDeregistered || !metricDeregist
 // Plugin configuration supports promotion independently for each signal.
 const signalEndpoint = openTelemetrySignalEndpoint({
   endpoint: 'http://localhost:4318',
+  insecure_http_hosts: ['host.docker.internal'],
   promote_resource_metadata_prefixes: ['deployment.'],
 });
 openTelemetryLogConfig({ enabled: true, endpoints: [signalEndpoint] });

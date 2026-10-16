@@ -136,6 +136,8 @@ fn insecure_http_hosts_reject_entries_that_are_not_bare_hosts() {
         ".",
         "http://release-api",
         "release-api:8080",
+        "[fd00::1]:80",
+        "[fd00::1]:4318",
         "release-api/v1",
         "*.svc.cluster.local",
         "user@release-api",
@@ -148,6 +150,47 @@ fn insecure_http_hosts_reject_entries_that_are_not_bare_hosts() {
             "{entry:?}: {error}"
         );
     }
+}
+
+#[test]
+fn http_client_consults_insecure_http_hosts_before_resolving_headers() {
+    let directory = tempfile::tempdir().unwrap();
+    let files = HashMap::from([(
+        "authorization".to_string(),
+        directory.path().join("missing").display().to_string(),
+    )]);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let send = |client: HeaderFileHttpClient| {
+        runtime
+            .block_on(
+                client.send_bytes(
+                    Request::builder()
+                        .uri("http://release-api.invalid:4318/v1/logs")
+                        .body(Bytes::new())
+                        .unwrap(),
+                ),
+            )
+            .unwrap_err()
+            .to_string()
+    };
+
+    let error = send(HeaderFileHttpClient::new(
+        reqwest::Client::builder().build().unwrap(),
+        HeaderFileResolver::new(files.clone()),
+        Vec::new(),
+    ));
+    assert!(
+        error.contains("configured headers require https"),
+        "{error}"
+    );
+
+    let error = send(HeaderFileHttpClient::new(
+        reqwest::Client::builder().build().unwrap(),
+        HeaderFileResolver::new(files),
+        hosts(&["release-api.invalid"]),
+    ));
+    assert!(!error.contains("require https"), "{error}");
+    assert!(error.contains("authorization"), "{error}");
 }
 
 #[test]

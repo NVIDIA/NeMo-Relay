@@ -810,6 +810,9 @@ fn build_otel_config(
     for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
         config = config.with_header_env(key, variable);
     }
+    if let Some(hosts) = options.insecure_http_hosts {
+        config = config.with_insecure_http_hosts(hosts);
+    }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
@@ -906,6 +909,9 @@ fn build_otel_log_config(
     for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
         config = config.with_header_env(key, variable);
     }
+    if let Some(hosts) = options.insecure_http_hosts {
+        config = config.with_insecure_http_hosts(hosts);
+    }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
@@ -956,6 +962,9 @@ fn build_otel_metric_config(
     }
     for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
         config = config.with_header_env(key, variable);
+    }
+    if let Some(hosts) = options.insecure_http_hosts {
+        config = config.with_insecure_http_hosts(hosts);
     }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
@@ -5666,6 +5675,8 @@ pub struct OpenTelemetryConfig {
     /// Header names mapped to environment variables resolved during subscriber activation.
     #[napi(ts_type = "Record<string, string>")]
     pub header_env: Option<Json>,
+    /// Non-loopback hosts trusted for plain HTTP; data and headers travel unencrypted.
+    pub insecure_http_hosts: Option<Vec<String>>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     pub resource_attributes: Option<Json>,
     /// `service.name` resource attribute. Defaults to `"unknown_service"`.
@@ -5879,6 +5890,8 @@ pub struct OpenTelemetryLogConfig {
     /// Header names mapped to environment variables resolved during subscriber activation.
     #[napi(ts_type = "Record<string, string>")]
     pub header_env: Option<Json>,
+    /// Non-loopback hosts trusted for plain HTTP; data and headers travel unencrypted.
+    pub insecure_http_hosts: Option<Vec<String>>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub resource_attributes: Option<Json>,
@@ -5978,6 +5991,8 @@ pub struct OpenTelemetryMetricConfig {
     /// Header names mapped to environment variables resolved during subscriber activation.
     #[napi(ts_type = "Record<string, string>")]
     pub header_env: Option<Json>,
+    /// Non-loopback hosts trusted for plain HTTP; data and headers travel unencrypted.
+    pub insecure_http_hosts: Option<Vec<String>>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub resource_attributes: Option<Json>,

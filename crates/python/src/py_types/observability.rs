@@ -491,6 +491,8 @@ pub struct PyOpenTelemetryConfig {
     pub(crate) mark_exclude_names: Vec<String>,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) header_env: HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub(crate) insecure_http_hosts: Vec<String>,
     pub(crate) resource_attributes: HashMap<String, String>,
     pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
     #[pyo3(get, set)]
@@ -725,6 +727,7 @@ impl PyOpenTelemetryConfig {
         for (key, variable) in &self.header_env {
             config = config.with_header_env(key.clone(), variable.clone());
         }
+        config = config.with_insecure_http_hosts(self.insecure_http_hosts.clone());
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
@@ -770,6 +773,7 @@ impl PyOpenTelemetryConfig {
             mark_exclude_names: nemo_relay::observability::default_mark_exclude_names(),
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            insecure_http_hosts: Vec::new(),
             resource_attributes: HashMap::new(),
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
@@ -1025,6 +1029,8 @@ pub struct PyOpenTelemetryLogConfig {
     pub(crate) completed_span_context_ttl_millis: u64,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) header_env: HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub(crate) insecure_http_hosts: Vec<String>,
     pub(crate) resource_attributes: HashMap<String, String>,
 }
 
@@ -1059,6 +1065,7 @@ impl PyOpenTelemetryLogConfig {
         for (key, variable) in &self.header_env {
             config = config.with_header_env(key.clone(), variable.clone());
         }
+        config = config.with_insecure_http_hosts(self.insecure_http_hosts.clone());
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
@@ -1085,6 +1092,7 @@ impl PyOpenTelemetryLogConfig {
             completed_span_context_ttl_millis: 60_000,
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            insecure_http_hosts: Vec::new(),
             resource_attributes: HashMap::new(),
         }
     }
@@ -1248,6 +1256,8 @@ pub struct PyOpenTelemetryMetricConfig {
     pub(crate) cardinality_limit: usize,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) header_env: HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub(crate) insecure_http_hosts: Vec<String>,
     pub(crate) resource_attributes: HashMap<String, String>,
 }
 
@@ -1279,6 +1289,7 @@ impl PyOpenTelemetryMetricConfig {
         for (key, variable) in &self.header_env {
             config = config.with_header_env(key.clone(), variable.clone());
         }
+        config = config.with_insecure_http_hosts(self.insecure_http_hosts.clone());
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
@@ -1304,6 +1315,7 @@ impl PyOpenTelemetryMetricConfig {
             cardinality_limit: 2_000,
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            insecure_http_hosts: Vec::new(),
             resource_attributes: HashMap::new(),
         }
     }

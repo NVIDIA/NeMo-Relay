@@ -2235,6 +2235,29 @@ fn plain_http_trace_endpoint_activates_only_when_host_is_listed() {
 }
 
 #[test]
+fn skipped_endpoint_reasons_never_echo_endpoint_userinfo() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "traces": [{
+                "type": "gen_ai",
+                "endpoint": "ftp://user:secret-token@collector.example/x"
+            }],
+            "logs": {"enabled": true}
+        }
+    }));
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(config))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("traces[0]"), "{error}");
+    assert!(error.contains("logs[0]"), "{error}");
+    assert!(!error.contains("secret-token"), "{error}");
+}
+
+#[test]
 fn file_only_sink_directory_creation_failure_reports_the_file_error() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();

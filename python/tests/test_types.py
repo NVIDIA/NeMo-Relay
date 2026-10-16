@@ -627,6 +627,9 @@ class TestOpenTelemetryTypes:
         assert log_config.scheduled_delay_millis == 1000
         assert log_config.completed_span_context_ttl_millis == 60000
         assert log_config.header_env == {}
+        assert log_config.insecure_http_hosts == []
+        log_config.insecure_http_hosts = ["host.docker.internal"]
+        assert log_config.insecure_http_hosts == ["host.docker.internal"]
         log_config.minimum_severity = LogSeverity.Warn
         log_config.headers = {"authorization": "Bearer token"}
         log_config.set_header_from_env("x-relay-route", variable)
@@ -649,6 +652,9 @@ class TestOpenTelemetryTypes:
         assert metric_config.max_instruments == 256
         assert metric_config.cardinality_limit == 2000
         assert metric_config.header_env == {}
+        assert metric_config.insecure_http_hosts == []
+        metric_config.insecure_http_hosts = ["host.docker.internal"]
+        assert metric_config.insecure_http_hosts == ["host.docker.internal"]
         metric_config.temporality = MetricTemporality.Delta
         metric_config.headers = {"authorization": "Bearer token"}
         metric_config.set_header_from_env("x-relay-route", variable)

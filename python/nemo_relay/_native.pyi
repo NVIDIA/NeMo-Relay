@@ -1212,6 +1212,8 @@ class OpenTelemetryConfig:
     def header_env(self, value: dict[str, str]) -> None:
         """Replace environment-backed exporter header references."""
         ...
+    insecure_http_hosts: list[str]
+    """Non-loopback hosts trusted for plain HTTP; spans and headers travel unencrypted."""
     @property
     def resource_attributes(self) -> dict[str, str]:
         """Return additional OpenTelemetry resource attributes."""
@@ -1357,6 +1359,7 @@ class OpenTelemetryLogConfig:
     def header_env(self) -> dict[str, str]: ...
     @header_env.setter
     def header_env(self, value: dict[str, str]) -> None: ...
+    insecure_http_hosts: list[str]
     @property
     def resource_attributes(self) -> dict[str, str]: ...
     @resource_attributes.setter
@@ -1406,6 +1409,7 @@ class OpenTelemetryMetricConfig:
     def header_env(self) -> dict[str, str]: ...
     @header_env.setter
     def header_env(self, value: dict[str, str]) -> None: ...
+    insecure_http_hosts: list[str]
     @property
     def resource_attributes(self) -> dict[str, str]: ...
     @resource_attributes.setter

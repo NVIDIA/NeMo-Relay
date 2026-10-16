@@ -2560,12 +2560,12 @@ fn derive_http_signal_endpoint(signal: &str, index: usize, endpoint: &str) -> Pl
     let trimmed = endpoint.trim();
     let parsed = reqwest::Url::parse(trimmed).map_err(|error| {
         PluginError::InvalidConfig(format!(
-            "OpenTelemetry endpoints[{index}] cannot derive {signal} endpoint from {trimmed:?}: {error}"
+            "OpenTelemetry endpoints[{index}] cannot derive {signal} endpoint from an invalid OTLP endpoint: {error}"
         ))
     })?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err(PluginError::InvalidConfig(format!(
-            "OpenTelemetry endpoints[{index}] cannot derive {signal} endpoint from non-HTTP endpoint {trimmed:?}"
+            "OpenTelemetry endpoints[{index}] cannot derive {signal} endpoint from a non-HTTP endpoint"
         )));
     }
     let path = parsed.path();
@@ -3888,9 +3888,7 @@ fn build_otel_config(
         ));
     }
     crate::observability::header_file::validate_insecure_http_hosts(&section.insecure_http_hosts)
-        .map_err(|error| {
-        PluginError::InvalidConfig(format!("OpenTelemetry endpoints[{index}] {error}"))
-    })?;
+        .map_err(PluginError::InvalidConfig)?;
     super::otel::validate_trace_endpoint(&section.endpoint, &section.insecure_http_hosts)
         .map_err(|error| PluginError::InvalidConfig(error.to_string()))?;
     let transport = match section.transport.as_str() {

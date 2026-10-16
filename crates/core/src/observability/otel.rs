@@ -27,7 +27,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
-    is_protected_http_endpoint, validate_header_files, validate_insecure_http_hosts,
+    is_protected_http_endpoint, plaintext_allowance, validate_header_files,
+    validate_insecure_http_hosts,
 };
 use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 use super::otel_signal::{
@@ -255,13 +256,9 @@ pub(super) fn validate_trace_endpoint(
     if is_protected_http_endpoint(endpoint, insecure_http_hosts) {
         return Ok(());
     }
-    let allowed = if insecure_http_hosts.is_empty() {
-        "localhost or loopback IP addresses"
-    } else {
-        "localhost, loopback IP addresses, or hosts listed in insecure_http_hosts"
-    };
     Err(OpenTelemetryError::ExporterBuild(format!(
-        "OTLP trace endpoints require HTTPS; HTTP is allowed only for {allowed}"
+        "OTLP trace endpoints require HTTPS; HTTP is allowed only for {}",
+        plaintext_allowance(insecure_http_hosts)
     )))
 }
 
@@ -951,6 +948,8 @@ impl OpenTelemetrySubscriber {
             validate_telemetry_sdk_resource_attributes(&shared.resource_attributes)?;
         }
         if let TraceConfig::Endpoint(endpoint) = &mut config {
+            validate_insecure_http_hosts(&endpoint.insecure_http_hosts)
+                .map_err(OpenTelemetryError::ExporterBuild)?;
             if endpoint.automatic {
                 let resolved = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
                     .ok_or_else(|| {
@@ -959,15 +958,13 @@ impl OpenTelemetrySubscriber {
                                 .to_string(),
                         )
                     })?;
-                validate_trace_endpoint(&resolved, &[])?;
+                validate_trace_endpoint(&resolved, &endpoint.insecure_http_hosts)?;
             } else {
                 if endpoint.endpoint.trim().is_empty() {
                     return Err(OpenTelemetryError::ExporterBuild(
                         "endpoint must be a nonblank string".to_string(),
                     ));
                 }
-                validate_insecure_http_hosts(&endpoint.insecure_http_hosts)
-                    .map_err(OpenTelemetryError::ExporterBuild)?;
                 validate_trace_endpoint(&endpoint.endpoint, &endpoint.insecure_http_hosts)?;
                 reject_global_header_environment()?;
                 validate_headers(&endpoint.headers)?;

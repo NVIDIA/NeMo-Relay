@@ -1317,6 +1317,10 @@ let subscriber = OpenTelemetrySubscriber::new(config)?;
 </Tab>
 </Tabs>
 
+Direct trace, log, and metric configs also accept `insecure_http_hosts`
+(`insecureHttpHosts` in Node.js, `with_insecure_http_hosts` in Rust) with the
+same rules as [Trusted Plaintext Hosts](#trusted-plaintext-hosts).
+
 Set each referenced environment variable before constructing the subscriber.
 Direct trace, log, and metric configs resolve `header_env` when the subscriber
 is constructed and retain that value for the subscriber's activation. Changing

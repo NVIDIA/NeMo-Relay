@@ -23,6 +23,9 @@ fn is_loopback_host(host: &str) -> bool {
 }
 
 fn canonical_host(host: &str) -> Option<String> {
+    if host.starts_with('[') && !host.ends_with(']') {
+        return None;
+    }
     let bracketed = if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]")
     } else {
@@ -69,15 +72,33 @@ fn plaintext_host_allowed(host: &str, insecure_http_hosts: &[String]) -> bool {
         })
 }
 
-/// Return whether a URL uses HTTPS or plain HTTP to loopback or an explicitly trusted host.
-pub(crate) fn is_protected_http_endpoint(endpoint: &str, insecure_http_hosts: &[String]) -> bool {
+fn is_protected_endpoint(
+    endpoint: &str,
+    protected_scheme: &str,
+    plaintext_scheme: &str,
+    insecure_http_hosts: &[String],
+) -> bool {
     reqwest::Url::parse(endpoint).is_ok_and(|url| {
-        url.scheme() == "https"
-            || (url.scheme() == "http"
+        url.scheme() == protected_scheme
+            || (url.scheme() == plaintext_scheme
                 && url
                     .host_str()
                     .is_some_and(|host| plaintext_host_allowed(host, insecure_http_hosts)))
     })
+}
+
+/// Return whether a URL uses HTTPS or plain HTTP to loopback or an explicitly trusted host.
+pub(crate) fn is_protected_http_endpoint(endpoint: &str, insecure_http_hosts: &[String]) -> bool {
+    is_protected_endpoint(endpoint, "https", "http", insecure_http_hosts)
+}
+
+/// Describe the destinations that may receive plaintext transport.
+pub(crate) fn plaintext_allowance(insecure_http_hosts: &[String]) -> &'static str {
+    if insecure_http_hosts.is_empty() {
+        "localhost or loopback IP addresses"
+    } else {
+        "localhost, loopback IP addresses, or hosts listed in insecure_http_hosts"
+    }
 }
 
 /// Return whether any configured header source adds request credentials or metadata.
@@ -95,24 +116,18 @@ fn validate_header_destination(
     plaintext_scheme: &str,
     insecure_http_hosts: &[String],
 ) -> Result<(), String> {
-    let protected = reqwest::Url::parse(endpoint).is_ok_and(|url| {
-        url.scheme() == protected_scheme
-            || (url.scheme() == plaintext_scheme
-                && url
-                    .host_str()
-                    .is_some_and(|host| plaintext_host_allowed(host, insecure_http_hosts)))
-    });
-    if protected {
-        Ok(())
-    } else if insecure_http_hosts.is_empty() {
-        Err(format!(
-            "configured headers require {protected_scheme} for remote endpoints; {plaintext_scheme} is allowed only for localhost or loopback IP addresses"
-        ))
-    } else {
-        Err(format!(
-            "configured headers require {protected_scheme} for remote endpoints; {plaintext_scheme} is allowed only for localhost, loopback IP addresses, or hosts listed in insecure_http_hosts"
-        ))
+    if is_protected_endpoint(
+        endpoint,
+        protected_scheme,
+        plaintext_scheme,
+        insecure_http_hosts,
+    ) {
+        return Ok(());
     }
+    Err(format!(
+        "configured headers require {protected_scheme} for remote endpoints; {plaintext_scheme} is allowed only for {}",
+        plaintext_allowance(insecure_http_hosts)
+    ))
 }
 
 /// Require protected HTTP transport before attaching configured headers.
