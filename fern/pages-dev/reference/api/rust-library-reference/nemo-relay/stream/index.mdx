@@ -22,7 +22,7 @@ upstream error -> terminate stream with error -> finalizer() -> queue END saniti
 stream ends -> finalizer() -> queue END sanitization
 ```
 
-The **collector** receives each chunk (Json) and can accumulate state (e.g., concatenating tokens). If the collector returns `Err`, the stream terminates immediately with that error. Upstream stream errors also terminate the stream immediately. The **finalizer** is called once when the stream terminates and returns the aggregated response as [`Json`](/reference/api/rust-library-reference/nemo-relay/json/type-json). That aggregated response is queued for sanitize response guardrails before being included in the END event. Stream termination does not await that queued observability work.
+The **collector** receives each chunk (Json) and can accumulate state (e.g., concatenating tokens). If the collector returns `Err`, the stream terminates immediately with that error. Upstream stream errors also terminate the stream immediately. The **finalizer** is called once when the stream terminates and returns the aggregated response as [`Json`](/reference/api/rust-library-reference/nemo-relay/json/type-json). That aggregated response is queued for sanitize response guardrails before being included in the END event. Stream termination awaits an asynchronous finalizer, not that queued observability work.
 
 ## Structs
 

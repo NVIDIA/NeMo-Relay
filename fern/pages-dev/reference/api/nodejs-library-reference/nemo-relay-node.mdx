@@ -900,7 +900,13 @@ export declare class LlmStream {
    * Throws if the underlying stream encountered an error.
    */
   next(): Promise<Json | null>
-  /** Stop the producer and wait for its cleanup to complete. */
+  /**
+   * Stop the producer and wait for its cleanup to complete.
+   *
+   * Throws a stream error that `next()` has not yet thrown, then a cleanup
+   * error, then a finalizer failure. A cleanup failure after a stream error
+   * is logged. Further calls return the same result.
+   */
   close(): Promise<void>
 }
 ```
@@ -1400,22 +1406,6 @@ export declare function collectResourceMetrics(): Promise<ResourceMetricsSnapsho
 export declare function error(message: string, target?: string | undefined | null, fields?: Json | undefined | null): void
 ```
 
-### `pushStreamChunk`
-
-Push a chunk into the stream identified by `streamId`. Called from JavaScript during async generator iteration.
-
-```ts
-export declare function pushStreamChunk(streamId: number, chunk: Json): boolean
-```
-
-### `endStream`
-
-Signal that a stream is complete. Drops the sender so the Rust receiver sees the channel as closed.
-
-```ts
-export declare function endStream(streamId: number): void
-```
-
 ### `createScopeStack`
 
 Creates a new isolated scope stack.
@@ -1694,12 +1684,12 @@ export declare function llmCallExecuteAsync(name: string, request: Json, func: (
 
 Execute a streaming LLM call end-to-end with full lifecycle management.
 
-Like `llmCallExecute`, conditional-execution guardrails run first on the raw request. Sanitize-request guardrails only affect the emitted `Start` event payload, and sanitize-response guardrails only affect the aggregated `End` event payload. Returns an `LlmStream` whose `next()` method yields response chunks incrementally. The `func` callback receives the intercepted request as JSON and its response is streamed back. Stream-level intercepts are applied to each chunk. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema.
+Like `llmCallExecute`, conditional-execution guardrails run first on the raw request. Sanitize-request guardrails only affect the emitted `Start` event payload, and sanitize-response guardrails only affect the aggregated `End` event payload. Returns an `LlmStream` whose `next()` method yields response chunks incrementally. The `func` callback receives the intercepted request as JSON and an `AbortSignal`, and returns an `AsyncIterable` of JSON chunks. Stream-level intercepts are applied to each chunk. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema.
 
-The optional `collector` callback is invoked with each intercepted chunk as JSON, allowing the caller to accumulate chunks for aggregation. The optional `finalizer` callback is invoked once when the stream is exhausted or closed early and must return a JSON value representing the aggregated response. Consumers that stop reading early must await `stream.close()` to wait for producer cleanup and surface cleanup errors.
+The optional `collector` callback is invoked with each intercepted chunk as JSON, allowing the caller to accumulate chunks for aggregation. The optional `finalizer` callback is invoked once when the stream is exhausted or closed early and must return a JSON value representing the aggregated response. Both may return a Promise. If the collector throws or rejects, the stream fails with that error. If the finalizer throws or rejects, the aggregated response is `null`. Consumers that stop reading early must await `stream.close()`, which aborts the signal and waits for producer cleanup.
 
 ```ts
-export declare function llmStreamCallExecute(name: string, request: Json, func: (...args: any[]) => any, collector?: (arg: Json) => any | undefined | null, finalizer?: () => any | undefined | null, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any, codecEncode?: (arg: Json) => any, responseCodecDecode?: (arg: Json) => any): Promise<LlmStream>
+export declare function llmStreamCallExecute(name: string, request: Json, func: (request: Json, signal: AbortSignal) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>, collector?: (chunk: Json) => void | Promise<void>, finalizer?: () => Json | Promise<Json>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any, codecEncode?: (arg: Json) => any, responseCodecDecode?: (arg: Json) => any): Promise<LlmStream>
 ```
 
 ### `registerEventMetadataInjector`
