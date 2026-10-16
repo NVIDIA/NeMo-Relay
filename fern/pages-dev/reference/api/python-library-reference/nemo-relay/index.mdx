@@ -23,6 +23,36 @@ Schema identifier attached to an event's opaque data payload.
 
 Observability fields returned by mark and scope event sanitizers.
 
+### `ScopeStackEntry`
+
+Immutable UUID and canonical type of one visible scope.
+
+#### Methods
+
+##### `scope_id`
+
+```python
+def scope_id() -> str
+```
+
+##### `scope_type`
+
+```python
+def scope_type() -> ScopeType
+```
+
+### `ScopeStackSnapshot`
+
+Detached root-to-top scope identities.
+
+#### Methods
+
+##### `scopes`
+
+```python
+def scopes() -> list[ScopeStackEntry]
+```
+
 ## Functions
 
 ### `get_scope_stack`
@@ -120,6 +150,14 @@ def set_thread_scope_stack(stack: ScopeStack) -> None
 ```
 
 Install a scope stack into the current thread's native runtime context.
+
+### `current_scope_stack_snapshot`
+
+```python
+def current_scope_stack_snapshot() -> ScopeStackSnapshot | None
+```
+
+Return detached root-to-top UUID/type entries, or None without a binding.
 
 ## Type Aliases And Constants
 

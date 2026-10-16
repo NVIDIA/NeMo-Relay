@@ -2,7 +2,7 @@
 title: "Struct Plugin Runtime"
 sidebar-title: "PluginRuntime"
 description: "Cloneable high-level runtime handle for host APIs available to native plugins."
-position: 67
+position: 68
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -26,6 +26,14 @@ Cloneable high-level runtime handle for host APIs available to native plugins.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(host: &amp;<a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>) -&gt; Self"}} /></pre>
 
 Creates a runtime handle from the host ABI table.
+
+#### `current_scope_stack_snapshot`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn current_scope_stack_snapshot(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-scopestacksnapshot\">ScopeStackSnapshot</a>&gt;&gt;"}} /></pre>
+
+Read the calling execution binding's root-to-top scope identities.
+
+Returns None without a binding. Hosts before ABI v8 return an explicit unsupported error. The buffer is released even on status/decode errors.
 
 #### `list_runtime_registrations`
 

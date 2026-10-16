@@ -393,6 +393,14 @@ Convert this outcome to its canonical JSON representation.
 
 Identify the semantic category of a Relay execution scope.
 
+### `ScopeStackEntry`
+
+Canonical scope UUID and semantic type from the visible stack.
+
+### `ScopeStackSnapshot`
+
+Detached root-to-top entries including implicit and synthetic roots.
+
 ### `WorkerPlugin`
 
 Define the validation and registration contract for a worker plugin.
@@ -666,6 +674,14 @@ async def emit_mark(name: str, data: Json | None = None, metadata: Json | None =
 ```
 
 Emit a mark event through the Relay host runtime.
+
+##### `current_scope_stack_snapshot`
+
+```python
+async def current_scope_stack_snapshot() -> ScopeStackSnapshot | None
+```
+
+Return owned scope UUIDs/types, or None when no context is bound.
 
 ##### `runtime_diagnostics`
 

@@ -60,6 +60,7 @@ Advanced runtime state, callbacks, and scope-stack helpers. Advanced runtime sta
 - `pub use scope_stack::create_scope_stack;`
 - `pub use scope_stack::create_scope_stack_from_propagation;`
 - `pub use scope_stack::current_scope_stack;`
+- `pub use scope_stack::current_scope_stack_snapshot;`
 - `pub use scope_stack::fork_scope_stack;`
 - `pub use scope_stack::propagate_scope_to_thread;`
 - `pub use scope_stack::restore_thread_scope_stack;`
@@ -85,6 +86,8 @@ Advanced runtime state, callbacks, and scope-stack helpers. Advanced runtime sta
 ## Structs
 
 - [LlmExecutionContext](/reference/api/rust-library-reference/nemo-relay/api/runtime/struct-llmexecutioncontext): Codec access for one LLM execution.
+- [ScopeStackEntry](/reference/api/rust-library-reference/nemo-relay/api/runtime/struct-scopestackentry): Identity of one entry in the visible Relay scope stack.
+- [ScopeStackSnapshot](/reference/api/rust-library-reference/nemo-relay/api/runtime/struct-scopestacksnapshot): Owned root-to-top values from one coherent read of a visible scope stack.
 
 ## Enums
 

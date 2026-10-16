@@ -255,6 +255,30 @@ export interface JsLlmCodecIdentity {
 }
 ```
 
+### `ScopeStackEntry`
+
+Identity of one visible Relay scope.
+
+```ts
+export interface ScopeStackEntry {
+  /** Canonical UUID of the scope handle. */
+  scopeId: string
+  /** Existing Relay scope category. */
+  scopeType: ScopeType
+}
+```
+
+### `ScopeStackSnapshot`
+
+Detached root-to-top values including implicit and synthetic roots.
+
+```ts
+export interface ScopeStackSnapshot {
+  /** Ordered owned entries from one coherent read. */
+  scopes: Array<ScopeStackEntry>
+}
+```
+
 ### `DataSchema`
 
 Schema identifier attached to an event's opaque data payload.
@@ -1486,6 +1510,14 @@ The caller's stack is restored immediately after callback invocation. When the c
 
 ```ts
 export declare function withScopeStack(stack: ScopeStack, callback: (...args: any[]) => any): unknown
+```
+
+### `currentScopeStackSnapshot`
+
+Return owned scope identities, or null without an explicitly active binding.
+
+```ts
+export declare function currentScopeStackSnapshot(): ScopeStackSnapshot | null
 ```
 
 ### `currentScopeStack`
