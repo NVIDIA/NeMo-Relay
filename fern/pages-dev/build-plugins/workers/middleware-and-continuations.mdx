@@ -45,6 +45,10 @@ Tool and LLM execution callbacks can wait for long tool or model calls through
 stream. The caller can cancel these callbacks. Relay then releases their
 continuations, codec capabilities, and scope state.
 
+Timeout errors name the callback and its registration surface. For example,
+`surface=TOOL_REQUEST_INTERCEPT, callback=check_request` identifies which callback
+timed out. The error also shows the time limit: `worker RPC timed out after 30000ms`.
+
 When a worker call ends or times out, Relay drops its active provider futures and
 streams. This happens even if the worker does not cancel its request to the host.
 Providers stop work if they support cancellation when a future or stream is
