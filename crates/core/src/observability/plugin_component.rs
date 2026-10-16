@@ -1418,8 +1418,9 @@ fn register_observability(
             config.version
         )));
     }
-    let plaintext = PlaintextPolicy::from_hosts(config.insecure_http_hosts.as_deref().unwrap_or_default())
-        .map_err(PluginError::InvalidConfig)?;
+    let plaintext =
+        PlaintextPolicy::from_hosts(config.insecure_http_hosts.as_deref().unwrap_or_default())
+            .map_err(PluginError::InvalidConfig)?;
     register_full_payload_policy(config.enable_full_payloads, ctx)?;
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
         register_atof_exporter(atof, &plaintext, ctx)?;
@@ -4581,11 +4582,9 @@ fn validate_observability_section_values(
     diagnostics: &mut Vec<ConfigDiagnostic>,
     config: &ObservabilityConfig,
 ) {
-    if let Err(message) =
-        crate::observability::header_file::validate_insecure_http_hosts(
-            config.insecure_http_hosts.as_deref().unwrap_or_default(),
-        )
-    {
+    if let Err(message) = crate::observability::header_file::validate_insecure_http_hosts(
+        config.insecure_http_hosts.as_deref().unwrap_or_default(),
+    ) {
         push_policy_diag(
             diagnostics,
             UnsupportedBehavior::Error,
