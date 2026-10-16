@@ -210,6 +210,14 @@ fn persistent_gateway_resolution_keeps_server_configuration_in_one_spec() {
         crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES
     );
     assert!(resolved.gateway.bootstrap_fingerprint.is_some());
+    let hook = resolve_hook_gateway(bind).unwrap();
+    assert_eq!(hook.gateway.bind(), resolved.gateway.bind());
+    assert_eq!(
+        hook.gateway.bootstrap_fingerprint,
+        resolved.gateway.bootstrap_fingerprint
+    );
+    assert_eq!(hook.max_hook_payload_bytes, resolved.max_hook_payload_bytes);
+    assert!(hook.gateway.launch_args.is_empty());
     assert!(
         resolved
             .gateway

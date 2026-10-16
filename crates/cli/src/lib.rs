@@ -39,6 +39,8 @@ pub(crate) mod test_support;
 
 use std::process::ExitCode;
 
+use clap::Parser;
+
 /// Runs the `nemo-relay` process.
 ///
 /// This is an executable entrypoint, not a supported library API.
@@ -46,17 +48,15 @@ use std::process::ExitCode;
 pub fn run_cli() -> ExitCode {
     mcp_environment::remove_unresolved_mcp_placeholders();
     let bootstrap_shutdown_token = take_bootstrap_shutdown_token();
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
+    let cli = commands::root::Cli::parse();
+    let runtime = match commands::runtime_builder(&cli).enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("failed to initialize async runtime: {error}");
             return ExitCode::FAILURE;
         }
     };
-    runtime.block_on(commands::run(bootstrap_shutdown_token))
+    runtime.block_on(commands::run(cli, bootstrap_shutdown_token))
 }
 
 fn take_bootstrap_shutdown_token() -> Option<String> {

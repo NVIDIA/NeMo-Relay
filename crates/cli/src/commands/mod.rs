@@ -21,8 +21,6 @@ mod serve;
 
 use std::process::ExitCode;
 
-use clap::Parser;
-
 #[cfg(test)]
 #[cfg(test)]
 use self::model_pricing::PricingCommand;
@@ -38,8 +36,8 @@ use crate::{
 // Runs the async CLI entrypoint and converts any surfaced gateway error into a non-zero process
 // exit. Errors are printed once here so subcommands can return structured errors without also
 // owning process-level reporting.
-pub(crate) async fn run(bootstrap_shutdown_token: Option<String>) -> ExitCode {
-    match dispatch(bootstrap_shutdown_token).await {
+pub(crate) async fn run(cli: Cli, bootstrap_shutdown_token: Option<String>) -> ExitCode {
+    match dispatch(cli, bootstrap_shutdown_token).await {
         Ok(code) => code,
         Err(error) => {
             let exit_code = if matches!(error, error::CliError::HookDelivery { .. })
@@ -52,6 +50,23 @@ pub(crate) async fn run(bootstrap_shutdown_token: Option<String>) -> ExitCode {
             eprintln!("{error}");
             exit_code
         }
+    }
+}
+
+pub(crate) fn runtime_builder(cli: &Cli) -> tokio::runtime::Builder {
+    // These clients only coordinate I/O. Blocking transports still use spawn_blocking, and
+    // daemon MCP's protocol and control tasks run concurrently on the calling thread.
+    match cli.command.as_ref() {
+        Some(Command::HookForward(_)) => tokio::runtime::Builder::new_current_thread(),
+        Some(Command::Daemon(command))
+            if matches!(
+                command.command.as_ref(),
+                Some(daemon::DaemonSubcommand::Hook(_) | daemon::DaemonSubcommand::Mcp(_))
+            ) =>
+        {
+            tokio::runtime::Builder::new_current_thread()
+        }
+        _ => tokio::runtime::Builder::new_multi_thread(),
     }
 }
 
@@ -141,8 +156,10 @@ fn resolve_command_logging_config(
     Ok((config, fallback_error))
 }
 
-async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, error::CliError> {
-    let cli = Cli::parse();
+async fn dispatch(
+    cli: Cli,
+    bootstrap_shutdown_token: Option<String>,
+) -> Result<ExitCode, error::CliError> {
     let command_name = cli
         .command
         .as_ref()
