@@ -33,6 +33,97 @@ use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
 struct ToolGuardrailCleanup(&'static str);
 
+#[tokio::test(start_paused = true)]
+async fn idle_sweeper_reclaims_unused_session_gates_without_idle_sessions() {
+    let manager = SessionManager::new(session_test_config());
+    manager.start_idle_sweeper();
+    // Let the interval's immediate first tick run before creating the gates.
+    tokio::task::yield_now().await;
+
+    for index in 0..1_000 {
+        drop(session_gate(&manager.session_gates, &format!("ended-{index}")).await);
+    }
+    assert_eq!(manager.session_gates.lock().await.len(), 1_000);
+    assert!(manager.inner.lock().await.is_empty());
+
+    tokio::time::advance(AGENT_IDLE_SWEEP_INTERVAL).await;
+    tokio::task::yield_now().await;
+
+    assert!(manager.session_gates.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn idle_sweep_preserves_session_gates_before_lock_acquisition() {
+    let manager = SessionManager::new(session_test_config());
+    let gate = session_gate(&manager.session_gates, "about-to-lock").await;
+
+    manager
+        .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+        .await
+        .unwrap();
+
+    let current = session_gate(&manager.session_gates, "about-to-lock").await;
+    assert!(Arc::ptr_eq(&gate, &current));
+    let _held = gate.lock().await;
+    assert!(current.try_lock().is_err());
+}
+
+#[tokio::test]
+async fn idle_sweep_preserves_held_and_waiting_session_gates() {
+    let manager = SessionManager::new(session_test_config());
+    let gate = session_gate(&manager.session_gates, "busy").await;
+    let held = gate.lock_owned().await;
+    let waiting = session_gate(&manager.session_gates, "busy")
+        .await
+        .lock_owned();
+    tokio::pin!(waiting);
+    assert!(futures_util::poll!(&mut waiting).is_pending());
+
+    manager
+        .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+        .await
+        .unwrap();
+    let current = session_gate(&manager.session_gates, "busy").await;
+    assert!(Arc::ptr_eq(
+        tokio::sync::OwnedMutexGuard::mutex(&held),
+        &current
+    ));
+    assert!(current.try_lock().is_err());
+
+    drop(current);
+    drop(held);
+    // The queued acquisition is now the only owner outside the directory.
+    manager
+        .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+        .await
+        .unwrap();
+    let current = session_gate(&manager.session_gates, "busy").await;
+    let held = tokio::time::timeout(Duration::from_secs(1), &mut waiting)
+        .await
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        tokio::sync::OwnedMutexGuard::mutex(&held),
+        &current
+    ));
+    drop(current);
+
+    manager
+        .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+        .await
+        .unwrap();
+    assert_eq!(manager.session_gates.lock().await.len(), 1);
+    drop(held);
+
+    manager
+        .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+        .await
+        .unwrap();
+    assert!(manager.session_gates.lock().await.is_empty());
+
+    let recreated = session_gate(&manager.session_gates, "busy").await;
+    assert!(recreated.try_lock().is_ok());
+}
+
 impl Drop for ToolGuardrailCleanup {
     fn drop(&mut self) {
         let _ = deregister_tool_conditional_execution_guardrail(self.0);
