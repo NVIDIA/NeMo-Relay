@@ -74,7 +74,7 @@ toml_edit = "0.23"
 tower-service = "0.3"
 uuid = { workspace = true, features = ["serde", "v7"] }
 zstd = "0.13"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
