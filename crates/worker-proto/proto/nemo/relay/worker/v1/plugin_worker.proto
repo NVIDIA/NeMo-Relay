@@ -19,6 +19,7 @@ service PluginWorker {
 service RelayHostRuntime {
   rpc Log(LogRequest) returns (HostAck);
   rpc EmitMark(EmitMarkRequest) returns (HostAck);
+  rpc GetCurrentScopeStackSnapshot(GetCurrentScopeStackSnapshotRequest) returns (GetCurrentScopeStackSnapshotResponse);
   rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest) returns (GetRuntimeDiagnosticsResponse);
   rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
   rpc PopScope(PopScopeRequest) returns (HostAck);
@@ -417,6 +418,25 @@ message WorkerError {
   string code = 1;
   string message = 2;
   bool retryable = 3;
+}
+
+// Owned root-to-top identities; never opaque binding or invocation IDs.
+message ScopeStackEntry {
+  string scope_id = 1;
+  ScopeType scope_type = 2;
+}
+message ScopeStackSnapshot {
+  repeated ScopeStackEntry scopes = 1;
+}
+message GetCurrentScopeStackSnapshotRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  ScopeContext scope = 3;
+}
+message GetCurrentScopeStackSnapshotResponse {
+  // Absence means no bound context, not an empty/root-only stack.
+  ScopeStackSnapshot snapshot = 1;
+  WorkerError error = 2;
 }
 
 message ScopeContext {

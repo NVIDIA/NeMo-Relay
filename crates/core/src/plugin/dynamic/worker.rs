@@ -296,6 +296,7 @@ impl Plugin for WorkerPluginAdapter {
 }
 
 struct WorkerPluginInstance {
+    callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     allows_multiple_components: bool,
     config: Map<String, Json>,
@@ -499,6 +500,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("unknown panic payload")
 }
 
+/// Starts and validates a worker, then stores its settings for this activation.
 fn load_one_worker_plugin(
     spec: &WorkerPluginLoadSpec,
     defer_registration: bool,
@@ -633,7 +635,9 @@ fn load_one_worker_plugin(
     .map_err(|err| PluginError::RegistrationFailed(format!("worker handshake failed: {err}")))?;
     let handshake = handshake.into_inner();
     validate_worker_handshake(&spec.plugin_id, &handshake)?;
+    let callback_timeouts = load.callback_timeouts.clone().unwrap_or_default();
     host_state.set_gate_callback(WorkerGateCallback {
+        callback_timeouts: callback_timeouts.clone(),
         plugin_kind: spec.plugin_id.clone(),
         runtime: runtime_handle.runtime().handle().clone(),
         client: client.clone(),
@@ -664,6 +668,7 @@ fn load_one_worker_plugin(
     };
 
     let instance = Arc::new(WorkerPluginInstance {
+        callback_timeouts,
         plugin_kind: spec.plugin_id.clone(),
         allows_multiple_components: handshake.allows_multiple_components,
         config: spec.config.clone(),
@@ -1554,8 +1559,10 @@ impl WorkerPluginInstance {
         }
     }
 
+    /// Shares the worker connection and copies its callback deadline settings.
     fn clone_for_callback(&self) -> WorkerPluginCallback {
         WorkerPluginCallback {
+            callback_timeouts: self.callback_timeouts.clone(),
             plugin_kind: self.plugin_kind.clone(),
             activation_id: self.host_state.activation_id.clone(),
             runtime: self.runtime.handle(),
@@ -1587,6 +1594,7 @@ fn bind_loopback_listener() -> crate::plugin::Result<(TcpListener, SocketAddr)> 
 
 #[derive(Clone)]
 struct WorkerPluginCallback {
+    callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     activation_id: String,
     runtime: tokio::runtime::Handle,
@@ -1596,6 +1604,7 @@ struct WorkerPluginCallback {
 
 #[derive(Clone)]
 struct WorkerGateCallback {
+    callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     runtime: tokio::runtime::Handle,
     client: PluginWorkerClient<Channel>,
@@ -1603,6 +1612,7 @@ struct WorkerGateCallback {
 }
 
 impl WorkerGateCallback {
+    /// Calls a worker-owned conditional guardrail while its activation is available.
     fn invoke(
         &self,
         callback_name: &str,
@@ -1614,6 +1624,7 @@ impl WorkerGateCallback {
             .upgrade()
             .ok_or_else(|| FlowError::NotFound("worker activation is shutting down".into()))?;
         WorkerPluginCallback {
+            callback_timeouts: self.callback_timeouts.clone(),
             plugin_kind: self.plugin_kind.clone(),
             activation_id: host_state.activation_id.clone(),
             runtime: self.runtime.clone(),
@@ -1678,6 +1689,9 @@ impl WorkerInvocationGuard {
             return None;
         }
         self.cancel_on_drop = false;
+        // Revoke inspection before awaiting worker cancellation.
+        self.host_state
+            .cancel_scope_stack_snapshot(&self.scope_stack_id);
         Some((
             self.client.clone(),
             CancelInvocationRequest {
@@ -2330,7 +2344,7 @@ impl WorkerPluginCallback {
         block_on_handle(&self.runtime, self.invoke_async(request))
     }
 
-    /// Invokes a callback with its surface's timeout policy and logs failures.
+    /// Runs a callback with its configured deadline unless the caller controls cancellation.
     async fn invoke_async(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
         let callback_name = request.registration_name.clone();
         let surface = request.surface;
@@ -2341,7 +2355,15 @@ impl WorkerPluginCallback {
                 RegistrationSurface::ToolExecutionIntercept
                 | RegistrationSurface::LlmExecutionIntercept,
             ) => None,
-            _ => Some(WORKER_RPC_TIMEOUT),
+            _ => Some(
+                self.callback_timeouts
+                    .by_name
+                    .get(&callback_name)
+                    .copied()
+                    .or(self.callback_timeouts.default_ms)
+                    .map(|millis| Duration::from_millis(millis.get()))
+                    .unwrap_or(WORKER_RPC_TIMEOUT),
+            ),
         };
         let result = self.invoke_async_with_timeout(request, timeout).await;
         if let Err(error) = &result {
@@ -2549,6 +2571,7 @@ struct WorkerHostRuntimeState {
     activation_id: String,
     auth_token: String,
     scope_stacks: Mutex<HashMap<String, StoredScopeStack>>,
+    snapshot_cancelled_bindings: Mutex<std::collections::HashSet<String>>,
     pending_scope_cleanups: Mutex<Vec<PendingScopeCleanup>>,
     scope_stack_cleanups: Mutex<Vec<crate::api::runtime::ScopeStackHandle>>,
     scope_stack_cleanup_complete: Condvar,
@@ -2649,6 +2672,7 @@ impl WorkerHostRuntimeState {
             activation_id,
             auth_token,
             scope_stacks: Mutex::new(HashMap::new()),
+            snapshot_cancelled_bindings: Mutex::new(std::collections::HashSet::new()),
             pending_scope_cleanups: Mutex::new(Vec::new()),
             scope_stack_cleanups: Mutex::new(Vec::new()),
             scope_stack_cleanup_complete: Condvar::new(),
@@ -2920,6 +2944,18 @@ impl WorkerHostRuntimeState {
         Ok(id)
     }
 
+    fn cancel_scope_stack_snapshot(&self, scope_stack_identifier: &str) {
+        if scope_stack_identifier.is_empty() {
+            return;
+        }
+        // Recover the marker set only to preserve revocation during cleanup.
+        // Inspection reports a poisoned lock as an explicit error.
+        self.snapshot_cancelled_bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(scope_stack_identifier.to_owned());
+    }
+
     fn cleanup_invocation_scope_stack(&self, id: &str) {
         let unwind = self.take_invocation_scope_cleanup(id);
         if let Some((handle, base_depth, continuation_context, publication_buffer)) = unwind {
@@ -2951,7 +2987,12 @@ impl WorkerHostRuntimeState {
         let Ok(mut stacks) = self.scope_stacks.lock() else {
             return None;
         };
-        let stored = stacks.remove(id)?;
+        let stored = stacks.remove(id);
+        self.snapshot_cancelled_bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(id);
+        let stored = stored?;
         let mut base_depth = stored.invocation_base_depth?;
         let Ok(mut pending) = self.pending_scope_cleanups.lock() else {
             return None;
@@ -3246,6 +3287,81 @@ fn registration_surface_from_kind(kind: RuntimeRegistrationKind) -> Registration
 
 #[tonic::async_trait]
 impl RelayHostRuntime for WorkerHostRuntimeService {
+    async fn get_current_scope_stack_snapshot(
+        &self,
+        request: Request<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest>,
+    ) -> Result<Response<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotResponse>, Status>
+    {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let snapshot = match request.scope {
+            None => None,
+            Some(scope) => {
+                if scope.scope_stack_id.trim().is_empty() {
+                    return Err(Status::invalid_argument(
+                        "snapshot scope_stack_id must not be empty",
+                    ));
+                }
+                // Keep registry ownership stable until the detached copy is complete.
+                // Cleanup removes entries under this same lock before unwinding them.
+                let stacks = self.state.scope_stacks.lock().map_err(|error| {
+                    Status::internal(format!("scope stack lock poisoned: {error}"))
+                })?;
+                // Keep revocation ordered with the copy: cancellation either
+                // starts after this read completes, or this read is rejected.
+                let cancelled_bindings =
+                    self.state
+                        .snapshot_cancelled_bindings
+                        .lock()
+                        .map_err(|error| {
+                            Status::internal(format!(
+                                "snapshot cancellation lock poisoned: {error}"
+                            ))
+                        })?;
+                if cancelled_bindings.contains(&scope.scope_stack_id) {
+                    return Err(Status::cancelled("scope stack binding is cancelled"));
+                }
+                let stored = stacks.get(&scope.scope_stack_id).ok_or_else(|| {
+                    Status::not_found("scope stack binding is expired, dropped, or foreign")
+                })?;
+                if !scope.parent_scope_id.is_empty() {
+                    let handles = self.state.scope_handles.lock().map_err(|error| {
+                        Status::internal(format!("scope handle lock poisoned: {error}"))
+                    })?;
+                    let parent = handles
+                        .get(&scope.parent_scope_id)
+                        .ok_or_else(|| Status::not_found("parent scope binding is unavailable"))?;
+                    if parent.scope_stack_id != scope.scope_stack_id {
+                        return Err(Status::permission_denied(
+                            "parent scope belongs to another binding",
+                        ));
+                    }
+                }
+                Some(
+                    crate::api::runtime::scope_stack_snapshot(&stored.handle)
+                        .map_err(status_from_flow)?,
+                )
+            }
+        };
+        let snapshot = snapshot.map(|snapshot| nemo_relay_worker_proto::v1::ScopeStackSnapshot {
+            scopes: snapshot
+                .scopes
+                .into_iter()
+                .map(|scope| nemo_relay_worker_proto::v1::ScopeStackEntry {
+                    scope_id: scope.scope_id.to_string(),
+                    scope_type: snapshot_scope_type_to_proto(scope.scope_type),
+                })
+                .collect(),
+        });
+        Ok(Response::new(
+            nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotResponse {
+                snapshot,
+                error: None,
+            },
+        ))
+    }
+
     async fn log(&self, request: Request<LogRequest>) -> Result<Response<HostAck>, Status> {
         let request = request.into_inner();
         self.state
@@ -4231,6 +4347,23 @@ fn worker_error_to_plugin(error: WorkerError, fallback: &str) -> PluginError {
 
 fn status_from_flow(err: FlowError) -> Status {
     Status::internal(err.to_string())
+}
+
+fn snapshot_scope_type_to_proto(scope_type: ScopeType) -> i32 {
+    use nemo_relay_worker_proto::v1::ScopeType as ProtoScopeType;
+    (match scope_type {
+        ScopeType::Agent => ProtoScopeType::Agent,
+        ScopeType::Function => ProtoScopeType::Function,
+        ScopeType::Tool => ProtoScopeType::Tool,
+        ScopeType::Llm => ProtoScopeType::Llm,
+        ScopeType::Retriever => ProtoScopeType::Retriever,
+        ScopeType::Embedder => ProtoScopeType::Embedder,
+        ScopeType::Reranker => ProtoScopeType::Reranker,
+        ScopeType::Guardrail => ProtoScopeType::Guardrail,
+        ScopeType::Evaluator => ProtoScopeType::Evaluator,
+        ScopeType::Custom => ProtoScopeType::Custom,
+        ScopeType::Unknown => ProtoScopeType::Unknown,
+    }) as i32
 }
 
 fn proto_scope_type(scope_type: i32) -> ScopeType {

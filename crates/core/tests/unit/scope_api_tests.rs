@@ -246,3 +246,243 @@ fn reserved_tool_completion_marks_sanitize_payloads_without_start_metadata() {
     deregister_tool_sanitize_request_guardrail("completion-request").unwrap();
     deregister_tool_sanitize_response_guardrail("completion-response").unwrap();
 }
+
+#[test]
+fn scope_stack_snapshot_is_nonactivating_and_detached() {
+    std::thread::spawn(|| {
+        use crate::api::runtime::{
+            create_scope_stack, current_scope_stack_snapshot, scope_stack_active, with_scope_stack,
+        };
+        use crate::api::scope::{
+            PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope,
+        };
+        assert!(!scope_stack_active());
+        assert_eq!(current_scope_stack_snapshot().unwrap(), None);
+        assert!(!scope_stack_active());
+        let stack = create_scope_stack();
+        let root_uuid = stack.read().unwrap().scopes()[0].uuid;
+        with_scope_stack(stack, || {
+            let root = current_scope_stack_snapshot().unwrap().unwrap();
+            assert_eq!(root.scopes.len(), 1);
+            assert_eq!(root.scopes[0].scope_id, root_uuid);
+            let agent = push_scope(
+                PushScopeParams::builder()
+                    .name("agent")
+                    .scope_type(ScopeType::Agent)
+                    .build(),
+            )
+            .unwrap();
+            let function = push_scope(
+                PushScopeParams::builder()
+                    .name("function")
+                    .scope_type(ScopeType::Function)
+                    .build(),
+            )
+            .unwrap();
+            let tool = push_scope(
+                PushScopeParams::builder()
+                    .name("tool")
+                    .scope_type(ScopeType::Tool)
+                    .build(),
+            )
+            .unwrap();
+            let before_pop = current_scope_stack_snapshot().unwrap().unwrap();
+            assert_eq!(
+                before_pop
+                    .scopes
+                    .iter()
+                    .map(|entry| entry.scope_id)
+                    .collect::<Vec<_>>(),
+                vec![root_uuid, agent.uuid, function.uuid, tool.uuid]
+            );
+            assert_eq!(before_pop.scopes[3].scope_type, ScopeType::Tool);
+            assert_eq!(current_scope_stack_snapshot().unwrap().unwrap(), before_pop);
+            pop_scope(PopScopeParams::builder().handle_uuid(&tool.uuid).build()).unwrap();
+            assert_eq!(
+                current_scope_stack_snapshot()
+                    .unwrap()
+                    .unwrap()
+                    .scopes
+                    .len(),
+                3
+            );
+            assert_eq!(before_pop.scopes.len(), 4);
+            pop_scope(
+                PopScopeParams::builder()
+                    .handle_uuid(&function.uuid)
+                    .build(),
+            )
+            .unwrap();
+            pop_scope(PopScopeParams::builder().handle_uuid(&agent.uuid).build()).unwrap();
+        });
+        assert_eq!(current_scope_stack_snapshot().unwrap(), None);
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn scope_stack_snapshot_binding_precedence_and_restoration() {
+    std::thread::spawn(|| {
+        use crate::api::runtime::{
+            TASK_SCOPE_STACK, create_scope_stack, current_scope_stack_snapshot,
+            set_thread_scope_stack, with_scope_stack,
+        };
+        let thread_stack = create_scope_stack();
+        let thread_uuid = thread_stack.read().unwrap().scopes()[0].uuid;
+        set_thread_scope_stack(thread_stack);
+        assert_eq!(
+            current_scope_stack_snapshot().unwrap().unwrap().scopes[0].scope_id,
+            thread_uuid
+        );
+        let task_stack = create_scope_stack();
+        let task_uuid = task_stack.read().unwrap().scopes()[0].uuid;
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        executor.block_on(TASK_SCOPE_STACK.scope(task_stack, async {
+            tokio::task::yield_now().await;
+            assert_eq!(
+                current_scope_stack_snapshot().unwrap().unwrap().scopes[0].scope_id,
+                task_uuid
+            );
+            let override_stack = create_scope_stack();
+            let override_uuid = override_stack.read().unwrap().scopes()[0].uuid;
+            with_scope_stack(override_stack, || {
+                assert_eq!(
+                    current_scope_stack_snapshot().unwrap().unwrap().scopes[0].scope_id,
+                    override_uuid
+                )
+            });
+            assert_eq!(
+                current_scope_stack_snapshot().unwrap().unwrap().scopes[0].scope_id,
+                task_uuid
+            );
+        }));
+        assert_eq!(
+            current_scope_stack_snapshot().unwrap().unwrap().scopes[0].scope_id,
+            thread_uuid
+        );
+    })
+    .join()
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scope_stack_snapshot_concurrent_agents_keep_identical_call_ids_isolated() {
+    use crate::api::runtime::{
+        TASK_SCOPE_STACK, create_scope_stack, current_scope_stack_snapshot, with_active_event_uuid,
+    };
+    use crate::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let call_uuid = uuid::Uuid::now_v7();
+    let mut tasks = Vec::new();
+    for _ in 0..2 {
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(TASK_SCOPE_STACK.scope(
+            create_scope_stack(),
+            async move {
+                let agent = push_scope(
+                    PushScopeParams::builder()
+                        .name("agent")
+                        .scope_type(ScopeType::Agent)
+                        .build(),
+                )
+                .unwrap();
+                let snapshot = with_active_event_uuid(call_uuid, async {
+                    barrier.wait().await;
+                    tokio::task::yield_now().await;
+                    current_scope_stack_snapshot().unwrap().unwrap()
+                })
+                .await;
+                assert_eq!(snapshot.scopes.len(), 2);
+                assert_eq!(snapshot.scopes[1].scope_id, agent.uuid);
+                assert!(
+                    snapshot
+                        .scopes
+                        .iter()
+                        .all(|entry| entry.scope_id != call_uuid)
+                );
+                pop_scope(PopScopeParams::builder().handle_uuid(&agent.uuid).build()).unwrap();
+                snapshot
+            },
+        )));
+    }
+    let first = tasks.remove(0).await.unwrap();
+    let second = tasks.remove(0).await.unwrap();
+    assert_ne!(first.scopes[0].scope_id, second.scopes[0].scope_id);
+    assert_ne!(first.scopes[1].scope_id, second.scopes[1].scope_id);
+}
+
+#[test]
+fn scope_stack_snapshot_preserves_rooted_and_rootless_propagation() {
+    use crate::api::runtime::{
+        PropagationContext, create_scope_stack_from_propagation, scope_stack_snapshot,
+    };
+    use crate::api::scope::ScopeType;
+    let root_uuid = uuid::Uuid::now_v7();
+    let parent_uuid = uuid::Uuid::now_v7();
+    for root in [Some(root_uuid), None, Some(parent_uuid)] {
+        let context = PropagationContext::from_json(
+            &json!({"version":1,"root_uuid":root,"parent_uuid":parent_uuid}).to_string(),
+        )
+        .unwrap();
+        let stack = create_scope_stack_from_propagation(&context).unwrap();
+        let snapshot = scope_stack_snapshot(&stack).unwrap();
+        assert_eq!(snapshot.scopes[0].scope_id, root.unwrap_or(parent_uuid));
+        assert_eq!(snapshot.scopes[0].scope_type, ScopeType::Agent);
+        if root == Some(root_uuid) {
+            assert_eq!(snapshot.scopes.len(), 2);
+            assert_eq!(snapshot.scopes[1].scope_id, parent_uuid);
+            assert_eq!(snapshot.scopes[1].scope_type, ScopeType::Unknown);
+        } else {
+            assert_eq!(snapshot.scopes.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn scope_stack_snapshot_poisoning_returns_error_without_activating_context() {
+    std::thread::spawn(|| {
+        use crate::api::runtime::{
+            create_scope_stack, current_scope_stack_snapshot, scope_stack_active,
+            scope_stack_snapshot, with_scope_stack,
+        };
+        let stack = create_scope_stack();
+        let poisoned_stack = Arc::clone(&stack);
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = poisoned_stack.write().unwrap();
+                panic!("poison the selected scope stack");
+            })
+            .join()
+            .is_err()
+        );
+        assert!(scope_stack_snapshot(&stack).is_err());
+        assert!(!scope_stack_active());
+        with_scope_stack(stack, || {
+            assert!(current_scope_stack_snapshot().is_err());
+        });
+        assert_eq!(current_scope_stack_snapshot().unwrap(), None);
+        assert!(!scope_stack_active());
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn scope_stack_snapshot_owned_values_survive_stack_drop() {
+    use crate::api::runtime::{create_scope_stack, scope_stack_snapshot};
+    let stack = create_scope_stack();
+    let root_uuid = stack.read().unwrap().scopes()[0].uuid;
+    let snapshot = scope_stack_snapshot(&stack).unwrap();
+    drop(stack);
+    assert_eq!(snapshot.scopes.len(), 1);
+    assert_eq!(snapshot.scopes[0].scope_id, root_uuid);
+    assert_eq!(
+        snapshot.scopes[0].scope_type,
+        crate::api::scope::ScopeType::Agent
+    );
+    let serialized = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(serialized["scopes"][0]["scope_id"], root_uuid.to_string());
+}

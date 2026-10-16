@@ -133,6 +133,8 @@ from nemo_relay._native import (
     ScopeEvent,
     ScopeHandle,
     ScopeStack,
+    ScopeStackEntry,
+    ScopeStackSnapshot,
     ScopeType,
     ToolAttributes,
     ToolExecutionContext,
@@ -154,6 +156,7 @@ from nemo_relay._native import create_scope_stack as _create_scope_stack
 from nemo_relay._native import (
     create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
 )
+from nemo_relay._native import current_scope_stack_snapshot as _current_scope_stack_snapshot
 from nemo_relay._native import (
     log as _log,
 )
@@ -344,6 +347,20 @@ _propagation_tracestate_var: contextvars.ContextVar[str | None] = contextvars.Co
     "propagation_tracestate",
     default=None,
 )
+
+
+def current_scope_stack_snapshot() -> ScopeStackSnapshot | None:
+    """Return detached root-to-top UUID/type entries, or None without a binding.
+
+    Includes implicit and synthetic roots. An Agent UUID identifies that
+    scope's lifetime; synthetic entries do not establish complete ancestry.
+    Later push/pop operations do not modify an earlier snapshot.
+
+    Returns:
+        ScopeStackSnapshot | None: Detached scope entries, or None when no
+        explicit scope-stack binding is active.
+    """
+    return _current_scope_stack_snapshot(_scope_stack_var.get(None))
 
 
 def get_scope_stack() -> ScopeStack:
@@ -779,6 +796,9 @@ __all__ = [
     "resource_metrics",
     # Scope stack isolation
     "ScopeStack",
+    "ScopeStackEntry",
+    "ScopeStackSnapshot",
+    "current_scope_stack_snapshot",
     "PropagationContext",
     "create_scope_stack",
     "capture_propagation_context",

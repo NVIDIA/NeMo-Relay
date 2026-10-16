@@ -28,13 +28,14 @@ pub(crate) use continuation_context::MiddlewareContinuationLease;
 pub use global::global_context;
 pub use llm_execution_context::LlmExecutionContext;
 pub use scope_stack::{
-    PropagationContext, ScopeStack, ScopeStackHandle, TASK_SCOPE_STACK, ThreadScopeStackBinding,
-    capture_propagation_context, capture_propagation_context_with_root,
-    capture_rootless_propagation_context, capture_thread_scope_stack, capture_traceparent,
-    create_scope_stack, create_scope_stack_from_propagation, current_scope_stack, fork_scope_stack,
-    propagate_scope_to_thread, restore_thread_scope_stack, scope_stack_active,
-    set_thread_scope_stack, sync_thread_scope_stack, task_scope_push, task_scope_remove,
-    task_scope_top, with_active_event_uuid, with_scope_stack,
+    PropagationContext, ScopeStack, ScopeStackEntry, ScopeStackHandle, ScopeStackSnapshot,
+    TASK_SCOPE_STACK, ThreadScopeStackBinding, capture_propagation_context,
+    capture_propagation_context_with_root, capture_rootless_propagation_context,
+    capture_thread_scope_stack, capture_traceparent, create_scope_stack,
+    create_scope_stack_from_propagation, current_scope_stack, current_scope_stack_snapshot,
+    fork_scope_stack, propagate_scope_to_thread, restore_thread_scope_stack, scope_stack_active,
+    scope_stack_snapshot, set_thread_scope_stack, sync_thread_scope_stack, task_scope_push,
+    task_scope_remove, task_scope_top, with_active_event_uuid, with_scope_stack,
 };
 pub(crate) use scope_stack::{capture_trace_context, sync_thread_active_event_for_stack};
 pub use state::NemoRelayContextState;
