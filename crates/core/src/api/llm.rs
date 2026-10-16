@@ -29,7 +29,7 @@ use crate::api::runtime::subscriber_dispatcher::{
     dispatch_sanitized_event, dispatch_transformed_event, register_pending_publication,
 };
 use crate::api::runtime::{
-    EventSubscriberFn, LlmCollectorFn, LlmExecutionContext, LlmExecutionNextFn, LlmFinalizerFn,
+    EventSubscriberFn, LlmCollector, LlmExecutionContext, LlmExecutionNextFn, LlmFinalizer,
     LlmJsonStream, LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
     MiddlewareContinuationContext,
 };
@@ -280,10 +280,12 @@ pub struct LlmStreamCallExecuteParams {
     pub request: LlmRequest,
     /// Streaming provider callback or execution continuation.
     pub func: LlmStreamExecutionNextFn,
-    /// Per-chunk collector callback used to accumulate stream state.
-    pub collector: LlmCollectorFn,
-    /// Finalizer callback used to construct the completed response.
-    pub finalizer: LlmFinalizerFn,
+    /// Per-chunk collector used to accumulate stream state.
+    #[builder(setter(into))]
+    pub collector: LlmCollector,
+    /// Finalizer used to construct the completed response.
+    #[builder(setter(into))]
+    pub finalizer: LlmFinalizer,
     /// Optional explicit parent scope for the emitted LLM span.
     #[builder(default)]
     pub parent: Option<ScopeHandle>,

@@ -210,9 +210,9 @@ async function typedLlmExecute(name, request, func, responseJsonCodec, options) 
  *
  * @param {string} name - Model/provider name.
  * @param {*} request - The LLM request object ({headers, content}).
- * @param {function(*): AsyncIterable<TChunk>} func - The streaming LLM implementation.
- * @param {function(TChunk): void} collector - Called with each typed chunk after intercepts.
- * @param {function(): TResponse} finalizer - Called once when the stream is exhausted or closed early.
+ * @param {function(*, AbortSignal): AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>} func - The streaming LLM implementation.
+ * @param {function(TChunk): void | Promise<void>} collector - Called with each typed chunk after intercepts.
+ * @param {function(): TResponse | Promise<TResponse>} finalizer - Called once when the stream is exhausted or closed early.
  * @param {Codec<TChunk>} chunkJsonCodec - Codec for serializing/deserializing chunks.
  * @param {Codec<TResponse>} responseJsonCodec - Codec for serializing/deserializing the final response.
  * @param {object} [options] - Optional parameters.
@@ -226,63 +226,28 @@ async function typedLlmExecute(name, request, func, responseJsonCodec, options) 
  * @param {{ decodeResponse(response: *): * }} [options.responseCodec]
  *   Response codec for annotated response events.
  * @returns {Promise<LlmStream>} A promise resolving to the native stream handle.
- * @remarks The JavaScript side drives async iteration and pushes each encoded
- * chunk back into the native stream bridge; the stream is always closed in the
- * `finally` path even if the source iterator throws. Consumers that stop
- * reading early must await `stream.close()` to complete producer cleanup.
+ * @remarks Chunks are encoded as they are pulled from `func`. A throw or
+ * rejection from `func` rejects the call, an iterator failure rejects the
+ * pending `next()`, and the native bridge aborts the signal and runs iterator
+ * cleanup when the consumer closes early. The producer must stop once the
+ * signal aborts. Consumers that stop reading early must await `stream.close()`,
+ * which waits for that cleanup without a timeout.
  */
 async function typedLlmStreamExecute(name, request, func, collector, finalizer, ...streamArgs) {
   const [chunkJsonCodec, responseJsonCodec, options] = streamArgs;
   const opts = options || {};
-  let iterator;
-  let resolveIterator;
-  const iteratorReady = new Promise((resolve) => {
-    resolveIterator = resolve;
-  });
 
-  // Push-based stream bridge: NAPI cannot resolve JS Promises from
-  // call_with_return_value, so the JS side drives async generator iteration
-  // and pushes each chunk into Rust via the exported pushStreamChunk function.
-  // The request and stream ID are passed as a wrapper object.
-  const jsonFunc = (wrapper) => {
-    const req = wrapper.__nemo_relay_native;
-    const streamId = wrapper.__nemo_relay_stream_id;
-    (async () => {
-      try {
-        iterator = func(req)[Symbol.asyncIterator]();
-        resolveIterator(iterator);
-        while (true) {
-          const { done, value: typedChunk } = await iterator.next();
-          if (done) {
-            break;
-          }
-          if (!lib.pushStreamChunk(streamId, chunkJsonCodec.toJson(typedChunk))) {
-            await iterator.return?.();
-            break;
-          }
-        }
-      } finally {
-        resolveIterator(iterator);
-        try {
-          await iterator?.return?.();
-        } finally {
-          lib.endStream(streamId);
-        }
-      }
-    })();
+  const jsonFunc = async (jsonRequest, signal) => {
+    const source = await func(jsonRequest, signal);
+    if (source == null || typeof source[Symbol.asyncIterator] !== 'function') {
+      throw new TypeError('typed streaming callback must return an AsyncIterable');
+    }
+    return encodeChunks(source, chunkJsonCodec);
   };
+  const jsonCollector = (jsonChunk) => collector(chunkJsonCodec.fromJson(jsonChunk));
+  const jsonFinalizer = async () => collectCodecReturn(responseJsonCodec.toJson(await finalizer()));
 
-  // Wrap collector: convert JSON chunks back to typed
-  const jsonCollector = (jsonChunk) => {
-    return collectCodecReturn(collector(chunkJsonCodec.fromJson(jsonChunk)));
-  };
-
-  // Wrap finalizer: convert typed response to JSON
-  const jsonFinalizer = () => {
-    return collectCodecReturn(responseJsonCodec.toJson(finalizer()));
-  };
-
-  const stream = await lib.llmStreamCallExecute(
+  return lib.llmStreamCallExecute(
     name,
     request,
     jsonFunc,
@@ -297,35 +262,12 @@ async function typedLlmStreamExecute(name, request, func, collector, finalizer, 
     opts.codec ? (payload) => encodeWithCodec(opts.codec, payload) : null,
     opts.responseCodec ? (response) => decodeResponseWithCodec(opts.responseCodec, response) : null,
   );
-  const close = stream.close.bind(stream);
-  stream.close = async () => {
-    const closing = close();
-    let iteratorError;
-    try {
-      await (await iteratorReady)?.return?.();
-    } catch (error) {
-      iteratorError = error;
-    }
-    let closeError;
-    try {
-      await closing;
-    } catch (error) {
-      closeError = error;
-    }
-    if (iteratorError && closeError) {
-      throw new AggregateError(
-        [iteratorError, closeError],
-        'stream close failed during iterator cleanup and native close',
-      );
-    }
-    if (iteratorError) {
-      throw iteratorError;
-    }
-    if (closeError) {
-      throw closeError;
-    }
-  };
-  return stream;
+}
+
+async function* encodeChunks(source, chunkJsonCodec) {
+  for await (const typedChunk of source) {
+    yield chunkJsonCodec.toJson(typedChunk);
+  }
 }
 
 module.exports = {

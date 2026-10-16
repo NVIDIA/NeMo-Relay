@@ -13,10 +13,11 @@ pub mod subscriber_dispatcher;
 
 pub use callbacks::{
     BuiltinLlmCodec, ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn,
-    EventSubscriberFn, LlmCodecIdentity, LlmCollectorFn, LlmConditionalFn, LlmExecutionFn,
-    LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmRequestContext, LlmRequestInterceptFn,
-    LlmResponseContext, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    EventSubscriberFn, LlmAsyncCollectorFn, LlmAsyncFinalizerFn, LlmCodecIdentity, LlmCollector,
+    LlmCollectorFn, LlmCollectorFuture, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
+    LlmFallibleFinalizerFn, LlmFinalizer, LlmFinalizerFn, LlmFinalizerFuture, LlmJsonStream,
+    LlmRequestContext, LlmRequestInterceptFn, LlmResponseContext, LlmSanitizeRequestContext,
+    LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, LlmStreamInner, ToolConditionalFn, ToolExecutionContext,
     ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };

@@ -8,15 +8,23 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
 use nemo_relay::api::optimization::LlmOptimizationRecorder;
+use nemo_relay::api::registry::{
+    deregister_llm_sanitize_response_guardrail, register_llm_sanitize_response_guardrail,
+};
 use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{LlmJsonStream, LlmStreamInner, NemoRelayContextState};
+use nemo_relay::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
+use nemo_relay::api::runtime::{
+    LlmCollector, LlmFinalizer, LlmJsonStream, LlmStreamInner, NemoRelayContextState,
+};
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
@@ -1348,4 +1356,850 @@ async fn test_stream_wrapper_collector_error_terminates_stream() {
 
     // Collector was called exactly twice (once for chunk1, once for chunk2)
     assert_eq!(*collector_calls.lock().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn failed_finalizer_skips_the_data_fallback() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "failed_finalizer_no_fallback",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    let handle_with_data = |name: &str| {
+        LlmHandle::builder()
+            .name(name.to_string())
+            .attributes(LlmAttributes::STREAMING)
+            .data(json!({"fallback": "not a response"}))
+            .build()
+    };
+
+    let mut failed = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        handle_with_data("finalizer-failed"),
+        Box::new(|_| Ok(())),
+        LlmFinalizer::Fallible(Box::new(|| {
+            Err(FlowError::Internal("finalizer failed".into()))
+        })),
+        None,
+        None,
+        None,
+    );
+    while failed.next().await.is_some() {}
+
+    let mut null_aggregate = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        handle_with_data("finalizer-null"),
+        Box::new(|_| Ok(())),
+        Box::new(|| Json::Null),
+        None,
+        None,
+        None,
+    );
+    while null_aggregate.next().await.is_some() {}
+
+    let events = captured_snapshot(&events);
+    let end_data = |name: &str| {
+        events
+            .iter()
+            .find(|event| event.name() == name && is_llm_end(event))
+            .expect("END event")
+            .data()
+            .cloned()
+    };
+    assert!(end_data("finalizer-failed").is_none_or(|data| data.is_null()));
+    assert_eq!(
+        end_data("finalizer-null"),
+        Some(json!({"fallback": "not a response"}))
+    );
+    assert!(deregister_subscriber("failed_finalizer_no_fallback").unwrap());
+}
+
+#[tokio::test]
+async fn failed_finalizer_skips_response_sanitizers() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "failed_finalizer_no_sanitizers",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_sanitize_response_guardrail(
+        "failed_finalizer_no_sanitizers",
+        1,
+        Arc::new(|_response, _context| Box::pin(async { Ok(Some(json!({"sanitized": true}))) })),
+    )
+    .unwrap();
+
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        make_llm_handle("finalizer-failed-sanitized"),
+        Box::new(|_| Ok(())),
+        LlmFinalizer::Fallible(Box::new(|| {
+            Err(FlowError::Internal("finalizer failed".into()))
+        })),
+        None,
+        None,
+        None,
+    );
+    while wrapper.next().await.is_some() {}
+
+    let events = captured_snapshot(&events);
+    let end = events
+        .iter()
+        .find(|event| event.name() == "finalizer-failed-sanitized" && is_llm_end(event))
+        .expect("END event");
+    assert!(end.data().is_none_or(Json::is_null));
+    assert!(deregister_llm_sanitize_response_guardrail("failed_finalizer_no_sanitizers").unwrap());
+    assert!(deregister_subscriber("failed_finalizer_no_sanitizers").unwrap());
+}
+
+fn capture_events(name: &'static str) -> Arc<Mutex<Vec<Event>>> {
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        name,
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    events
+}
+
+fn end_event(events: &[Event]) -> &Event {
+    events
+        .iter()
+        .find(|event| is_llm_end(event))
+        .expect("stream emitted an LLM END event")
+}
+
+#[tokio::test]
+async fn async_collector_is_awaited_before_its_chunk_is_yielded() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let (release, gate) = tokio::sync::oneshot::channel::<()>();
+    let gate = Arc::new(Mutex::new(Some(gate)));
+    let collected = Arc::new(Mutex::new(Vec::<Json>::new()));
+    let seen = Arc::clone(&collected);
+    let collector = LlmCollector::new_async(move |chunk: Json| {
+        let gate = gate.lock().unwrap().take();
+        let seen = Arc::clone(&seen);
+        async move {
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
+            seen.lock().unwrap().push(chunk);
+            Ok(())
+        }
+    });
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![
+            Ok(json!({"token": "first"})),
+            Ok(json!({"token": "second"})),
+        ]),
+        make_llm_handle("async-collector-order"),
+        collector,
+        Box::new(|| Json::Null),
+        None,
+        None,
+        None,
+    );
+
+    let blocked = tokio::time::timeout(tokio::time::Duration::from_millis(100), wrapper.next());
+    assert!(
+        blocked.await.is_err(),
+        "a chunk must wait for its collector"
+    );
+    assert!(collected.lock().unwrap().is_empty());
+
+    release.send(()).unwrap();
+    assert_eq!(wrapper.next().await.unwrap().unwrap()["token"], "first");
+    assert_eq!(collected.lock().unwrap().len(), 1);
+    assert_eq!(wrapper.next().await.unwrap().unwrap()["token"], "second");
+    assert!(wrapper.next().await.is_none());
+    assert_eq!(collected.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn async_collector_error_ends_the_stream_with_that_error() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_collector_error");
+
+    let collector = LlmCollector::new_async(|_chunk: Json| async {
+        Err(FlowError::Internal("async collector failed".into()))
+    });
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![
+            Ok(json!({"token": "first"})),
+            Ok(json!({"token": "unread"})),
+        ]),
+        make_llm_handle("async-collector-error"),
+        collector,
+        Box::new(|| json!({"partial": true})),
+        None,
+        None,
+        None,
+    );
+
+    let error = wrapper.next().await.unwrap().unwrap_err();
+    assert!(error.to_string().contains("async collector failed"));
+    assert!(wrapper.next().await.is_none());
+
+    let events = captured_snapshot(&events);
+    let end = end_event(&events);
+    assert_eq!(end.metadata().unwrap()["otel.status_code"], json!("ERROR"));
+    assert_eq!(end.data().unwrap()["partial"], json!(true));
+    assert!(deregister_subscriber("async_collector_error").unwrap());
+}
+
+#[tokio::test]
+async fn async_finalizer_settles_before_the_stream_ends() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_finalizer_end");
+
+    let finalized = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&finalized);
+    let finalizer = LlmFinalizer::new_async(move || async move {
+        tokio::task::yield_now().await;
+        count.fetch_add(1, Ordering::SeqCst);
+        Ok(json!({"aggregate": "done"}))
+    });
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        make_llm_handle("async-finalizer-end"),
+        Box::new(|_| Ok(())),
+        finalizer,
+        None,
+        None,
+        None,
+    );
+
+    assert_eq!(wrapper.next().await.unwrap().unwrap()["token"], "only");
+    assert!(wrapper.next().await.is_none());
+    assert_eq!(finalized.load(Ordering::SeqCst), 1);
+
+    let events = captured_snapshot(&events);
+    let end = end_event(&events);
+    assert_eq!(end.data().unwrap()["aggregate"], json!("done"));
+    assert_eq!(end.metadata().unwrap()["otel.status_code"], json!("OK"));
+    assert!(deregister_subscriber("async_finalizer_end").unwrap());
+}
+
+#[tokio::test]
+async fn close_waits_for_an_async_finalizer() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let finalized = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&finalized);
+    let finalizer = LlmFinalizer::new_async(move || async move {
+        tokio::task::yield_now().await;
+        count.fetch_add(1, Ordering::SeqCst);
+        Ok(json!({"partial": true}))
+    });
+    let wrapper = LlmStreamWrapper::new(
+        make_stream(vec![
+            Ok(json!({"token": "first"})),
+            Ok(json!({"token": "unread"})),
+        ]),
+        make_llm_handle("async-finalizer-close"),
+        Box::new(|_| Ok(())),
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    let mut stream = LlmJsonStream::from_closeable(wrapper);
+
+    assert_eq!(stream.next().await.unwrap().unwrap()["token"], "first");
+    stream.close().await.unwrap();
+    assert_eq!(finalized.load(Ordering::SeqCst), 1);
+    stream.close().await.unwrap();
+    assert_eq!(finalized.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn dropped_stream_with_an_async_finalizer_still_emits_end() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_finalizer_drop");
+
+    let finalizer = LlmFinalizer::new_async(|| async {
+        tokio::task::yield_now().await;
+        Ok(json!({"dropped": true}))
+    });
+    let wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "unread"}))]),
+        make_llm_handle("async-finalizer-drop"),
+        Box::new(|_| Ok(())),
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    drop(wrapper);
+
+    let events = captured_snapshot(&events);
+    assert_eq!(end_event(&events).data().unwrap()["dropped"], json!(true));
+    assert!(deregister_subscriber("async_finalizer_drop").unwrap());
+}
+
+#[tokio::test]
+async fn finalizer_that_flushes_subscribers_completes() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("finalizer_flush");
+
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        make_llm_handle("finalizer-flush"),
+        Box::new(|_| Ok(())),
+        Box::new(|| {
+            flush_subscribers().unwrap();
+            json!({"flushed": true})
+        }),
+        None,
+        None,
+        None,
+    );
+
+    let drained = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        while wrapper.next().await.is_some() {}
+    });
+    assert!(
+        drained.await.is_ok(),
+        "stream end hung on a flush inside the finalizer"
+    );
+
+    let events = captured_snapshot(&events);
+    assert_eq!(end_event(&events).data().unwrap()["flushed"], json!(true));
+    assert!(deregister_subscriber("finalizer_flush").unwrap());
+}
+
+#[tokio::test]
+async fn async_finalizer_that_flushes_subscribers_completes() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_finalizer_flush");
+
+    let finalizer = LlmFinalizer::new_async(|| async {
+        tokio::task::yield_now().await;
+        flush_subscribers()?;
+        Ok(json!({"flushed": true}))
+    });
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        make_llm_handle("async-finalizer-flush"),
+        Box::new(|_| Ok(())),
+        finalizer,
+        None,
+        None,
+        None,
+    );
+
+    let drained = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        while wrapper.next().await.is_some() {}
+    });
+    assert!(
+        drained.await.is_ok(),
+        "stream end hung on a flush inside the async finalizer"
+    );
+
+    let events = captured_snapshot(&events);
+    assert_eq!(end_event(&events).data().unwrap()["flushed"], json!(true));
+    assert!(deregister_subscriber("async_finalizer_flush").unwrap());
+}
+
+#[tokio::test]
+async fn close_reports_an_undelivered_async_collector_error_once() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_collector_close");
+
+    let (release, gate) = tokio::sync::oneshot::channel::<()>();
+    let gate = Arc::new(Mutex::new(Some(gate)));
+    let collector = LlmCollector::new_async(move |_chunk: Json| {
+        let gate = gate.lock().unwrap().take();
+        async move {
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
+            Err(FlowError::Internal("late collector failure".into()))
+        }
+    });
+    let wrapper = LlmStreamWrapper::new(
+        make_stream(vec![
+            Ok(json!({"token": "first"})),
+            Ok(json!({"token": "unread"})),
+        ]),
+        make_llm_handle("async-collector-close"),
+        collector,
+        Box::new(|| Json::Null),
+        None,
+        None,
+        None,
+    );
+    let mut stream = LlmJsonStream::from_closeable(wrapper);
+
+    let blocked = tokio::time::timeout(tokio::time::Duration::from_millis(50), stream.next());
+    assert!(blocked.await.is_err(), "the chunk waits for its collector");
+    release.send(()).unwrap();
+
+    let error = stream.close().await.unwrap_err();
+    assert!(error.to_string().contains("late collector failure"));
+    let again = stream.close().await.unwrap_err();
+    assert!(again.to_string().contains("late collector failure"));
+    assert!(stream.next().await.is_none());
+
+    let events = captured_snapshot(&events);
+    assert_eq!(
+        end_event(&events).metadata().unwrap()["otel.status_code"],
+        json!("ERROR")
+    );
+    assert!(deregister_subscriber("async_collector_close").unwrap());
+}
+
+#[tokio::test]
+async fn close_reports_a_stream_error_that_polling_has_not_delivered() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let finalizer = LlmFinalizer::new_async(|| async {
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        Ok(Json::Null)
+    });
+    let wrapper = LlmStreamWrapper::new(
+        make_stream(vec![
+            Ok(json!({"token": "first"})),
+            Err(FlowError::Internal("producer failed".into())),
+        ]),
+        make_llm_handle("parked-producer-error"),
+        Box::new(|_| Ok(())),
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    let mut stream = LlmJsonStream::from_closeable(wrapper);
+
+    assert_eq!(stream.next().await.unwrap().unwrap()["token"], "first");
+    // The error is observed here but held until the finalizer settles.
+    let parked = tokio::time::timeout(tokio::time::Duration::from_millis(10), stream.next());
+    assert!(parked.await.is_err());
+
+    let error = stream.close().await.unwrap_err();
+    assert!(error.to_string().contains("producer failed"));
+    assert!(stream.close().await.is_err());
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn failed_finalizer_marks_the_end_event_as_an_error() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("failed_finalizer_status");
+
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        make_llm_handle("finalizer-failed-status"),
+        Box::new(|_| Ok(())),
+        LlmFinalizer::Fallible(Box::new(|| {
+            Err(FlowError::Internal("finalizer failed".into()))
+        })),
+        None,
+        None,
+        None,
+    );
+    while wrapper.next().await.is_some() {}
+
+    let events = captured_snapshot(&events);
+    let end = end_event(&events);
+    let metadata = end.metadata().unwrap();
+    assert_eq!(metadata["otel.status_code"], json!("ERROR"));
+    assert!(
+        metadata["otel.status_description"]
+            .as_str()
+            .is_some_and(|description| description.contains("finalizer failed"))
+    );
+    assert!(metadata["error.type"].is_string());
+    assert!(end.data().is_none_or(Json::is_null));
+    assert!(deregister_subscriber("failed_finalizer_status").unwrap());
+}
+
+#[tokio::test]
+async fn failed_async_finalizer_marks_the_end_event_as_an_error() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("failed_async_finalizer_status");
+
+    let finalizer = LlmFinalizer::new_async(|| async {
+        tokio::task::yield_now().await;
+        Err(FlowError::Internal("async finalizer failed".into()))
+    });
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        make_llm_handle("async-finalizer-failed-status"),
+        Box::new(|_| Ok(())),
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    assert_eq!(wrapper.next().await.unwrap().unwrap()["token"], "only");
+    assert!(wrapper.next().await.is_none());
+
+    let events = captured_snapshot(&events);
+    let end = end_event(&events);
+    let metadata = end.metadata().unwrap();
+    assert_eq!(metadata["otel.status_code"], json!("ERROR"));
+    assert!(
+        metadata["otel.status_description"]
+            .as_str()
+            .is_some_and(|description| description.contains("async finalizer failed"))
+    );
+    assert!(end.data().is_none_or(Json::is_null));
+    assert!(deregister_subscriber("failed_async_finalizer_status").unwrap());
+}
+
+#[tokio::test]
+async fn failed_finalizer_keeps_the_stream_error_on_a_failed_stream() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("failed_finalizer_failed_stream");
+
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![
+            Ok(json!({"token": "first"})),
+            Err(FlowError::Internal("producer failed".into())),
+        ]),
+        make_llm_handle("finalizer-failed-after-stream-error"),
+        Box::new(|_| Ok(())),
+        LlmFinalizer::Fallible(Box::new(|| {
+            Err(FlowError::Internal("finalizer failed".into()))
+        })),
+        None,
+        None,
+        None,
+    );
+    assert_eq!(wrapper.next().await.unwrap().unwrap()["token"], "first");
+    assert!(wrapper.next().await.unwrap().is_err());
+    assert!(wrapper.next().await.is_none());
+
+    let events = captured_snapshot(&events);
+    let metadata = end_event(&events).metadata().unwrap();
+    assert_eq!(metadata["otel.status_code"], json!("ERROR"));
+    let description = metadata["otel.status_description"].as_str().unwrap();
+    assert!(description.contains("producer failed"));
+    assert!(!description.contains("finalizer failed"));
+    assert!(deregister_subscriber("failed_finalizer_failed_stream").unwrap());
+}
+
+#[tokio::test]
+async fn async_finalizer_does_not_hold_unrelated_event_delivery() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let (fast_ended, fast_end_seen) = tokio::sync::oneshot::channel::<()>();
+    let fast_ended = Mutex::new(Some(fast_ended));
+    register_subscriber(
+        "async_finalizer_unrelated_delivery",
+        Arc::new(move |event: &Event| {
+            if is_llm_end(event)
+                && event.name() == "fast-stream"
+                && let Some(fast_ended) = fast_ended.lock().unwrap().take()
+            {
+                let _ = fast_ended.send(());
+            }
+        }),
+    )
+    .unwrap();
+
+    let (release, gate) = tokio::sync::oneshot::channel::<()>();
+    let slow = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "slow"}))]),
+        make_llm_handle("slow-stream"),
+        Box::new(|_| Ok(())),
+        LlmFinalizer::new_async(move || async move {
+            let _ = gate.await;
+            Ok(json!({"slow": true}))
+        }),
+        None,
+        None,
+        None,
+    );
+    drop(slow);
+    let fast = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "fast"}))]),
+        make_llm_handle("fast-stream"),
+        Box::new(|_| Ok(())),
+        Box::new(|| json!({"fast": true})),
+        None,
+        None,
+        None,
+    );
+    drop(fast);
+
+    let delivered = tokio::time::timeout(tokio::time::Duration::from_secs(5), fast_end_seen).await;
+    assert!(
+        delivered.is_ok(),
+        "the fast stream's END waited on the slow stream's parked finalizer"
+    );
+
+    release.send(()).unwrap();
+    flush_subscribers().unwrap();
+    assert!(deregister_subscriber("async_finalizer_unrelated_delivery").unwrap());
+}
+
+#[tokio::test]
+async fn flush_inside_async_finalizer_waits_for_earlier_publications_only() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_finalizer_real_flush");
+
+    let seen_by_finalizer = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let observed = Arc::clone(&events);
+    let recorded = Arc::clone(&seen_by_finalizer);
+    let finalizer = LlmFinalizer::new_async(move || async move {
+        flush_subscribers()?;
+        *recorded.lock().unwrap() = observed.lock().unwrap().clone();
+        Ok(json!({"flushed": true}))
+    });
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        make_llm_handle("async-finalizer-real-flush"),
+        Box::new(|_| Ok(())),
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    while wrapper.next().await.is_some() {}
+
+    let seen = seen_by_finalizer.lock().unwrap().clone();
+    assert!(
+        seen.iter().any(|event| event.name() == "llm.chunk"),
+        "the flush returned before the chunk mark was delivered"
+    );
+    assert!(
+        !seen.iter().any(is_llm_end),
+        "the flush waited on this stream's own END event"
+    );
+
+    let events = captured_snapshot(&events);
+    assert_eq!(end_event(&events).data().unwrap()["flushed"], json!(true));
+    assert!(deregister_subscriber("async_finalizer_real_flush").unwrap());
+}
+
+#[tokio::test]
+async fn flush_inside_an_async_finalizer_lets_a_queued_end_publication_finish() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_finalizer_flush_executor");
+
+    // This END publication parks in a response sanitizer while its barrier holds the dispatcher.
+    let (release_sanitizer, sanitizer_gate) = tokio::sync::oneshot::channel::<()>();
+    let sanitizer_gate = Arc::new(Mutex::new(Some(sanitizer_gate)));
+    register_llm_sanitize_response_guardrail(
+        "async_finalizer_flush_executor",
+        1,
+        Arc::new(move |response, _context| {
+            let gate = sanitizer_gate.lock().unwrap().take();
+            Box::pin(async move {
+                if let Some(gate) = gate {
+                    let _ = gate.await;
+                }
+                Ok(Some(response))
+            })
+        }),
+    )
+    .unwrap();
+    drop(LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "parked"}))]),
+        make_llm_handle("parked-sanitizer-stream"),
+        Box::new(|_| Ok(())),
+        Box::new(|| json!({"parked": true})),
+        None,
+        None,
+        None,
+    ));
+
+    // Release the sanitizer only once the flush behind that barrier is queued.
+    let (flushed_tx, flushed_rx) = mpsc::channel::<()>();
+    let finalizer = LlmFinalizer::new_async(move || async move {
+        let (started_tx, started_rx) = mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            let _ = started_rx.recv();
+            let _ = release_sanitizer.send(());
+        });
+        flush_subscribers_with_started_signal(started_tx)?;
+        let _ = flushed_tx.send(());
+        Ok(json!({"flushed": true}))
+    });
+    drop(LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "flushing"}))]),
+        make_llm_handle("flushing-finalizer-stream"),
+        Box::new(|_| Ok(())),
+        finalizer,
+        None,
+        None,
+        None,
+    ));
+
+    flushed_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the flush inside the async finalizer stalled the parked END publication");
+
+    let events = captured_snapshot(&events);
+    for name in ["parked-sanitizer-stream", "flushing-finalizer-stream"] {
+        assert!(
+            events
+                .iter()
+                .any(|event| is_llm_end(event) && event.name() == name),
+            "{name} END event was not delivered"
+        );
+    }
+    assert!(deregister_llm_sanitize_response_guardrail("async_finalizer_flush_executor").unwrap());
+    assert!(deregister_subscriber("async_finalizer_flush_executor").unwrap());
+}
+
+#[tokio::test]
+async fn concurrent_async_finalizers_that_flush_do_not_wait_on_each_other() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_finalizers_mutual_flush");
+
+    let rendezvous = Arc::new(tokio::sync::Barrier::new(2));
+    let (flushed_tx, flushed_rx) = mpsc::channel::<&'static str>();
+    for name in ["first-flushing-finalizer", "second-flushing-finalizer"] {
+        let rendezvous = Arc::clone(&rendezvous);
+        let flushed_tx = flushed_tx.clone();
+        drop(LlmStreamWrapper::new(
+            make_stream(vec![Ok(json!({"token": name}))]),
+            make_llm_handle(name),
+            Box::new(|_| Ok(())),
+            LlmFinalizer::new_async(move || async move {
+                // Both finalizers hold a pending END permit while they flush.
+                rendezvous.wait().await;
+                flush_subscribers()?;
+                let _ = flushed_tx.send(name);
+                Ok(json!({"flushed": name}))
+            }),
+            None,
+            None,
+            None,
+        ));
+    }
+
+    for _ in 0..2 {
+        flushed_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a flush inside one async finalizer waited on the other finalizer's END");
+    }
+
+    let events = captured_snapshot(&events);
+    assert_eq!(events.iter().filter(|event| is_llm_end(event)).count(), 2);
+    assert!(deregister_subscriber("async_finalizers_mutual_flush").unwrap());
+}
+
+#[tokio::test]
+async fn events_emitted_after_an_async_stream_ends_follow_its_end_event() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("async_finalizer_end_ordering");
+
+    let finalizer = LlmFinalizer::new_async(|| async {
+        tokio::task::yield_now().await;
+        Ok(json!({"ordered": true}))
+    });
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"token": "only"}))]),
+        make_llm_handle("async-finalizer-ordering"),
+        Box::new(|_| Ok(())),
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    while wrapper.next().await.is_some() {}
+
+    let scope = push_scope(
+        PushScopeParams::builder()
+            .name("after-stream")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    pop_scope(PopScopeParams::builder().handle_uuid(&scope.uuid).build()).unwrap();
+
+    let events = captured_snapshot(&events);
+    let end_index = events.iter().position(is_llm_end).unwrap();
+    let scope_index = events
+        .iter()
+        .position(|event| event.name() == "after-stream")
+        .unwrap();
+    assert!(
+        end_index < scope_index,
+        "scope events overtook the END event"
+    );
+    assert!(deregister_subscriber("async_finalizer_end_ordering").unwrap());
+}
+
+#[tokio::test]
+async fn close_keeps_the_stream_error_variant_when_cleanup_also_fails() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let (release, gate) = tokio::sync::oneshot::channel::<()>();
+    let gate = Arc::new(Mutex::new(Some(gate)));
+    let collector = LlmCollector::new_async(move |_chunk: Json| {
+        let gate = gate.lock().unwrap().take();
+        async move {
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
+            Err(FlowError::GuardrailRejected(
+                "collector rejected the chunk".into(),
+            ))
+        }
+    });
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let inner = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(tokio_stream::iter(vec![Ok::<Json, FlowError>(
+            json!({"token": "first"}),
+        )])),
+        close_calls: Arc::clone(&close_calls),
+        close_error: Some(FlowError::NotFound("producer cleanup failed".into())),
+        closed: false,
+    });
+    let wrapper = LlmStreamWrapper::new(
+        inner,
+        make_llm_handle("collector-then-cleanup-error"),
+        collector,
+        Box::new(|| Json::Null),
+        None,
+        None,
+        None,
+    );
+    let mut stream = LlmJsonStream::from_closeable(wrapper);
+
+    let blocked = tokio::time::timeout(tokio::time::Duration::from_millis(50), stream.next());
+    assert!(blocked.await.is_err(), "the chunk waits for its collector");
+    release.send(()).unwrap();
+
+    for _ in 0..2 {
+        let error = stream.close().await.unwrap_err();
+        assert!(matches!(
+            error,
+            FlowError::GuardrailRejected(ref message) if message == "collector rejected the chunk"
+        ));
+    }
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    assert!(stream.next().await.is_none());
 }
