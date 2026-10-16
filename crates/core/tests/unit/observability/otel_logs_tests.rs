@@ -23,15 +23,17 @@ use std::thread;
 use std::time::Duration;
 
 #[test]
-fn exporter_recovery_does_not_clear_a_sibling_resource_pipeline_failure() {
+fn export_success_preserves_sibling_pipeline_failure_evidence() {
     let field = format!("logs.test.{}", Uuid::now_v7());
     let shared = SignalRuntimeDiagnostics::new_for_signal("logs", Some(field.clone()));
     let failed = LogDeliveryDiagnostics::new("collector-a".into(), shared.clone());
-    let healthy = LogDeliveryDiagnostics::new("collector-b".into(), shared.clone());
+    let successful = LogDeliveryDiagnostics::new("collector-b".into(), shared.clone());
     failed.record_export_failure(&"collector unavailable");
-    healthy
-        .runtime_diagnostics
-        .record_recovery("otel.logs_export_failed");
+    let legacy_before = shared.snapshot();
+    successful.runtime_diagnostics.record_success(
+        "otel.logs_export_succeeded",
+        "OpenTelemetry log export succeeded",
+    );
 
     let query = crate::diagnostics::DiagnosticQuery {
         component_key: Some(crate::diagnostics::legacy_component_key(
@@ -44,43 +46,69 @@ fn exporter_recovery_does_not_clear_a_sibling_resource_pipeline_failure() {
         .snapshot(query.clone())
         .unwrap();
     assert_eq!(before.components.len(), 2);
+    let failed_component = before
+        .components
+        .iter()
+        .find(|component| {
+            component
+                .counters
+                .iter()
+                .any(|counter| counter.code == "otel.logs_export_failed")
+        })
+        .unwrap();
+    assert_eq!(failed_component.counters.len(), 1);
+    assert_eq!(failed_component.counters[0].occurrences.value.get(), 1);
+    let successful_component = before
+        .components
+        .iter()
+        .find(|component| component.identity != failed_component.identity)
+        .unwrap();
+    assert_eq!(successful_component.counters.len(), 1);
     assert_eq!(
-        before
-            .components
-            .iter()
-            .flat_map(|component| &component.conditions)
-            .filter(|condition| matches!(
-                condition.state,
-                crate::diagnostics::DiagnosticConditionState::Active
-            ))
-            .count(),
-        1
+        successful_component.counters[0].code,
+        "otel.logs_export_succeeded"
     );
+    assert_eq!(successful_component.counters[0].occurrences.value.get(), 1);
+    assert_eq!(shared.snapshot(), legacy_before);
 
-    failed
-        .runtime_diagnostics
-        .record_recovery("otel.logs_export_failed");
+    failed.runtime_diagnostics.record_success(
+        "otel.logs_export_succeeded",
+        "OpenTelemetry log export succeeded",
+    );
     let after = crate::diagnostics::Diagnostics::process_default()
         .snapshot(query)
         .unwrap();
+    let after_failed = after
+        .components
+        .iter()
+        .find(|component| component.identity == failed_component.identity)
+        .unwrap();
+    assert_eq!(after_failed.counters.len(), 2);
     assert!(
+        after_failed
+            .counters
+            .contains(&failed_component.counters[0])
+    );
+    assert_eq!(
+        after_failed
+            .counters
+            .iter()
+            .find(|counter| counter.code == "otel.logs_export_succeeded")
+            .unwrap()
+            .occurrences
+            .value
+            .get(),
+        1
+    );
+    assert_eq!(
         after
             .components
             .iter()
-            .flat_map(|component| &component.conditions)
-            .all(|condition| matches!(
-                condition.state,
-                crate::diagnostics::DiagnosticConditionState::Recovered { .. }
-            ))
+            .find(|component| { component.identity == successful_component.identity })
+            .unwrap(),
+        successful_component
     );
-    assert_eq!(
-        shared
-            .snapshot()
-            .get("otel.logs_export_failed")
-            .unwrap()
-            .count,
-        1
-    );
+    assert_eq!(shared.snapshot(), legacy_before);
 }
 
 fn mark(

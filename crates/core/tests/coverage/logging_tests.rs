@@ -142,7 +142,7 @@ fn default_config() -> LoggingConfig {
 
 #[test]
 fn diagnostics_retain_required_sink_initialization_failure_before_logging_exists() {
-    use crate::diagnostics::{DiagnosticConditionState, DiagnosticQuery, Diagnostics};
+    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery, Diagnostics};
 
     let _guard = lock_logging_tests();
     let diagnostics = Diagnostics::default();
@@ -168,9 +168,10 @@ fn diagnostics_retain_required_sink_initialization_failure_before_logging_exists
         .find(|component| component.identity.key == "logging.file.0")
         .unwrap();
     assert!(sink.closed_at.is_some());
-    assert!(sink.conditions.iter().any(|condition| {
-        condition.code == "logging.sink.initialize_failed"
-            && condition.state == DiagnosticConditionState::Active
+    assert!(snapshot.events.iter().any(|event| {
+        event.component == sink.identity
+            && event.code == "logging.sink.initialize_failed"
+            && event.outcome == DiagnosticOutcome::Failure
     }));
     let failures = sink
         .counters
@@ -340,7 +341,7 @@ fn replacing_logging_diagnostics_projects_only_into_the_current_runtime() {
 
 #[test]
 fn exhausted_diagnostic_budgets_do_not_prevent_operational_logging_startup() {
-    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, Diagnostics};
+    use crate::diagnostics::{DiagnosticLimits, DiagnosticOutcome, DiagnosticQuery, Diagnostics};
 
     let _guard = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
@@ -384,11 +385,10 @@ fn exhausted_diagnostic_budgets_do_not_prevent_operational_logging_startup() {
         if case == "components" {
             assert!(snapshot.coverage.loss.components_rejected.value.get() > 0);
         } else {
-            assert!(snapshot.components.iter().any(|component| {
-                component
-                    .conditions
-                    .iter()
-                    .any(|condition| condition.code == "logging.projection_unavailable")
+            assert!(snapshot.events.iter().any(|event| {
+                event.component.key == "logging"
+                    && event.code == "logging.projection_unavailable"
+                    && event.outcome == DiagnosticOutcome::Failure
             }));
         }
     }

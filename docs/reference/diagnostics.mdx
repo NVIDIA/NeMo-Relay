@@ -22,15 +22,21 @@ it from another execution using the same PID. Component registrations have
 their own instance identifiers and generations. Recreating a component starts
 a new counter epoch; polling an existing component does not.
 
-Components record occurrences, active conditions, and observed recovery.
-Reading a condition does not record another occurrence. Recovery clears the
-active condition while preserving its bounded history and occurrence count.
-Closing a component retains its diagnostic evidence until retention requires
-eviction; closure does not establish recovery.
+Components record occurrences with observed outcomes. Counters aggregate by
+registration and code; producers use distinct failure and success codes when
+those outcomes need separate counts. A later success leaves
+historical failure counts intact; reads add no occurrences. Closing a recording
+registration retains its diagnostic evidence until retention requires eviction.
+It does not classify the component's health or prove that a process exited.
 
 The foundation describes observed facts. It does not decide application health,
 readiness, retry policy, admission, or restart behavior. A disconnected source
 does not establish that its process exited.
+
+The embedding application or deployment owner interprets these observations.
+The common contract has no active/recovered conditions, activation flags, or
+error-code closure operation. A successful export describes that attempt and
+does not establish that an earlier failed batch was delivered.
 
 ## Resource and Data Boundaries
 
@@ -66,7 +72,13 @@ component.observe_failure(
 let snapshot = diagnostics.snapshot(DiagnosticQuery::default())?;
 assert_eq!(snapshot.components.len(), 1);
 
-component.observe_recovery("otel.logs_export_failed")?;
+component.observe_success(
+    "otel.logs_export_succeeded",
+    "The export attempt succeeded",
+    1,
+    DiagnosticCorrelation::default(),
+)?;
+// The earlier failure count remains unchanged.
 ```
 
 Create diagnostic state before configuring logging when startup failures need

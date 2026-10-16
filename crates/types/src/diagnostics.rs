@@ -176,9 +176,9 @@ pub enum DiagnosticSeverity {
     Debug,
     /// Informational observation.
     Info,
-    /// A degraded or unexpected condition.
+    /// An unexpected observation.
     Warning,
-    /// A failed operation or component condition.
+    /// A failed operation.
     Error,
 }
 
@@ -194,8 +194,6 @@ pub enum DiagnosticOutcome {
     Success,
     /// The observed operation failed.
     Failure,
-    /// An explicit observation resolved an existing condition.
-    Recovery,
 }
 
 /// Optional safe correlation identifiers, excluded from aggregation keys.
@@ -228,42 +226,10 @@ pub struct DiagnosticEvent {
     pub outcome: DiagnosticOutcome,
     /// Bounded, producer-approved human-readable detail.
     pub message: String,
-    /// Occurrences represented by this observation; recovery adds none.
+    /// Occurrences represented by this observation.
     pub count: DiagnosticNumber,
     /// Correlation preserved without creating new aggregate identities.
     pub correlation: DiagnosticCorrelation,
-}
-
-/// Current condition state; component closure does not imply recovery.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum DiagnosticConditionState {
-    /// The condition has no observed recovery.
-    Active,
-    /// An observed operation or explicit signal resolved the condition.
-    Recovered {
-        /// Source time of the observed recovery.
-        recovered_at: ObservationTime,
-    },
-}
-
-/// Latest condition evidence for one component and diagnostic code.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct DiagnosticCondition {
-    /// Stable classification, scoped to the owning component.
-    pub code: String,
-    /// Severity when the condition was observed.
-    pub severity: DiagnosticSeverity,
-    /// Latest bounded condition detail, retained after recovery.
-    pub message: String,
-    /// First observation of the retained condition episode.
-    pub first_observed_at: ObservationTime,
-    /// Most recent condition observation, excluding reads and recovery.
-    pub last_observed_at: ObservationTime,
-    /// Recovery state, independent of component lifetime.
-    pub state: DiagnosticConditionState,
 }
 
 /// Cumulative occurrences for one registered component and diagnostic code.
@@ -274,7 +240,7 @@ pub struct DiagnosticCounter {
     pub code: String,
     /// Counter epoch; replacing snapshots must not add their cumulative counts.
     pub epoch: Uuid,
-    /// Occurrences; condition reads and recovery do not increment this value.
+    /// Occurrences; reading a snapshot does not increment this value.
     pub occurrences: DiagnosticCount,
     /// Source time of the last counted observation.
     pub last_observed_at: ObservationTime,
@@ -290,10 +256,8 @@ pub struct ComponentSnapshot {
     pub identity: ComponentIdentity,
     /// Source time when this component registered.
     pub registered_at: ObservationTime,
-    /// Observed closure, independent of unresolved conditions.
+    /// Source time when this component registration closed, if observed.
     pub closed_at: Option<ObservationTime>,
-    /// Active or recovered conditions retained within source limits.
-    pub conditions: Vec<DiagnosticCondition>,
     /// Cumulative occurrence aggregates retained within source limits.
     pub counters: Vec<DiagnosticCounter>,
 }

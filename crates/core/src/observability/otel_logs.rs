@@ -884,9 +884,10 @@ impl<E: LogExporter> LogExporter for DiagnosticLogExporter<E> {
         if let Err(error) = &result {
             self.diagnostics.record_export_failure(error);
         } else {
-            self.diagnostics
-                .runtime_diagnostics
-                .record_recovery("otel.logs_export_failed");
+            self.diagnostics.runtime_diagnostics.record_success(
+                "otel.logs_export_succeeded",
+                "OpenTelemetry log export succeeded",
+            );
         }
         result
     }

@@ -4,9 +4,9 @@
 //! Process-local diagnostics independent of logging, plugins, and async runtimes.
 //!
 //! Components receive scoped recording handles. Readers can inspect bounded evidence
-//! without changing counters, resolving conditions, or extending component lifetimes.
+//! without changing counters or extending component lifetimes.
 //! A projection receives accepted observations after the state lock has been released;
-//! ordinary operational logs are not parsed back into diagnostic conditions.
+//! observations describe evidence without inferring health or recovery policy.
 //! Messages and correlation fields must already be safe for diagnostic exposure:
 //! truncation bounds their size and does not remove credentials or user payloads.
 
@@ -76,10 +76,8 @@ pub struct DiagnosticQuery {
     pub component_key: Option<String>,
     /// Match one component registration incarnation.
     pub component_instance_id: Option<Uuid>,
-    /// Retain only this diagnostic code in events, conditions, and counters.
+    /// Retain only this diagnostic code in events and counters.
     pub code: Option<String>,
-    /// Omit recovered conditions while preserving matching events and counters.
-    pub active_conditions_only: bool,
     /// Return events strictly after this sequence. Counters remain cumulative.
     pub after_sequence: Option<u64>,
 }
@@ -111,27 +109,25 @@ impl AsRef<str> for DiagnosticCode {
     }
 }
 
-/// One observation, accepted atomically with its counter and condition update.
+/// One counted observation, accepted atomically with its counter update.
 #[derive(Debug, Clone)]
 pub struct DiagnosticObservation {
     /// Stable code; identifiers such as requests and sessions belong in correlation.
     pub code: String,
     /// Severity of the observed evidence, independent of deployment health policy.
     pub severity: DiagnosticSeverity,
-    /// Observed operation outcome; it does not implicitly activate a condition.
+    /// Observed operation outcome, independent of deployment health policy.
     pub outcome: DiagnosticOutcome,
     /// Caller-sanitized explanation; the recorder bounds bytes but does not redact.
     pub message: String,
-    /// Occurrences represented by this observation; zero is allowed for activation.
+    /// Occurrences represented by this observation; the count must be nonzero.
     pub count: u64,
     /// Bounded correlation fields, excluded from aggregation keys.
     pub correlation: DiagnosticCorrelation,
-    /// Explicit activation is independent of the event's outcome classification.
-    pub activate_condition: bool,
 }
 
 impl DiagnosticObservation {
-    /// Build a failure that increments occurrences and activates its condition.
+    /// Build a counted observation of failed operations.
     pub fn failure(code: impl Into<String>, message: impl Into<String>, count: u64) -> Self {
         Self {
             code: code.into(),
@@ -140,11 +136,22 @@ impl DiagnosticObservation {
             message: message.into(),
             count,
             correlation: DiagnosticCorrelation::default(),
-            activate_condition: true,
         }
     }
 
-    /// Build a counted observation without activating a current condition.
+    /// Build a counted observation of successful operations.
+    pub fn success(code: impl Into<String>, message: impl Into<String>, count: u64) -> Self {
+        Self {
+            code: code.into(),
+            severity: DiagnosticSeverity::Info,
+            outcome: DiagnosticOutcome::Success,
+            message: message.into(),
+            count,
+            correlation: DiagnosticCorrelation::default(),
+        }
+    }
+
+    /// Build a counted observation without classifying its operation outcome.
     pub fn occurrence(
         code: impl Into<String>,
         severity: DiagnosticSeverity,
@@ -158,7 +165,6 @@ impl DiagnosticObservation {
             message: message.into(),
             count,
             correlation: DiagnosticCorrelation::default(),
-            activate_condition: false,
         }
     }
 
@@ -193,11 +199,8 @@ pub enum DiagnosticError {
     /// Diagnostic code is empty, too long, or has invalid code segments.
     InvalidCode,
     #[error("an occurrence must have a nonzero count")]
-    /// A non-activation observation has zero occurrences.
+    /// An observation has zero occurrences.
     InvalidCount,
-    #[error("recovery must use the explicit observe_recovery operation")]
-    /// Generic recording cannot resolve a condition or classify a counted recovery.
-    InvalidOutcome,
     #[error("diagnostic component capacity exhausted")]
     /// No component slot is available after evicting retained closed components.
     ComponentCapacity,
@@ -410,7 +413,6 @@ impl Diagnostics {
                 identity: identity.clone(),
                 registered_at: Utc::now(),
                 closed_at: None,
-                conditions: Vec::new(),
                 counters: Vec::new(),
             },
         );
@@ -494,12 +496,12 @@ impl ComponentRecorder {
             .component_snapshot(self.lease.identity.instance_id)
     }
 
-    /// Explicit close is idempotent and never resolves an outstanding condition.
+    /// Explicit close is idempotent and preserves retained observations.
     pub fn close(&self) -> bool {
         close_component(&self.lease.inner, self.lease.identity.instance_id)
     }
 
-    /// Atomically count a failure, activate its condition, and retain its event.
+    /// Atomically count failed operations and record the observation.
     pub fn observe_failure(
         &self,
         code: impl Into<String>,
@@ -512,7 +514,20 @@ impl ComponentRecorder {
         )
     }
 
-    /// Count an occurrence without asserting that a condition remains active.
+    /// Atomically count successful operations and record the observation.
+    pub fn observe_success(
+        &self,
+        code: impl Into<String>,
+        message: impl Into<String>,
+        count: u64,
+        correlation: DiagnosticCorrelation,
+    ) -> Result<RecordReceipt, DiagnosticError> {
+        self.record(
+            DiagnosticObservation::success(code, message, count).with_correlation(correlation),
+        )
+    }
+
+    /// Count observed evidence without classifying its operation outcome.
     pub fn observe_occurrence(
         &self,
         code: impl Into<String>,
@@ -525,24 +540,6 @@ impl ComponentRecorder {
             DiagnosticObservation::occurrence(code, severity, message, count)
                 .with_correlation(correlation),
         )
-    }
-
-    /// Activate/update a condition without recounting the occurrence that caused it.
-    pub fn activate_condition(
-        &self,
-        code: impl Into<String>,
-        severity: DiagnosticSeverity,
-        message: impl Into<String>,
-    ) -> Result<RecordReceipt, DiagnosticError> {
-        self.record(DiagnosticObservation {
-            code: code.into(),
-            severity,
-            outcome: DiagnosticOutcome::Unknown,
-            message: message.into(),
-            count: 0,
-            correlation: DiagnosticCorrelation::default(),
-            activate_condition: true,
-        })
     }
 
     /// Accept an observation and notify attached projections after releasing locks.
@@ -574,10 +571,7 @@ impl ComponentRecorder {
             increment(&mut state.loss.keys_rejected, 1);
             return reject(&mut state, DiagnosticError::InvalidCode);
         }
-        if observation.outcome == DiagnosticOutcome::Recovery {
-            return reject(&mut state, DiagnosticError::InvalidOutcome);
-        }
-        if observation.count == 0 && !observation.activate_condition {
+        if observation.count == 0 {
             return reject(&mut state, DiagnosticError::InvalidCount);
         }
         let Some(existing) = state.components.get(&id) else {
@@ -589,12 +583,8 @@ impl ComponentRecorder {
         let known_code = existing
             .counters
             .iter()
-            .any(|entry| entry.code == observation.code)
-            || existing
-                .conditions
-                .iter()
-                .any(|entry| entry.code == observation.code);
-        if !known_code && component_key_count(existing) >= inner.limits.max_keys_per_component {
+            .any(|entry| entry.code == observation.code);
+        if !known_code && existing.counters.len() >= inner.limits.max_keys_per_component {
             increment(&mut state.loss.keys_rejected, 1);
             return reject(&mut state, DiagnosticError::KeyCapacity);
         }
@@ -623,58 +613,31 @@ impl ComponentRecorder {
             .components
             .get_mut(&id)
             .expect("component checked above");
-        if observation.count > 0 {
-            if let Some(counter) = component
+
+        if let Some(counter) = component
+            .counters
+            .iter_mut()
+            .find(|entry| entry.code == observation.code)
+        {
+            increment(&mut counter.occurrences, observation.count);
+            counter.last_observed_at = now;
+            counter.last_message.clone_from(&observation.message);
+        } else {
+            component.counters.push(DiagnosticCounter {
+                code: observation.code.clone(),
+                epoch: id,
+                occurrences: DiagnosticCount {
+                    value: observation.count.into(),
+                    saturated: false,
+                },
+                last_observed_at: now,
+                last_message: observation.message.clone(),
+            });
+            component
                 .counters
-                .iter_mut()
-                .find(|entry| entry.code == observation.code)
-            {
-                increment(&mut counter.occurrences, observation.count);
-                counter.last_observed_at = now;
-                counter.last_message.clone_from(&observation.message);
-            } else {
-                component.counters.push(DiagnosticCounter {
-                    code: observation.code.clone(),
-                    epoch: id,
-                    occurrences: DiagnosticCount {
-                        value: observation.count.into(),
-                        saturated: false,
-                    },
-                    last_observed_at: now,
-                    last_message: observation.message.clone(),
-                });
-                component
-                    .counters
-                    .sort_by(|left, right| left.code.cmp(&right.code));
-            }
+                .sort_by(|left, right| left.code.cmp(&right.code));
         }
-        if observation.activate_condition {
-            if let Some(condition) = component
-                .conditions
-                .iter_mut()
-                .find(|entry| entry.code == observation.code)
-            {
-                if !matches!(condition.state, DiagnosticConditionState::Active) {
-                    condition.first_observed_at = now;
-                }
-                condition.last_observed_at = now;
-                condition.state = DiagnosticConditionState::Active;
-                condition.severity = observation.severity;
-                condition.message.clone_from(&observation.message);
-            } else {
-                component.conditions.push(DiagnosticCondition {
-                    code: observation.code.clone(),
-                    severity: observation.severity,
-                    message: observation.message.clone(),
-                    first_observed_at: now,
-                    last_observed_at: now,
-                    state: DiagnosticConditionState::Active,
-                });
-                component
-                    .conditions
-                    .sort_by(|left, right| left.code.cmp(&right.code));
-            }
-        }
+
         let (occurrence_count, count_saturated) = counter_receipt(component, &observation.code);
         let event = DiagnosticEvent {
             sequence: sequence.into(),
@@ -705,92 +668,6 @@ impl ComponentRecorder {
             count_saturated,
         })
     }
-
-    /// Record an observed recovery. Missing/already recovered conditions are a no-op,
-    /// and no occurrence count is incremented. Reads never invoke this operation.
-    pub fn observe_recovery(&self, code: &str) -> Result<Option<RecordReceipt>, DiagnosticError> {
-        self.recover_inner(code, true)
-    }
-
-    /// Resolve an observed condition without invoking operational-log projections.
-    pub fn observe_recovery_without_projection(
-        &self,
-        code: &str,
-    ) -> Result<Option<RecordReceipt>, DiagnosticError> {
-        self.recover_inner(code, false)
-    }
-
-    fn recover_inner(
-        &self,
-        code: &str,
-        project: bool,
-    ) -> Result<Option<RecordReceipt>, DiagnosticError> {
-        let inner = &self.lease.inner;
-        let id = self.lease.identity.instance_id;
-        let mut state = lock(&inner.state);
-        if !valid_code(code) {
-            increment(&mut state.loss.keys_rejected, 1);
-            return reject(&mut state, DiagnosticError::InvalidCode);
-        }
-        let Some(component) = state.components.get(&id) else {
-            return reject(&mut state, DiagnosticError::ComponentClosed);
-        };
-        if component.closed_at.is_some() {
-            return reject(&mut state, DiagnosticError::ComponentClosed);
-        }
-        if !component.conditions.iter().any(|condition| {
-            condition.code == code && matches!(condition.state, DiagnosticConditionState::Active)
-        }) {
-            return Ok(None);
-        }
-        let sequence = next_sequence(&mut state)?;
-        let now = Utc::now();
-        let previous = state
-            .components
-            .get(&id)
-            .cloned()
-            .expect("component checked above");
-        let component = state
-            .components
-            .get_mut(&id)
-            .expect("component checked above");
-        let condition = component
-            .conditions
-            .iter_mut()
-            .find(|entry| entry.code == code)
-            .expect("condition checked above");
-        condition.state = DiagnosticConditionState::Recovered { recovered_at: now };
-        let message = condition.message.clone();
-        let (occurrence_count, count_saturated) = counter_receipt(component, code);
-        let event = DiagnosticEvent {
-            sequence: sequence.into(),
-            observed_at: now,
-            component: self.lease.identity.clone(),
-            code: code.to_owned(),
-            severity: DiagnosticSeverity::Info,
-            outcome: DiagnosticOutcome::Recovery,
-            message,
-            count: 0.into(),
-            correlation: DiagnosticCorrelation::default(),
-        };
-        update_component_bytes(&mut state, id);
-        push_event(&mut state, &inner.limits, event.clone());
-        if !enforce_byte_budget(&mut state, &inner.limits, id) {
-            state.components.insert(id, previous);
-            update_component_bytes(&mut state, id);
-            return reject(&mut state, DiagnosticError::ByteCapacity);
-        }
-        state.sequence = sequence;
-        drop(state);
-        if project {
-            publish(inner, &event);
-        }
-        Ok(Some(RecordReceipt {
-            sequence,
-            occurrence_count,
-            count_saturated,
-        }))
-    }
 }
 
 impl DiagnosticsReader {
@@ -818,14 +695,6 @@ impl DiagnosticsReader {
             .cloned()
             .collect::<Vec<_>>();
         for component in &mut components {
-            component.conditions.retain(|condition| {
-                query
-                    .code
-                    .as_ref()
-                    .is_none_or(|code| code == &condition.code)
-                    && (!query.active_conditions_only
-                        || matches!(condition.state, DiagnosticConditionState::Active))
-            });
             component
                 .counters
                 .retain(|counter| query.code.as_ref().is_none_or(|code| code == &counter.code));
@@ -913,20 +782,6 @@ fn counter_receipt(component: &ComponentSnapshot, code: &str) -> (u64, bool) {
             )
         })
         .unwrap_or((0, false))
-}
-
-fn component_key_count(component: &ComponentSnapshot) -> usize {
-    component.counters.len()
-        + component
-            .conditions
-            .iter()
-            .filter(|condition| {
-                !component
-                    .counters
-                    .iter()
-                    .any(|counter| counter.code == condition.code)
-            })
-            .count()
 }
 
 fn next_sequence(state: &mut State) -> Result<u64, DiagnosticError> {

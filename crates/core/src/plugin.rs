@@ -49,8 +49,8 @@ use crate::api::runtime::{
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 use crate::diagnostics::{
-    ComponentRecorder, DiagnosticObservation, DiagnosticOutcome, DiagnosticSeverity, Diagnostics,
-    legacy_component_key, legacy_diagnostic_code,
+    ComponentRecorder, DiagnosticObservation, Diagnostics, legacy_component_key,
+    legacy_diagnostic_code,
 };
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
@@ -2621,13 +2621,11 @@ pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
     if let Some(recorder) = recorder {
         // Compatibility emitters already own their log records. This is the only
         // recording boundary; report projection below never records a second event.
-        let mut observation = DiagnosticObservation::occurrence(
+        let observation = DiagnosticObservation::failure(
             legacy_diagnostic_code(&diagnostic.code),
-            DiagnosticSeverity::Error,
             diagnostic.message.clone(),
             diagnostic.count,
         );
-        observation.outcome = DiagnosticOutcome::Failure;
         let _ = recorder.record_without_projection(observation);
     }
     project_active_plugin_runtime_diagnostic(diagnostic);

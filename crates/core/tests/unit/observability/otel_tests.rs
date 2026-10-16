@@ -48,6 +48,49 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use uuid::Uuid;
 
+#[test]
+fn trace_export_success_records_evidence_without_resetting_failure_reports() {
+    let field = format!("traces.test.{}", Uuid::now_v7());
+    let shared = SignalRuntimeDiagnostics::new_for_signal("traces", Some(field.clone()));
+    let delivery = TraceDeliveryDiagnostics::with_identity("collector".into(), shared.clone());
+    delivery.record_export_failure();
+    let legacy_before = shared.snapshot();
+    delivery.record_export_success();
+    delivery.record_export_success();
+
+    let snapshot = crate::diagnostics::Diagnostics::process_default()
+        .snapshot(crate::diagnostics::DiagnosticQuery {
+            component_key: Some(crate::diagnostics::legacy_component_key(
+                "observability.otel.traces.exporter",
+                Some(&field),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(snapshot.components.len(), 1);
+    let counters = &snapshot.components[0].counters;
+    assert_eq!(counters.len(), 2);
+    let failure = counters
+        .iter()
+        .find(|counter| counter.code == "otel.traces_export_failed")
+        .unwrap();
+    assert_eq!(failure.occurrences.value.get(), 1);
+    let success = counters
+        .iter()
+        .find(|counter| counter.code == "otel.traces_export_succeeded")
+        .unwrap();
+    assert_eq!(success.occurrences.value.get(), 2);
+    assert_eq!(success.last_message, "OpenTelemetry trace export succeeded");
+    assert_eq!(delivery.export_failures.load(Ordering::Relaxed), 1);
+    assert_eq!(shared.snapshot(), legacy_before);
+    assert!(
+        shared
+            .snapshot()
+            .get("otel.traces_export_succeeded")
+            .is_none()
+    );
+}
+
 struct ResetPricingResolverGuard;
 
 impl Drop for ResetPricingResolverGuard {

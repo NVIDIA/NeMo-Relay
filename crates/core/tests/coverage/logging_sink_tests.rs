@@ -351,7 +351,7 @@ fn async_sink_boundaries_report_each_full_sink_without_blocking_the_caller() {
 
 #[test]
 fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics};
+    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery, Diagnostics};
     use crate::logging::diagnostics::LoggingDiagnostics;
 
     let diagnostics = Diagnostics::default();
@@ -397,11 +397,16 @@ fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
                 .get(),
             expected
         );
+        let observations = snapshot
+            .events
+            .iter()
+            .filter(|event| event.component == sink.identity && event.code == code)
+            .collect::<Vec<_>>();
+        assert_eq!(observations.len() as u64, expected);
         assert!(
-            !sink
-                .conditions
+            observations
                 .iter()
-                .any(|condition| condition.code == code)
+                .all(|event| event.outcome == DiagnosticOutcome::Failure)
         );
     }
     release_sinks.release();
@@ -505,7 +510,7 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
 
 #[test]
 fn logging_shutdown_records_final_flush_failures_before_closing_component_handles() {
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics};
+    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery, Diagnostics};
     use crate::logging::{LoggingRuntime, diagnostics::LoggingDiagnostics};
 
     let _guard = crate::logging::lock_test_logging();
@@ -542,6 +547,11 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
             .find(|component| component.identity.key == component_key)
             .unwrap();
         assert!(component.closed_at.is_some());
+        assert!(snapshot.events.iter().any(|event| {
+            event.component == component.identity
+                && event.code == code
+                && event.outcome == DiagnosticOutcome::Failure
+        }));
         assert_eq!(
             component
                 .counters

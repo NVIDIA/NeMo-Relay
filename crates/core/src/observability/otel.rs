@@ -1684,8 +1684,10 @@ impl TraceDeliveryDiagnostics {
     fn record_export_success(&self) {
         self.unresolved_export_failure
             .store(false, Ordering::Relaxed);
-        self.runtime_diagnostics
-            .record_recovery("otel.traces_export_failed");
+        self.runtime_diagnostics.record_success(
+            "otel.traces_export_succeeded",
+            "OpenTelemetry trace export succeeded",
+        );
     }
 
     fn unresolved_failure_summary(&self) -> Option<String> {

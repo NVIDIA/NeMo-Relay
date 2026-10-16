@@ -11,12 +11,12 @@ Implement serializable diagnostic contracts in `nemo-relay-types` and the execut
 
 The foundation should provide separate write and read interfaces. Components receive scoped recording handles; consumers receive read-only query handles. Operational logging becomes a projection of recorded observations. Diagnostic state updates occur independently of logging configuration and verbosity.
 
-- **Shared contracts:** Define source identity, component identity, diagnostic codes, events, conditions, counters, snapshots, and coverage metadata. Keep synchronization, logger handles, HTTP concepts, and runtime ownership out of `types`.
+- **Shared contracts:** Define source identity, component identity, diagnostic codes, events, observed outcomes, counters, snapshots, and coverage metadata. Keep synchronization, logger handles, HTTP concepts, and runtime ownership out of `types`.
 - **Identity:** Assign an incarnation identity before logging initialization. Give each component a logical identity and a registration generation, so recreated exporters or sinks are distinguishable. Keep request/session correlation outside aggregation keys to bound cardinality.
-- **Registration and lifetime:** Register components explicitly and return scoped handles. Closing a component records its termination and retains bounded evidence. Closing a component must not imply that its unresolved conditions recovered.
-- **State management:** Separate recent events, active conditions, cumulative counters, and current component facts. Distinguish unavailable, unsupported, never observed, and available values.
+- **Registration and lifetime:** Register components explicitly and return scoped handles. Closing a recording registration retains bounded evidence without classifying component health or asserting that a process exited.
+- **State management:** Separate recent events, cumulative counters, and registration lifetime facts. Distinguish unavailable, unsupported, never observed, and available evidence.
 - **Resource limits:** Bound registered components, diagnostic keys, retained events, message sizes, and snapshot size. Expose truncation, eviction, rejected observations, and counter saturation through reserved metadata.
-- **Recording semantics:** Count an occurrence once. Activating or querying an existing condition must not increment its occurrence count. Recovery requires an observed successful operation or another explicit recovery signal.
+- **Recording semantics:** Count each supplied positive occurrence delta once. Reads add no occurrences. Failures and successes are independent observations with separate codes; success resets no failure count. The common foundation contains no condition activation or recovery policy.
 - **Compatibility:** Preserve existing subscriber diagnostics and plugin reports as projections. Replace mirrored counting paths with a single recording boundary.
 - **Logging integration:** Publish log projections after releasing diagnostic-state locks. Sink failures update state through a path that avoids recursively writing into the failed sink.
 
@@ -28,31 +28,36 @@ pub struct DiagnosticSnapshot {
     pub schema_version: u32,
     pub source: SourceIdentity,
     pub captured_at: ObservationTime,
-    pub sequence: u64,
+    pub sequence: DiagnosticNumber,
     pub components: Vec<ComponentSnapshot>,
+    pub events: Vec<DiagnosticEvent>,
     pub coverage: DiagnosticCoverage,
 }
 
 // nemo-relay: recorder, ownership, storage, and queries.
 let diagnostics = Diagnostics::new(source_identity, limits);
-let exporter = diagnostics.register_component(
-    ComponentIdentity::exporter("otlp.logs", "collector-a"),
-)?;
+let exporter = diagnostics.register_component("exporter.otlp.logs")?;
 
-// Records one occurrence and updates its active condition.
+// Records an observed failure occurrence.
 let _receipt = exporter.observe_failure(
     "otel.logs_export_failed",
-    SafeMessage::new("The export attempt failed"),
+    "The export attempt failed",
+    1,
     correlation,
-);
+)?;
 
-// A later observed success resolves the condition; history remains.
-exporter.observe_recovery("otel.logs_export_failed");
+// A later successful attempt is independent evidence; failures remain counted.
+exporter.observe_success(
+    "otel.logs_export_succeeded",
+    "The export attempt succeeded",
+    1,
+    DiagnosticCorrelation::default(),
+)?;
 
 let snapshot = diagnostics.reader().snapshot(query)?;
 ```
 
-The common model should describe observed evidence and its coverage. Components and deployment owners retain responsibility for admission, retry, restart, and health policy.
+The common model describes observed evidence and its coverage. The embedding application or deployment owner retains health classification, readiness, alerting, and recovery policy. Components retain their operational admission, retry, and restart behavior. This evidence-only revision supersedes the earlier proposal's generalized active/recovered condition model.
 
 **2. CLI deployment mode integration**
 
@@ -104,7 +109,7 @@ Preserve the distinction between authoritative broker observations and worker-au
 
 - **Local instrumentation:** Register broker routing/control components and worker runtime/plugin/exporter components through the common recorder.
 - **API consistency:** Share process/component snapshot schemas and handlers. Preserve existing `/healthz`, worker listing, aggregate status, and individual worker status contracts.
-- **Assignment versus process state:** Keep broker assignment fields separate from the worker’s own lifecycle and component conditions.
+- **Assignment versus process state:** Keep broker assignment fields separate from the worker’s own lifecycle and component observations.
 - **Collection:** Query the worker’s shared diagnostics interface through its authenticated listener. Run collection independently of request forwarding and lifecycle control.
 - **Freshness and identity:** Retain worker generation, process incarnation, source sequence, source observation time, and broker receipt time. Use broker-local elapsed time to determine freshness.
 - **Cache behavior:** Replace cumulative snapshots rather than adding their counters. Reject obsolete generations, bound cache size, and expose missing, stale, unsupported, or evicted coverage.
@@ -194,7 +199,7 @@ The protocol already separates host-to-plugin `PluginWorker` calls from plugin-t
 - **Host-observed failures:** Instrument launch, handshake, registration, callback transport, cancellation, and teardown independently of plugin-authored records.
 - **Acceptance semantics:** A recording receipt means acceptance into host memory. Bound requests and any retry/deduplication state; retries of an accepted operation must not add another occurrence.
 - **Compatibility:** Implement additive `grpc-v1` extensions. Older hosts returning `UNIMPLEMENTED` produce unsupported coverage, not an empty successful result.
-- **Lifecycle:** Retire activation-owned sources on teardown while retaining bounded evidence. Conditions do not become recovered merely because the plugin exits.
+- **Lifecycle:** Retire activation-owned registrations on teardown while retaining bounded evidence. Teardown does not clear prior failures or establish a health outcome.
 
 Illustrative SDK usage:
 
@@ -216,7 +221,10 @@ let receipt = recorder.record(
 // After an observed successful backend operation:
 recorder.record(
     DiagnosticOperationId::new(),
-    DiagnosticUpdate::recovery("plugin.backend_unavailable"),
+    DiagnosticUpdate::success(
+        "plugin.backend_operation_succeeded",
+        SafeMessage::new("The backend operation succeeded"),
+    ),
 ).await?;
 ```
 
@@ -244,7 +252,7 @@ async fn record_diagnostic(
 }
 ```
 
-Existing ordinary logging and configuration-validation diagnostics remain distinct operations. Typed observations enter the shared recorder once and use its logging projection; free-form log messages should not be parsed into conditions.
+Existing ordinary logging and configuration-validation diagnostics remain distinct operations. Typed observations enter the shared recorder once and use its logging projection; free-form log messages should not be parsed into typed observations.
 
 This phase does not require a second diagnostic store or HTTP server inside each dynamic-plugin process. Independently queryable plugin-local state would require a separate host-to-plugin snapshot capability.
 
@@ -255,18 +263,18 @@ Use this phase to complete conformance, compatibility review, and documentation 
 Define one contract for recording, querying, projecting, and collecting diagnostics. Keep adapters responsible for transport and language representation, with observable semantics supplied by core.
 
 - **Schema and versioning:** Document required fields, identities, timestamp meanings, code namespaces, unknown-field handling, lossless integers, availability, freshness, retention gaps, and compatibility rules.
-- **API consistency:** Publish the shared CLI endpoint contract and its relationship to existing health and worker-status endpoints. Distinguish request success, lifecycle state, active diagnostic conditions, and deployment health policy.
-- **Producer coverage:** Catalogue which components report each condition and outcome. Explicitly identify observations the implementation cannot obtain.
-- **Delivery semantics:** Define precisely what “recorded,” “exported,” “acknowledged,” and “recovered” mean. Collector partial rejection requires actual exporter instrumentation; a common API cannot infer it.
+- **API consistency:** Publish the shared CLI endpoint contract and its relationship to existing health and worker-status endpoints. Distinguish request outcomes, lifecycle facts, diagnostic evidence, and owner-defined deployment health policy.
+- **Producer coverage:** Catalogue which components report each observation and outcome. Explicitly identify observations the implementation cannot obtain.
+- **Delivery semantics:** Define precisely what “recorded,” “exported,” and “acknowledged” mean. A subsequent success is an independent observation, not a resolution of earlier failure or loss. Collector partial rejection requires actual exporter instrumentation; a common API cannot infer it.
 - **Compatibility:** Review existing subscriber reports, plugin reports, binding APIs, and dynamic-plugin consumers. Native-plugin extensions, if required, must use the stable ABI boundary rather than pass Rust runtime handles across libraries.
 - **Documentation:** Update operational logging, CLI/gateway, daemon operations, embedded SDK, plugin authoring, troubleshooting, and release notes. Explain optional-sink behavior, bootstrap limitations, freshness, and loss.
-- **Conformance validation:** Exercise common scenarios through each applicable adapter: startup failure, optional-sink failure, repeated failure and recovery, component replacement, stale worker reports, unsupported peers, and bounded-history loss.
+- **Conformance validation:** Exercise common scenarios through each applicable adapter: startup failure, optional-sink failure, repeated failures followed by success without resetting counts, component replacement, stale worker reports, unsupported peers, and bounded-history loss.
 - **Generated surfaces:** Update schemas, declarations, protocol clients, and API references through their owning generation workflows.
 
 Illustrative conformance pseudocode:
 
 ```rust
-let expected = fixture.record_failure_then_recovery();
+let expected = fixture.record_failure_then_success();
 
 let rust_view = rust_reader.snapshot(query.clone())?;
 let http_view = decode_http_snapshot(http.get_status().await?)?;
@@ -280,7 +288,7 @@ assert_same_diagnostic_facts(
 // Verify separately:
 // - transport-specific access and errors;
 // - legacy response compatibility;
-// - reads do not change counters or trigger recovery;
+// - reads do not change counters and success does not reset failure counts;
 // - source identity and freshness survive collection.
 ```
 

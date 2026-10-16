@@ -2339,15 +2339,17 @@ fn reject_opentelemetry_metric_mark(
             "OpenTelemetry metric mark was dropped atomically: {error}"
         );
     }
-    crate::observability::otel_signal::record_signal_runtime_diagnostic(
-        "otel.metric_mark_invalid",
-        metric_diagnostic_field.map(str::to_owned),
-        format!(
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+        code: "otel.metric_mark_invalid".to_owned(),
+        component: OBSERVABILITY_PLUGIN_KIND.to_owned(),
+        field: metric_diagnostic_field.map(str::to_owned),
+        message: format!(
             "OpenTelemetry metric mark {:?} was dropped atomically: {error}",
             event.name()
         ),
-        1,
-    );
+        session_id: None,
+        count: 1,
+    });
 }
 
 fn build_opentelemetry_subscribers(
