@@ -241,6 +241,22 @@ class TestObservabilityConfigHelpers:
         report = validate_plugin_config(plugin.PluginConfig(components=[ComponentSpec(config)]))
         assert report["diagnostics"] == []
 
+    async def test_insecure_http_hosts_activate_a_listed_plain_http_trace_endpoint(self) -> None:
+        def config(hosts: list[str] | None) -> plugin.PluginConfig:
+            section = OpenTelemetrySectionConfig(
+                enabled=True,
+                endpoints=[OpenTelemetryEndpointConfig("gen_ai", "http://collector.invalid:4318/v1/traces")],
+            )
+            return plugin.PluginConfig(
+                components=[ComponentSpec(ObservabilityConfig(opentelemetry=section, insecure_http_hosts=hosts))]
+            )
+
+        with pytest.raises(ValueError, match="insecure_http_hosts"):
+            await plugin.initialize(config(None))
+        activation = await plugin.initialize(config(["collector.invalid"]))
+        assert activation.is_active
+        await activation.close()
+
     def test_defaults_and_component_wrapper(self) -> None:
         assert AtofConfig().to_dict() == {"enabled": False}
         assert AtifConfig().to_dict() == {

@@ -115,6 +115,26 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	assertWrappedObservabilityConfig(t, wrapped)
 }
 
+func TestObservabilityInsecureHTTPHostsSerializeAtTopLevel(t *testing.T) {
+	config := NewObservabilityConfig()
+	omitted, err := json.Marshal(config)
+	requireNoError(t, err, "json.Marshal failed")
+	if strings.Contains(string(omitted), "insecure_http_hosts") {
+		t.Fatalf("unset insecure_http_hosts was serialized: %s", omitted)
+	}
+
+	config.InsecureHTTPHosts = []string{"host.docker.internal", "collector.ns.svc.cluster.local"}
+	payload, err := json.Marshal(config)
+	requireNoError(t, err, "json.Marshal failed")
+	var decoded struct {
+		InsecureHTTPHosts []string `json:"insecure_http_hosts"`
+	}
+	requireNoError(t, json.Unmarshal(payload, &decoded), "json.Unmarshal failed")
+	if strings.Join(decoded.InsecureHTTPHosts, ",") != strings.Join(config.InsecureHTTPHosts, ",") {
+		t.Fatalf("unexpected insecure_http_hosts: %s", payload)
+	}
+}
+
 func TestObservabilityAtofSinkConfigConstructorsSerializeTheirDiscriminators(t *testing.T) {
 	file := NewObservabilityAtofFileSinkConfig()
 	if file.Mode != "append" {

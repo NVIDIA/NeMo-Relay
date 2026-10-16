@@ -216,6 +216,7 @@ fn insecure_http_hosts_reject_entries_that_are_not_bare_hosts() {
         "release-api:8080",
         "[fd00::1]:80",
         "release-api/v1",
+        "collector.example/..",
         "*.svc.cluster.local",
         ".svc.cluster.local",
         "%2A.svc.cluster.local",
