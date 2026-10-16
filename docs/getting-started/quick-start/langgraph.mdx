@@ -1,0 +1,135 @@
+---
+title: "LangGraph Quick Start"
+sidebar-title: "LangGraph"
+slug: getting-started/quick-start/langgraph
+description: "Run one LangGraph workflow with NeMo Relay observability."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "langgraph",
+  "mode": "local",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-langgraph-quickstart",
+  "requires": {
+    "python": ">=3.11",
+    "uv": "available"
+  },
+  "setup": [],
+  "inputs": {},
+  "fresh": [
+    "logs/events.jsonl"
+  ],
+  "checks": [
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent",
+          "name": "langgraph-request"
+        },
+        {
+          "category": "agent",
+          "name": "emit_marker"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
+## Goal
+
+Run one credential-free LangGraph workflow and write its lifecycle to a local
+Agent Trajectory Observability Format (ATOF) file.
+
+## Prerequisites
+
+Before you start, make sure you have:
+
+- Python 3.11 or newer
+- `uv`
+
+<Note icon="circle-info">
+Install commands target the Relay version documented here. If that version has
+not been released, its pinned packages and downloads are not available yet.
+Select a released documentation version to try Relay now.
+</Note>
+
+<Steps toc={true}>
+
+## Install
+
+Create a project and install the NeMo Relay version for these docs with the
+LangGraph extra.
+For an existing `uv` project, run only the `uv add` command from its directory.
+
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
+```bash
+mkdir relay-langgraph-quickstart
+cd relay-langgraph-quickstart
+uv init
+uv add "nemo-relay[langgraph]==0.11.0"
+```
+
+## Configure
+
+Save the following configuration as `plugins.toml` in your project directory:
+
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-langgraph-quickstart","path":"plugins.toml"} */}
+<Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
+
+<Warning>
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+</Warning>
+
+## Run
+
+Save this file as `quickstart.py` beside `plugins.toml`:
+
+{/* quickstart-block {"id":"program","role":"file","cwd":"relay-langgraph-quickstart","path":"quickstart.py"} */}
+<Code src="_code/langgraph/quickstart.py" language="python" title="quickstart.py" />
+
+Run it from the project directory:
+
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-langgraph-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+uv run python quickstart.py
+```
+
+## Verify
+
+The program checks the event file for matching start and end records from the
+`emit_marker` graph node. A successful run prints these markers in order:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-langgraph-quickstart","from":"run","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_GRAPH_OK
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+<Tip>
+This deterministic path needs no model credentials. After it works, add a model
+and tool node to observe a full agent workflow.
+</Tip>
+
+</Steps>
+
+## For More Details
+
+For more details, refer to:
+
+- [LangGraph integration guide](/supported-integrations/langgraph)
+- [ATOF exporter](/configure-plugins/observability/atof)
