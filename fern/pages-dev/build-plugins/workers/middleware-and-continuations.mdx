@@ -45,6 +45,12 @@ Tool and LLM execution callbacks can wait for long tool or model calls through
 stream. The caller can cancel these callbacks. Relay then releases their
 continuations, codec capabilities, and scope state.
 
+When a worker call ends or times out, Relay drops its active provider futures and
+streams. This happens even if the worker does not cancel its request to the host.
+Providers stop work if they support cancellation when a future or stream is
+dropped. Blocking work and tasks that run on their own need a separate way to
+stop.
+
 ## Inject Event Metadata
 
 Choose a worker language to register a callback that proposes metadata additions:
