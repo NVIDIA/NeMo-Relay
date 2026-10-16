@@ -42,6 +42,12 @@ operations through `next()` and have no host RPC deadline. This also applies
 while opening an LLM response stream. Caller cancellation stops the invocation
 and releases its continuations, codec capabilities, and scope state.
 
+When a worker call ends or times out, Relay drops its active provider futures and
+streams. This happens even if the worker does not cancel its request to the host.
+Providers stop work if they support cancellation when a future or stream is
+dropped. Blocking work and tasks that run on their own need a separate way to
+stop.
+
 ## Inject Event Metadata
 
 Choose a worker language to register a callback that proposes metadata additions:

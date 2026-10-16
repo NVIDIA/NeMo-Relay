@@ -2538,7 +2538,7 @@ struct WorkerHostRuntimeState {
     scope_stack_cleanups: Mutex<Vec<crate::api::runtime::ScopeStackHandle>>,
     scope_stack_cleanup_complete: Condvar,
     scope_handles: Mutex<HashMap<String, StoredScopeHandle>>,
-    continuations: Mutex<HashMap<String, Continuation>>,
+    continuations: Mutex<HashMap<String, StoredContinuation>>,
     codecs: Mutex<HashMap<String, WorkerCodecCapability>>,
     gates_active: AtomicBool,
     conditional_middleware_guardrails: Mutex<HashMap<String, WorkerOwnedGate>>,
@@ -3012,7 +3012,14 @@ impl WorkerHostRuntimeState {
             .continuations
             .lock()
             .map_err(|err| FlowError::Internal(format!("continuation lock poisoned: {err}")))?;
-        continuations.insert(id.clone(), continuation);
+        let (lifetime, _) = watch::channel(());
+        continuations.insert(
+            id.clone(),
+            StoredContinuation {
+                continuation,
+                lifetime,
+            },
+        );
         Ok(id)
     }
 
@@ -3022,12 +3029,12 @@ impl WorkerHostRuntimeState {
         }
     }
 
-    fn continuation(&self, id: &str) -> Result<Continuation, Status> {
+    fn continuation(&self, id: &str) -> Result<(Continuation, watch::Receiver<()>), Status> {
         self.continuations
             .lock()
             .map_err(|err| Status::internal(format!("continuation lock poisoned: {err}")))?
             .get(id)
-            .cloned()
+            .map(|stored| (stored.continuation.clone(), stored.lifetime.subscribe()))
             .ok_or_else(|| Status::not_found("continuation not found"))
     }
 
@@ -3078,6 +3085,24 @@ impl StoredInvocationContext {
                 with_scope_stack(self.scope_stack.clone(), callback)
             }),
         }
+    }
+}
+
+// Only the registry owns the sender. Removing an invocation closes every active
+// continuation receiver, including calls already dispatched to a provider.
+struct StoredContinuation {
+    continuation: Continuation,
+    lifetime: watch::Sender<()>,
+}
+
+async fn while_continuation_active<T>(
+    lifetime: &mut watch::Receiver<()>,
+    future: impl Future<Output = T>,
+) -> Result<T, Status> {
+    tokio::select! {
+        biased;
+        _ = lifetime.changed() => Err(Status::cancelled("worker invocation has ended")),
+        result = future => Ok(result),
     }
 }
 
@@ -3569,7 +3594,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
-        let continuation = self.state.continuation(&request.continuation_id)?;
+        let (continuation, mut lifetime) = self.state.continuation(&request.continuation_id)?;
         let Continuation::Tool { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not a tool continuation",
@@ -3580,15 +3605,17 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             required_envelope(request.value, "tool next value").map_err(status_from_flow)?;
         let value = decode_json_envelope::<Json>(&value)
             .map_err(|err| Status::invalid_argument(format!("invalid tool next JSON: {err}")))?;
-        let result = AssertUnwindSafe(context.invoke(move || next(value)))
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|payload| {
-                Err(FlowError::Internal(format!(
-                    "worker tool continuation panicked: {}",
-                    panic_payload_message(payload.as_ref())
-                )))
-            });
+        let result = while_continuation_active(
+            &mut lifetime,
+            AssertUnwindSafe(context.invoke(move || next(value))).catch_unwind(),
+        )
+        .await?
+        .unwrap_or_else(|payload| {
+            Err(FlowError::Internal(format!(
+                "worker tool continuation panicked: {}",
+                panic_payload_message(payload.as_ref())
+            )))
+        });
         Ok(Response::new(tool_execution_result_response(result)))
     }
 
@@ -3599,7 +3626,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
-        let continuation = self.state.continuation(&request.continuation_id)?;
+        let (continuation, mut lifetime) = self.state.continuation(&request.continuation_id)?;
         let Continuation::Llm { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not an LLM continuation",
@@ -3610,15 +3637,17 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             required_envelope(request.request, "llm next request").map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request)
             .map_err(|err| Status::invalid_argument(format!("invalid LLM next request: {err}")))?;
-        let result = AssertUnwindSafe(context.invoke(move || next(request)))
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|payload| {
-                Err(FlowError::Internal(format!(
-                    "worker LLM continuation panicked: {}",
-                    panic_payload_message(payload.as_ref())
-                )))
-            });
+        let result = while_continuation_active(
+            &mut lifetime,
+            AssertUnwindSafe(context.invoke(move || next(request))).catch_unwind(),
+        )
+        .await?
+        .unwrap_or_else(|payload| {
+            Err(FlowError::Internal(format!(
+                "worker LLM continuation panicked: {}",
+                panic_payload_message(payload.as_ref())
+            )))
+        });
         Ok(Response::new(json_result(result)))
     }
 
@@ -3632,7 +3661,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
-        let continuation = self.state.continuation(&request.continuation_id)?;
+        let (continuation, mut lifetime) = self.state.continuation(&request.continuation_id)?;
         let Continuation::LlmStream { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not an LLM stream continuation",
@@ -3644,16 +3673,18 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = decode_json_envelope::<LlmRequest>(&request).map_err(|err| {
             Status::invalid_argument(format!("invalid LLM stream next request: {err}"))
         })?;
-        let stream = AssertUnwindSafe(context.invoke(move || next(request)))
-            .catch_unwind()
-            .await
-            .map_err(|payload| {
-                Status::internal(format!(
-                    "worker stream continuation panicked: {}",
-                    panic_payload_message(payload.as_ref())
-                ))
-            })?
-            .map_err(status_from_flow)?;
+        let stream = while_continuation_active(
+            &mut lifetime,
+            AssertUnwindSafe(context.invoke(move || next(request))).catch_unwind(),
+        )
+        .await?
+        .map_err(|payload| {
+            Status::internal(format!(
+                "worker stream continuation panicked: {}",
+                panic_payload_message(payload.as_ref())
+            ))
+        })?
+        .map_err(status_from_flow)?;
         let (tx, rx) = mpsc::channel(16);
         tokio::spawn(async move {
             context
@@ -3662,22 +3693,28 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                     loop {
                         tokio::select! {
                             biased;
+                            _ = lifetime.changed() => break,
                             _ = tx.closed() => break,
                             item = AssertUnwindSafe(stream.next()).catch_unwind() => {
                                 match item {
                                     Ok(Some(item)) => {
-                                        if tx.send(item).await.is_err() {
+                                        if !matches!(
+                                            while_continuation_active(&mut lifetime, tx.send(item)).await,
+                                            Ok(Ok(()))
+                                        ) {
                                             break;
                                         }
                                     }
                                     Ok(None) => break,
                                     Err(payload) => {
-                                        let _ = tx
-                                            .send(Err(FlowError::Internal(format!(
+                                        let _ = while_continuation_active(
+                                            &mut lifetime,
+                                            tx.send(Err(FlowError::Internal(format!(
                                                 "worker stream continuation panicked: {}",
                                                 panic_payload_message(payload.as_ref())
-                                            ))))
-                                            .await;
+                                            )))),
+                                        )
+                                        .await;
                                         break;
                                     }
                                 }
