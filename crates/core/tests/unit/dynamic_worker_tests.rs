@@ -5361,3 +5361,240 @@ async fn scope_stack_snapshot_cleanup_races_return_complete_values_or_explicit_e
         }
     }
 }
+
+/// The host stops provider work even if the worker keeps its request open.
+#[tokio::test]
+async fn worker_invocation_cancellation_drops_in_flight_provider_calls() {
+    for timed_out in [false, true] {
+        for surface in ["tool", "llm", "stream_open"] {
+            let (callback, _shutdown, _cancel_rx) = fake_callback_service_with_handlers(
+                |_| Box::pin(std::future::pending()),
+                |_| Box::pin(tokio_stream::empty()),
+            )
+            .await;
+            /// Wait for cancellation and report when the provider future is dropped.
+            async fn pending_provider<T>(
+                started: Arc<tokio::sync::Notify>,
+                dropped: mpsc::UnboundedSender<()>,
+            ) -> FlowResult<T> {
+                /// Report that the provider released its resources.
+                struct ProviderDrop(mpsc::UnboundedSender<()>);
+                impl Drop for ProviderDrop {
+                    /// Notify the test that provider work has stopped.
+                    fn drop(&mut self) {
+                        let _ = self.0.send(());
+                    }
+                }
+                let _dropped = ProviderDrop(dropped);
+                started.notify_one();
+                std::future::pending().await
+            }
+            let provider_started = Arc::new(tokio::sync::Notify::new());
+            let started = provider_started.clone();
+            let (dropped_tx, mut dropped_rx) = mpsc::unbounded_channel();
+            let continuation = match surface {
+                "tool" => Continuation::tool(Arc::new(move |_| {
+                    Box::pin(pending_provider(started.clone(), dropped_tx.clone()))
+                })),
+                "llm" => Continuation::llm(Arc::new(move |_| {
+                    Box::pin(pending_provider(started.clone(), dropped_tx.clone()))
+                })),
+                _ => Continuation::llm_stream(Arc::new(move |_| {
+                    Box::pin(pending_provider(started.clone(), dropped_tx.clone()))
+                })),
+            };
+            let id = callback
+                .host_state
+                .insert_continuation(continuation)
+                .unwrap();
+            let request = callback
+                .base_request(
+                    "pending",
+                    RegistrationSurface::LlmExecutionIntercept,
+                    Some(id.clone()),
+                    None,
+                )
+                .unwrap();
+            let service = WorkerHostRuntimeService {
+                state: callback.host_state.clone(),
+            };
+            let provider_task = tokio::spawn(async move {
+                match surface {
+                    "tool" => service
+                        .tool_next(Request::new(ToolNextRequest {
+                            activation_id: ACTIVATION_ID.into(),
+                            auth_token: AUTH_TOKEN.into(),
+                            continuation_id: id,
+                            scope: None,
+                            value: Some(json_envelope(JSON_SCHEMA, &json!({})).unwrap()),
+                        }))
+                        .await
+                        .map(|_| ()),
+                    "llm" => service
+                        .llm_next(Request::new(LlmNextRequest {
+                            activation_id: ACTIVATION_ID.into(),
+                            auth_token: AUTH_TOKEN.into(),
+                            continuation_id: id,
+                            scope: None,
+                            request: Some(
+                                json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap(),
+                            ),
+                        }))
+                        .await
+                        .map(|_| ()),
+                    _ => service
+                        .llm_stream_next(Request::new(LlmStreamNextRequest {
+                            activation_id: ACTIVATION_ID.into(),
+                            auth_token: AUTH_TOKEN.into(),
+                            continuation_id: id,
+                            scope: None,
+                            request: Some(
+                                json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap(),
+                            ),
+                        }))
+                        .await
+                        .map(|_| ()),
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(2), provider_started.notified())
+                .await
+                .unwrap();
+            if timed_out {
+                let error = callback
+                    .invoke_async_with_timeout(request, Some(Duration::from_millis(10)))
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("timed out"));
+            } else {
+                let mut invocation = Box::pin(callback.invoke_async_with_timeout(request, None));
+                assert!(futures_util::poll!(&mut invocation).is_pending());
+                drop(invocation);
+            }
+            tokio::time::timeout(Duration::from_secs(2), dropped_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let error = tokio::time::timeout(Duration::from_secs(2), provider_task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::Cancelled, "{surface}");
+        }
+    }
+}
+
+/// End provider streams even when their consumer remains open or stops reading.
+#[tokio::test]
+async fn worker_invocation_cleanup_drops_provider_stream_even_with_a_live_consumer() {
+    for backpressure in [false, true] {
+        let state = Arc::new(WorkerHostRuntimeState::new(
+            ACTIVATION_ID.into(),
+            AUTH_TOKEN.into(),
+        ));
+        let (dropped_tx, mut dropped_rx) = mpsc::unbounded_channel();
+        let polled = Arc::new(tokio::sync::Notify::new());
+        let signal = polled.clone();
+        let id = state
+            .insert_continuation(Continuation::llm_stream(Arc::new(move |_| {
+                let dropped_tx = dropped_tx.clone();
+                let signal = signal.clone();
+                Box::pin(async move {
+                    /// Report that the provider released its resources.
+                    struct ProviderDrop(mpsc::UnboundedSender<()>);
+                    impl Drop for ProviderDrop {
+                        /// Notify the test that provider work has stopped.
+                        fn drop(&mut self) {
+                            let _ = self.0.send(());
+                        }
+                    }
+                    let drop_signal = ProviderDrop(dropped_tx);
+                    Ok(LlmJsonStream::new(futures_util::stream::poll_fn(
+                        move |_| {
+                            let _keep_alive = &drop_signal;
+                            signal.notify_one();
+                            if backpressure {
+                                std::task::Poll::Ready(Some(Ok(json!("chunk"))))
+                            } else {
+                                std::task::Poll::Pending
+                            }
+                        },
+                    )))
+                })
+            })))
+            .unwrap();
+        let service = WorkerHostRuntimeService {
+            state: state.clone(),
+        };
+        let mut stream = service
+            .llm_stream_next(Request::new(LlmStreamNextRequest {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                continuation_id: id.clone(),
+                scope: None,
+                request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        tokio::time::timeout(Duration::from_secs(2), polled.notified())
+            .await
+            .unwrap();
+        // With a slow consumer, the forwarding task fills the queue before it yields.
+        state.remove_continuation(&id);
+        tokio::time::timeout(Duration::from_secs(2), dropped_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        while stream.next().await.is_some() {}
+    }
+}
+
+/// Keep the default callback deadline and send cancellation when it expires.
+#[tokio::test]
+async fn short_callbacks_keep_their_rpc_deadline() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started = Arc::clone(&started);
+            move |_| {
+                let started = Arc::clone(&started);
+                Box::pin(async move {
+                    started.notify_one();
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let request = callback
+        .base_request(
+            "short_callback",
+            RegistrationSurface::ToolRequestIntercept,
+            None,
+            None,
+        )
+        .unwrap();
+    let invocation_id = request.invocation_id.clone();
+    let task = tokio::spawn(async move { callback.invoke_async(request).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(WORKER_RPC_TIMEOUT + std::time::Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    tokio::time::resume();
+    assert!(
+        task.await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("worker invocation timed out")
+    );
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cancellation.invocation_id, invocation_id);
+}
