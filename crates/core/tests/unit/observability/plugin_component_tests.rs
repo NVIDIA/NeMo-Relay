@@ -2307,6 +2307,18 @@ fn insecure_http_hosts_is_a_top_level_field_only() {
     );
 }
 
+#[test]
+fn typed_insecure_http_hosts_serialize_an_explicit_empty_list() {
+    let omitted = serde_json::to_value(ObservabilityConfig::default()).unwrap();
+    assert!(omitted.get("insecure_http_hosts").is_none());
+    let cleared = serde_json::to_value(ObservabilityConfig {
+        insecure_http_hosts: Some(Vec::new()),
+        ..ObservabilityConfig::default()
+    })
+    .unwrap();
+    assert_eq!(cleared.get("insecure_http_hosts"), Some(&json!([])));
+}
+
 #[cfg(feature = "object-store")]
 #[test]
 fn atif_http_storage_headers_follow_the_plaintext_policy() {

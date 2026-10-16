@@ -18,7 +18,8 @@ type ObservabilityConfig struct {
 	// EnableFullPayloads retains complete sanitized request data on every LLM start event.
 	EnableFullPayloads bool `json:"enable_full_payloads,omitempty"`
 	// InsecureHTTPHosts lists non-loopback hosts allowed unencrypted HTTP or WebSocket exports, including headers.
-	InsecureHTTPHosts []string `json:"insecure_http_hosts,omitempty"`
+	// Nil keeps a lower-precedence list; a pointer to an empty slice clears it.
+	InsecureHTTPHosts *[]string `json:"insecure_http_hosts,omitempty"`
 }
 
 // ObservabilityOpenTelemetryConfig configures multiple typed OTLP endpoints.

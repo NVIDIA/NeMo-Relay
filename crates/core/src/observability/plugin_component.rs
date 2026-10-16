@@ -158,8 +158,8 @@ pub struct ObservabilityConfig {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub enable_full_payloads: bool,
     /// Non-loopback hosts trusted to receive plain HTTP or WebSocket exports and configured headers.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub insecure_http_hosts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insecure_http_hosts: Option<Vec<String>>,
 }
 
 impl Default for ObservabilityConfig {
@@ -171,7 +171,7 @@ impl Default for ObservabilityConfig {
             opentelemetry: None,
             policy: ConfigPolicy::default(),
             enable_full_payloads: false,
-            insecure_http_hosts: Vec::new(),
+            insecure_http_hosts: None,
         }
     }
 }
@@ -752,6 +752,7 @@ crate::editor_config! {
         insecure_http_hosts => {
             label: "insecure_http_hosts",
             kind: List,
+            optional: true,
             list: &crate::config_editor::STRING_LIST_ITEM,
         },
     }
@@ -1417,7 +1418,7 @@ fn register_observability(
             config.version
         )));
     }
-    let plaintext = PlaintextPolicy::from_hosts(&config.insecure_http_hosts)
+    let plaintext = PlaintextPolicy::from_hosts(config.insecure_http_hosts.as_deref().unwrap_or_default())
         .map_err(PluginError::InvalidConfig)?;
     register_full_payload_policy(config.enable_full_payloads, ctx)?;
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
@@ -1749,11 +1750,22 @@ struct SkippedResource {
 
 impl SkippedResource {
     fn for_endpoint(endpoint: &str, error: impl std::fmt::Display) -> Self {
+        Self::scrubbed(endpoint, &[endpoint, endpoint.trim()], error)
+    }
+
+    fn for_signal_endpoint(endpoint: &str, signal: &str, error: impl std::fmt::Display) -> Self {
+        let derived = super::otel_signal::resolve_http_signal_endpoint(endpoint.trim(), signal);
+        Self::scrubbed(endpoint, &[endpoint, endpoint.trim(), &derived], error)
+    }
+
+    fn scrubbed(endpoint: &str, forms: &[&str], error: impl std::fmt::Display) -> Self {
         let destination = super::otel::trace_endpoint_log_identity(endpoint);
+        let mut forms = forms.to_vec();
+        forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
         let mut reason = error.to_string();
-        for raw in [endpoint, endpoint.trim()] {
-            if !raw.is_empty() {
-                reason = reason.replace(raw, &destination);
+        for form in forms {
+            if !form.is_empty() {
+                reason = reason.replace(form, &destination);
             }
         }
         Self {
@@ -2478,10 +2490,9 @@ fn resolve_signal_endpoints(
             for (index, trace) in traces.iter().enumerate() {
                 let value = match derive_signal_endpoint(signal, index, trace) {
                     Ok(value) => OpenTelemetryResource::Active(value),
-                    Err(error) => OpenTelemetryResource::Skipped(SkippedResource::for_endpoint(
-                        &trace.endpoint,
-                        error,
-                    )),
+                    Err(error) => OpenTelemetryResource::Skipped(
+                        SkippedResource::for_signal_endpoint(&trace.endpoint, signal, error),
+                    ),
                 };
                 endpoints.push(IndexedOpenTelemetryResource { index, value });
             }
@@ -2688,7 +2699,8 @@ fn build_opentelemetry_log_subscribers(
                 match result {
                     Ok(value) => OpenTelemetryResource::Active(Arc::new(value)),
                     Err(error) => {
-                        let skipped = SkippedResource::for_endpoint(&raw_endpoint, error);
+                        let skipped =
+                            SkippedResource::for_signal_endpoint(&raw_endpoint, "logs", error);
                         log::warn!(
                             target: "nemo_relay.plugin",
                             event = "opentelemetry_endpoint_skipped",
@@ -2744,7 +2756,8 @@ fn build_opentelemetry_metric_subscribers(
                 match result {
                     Ok(value) => OpenTelemetryResource::Active(Arc::new(value)),
                     Err(error) => {
-                        let skipped = SkippedResource::for_endpoint(&raw_endpoint, error);
+                        let skipped =
+                            SkippedResource::for_signal_endpoint(&raw_endpoint, "metrics", error);
                         log::warn!(
                             target: "nemo_relay.plugin",
                             event = "opentelemetry_endpoint_skipped",
@@ -4569,7 +4582,9 @@ fn validate_observability_section_values(
     config: &ObservabilityConfig,
 ) {
     if let Err(message) =
-        crate::observability::header_file::validate_insecure_http_hosts(&config.insecure_http_hosts)
+        crate::observability::header_file::validate_insecure_http_hosts(
+            config.insecure_http_hosts.as_deref().unwrap_or_default(),
+        )
     {
         push_policy_diag(
             diagnostics,
