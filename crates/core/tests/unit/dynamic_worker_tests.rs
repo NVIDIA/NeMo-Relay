@@ -2007,6 +2007,7 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// Checks that a timeout reports the callback's identity and sends cancellation.
 async fn callback_timeout_sends_explicit_worker_cancellation() {
     enable_operational_logs();
     let (started_tx, started_rx) = oneshot::channel();

@@ -2330,6 +2330,7 @@ impl WorkerPluginCallback {
         block_on_handle(&self.runtime, self.invoke_async(request))
     }
 
+    /// Invokes a callback with its surface's timeout policy and logs failures.
     async fn invoke_async(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
         let callback_name = request.registration_name.clone();
         let surface = request.surface;
