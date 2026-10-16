@@ -394,7 +394,7 @@ class ObservabilityConfig:
     opentelemetry: OpenTelemetrySectionConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
     enable_full_payloads: bool = False
-    insecure_http_hosts: list[str] = field(default_factory=list)
+    insecure_http_hosts: list[str] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this observability config to the canonical JSON object shape."""
@@ -406,7 +406,7 @@ class ObservabilityConfig:
                 "opentelemetry": self.opentelemetry,
                 "policy": self.policy,
                 "enable_full_payloads": self.enable_full_payloads,
-                "insecure_http_hosts": self.insecure_http_hosts or None,
+                "insecure_http_hosts": self.insecure_http_hosts,
             }
         )
 

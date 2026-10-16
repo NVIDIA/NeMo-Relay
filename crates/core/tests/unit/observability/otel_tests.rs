@@ -4058,7 +4058,7 @@ fn all_trace_projections_require_protected_remote_transport() {
 
 #[test]
 fn trace_endpoints_allow_plain_http_only_to_listed_insecure_hosts() {
-    let trusted = PlaintextPolicy::from_hosts(vec!["host.docker.internal".to_string()]);
+    let trusted = PlaintextPolicy::from_hosts(&["host.docker.internal".to_string()]).unwrap();
     assert!(
         validate_trace_endpoint("http://host.docker.internal:8082/v1/traces", &trusted).is_ok()
     );
@@ -4069,24 +4069,11 @@ fn trace_endpoints_allow_plain_http_only_to_listed_insecure_hosts() {
         error.contains("hosts listed in insecure_http_hosts"),
         "{error}"
     );
-
-    let error = OpenTelemetrySubscriber::new(
-        OpenTelemetryConfig::new(
-            OpenTelemetryType::GenAi,
-            "http://release-api:8080/v1/traces",
-        )
-        .with_plaintext_policy(PlaintextPolicy::from_hosts(vec![
-            "release-api:8080".to_string(),
-        ])),
-    )
-    .err()
-    .unwrap()
-    .to_string();
-    assert!(error.contains("bare hostname or IP address"), "{error}");
 }
 
 #[test]
 fn allow_insecure_permits_plain_http_trace_export_to_any_host() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let config =
         || OpenTelemetryConfig::new(OpenTelemetryType::GenAi, "http://collector.example:4318");
     assert!(OpenTelemetrySubscriber::new(config()).is_err());

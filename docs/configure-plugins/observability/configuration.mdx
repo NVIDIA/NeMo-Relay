@@ -123,21 +123,24 @@ log, and metric endpoints, including environment-configured ones, ATOF stream
 sinks over HTTP or WebSocket, and ATIF HTTP storage.
 
 - Each entry is a bare hostname or IP address. Entries with a scheme, port,
-  path, user information, or wildcard fail validation.
+  path, user information, wildcard, or leading dot fail validation. IPv4
+  addresses must use four decimal parts without leading zeros.
 - Matching is exact and case-insensitive, and ignores a trailing dot. A listed
   host can use any port and path. Subdomains of a listed host are not trusted.
 - Relay compares the host in the destination URL only. DNS resolution never
   grants trust, so a name that resolves to a listed IP address is still
   rejected.
-- The list is a top-level component list, so it
-  [concatenates across configuration layers](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
-  A user `plugins.toml` can add hosts to the list in the system configuration.
-  Review user-writable configuration where that matters.
+- Unlike other component lists, this list does not concatenate across
+  [configuration layers](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
+  The highest-precedence layer that sets it wins, so the system configuration
+  can replace the hosts a user `plugins.toml` lists, or set
+  `insecure_http_hosts = []` to allow none.
 
-Exporters built in code, rather than from `plugins.toml`, take an
-`allow_insecure` option instead (`allowInsecure` in Node.js,
-`with_allow_insecure` in Rust). It allows plain HTTP or WebSocket to any host
-for that exporter and defaults to `false`.
+Programmatic plugin configs set the same top-level `insecure_http_hosts`
+field. Exporters constructed directly through the Manual API, outside the
+observability plugin, take an `allow_insecure` option instead (`allowInsecure`
+in Node.js, `with_allow_insecure` in Rust). It allows plain HTTP or WebSocket
+to any host for that exporter and defaults to `false`.
 
 ## Multi-Endpoint Lifecycle
 

@@ -1128,6 +1128,13 @@ fn editor_schema_tracks_observability_config_types() {
             .kind,
         EditorFieldKind::Boolean
     );
+    assert_eq!(
+        schema
+            .field("insecure_http_hosts")
+            .expect("insecure HTTP hosts field")
+            .kind,
+        EditorFieldKind::List
+    );
     let atof = schema.field("atof").expect("atof section");
     assert_eq!(atof.label, "ATOF");
     assert_eq!(atof.kind, EditorFieldKind::Section);
@@ -2308,7 +2315,7 @@ fn atif_http_storage_headers_follow_the_plaintext_policy() {
         .headers
         .insert("authorization".to_string(), "Bearer token".to_string());
     assert!(HttpUploadConfig::resolve(0, &config, &PlaintextPolicy::LoopbackOnly).is_err());
-    let listed = PlaintextPolicy::from_hosts(vec!["release-api".to_string()]);
+    let listed = PlaintextPolicy::from_hosts(&["release-api".to_string()]).unwrap();
     assert!(HttpUploadConfig::resolve(0, &config, &listed).is_ok());
 }
 
@@ -2333,6 +2340,74 @@ fn skipped_endpoint_reasons_never_echo_endpoint_userinfo() {
     assert!(error.contains("traces[0]"), "{error}");
     assert!(error.contains("logs[0]"), "{error}");
     assert!(!error.contains("secret-token"), "{error}");
+
+    for (endpoint, secret, logs) in [
+        (
+            "https://user:p^ss@collector.example/v1/traces",
+            "p^ss",
+            false,
+        ),
+        (
+            "https://collector.example/v1/traces?api_key=s3cret\n",
+            "s3cret",
+            false,
+        ),
+        (
+            "http://collector.internal:4318/t/SECRET-KEY/ingest",
+            "SECRET-KEY",
+            true,
+        ),
+    ] {
+        reset_runtime();
+        let config = plugin_config(json!({
+            "version": 4,
+            "opentelemetry": {
+                "enabled": true,
+                "traces": [{"type": "gen_ai", "endpoint": endpoint}],
+                "logs": {"enabled": logs}
+            }
+        }));
+        let error = futures::executor::block_on(test_initialize_plugin_host_exact(config))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("traces[0]"), "{error}");
+        assert!(!error.contains(secret), "{error}");
+    }
+}
+
+#[test]
+fn automatic_otel_rejects_an_unparseable_signal_endpoint_instead_of_falling_back() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let variables = [
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+    ];
+    let _environment = EnvironmentGuard::capture(variables);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(variables[0], "http://host.docker.internal:4318/v1/traces ");
+        std::env::set_var(variables[1], "http://host.docker.internal:4318/v1/logs\n");
+        std::env::set_var(variables[2], "http://192.0.2.17:4318");
+        std::env::set_var(variables[3], "authorization=Bearer%20environment-token");
+    }
+
+    let listed = PlaintextPolicy::from_hosts(&["host.docker.internal".to_string()]).unwrap();
+    let traces =
+        OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin(listed.clone());
+    let error = traces.err().unwrap().to_string();
+    assert!(
+        error.contains("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT must be a valid URI"),
+        "{error}"
+    );
+    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(listed);
+    let error = logs.err().unwrap().to_string();
+    assert!(
+        error.contains("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT must be a valid URI"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -3595,7 +3670,6 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
             timeout_millis: 123,
             field_name_policy: "replace_dots".into(),
         }),
-        &PlaintextPolicy::default(),
     )
     .unwrap();
 
@@ -3630,7 +3704,6 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
             timeout_millis: 3_000,
             field_name_policy: "preserve".into(),
         }),
-        &PlaintextPolicy::default(),
     )
     .unwrap_err();
     assert!(error.to_string().contains("sinks[3].transport"));
@@ -3647,7 +3720,6 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
             timeout_millis: 3_000,
             field_name_policy: "bogus".into(),
         }),
-        &PlaintextPolicy::default(),
     )
     .unwrap_err();
     assert!(error.to_string().contains("sinks[4].field_name_policy"));
@@ -5534,7 +5606,10 @@ fn opentelemetry_delivery_continues_after_an_endpoint_panics() {
         },
         IndexedOpenTelemetryResource {
             index: 1,
-            value: OpenTelemetryResource::Skipped("invalid endpoint".to_string()),
+            value: OpenTelemetryResource::Skipped(SkippedResource::for_endpoint(
+                "",
+                "invalid endpoint",
+            )),
         },
         IndexedOpenTelemetryResource {
             index: 2,
@@ -7597,7 +7672,10 @@ fn metric_delivery_continues_after_a_panicking_or_skipped_endpoint() {
     let callbacks: Vec<IndexedOpenTelemetryResource<MetricEventCallback>> = vec![
         IndexedOpenTelemetryResource {
             index: 0,
-            value: OpenTelemetryResource::Skipped("invalid endpoint".into()),
+            value: OpenTelemetryResource::Skipped(SkippedResource::for_endpoint(
+                "",
+                "invalid endpoint",
+            )),
         },
         IndexedOpenTelemetryResource {
             index: 1,

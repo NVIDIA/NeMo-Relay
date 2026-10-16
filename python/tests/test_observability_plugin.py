@@ -236,6 +236,7 @@ class TestObservabilityConfigHelpers:
         )
         assert config.to_dict()["insecure_http_hosts"] == hosts
         assert "insecure_http_hosts" not in ObservabilityConfig().to_dict()
+        assert ObservabilityConfig(insecure_http_hosts=[]).to_dict()["insecure_http_hosts"] == []
 
         report = validate_plugin_config(plugin.PluginConfig(components=[ComponentSpec(config)]))
         assert report["diagnostics"] == []

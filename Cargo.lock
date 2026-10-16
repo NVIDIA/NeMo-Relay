@@ -1847,6 +1847,7 @@ dependencies = [
  "chrono",
  "futures",
  "futures-util",
+ "http",
  "hyper-util",
  "jsonschema",
  "libloading",

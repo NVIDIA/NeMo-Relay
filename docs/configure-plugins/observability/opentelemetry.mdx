@@ -141,9 +141,13 @@ Process-global OTLP headers belong only to the automatic exporter; Relay never
 copies them to independently configured endpoints.
 
 Remote automatic trace endpoints must use HTTPS; plaintext HTTP is allowed
-only for localhost or a loopback IP address. Automatic log and metric headers
-have the same transport requirement, preventing credentials from being sent to
-remote plaintext endpoints.
+only for localhost, a loopback IP address, or a host listed in the
+not-recommended
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts)
+setting. Automatic log and metric headers have the same transport requirement,
+so credentials reach a remote plaintext endpoint only when you list its host.
+An endpoint environment variable that the OTLP exporter cannot parse fails
+activation instead of falling back to `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 Automatic OTLP/HTTP exporters never follow redirects. This applies to traces,
 logs, and metrics, including when no headers are configured, so an endpoint
@@ -707,8 +711,10 @@ This applies to trace, log, and metric endpoints.
 
 Remote trace endpoints must use HTTPS. When you set any header source
 (`headers`, `header_env`, or `header_file`), remote log and metric endpoints
-must also use HTTPS. HTTP is allowed only for localhost and loopback IP
-addresses. OTLP/HTTP exporters never follow redirects.
+must also use HTTPS. HTTP is allowed only for localhost, loopback IP addresses,
+and hosts listed in the not-recommended
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts)
+setting. OTLP/HTTP exporters never follow redirects.
 For example, an OIDC token-file writer must write the complete value `Bearer
 eyJ...` to the file. Relay does not add the authentication
 scheme for you.

@@ -27,7 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
-    is_protected_http_endpoint, validate_header_files,
+    validate_header_files, validate_trace_transport,
 };
 use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 use super::otel_signal::{
@@ -249,13 +249,7 @@ pub(super) fn trace_endpoint_log_identity(endpoint: &str) -> String {
 
 /// Require protected transport for remote OTLP trace exports, regardless of projection.
 pub(super) fn validate_trace_endpoint(endpoint: &str, plaintext: &PlaintextPolicy) -> Result<()> {
-    if is_protected_http_endpoint(endpoint, plaintext) {
-        return Ok(());
-    }
-    Err(OpenTelemetryError::ExporterBuild(format!(
-        "OTLP trace endpoints require HTTPS; HTTP is allowed only for {}",
-        plaintext.allowance()
-    )))
+    validate_trace_transport(endpoint, plaintext).map_err(OpenTelemetryError::ExporterBuild)
 }
 
 /// Open mode used when a trace file sink creates its output file.
@@ -950,12 +944,9 @@ impl OpenTelemetrySubscriber {
             validate_telemetry_sdk_resource_attributes(&shared.resource_attributes)?;
         }
         if let TraceConfig::Endpoint(endpoint) = &mut config {
-            endpoint
-                .plaintext
-                .validate()
-                .map_err(OpenTelemetryError::ExporterBuild)?;
             if endpoint.automatic {
                 let resolved = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+                    .map_err(OpenTelemetryError::ExporterBuild)?
                     .ok_or_else(|| {
                         OpenTelemetryError::ExporterBuild(
                             "automatic trace exporter requires a nonblank OTLP endpoint"

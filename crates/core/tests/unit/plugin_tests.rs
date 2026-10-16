@@ -723,6 +723,32 @@ fn test_layer_config_preserves_signal_endpoint_option_semantics() {
 }
 
 #[test]
+fn test_layer_config_lets_higher_precedence_replace_insecure_http_hosts() {
+    let layer = |hosts: Option<Json>| {
+        let mut config = json!({"version": 4});
+        if let Some(hosts) = hosts {
+            config["insecure_http_hosts"] = hosts;
+        }
+        json!({"components": [{"kind": "observability", "config": config}]})
+    };
+    for (higher, expected) in [
+        (
+            Some(json!(["managed-collector"])),
+            json!(["managed-collector"]),
+        ),
+        (Some(json!([])), json!([])),
+        (None, json!(["user-collector"])),
+    ] {
+        let mut merged = layer(Some(json!(["user-collector"])));
+        layer_config(&mut merged, layer(higher));
+        assert_eq!(
+            merged["components"][0]["config"]["insecure_http_hosts"],
+            expected
+        );
+    }
+}
+
+#[test]
 fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins() {
     let mut merged = json!({
         "components": [{

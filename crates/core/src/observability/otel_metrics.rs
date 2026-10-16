@@ -306,12 +306,10 @@ impl OpenTelemetryMetricConfig {
                 "cardinality_limit must be less than usize::MAX".to_string(),
             ));
         }
-        self.plaintext
-            .validate()
-            .map_err(OpenTelemetryError::ExporterBuild)?;
         if self.automatic {
             if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_METRICS_HEADERS") {
                 let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+                    .map_err(OpenTelemetryError::ExporterBuild)?
                     .ok_or_else(|| {
                         OpenTelemetryError::ExporterBuild(
                             "automatic metric exporter requires a nonblank OTLP endpoint"
