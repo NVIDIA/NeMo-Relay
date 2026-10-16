@@ -5040,12 +5040,15 @@ async fn worker_invocation_cancellation_drops_in_flight_provider_calls() {
                 |_| Box::pin(tokio_stream::empty()),
             )
             .await;
+            /// Wait for cancellation and report when the provider future is dropped.
             async fn pending_provider<T>(
                 started: Arc<tokio::sync::Notify>,
                 dropped: mpsc::UnboundedSender<()>,
             ) -> FlowResult<T> {
+                /// Report that the provider released its resources.
                 struct ProviderDrop(mpsc::UnboundedSender<()>);
                 impl Drop for ProviderDrop {
+                    /// Notify the test that provider work has stopped.
                     fn drop(&mut self) {
                         let _ = self.0.send(());
                     }
@@ -5149,6 +5152,7 @@ async fn worker_invocation_cancellation_drops_in_flight_provider_calls() {
     }
 }
 
+/// End provider streams even when their consumer remains open or stops reading.
 #[tokio::test]
 async fn worker_invocation_cleanup_drops_provider_stream_even_with_a_live_consumer() {
     for backpressure in [false, true] {
@@ -5164,8 +5168,10 @@ async fn worker_invocation_cleanup_drops_provider_stream_even_with_a_live_consum
                 let dropped_tx = dropped_tx.clone();
                 let signal = signal.clone();
                 Box::pin(async move {
+                    /// Report that the provider released its resources.
                     struct ProviderDrop(mpsc::UnboundedSender<()>);
                     impl Drop for ProviderDrop {
+                        /// Notify the test that provider work has stopped.
                         fn drop(&mut self) {
                             let _ = self.0.send(());
                         }

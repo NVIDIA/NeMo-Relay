@@ -3006,6 +3006,7 @@ impl WorkerHostRuntimeState {
         }
     }
 
+    /// Store a callback and own the signal that keeps its calls active.
     fn insert_continuation(&self, continuation: Continuation) -> FlowResult<String> {
         let id = format!("next-{}", Uuid::now_v7());
         let mut continuations = self
@@ -3023,12 +3024,14 @@ impl WorkerHostRuntimeState {
         Ok(id)
     }
 
+    /// Remove a callback and cancel any provider work still using it.
     fn remove_continuation(&self, id: &str) {
         if let Ok(mut continuations) = self.continuations.lock() {
             continuations.remove(id);
         }
     }
 
+    /// Get a callback and a signal that closes when its invocation ends.
     fn continuation(&self, id: &str) -> Result<(Continuation, watch::Receiver<()>), Status> {
         self.continuations
             .lock()
@@ -3088,13 +3091,15 @@ impl StoredInvocationContext {
     }
 }
 
-// Only the registry owns the sender. Removing an invocation closes every active
-// continuation receiver, including calls already dispatched to a provider.
+/// Keep the cancellation sender in the registry, separate from active calls.
+///
+/// Removing this entry closes all receivers, including those held by provider calls.
 struct StoredContinuation {
     continuation: Continuation,
     lifetime: watch::Sender<()>,
 }
 
+/// Poll an operation until it finishes or its invocation ends.
 async fn while_continuation_active<T>(
     lifetime: &mut watch::Receiver<()>,
     future: impl Future<Output = T>,
@@ -3587,6 +3592,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         }))
     }
 
+    /// Run a tool call and drop its future if the worker invocation ends.
     async fn tool_next(
         &self,
         request: Request<ToolNextRequest>,
@@ -3619,6 +3625,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         Ok(Response::new(tool_execution_result_response(result)))
     }
 
+    /// Run an LLM call and drop its future if the worker invocation ends.
     async fn llm_next(
         &self,
         request: Request<LlmNextRequest>,
@@ -3654,6 +3661,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
     type LlmStreamNextStream =
         Pin<Box<dyn tokio_stream::Stream<Item = Result<StreamChunk, Status>> + Send>>;
 
+    /// Open and forward a provider stream while its worker invocation is active.
     async fn llm_stream_next(
         &self,
         request: Request<LlmStreamNextRequest>,
