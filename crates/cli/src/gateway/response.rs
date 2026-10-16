@@ -74,8 +74,8 @@ pub(super) fn response_headers(headers: &HeaderMap) -> HeaderMap {
     output
 }
 
-// Reconstructs an Axum response from upstream status, filtered headers, and the selected body. All
-// builder errors are converted into gateway HTTP errors rather than panics.
+/// Builds a downstream response with the upstream status and selected body.
+/// Redirects lose their `Location` header so callers cannot resend prompts to another destination.
 pub(super) fn build_response(
     status: StatusCode,
     headers: HeaderMap,
@@ -85,7 +85,16 @@ pub(super) fn build_response(
     for (name, value) in &headers {
         builder = builder.header(name, value);
     }
-    Ok(builder.body(body)?)
+    let mut response = builder.body(body)?;
+    strip_redirect_location(&mut response);
+    Ok(response)
+}
+
+/// Removes redirect targets so callers cannot resend credentials or prompts to another host.
+pub(crate) fn strip_redirect_location<B>(response: &mut Response<B>) {
+    if response.status().is_redirection() {
+        response.headers_mut().remove(http::header::LOCATION);
+    }
 }
 
 // Allows provider request headers through unless they are transport-owned or must be recalculated
@@ -125,6 +134,7 @@ pub(super) fn should_record_header(name: &HeaderName, headers: &HeaderMap) -> bo
         && name.as_str() != "x-api-key"
         && name.as_str() != "api-key"
         && name.as_str() != "anthropic-api-key"
+        && !name.as_str().starts_with("x-nemo-relay-internal-")
 }
 
 fn named_by_connection_header(name: &HeaderName, headers: &HeaderMap) -> bool {

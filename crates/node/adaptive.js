@@ -172,7 +172,7 @@ function responseCacheConfig(config = {}) {
   return {
     ttlSeconds: 3600,
     namespace: '',
-    priority: 50,
+    priority: 150,
     bypassRate: 0,
     cacheNondeterministic: false,
     keyStrategy: ResponseCacheKeyStrategy.ExactRequest,

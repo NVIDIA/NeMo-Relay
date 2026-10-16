@@ -48,6 +48,8 @@ pub(super) async fn prepare_gateway_request(
 ) -> Result<PreparedGatewayRequest, CliError> {
     let (mut parts, body) = request.into_parts();
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+    // Dispatch controls are trusted only when set by in-process middleware.
+    super::strip_internal_dispatch_headers(&mut parts.headers);
     let provider = ProviderRoute::from_path(provider_path).ok_or_else(|| {
         crate::operational::unmatched_route(
             "gateway",
@@ -57,6 +59,8 @@ pub(super) async fn prepare_gateway_request(
         );
         CliError::InvalidPayload(format!("unsupported gateway path {provider_path}"))
     })?;
+    // Restrict auth before alignment can replace a caller's credential or select an upstream.
+    authorization.allow_environment_provider_auth &= provider.allows_relay_auth();
     let body_bytes = axum::body::to_bytes(body, config.max_passthrough_body_bytes)
         .await
         .map_err(passthrough_body_error)?;
@@ -125,8 +129,24 @@ pub(super) async fn prepare_gateway_request(
         &parts.headers,
         provider,
         authorization.allow_environment_provider_auth,
-        provider.configured_auth_header(config),
+        if provider.has_replacement(config) {
+            Some("configured")
+        } else {
+            None
+        },
     );
+    if authorization.allow_environment_provider_auth
+        && provider.has_replacement(config)
+        && (if provider.is_anthropic() {
+            config.anthropic_api_key_helper.is_some()
+        } else {
+            config.openai_api_key_helper.is_some()
+        })
+    {
+        for name in ["authorization", "x-api-key", "api-key", "anthropic-api-key"] {
+            parts.headers.remove(name);
+        }
+    }
     authorization.source_credential = authorization
         .source_credential
         .after_source_normalization(&parts.headers);

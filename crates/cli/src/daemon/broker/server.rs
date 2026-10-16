@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path as AxumPath, State};
-use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
+#[cfg(test)]
+use axum::http::header::AUTHORIZATION;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::IntoResponse;
@@ -145,6 +147,7 @@ struct DaemonState {
     descriptor: crate::daemon::common::protocol::ComponentDescriptor,
     instance_id: String,
     pass_through: bool,
+    loopback_listener: bool,
     public_origin: String,
     config: GatewayConfig,
     upstream: PooledClient,
@@ -180,9 +183,10 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
         instance_id: uuid::Uuid::now_v7().to_string(),
         pass_through: options.pass_through,
+        loopback_listener: local.ip().is_loopback(),
         public_origin,
-        config: resolved.gateway,
         upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
+        config: resolved.gateway,
         worker_clients: WorkerClientPool::new()?,
         challenges: Mutex::new(HashMap::new()),
         activations: Mutex::new(HashMap::new()),
@@ -203,7 +207,23 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
     }
     socket::recover_after_restart(Arc::clone(&state));
     spawn_maintenance(Arc::clone(&state));
-    let app = router(Arc::clone(&state));
+    let mut app = router(Arc::clone(&state));
+    if options.tls_cert.is_none() {
+        let tls = crate::gateway::tls::RelayTlsIdentity::load_or_create()
+            .and_then(|identity| identity.server_config())
+            .map_err(CliError::Launch)?;
+        let inner = app.clone();
+        let handshake_permits = Arc::new(Semaphore::new(MAX_CONCURRENT_TLS_HANDSHAKES));
+        app = app.route(
+            "/bootstrap/tunnel",
+            get(move |request: Request<Body>| {
+                let tls = Arc::clone(&tls);
+                let inner = inner.clone();
+                let handshake_permits = Arc::clone(&handshake_permits);
+                async move { crate::gateway::tls::upgrade(request, tls, inner, handshake_permits) }
+            }),
+        );
+    }
     let address = local.to_string();
     log::info!(
         target: "nemo_relay.daemon",
@@ -1689,7 +1709,7 @@ async fn public_proxy_inner(
             Err(ResolveError::Unavailable(_)) => return unavailable_response(),
         },
     };
-    match (target, route) {
+    let mut response = match (target, route) {
         (ResolvedTarget::PassThrough, PublicRoute::Hook(hook)) => {
             let mut response = Response::new(Body::from(hook.pass_through_body()));
             response
@@ -1717,7 +1737,11 @@ async fn public_proxy_inner(
             }
             forward_to_worker(Arc::clone(&state), request, worker).await
         }
+    };
+    if matches!(route, PublicRoute::Provider(_)) {
+        crate::gateway::strip_redirect_location(&mut response);
     }
+    response
 }
 
 fn responses_websocket_probe(request: &Request<Body>) -> bool {
@@ -1852,10 +1876,15 @@ async fn forward_to_provider(
 ) -> Response<Body> {
     let invocation_authenticated = access == ProviderAccess::BoundRoute;
     // Daemon-held provider credentials (configured auth headers or the daemon's own API key
-    // environment) are only lent to requests attributed to a bound route, or to every request
-    // when the operator explicitly deployed the daemon in global pass-through mode.
-    let allow_environment_provider_auth = (invocation_authenticated || state.pass_through)
-        && crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    // environment) are only lent to requests attributed to a bound route, or to requests on
+    // a loopback listener when the operator explicitly deployed global pass-through mode.
+    let allow_environment_provider_auth = (invocation_authenticated
+        || (state.pass_through && state.loopback_listener))
+        && crate::gateway::daemon_allows_provider_auth(
+            request.headers(),
+            request.uri().path(),
+            &state.config,
+        );
     let path_and_query = request
         .uri()
         .path_and_query()
@@ -1886,12 +1915,18 @@ async fn forward_to_provider(
     request
         .headers_mut()
         .remove(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER);
-    if allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, &state.config);
+    if allow_environment_provider_auth
+        && let Err(error) = inject_provider_auth(request.headers_mut(), route, &state.config).await
+    {
+        return error.into_response();
     }
+    let helper_auth = allow_environment_provider_auth
+        && crate::upstream_auth::helper(&state.config, matches!(route, ProviderRoute::Anthropic))
+            .is_some();
     if crate::gateway::websocket::is_websocket(&request) {
         return crate::gateway::websocket::forward_to_provider(
             client_named,
+            helper_auth,
             request,
             &destination,
             (),
@@ -1901,21 +1936,18 @@ async fn forward_to_provider(
         .await
         .unwrap_or_else(|error| control_error(StatusCode::BAD_GATEWAY, error));
     }
+    let upstream =
+        match crate::daemon::common::transport::provider_client(&state.upstream, helper_auth) {
+            Ok(client) => client,
+            Err(error) => return CliError::Launch(error.to_string()).into_response(),
+        };
     let outcome = if client_named {
         match crate::daemon::common::transport::named_upstream_client() {
             Ok(client) => forward(&client, request, &destination, None, None, &state.config).await,
             Err(error) => return control_error(StatusCode::BAD_GATEWAY, error),
         }
     } else {
-        forward(
-            &state.upstream,
-            request,
-            &destination,
-            None,
-            None,
-            &state.config,
-        )
-        .await
+        forward(&upstream, request, &destination, None, None, &state.config).await
     };
     if let Some(failure) = outcome.failure {
         log_upstream_request_failed(route, failure);
@@ -1923,42 +1955,18 @@ async fn forward_to_provider(
     outcome.response
 }
 
-fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &GatewayConfig) {
-    if crate::provider_auth::has_provider_credential(headers) {
-        return;
-    }
-    let configured = match route {
-        ProviderRoute::OpenAi => config.openai_auth_header.as_deref(),
-        ProviderRoute::Anthropic => config.anthropic_auth_header.as_deref(),
-    };
-    if let Some(configured) = configured.and_then(|value| HeaderValue::from_str(value).ok()) {
-        headers.insert(AUTHORIZATION, configured);
-        return;
-    }
-    let (name, value) = match route {
-        ProviderRoute::OpenAi => {
-            let Some(key) = nonempty_environment("OPENAI_API_KEY") else {
-                return;
-            };
-            (AUTHORIZATION, format!("Bearer {key}"))
-        }
-        ProviderRoute::Anthropic => {
-            let Some(key) = nonempty_environment("ANTHROPIC_API_KEY") else {
-                return;
-            };
-            (HeaderName::from_static("x-api-key"), key)
-        }
-    };
-    if let Ok(value) = HeaderValue::from_str(&value) {
-        headers.insert(name, value);
-    }
-}
-
-fn nonempty_environment(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+async fn inject_provider_auth(
+    headers: &mut HeaderMap,
+    route: ProviderRoute,
+    config: &GatewayConfig,
+) -> Result<(), CliError> {
+    crate::upstream_auth::apply(
+        headers,
+        matches!(route, ProviderRoute::Anthropic),
+        true,
+        config,
+    )
+    .await
 }
 
 async fn forward_to_worker(

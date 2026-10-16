@@ -2817,6 +2817,85 @@ fn subscriber_options_apply_custom_completed_context_ttl_at_the_boundary() {
 }
 
 #[test]
+fn propagated_children_and_marks_preserve_lineage_after_completed_context_expiry() {
+    for w3c in [false, true] {
+        let (provider, exporter) = make_provider();
+        let mut processor = OtelEventProcessor::new(provider, "test-scope".to_string());
+        let parent_uuid = Uuid::now_v7();
+        let child_uuid = Uuid::now_v7();
+        let closed_at = chrono::Utc::now();
+        let scope_event = |uuid, parent, name, category, timestamp| {
+            Event::Scope(ScopeEvent::new(
+                BaseEvent::builder()
+                    .uuid(uuid)
+                    .parent_uuid_opt(parent)
+                    .name(name)
+                    .timestamp(timestamp)
+                    .build(),
+                category,
+                Vec::new(),
+                ScopeType::Tool.into(),
+                None,
+            ))
+        };
+        for category in [ScopeCategory::Start, ScopeCategory::End] {
+            processor.process(&scope_event(
+                parent_uuid,
+                None,
+                "parent",
+                category,
+                closed_at,
+            ));
+        }
+        let context = processor.completed_span_contexts[&parent_uuid]
+            .span_context
+            .clone();
+        let propagate = |mut event: Event| {
+            event.set_propagation_parent_uuid(Some(parent_uuid));
+            if w3c {
+                event.set_propagation_traceparent(Some(format!(
+                    "00-{}-{}-01",
+                    context.trace_id(),
+                    context.span_id()
+                )));
+            } else {
+                event.set_propagation_root_uuid(Some(parent_uuid));
+            }
+            event
+        };
+        let after_ttl = closed_at + chrono::Duration::seconds(61);
+        processor.process(&propagate(Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(parent_uuid)
+                .name("late-mark")
+                .timestamp(after_ttl)
+                .build(),
+            None,
+            None,
+        ))));
+        assert!(!processor.completed_span_contexts.contains_key(&parent_uuid));
+        for category in [ScopeCategory::Start, ScopeCategory::End] {
+            processor.process(&propagate(scope_event(
+                child_uuid,
+                Some(parent_uuid),
+                "late-child",
+                category,
+                after_ttl,
+            )));
+        }
+        processor.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 3);
+        let parent = finished_span_named(&spans, "parent");
+        for name in ["mark:late-mark", "late-child"] {
+            let span = finished_span_named(&spans, name);
+            assert_eq!(span.span_context.trace_id(), parent.span_context.trace_id());
+            assert_eq!(span.parent_span_id, parent.span_context.span_id());
+        }
+    }
+}
+
+#[test]
 fn invalid_grpc_headers_are_rejected() {
     let err = build_grpc_metadata(&HashMap::from([(
         "bad key".to_string(),

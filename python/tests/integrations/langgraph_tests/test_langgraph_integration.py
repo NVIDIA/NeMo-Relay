@@ -892,7 +892,7 @@ def test_tool_arguments_remain_json(use_async: bool, tag: str) -> None:
     registered = codec.to_json(Payload("original"))
     args = {
         tag: registered["__nv_dataclass__"],
-        "__nv_runtime_type__": registered["__nv_runtime_type__"],
+        "__nv_runtime_type__": f"{Payload.__module__}.{Payload.__qualname__}:{id(Payload)}",
         "data": {"value": "model-controlled"},
     }
     request = ToolCallRequest(

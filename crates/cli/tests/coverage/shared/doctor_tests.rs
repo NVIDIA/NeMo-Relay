@@ -483,6 +483,7 @@ fn empty_report() -> DoctorReport {
             upstream_auth: UpstreamAuthInfo {
                 openai: SecretPresence::Unset,
                 anthropic: SecretPresence::Unset,
+                checks: vec![],
             },
             plugin_configs: vec![],
             plugin_resolution: Check {
@@ -799,6 +800,7 @@ fn format_human_reports_effective_upstream_auth_presence() {
     report.configuration.upstream_auth = UpstreamAuthInfo {
         openai: SecretPresence::Configured,
         anthropic: SecretPresence::Unset,
+        checks: vec![],
     };
 
     let rendered = format_human(&report);
@@ -1772,6 +1774,8 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
             gateway: GatewayConfig {
                 openai_auth_header: Some("Bearer openai".into()),
                 anthropic_auth_header: None,
+                anthropic_api_key: None,
+                anthropic_api_key_helper: None,
                 ..GatewayConfig::default()
             },
             ..ResolvedConfig::default()
@@ -1857,6 +1861,111 @@ fn upstream_auth_info_treats_whitespace_env_values_as_unset() {
 
     assert_eq!(info.openai, SecretPresence::Unset);
     assert_eq!(info.anthropic, SecretPresence::Unset);
+}
+
+#[test]
+fn doctor_reports_helpers_and_ignored_environment_without_exposing_secrets() {
+    let _environment = EnvScope::set(&[
+        (
+            "OPENAI_API_KEY",
+            Some(std::ffi::OsStr::new("secret-openai-environment")),
+        ),
+        (
+            "ANTHROPIC_API_KEY",
+            Some(std::ffi::OsStr::new("secret-anthropic-environment")),
+        ),
+        (
+            "ANTHROPIC_AUTH_TOKEN",
+            Some(std::ffi::OsStr::new("secret-anthropic-token")),
+        ),
+        (
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            Some(std::ffi::OsStr::new("secret-openai-header")),
+        ),
+        (
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            Some(std::ffi::OsStr::new("secret-anthropic-header")),
+        ),
+    ]);
+    let helper = crate::upstream_auth::ApiKeyHelper {
+        command: "secret-missing-helper-command".into(),
+        args: vec!["secret-helper-argument".into()],
+        timeout_ms: 2500,
+        auth_scheme: None,
+    };
+    let mut report = empty_report();
+    report.configuration.upstream_auth =
+        UpstreamAuthInfo::from_effective_gateway_auth(&GatewayConfig {
+            openai_api_key_helper: Some(helper.clone()),
+            anthropic_api_key_helper: Some(helper),
+            ..GatewayConfig::default()
+        });
+    let checks = &report.configuration.upstream_auth.checks;
+    assert_eq!(checks.len(), 2);
+    assert!(checks.iter().all(|check| check.status == Status::Warn));
+    assert!(checks[0].details.contains("Authentication: bearer"));
+    assert!(checks[1].details.contains("Authentication: x-api-key"));
+    let human = format_human(&report);
+    let json = format_json(&report).unwrap();
+    for output in [&human, &json] {
+        assert!(output.contains("API key helper configured"));
+        assert!(output.contains("Doctor does not run the helper or check its token"));
+        assert!(output.contains("2500 ms"));
+        for name in [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+        ] {
+            assert!(output.contains(name));
+        }
+        assert!(!output.contains("secret-"));
+    }
+    assert!(human.contains("warnings"));
+    assert_eq!(exit_code(&report), 0);
+    let json: Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        json["configuration"]["upstream_auth"]["openai"],
+        "configured"
+    );
+    assert_eq!(
+        json["configuration"]["upstream_auth"]["checks"][0]["status"],
+        "warn"
+    );
+}
+
+#[test]
+fn doctor_reports_static_keys_custom_headers_and_helper_without_environment_warnings() {
+    let _environment = EnvScope::set(&[
+        ("OPENAI_API_KEY", None),
+        ("ANTHROPIC_API_KEY", None),
+        ("ANTHROPIC_AUTH_TOKEN", None),
+    ]);
+    let mut config = GatewayConfig {
+        openai_api_key: Some("secret-static-key".into()),
+        anthropic_auth_header: Some("Bearer secret-custom-header".into()),
+        ..GatewayConfig::default()
+    };
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&config);
+    assert!(info.checks[0].details.contains("Static API key configured"));
+    assert!(
+        info.checks[1]
+            .details
+            .contains("Custom authorization header configured")
+    );
+    assert!(!serde_json::to_string(&info).unwrap().contains("secret-"));
+    config.anthropic_auth_header = None;
+    config.anthropic_api_key_helper = Some(crate::upstream_auth::ApiKeyHelper {
+        command: "helper-that-is-not-executed".into(),
+        args: vec![],
+        timeout_ms: 10000,
+        auth_scheme: Some(crate::upstream_auth::AuthScheme::Bearer),
+    });
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&config);
+    assert_eq!(info.checks[1].status, Status::Info);
+    assert!(info.checks[1].details.contains("Authentication: bearer"));
+    assert!(!info.checks[1].details.contains("Ignored environment"));
 }
 
 #[test]

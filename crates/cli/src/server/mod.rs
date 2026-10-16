@@ -31,7 +31,7 @@ use reqwest::Client;
 use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::{
@@ -43,6 +43,9 @@ use crate::gateway;
 use crate::operational::{self, OperationalContext};
 use crate::plugins::lifecycle::{ActiveDynamicPluginComponent, DynamicPluginActivationSnapshot};
 use crate::sessions::SessionManager;
+
+pub(crate) const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -56,6 +59,8 @@ pub(crate) struct AppState {
     pub(crate) transparent_proxy_credential:
         Option<crate::provider_auth::TransparentProxyCredential>,
     pub(crate) http: Client,
+    /// Configured helper requests cannot reuse credentials through redirects or transport retries.
+    pub(crate) http_helper: Client,
     /// Client for caller-named destinations; does not follow redirects. See `upstream_client`.
     pub(crate) http_no_redirect: Client,
     pub(crate) sessions: SessionManager,
@@ -64,6 +69,7 @@ pub(crate) struct AppState {
     pub(crate) bootstrap_shutdown: Option<BootstrapShutdown>,
     pub(crate) instance_id: String,
     pub(crate) bootstrap_tls: Option<Arc<rustls::ServerConfig>>,
+    pub(crate) bootstrap_handshake_permits: Arc<Semaphore>,
     pub(crate) local_address: Option<SocketAddr>,
 }
 
@@ -293,8 +299,7 @@ async fn serve_listener_with_dynamic_inner(
     .map(|identity| identity.server_config())
     .transpose()
     .map_err(CliError::Launch)?;
-    let require_provider_client_token =
-        bootstrap_fingerprint.is_some() && transparent_proxy_credential.is_none();
+    let require_provider_client_token = transparent_proxy_credential.is_none();
     let plugin_activation =
         activate_server_plugins(config.plugin_config.clone(), dynamic_plugins).await?;
     let (bootstrap_shutdown, bootstrap_shutdown_rx) =
@@ -507,7 +512,7 @@ pub(crate) fn router(config: GatewayConfig) -> Router {
 impl AppState {
     #[cfg(test)]
     pub(crate) fn new(config: GatewayConfig) -> Self {
-        Self::new_with_bootstrap(config, None, None, false, None, None)
+        Self::new_with_bootstrap(config, None, None, true, None, None)
     }
 
     fn new_with_bootstrap(
@@ -541,7 +546,14 @@ impl AppState {
         sessions: SessionManager,
         idle_read_timeout: Option<Duration>,
     ) -> Self {
-        let http = gateway_http_client(idle_read_timeout, false);
+        let http = gateway_http_client(idle_read_timeout, false, false);
+        let http_helper = if config.openai_api_key_helper.is_some()
+            || config.anthropic_api_key_helper.is_some()
+        {
+            gateway_http_client(idle_read_timeout, false, true)
+        } else {
+            http.clone()
+        };
         // A second client for destinations the caller named, which must not follow redirects.
         //
         // Validation applies to the URL that was named; a redirect names a different one, and
@@ -549,7 +561,7 @@ impl AppState {
         // here either -- it covers `Authorization` across origins, and provider keys travel in
         // `x-api-key` and friends, which are ordinary headers to it. So a validated `https`
         // endpoint could 307 a caller's provider key to any host, including over plain http.
-        let http_no_redirect = gateway_http_client(idle_read_timeout, true);
+        let http_no_redirect = gateway_http_client(idle_read_timeout, true, false);
         Self {
             config,
             bootstrap_fingerprint: None,
@@ -558,12 +570,14 @@ impl AppState {
             transparent_proxy_credential: None,
             http,
             http_no_redirect,
+            http_helper,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             active_websockets: Arc::new(AtomicUsize::new(0)),
             bootstrap_shutdown: None,
             instance_id: uuid::Uuid::now_v7().to_string(),
             bootstrap_tls: None,
+            bootstrap_handshake_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_TLS_HANDSHAKES)),
             local_address: None,
         }
     }
@@ -584,10 +598,9 @@ impl AppState {
             || self.sessions.has_open_sessions().await
     }
 
-    /// Authenticate an invocation-owned transparent client before interceptors can rewrite its
-    /// route. Foreground gateways retain their existing provider-credential behavior; managed
-    /// sidecars still require their stable client proof before ambient provider credentials may be
-    /// used.
+    /// Authenticate transparent clients before interceptors can change the route.
+    /// Foreground gateways and managed sidecars require client proof before they use
+    /// provider credentials from the server. Requests can still use credentials sent by the client.
     pub(crate) fn authorize_provider_request(
         &self,
         headers: &mut HeaderMap,
@@ -720,11 +733,25 @@ impl AppState {
     }
 }
 
-fn gateway_http_client(idle_read_timeout: Option<Duration>, no_redirect: bool) -> Client {
-    let builder = Client::builder().connect_timeout(HTTP_CONNECT_TIMEOUT);
+fn gateway_http_client(
+    idle_read_timeout: Option<Duration>,
+    no_redirect: bool,
+    has_helpers: bool,
+) -> Client {
+    let builder = Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none());
     let builder = match idle_read_timeout {
         Some(timeout) => builder.read_timeout(timeout),
         None => builder,
+    };
+    // Automatic redirects/retries would reuse a helper token without resolving another one.
+    let builder = if has_helpers {
+        builder
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+    } else {
+        builder
     };
     // The no-redirect client serves only caller-named destinations, so it is also the one that
     // resolves through the named-upstream address policy.
@@ -926,15 +953,10 @@ async fn bootstrap_tls_tunnel(
     let Some(key) = state.bootstrap_challenge_key.as_ref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let token_is_valid = headers
-        .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+    if headers
+        .get(http::header::UPGRADE)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|token| key.verify_client_token(token));
-    if !token_is_valid
-        || headers
-            .get(http::header::UPGRADE)
-            .and_then(|value| value.to_str().ok())
-            != Some("nemo-relay-tls")
+        != Some("nemo-relay-tls")
     {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -942,17 +964,31 @@ async fn bootstrap_tls_tunnel(
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let proof = key.proof(fingerprint, nonce);
+    let Ok(handshake_permit) = Arc::clone(&state.bootstrap_handshake_permits).try_acquire_owned()
+    else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let proof = key.proof(
+        &crate::gateway::client::listener_fingerprint(
+            fingerprint,
+            local_address,
+            &state.instance_id,
+        ),
+        nonce,
+    );
     let upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(async move {
         let Ok(upgraded) = upgrade.await else {
             return;
         };
         let acceptor = tokio_rustls::TlsAcceptor::from(tls);
-        let Ok(mut encrypted) = acceptor
-            .accept(hyper_util::rt::TokioIo::new(upgraded))
-            .await
-        else {
+        let handshake = tokio::time::timeout(
+            TLS_HANDSHAKE_TIMEOUT,
+            acceptor.accept(hyper_util::rt::TokioIo::new(upgraded)),
+        )
+        .await;
+        drop(handshake_permit);
+        let Ok(Ok(mut encrypted)) = handshake else {
             return;
         };
         let Ok(mut local) = tokio::net::TcpStream::connect(local_address).await else {
@@ -965,6 +1001,7 @@ async fn bootstrap_tls_tunnel(
         .header(http::header::CONNECTION, "upgrade")
         .header(http::header::UPGRADE, "nemo-relay-tls")
         .header("x-nemo-relay-bootstrap-proof", proof)
+        .header("x-nemo-relay-instance-id", &state.instance_id)
         .header(http::header::CONTENT_LENGTH, "0")
         .body(Body::empty())
         .expect("bootstrap TLS upgrade response is valid")
@@ -1018,19 +1055,28 @@ async fn healthz(State(state): State<AppState>, headers: HeaderMap) -> Response 
     let compatible = match presented_fingerprint {
         None => true,
         Some(fingerprint) => {
-            // Persistent configuration does not determine whether an existing
-            // gateway can serve this MCP connection. Bind the caller's
-            // fingerprint into the proof without requiring it to match the
-            // gateway's configuration fingerprint.
+            // Persistent and transparent clients can share a listener. Proofs bind the
+            // caller context to this actual listener and instance, never the Host header.
             let nonce = headers
                 .get("x-nemo-relay-bootstrap-nonce")
                 .and_then(|value| value.to_str().ok())
                 .filter(|nonce| {
                     nonce.len() == 64 && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
                 });
-            match (nonce, state.bootstrap_challenge_key.as_ref()) {
-                (Some(nonce), Some(key)) => {
-                    let proof = key.proof(fingerprint, nonce);
+            match (
+                nonce,
+                state.bootstrap_challenge_key.as_ref(),
+                state.local_address,
+            ) {
+                (Some(nonce), Some(key), Some(address)) => {
+                    let proof = key.proof(
+                        &crate::gateway::client::listener_fingerprint(
+                            fingerprint,
+                            address,
+                            &state.instance_id,
+                        ),
+                        nonce,
+                    );
                     response_headers.insert(
                         "x-nemo-relay-bootstrap-proof",
                         HeaderValue::from_str(&proof).expect("bootstrap proof is an ASCII value"),

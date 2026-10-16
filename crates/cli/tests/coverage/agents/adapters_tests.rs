@@ -1358,6 +1358,59 @@ fn turn_start_and_compaction_rules_stay_inert_for_codex_and_claude() {
     }
 }
 
+/// MCP error results report failure even when the hook has a normal end-event name.
+#[test]
+fn mcp_error_envelopes_do_not_depend_on_failure_hook_names() {
+    for adapt in [claude_code::adapt, codex::adapt] {
+        for (name, result, expected) in [
+            (
+                "mcp__fixture__error",
+                json!({"isError": true}),
+                Some("error"),
+            ),
+            ("mcp__fixture__success", json!({"isError": false}), None),
+            ("mcp__fixture__malformed", json!({"isError": "true"}), None),
+            ("ordinary_tool", json!({"isError": true}), None),
+        ] {
+            let outcome = adapt(
+                json!({
+                    "session_id": "mcp-error-envelope", "hook_event_name": "PostToolUse",
+                    "tool_name": name, "tool_use_id": "call", "tool_response": result,
+                }),
+                &HeaderMap::new(),
+            );
+            let NormalizedEvent::ToolEnded(event) = &outcome.events[0] else {
+                panic!("expected completion");
+            };
+            assert_eq!(event.status.as_deref(), expected);
+        }
+    }
+}
+
+/// An explicit interruption flag takes priority over a failure-event name.
+#[test]
+fn interrupted_failure_hooks_do_not_report_execution_errors() {
+    for (adapt, hook) in [
+        (
+            claude_code::adapt as fn(Value, &HeaderMap) -> AdapterOutcome,
+            "PostToolUseFailure",
+        ),
+        (codex::adapt, "toolFailed"),
+    ] {
+        let outcome = adapt(
+            json!({
+                "session_id": "interrupted-tool", "hook_event_name": hook,
+                "tool_name": "mcp__fixture__tool", "tool_use_id": "call", "is_interrupt": true,
+            }),
+            &HeaderMap::new(),
+        );
+        let NormalizedEvent::ToolEnded(event) = &outcome.events[0] else {
+            panic!("expected completion");
+        };
+        assert_eq!(event.status.as_deref(), Some("interrupted"));
+    }
+}
+
 #[test]
 fn mcp_tool_hooks_normalize_method_for_supported_harnesses() {
     for (adapt, failure) in [

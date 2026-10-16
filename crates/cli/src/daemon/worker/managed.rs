@@ -3,7 +3,7 @@
 
 //! Managed worker execution with raw forwarding or JSON middleware delivery.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as _;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use axum::Json;
 use axum::body::{Body, Bytes};
-use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
+#[cfg(test)]
+use axum::http::header::AUTHORIZATION;
+use axum::http::header::{ACCEPT, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use axum::response::IntoResponse;
 use http_body_util::LengthLimitError;
@@ -28,7 +30,7 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::runtime::TASK_SCOPE_STACK;
 use nemo_relay::codec::resolve::{ProviderSurface, request_codec, response_codec, streaming_codec};
 use nemo_relay::codec::streaming::SseEventDecoder;
-use nemo_relay::error::FlowError;
+use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
 
@@ -37,8 +39,8 @@ use super::super::common::control::{
 };
 use super::super::common::routes::{HookRoute, ProviderRoute};
 use super::super::common::transport::{
-    BoxError, PooledClient, RelayBody, box_body, prepare_forward_request, prepare_forward_response,
-    request_provider,
+    BoxError, PooledClient, RelayBody, TransportError, box_body, prepare_forward_request,
+    prepare_forward_response, request_provider,
 };
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::GatewayConfig;
@@ -441,6 +443,7 @@ impl ManagedRuntime {
             .await
     }
 
+    /// Forward an undecoded request and observe its response for telemetry.
     async fn proxy_unbuffered(
         &self,
         upstream: PooledClient,
@@ -476,6 +479,7 @@ impl ManagedRuntime {
                     LlmCallParams::builder()
                         .name(&provider_name)
                         .request(&request_for_event)
+                        .codec(request_codec(surface))
                         .parent_opt(parent.as_ref())
                         .attributes(attributes)
                         .metadata(metadata.clone())
@@ -551,6 +555,7 @@ impl ManagedRuntime {
         Ok(response)
     }
 
+    /// Forward a decoded request after request middleware runs, then observe its response.
     async fn proxy_managed(
         &self,
         upstream: PooledClient,
@@ -606,6 +611,7 @@ impl ManagedRuntime {
                     LlmCallParams::builder()
                         .name(&provider_name)
                         .request(&request_for_event)
+                        .codec(codec)
                         .parent_opt(parent.as_ref())
                         .attributes(attributes)
                         .metadata(metadata.clone())
@@ -705,8 +711,11 @@ async fn dispatch_unmanaged(
     route: ProviderRoute,
     config: &GatewayConfig,
 ) -> Result<Response<RelayBody>, CliError> {
-    let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    let allow_environment_provider_auth = crate::gateway::daemon_allows_provider_auth(
+        request.headers(),
+        request.uri().path(),
+        config,
+    );
     strip_worker_headers(request.headers_mut());
     strip_untrusted_dispatch_headers(request.headers_mut());
     let path_and_query = request
@@ -718,7 +727,7 @@ async fn dispatch_unmanaged(
         crate::gateway::daemon_provider_upstream_url(request.headers(), &path_and_query, config)?
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
             .parse::<Uri>()
-            .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))?;
+            .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))?;
     if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
         request.headers(),
         request.uri().path(),
@@ -728,23 +737,37 @@ async fn dispatch_unmanaged(
     }
     strip_internal_headers(request.headers_mut());
     if allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, config);
+        inject_provider_auth(request.headers_mut(), route, config).await?;
     }
+    let upstream = crate::daemon::common::transport::provider_client(
+        &upstream,
+        allow_environment_provider_auth
+            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
+                .is_some(),
+    )
+    .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
     let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+        .map_err(CliError::UpstreamTransport)?
         .map(box_body);
-    let request = request_provider(&upstream, client_named, request)
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+    let request =
+        request_provider(&upstream, client_named, request).map_err(CliError::UpstreamTransport)?;
     let response = config
         .wait_for_response(request)
         .await
-        .map_err(|_| CliError::Launch("provider response-head timeout".into()))?
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+        .map_err(|_| {
+            provider_transport_failure(
+                UpstreamFailureClass::Timeout,
+                "provider response-head timeout",
+            )
+        })?
+        .map_err(|error| {
+            provider_transport_failure(UpstreamFailureClass::Connection, error.to_string())
+        })?;
     let response = prepare_forward_response(response, &strip)
         .map_err(|error| CliError::Launch(error.to_string()))?;
     let (parts, body) = response.into_parts();
@@ -759,8 +782,11 @@ async fn dispatch_unbuffered_observed(
     capture_limit: usize,
     operational: OperationalContext,
 ) -> Result<(Response<RelayBody>, ObservationReceiver, bool), CliError> {
-    let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    let allow_environment_provider_auth = crate::gateway::daemon_allows_provider_auth(
+        request.headers(),
+        request.uri().path(),
+        config,
+    );
     strip_worker_headers(request.headers_mut());
     strip_untrusted_dispatch_headers(request.headers_mut());
     let path_and_query = request
@@ -772,7 +798,7 @@ async fn dispatch_unbuffered_observed(
         crate::gateway::daemon_provider_upstream_url(request.headers(), &path_and_query, config)?
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
             .parse::<Uri>()
-            .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))?;
+            .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))?;
     if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
         request.headers(),
         request.uri().path(),
@@ -782,8 +808,15 @@ async fn dispatch_unbuffered_observed(
     }
     strip_internal_headers(request.headers_mut());
     if allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, config);
+        inject_provider_auth(request.headers_mut(), route, config).await?;
     }
+    let upstream = crate::daemon::common::transport::provider_client(
+        &upstream,
+        allow_environment_provider_auth
+            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
+                .is_some(),
+    )
+    .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
@@ -791,7 +824,7 @@ async fn dispatch_unbuffered_observed(
     ];
     let streaming = request_streaming_hint(request.headers());
     let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+        .map_err(CliError::UpstreamTransport)?
         .map(box_body);
     let response = request_worker_upstream(
         upstream,
@@ -881,7 +914,7 @@ async fn dispatch_observed(
     operational: OperationalContext,
 ) -> Result<(Response<RelayBody>, ObservationReceiver), CliError> {
     let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(&prepared.headers);
+        crate::gateway::daemon_allows_provider_auth(&prepared.headers, &prepared.path, config);
     let destination = effective_destination(&prepared, route, effective, config)?;
     // An intercept's dispatch override is trusted plugin code, not the caller naming a host.
     let client_named = dispatch_override(effective).is_none()
@@ -900,15 +933,23 @@ async fn dispatch_observed(
         .body(Body::from(body))?;
     *request.headers_mut() = headers;
     if !explicit_target && allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, config);
+        inject_provider_auth(request.headers_mut(), route, config).await?;
     }
+    let upstream = crate::daemon::common::transport::provider_client(
+        &upstream,
+        !explicit_target
+            && allow_environment_provider_auth
+            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
+                .is_some(),
+    )
+    .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
     let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
+        .map_err(CliError::UpstreamTransport)?
         .map(box_body);
     let response = request_worker_upstream(
         upstream,
@@ -942,7 +983,7 @@ async fn request_worker_upstream(
     operational::upstream_started(operational, streaming);
     let request = request_provider(&upstream, client_named, request).map_err(|error| {
         operational::upstream_failed(operational, "transport");
-        CliError::Launch(error.to_string())
+        CliError::UpstreamTransport(error)
     })?;
     let request = config.wait_for_response(request);
     tokio::pin!(request);
@@ -967,13 +1008,29 @@ async fn request_worker_upstream(
         }
         Ok(Err(error)) => {
             operational::upstream_failed(operational, "transport");
-            Err(CliError::Launch(error.to_string()))
+            Err(provider_transport_failure(
+                UpstreamFailureClass::Connection,
+                error.to_string(),
+            ))
         }
         Err(_) => {
             operational::upstream_failed(operational, "transport");
-            Err(CliError::Launch("provider response-head timeout".into()))
+            Err(provider_transport_failure(
+                UpstreamFailureClass::Timeout,
+                "provider response-head timeout",
+            ))
         }
     }
+}
+
+/// Classifies a provider failure that occurred before receiving an HTTP response head.
+fn provider_transport_failure(class: UpstreamFailureClass, message: impl Into<String>) -> CliError {
+    CliError::ProviderFailure(UpstreamFailure {
+        status: None,
+        body: message.into(),
+        headers: BTreeMap::new(),
+        class,
+    })
 }
 
 /// The destination a request intercept set through the internal dispatch header, if any.
@@ -1006,7 +1063,7 @@ fn effective_destination(
     };
     destination
         .parse::<Uri>()
-        .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))
+        .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))
 }
 
 fn effective_request(
@@ -1113,43 +1170,18 @@ fn body_read_error(error: axum::Error) -> CliError {
     }
 }
 
-fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &GatewayConfig) {
-    if crate::provider_auth::has_provider_credential(headers) {
-        return;
-    }
-    if let Some(configured) = match route {
-        ProviderRoute::OpenAi => config.openai_auth_header.as_deref(),
-        ProviderRoute::Anthropic => config.anthropic_auth_header.as_deref(),
-    }
-    .and_then(|value| HeaderValue::from_str(value).ok())
-    {
-        headers.insert(AUTHORIZATION, configured);
-        return;
-    }
-    let (name, value) = match route {
-        ProviderRoute::OpenAi => {
-            let Some(key) = environment_value("OPENAI_API_KEY") else {
-                return;
-            };
-            (AUTHORIZATION, format!("Bearer {key}"))
-        }
-        ProviderRoute::Anthropic => {
-            let Some(key) = environment_value("ANTHROPIC_API_KEY") else {
-                return;
-            };
-            (HeaderName::from_static("x-api-key"), key)
-        }
-    };
-    if let Ok(value) = HeaderValue::from_str(&value) {
-        headers.insert(name, value);
-    }
-}
-
-fn environment_value(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+async fn inject_provider_auth(
+    headers: &mut HeaderMap,
+    route: ProviderRoute,
+    config: &GatewayConfig,
+) -> Result<(), CliError> {
+    crate::upstream_auth::apply(
+        headers,
+        matches!(route, ProviderRoute::Anthropic),
+        true,
+        config,
+    )
+    .await
 }
 
 fn observation_capture_limit_from_environment() -> Result<usize, CliError> {

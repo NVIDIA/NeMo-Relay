@@ -22,7 +22,7 @@
 //!
 //! [`AnnotatedLlmResponse`]: crate::codec::response::AnnotatedLlmResponse
 
-use crate::api::runtime::{LlmCollectorFn, LlmFinalizerFn};
+use crate::api::runtime::{LlmCollectorFn, LlmFinalizerFn, LlmJsonStream};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,14 @@ pub enum NormalizedStreamEvent {
 /// construct a fresh instance per managed-lifecycle call and discard it after the stream
 /// completes.
 pub trait StreamingCodec: Send + Sync {
+    /// Wraps the source stream to check provider completion rules.
+    ///
+    /// Feed the returned stream to this instance's collector and finalizer. The default
+    /// leaves the stream unchanged. An override must forward close and cleanup operations.
+    fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
+        stream
+    }
+
     /// Returns a closure that consumes one decoded provider event per call.
     fn collector(&self) -> LlmCollectorFn;
 

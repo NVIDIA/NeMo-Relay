@@ -3,6 +3,7 @@
 
 //! Gateway response handling for forwarded lifecycle hooks.
 
+#[cfg(test)]
 use futures_util::StreamExt;
 use serde_json::Value;
 
@@ -11,6 +12,7 @@ use crate::operational::{self, OperationalContext};
 
 pub(super) const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
 
+#[cfg(test)]
 pub(super) async fn handle_hook_forward_response_with_context(
     response: Result<reqwest::Response, reqwest::Error>,
     fail_closed: bool,
@@ -208,6 +210,7 @@ fn handle_hook_failure(
     }
 }
 
+#[cfg(test)]
 pub(super) async fn read_hook_response(
     response: reqwest::Response,
     operational: &OperationalContext,

@@ -19,6 +19,15 @@ starting the service runbook for your platform.
 | Plugin manifest | `/etc/nemo-relay/plugins.toml` | `%ProgramData%\nemo-relay\plugins.toml` |
 | Identity state | See the resolution order below. | See the resolution order below. |
 
+<Note>
+The daemon loads configuration for the user and machine that run it. A daemon
+that runs as another user does not load your per-user `config.toml` settings.
+This includes a system service that runs under a separate account. The same
+applies to a daemon on another machine. Clients do not send their personal
+settings to the daemon. Add the settings the daemon needs to its deployment
+configuration.
+</Note>
+
 Relay resolves identity state in this order on every platform, including Windows:
 
 1. If `XDG_CONFIG_HOME` is set, use `<XDG_CONFIG_HOME>/nemo-relay/daemon`.
@@ -29,7 +38,9 @@ Relay resolves identity state in this order on every platform, including Windows
 On Windows, `HOME` takes precedence over `USERPROFILE`. Check the environment of
 the actual daemon or client process before backing up its keys and trust pins.
 The service runbooks set an explicit `XDG_CONFIG_HOME` for the daemon. It does
-not change the managed worker's system configuration path.
+not change the managed worker's system configuration path. The worker also
+loads the user configuration and plugins from the resolved user directory;
+system settings retain higher precedence when the layers merge.
 </Note>
 
 Client identities stay with the user and must not be shared or copied into a
@@ -48,6 +59,12 @@ level = "info"
 stderr_enabled = true
 stderr_format = "jsonl"
 ```
+
+Provider base URLs must use HTTPS for remote hosts, including private Kubernetes
+service addresses. Plain HTTP is allowed only for loopback hosts such as
+`localhost`, `127.0.0.1`, or `::1`. Managed workers validate these URLs when
+loading configuration and check destination transport requirements when forwarding
+requests. Base URLs must not include user information, query strings, or fragments.
 
 Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/basic-usage).
 Use your approved provider URLs when they differ from these defaults. Set the same
@@ -400,6 +417,9 @@ than four tokens at the same time; idle tokens are released automatically.
 
 ### Requests Without a Bound Credential
 
+The rules below apply to HTTP requests that reach the daemon. The hook CLI
+can stop a request before it reaches these routes.
+
 On the daemon's public HTTP routes, a missing credential means telemetry and
 guardrails are skipped for that request; the coding agent keeps working:
 
@@ -414,11 +434,17 @@ guardrails are skipped for that request; the coding agent keeps working:
 - A malformed credential or a repeated header still returns `401`.
 - A daemon started with `--require-worker` keeps rejecting missing and unbound
   credentials with `401`.
-- A request without a bound credential never receives daemon-held provider
-  credentials (configured provider auth headers or the daemon's own
-  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`), except that a daemon explicitly
-  started with `--pass-through` applies its provider credentials to every
-  request.
+- By default, requests without a bound route use only the client's provider
+  credentials. They do not receive static keys, custom authorization headers,
+  or helper tokens from the daemon's configuration, or API keys from its
+  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` environment variables.
+  To allow anonymous requests to use daemon credentials, start the daemon with
+  `--pass-through --bind 127.0.0.1`. With `--bind 0.0.0.0`, requests need a
+  bound route to use daemon credentials. This rule also applies to requests
+  sent to `127.0.0.1`.
+- Unmanaged routes forward only the provider credentials that the caller sends.
+  This rule includes WebSocket upgrades. It also applies to bound routes,
+  workers, and daemons started with `--pass-through`.
 - A provider request that names its own upstream with
   `x-nemo-relay-upstream-base-url`, as the managed Pi extension does, is
   honored only with a bound credential. Without one it receives `503` with
@@ -430,15 +456,23 @@ guardrails are skipped for that request; the coding agent keeps working:
   `reason = "unbound_credential"`, or `reason = "no_live_session"`,
   rate-limited, without the credential.
 
-On the client side, `nemo-relay daemon hook` with no resolvable credential does
-not contact the daemon. It honors the same hook failure policy in daemon and
-daemon-worker deployments: `--fail-closed` reports a delivery failure, writes no
-allow response, and exits nonzero. Without an explicit flag, policy events such
-as `PreToolUse` and `pre_tool_call`, or `NEMO_RELAY_FAIL_CLOSED=1`, also fail
-closed. `--fail-open` overrides the default policy; fail-open hooks write the
-same pass-through response, exit `0`, and log a warning. Restore the credential
-through `NEMO_RELAY_CLIENT_TOKEN` or the client token file before retrying a
-fail-closed hook.
+If `nemo-relay daemon hook` cannot find a valid credential, it does not contact
+the daemon. The same failure policy applies in daemon and daemon-worker
+setups. With `--fail-closed`, the hook reports an error and exits with code `2`.
+It does not send an allow response.
+
+Without a policy flag, events such as `PreToolUse` and `pre_tool_call` also
+fail closed. Hooks also fail closed if Relay cannot read the payload, parse
+its JSON, or find an event name. Payloads that exceed the size limit fail
+closed too. Set `NEMO_RELAY_FAIL_CLOSED=1` to make all events fail closed.
+
+`--fail-open` overrides the default event policy. It also overrides
+`NEMO_RELAY_FAIL_CLOSED=1`. The hook exits with code `0` and logs a warning.
+It sends a pass-through response only for named events that do not require a
+permission check. Restore the credential through
+`NEMO_RELAY_CLIENT_TOKEN` or the client token file before retrying a fail-closed
+hook.
+
 `nemo-relay daemon mcp` with no resolvable credential keeps serving the MCP
 protocol without registering a route, so hosts that require the server keep
 running. It does the same, without retrying, when the daemon rejects its
@@ -755,18 +789,23 @@ does not add a managed daemon route.
 
 ### Codex Responses Compatibility
 
-Both the personal gateway and managed daemon recognize Codex ChatGPT OAuth on
-OpenAI routes, including the managed provider's `/v1/responses` and `/v1/models`
-requests. When no administrator OpenAI credential is configured, Relay preserves
-the OAuth credential and sends the request to the native ChatGPT Codex backend.
-When `openai_auth_header` or `OPENAI_API_KEY` is configured for the daemon, Relay
-removes the ChatGPT OAuth credential, injects that replacement credential, and
-uses the administrator's configured OpenAI-compatible upstream instead.
+The personal gateway and managed daemon recognize Codex ChatGPT OAuth on OpenAI
+routes. These routes include `/v1/responses` and `/v1/models`.
 
-ChatGPT voice call creation is an exception. Requests to
-`POST /backend-api/codex/realtime/calls` keep the caller's ChatGPT credential
-and use the ChatGPT backend even when a replacement OpenAI credential
-is configured. This preserves ChatGPT's JSON call format.
+On managed OpenAI routes, Relay can replace the caller's ChatGPT OAuth credential.
+It uses `openai_auth_header`, `openai_api_key`,
+`[upstream.openai_api_key_helper]`, or `OPENAI_API_KEY` when the client has Relay access.
+It then sends the request to the configured OpenAI-compatible upstream.
+
+Unmanaged OpenAI routes keep the caller's ChatGPT credential. These routes
+include model discovery, compaction, and voice call creation. Relay never adds
+its own provider credentials to unmanaged requests.
+
+Requests without a replacement credential follow the configured upstream settings.
+With the default `openai_base_url`, Relay sends ChatGPT requests to the native
+ChatGPT Codex backend. With a custom `openai_base_url`, Relay uses that URL.
+ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` always use the
+ChatGPT backend and keep the caller's credential.
 
 Set `[upstream] chatgpt_codex_base_url` to send ChatGPT requests, including
 voice call creation, to an approved endpoint instead of the default
@@ -791,3 +830,23 @@ Responses route. A WebSocket upgrade probe sent with `GET` to that path,
 `/responses`, or `/v1/responses` receives `426 Upgrade Required`, which causes
 clients that support the fallback to use HTTP streaming. An ordinary GET remains
 `405 Method Not Allowed`.
+
+### Upstream API Key Helpers
+
+The daemon uses the same `[upstream.openai_api_key_helper]` and
+`[upstream.anthropic_api_key_helper]` configuration as the personal gateway.
+Relay runs the helper for each provider request attempt. This includes middleware
+retries, streaming requests, and WebSocket handshakes. Choose one credential
+source for each provider. You cannot combine a helper with a static API key or
+a custom authorization header. Refer to
+[Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request)
+for examples, supported authentication methods, limits, and error handling.
+
+With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and
+`NEMO_RELAY_OPENAI_AUTH_HEADER`. With an Anthropic helper, it warns about and
+ignores `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use `OPENAI_API_KEY` and
+`ANTHROPIC_API_KEY` to authenticate upstream requests.
+
+The daemon's access rules still control which requests can use its credentials.
+An upstream endpoint named by the client never receives a daemon helper token.

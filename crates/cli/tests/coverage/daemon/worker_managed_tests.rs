@@ -85,13 +85,11 @@ async fn managed_provider_wait_has_no_default_deadline_and_honors_configuration(
                 "compaction complete"
             );
         } else {
-            assert!(
-                task.await
-                    .unwrap()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("response-head timeout")
-            );
+            let error = task.await.unwrap().unwrap_err();
+            assert!(matches!(&error, CliError::ProviderFailure(failure)
+                if failure.class == UpstreamFailureClass::Timeout));
+            assert!(error.to_string().contains("response-head timeout"));
+            assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
         }
         server.abort();
     }
@@ -1026,8 +1024,8 @@ async fn prepared_request_enforces_body_limit_and_normalizes_non_json_payloads()
     assert!(!prepared.streaming);
 }
 
-#[test]
-fn managed_request_helpers_cover_overrides_streaming_and_provider_credentials() {
+#[tokio::test]
+async fn managed_request_helpers_cover_overrides_streaming_and_provider_credentials() {
     let _environment = EnvScope::set(&[
         ("OPENAI_API_KEY", Some(OsStr::new("  openai-env-key  "))),
         ("ANTHROPIC_API_KEY", Some(OsStr::new("anthropic-env-key"))),
@@ -1077,21 +1075,27 @@ fn managed_request_helpers_cover_overrides_streaming_and_provider_credentials() 
         &mut headers,
         ProviderRoute::OpenAi,
         &GatewayConfig::default(),
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(headers[AUTHORIZATION], "Bearer openai-env-key");
     headers.clear();
     inject_provider_auth(
         &mut headers,
         ProviderRoute::Anthropic,
         &GatewayConfig::default(),
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(headers["x-api-key"], "anthropic-env-key");
     headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer caller"));
     inject_provider_auth(
         &mut headers,
         ProviderRoute::OpenAi,
         &GatewayConfig::default(),
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(headers[AUTHORIZATION], "Bearer caller");
 
     let accepts_sse = HeaderMap::from_iter([(
@@ -1556,7 +1560,8 @@ async fn managed_runtime_closes_the_llm_lifecycle_when_provider_dispatch_fails()
         .await
         .expect_err("unreachable provider must fail");
     assert!(
-        matches!(error, CliError::Launch(_)),
+        matches!(&error, CliError::ProviderFailure(failure)
+            if failure.class == UpstreamFailureClass::Connection),
         "unexpected dispatch error: {error:?}"
     );
     runtime.close().await.expect("close managed runtime");
@@ -1589,6 +1594,170 @@ impl Drop for LlmGuardrailRegistration {
         let _ = deregister_llm_sanitize_response_guardrail(self.0);
         let _ = nemo_relay::api::subscriber::deregister_subscriber(self.0);
     }
+}
+
+#[tokio::test]
+async fn observed_responses_preserve_sanitized_payloads_and_usage_without_a_fallback_codec() {
+    use nemo_relay::api::event::{Event, ScopeCategory};
+    use nemo_relay::api::subscriber::{flush_subscribers, register_subscriber};
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const SUBSCRIBER: &str = "daemon-worker-responses-pii";
+    let _registration = LlmGuardrailRegistration(SUBSCRIBER);
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::<Event>::new()));
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new({
+            let recorded = recorded.clone();
+            move |event| recorded.lock().unwrap().push(event.clone())
+        }),
+    )
+    .unwrap();
+
+    let provider_response = json!({
+        "id": "resp_pii", "model": "test", "status": "completed",
+        "output": [{"type": "message", "role": "assistant", "content": [
+            {"type": "output_text", "text": "sk-response-secret"}
+        ]}],
+        "usage": {"input_tokens": 17, "output_tokens": 5, "total_tokens": 22}
+    });
+    let app = Router::new().route(
+        "/v1/responses",
+        post({
+            let provider_response = provider_response.clone();
+            move |request: Request<Body>| {
+                let provider_response = provider_response.clone();
+                async move {
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let request: Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(request["input"], "sk-request-secret");
+                    let (content_type, body) = if request["stream"] == true {
+                        (
+                            "text/event-stream",
+                            format!(
+                                "data: {}\n\n",
+                                json!({
+                                    "type": "response.completed", "response": provider_response
+                                })
+                            ),
+                        )
+                    } else {
+                        ("application/json", provider_response.to_string())
+                    };
+                    Response::builder()
+                        .header(CONTENT_TYPE, content_type)
+                        .body(Body::from(body))
+                        .unwrap()
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let runtime = ManagedRuntime::initialize(
+        GatewayConfig {
+            openai_base_url: format!("http://{address}"),
+            plugin_config: Some(json!({
+                "version": 1,
+                "components": [{
+                    "kind": "pii_redaction", "enabled": true,
+                    "config": {
+                        "mode": "builtin", "tool_input": false, "tool_output": false,
+                        "builtin": {
+                            "action": "regex_replace", "pattern": "sk-[A-Za-z0-9_-]+",
+                            "replacement": "[REDACTED]",
+                            "target_paths": ["/messages/0/content", "/message"]
+                        }
+                    }
+                }]
+            })),
+            ..GatewayConfig::default()
+        },
+        Vec::new(),
+        "machine-owner".into(),
+    )
+    .await
+    .unwrap();
+    let requirements = runtime.provider_middleware_requirements().unwrap();
+    assert!(requirements.request_body_decode_required);
+    assert!(!requirements.managed_execution_required);
+    for streaming in [false, true] {
+        let response = runtime
+            .proxy_provider(
+                pooled_client().unwrap(),
+                Request::post("/v1/responses")
+                    .body(Body::from(
+                        json!({
+                            "model": "test", "input": "sk-request-secret", "stream": streaming
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+                ProviderRoute::OpenAi,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&body).contains("sk-response-secret"));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            flush_subscribers().unwrap();
+            let end_count = recorded
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    event.scope_category() == Some(ScopeCategory::End)
+                        && event.annotated_response().is_some()
+                })
+                .count();
+            if end_count == 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both observed responses must finish");
+    {
+        let events = recorded.lock().unwrap();
+        let starts = events
+            .iter()
+            .filter(|event| {
+                event.scope_category() == Some(ScopeCategory::Start)
+                    && event.annotated_request().is_some()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(starts.len(), 2);
+        for start in starts {
+            assert_eq!(start.input().unwrap()["content"]["input"], "[REDACTED]");
+            assert!(
+                !start
+                    .to_json_string()
+                    .unwrap()
+                    .contains("sk-request-secret")
+            );
+        }
+        for end in events
+            .iter()
+            .filter(|event| event.annotated_response().is_some())
+        {
+            let annotated = end.annotated_response().unwrap();
+            assert_eq!(annotated.response_text(), Some("[REDACTED]"));
+            let usage = serde_json::to_value(annotated.usage.as_ref().unwrap()).unwrap();
+            assert_eq!(usage["prompt_tokens"], 17);
+            assert_eq!(usage["completion_tokens"], 5);
+            assert_eq!(usage["total_tokens"], 22);
+            assert!(!end.to_json_string().unwrap().contains("sk-response-secret"));
+        }
+    }
+    runtime.close().await.unwrap();
+    server.abort();
 }
 
 #[tokio::test]
@@ -2374,8 +2543,8 @@ fn managed_header_and_observation_helpers_cover_ignored_and_invalid_values() {
 }
 
 #[cfg(unix)]
-#[test]
-fn managed_observation_and_provider_environment_values_reject_invalid_inputs() {
+#[tokio::test]
+async fn managed_observation_and_provider_environment_values_reject_invalid_inputs() {
     use std::os::unix::ffi::OsStrExt;
 
     let _environment = EnvScope::set(&[
@@ -2387,8 +2556,6 @@ fn managed_observation_and_provider_environment_values_reject_invalid_inputs() {
         ("ANTHROPIC_API_KEY", None),
     ]);
     assert!(observation_capture_limit_from_environment().is_err());
-    assert!(environment_value("OPENAI_API_KEY").is_none());
-    assert!(environment_value("ANTHROPIC_API_KEY").is_none());
     let mut headers = HeaderMap::new();
     inject_provider_auth(
         &mut headers,
@@ -2397,7 +2564,9 @@ fn managed_observation_and_provider_environment_values_reject_invalid_inputs() {
             openai_auth_header: Some("bad\nvalue".into()),
             ..GatewayConfig::default()
         },
-    );
+    )
+    .await
+    .unwrap_err();
     assert!(headers.is_empty());
 }
 
@@ -2645,4 +2814,265 @@ async fn malformed_permission_hooks_fail_closed_in_each_native_response_shape() 
     );
 
     runtime.close().await.expect("close managed runtime");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unmanaged_daemon_dispatch_generates_fresh_helper_tokens() {
+    let seen = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
+    let capture = seen.clone();
+    let app = Router::new().route(
+        "/v1/messages/count_tokens",
+        post(move |headers: HeaderMap| {
+            let capture = capture.clone();
+            async move {
+                capture.lock().unwrap().push(headers);
+                "{}"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = GatewayConfig {
+        anthropic_base_url: format!("http://{}", listener.local_addr().unwrap()),
+        anthropic_api_key_helper: Some(crate::upstream_auth::tests::helper("printf 'token-%s' $$")),
+        ..GatewayConfig::default()
+    };
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for _ in 0..2 {
+        let request = Request::post("/v1/messages/count_tokens")
+            .header(AUTHORIZATION, "Bearer caller-token")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = dispatch_unmanaged(
+            pooled_client().unwrap(),
+            request,
+            ProviderRoute::Anthropic,
+            &config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.into_body().collect().await.unwrap();
+    }
+    let captured = seen.lock().unwrap();
+    assert_eq!(captured.len(), 2);
+    assert_ne!(captured[0]["x-api-key"], captured[1]["x-api-key"]);
+    assert!(!captured[0].contains_key(AUTHORIZATION));
+    server.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn regression_backend_alias_preserves_caller_credentials_with_helper() {
+    let seen = Arc::new(Mutex::new(None::<HeaderMap>));
+    let capture = seen.clone();
+    let app = Router::new().route(
+        "/v1/realtime/calls",
+        post(move |headers: HeaderMap| {
+            let capture = capture.clone();
+            async move {
+                *capture.lock().unwrap() = Some(headers);
+                "{}"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = GatewayConfig {
+        openai_base_url: format!("http://{}", listener.local_addr().unwrap()),
+        openai_api_key_helper: Some(crate::upstream_auth::tests::helper("exit 9")),
+        ..GatewayConfig::default()
+    };
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let request = Request::post("/backend-api/codex/realtime/calls")
+        .header(AUTHORIZATION, "Bearer stale-client-api-key")
+        .body(Body::from("{}"))
+        .unwrap();
+    let response = dispatch_unmanaged(
+        pooled_client().unwrap(),
+        request,
+        ProviderRoute::OpenAi,
+        &config,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.into_body().collect().await.unwrap();
+    let actual = seen.lock().unwrap().as_ref().unwrap()[AUTHORIZATION].clone();
+    server.abort();
+    assert_eq!(
+        actual, "Bearer stale-client-api-key",
+        "An unmanaged backend alias must retain caller credentials without executing the helper"
+    );
+}
+
+#[tokio::test]
+async fn managed_forwarding_rejects_remote_http_as_an_upstream_error() {
+    let config = GatewayConfig {
+        openai_base_url: "http://172.16.0.223:30919/v1".into(),
+        ..Default::default()
+    };
+    let error = dispatch_unmanaged(
+        pooled_client().unwrap(),
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        &config,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CliError::UpstreamTransport(TransportError::InsecureDestination)
+    ));
+    assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
+
+    let error = dispatch_unbuffered_observed(
+        pooled_client().unwrap(),
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        &config,
+        1024,
+        OperationalContext::new(),
+    )
+    .await
+    .err()
+    .expect("remote HTTP must be rejected before connecting");
+    assert!(matches!(
+        error,
+        CliError::UpstreamTransport(TransportError::InsecureDestination)
+    ));
+    assert!(!error.to_string().contains("hook payload"));
+}
+
+#[tokio::test]
+async fn provider_connection_failures_return_bad_gateway_for_both_forwarding_paths() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let destination = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let config = GatewayConfig {
+        openai_base_url: destination.clone(),
+        ..Default::default()
+    };
+    let unmanaged = dispatch_unmanaged(
+        pooled_client().unwrap(),
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        &config,
+    )
+    .await
+    .unwrap_err();
+    let managed = request_worker_upstream(
+        pooled_client().unwrap(),
+        false,
+        Request::post(destination)
+            .body(box_body(Body::empty()))
+            .unwrap(),
+        &OperationalContext::new(),
+        false,
+        &config,
+    )
+    .await
+    .unwrap_err();
+    for error in [unmanaged, managed] {
+        assert!(matches!(&error, CliError::ProviderFailure(failure)
+            if failure.class == UpstreamFailureClass::Connection && failure.status.is_none()));
+        assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
+    }
+}
+
+#[tokio::test]
+async fn unmanaged_provider_response_head_timeout_returns_bad_gateway() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = GatewayConfig {
+        openai_base_url: format!("http://{}", listener.local_addr().unwrap()),
+        response_timeout_secs: 1,
+        ..Default::default()
+    };
+    let provider = tokio::spawn(async move {
+        let (_connection, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let error = dispatch_unmanaged(
+        pooled_client().unwrap(),
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        &config,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(&error, CliError::ProviderFailure(failure)
+        if failure.class == UpstreamFailureClass::Timeout && failure.status.is_none()));
+    assert!(error.to_string().contains("response-head timeout"));
+    assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
+    provider.abort();
+}
+
+#[tokio::test]
+async fn unmanaged_routes_forward_only_client_credentials() {
+    let _env = crate::test_support::EnvScope::set(&[(
+        "OPENAI_API_KEY",
+        Some(std::ffi::OsStr::new("relay-environment-secret")),
+    )]);
+    for configured in [None, Some("Bearer relay-owned-secret")] {
+        async fn echo(request: Request<Body>) -> Response<Body> {
+            Response::builder()
+                .status(StatusCode::CREATED)
+                .body(Body::from(
+                    request
+                        .headers()
+                        .get("authorization")
+                        .map_or("absent", |value| value.to_str().unwrap())
+                        .to_owned(),
+                ))
+                .unwrap()
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = GatewayConfig {
+            openai_base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            chatgpt_codex_base_url: Some(format!("http://{}", listener.local_addr().unwrap())),
+            openai_auth_header: configured.map(str::to_owned),
+            ..GatewayConfig::default()
+        };
+        let provider = axum::Router::new().fallback(echo);
+        let task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+
+        for path in [
+            "/v1/responses/compact",
+            "/v1/images/generations",
+            "/v1/realtime/calls",
+            "/v1/live/sessions",
+            "/v1/images/edits",
+            "/v1/alpha/search",
+            "/v1/memories/trace_summarize",
+        ] {
+            for credential in [
+                None,
+                Some("Bearer caller-key"),
+                Some("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+            ] {
+                let mut request = Request::post(path)
+                    .header("content-type", "application/json")
+                    .header("x-nemo-relay-worker-token", "data-secret");
+                if let Some(credential) = credential {
+                    request = request.header("authorization", credential);
+                }
+                let request = request.body(Body::from("{}")).unwrap();
+                let response = dispatch_unmanaged(
+                    pooled_client().unwrap(),
+                    request,
+                    ProviderRoute::OpenAi,
+                    &config,
+                )
+                .await
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::CREATED, "{path}");
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                assert_eq!(
+                    bytes.as_ref(),
+                    credential.unwrap_or("absent").as_bytes(),
+                    "{path}"
+                );
+            }
+        }
+        task.abort();
+    }
 }

@@ -1586,6 +1586,38 @@ fn assert_responses_tool_and_choice_branches() {
 
 use super::super::streaming::StreamingCodec;
 
+/// Later lifecycle and terminal events cannot replace the first final snapshot.
+#[test]
+fn openai_responses_streaming_codec_retains_first_terminal_snapshot() {
+    for terminal_type in [
+        "response.completed",
+        "response.failed",
+        "response.incomplete",
+    ] {
+        for later_type in [
+            "response.created",
+            "response.in_progress",
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+        ] {
+            let codec = OpenAIResponsesStreamingCodec::new();
+            let mut collector = codec.collector();
+            let finalizer = codec.finalizer();
+            let mut terminal = full_responses_response();
+            terminal["status"] = json!(terminal_type.strip_prefix("response.").unwrap());
+            collector(json!({"type": terminal_type, "response": terminal})).unwrap();
+            collector(json!({
+                "type": later_type,
+                "response": {"id": "resp_abc123", "status": "in_progress", "output": [], "usage": null}
+            }))
+            .unwrap();
+
+            assert_eq!(finalizer(), terminal, "{terminal_type} then {later_type}");
+        }
+    }
+}
+
 #[test]
 fn openai_responses_streaming_codec_uses_terminal_snapshot() {
     // Common case: response.completed carries the full final state. Streaming codec emits that
