@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    AsyncSinkErrorBoundary, DROP_REPORT_INTERVAL_MILLIS, DropNoticeRateLimiter,
+    DROP_REPORT_INTERVAL_MILLIS, DropNoticeRateLimiter, SinkErrorBoundary,
     async_sink_error_handler, build_logger, log_level_filter, logging_path_identity,
     normalize_path_components, now_millis, reserved_sink_paths, resolve_log_path, spdlog_level,
     stderr_error_handler,
@@ -259,7 +259,7 @@ fn async_sink_boundary_preserves_shutdown_flush_errors() {
     let (sink_tx, sink_rx) = mpsc::channel();
     let sink_handler = ErrorHandler::new(move |error| sink_tx.send(error).unwrap());
     let inner = test_async_sink(backend.clone(), sink_handler.clone());
-    let boundary = AsyncSinkErrorBoundary::new(inner, sink_handler);
+    let boundary = SinkErrorBoundary::new(inner, sink_handler);
 
     let result = Sink::flush_on_exit(&boundary);
 
@@ -278,11 +278,11 @@ fn async_sink_boundaries_report_each_full_sink_without_blocking_the_caller() {
         move |error| sink_tx.send(("sink-a", error)).unwrap()
     });
     let handler_b = ErrorHandler::new(move |error| sink_tx.send(("sink-b", error)).unwrap());
-    let boundary_a = Arc::new(AsyncSinkErrorBoundary::new(
+    let boundary_a = Arc::new(SinkErrorBoundary::new(
         test_async_sink(backend_a.clone(), ErrorHandler::default()),
         ErrorHandler::default(),
     ));
-    let boundary_b = Arc::new(AsyncSinkErrorBoundary::new(
+    let boundary_b = Arc::new(SinkErrorBoundary::new(
         test_async_sink(backend_b.clone(), ErrorHandler::default()),
         ErrorHandler::default(),
     ));
@@ -363,7 +363,7 @@ fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
     let logging = LoggingDiagnostics::new(&diagnostics, &config);
     let (backend, entered, release) = blocking_test_sink(false);
     let handler = ErrorHandler::new(async_sink_error_handler("test", logging.file(0)));
-    let boundary = Arc::new(AsyncSinkErrorBoundary::new(
+    let boundary = Arc::new(SinkErrorBoundary::new(
         test_async_sink(backend, handler.clone()),
         handler,
     ));
@@ -415,6 +415,7 @@ fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
 #[derive(Default)]
 struct FailingRecordSink {
     prop: SinkProp,
+    fail_flush: bool,
 }
 
 impl GetSinkProp for FailingRecordSink {
@@ -431,7 +432,13 @@ impl Sink for FailingRecordSink {
     }
 
     fn flush(&self) -> spdlog::Result<()> {
-        Ok(())
+        if self.fail_flush {
+            Err(Error::FlushBuffer(std::io::Error::other(
+                "private flush detail",
+            )))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -458,7 +465,7 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
         sink_diagnostics.runtime_error(&error);
         failed_tx.send(()).unwrap();
     });
-    let boundary = Arc::new(AsyncSinkErrorBoundary::new(
+    let boundary = Arc::new(SinkErrorBoundary::new(
         test_async_sink(Arc::new(FailingRecordSink::default()), handler.clone()),
         handler,
     ));
@@ -522,7 +529,7 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
     };
     let logging = LoggingDiagnostics::new(&diagnostics, &config);
     let (backend, _entered, _release) = blocking_test_sink(true);
-    let boundary = Arc::new(AsyncSinkErrorBoundary::new(
+    let boundary = Arc::new(SinkErrorBoundary::new(
         test_async_sink(backend, ErrorHandler::default()),
         ErrorHandler::default(),
     ));
@@ -564,4 +571,173 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
             1
         );
     }
+}
+
+#[test]
+fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
+    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery, Diagnostics};
+    use crate::logging::diagnostics::LoggingDiagnostics;
+
+    let diagnostics = Diagnostics::default();
+    let logging = LoggingDiagnostics::new(&diagnostics, &LoggingConfig::default());
+    let sink_diagnostics = logging.stderr().unwrap();
+    let (sink_tx, sink_rx) = mpsc::channel();
+    let boundary = Arc::new(SinkErrorBoundary::new(
+        FailingRecordSink {
+            fail_flush: true,
+            ..Default::default()
+        },
+        ErrorHandler::new(move |error| {
+            sink_diagnostics.runtime_error(&error);
+            sink_tx.send(error).unwrap();
+        }),
+    ));
+    let (logger_tx, logger_rx) = mpsc::channel();
+    let logger = Logger::builder()
+        .sink(boundary.clone())
+        .error_handler(move |error| logger_tx.send(error).unwrap())
+        .build_arc()
+        .unwrap();
+
+    spdlog::info!(logger: logger, "A synchronous record fails");
+    logger.flush();
+    // Exit failures must reach LoggingRuntime instead of being consumed or reported twice.
+    assert!(matches!(
+        Sink::flush_on_exit(boundary.as_ref()),
+        Err(Error::FlushBuffer(_))
+    ));
+
+    let errors = sink_rx.try_iter().collect::<Vec<_>>();
+    assert_eq!(errors.len(), 2);
+    assert!(matches!(&errors[0], Error::WriteRecord(_)));
+    assert!(matches!(&errors[1], Error::FlushBuffer(_)));
+    assert!(matches!(
+        logger_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    let sink = snapshot
+        .components
+        .iter()
+        .find(|component| component.identity.key == "logging.stderr")
+        .unwrap();
+    for code in ["logging.sink.write_failed", "logging.sink.flush_failed"] {
+        assert_eq!(
+            sink.counters
+                .iter()
+                .find(|counter| counter.code == code)
+                .unwrap()
+                .occurrences
+                .value
+                .get(),
+            1
+        );
+        let events = snapshot
+            .events
+            .iter()
+            .filter(|event| event.component == sink.identity && event.code == code)
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].outcome, DiagnosticOutcome::Failure);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn stderr_backend_failures_record_once_without_projection_recursion() {
+    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery, Diagnostics};
+    use crate::logging::LoggingRuntime;
+
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_STDERR_DIAGNOSTICS_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let (stderr_writer, stderr_reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        drop(stderr_reader);
+        let current_thread = std::thread::current();
+        let test_name = current_thread.name().expect("test thread should be named");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env(CHILD_ENV, "1")
+            // A closed peer produces EPIPE; Rust silently ignores EBADF on stderr.
+            .stderr(std::process::Stdio::from(std::os::fd::OwnedFd::from(
+                stderr_writer,
+            )))
+            .output()
+            .expect("stderr diagnostic child test should start");
+        assert!(
+            output.status.success(),
+            "stderr diagnostic child test failed\nstdout:\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        return;
+    }
+
+    // Stderr is intentionally unwritable; keep child assertion failures visible.
+    std::panic::set_hook(Box::new(|info| println!("{info}")));
+    let diagnostics = Diagnostics::default();
+    let producer = diagnostics.register_component("test.exporter").unwrap();
+    let runtime = LoggingRuntime::configure_with_diagnostics(
+        LoggingConfig {
+            level: LogLevel::Error,
+            flush_interval_millis: 0,
+            ..LoggingConfig::default()
+        },
+        &diagnostics,
+    )
+    .unwrap();
+    let logger_failures = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let callback_logger_failures = Arc::clone(&logger_failures);
+    runtime.logger.set_error_handler(move |_| {
+        callback_logger_failures.fetch_add(1, Ordering::Relaxed);
+    });
+    let projected = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let callback_projected = Arc::clone(&projected);
+    let _projection = diagnostics
+        .subscribe_projection(move |_| {
+            callback_projected.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+
+    log::error!(target: "test.stderr", "An ordinary stderr write fails");
+    producer
+        .observe_failure(
+            "test.export_failed",
+            "The projected stderr write also fails",
+            1,
+            Default::default(),
+        )
+        .unwrap();
+
+    assert_eq!(logger_failures.load(Ordering::Relaxed), 0);
+    assert_eq!(projected.load(Ordering::Relaxed), 1);
+    runtime.shutdown();
+    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    let sink = snapshot
+        .components
+        .iter()
+        .find(|component| component.identity.key == "logging.stderr")
+        .unwrap();
+    assert!(sink.closed_at.is_some());
+    assert_eq!(
+        sink.counters
+            .iter()
+            .find(|counter| counter.code == "logging.sink.write_failed")
+            .unwrap()
+            .occurrences
+            .value
+            .get(),
+        2
+    );
+    let events = snapshot
+        .events
+        .iter()
+        .filter(|event| {
+            event.component == sink.identity && event.code == "logging.sink.write_failed"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 2);
+    assert!(
+        events
+            .iter()
+            .all(|event| event.outcome == DiagnosticOutcome::Failure)
+    );
 }

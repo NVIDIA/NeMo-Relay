@@ -42,6 +42,7 @@ pub(super) fn build_logger_with_diagnostics(
     if config.stderr_enabled {
         let diagnostic = diagnostics.and_then(LoggingDiagnostics::stderr);
         let initialization = SinkInitialization::new(diagnostic.clone());
+        let error_handler: ErrorHandler = stderr_error_handler("stderr", diagnostic).into();
         let stderr_sink = StdStreamSink::builder()
             .stderr()
             .style_mode(StyleMode::Never)
@@ -50,12 +51,12 @@ pub(super) fn build_logger_with_diagnostics(
                 root_relay_id: root_relay_id.clone(),
             })
             .level_filter(spdlog_level_filter(config.level))
-            .error_handler(stderr_error_handler("stderr", diagnostic))
-            .build_arc()
+            .error_handler(error_handler.clone())
+            .build()
             .map_err(|error| {
                 FlowError::InvalidArgument(format!("failed to create stderr logging sink: {error}"))
             })?;
-        sinks.push(stderr_sink);
+        sinks.push(Arc::new(SinkErrorBoundary::new(stderr_sink, error_handler)));
         initialization.complete();
     }
 
@@ -166,7 +167,7 @@ pub(super) fn build_logger_with_diagnostics(
                     resolved_path.display()
                 ))
             })?;
-        let async_sink = Arc::new(AsyncSinkErrorBoundary::new(async_sink, async_error_handler));
+        let async_sink = Arc::new(SinkErrorBoundary::new(async_sink, async_error_handler));
 
         thread_pools.push(pool);
         sinks.push(async_sink);
@@ -221,14 +222,14 @@ impl Drop for SinkInitialization {
     }
 }
 
-/// Routes synchronous `AsyncPoolSink` errors through its per-sink handler.
-struct AsyncSinkErrorBoundary {
-    inner: AsyncPoolSink,
+/// Routes returned sink errors through the sink-specific handler instead of the logger handler.
+struct SinkErrorBoundary<S: Sink> {
+    inner: S,
     error_handler: RwLock<ErrorHandler>,
 }
 
-impl AsyncSinkErrorBoundary {
-    fn new(inner: AsyncPoolSink, error_handler: ErrorHandler) -> Self {
+impl<S: Sink> SinkErrorBoundary<S> {
+    fn new(inner: S, error_handler: ErrorHandler) -> Self {
         Self {
             inner,
             error_handler: RwLock::new(error_handler),
@@ -248,7 +249,7 @@ impl AsyncSinkErrorBoundary {
     }
 }
 
-impl SinkPropAccess for AsyncSinkErrorBoundary {
+impl<S: Sink> SinkPropAccess for SinkErrorBoundary<S> {
     fn level_filter(&self) -> LevelFilter {
         self.inner.level_filter()
     }
@@ -270,7 +271,7 @@ impl SinkPropAccess for AsyncSinkErrorBoundary {
     }
 }
 
-impl Sink for AsyncSinkErrorBoundary {
+impl<S: Sink> Sink for SinkErrorBoundary<S> {
     fn log(&self, record: &Record) -> spdlog::Result<()> {
         self.report_immediate_error(self.inner.log(record))
     }
@@ -280,7 +281,7 @@ impl Sink for AsyncSinkErrorBoundary {
     }
 
     fn flush_on_exit(&self) -> spdlog::Result<()> {
-        // Preserve final-drain errors for `LoggingRuntime`.
+        // Preserve final flush and drain errors for `LoggingRuntime`.
         self.inner.flush_on_exit()
     }
 }
