@@ -47,6 +47,65 @@ fn canonical_host(host: &str) -> Option<String> {
     (bare && !canonical.is_empty()).then_some(canonical)
 }
 
+/// Destinations beyond loopback that may receive plaintext HTTP or WebSocket traffic.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum PlaintextPolicy {
+    #[default]
+    LoopbackOnly,
+    Hosts(Vec<String>),
+    AnyHost,
+}
+
+impl PlaintextPolicy {
+    pub(crate) fn from_allow_insecure(allow_insecure: bool) -> Self {
+        if allow_insecure {
+            Self::AnyHost
+        } else {
+            Self::LoopbackOnly
+        }
+    }
+
+    pub(crate) fn from_hosts(hosts: Vec<String>) -> Self {
+        if hosts.is_empty() {
+            Self::LoopbackOnly
+        } else {
+            Self::Hosts(hosts)
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        let Self::Hosts(hosts) = self else {
+            return Ok(());
+        };
+        validate_insecure_http_hosts(hosts)
+    }
+
+    fn allows(&self, host: &str) -> bool {
+        match self {
+            Self::AnyHost => true,
+            Self::LoopbackOnly => is_loopback_host(host),
+            Self::Hosts(hosts) => {
+                is_loopback_host(host)
+                    || canonical_host(host).is_some_and(|host| {
+                        hosts.iter().any(|trusted| {
+                            canonical_host(trusted).as_deref() == Some(host.as_str())
+                        })
+                    })
+            }
+        }
+    }
+
+    /// Describe the destinations that may receive plaintext transport.
+    pub(crate) fn allowance(&self) -> &'static str {
+        match self {
+            Self::LoopbackOnly => "localhost or loopback IP addresses",
+            Self::Hosts(_) | Self::AnyHost => {
+                "localhost, loopback IP addresses, or hosts listed in insecure_http_hosts"
+            }
+        }
+    }
+}
+
 /// Reject `insecure_http_hosts` entries that are not a bare hostname or IP address.
 pub(crate) fn validate_insecure_http_hosts(hosts: &[String]) -> Result<(), String> {
     for host in hosts {
@@ -63,42 +122,22 @@ pub(crate) fn validate_insecure_http_hosts(hosts: &[String]) -> Result<(), Strin
     Ok(())
 }
 
-fn plaintext_host_allowed(host: &str, insecure_http_hosts: &[String]) -> bool {
-    is_loopback_host(host)
-        || canonical_host(host).is_some_and(|host| {
-            insecure_http_hosts
-                .iter()
-                .any(|trusted| canonical_host(trusted).as_deref() == Some(host.as_str()))
-        })
-}
-
 fn is_protected_endpoint(
     endpoint: &str,
     protected_scheme: &str,
     plaintext_scheme: &str,
-    insecure_http_hosts: &[String],
+    plaintext: &PlaintextPolicy,
 ) -> bool {
     reqwest::Url::parse(endpoint).is_ok_and(|url| {
         url.scheme() == protected_scheme
             || (url.scheme() == plaintext_scheme
-                && url
-                    .host_str()
-                    .is_some_and(|host| plaintext_host_allowed(host, insecure_http_hosts)))
+                && url.host_str().is_some_and(|host| plaintext.allows(host)))
     })
 }
 
-/// Return whether a URL uses HTTPS or plain HTTP to loopback or an explicitly trusted host.
-pub(crate) fn is_protected_http_endpoint(endpoint: &str, insecure_http_hosts: &[String]) -> bool {
-    is_protected_endpoint(endpoint, "https", "http", insecure_http_hosts)
-}
-
-/// Describe the destinations that may receive plaintext transport.
-pub(crate) fn plaintext_allowance(insecure_http_hosts: &[String]) -> &'static str {
-    if insecure_http_hosts.is_empty() {
-        "localhost or loopback IP addresses"
-    } else {
-        "localhost, loopback IP addresses, or hosts listed in insecure_http_hosts"
-    }
+/// Return whether a URL uses HTTPS or plain HTTP to a destination the policy allows.
+pub(crate) fn is_protected_http_endpoint(endpoint: &str, plaintext: &PlaintextPolicy) -> bool {
+    is_protected_endpoint(endpoint, "https", "http", plaintext)
 }
 
 /// Return whether any configured header source adds request credentials or metadata.
@@ -114,34 +153,32 @@ fn validate_header_destination(
     endpoint: &str,
     protected_scheme: &str,
     plaintext_scheme: &str,
-    insecure_http_hosts: &[String],
+    plaintext: &PlaintextPolicy,
 ) -> Result<(), String> {
-    if is_protected_endpoint(
-        endpoint,
-        protected_scheme,
-        plaintext_scheme,
-        insecure_http_hosts,
-    ) {
+    if is_protected_endpoint(endpoint, protected_scheme, plaintext_scheme, plaintext) {
         return Ok(());
     }
     Err(format!(
         "configured headers require {protected_scheme} for remote endpoints; {plaintext_scheme} is allowed only for {}",
-        plaintext_allowance(insecure_http_hosts)
+        plaintext.allowance()
     ))
 }
 
 /// Require protected HTTP transport before attaching configured headers.
 pub(crate) fn validate_header_http_endpoint(
     endpoint: &str,
-    insecure_http_hosts: &[String],
+    plaintext: &PlaintextPolicy,
 ) -> Result<(), String> {
-    validate_header_destination(endpoint, "https", "http", insecure_http_hosts)
+    validate_header_destination(endpoint, "https", "http", plaintext)
 }
 
 /// Require protected WebSocket transport before attaching configured headers.
 #[cfg_attr(not(feature = "atof-streaming"), allow(dead_code))]
-pub(crate) fn validate_header_websocket_endpoint(endpoint: &str) -> Result<(), String> {
-    validate_header_destination(endpoint, "wss", "ws", &[])
+pub(crate) fn validate_header_websocket_endpoint(
+    endpoint: &str,
+    plaintext: &PlaintextPolicy,
+) -> Result<(), String> {
+    validate_header_destination(endpoint, "wss", "ws", plaintext)
 }
 
 /// Validate header source names and require configured files to exist.
@@ -217,19 +254,19 @@ impl HeaderFileResolver {
 pub(crate) struct HeaderFileHttpClient {
     inner: reqwest::Client,
     resolver: HeaderFileResolver,
-    insecure_http_hosts: Vec<String>,
+    plaintext: PlaintextPolicy,
 }
 
 impl HeaderFileHttpClient {
     pub(crate) fn new(
         inner: reqwest::Client,
         resolver: HeaderFileResolver,
-        insecure_http_hosts: Vec<String>,
+        plaintext: PlaintextPolicy,
     ) -> Self {
         Self {
             inner,
             resolver,
-            insecure_http_hosts,
+            plaintext,
         }
     }
 }
@@ -237,7 +274,7 @@ impl HeaderFileHttpClient {
 #[async_trait]
 impl HttpClient for HeaderFileHttpClient {
     async fn send_bytes(&self, request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
-        validate_header_http_endpoint(&request.uri().to_string(), &self.insecure_http_hosts)
+        validate_header_http_endpoint(&request.uri().to_string(), &self.plaintext)
             .map_err(std::io::Error::other)?;
         let mut request = request;
         let resolver = self.resolver.clone();

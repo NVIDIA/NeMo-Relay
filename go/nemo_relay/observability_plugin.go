@@ -17,6 +17,8 @@ type ObservabilityConfig struct {
 	Policy        *ConfigPolicy                     `json:"policy,omitempty"`
 	// EnableFullPayloads retains complete sanitized request data on every LLM start event.
 	EnableFullPayloads bool `json:"enable_full_payloads,omitempty"`
+	// InsecureHTTPHosts lists non-loopback hosts allowed unencrypted HTTP or WebSocket exports, including headers.
+	InsecureHTTPHosts []string `json:"insecure_http_hosts,omitempty"`
 }
 
 // ObservabilityOpenTelemetryConfig configures multiple typed OTLP endpoints.
@@ -69,8 +71,6 @@ type ObservabilityOpenTelemetrySignalEndpointConfig struct {
 	TimeoutMillis        uint64            `json:"timeout_millis,omitempty"`
 	// PromoteResourceMetadataPrefixes selects root-scope metadata for resource attributes.
 	PromoteResourceMetadataPrefixes []string `json:"promote_resource_metadata_prefixes,omitempty"`
-	// InsecureHTTPHosts trusts plain HTTP to these non-loopback hosts; data and headers travel unencrypted.
-	InsecureHTTPHosts []string `json:"insecure_http_hosts,omitempty"`
 }
 
 // ObservabilityOpenTelemetryLogConfig configures the plugin's OTLP log pipeline.
@@ -120,8 +120,6 @@ type ObservabilityOpenTelemetryEndpointConfig struct {
 	CompletedSpanContextTTLMillis *uint64                `json:"completed_span_context_ttl_millis,omitempty"`
 	// PromoteResourceMetadataPrefixes selects root-scope metadata for trace resources and derived signals.
 	PromoteResourceMetadataPrefixes []string `json:"promote_resource_metadata_prefixes,omitempty"`
-	// InsecureHTTPHosts trusts plain HTTP to these non-loopback hosts; data and headers travel unencrypted.
-	InsecureHTTPHosts []string `json:"insecure_http_hosts,omitempty"`
 }
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.

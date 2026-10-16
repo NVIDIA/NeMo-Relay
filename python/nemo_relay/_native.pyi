@@ -1054,6 +1054,8 @@ class AtofStreamSinkConfig:
     header_env: dict[str, str]
     timeout_millis: int
     field_name_policy: str
+    allow_insecure: bool
+    """Allow ``http://`` or ``ws://`` to any host; events and configured headers travel unencrypted."""
 
     def __init__(
         self,
@@ -1064,6 +1066,7 @@ class AtofStreamSinkConfig:
         header_env: dict[str, str] | None = None,
         timeout_millis: int = 3000,
         field_name_policy: str = "preserve",
+        allow_insecure: bool = False,
     ) -> None:
         """Create an ATOF stream sink config.
 
@@ -1084,6 +1087,7 @@ class AtofExporterConfig:
     header_env: dict[str, str]
     timeout_millis: int
     field_name_policy: str
+    allow_insecure: bool
 
     def __init__(self) -> None:
         """Create an ATOF exporter config with native defaults."""
@@ -1212,8 +1216,8 @@ class OpenTelemetryConfig:
     def header_env(self, value: dict[str, str]) -> None:
         """Replace environment-backed exporter header references."""
         ...
-    insecure_http_hosts: list[str]
-    """Non-loopback hosts trusted for plain HTTP; spans and headers travel unencrypted."""
+    allow_insecure: bool
+    """Allow plain HTTP to any host; spans and configured headers travel unencrypted."""
     @property
     def resource_attributes(self) -> dict[str, str]:
         """Return additional OpenTelemetry resource attributes."""
@@ -1359,7 +1363,7 @@ class OpenTelemetryLogConfig:
     def header_env(self) -> dict[str, str]: ...
     @header_env.setter
     def header_env(self, value: dict[str, str]) -> None: ...
-    insecure_http_hosts: list[str]
+    allow_insecure: bool
     @property
     def resource_attributes(self) -> dict[str, str]: ...
     @resource_attributes.setter
@@ -1409,7 +1413,7 @@ class OpenTelemetryMetricConfig:
     def header_env(self) -> dict[str, str]: ...
     @header_env.setter
     def header_env(self, value: dict[str, str]) -> None: ...
-    insecure_http_hosts: list[str]
+    allow_insecure: bool
     @property
     def resource_attributes(self) -> dict[str, str]: ...
     @resource_attributes.setter

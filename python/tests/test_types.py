@@ -517,6 +517,20 @@ class TestAtofExporterType:
         assert config.timeout_millis == 1000
         assert config.field_name_policy == "replace_dots"
 
+    def test_stream_sink_headers_over_plain_http_need_allow_insecure(self) -> None:
+        config = AtofExporterConfig()
+        config.sink_type = "stream"
+        config.url = "http://collector.example:8080/events"
+        config.headers = {"authorization": "Bearer token"}
+        assert config.allow_insecure is False
+
+        with pytest.raises(RuntimeError, match="configured headers require https"):
+            AtofExporter(config)
+
+        config.allow_insecure = True
+        exporter = AtofExporter(config)
+        exporter.shutdown()
+
     def test_stream_sink_requires_url(self) -> None:
         config = AtofExporterConfig()
         config.sink_type = "stream"
@@ -627,9 +641,10 @@ class TestOpenTelemetryTypes:
         assert log_config.scheduled_delay_millis == 1000
         assert log_config.completed_span_context_ttl_millis == 60000
         assert log_config.header_env == {}
-        assert log_config.insecure_http_hosts == []
-        log_config.insecure_http_hosts = ["host.docker.internal"]
-        assert log_config.insecure_http_hosts == ["host.docker.internal"]
+        assert log_config.allow_insecure is False
+        log_config.allow_insecure = True
+        assert log_config.allow_insecure is True
+        log_config.allow_insecure = False
         log_config.minimum_severity = LogSeverity.Warn
         log_config.headers = {"authorization": "Bearer token"}
         log_config.set_header_from_env("x-relay-route", variable)
@@ -652,9 +667,10 @@ class TestOpenTelemetryTypes:
         assert metric_config.max_instruments == 256
         assert metric_config.cardinality_limit == 2000
         assert metric_config.header_env == {}
-        assert metric_config.insecure_http_hosts == []
-        metric_config.insecure_http_hosts = ["host.docker.internal"]
-        assert metric_config.insecure_http_hosts == ["host.docker.internal"]
+        assert metric_config.allow_insecure is False
+        metric_config.allow_insecure = True
+        assert metric_config.allow_insecure is True
+        metric_config.allow_insecure = False
         metric_config.temporality = MetricTemporality.Delta
         metric_config.headers = {"authorization": "Bearer token"}
         metric_config.set_header_from_env("x-relay-route", variable)

@@ -1499,6 +1499,42 @@ fn invalid_endpoint_scheme_errors_cleanly() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
+fn plaintext_stream_headers_require_a_listed_host_or_allow_insecure() {
+    for (url, transport) in [
+        (
+            "http://release-api:8080/events",
+            AtofEndpointTransport::HttpPost,
+        ),
+        (
+            "ws://release-api:8080/events",
+            AtofEndpointTransport::Websocket,
+        ),
+    ] {
+        let config =
+            || AtofStreamSinkConfig::new(url, transport).with_header("authorization", "Bearer t");
+        assert!(validate_endpoint_config(config()).is_err(), "{url}");
+        assert!(
+            validate_endpoint_config(config().with_plaintext_policy(PlaintextPolicy::from_hosts(
+                vec!["release-api".to_string()]
+            )))
+            .is_ok(),
+            "{url}"
+        );
+        assert!(
+            validate_endpoint_config(config().with_allow_insecure(true)).is_ok(),
+            "{url}"
+        );
+    }
+    let malformed =
+        AtofStreamSinkConfig::new("http://release-api/events", AtofEndpointTransport::HttpPost)
+            .with_plaintext_policy(PlaintextPolicy::from_hosts(vec![
+                "release-api:80".to_string(),
+            ]));
+    assert!(validate_endpoint_config(malformed).is_err());
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
 fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
     let mut headers = std::collections::HashMap::new();
     headers.insert("x-test".to_string(), "ok".to_string());
@@ -1510,6 +1546,8 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+        allow_insecure: false,
+        plaintext: PlaintextPolicy::LoopbackOnly,
     })
     .unwrap();
     assert_eq!(
@@ -1546,6 +1584,8 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+        allow_insecure: false,
+        plaintext: PlaintextPolicy::LoopbackOnly,
     };
     assert!(
         validate_endpoint_config(empty_url)
@@ -1562,6 +1602,8 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         header_file: std::collections::HashMap::new(),
         timeout_millis: 0,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+        allow_insecure: false,
+        plaintext: PlaintextPolicy::LoopbackOnly,
     };
     assert!(
         validate_endpoint_config(zero_timeout)
@@ -1586,6 +1628,8 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
             header_file: std::collections::HashMap::new(),
             timeout_millis: 1,
             field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+            allow_insecure: false,
+            plaintext: PlaintextPolicy::LoopbackOnly,
         })
         .is_err()
     );
@@ -1654,6 +1698,8 @@ fn configured_headers_require_protected_remote_atof_destinations() {
                 header_file: header_file.clone(),
                 timeout_millis: 1,
                 field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+                allow_insecure: false,
+                plaintext: PlaintextPolicy::LoopbackOnly,
             };
             let error = validate_endpoint_config(remote).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
@@ -1666,6 +1712,8 @@ fn configured_headers_require_protected_remote_atof_destinations() {
                 header_file: header_file.clone(),
                 timeout_millis: 1,
                 field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+                allow_insecure: false,
+                plaintext: PlaintextPolicy::LoopbackOnly,
             };
             assert!(validate_endpoint_config(loopback).is_ok());
         }
@@ -1720,6 +1768,8 @@ fn file_backed_http_post_headers_reload_for_each_event() {
         )]),
         timeout_millis: 5_000,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+        allow_insecure: false,
+        plaintext: PlaintextPolicy::LoopbackOnly,
     })
     .unwrap();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1794,6 +1844,8 @@ fn file_backed_ndjson_headers_refresh_when_a_stream_starts() {
         )]),
         timeout_millis: 5_000,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+        allow_insecure: false,
+        plaintext: PlaintextPolicy::LoopbackOnly,
     })
     .unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -1878,6 +1930,8 @@ fn file_backed_websocket_headers_refresh_on_reconnect() {
         )]),
         timeout_millis: 5_000,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+        allow_insecure: false,
+        plaintext: PlaintextPolicy::LoopbackOnly,
     })
     .unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -1917,6 +1971,8 @@ fn endpoint_activation_snapshots_header_env() {
         header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+        allow_insecure: false,
+        plaintext: PlaintextPolicy::LoopbackOnly,
     })
     .unwrap();
 
@@ -2136,6 +2192,8 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
         header_file: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+        allow_insecure: false,
+        plaintext: PlaintextPolicy::LoopbackOnly,
     })
     .unwrap();
     tokio::runtime::Runtime::new().unwrap().block_on(async {

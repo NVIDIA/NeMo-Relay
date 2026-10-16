@@ -89,12 +89,12 @@ fn hosts(entries: &[&str]) -> Vec<String> {
 
 #[test]
 fn insecure_http_hosts_trust_only_exact_listed_hosts() {
-    let trusted = hosts(&[
+    let trusted = PlaintextPolicy::from_hosts(hosts(&[
         "Host.Docker.Internal.",
         "release-api",
         "10.0.0.5",
         "fd00::1",
-    ]);
+    ]));
     for endpoint in [
         "http://host.docker.internal:8082/v1/traces",
         "http://HOST.DOCKER.INTERNAL./v1/traces",
@@ -123,6 +123,45 @@ fn insecure_http_hosts_trust_only_exact_listed_hosts() {
         let error = validate_header_http_endpoint(endpoint, &trusted).unwrap_err();
         assert!(error.contains("insecure_http_hosts"), "{error}");
     }
+}
+
+#[test]
+fn any_host_policy_allows_plaintext_everywhere_and_listed_hosts_cover_websockets() {
+    for endpoint in ["http://collector.example/v1/traces", "http://10.0.0.6:4318"] {
+        assert!(is_protected_http_endpoint(
+            endpoint,
+            &PlaintextPolicy::AnyHost
+        ));
+        assert!(validate_header_http_endpoint(endpoint, &PlaintextPolicy::AnyHost).is_ok());
+    }
+    assert!(!is_protected_http_endpoint(
+        "ftp://collector.example/",
+        &PlaintextPolicy::AnyHost
+    ));
+    assert!(
+        validate_header_websocket_endpoint(
+            "ws://collector.example/events",
+            &PlaintextPolicy::AnyHost
+        )
+        .is_ok()
+    );
+
+    let listed = PlaintextPolicy::from_hosts(hosts(&["release-api"]));
+    assert!(validate_header_websocket_endpoint("ws://release-api:9000/events", &listed).is_ok());
+    let error =
+        validate_header_websocket_endpoint("ws://collector.example/events", &listed).unwrap_err();
+    assert!(
+        error.contains("hosts listed in insecure_http_hosts"),
+        "{error}"
+    );
+    assert_eq!(
+        PlaintextPolicy::from_hosts(Vec::new()),
+        PlaintextPolicy::LoopbackOnly
+    );
+    assert_eq!(
+        PlaintextPolicy::from_allow_insecure(true),
+        PlaintextPolicy::AnyHost
+    );
 }
 
 #[test]
@@ -177,7 +216,7 @@ fn http_client_consults_insecure_http_hosts_before_resolving_headers() {
     let error = send(HeaderFileHttpClient::new(
         reqwest::Client::builder().build().unwrap(),
         HeaderFileResolver::new(files.clone()),
-        Vec::new(),
+        PlaintextPolicy::LoopbackOnly,
     ));
     assert!(
         error.contains("configured headers require https"),
@@ -187,7 +226,7 @@ fn http_client_consults_insecure_http_hosts_before_resolving_headers() {
     let error = send(HeaderFileHttpClient::new(
         reqwest::Client::builder().build().unwrap(),
         HeaderFileResolver::new(files),
-        hosts(&["release-api.invalid"]),
+        PlaintextPolicy::from_hosts(hosts(&["release-api.invalid"])),
     ));
     assert!(!error.contains("require https"), "{error}");
     assert!(error.contains("authorization"), "{error}");
@@ -195,14 +234,53 @@ fn http_client_consults_insecure_http_hosts_before_resolving_headers() {
 
 #[test]
 fn configured_headers_require_protected_remote_destinations() {
-    assert!(validate_header_http_endpoint("https://collector.example/v1/logs", &[]).is_ok());
-    assert!(validate_header_http_endpoint("http://localhost:4318/v1/logs", &[]).is_ok());
-    assert!(validate_header_http_endpoint("http://127.0.0.1:4318/v1/logs", &[]).is_ok());
-    assert!(validate_header_http_endpoint("http://collector.example/v1/logs", &[]).is_err());
+    assert!(
+        validate_header_http_endpoint(
+            "https://collector.example/v1/logs",
+            &PlaintextPolicy::LoopbackOnly
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_header_http_endpoint(
+            "http://localhost:4318/v1/logs",
+            &PlaintextPolicy::LoopbackOnly
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_header_http_endpoint(
+            "http://127.0.0.1:4318/v1/logs",
+            &PlaintextPolicy::LoopbackOnly
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_header_http_endpoint(
+            "http://collector.example/v1/logs",
+            &PlaintextPolicy::LoopbackOnly
+        )
+        .is_err()
+    );
 
-    assert!(validate_header_websocket_endpoint("wss://collector.example/events").is_ok());
-    assert!(validate_header_websocket_endpoint("ws://[::1]:4318/events").is_ok());
-    assert!(validate_header_websocket_endpoint("ws://collector.example/events").is_err());
+    assert!(
+        validate_header_websocket_endpoint(
+            "wss://collector.example/events",
+            &PlaintextPolicy::default()
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_header_websocket_endpoint("ws://[::1]:4318/events", &PlaintextPolicy::default())
+            .is_ok()
+    );
+    assert!(
+        validate_header_websocket_endpoint(
+            "ws://collector.example/events",
+            &PlaintextPolicy::default()
+        )
+        .is_err()
+    );
 
     assert!(has_configured_headers(
         &HashMap::from([("authorization".to_string(), "Bearer static".to_string())]),
@@ -320,7 +398,7 @@ fn http_client_reads_current_values_and_stops_before_network_on_resolution_failu
     let client = HeaderFileHttpClient::new(
         reqwest::Client::builder().build().unwrap(),
         HeaderFileResolver::new(files),
-        Vec::new(),
+        PlaintextPolicy::LoopbackOnly,
     );
     let endpoint = format!("http://{address}/v1/logs");
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -389,7 +467,7 @@ async fn http_client_resolves_file_backed_headers_in_a_tokio_runtime() {
     let client = HeaderFileHttpClient::new(
         reqwest::Client::builder().build().unwrap(),
         HeaderFileResolver::new(files),
-        Vec::new(),
+        PlaintextPolicy::LoopbackOnly,
     );
 
     client

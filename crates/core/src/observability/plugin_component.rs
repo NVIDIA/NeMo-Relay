@@ -55,6 +55,7 @@ use crate::observability::atof::{
     AtofExporterConfig as CoreAtofExporterConfig, AtofExporterMode, AtofFileSinkConfig,
     AtofSinkConfig as CoreAtofSinkConfig, AtofStreamSinkConfig,
 };
+use crate::observability::header_file::PlaintextPolicy;
 use crate::observability::otel::{
     OpenTelemetryConfig as CoreOpenTelemetryConfig,
     OpenTelemetryFileSinkConfig as CoreOpenTelemetryFileSinkConfig, OpenTelemetrySubscriber,
@@ -156,6 +157,9 @@ pub struct ObservabilityConfig {
     /// Whether LLM start events retain complete sanitized request payloads.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub enable_full_payloads: bool,
+    /// Non-loopback hosts trusted to receive plain HTTP or WebSocket exports and configured headers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub insecure_http_hosts: Vec<String>,
 }
 
 impl Default for ObservabilityConfig {
@@ -167,6 +171,7 @@ impl Default for ObservabilityConfig {
             opentelemetry: None,
             policy: ConfigPolicy::default(),
             enable_full_payloads: false,
+            insecure_http_hosts: Vec::new(),
         }
     }
 }
@@ -216,9 +221,6 @@ pub struct OpenTelemetrySignalEndpointConfig {
     /// Exporter headers mapped to files read immediately before each export.
     #[serde(default)]
     pub header_file: HashMap<String, String>,
-    /// Non-loopback hosts trusted to receive plain HTTP exports, including configured headers.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub insecure_http_hosts: Vec<String>,
     /// Extra resource attributes.
     #[serde(default)]
     pub resource_attributes: HashMap<String, String>,
@@ -367,9 +369,6 @@ pub struct OpenTelemetryEndpointConfig {
     /// Exporter headers mapped to files read immediately before each export.
     #[serde(default)]
     pub header_file: HashMap<String, String>,
-    /// Non-loopback hosts trusted to receive plain HTTP exports, including configured headers.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub insecure_http_hosts: Vec<String>,
     /// Extra resource attributes.
     #[serde(default)]
     pub resource_attributes: HashMap<String, String>,
@@ -916,7 +915,6 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 otel_editor_field("headers", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_env", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_file", EditorFieldKind::StringMap, &[], false),
-                otel_editor_field("insecure_http_hosts", EditorFieldKind::List, &[], true),
                 otel_editor_field(
                     "resource_attributes",
                     EditorFieldKind::StringMap,
@@ -1026,7 +1024,6 @@ impl EditorConfig for OpenTelemetrySignalEndpointConfig {
                 otel_editor_field("headers", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_env", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_file", EditorFieldKind::StringMap, &[], false),
-                otel_editor_field("insecure_http_hosts", EditorFieldKind::List, &[], true),
                 otel_editor_field(
                     "resource_attributes",
                     EditorFieldKind::StringMap,
@@ -1415,12 +1412,14 @@ fn register_observability(
             config.version
         )));
     }
+    let plaintext = PlaintextPolicy::from_hosts(config.insecure_http_hosts);
+    plaintext.validate().map_err(PluginError::InvalidConfig)?;
     register_full_payload_policy(config.enable_full_payloads, ctx)?;
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
-        register_atof_exporter(atof, ctx)?;
+        register_atof_exporter(atof, &plaintext, ctx)?;
     }
     if let Some(atif) = config.atif.filter(|section| section.enabled) {
-        register_atif_dispatcher(atif, ctx)?;
+        register_atif_dispatcher(atif, &plaintext, ctx)?;
     }
     if otel_sdk_disabled() {
         return Ok(());
@@ -1429,17 +1428,17 @@ fn register_observability(
     match config.opentelemetry {
         Some(otel) if otel.enabled => {
             let automatic_active = match automatic_signals {
-                Some(signals) => register_automatic_opentelemetry(signals, ctx)?,
+                Some(signals) => register_automatic_opentelemetry(signals, &plaintext, ctx)?,
                 None => false,
             };
             if !opentelemetry_section_is_empty(&otel) || automatic_signals.is_none() {
-                register_opentelemetry(otel, ctx, automatic_active)?;
+                register_opentelemetry(otel, &plaintext, ctx, automatic_active)?;
             }
         }
         Some(_) => {}
         None => {
             if let Some(signals) = automatic_signals {
-                register_automatic_opentelemetry(signals, ctx)?;
+                register_automatic_opentelemetry(signals, &plaintext, ctx)?;
             }
         }
     }
@@ -1481,6 +1480,7 @@ fn register_full_payload_policy(
 
 fn register_atof_exporter(
     section: AtofSectionConfig,
+    plaintext: &PlaintextPolicy,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
     let exporters = section
@@ -1489,7 +1489,7 @@ fn register_atof_exporter(
         .enumerate()
         .map(|(index, sink)| {
             let config = CoreAtofExporterConfig {
-                sink: build_atof_sink_config(index, sink)?,
+                sink: build_atof_sink_config(index, sink, plaintext)?,
             };
             AtofExporter::new(config)
                 .map(Arc::new)
@@ -1526,6 +1526,7 @@ fn register_atof_exporter(
 fn build_atof_sink_config(
     index: usize,
     sink: AtofSinkSectionConfig,
+    plaintext: &PlaintextPolicy,
 ) -> PluginResult<CoreAtofSinkConfig> {
     match sink {
         AtofSinkSectionConfig::File(file) => {
@@ -1557,6 +1558,7 @@ fn build_atof_sink_config(
                 ))
             })?;
             let mut config = AtofStreamSinkConfig::new(stream.url, transport)
+                .with_plaintext_policy(plaintext.clone())
                 .with_timeout_millis(stream.timeout_millis)
                 .with_field_name_policy(field_name_policy);
             for (key, value) in stream.headers {
@@ -1577,6 +1579,7 @@ type AtifStorageList = Arc<Vec<Arc<AtifRemoteStorage>>>;
 
 fn register_atif_dispatcher(
     section: AtifSectionConfig,
+    plaintext: &PlaintextPolicy,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
     validate_atif_filename_template(&section.filename_template)
@@ -1584,7 +1587,7 @@ fn register_atif_dispatcher(
 
     let mut storage_vec = Vec::with_capacity(section.storage.len());
     for (index, entry) in section.storage.iter().enumerate() {
-        storage_vec.push(build_atif_storage(index, entry)?);
+        storage_vec.push(build_atif_storage(index, entry, plaintext)?);
     }
     let storage: AtifStorageList = Arc::new(storage_vec);
 
@@ -1699,8 +1702,9 @@ fn deregister_atif_shutdown_subscriber(scope_uuid: &Uuid, name: &str) -> PluginR
 fn build_atif_storage(
     index: usize,
     config: &AtifStorageConfig,
+    plaintext: &PlaintextPolicy,
 ) -> PluginResult<Arc<AtifRemoteStorage>> {
-    let storage = AtifRemoteStorage::from_config(index, config)
+    let storage = AtifRemoteStorage::from_config(index, config, plaintext)
         .map(Arc::new)
         .map_err(observability_registration_error)?;
     log::info!(
@@ -1719,6 +1723,7 @@ fn build_atif_storage(
 fn build_atif_storage(
     _index: usize,
     _config: &AtifStorageConfig,
+    _plaintext: &PlaintextPolicy,
 ) -> PluginResult<Arc<AtifRemoteStorage>> {
     Err(PluginError::InvalidConfig(
         "ATIF storage support is not enabled in this build".to_string(),
@@ -1752,6 +1757,7 @@ struct ResolvedSignalEndpoints {
 
 fn register_opentelemetry(
     section: OpenTelemetrySectionConfig,
+    plaintext: &PlaintextPolicy,
     ctx: &mut PluginRegistrationContext,
     automatic_active: bool,
 ) -> PluginResult<()> {
@@ -1794,7 +1800,7 @@ fn register_opentelemetry(
         signal_destination_identities(log_resolution.as_ref(), &trace_destinations);
     let metric_destinations =
         signal_destination_identities(metric_resolution.as_ref(), &trace_destinations);
-    let mut trace_subscribers = build_opentelemetry_subscribers(endpoints)?;
+    let mut trace_subscribers = build_opentelemetry_subscribers(endpoints, plaintext)?;
     // Signals are built before the file sinks: an overwrite-mode sink truncates
     // its file as it opens, and a signal that fails registration would leave
     // that file empty behind it.
@@ -1804,6 +1810,7 @@ fn register_opentelemetry(
         metrics,
         metric_resolution,
         &trace_subscribers,
+        plaintext,
     )?;
     let mut skipped_endpoints =
         skipped_opentelemetry_endpoints("traces", &trace_subscribers, &trace_destinations);
@@ -2012,22 +2019,31 @@ fn environment_signal_enabled(variable: &'static str) -> bool {
 
 fn register_automatic_opentelemetry(
     signals: AutomaticOtlpSignals,
+    plaintext: &PlaintextPolicy,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<bool> {
     let trace_subscribers = automatic_subscriber(
         signals.traces && environment_signal_enabled("OTEL_TRACES_EXPORTER"),
         "traces",
-        OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin,
+        || OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin(plaintext.clone()),
     );
     let log_subscribers = automatic_subscriber(
         signals.logs && environment_signal_enabled("OTEL_LOGS_EXPORTER"),
         "logs",
-        OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin,
+        || {
+            OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
+                plaintext.clone(),
+            )
+        },
     );
     let metric_subscribers = automatic_subscriber(
         signals.metrics && environment_signal_enabled("OTEL_METRICS_EXPORTER"),
         "metrics",
-        OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin,
+        || {
+            OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
+                plaintext.clone(),
+            )
+        },
     );
     if trace_subscribers.is_empty() && log_subscribers.is_empty() && metric_subscribers.is_empty() {
         return Ok(false);
@@ -2080,29 +2096,28 @@ fn build_opentelemetry_signal_subscribers(
     metrics: Option<OpenTelemetryMetricSectionConfig>,
     metric_resolution: Option<ResolvedSignalEndpoints>,
     trace_subscribers: &[IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>],
+    plaintext: &PlaintextPolicy,
 ) -> PluginResult<OpenTelemetrySignalSubscribers> {
     let logs = match (logs, log_resolution) {
         (Some(section), Some(resolution)) => {
-            build_opentelemetry_log_subscribers(section, resolution.endpoints).inspect_err(
-                |_| {
+            build_opentelemetry_log_subscribers(section, resolution.endpoints, plaintext)
+                .inspect_err(|_| {
                     let _ = shutdown_indexed_opentelemetry_providers(trace_subscribers);
-                },
-            )?
+                })?
         }
         _ => Vec::new(),
     };
     let metrics = match (metrics, metric_resolution) {
         (Some(section), Some(resolution)) => {
-            build_opentelemetry_metric_subscribers(section, resolution.endpoints).inspect_err(
-                |_| {
+            build_opentelemetry_metric_subscribers(section, resolution.endpoints, plaintext)
+                .inspect_err(|_| {
                     let _ = shutdown_indexed_opentelemetry_providers(trace_subscribers);
                     for subscriber in &logs {
                         if let Some(value) = subscriber.value.as_active() {
                             let _ = value.shutdown_provider();
                         }
                     }
-                },
-            )?
+                })?
         }
         _ => Vec::new(),
     };
@@ -2278,10 +2293,11 @@ fn reject_opentelemetry_metric_mark(
 
 fn build_opentelemetry_subscribers(
     endpoints: Vec<OpenTelemetryEndpointConfig>,
+    plaintext: &PlaintextPolicy,
 ) -> PluginResult<Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>>> {
     let mut subscribers = Vec::with_capacity(endpoints.len());
     for (index, endpoint) in endpoints.into_iter().enumerate() {
-        let subscriber = build_otel_config(index, endpoint).and_then(|config| {
+        let subscriber = build_otel_config(index, endpoint, plaintext).and_then(|config| {
             OpenTelemetrySubscriber::new_for_plugin(config, index)
                 .map_err(observability_registration_error)
         });
@@ -2545,7 +2561,6 @@ fn derive_signal_endpoint(
         headers: trace.headers.clone(),
         header_env: trace.header_env.clone(),
         header_file: trace.header_file.clone(),
-        insecure_http_hosts: trace.insecure_http_hosts.clone(),
         resource_attributes: trace.resource_attributes.clone(),
         promote_resource_metadata_prefixes: trace.promote_resource_metadata_prefixes.clone(),
         service_name: trace.service_name.clone(),
@@ -2643,6 +2658,7 @@ fn signal_destination(
 fn build_opentelemetry_log_subscribers(
     section: OpenTelemetryLogSectionConfig,
     endpoints: Vec<IndexedOpenTelemetryResource<OpenTelemetrySignalEndpointConfig>>,
+    plaintext: &PlaintextPolicy,
 ) -> PluginResult<Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetryLogSubscriber>>>> {
     let minimum_severity = section
         .minimum_severity
@@ -2666,11 +2682,12 @@ fn build_opentelemetry_log_subscribers(
         let value = match endpoint.value {
             OpenTelemetryResource::Skipped(message) => OpenTelemetryResource::Skipped(message),
             OpenTelemetryResource::Active(endpoint) => {
-                let result = build_log_config(index, endpoint, &section, minimum_severity)
-                    .and_then(|config| {
-                        OpenTelemetryLogSubscriber::new_for_plugin(config, index)
-                            .map_err(observability_registration_error)
-                    });
+                let result =
+                    build_log_config(index, endpoint, &section, minimum_severity, plaintext)
+                        .and_then(|config| {
+                            OpenTelemetryLogSubscriber::new_for_plugin(config, index)
+                                .map_err(observability_registration_error)
+                        });
                 match result {
                     Ok(value) => OpenTelemetryResource::Active(Arc::new(value)),
                     Err(error) => {
@@ -2696,6 +2713,7 @@ fn build_opentelemetry_log_subscribers(
 fn build_opentelemetry_metric_subscribers(
     section: OpenTelemetryMetricSectionConfig,
     endpoints: Vec<IndexedOpenTelemetryResource<OpenTelemetrySignalEndpointConfig>>,
+    plaintext: &PlaintextPolicy,
 ) -> PluginResult<Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetryMetricSubscriber>>>> {
     let temporality = section
         .temporality
@@ -2718,12 +2736,11 @@ fn build_opentelemetry_metric_subscribers(
         let value = match endpoint.value {
             OpenTelemetryResource::Skipped(message) => OpenTelemetryResource::Skipped(message),
             OpenTelemetryResource::Active(endpoint) => {
-                let result = build_metric_config(index, endpoint, &section, temporality).and_then(
-                    |config| {
+                let result = build_metric_config(index, endpoint, &section, temporality, plaintext)
+                    .and_then(|config| {
                         OpenTelemetryMetricSubscriber::new_for_plugin(config, index)
                             .map_err(observability_registration_error)
-                    },
-                );
+                    });
                 match result {
                     Ok(value) => OpenTelemetryResource::Active(Arc::new(value)),
                     Err(error) => {
@@ -2751,6 +2768,7 @@ fn build_log_config(
     endpoint: OpenTelemetrySignalEndpointConfig,
     section: &OpenTelemetryLogSectionConfig,
     minimum_severity: LogSeverity,
+    plaintext: &PlaintextPolicy,
 ) -> PluginResult<CoreOpenTelemetryLogConfig> {
     let transport = parse_signal_transport("logs", index, &endpoint.transport)?;
     let (headers, header_file) = resolve_signal_headers("logs", index, &endpoint)?;
@@ -2765,7 +2783,7 @@ fn build_log_config(
         .with_completed_span_context_ttl(Duration::from_millis(
             section.completed_span_context_ttl_millis,
         ))
-        .with_insecure_http_hosts(endpoint.insecure_http_hosts.clone())
+        .with_plaintext_policy(plaintext.clone())
         .with_promote_resource_metadata_prefixes(
             endpoint.promote_resource_metadata_prefixes.clone(),
         );
@@ -2781,6 +2799,7 @@ fn build_metric_config(
     endpoint: OpenTelemetrySignalEndpointConfig,
     section: &OpenTelemetryMetricSectionConfig,
     temporality: MetricTemporality,
+    plaintext: &PlaintextPolicy,
 ) -> PluginResult<CoreOpenTelemetryMetricConfig> {
     let transport = parse_signal_transport("metrics", index, &endpoint.transport)?;
     let (headers, header_file) = resolve_signal_headers("metrics", index, &endpoint)?;
@@ -2792,7 +2811,7 @@ fn build_metric_config(
         .with_temporality(temporality)
         .with_max_instruments(section.max_instruments)
         .with_cardinality_limit(section.cardinality_limit)
-        .with_insecure_http_hosts(endpoint.insecure_http_hosts.clone())
+        .with_plaintext_policy(plaintext.clone())
         .with_promote_resource_metadata_prefixes(
             endpoint.promote_resource_metadata_prefixes.clone(),
         );
@@ -3881,15 +3900,14 @@ fn is_top_level_trajectory_start(event: &Event) -> bool {
 fn build_otel_config(
     index: usize,
     section: OpenTelemetryEndpointConfig,
+    plaintext: &PlaintextPolicy,
 ) -> PluginResult<CoreOpenTelemetryConfig> {
     if section.endpoint.trim().is_empty() {
         return Err(PluginError::InvalidConfig(
             "OpenTelemetry endpoint must be a nonblank string".to_string(),
         ));
     }
-    crate::observability::header_file::validate_insecure_http_hosts(&section.insecure_http_hosts)
-        .map_err(PluginError::InvalidConfig)?;
-    super::otel::validate_trace_endpoint(&section.endpoint, &section.insecure_http_hosts)
+    super::otel::validate_trace_endpoint(&section.endpoint, plaintext)
         .map_err(|error| PluginError::InvalidConfig(error.to_string()))?;
     let transport = match section.transport.as_str() {
         "http_binary" => OtlpTransport::HttpBinary,
@@ -3912,7 +3930,7 @@ fn build_otel_config(
     validate_otel_batch_config(index, &section)?;
     let mut config = CoreOpenTelemetryConfig::new(section.otel_type, section.endpoint)
         .with_transport(transport)
-        .with_insecure_http_hosts(section.insecure_http_hosts)
+        .with_plaintext_policy(plaintext.clone())
         .with_timeout(Duration::from_millis(section.timeout_millis))
         .with_instrumentation_scope(section.instrumentation_scope)
         .with_mark_projection(section.mark_projection)
@@ -4221,6 +4239,7 @@ fn validate_top_level_observability_fields(
             "openinference",
             "policy",
             "enable_full_payloads",
+            "insecure_http_hosts",
         ],
     );
     if plugin_config.contains_key("openinference") {
@@ -4359,7 +4378,6 @@ fn validate_opentelemetry_signal_fields(
         "headers",
         "header_env",
         "header_file",
-        "insecure_http_hosts",
         "resource_attributes",
         "promote_resource_metadata_prefixes",
         "service_name",
@@ -4442,7 +4460,6 @@ fn validate_opentelemetry_endpoint_fields(
         "headers",
         "header_env",
         "header_file",
-        "insecure_http_hosts",
         "resource_attributes",
         "service_name",
         "service_namespace",
@@ -4549,6 +4566,18 @@ fn validate_observability_section_values(
     diagnostics: &mut Vec<ConfigDiagnostic>,
     config: &ObservabilityConfig,
 ) {
+    if let Err(message) =
+        crate::observability::header_file::validate_insecure_http_hosts(&config.insecure_http_hosts)
+    {
+        push_policy_diag(
+            diagnostics,
+            UnsupportedBehavior::Error,
+            "observability.invalid_insecure_http_hosts",
+            Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
+            Some("insecure_http_hosts".to_string()),
+            message,
+        );
+    }
     if let Some(section) = &config.atof {
         validate_atof_section(diagnostics, &config.policy, section);
     }
@@ -6342,15 +6371,23 @@ fn resolve_env_var_field(field: &str, var_name: Option<&str>) -> std::io::Result
 
 #[cfg(feature = "object-store")]
 impl AtifRemoteStorage {
-    fn from_config(index: usize, config: &AtifStorageConfig) -> std::io::Result<Self> {
+    fn from_config(
+        index: usize,
+        config: &AtifStorageConfig,
+        plaintext: &PlaintextPolicy,
+    ) -> std::io::Result<Self> {
         match config {
-            AtifStorageConfig::Http(http) => Self::build_http(index, http),
+            AtifStorageConfig::Http(http) => Self::build_http(index, http, plaintext),
             AtifStorageConfig::S3(s3) => Self::build_s3(index, s3),
         }
     }
 
-    fn build_http(index: usize, http: &HttpStorageConfig) -> std::io::Result<Self> {
-        let upload_config = HttpUploadConfig::resolve(index, http)?;
+    fn build_http(
+        index: usize,
+        http: &HttpStorageConfig,
+        plaintext: &PlaintextPolicy,
+    ) -> std::io::Result<Self> {
+        let upload_config = HttpUploadConfig::resolve(index, http, plaintext)?;
         let (req_tx, req_rx) = std::sync::mpsc::channel::<AtifUploadRequest>();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::io::Result<()>>();
 
@@ -6556,7 +6593,11 @@ impl AtifRemoteStorage {
 
 #[cfg(feature = "object-store")]
 impl HttpUploadConfig {
-    fn resolve(index: usize, http: &HttpStorageConfig) -> std::io::Result<Self> {
+    fn resolve(
+        index: usize,
+        http: &HttpStorageConfig,
+        plaintext: &PlaintextPolicy,
+    ) -> std::io::Result<Self> {
         let endpoint = http.endpoint.trim();
         if endpoint.is_empty() || endpoint != http.endpoint {
             return Err(std::io::Error::other(format!(
@@ -6590,7 +6631,7 @@ impl HttpUploadConfig {
             &http.header_env,
             &http.header_file,
         ) {
-            crate::observability::header_file::validate_header_http_endpoint(endpoint, &[])
+            crate::observability::header_file::validate_header_http_endpoint(endpoint, plaintext)
                 .map_err(std::io::Error::other)?;
         }
         let mut headers = http.headers.clone();

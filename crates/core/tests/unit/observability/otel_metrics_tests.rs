@@ -356,7 +356,7 @@ fn metric_configured_headers_allow_plain_http_only_to_listed_insecure_hosts() {
     let config = |endpoint: &str| {
         OpenTelemetryMetricConfig::new(endpoint)
             .with_header("authorization", "Bearer static")
-            .with_insecure_http_hosts(["release-api"])
+            .with_plaintext_policy(PlaintextPolicy::from_hosts(vec!["release-api".to_string()]))
     };
     assert!(
         config("http://release-api:4318/v1/metrics")
@@ -372,11 +372,20 @@ fn metric_configured_headers_allow_plain_http_only_to_listed_insecure_hosts() {
         "{error}"
     );
     let error = OpenTelemetryMetricConfig::new("http://release-api:4318/v1/metrics")
-        .with_insecure_http_hosts(["release-api:4318"])
+        .with_plaintext_policy(PlaintextPolicy::from_hosts(vec![
+            "release-api:4318".to_string(),
+        ]))
         .validate()
         .unwrap_err()
         .to_string();
     assert!(error.contains("bare hostname or IP address"), "{error}");
+    assert!(
+        OpenTelemetryMetricConfig::new("http://collector.example/v1/metrics")
+            .with_header("authorization", "Bearer static")
+            .with_allow_insecure(true)
+            .validate()
+            .is_ok()
+    );
 }
 
 #[test]

@@ -35,9 +35,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::header_file::{
-    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
     has_configured_headers, validate_header_files, validate_header_http_endpoint,
-    validate_insecure_http_hosts,
 };
 use super::otel::{
     DEFAULT_COMPLETED_SPAN_CONTEXT_TTL, OpenTelemetryError, OtlpTransport, Result,
@@ -113,7 +112,7 @@ pub struct OpenTelemetryMetricConfig {
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
-    insecure_http_hosts: Vec<String>,
+    plaintext: PlaintextPolicy,
     resource_attributes: HashMap<String, String>,
     service_name: Option<String>,
     promote_resource_metadata_prefixes: Vec<String>,
@@ -138,7 +137,7 @@ impl OpenTelemetryMetricConfig {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             header_file: HashMap::new(),
-            insecure_http_hosts: Vec::new(),
+            plaintext: PlaintextPolicy::LoopbackOnly,
             resource_attributes: HashMap::new(),
             service_name: None,
             promote_resource_metadata_prefixes: Vec::new(),
@@ -182,13 +181,14 @@ impl OpenTelemetryMetricConfig {
         self
     }
 
-    /// Trust plain HTTP to these non-loopback hosts for configured headers.
-    pub fn with_insecure_http_hosts<I, S>(mut self, hosts: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.insecure_http_hosts = hosts.into_iter().map(Into::into).collect();
+    /// Allows plain HTTP to any host; data and configured headers travel unencrypted.
+    pub fn with_allow_insecure(mut self, allow_insecure: bool) -> Self {
+        self.plaintext = PlaintextPolicy::from_allow_insecure(allow_insecure);
+        self
+    }
+
+    pub(crate) fn with_plaintext_policy(mut self, plaintext: PlaintextPolicy) -> Self {
+        self.plaintext = plaintext;
         self
     }
 
@@ -306,7 +306,8 @@ impl OpenTelemetryMetricConfig {
                 "cardinality_limit must be less than usize::MAX".to_string(),
             ));
         }
-        validate_insecure_http_hosts(&self.insecure_http_hosts)
+        self.plaintext
+            .validate()
             .map_err(OpenTelemetryError::ExporterBuild)?;
         if self.automatic {
             if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_METRICS_HEADERS") {
@@ -317,7 +318,7 @@ impl OpenTelemetryMetricConfig {
                                 .to_string(),
                         )
                     })?;
-                validate_header_http_endpoint(&endpoint, &self.insecure_http_hosts)
+                validate_header_http_endpoint(&endpoint, &self.plaintext)
                     .map_err(OpenTelemetryError::ExporterBuild)?;
             }
         } else {
@@ -327,7 +328,7 @@ impl OpenTelemetryMetricConfig {
             reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
             validate_signal_headers(&self.headers)?;
             if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
-                validate_header_http_endpoint(&self.endpoint, &self.insecure_http_hosts)
+                validate_header_http_endpoint(&self.endpoint, &self.plaintext)
                     .map_err(OpenTelemetryError::ExporterBuild)?;
             }
         }
@@ -485,11 +486,14 @@ impl OpenTelemetryMetricSubscriber {
         Self::new_with_runtime_diagnostics(config)
     }
 
-    pub(crate) fn new_from_automatic_configuration_for_plugin() -> Result<Self> {
+    pub(crate) fn new_from_automatic_configuration_for_plugin(
+        plaintext: PlaintextPolicy,
+    ) -> Result<Self> {
         super::otel_signal::validate_automatic_header_environment(
             "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
         )?;
-        let mut config = OpenTelemetryMetricConfig::from_automatic_configuration();
+        let mut config = OpenTelemetryMetricConfig::from_automatic_configuration()
+            .with_plaintext_policy(plaintext);
         config.diagnostic_field = Some("opentelemetry.automatic.metrics".to_string());
         Self::new_with_runtime_diagnostics(config)
     }
@@ -710,7 +714,7 @@ fn build_metric_provider(
                     builder.with_http_client(HeaderFileHttpClient::new(
                         client,
                         HeaderFileResolver::new(config.header_file.clone()),
-                        config.insecure_http_hosts.clone(),
+                        config.plaintext.clone(),
                     ))
                 };
                 if !config.headers.is_empty() {

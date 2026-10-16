@@ -225,31 +225,19 @@ class TestObservabilityConfigHelpers:
             "https://example.com/v1/logs", header_file={"authorization": path}
         ).to_dict()["header_file"] == {"authorization": path}
 
-    def test_insecure_http_hosts_serialize_and_pass_strict_validation(self) -> None:
+    def test_insecure_http_hosts_serialize_at_top_level_and_pass_strict_validation(self) -> None:
         hosts = ["host.docker.internal", "collector.ns.svc.cluster.local"]
-        trace = OpenTelemetryEndpointConfig(
-            "gen_ai", "http://host.docker.internal:8082/v1/traces", insecure_http_hosts=hosts
-        )
-        log = OpenTelemetrySignalEndpointConfig("http://host.docker.internal:8082", insecure_http_hosts=hosts)
-        assert trace.to_dict()["insecure_http_hosts"] == hosts
-        assert log.to_dict()["insecure_http_hosts"] == hosts
-        assert "insecure_http_hosts" not in OpenTelemetryEndpointConfig("full", "https://example.com").to_dict()
-        assert "insecure_http_hosts" not in OpenTelemetrySignalEndpointConfig("https://example.com").to_dict()
-
         section = OpenTelemetrySectionConfig(
             enabled=True,
-            endpoints=[trace],
-            logs=OpenTelemetryLogSectionConfig(enabled=True, endpoints=[log]),
+            endpoints=[OpenTelemetryEndpointConfig("gen_ai", "http://host.docker.internal:8082/v1/traces")],
         )
-        report = validate_plugin_config(
-            plugin.PluginConfig(
-                components=[
-                    ComponentSpec(
-                        ObservabilityConfig(opentelemetry=section, policy=ConfigPolicy(unknown_field="error"))
-                    )
-                ]
-            )
+        config = ObservabilityConfig(
+            opentelemetry=section, policy=ConfigPolicy(unknown_field="error"), insecure_http_hosts=hosts
         )
+        assert config.to_dict()["insecure_http_hosts"] == hosts
+        assert "insecure_http_hosts" not in ObservabilityConfig().to_dict()
+
+        report = validate_plugin_config(plugin.PluginConfig(components=[ComponentSpec(config)]))
         assert report["diagnostics"] == []
 
     def test_defaults_and_component_wrapper(self) -> None:

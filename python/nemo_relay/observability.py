@@ -240,7 +240,6 @@ class OpenTelemetryEndpointConfig:
     promote_metadata_prefixes: list[str] = field(default_factory=list)
     promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
     header_file: dict[str, str] = field(default_factory=dict)
-    insecure_http_hosts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize this endpoint to the canonical plugin shape."""
@@ -266,7 +265,6 @@ class OpenTelemetryEndpointConfig:
                 "headers": self.headers,
                 "header_env": self.header_env,
                 "header_file": self.header_file or None,
-                "insecure_http_hosts": self.insecure_http_hosts or None,
                 "resource_attributes": self.resource_attributes,
             }
         )
@@ -288,7 +286,6 @@ class OpenTelemetrySignalEndpointConfig:
     timeout_millis: int = 3000
     header_file: dict[str, str] = field(default_factory=dict)
     promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
-    insecure_http_hosts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize this signal endpoint to the canonical plugin shape."""
@@ -299,7 +296,6 @@ class OpenTelemetrySignalEndpointConfig:
                 "headers": self.headers,
                 "header_env": self.header_env,
                 "header_file": self.header_file or None,
-                "insecure_http_hosts": self.insecure_http_hosts or None,
                 "resource_attributes": self.resource_attributes,
                 "promote_resource_metadata_prefixes": self.promote_resource_metadata_prefixes or None,
                 "service_name": self.service_name,
@@ -388,7 +384,8 @@ class ObservabilityConfig:
     """Canonical config document for the top-level observability component.
 
     ``enable_full_payloads`` retains complete sanitized request data on every
-    LLM start event.
+    LLM start event. ``insecure_http_hosts`` lists non-loopback hosts that may
+    receive exports and configured headers over unencrypted HTTP or WebSocket.
     """
 
     version: int = 4
@@ -397,6 +394,7 @@ class ObservabilityConfig:
     opentelemetry: OpenTelemetrySectionConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
     enable_full_payloads: bool = False
+    insecure_http_hosts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize this observability config to the canonical JSON object shape."""
@@ -408,6 +406,7 @@ class ObservabilityConfig:
                 "opentelemetry": self.opentelemetry,
                 "policy": self.policy,
                 "enable_full_payloads": self.enable_full_payloads,
+                "insecure_http_hosts": self.insecure_http_hosts or None,
             }
         )
 

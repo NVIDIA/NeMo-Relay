@@ -23,7 +23,7 @@ use serde_json::Value as Json;
 #[cfg(feature = "atof-streaming")]
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
-use super::header_file::HeaderFiles;
+use super::header_file::{HeaderFiles, PlaintextPolicy};
 #[cfg(feature = "atof-streaming")]
 use super::header_file::{
     has_configured_headers, resolve_header_files, validate_header_files,
@@ -196,6 +196,11 @@ pub struct AtofStreamSinkConfig {
     /// Field name transformation policy applied before sending events.
     #[serde(default)]
     pub field_name_policy: AtofEndpointFieldNamePolicy,
+    /// Allow `http://` or `ws://` to any host; events and configured headers travel unencrypted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_insecure: bool,
+    #[serde(skip)]
+    pub(crate) plaintext: PlaintextPolicy,
 }
 
 impl AtofStreamSinkConfig {
@@ -209,6 +214,28 @@ impl AtofStreamSinkConfig {
             header_file: HashMap::new(),
             timeout_millis: default_endpoint_timeout_millis(),
             field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+            allow_insecure: false,
+            plaintext: PlaintextPolicy::LoopbackOnly,
+        }
+    }
+
+    /// Allow `http://` or `ws://` to any host; events and configured headers travel unencrypted.
+    pub fn with_allow_insecure(mut self, allow_insecure: bool) -> Self {
+        self.allow_insecure = allow_insecure;
+        self
+    }
+
+    pub(crate) fn with_plaintext_policy(mut self, plaintext: PlaintextPolicy) -> Self {
+        self.plaintext = plaintext;
+        self
+    }
+
+    #[cfg_attr(not(feature = "atof-streaming"), allow(dead_code))]
+    fn effective_plaintext_policy(&self) -> PlaintextPolicy {
+        if self.allow_insecure {
+            PlaintextPolicy::AnyHost
+        } else {
+            self.plaintext.clone()
         }
     }
 
@@ -799,12 +826,18 @@ fn validate_endpoint_config(config: AtofEndpointConfig) -> Result<ActivatedAtofE
     }
     validate_header_files(&config.headers, &config.header_env, &config.header_file)
         .map_err(AtofExporterError::InvalidEndpoint)?;
+    let plaintext = config.effective_plaintext_policy();
+    plaintext
+        .validate()
+        .map_err(AtofExporterError::InvalidEndpoint)?;
     if has_configured_headers(&config.headers, &config.header_env, &config.header_file) {
         let validation = match config.transport {
             AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => {
-                validate_header_http_endpoint(&config.url, &[])
+                validate_header_http_endpoint(&config.url, &plaintext)
             }
-            AtofEndpointTransport::Websocket => validate_header_websocket_endpoint(&config.url),
+            AtofEndpointTransport::Websocket => {
+                validate_header_websocket_endpoint(&config.url, &plaintext)
+            }
         };
         validation.map_err(AtofExporterError::InvalidEndpoint)?;
     }
