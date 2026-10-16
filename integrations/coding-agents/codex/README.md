@@ -54,7 +54,7 @@ Persistent installation opens the stable Codex app-server interface and
 selects only hooks whose source is `plugin`, plugin ID is
 `nemo-relay-plugin@nemo-relay-local`, and command exactly matches the generated
 canonical Relay forwarding command. It requires exactly one handler for each
-event in the complete 10-event supported set listed above.
+event in the complete nine-event supported set listed above.
 
 Unrelated user, project, and plugin hooks are never trusted. If installation
 fails after a trust write, it restores every targeted hook's prior trusted,

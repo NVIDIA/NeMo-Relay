@@ -175,7 +175,7 @@ If Codex does not discover exactly one enabled and trusted handler for every
 generated event—`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
 `PostCompact`—installation restores the previous Codex config, legacy hooks,
-Relay backup files, and every original targeted trust entry. These 10 events are
+Relay backup files, and every original targeted trust entry. These nine events are
 the complete supported Codex 0.143 plugin hook schema; Relay does not generate
 undiscoverable `PostToolUseFailure`, `Notification`, or `SessionEnd` handlers.
 Upgrade removes legacy Relay groups from
