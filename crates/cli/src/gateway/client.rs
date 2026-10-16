@@ -4,7 +4,7 @@
 //! Authenticated health and shutdown transport for loopback sidecars.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{BufWriter, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -42,19 +42,33 @@ pub(crate) struct VerifiedHttpResponse {
 #[derive(Debug)]
 pub(crate) struct VerifiedHttpError {
     message: String,
+    readiness_failed: bool,
 }
 
 impl VerifiedHttpError {
     fn before_payload(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            readiness_failed: false,
         }
     }
 
     fn after_payload(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            readiness_failed: false,
         }
+    }
+
+    fn before_readiness(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            readiness_failed: true,
+        }
+    }
+
+    pub(crate) fn readiness_failed(&self) -> bool {
+        self.readiness_failed
     }
 
     pub(crate) fn missing_fingerprint() -> Self {
@@ -92,6 +106,38 @@ pub(crate) fn post_verified(
         timeout,
         max_response_bytes,
         false,
+        None,
+    )
+}
+
+/// Uses the health-probe timeout until the listener proves its identity, then the normal delivery
+/// timeout. Only failures before that authentication barrier may fall back to readiness polling.
+pub(crate) fn post_verified_preflight(
+    url: &str,
+    bootstrap_fingerprint: &str,
+    path: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    timeout: Duration,
+    max_response_bytes: usize,
+) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
+    // A gateway still starting may not have published its TLS pin yet. Fall back to the
+    // existing readiness check without opening an empty connection to that listener.
+    cached_tls_identity().map_err(|error| {
+        VerifiedHttpError::before_readiness(format!(
+            "failed to load pinned Relay TLS identity: {error}"
+        ))
+    })?;
+    post_authenticated(
+        url,
+        bootstrap_fingerprint,
+        path,
+        headers,
+        body,
+        timeout,
+        max_response_bytes,
+        false,
+        Some(HEALTHZ_TIMEOUT),
     )
 }
 
@@ -112,6 +158,7 @@ pub(crate) fn post_daemon_verified(
         timeout,
         max_response_bytes,
         true,
+        None,
     )
 }
 
@@ -125,31 +172,42 @@ fn post_authenticated(
     timeout: Duration,
     max_response_bytes: usize,
     daemon: bool,
+    readiness_timeout: Option<Duration>,
 ) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
     let (host, port) = parse_loopback_url(url).map_err(VerifiedHttpError::after_payload)?;
     let addresses = (host.as_str(), port).to_socket_addrs().map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
+        VerifiedHttpError::before_readiness(format!(
             "failed to resolve verified gateway {url}: {error}"
         ))
     })?;
-    let mut stream = connect_loopback(addresses, timeout).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
+    let setup_timeout = readiness_timeout.unwrap_or(timeout);
+    let mut stream = connect_loopback(addresses, setup_timeout).map_err(|error| {
+        VerifiedHttpError::before_readiness(format!(
             "failed to connect to verified gateway {url}: {error}"
+        ))
+    })?;
+    stream.set_nodelay(true).map_err(|error| {
+        VerifiedHttpError::before_payload(format!(
+            "failed to configure verified gateway TCP_NODELAY: {error}"
         ))
     })?;
     let address = stream
         .peer_addr()
         .map_err(|error| VerifiedHttpError::before_payload(error.to_string()))?;
-    stream.set_read_timeout(Some(timeout)).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
-            "failed to configure verified gateway read timeout: {error}"
-        ))
-    })?;
-    stream.set_write_timeout(Some(timeout)).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
-            "failed to configure verified gateway write timeout: {error}"
-        ))
-    })?;
+    stream
+        .set_read_timeout(Some(setup_timeout))
+        .map_err(|error| {
+            VerifiedHttpError::before_payload(format!(
+                "failed to configure verified gateway read timeout: {error}"
+            ))
+        })?;
+    stream
+        .set_write_timeout(Some(setup_timeout))
+        .map_err(|error| {
+            VerifiedHttpError::before_payload(format!(
+                "failed to configure verified gateway write timeout: {error}"
+            ))
+        })?;
 
     let key = cached_bootstrap_challenge_key().map_err(|error| {
         VerifiedHttpError::before_payload(format!(
@@ -174,12 +232,12 @@ fn post_authenticated(
         "GET /bootstrap/tunnel HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\n\r\n"
     );
     stream.write_all(tunnel.as_bytes()).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
+        VerifiedHttpError::before_readiness(format!(
             "failed to request the Relay TLS tunnel: {error}"
         ))
     })?;
     let (tunnel_headers, _) = read_http_message(&mut stream, 0).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
+        VerifiedHttpError::before_readiness(format!(
             "failed to read the Relay TLS tunnel response: {error}"
         ))
     })?;
@@ -193,13 +251,29 @@ fn post_authenticated(
                 )
             })
         });
-    if http_status(&tunnel_headers) != Some(101)
-        || (!daemon && !proof_valid)
+    if http_status(&tunnel_headers) != Some(101) {
+        return Err(VerifiedHttpError::before_readiness(
+            "gateway did not establish an authenticated Relay TLS tunnel",
+        ));
+    }
+    if (!daemon && !proof_valid)
         || http_header(&tunnel_headers, "upgrade") != Some("nemo-relay-tls")
     {
         return Err(VerifiedHttpError::before_payload(
             "gateway did not establish an authenticated Relay TLS tunnel",
         ));
+    }
+    // Readiness fallback is forbidden beyond this point, even if TLS or the health exchange
+    // fails before payload transmission. Keep delivery's existing timeout after authentication.
+    if readiness_timeout.is_some() {
+        stream
+            .set_read_timeout(Some(timeout))
+            .and_then(|()| stream.set_write_timeout(Some(timeout)))
+            .map_err(|error| {
+                VerifiedHttpError::before_payload(format!(
+                    "failed to configure verified gateway delivery timeout: {error}"
+                ))
+            })?;
     }
     let client_config = tls_identity
         .client_config()
@@ -275,16 +349,24 @@ fn post_authenticated(
         "Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     ));
-    stream.write_all(request.as_bytes()).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
-            "failed to send verified gateway request headers: {error}"
-        ))
-    })?;
-    stream.write_all(body).map_err(|error| {
-        VerifiedHttpError::after_payload(format!(
-            "verified gateway payload delivery became indeterminate: {error}"
-        ))
-    })?;
+    {
+        // Coalesce small hooks into one TLS write without copying large payloads into a
+        // second, payload-sized allocation. Flush before waiting for the response.
+        let mut writer = BufWriter::new(&mut stream);
+        writer.write_all(request.as_bytes()).map_err(|error| {
+            VerifiedHttpError::before_payload(format!(
+                "failed to send verified gateway request headers: {error}"
+            ))
+        })?;
+        writer
+            .write_all(body)
+            .and_then(|()| writer.flush())
+            .map_err(|error| {
+                VerifiedHttpError::after_payload(format!(
+                    "verified gateway payload delivery became indeterminate: {error}"
+                ))
+            })?;
+    }
     let (response_headers, response_body) = read_http_message(&mut stream, max_response_bytes)
         .map_err(|error| {
             VerifiedHttpError::after_payload(format!(
