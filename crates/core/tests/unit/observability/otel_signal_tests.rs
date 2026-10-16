@@ -85,6 +85,62 @@ fn runtime_diagnostics_truncate_unicode_without_losing_occurrence_counts() {
 }
 
 #[test]
+fn runtime_diagnostics_share_evidence_without_recounting_compatibility_reads() {
+    let diagnostics = SignalRuntimeDiagnostics::new(None);
+    diagnostics.record("otel.logs_export_failed", "export failed".into(), 2);
+    diagnostics.record("otel.logs_export_failed", "export failed again".into(), 3);
+
+    let recorder = diagnostics.recorder.as_ref().unwrap();
+    let snapshot = recorder.snapshot().unwrap();
+    let counter = snapshot
+        .counters
+        .iter()
+        .find(|counter| counter.code == "otel.logs_export_failed")
+        .unwrap();
+    assert_eq!(counter.occurrences.value.get(), 5);
+    assert!(matches!(
+        snapshot.conditions[0].state,
+        crate::diagnostics::DiagnosticConditionState::Active
+    ));
+
+    for _ in 0..3 {
+        assert_eq!(
+            diagnostics
+                .snapshot()
+                .get("otel.logs_export_failed")
+                .unwrap()
+                .count,
+            5
+        );
+    }
+    diagnostics.record_recovery("otel.logs_export_failed");
+    let recovered = recorder.snapshot().unwrap();
+    assert_eq!(recovered.counters[0].occurrences.value.get(), 5);
+    assert!(matches!(
+        recovered.conditions[0].state,
+        crate::diagnostics::DiagnosticConditionState::Recovered { .. }
+    ));
+    assert_eq!(diagnostics.snapshot().entries()[0].count, 5);
+}
+
+#[test]
+fn legacy_metadata_codes_are_normalized_without_changing_subscriber_reports() {
+    let diagnostics = SignalRuntimeDiagnostics::new(None);
+    let code = "otel.resource_metadata_invalid.Application/Key";
+    diagnostics.record(code, "A selected metadata value was rejected".into(), 1);
+    diagnostics.record(code, "A selected metadata value was rejected".into(), 2);
+
+    assert_eq!(diagnostics.snapshot().get(code).unwrap().count, 3);
+    let snapshot = diagnostics.recorder.as_ref().unwrap().snapshot().unwrap();
+    assert_eq!(snapshot.counters.len(), 1);
+    let normalized = &snapshot.counters[0].code;
+    assert!(normalized.starts_with("legacy.code."));
+    assert!(!normalized.contains("Application"));
+    assert!(crate::diagnostics::DiagnosticCode::new(normalized).is_ok());
+    assert_eq!(snapshot.counters[0].occurrences.value.get(), 3);
+}
+
+#[test]
 fn exporter_runtime_reports_a_panicking_constructor_without_hanging() {
     let error = build_in_owned_runtime::<(), _>("coverage-panicking-exporter", || {
         panic!("constructor failed");

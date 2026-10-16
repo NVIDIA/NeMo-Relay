@@ -7,6 +7,7 @@
 //! `spdlog-rs` backend, `LogCrateProxy` installation, formatters, and sink lifetime.
 
 mod config;
+mod diagnostics;
 mod format;
 mod rotation;
 mod sink;
@@ -20,6 +21,8 @@ use spdlog::sink::Sink;
 use spdlog::{Logger, ThreadPool};
 use uuid::Uuid;
 
+use self::diagnostics::{LoggingDiagnostics, LoggingProjection};
+use crate::diagnostics::Diagnostics;
 use crate::error::{FlowError, Result};
 
 pub use config::{
@@ -64,6 +67,14 @@ fn active_relay_logger_exists() -> bool {
         .is_some_and(|logger| logger.upgrade().is_some())
 }
 
+fn is_active_relay_logger(logger: &Arc<Logger>) -> bool {
+    ACTIVE_RELAY_LOGGER
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .is_some_and(|active| Weak::ptr_eq(active, &Arc::downgrade(logger)))
+}
+
 fn set_active_relay_logger(logger: &Arc<Logger>) {
     *ACTIVE_RELAY_LOGGER
         .lock()
@@ -104,6 +115,8 @@ pub struct LoggingRuntime {
     pub(crate) logger: Arc<Logger>,
     /// Keeps per-sink async thread pools alive until shutdown.
     _thread_pools: Vec<Arc<ThreadPool>>,
+    diagnostics: Option<LoggingDiagnostics>,
+    projection: Option<LoggingProjection>,
 }
 
 impl LoggingRuntime {
@@ -119,6 +132,66 @@ impl LoggingRuntime {
         // `log` facade records, so fail instead of returning a nonfunctional runtime.
         let _lifecycle = lock_logger_lifecycle();
         Self::configure_with_lifecycle_lock(config)
+    }
+
+    /// Installs operational logging with diagnostics owned by an independent diagnostic context.
+    ///
+    /// Sink initialization and delivery failures remain queryable when logging is unavailable or
+    /// filtered. Configured sinks remain required, matching [`Self::configure`]. Diagnostic events
+    /// are projected into this logger through a detachable subscription; sink failures update
+    /// diagnostic state directly without being sent back through the failing logging pipeline.
+    /// Exhausting diagnostic component or projection budgets does not prevent operational logging
+    /// from starting; the diagnostic snapshot reports the available evidence and coverage loss.
+    /// Dropping this runtime detaches the projection before draining sinks.
+    pub fn configure_with_diagnostics(
+        config: LoggingConfig,
+        context: &Diagnostics,
+    ) -> Result<Self> {
+        let diagnostics = LoggingDiagnostics::new(context, &config);
+        let root_relay_id = context.source().instance_id.to_string();
+        let built =
+            sink::build_logger_with_diagnostics(&config, root_relay_id.clone(), Some(&diagnostics));
+        let (logger, thread_pools) = match built {
+            Ok(built) => built,
+            Err(error) => {
+                diagnostics.initialization_failed();
+                return Err(error);
+            }
+        };
+        let projection = match self::diagnostics::attach_projection(context, &logger) {
+            Ok(projection) => Some(projection),
+            Err(_) => {
+                diagnostics.projection_unavailable();
+                None
+            }
+        };
+        let installed = {
+            let _lifecycle = lock_logger_lifecycle();
+            install_log_crate_proxy().map(|()| {
+                spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&logger)));
+                spdlog::log_crate_proxy().set_filter(None);
+                log::set_max_level(log_level_filter(config.level));
+                set_active_relay_logger(&logger);
+            })
+        };
+        if let Err(error) = installed {
+            diagnostics.initialization_failed();
+            return Err(error);
+        }
+        diagnostics.initialized();
+        log::info!(
+            target: "nemo_relay.logging",
+            event = "logging_initialized",
+            file_sink_count = config.sinks.len();
+            "Operational logging initialized"
+        );
+        Ok(Self {
+            root_relay_id,
+            logger,
+            _thread_pools: thread_pools,
+            diagnostics: Some(diagnostics),
+            projection,
+        })
     }
 
     fn configure_with_lifecycle_lock(config: LoggingConfig) -> Result<Self> {
@@ -142,6 +215,8 @@ impl LoggingRuntime {
             root_relay_id,
             logger,
             _thread_pools: thread_pools,
+            diagnostics: None,
+            projection: None,
         })
     }
 
@@ -170,6 +245,8 @@ impl LoggingRuntime {
 
 impl Drop for LoggingRuntime {
     fn drop(&mut self) {
+        // No new diagnostic projections may enqueue work while the sinks are being drained.
+        self.projection.take();
         log::info!(
             target: "nemo_relay.logging",
             event = "logging_shutdown_started";
@@ -181,13 +258,21 @@ impl Drop for LoggingRuntime {
         // pool (draining pending tasks) then flushes the underlying FileSink on this thread.
         // LogCrateProxy loggers are outside spdlog's atexit default-logger path, so we must
         // do this explicitly while `_thread_pools` is still alive.
-        for sink in self.logger.sinks() {
+        let mut shutdown_failed = false;
+        for (index, sink) in self.logger.sinks().iter().enumerate() {
             if let Err(error) = Sink::flush_on_exit(sink.as_ref()) {
+                shutdown_failed = true;
+                if let Some(diagnostics) = self.diagnostics.as_ref().and_then(|d| d.sink(index)) {
+                    diagnostics.shutdown_failed();
+                }
                 let _ = writeln!(
                     io::stderr(),
                     "nemo-relay: logging shutdown flush failed: {error}"
                 );
             }
+        }
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.shutdown(shutdown_failed);
         }
 
         // Detach only if we are still the installed receiver. A later configuration may have
@@ -265,6 +350,16 @@ pub fn shutdown_default_logging() -> Result<()> {
 
 /// Emits a structured operational record through Relay's configured logger.
 pub fn emit(level: log::Level, target: &str, message: &str, fields: Map<String, Json>) {
+    emit_to_logger(log::logger(), level, target, message, fields);
+}
+
+fn emit_to_logger(
+    logger: &dyn log::Log,
+    level: log::Level,
+    target: &str,
+    message: &str,
+    fields: Map<String, Json>,
+) {
     struct Fields(Map<String, Json>);
     impl log::kv::Source for Fields {
         fn visit<'kvs>(
@@ -288,7 +383,7 @@ pub fn emit(level: log::Level, target: &str, message: &str, fields: Map<String, 
         .target(target)
         .key_values(&fields)
         .build();
-    log::logger().log(&record);
+    logger.log(&record);
 }
 
 /// Emits a structured record using a binding-facing level name.

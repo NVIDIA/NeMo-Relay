@@ -16,6 +16,67 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[test]
+fn exporter_recovery_does_not_clear_a_sibling_resource_pipeline_failure() {
+    let field = format!("logs.test.{}", Uuid::now_v7());
+    let shared = SignalRuntimeDiagnostics::new_for_signal("logs", Some(field.clone()));
+    let failed = LogDeliveryDiagnostics::new("collector-a".into(), shared.clone());
+    let healthy = LogDeliveryDiagnostics::new("collector-b".into(), shared.clone());
+    failed.record_export_failure(&"collector unavailable");
+    healthy
+        .runtime_diagnostics
+        .record_recovery("otel.logs_export_failed");
+
+    let query = crate::diagnostics::DiagnosticQuery {
+        component_key: Some(crate::diagnostics::legacy_component_key(
+            "observability.otel.logs.exporter",
+            Some(&field),
+        )),
+        ..Default::default()
+    };
+    let before = crate::diagnostics::Diagnostics::process_default()
+        .snapshot(query.clone())
+        .unwrap();
+    assert_eq!(before.components.len(), 2);
+    assert_eq!(
+        before
+            .components
+            .iter()
+            .flat_map(|component| &component.conditions)
+            .filter(|condition| matches!(
+                condition.state,
+                crate::diagnostics::DiagnosticConditionState::Active
+            ))
+            .count(),
+        1
+    );
+
+    failed
+        .runtime_diagnostics
+        .record_recovery("otel.logs_export_failed");
+    let after = crate::diagnostics::Diagnostics::process_default()
+        .snapshot(query)
+        .unwrap();
+    assert!(
+        after
+            .components
+            .iter()
+            .flat_map(|component| &component.conditions)
+            .all(|condition| matches!(
+                condition.state,
+                crate::diagnostics::DiagnosticConditionState::Recovered { .. }
+            ))
+    );
+    assert_eq!(
+        shared
+            .snapshot()
+            .get("otel.logs_export_failed")
+            .unwrap()
+            .count,
+        1
+    );
+}
+
 fn mark(
     parent_uuid: Option<Uuid>,
     name: &str,

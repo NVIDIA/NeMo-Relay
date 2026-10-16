@@ -970,7 +970,8 @@ impl OpenTelemetrySubscriber {
                 validate_headers(&endpoint.headers)?;
             }
         }
-        let runtime_diagnostics = SignalRuntimeDiagnostics::new(diagnostic_field);
+        let runtime_diagnostics =
+            SignalRuntimeDiagnostics::new_for_signal("traces", diagnostic_field);
         let (provider, runtime) =
             build_owned_tracer_provider(config.clone(), runtime_diagnostics.clone())?;
         let shared = config.shared().clone();
@@ -1119,7 +1120,7 @@ impl OpenTelemetrySubscriber {
         let runtime_diagnostics = runtime
             .as_ref()
             .map(|runtime| runtime.runtime_diagnostics.clone())
-            .unwrap_or_else(|| SignalRuntimeDiagnostics::new(None));
+            .unwrap_or_else(|| SignalRuntimeDiagnostics::new_for_signal("traces", None));
         let dynamic_pipelines = Arc::new(Mutex::new(HashMap::new()));
         let processor = Arc::new(Mutex::new(
             OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics_with_ttl(
@@ -1622,7 +1623,8 @@ impl TraceDeliveryDiagnostics {
     fn with_identity(identity: String, runtime_diagnostics: SignalRuntimeDiagnostics) -> Self {
         Self {
             endpoint: identity,
-            runtime_diagnostics,
+            runtime_diagnostics: runtime_diagnostics
+                .for_exporter("observability.otel.traces.exporter"),
             export_failures: AtomicU64::new(0),
             unresolved_export_failure: AtomicBool::new(false),
         }
@@ -1645,6 +1647,8 @@ impl TraceDeliveryDiagnostics {
     fn record_export_success(&self) {
         self.unresolved_export_failure
             .store(false, Ordering::Relaxed);
+        self.runtime_diagnostics
+            .record_recovery("otel.traces_export_failed");
     }
 
     fn unresolved_failure_summary(&self) -> Option<String> {
@@ -2038,7 +2042,7 @@ impl OtelEventProcessor {
             mark_exclude_names,
             attribute_mappings,
             Vec::new(),
-            SignalRuntimeDiagnostics::new(None),
+            SignalRuntimeDiagnostics::new_for_signal("traces", None),
         )
     }
 

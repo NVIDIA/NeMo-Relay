@@ -1,0 +1,151 @@
+---
+title: "Diagnostics Foundation Implementation"
+description: "Phase-one ownership, compatibility, scope decisions, and validation for shared Relay diagnostics."
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+## Scope and Design Decisions
+
+This implementation follows phase 1 of `diagnostics-implementation-phases.md`.
+It starts from upstream main at `c764f793` and keeps executable changes in
+`crates/types` and `crates/core`. The user-approved architecture places shared
+contracts in the existing types crate and recording/state/query ownership in
+the existing core crate. It adds no diagnostics crate.
+
+The deployment discussion established three groups: embedded runtime,
+CLI-hosted gateway, and broker/worker deployment. All need the same local
+foundation. CLI process composition and the common HTTP router are later
+phases; daemon collection, language binding exposure, and dynamic-plugin RPC
+extensions are also deferred. The existing worker plugin protocol is distinct
+from the daemon's Relay worker process.
+
+## Recording and Lifetime
+
+`Diagnostics` is explicitly owned and requires no logger, plugin activation,
+Tokio runtime, or listener. An optional lazy process default adapts existing
+APIs whose constructors do not accept a diagnostic context. It survives
+logging reconfiguration and plugin replacement. Its default role is generic;
+deployment hosts can supply explicit roles when phase 2 composes the service.
+
+Component handles share a registration lease. Explicit close or final-handle
+drop marks the component closed and leaves its evidence eligible for bounded
+retention. Re-registering a logical key creates a new instance and counter
+epoch. Readers do not hold a component lease. Source-local sequences provide
+ordering when wall-clock timestamps coincide or change.
+
+Failures, occurrences, activation, and recovery are separate operations.
+Condition activation can leave occurrence counts unchanged. Recovery requires
+an existing active condition and does not increment the failure counter.
+Permanently dropped records are historical losses, not conditions implying
+that a queue is still full. No global health, admission, retry, or restart
+policy is added.
+
+## Compatibility Projections
+
+OpenTelemetry subscriber reports retain their established 32-code view,
+distinct-message character budget, occurrence counts, and logging behavior.
+Plugin reports retain their active-only lifetime and component/field grouping.
+These materialized compatibility views continue to account for observations
+even if shared-state budgets reject them; shared coverage reports its own
+rejections. A compatibility view is not a claim that shared history is complete.
+
+An OpenTelemetry observation enters the shared store once and is forwarded to
+the plugin report through a projection-only helper. It is not recorded again
+by that helper. Legacy emitters retain existing operational records and rate
+limiting, so their shared-state updates suppress a duplicate log projection.
+Confirmed exporter success resolves the corresponding shared active condition;
+legacy error history remains retained.
+
+Each exporter pipeline owns its delivery condition, even when several resource
+pipelines share a legacy subscriber report. Success in one pipeline cannot
+clear another pipeline's failure. Component keys include the signal and a
+stable opaque discriminator for configuration fields. Plugin adapters use the
+same discriminator and rely on the foundation's reported registration limits,
+rather than introducing another silent adapter-capacity boundary.
+
+Some legacy codes append arbitrary application metadata keys. New typed codes
+have a bounded grammar. Compatibility adapters preserve valid codes and map
+other legacy classifications to `legacy.code.<sha256>` in shared state. The
+legacy reports preserve their existing original classifications. Hashing avoids
+reflecting arbitrary metadata keys into the common code namespace.
+
+Legacy plugin reports may contain trajectory session identifiers. Their
+established representation is preserved, but the adapter does not copy those
+unreviewed identifiers into the new shared correlation fields. New callers must
+provide safe correlation identifiers explicitly.
+
+## Logging Integration
+
+`LoggingRuntime::configure_with_diagnostics` is an explicit Rust composition
+API. It uses the diagnostic source identity for log correlation, registers
+logging and sink components, and attaches a detachable typed-event projection.
+Existing logging constructors keep their established behavior. Configured
+file sinks remain required; optional sink policy from issue 1297 belongs to
+phase 2.
+
+Sink callbacks record state directly, with safe fixed explanations and without
+dropped record bodies, raw backend errors, or sink paths. Existing emergency
+stderr reporting remains available. Diagnostics registration or projection
+budget exhaustion does not prevent an otherwise valid logger from starting.
+
+Projection callbacks run outside diagnostic-state locks. State-only updates
+perform no output. Ordinary projected calls can inherit the existing logger's
+I/O latency; this phase makes no new end-to-end latency or shutdown deadline
+guarantee. Logging detaches and quiesces its projection before draining sinks.
+Projection exceptions and suppressed recursive projection attempts are exposed
+as coverage losses.
+
+Existing sink interfaces report failures but do not acknowledge successful
+delivery of each record. The implementation therefore does not invent sink
+recovery or last-success timestamps. A fresh configuration has new component
+identities; old unresolved evidence remains visibly associated with the old
+generation. Collector partial rejection remains a separate exporter coverage
+gap, not something the common state model can infer.
+
+## Bounds and Wire Contract
+
+The service bounds registrations, keys, recent events, message/correlation
+bytes, retained encoded evidence, snapshots, and attached projections. Count
+limits also bound structural allocation overhead; the encoded byte budget is
+not an exact heap-allocation measurement. Capacity failures preserve reserved
+loss counters. Snapshot omission is explicit and does not evict underlying
+state. Active components are not silently evicted to admit new registrations.
+
+Diagnostic counters and sequences use a Rust integer wrapper whose JSON
+representation is a canonical unsigned decimal string. This refines the older
+reference document's numeric-JSON assumption so Node.js and JSON consumers can
+preserve the full unsigned 64-bit range. Existing public legacy APIs retain
+their numeric representation. Counter saturation is separately flagged and
+means a lower bound.
+
+Schema version 1 allows additive object fields and arbitrary validated producer
+codes. Closed enum changes require explicit compatibility handling. UUID,
+timestamp, and exact unsigned-integer schemas match serialization. This phase
+does not add remote snapshot ingestion or make claims about mixed-version
+transport negotiation.
+
+## Validation Strategy
+
+Focused contract tests cover lossless integers, schema bounds, UUID/time
+formats, and evidence availability. Core tests cover independent pre-logging
+contexts, component replacement, explicit recovery, concurrency, byte/count
+limits, projection reentrancy and failures, and retained closed evidence.
+Logging and existing producer tests cover strict startup failures, independent
+sink diagnostics, exact queue losses, projection filtering/lifetime, and
+compatibility views without a second recorded occurrence.
+
+Validation completed with the canonical `just test-rust` suite: 5,961 tests
+passed with none skipped. Focused tests also covered the types schema contract
+(nine tests) and the core foundation (18 tests). The Rust run explicitly unset
+inherited `NEMO_RELAY_LOG` and `NEMO_RELAY_LOG_STDERR_FORMAT` values because
+unrelated CLI tests require their default logging configuration.
+
+`just docs` generated the ignored API references and passed documentation and
+link checks. Fern skipped its authenticated missing-redirect check because no
+Fern authentication was available. No generated references were edited by hand.
+
+Additional binding or deployment suites are needed only if their exposed
+contracts change; new binding APIs and CLI routes remain in their later phases.
+A final source audit confirmed that executable changes remain in the types and
+core crates, so no CLI or daemon stack is needed for this phase.

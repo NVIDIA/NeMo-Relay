@@ -1888,6 +1888,84 @@ fn dynamic_plugin_runtime_diagnostics_snapshot_is_bounded() {
 }
 
 #[test]
+fn runtime_diagnostic_before_activation_remains_in_shared_evidence() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let component = format!("preactivation-{}", uuid::Uuid::now_v7());
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+        code: "plugin.bootstrap_failed".into(),
+        component: component.clone(),
+        field: None,
+        message: "Plugin bootstrap failed".into(),
+        session_id: None,
+        count: 2,
+    });
+
+    // The compatibility API stays active-only, while the foundation outlives
+    // plugin activation and retains the closed source's evidence.
+    assert!(active_runtime_diagnostics_snapshot().is_empty());
+    let shared = crate::diagnostics::Diagnostics::process_default()
+        .snapshot(crate::diagnostics::DiagnosticQuery {
+            component_key: Some(crate::diagnostics::legacy_component_key(
+                &format!("plugin.{component}"),
+                None,
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(shared.components.len(), 1);
+    assert!(shared.components[0].closed_at.is_some());
+    assert_eq!(shared.components[0].counters[0].occurrences.value.get(), 2);
+    reset_global();
+}
+
+#[test]
+fn plugin_diagnostic_fields_have_separate_stable_component_identities() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+    let component = format!("field-test-{}", uuid::Uuid::now_v7());
+    for (field, count) in [("storage[0]", 2), ("storage[1]", 3)] {
+        record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+            code: "plugin.export_failed".into(),
+            component: component.clone(),
+            field: Some(field.into()),
+            message: "Storage export failed".into(),
+            session_id: None,
+            count,
+        });
+        let key =
+            crate::diagnostics::legacy_component_key(&format!("plugin.{component}"), Some(field));
+        let snapshot = crate::diagnostics::Diagnostics::process_default()
+            .snapshot(crate::diagnostics::DiagnosticQuery {
+                component_key: Some(key.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(snapshot.components.len(), 1);
+        assert_eq!(snapshot.components[0].identity.key, key);
+        assert_eq!(
+            snapshot.components[0].counters[0].occurrences.value.get(),
+            count
+        );
+        assert!(!key.contains(field));
+    }
+    assert_eq!(
+        ACTIVE_PLUGIN_CONFIGURATION
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .diagnostic_recorders
+            .len(),
+        2
+    );
+    clear_plugin_configuration_inner();
+    reset_global();
+}
+
+#[test]
 fn test_opentelemetry_delivery_failure_allows_later_plugin_configuration() {
     let _guard = lock_runtime_owner();
     reset_global();

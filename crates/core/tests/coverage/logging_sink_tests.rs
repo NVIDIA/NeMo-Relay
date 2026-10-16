@@ -124,10 +124,10 @@ fn sink_helpers_cover_boundary_levels_time_and_emergency_handlers() {
     assert_eq!(log_level_filter(LogLevel::Trace), log::LevelFilter::Trace);
     assert!(now_millis() > 0);
 
-    stderr_error_handler("test")(spdlog::Error::WriteRecord(std::io::Error::other(
+    stderr_error_handler("test", None)(spdlog::Error::WriteRecord(std::io::Error::other(
         "expected test error",
     )));
-    async_sink_error_handler("test")(spdlog::Error::WriteRecord(std::io::Error::other(
+    async_sink_error_handler("test", None)(spdlog::Error::WriteRecord(std::io::Error::other(
         "expected test error",
     )));
 }
@@ -347,4 +347,211 @@ fn async_sink_boundaries_report_each_full_sink_without_blocking_the_caller() {
         logger_rx.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
+}
+
+#[test]
+fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics};
+    use crate::logging::diagnostics::LoggingDiagnostics;
+
+    let diagnostics = Diagnostics::default();
+    let config = LoggingConfig {
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig::default())],
+        ..LoggingConfig::default()
+    };
+    let logging = LoggingDiagnostics::new(&diagnostics, &config);
+    let (backend, entered, release) = blocking_test_sink(false);
+    let handler = ErrorHandler::new(async_sink_error_handler("test", logging.file(0)));
+    let boundary = Arc::new(AsyncSinkErrorBoundary::new(
+        test_async_sink(backend, handler.clone()),
+        handler,
+    ));
+    let logger = Logger::builder().sink(boundary).build_arc().unwrap();
+    // Always unblock the worker on assertion failure before the logger drops.
+    let release_sinks = ReleaseBlockedSinks([release.clone(), release]);
+    spdlog::info!(logger: logger, "block worker");
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    spdlog::info!(logger: logger, "fill queue");
+    spdlog::info!(logger: logger, "first dropped record");
+    spdlog::info!(logger: logger, "second dropped record");
+    logger.flush();
+
+    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    let sink = snapshot
+        .components
+        .iter()
+        .find(|component| component.identity.key == "logging.file.0")
+        .unwrap();
+    for (code, expected) in [
+        ("logging.sink.record_dropped", 2),
+        ("logging.sink.flush_dropped", 1),
+    ] {
+        assert_eq!(
+            sink.counters
+                .iter()
+                .find(|counter| counter.code == code)
+                .unwrap()
+                .occurrences
+                .value
+                .get(),
+            expected
+        );
+        assert!(
+            !sink
+                .conditions
+                .iter()
+                .any(|condition| condition.code == code)
+        );
+    }
+    release_sinks.release();
+}
+
+#[derive(Default)]
+struct FailingRecordSink {
+    prop: SinkProp,
+}
+
+impl GetSinkProp for FailingRecordSink {
+    fn prop(&self) -> &SinkProp {
+        &self.prop
+    }
+}
+
+impl Sink for FailingRecordSink {
+    fn log(&self, _record: &Record) -> spdlog::Result<()> {
+        Err(Error::WriteRecord(std::io::Error::other(
+            "private backend detail",
+        )))
+    }
+
+    fn flush(&self) -> spdlog::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failure() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics};
+    use crate::logging::{
+        LoggingRuntime,
+        diagnostics::{LoggingDiagnostics, attach_projection},
+    };
+
+    let _guard = crate::logging::lock_test_logging();
+    let diagnostics = Diagnostics::default();
+    let producer = diagnostics.register_component("test.exporter").unwrap();
+    let config = LoggingConfig {
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig::default())],
+        ..LoggingConfig::default()
+    };
+    let logging = LoggingDiagnostics::new(&diagnostics, &config);
+    let sink_diagnostics = logging.file(0).unwrap();
+    let (failed_tx, failed_rx) = mpsc::channel();
+    let handler = ErrorHandler::new(move |error| {
+        sink_diagnostics.runtime_error(&error);
+        failed_tx.send(()).unwrap();
+    });
+    let boundary = Arc::new(AsyncSinkErrorBoundary::new(
+        test_async_sink(Arc::new(FailingRecordSink::default()), handler.clone()),
+        handler,
+    ));
+    let logger = Logger::builder().sink(boundary).build_arc().unwrap();
+    crate::logging::set_active_relay_logger(&logger);
+    let projection = attach_projection(&diagnostics, &logger).unwrap();
+    let runtime = LoggingRuntime {
+        root_relay_id: diagnostics.source().instance_id.to_string(),
+        logger,
+        _thread_pools: Vec::new(),
+        diagnostics: Some(logging),
+        projection: Some(projection),
+    };
+
+    producer
+        .observe_failure(
+            "test.export_failed",
+            "Exporter failed",
+            1,
+            Default::default(),
+        )
+        .unwrap();
+    failed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    runtime.shutdown();
+
+    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    let sink = snapshot
+        .components
+        .iter()
+        .find(|component| component.identity.key == "logging.file.0")
+        .unwrap();
+    assert_eq!(
+        sink.counters
+            .iter()
+            .find(|counter| counter.code == "logging.sink.write_failed")
+            .unwrap()
+            .occurrences
+            .value
+            .get(),
+        1
+    );
+    assert!(failed_rx.try_recv().is_err());
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("private backend detail")
+    );
+}
+
+#[test]
+fn logging_shutdown_records_final_flush_failures_before_closing_component_handles() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics};
+    use crate::logging::{LoggingRuntime, diagnostics::LoggingDiagnostics};
+
+    let _guard = crate::logging::lock_test_logging();
+    let diagnostics = Diagnostics::default();
+    let config = LoggingConfig {
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig::default())],
+        ..LoggingConfig::default()
+    };
+    let logging = LoggingDiagnostics::new(&diagnostics, &config);
+    let (backend, _entered, _release) = blocking_test_sink(true);
+    let boundary = Arc::new(AsyncSinkErrorBoundary::new(
+        test_async_sink(backend, ErrorHandler::default()),
+        ErrorHandler::default(),
+    ));
+    let logger = Logger::builder().sink(boundary).build_arc().unwrap();
+    LoggingRuntime {
+        root_relay_id: diagnostics.source().instance_id.to_string(),
+        logger,
+        _thread_pools: Vec::new(),
+        diagnostics: Some(logging),
+        projection: None,
+    }
+    .shutdown();
+
+    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    for (component_key, code) in [
+        ("logging", "logging.shutdown_failed"),
+        ("logging.file.0", "logging.sink.shutdown_failed"),
+    ] {
+        let component = snapshot
+            .components
+            .iter()
+            .find(|component| component.identity.key == component_key)
+            .unwrap();
+        assert!(component.closed_at.is_some());
+        assert_eq!(
+            component
+                .counters
+                .iter()
+                .find(|counter| counter.code == code)
+                .unwrap()
+                .occurrences
+                .value
+                .get(),
+            1
+        );
+    }
 }
