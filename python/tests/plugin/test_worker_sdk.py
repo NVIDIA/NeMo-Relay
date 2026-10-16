@@ -3849,19 +3849,6 @@ async def test_scope_stack_snapshot_converts_types_and_reads_each_binding_fresh(
     assert all(request.activation_id == ACTIVATION_ID and request.auth_token == AUTH_TOKEN for request in requests)
 
 
-@pytest.mark.parametrize("identifier", ["", "not-a-uuid", "123"])
-async def test_scope_stack_snapshot_rejects_invalid_uuid(identifier: str) -> None:
-    host = mock.Mock()
-    host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
-        return_value=pb.GetCurrentScopeStackSnapshotResponse(
-            snapshot=pb.ScopeStackSnapshot(scopes=[pb.ScopeStackEntry(scope_id=identifier, scope_type=pb.AGENT)])
-        )
-    )
-    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
-    with pytest.raises(WorkerSdkError, match="invalid snapshot scope UUID"):
-        await runtime.current_scope_stack_snapshot()
-
-
 async def test_scope_stack_snapshot_distinguishes_host_error_and_unsupported_rpc() -> None:
     host = mock.Mock()
     host.GetCurrentScopeStackSnapshot = mock.AsyncMock(

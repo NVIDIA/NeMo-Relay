@@ -156,6 +156,7 @@ from nemo_relay._native import create_scope_stack as _create_scope_stack
 from nemo_relay._native import (
     create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
 )
+from nemo_relay._native import current_scope_stack_snapshot as _current_scope_stack_snapshot
 from nemo_relay._native import (
     log as _log,
 )
@@ -359,9 +360,7 @@ def current_scope_stack_snapshot() -> ScopeStackSnapshot | None:
         ScopeStackSnapshot | None: Detached scope entries, or None when no
         explicit scope-stack binding is active.
     """
-    from nemo_relay._native import current_scope_stack_snapshot as native_snapshot
-
-    return native_snapshot(_scope_stack_var.get(None))
+    return _current_scope_stack_snapshot(_scope_stack_var.get(None))
 
 
 def get_scope_stack() -> ScopeStack:

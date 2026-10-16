@@ -83,7 +83,6 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
-from uuid import UUID
 
 grpc: Any = importlib.import_module("grpc")
 pb: Any = importlib.import_module("._proto.plugin_worker_pb2", __package__)
@@ -1900,8 +1899,8 @@ class PluginRuntime:
         """Return owned scope UUIDs/types, or None when no context is bound.
 
         Raises:
-            WorkerSdkError: Unsupported hosts, invalid/expired bindings, or
-                malformed snapshot responses. Inspection never creates a stack.
+            WorkerSdkError: Unsupported hosts or invalid/expired bindings.
+                Inspection never creates a stack.
         """
         try:
             response = await self._host_stub.GetCurrentScopeStackSnapshot(
@@ -1924,12 +1923,8 @@ class PluginRuntime:
         categories = {_proto_scope_type(category): category for category in ScopeType}
         entries = []
         for entry in response.snapshot.scopes:
-            try:
-                identifier = str(UUID(entry.scope_id))
-            except ValueError as error:
-                raise WorkerSdkError("invalid snapshot scope UUID") from error
             category = categories.get(entry.scope_type, ScopeType.UNKNOWN)
-            entries.append(ScopeStackEntry(identifier, category))
+            entries.append(ScopeStackEntry(entry.scope_id, category))
         return ScopeStackSnapshot(tuple(entries))
 
     async def runtime_diagnostics(self) -> RuntimeDiagnostics:
