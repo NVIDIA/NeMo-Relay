@@ -402,17 +402,18 @@ so these adapter updates suppress the new log projection.
 
 ```rust
 // Pipelines share compatibility totals but own separate component recorders.
+// Matching category names still produce distinct component registrations.
 let pipeline_a = subscriber_diagnostics.for_exporter("observability.otel.logs.exporter");
 let pipeline_b = subscriber_diagnostics.for_exporter("observability.otel.logs.exporter");
 
-fn record_export_failure(pipeline, code, message, count) {
-    // Record this failure with no standing fault or health classification.
-    try_record_without_projection(pipeline.component, code, message, count);
+fn record_export_failure(pipeline, code, message, new_failures) {
+    // Record the newly observed occurrences once in shared diagnostic state.
+    try_record_without_projection(pipeline.component, code, message, new_failures);
 
     // These compatibility updates never invoke core recording again.
-    if pipeline.legacy_cache.accumulate(code, message, count).is_retained() {
-        let legacy_diagnostic = make_legacy_diagnostic(code, message, count);
-        // count is the input delta, not the updated compatibility total.
+    if pipeline.legacy_cache.accumulate(code, message, new_failures).is_retained() {
+        let legacy_diagnostic = make_legacy_diagnostic(code, message, new_failures);
+        // Forward only this increment, not the subscriber's updated total.
         project_active_plugin_runtime_diagnostic(legacy_diagnostic);
     }
 }
@@ -424,6 +425,25 @@ fn on_observed_export_success(pipeline) {
     );
     // This state-only observation changes no legacy failure report or total.
 }
+
+// Start with empty reports, an active plugin report, and sufficient capacity.
+// Each call below reports a group of newly observed failure occurrences.
+let failure_code = "otel.logs_export_failed";
+
+record_export_failure(pipeline_a, failure_code, "Export failed", 2);
+// Shared diagnostics: A has 2 failures; B has 0.
+// Subscriber failure total: 0 + 2 = 2.
+// Active plugin failure total: 0 + 2 = 2.
+
+record_export_failure(pipeline_b, failure_code, "Export failed", 3);
+// Shared diagnostics: A still has 2 failures; B now has 3.
+// Subscriber failure total: 2 + 3 = 5.
+// Active plugin failure total: 2 + 3 = 5.
+// Forwarding the subscriber total of 5 here would incorrectly produce 2 + 5 = 7.
+
+on_observed_export_success(pipeline_b);
+// Shared diagnostics: B gains 1 success; A's 2 and B's 3 failures remain.
+// Subscriber and active plugin failure totals both remain 5.
 ```
 
 Successful trace, log, and metric exports use distinct success codes alongside
