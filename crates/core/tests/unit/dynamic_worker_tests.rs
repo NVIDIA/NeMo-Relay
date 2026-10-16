@@ -2075,7 +2075,7 @@ async fn execution_callbacks_outlive_short_rpc_deadlines_and_remain_cancellable(
         for cancel in [false, true] {
             let started = Arc::new(tokio::sync::Notify::new());
             let release = Arc::new(tokio::sync::Notify::new());
-            let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+            let (mut callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
                 {
                     let started = Arc::clone(&started);
                     let release = Arc::clone(&release);
@@ -2094,6 +2094,11 @@ async fn execution_callbacks_outlive_short_rpc_deadlines_and_remain_cancellable(
                 |_| Box::pin(tokio_stream::empty()),
             )
             .await;
+            callback.callback_timeouts = serde_json::from_value(serde_json::json!({
+                "default_ms": 1,
+                "by_name": {"long_execution": 1}
+            }))
+            .unwrap();
             let request = callback
                 .base_request("long_execution", surface, None, None)
                 .unwrap();
@@ -2134,51 +2139,74 @@ async fn execution_callbacks_outlive_short_rpc_deadlines_and_remain_cancellable(
 }
 
 #[tokio::test]
-async fn short_callbacks_keep_their_rpc_deadline() {
-    let started = Arc::new(tokio::sync::Notify::new());
-    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
-        {
-            let started = Arc::clone(&started);
-            move |_| {
+async fn short_callbacks_use_configured_deadlines_and_cancel_on_expiry() {
+    for (settings, deadline_ms) in [
+        (serde_json::json!({}), 30_000),
+        (serde_json::json!({"default_ms": 60_000}), 60_000),
+        (
+            serde_json::json!({"default_ms": 60_000, "by_name": {"short_callback": 5_000}}),
+            5_000,
+        ),
+        (
+            serde_json::json!({"by_name": {"another_callback": 5_000}}),
+            30_000,
+        ),
+    ] {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let (mut callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+            {
                 let started = Arc::clone(&started);
-                Box::pin(async move {
-                    started.notify_one();
-                    std::future::pending::<InvokeResponse>().await
-                })
-            }
-        },
-        |_| Box::pin(tokio_stream::empty()),
-    )
-    .await;
-    let request = callback
-        .base_request(
-            "short_callback",
-            RegistrationSurface::ToolRequestIntercept,
-            None,
-            None,
+                move |_| {
+                    let started = Arc::clone(&started);
+                    Box::pin(async move {
+                        started.notify_one();
+                        std::future::pending::<InvokeResponse>().await
+                    })
+                }
+            },
+            |_| Box::pin(tokio_stream::empty()),
         )
-        .unwrap();
-    let invocation_id = request.invocation_id.clone();
-    let task = tokio::spawn(async move { callback.invoke_async(request).await });
-    tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
-        .await
-        .unwrap();
-    tokio::time::pause();
-    tokio::time::advance(WORKER_RPC_TIMEOUT + std::time::Duration::from_secs(1)).await;
-    tokio::task::yield_now().await;
-    tokio::time::resume();
-    assert!(
-        task.await
-            .unwrap()
-            .unwrap_err()
-            .to_string()
-            .contains("worker invocation timed out")
-    );
-    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(cancellation.invocation_id, invocation_id);
+        .await;
+        callback.callback_timeouts = serde_json::from_value(settings).unwrap();
+        let host_state = callback.host_state.clone();
+        let request = callback
+            .base_request(
+                "short_callback",
+                RegistrationSurface::ToolRequestIntercept,
+                None,
+                None,
+            )
+            .unwrap();
+        let invocation_id = request.invocation_id.clone();
+        let task = tokio::spawn(async move { callback.invoke_async(request).await });
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_millis(deadline_ms * 3 / 4)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            !task.is_finished(),
+            "callback must survive until its configured deadline"
+        );
+        tokio::time::advance(std::time::Duration::from_millis(deadline_ms / 4 + 1000)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        assert!(
+            task.await
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("worker invocation timed out")
+        );
+        let cancellation =
+            tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(cancellation.invocation_id, invocation_id);
+        assert!(host_state.scope_stacks.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]
@@ -4447,6 +4475,7 @@ fn callback_for_client(
     ));
     (
         WorkerPluginCallback {
+            callback_timeouts: Default::default(),
             activation_id: ACTIVATION_ID.into(),
             plugin_kind: "fixture_worker".into(),
             runtime: tokio::runtime::Handle::current(),
@@ -4469,6 +4498,7 @@ async fn fake_worker_instance(
     std::fs::create_dir_all(&activation_dir).expect("unit activation dir should be created");
     (
         WorkerPluginInstance {
+            callback_timeouts: Default::default(),
             plugin_kind: "fixture_worker".into(),
             allows_multiple_components: false,
             config: serde_json::Map::new(),

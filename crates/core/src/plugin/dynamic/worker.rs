@@ -296,6 +296,7 @@ impl Plugin for WorkerPluginAdapter {
 }
 
 struct WorkerPluginInstance {
+    callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     allows_multiple_components: bool,
     config: Map<String, Json>,
@@ -633,7 +634,9 @@ fn load_one_worker_plugin(
     .map_err(|err| PluginError::RegistrationFailed(format!("worker handshake failed: {err}")))?;
     let handshake = handshake.into_inner();
     validate_worker_handshake(&spec.plugin_id, &handshake)?;
+    let callback_timeouts = load.callback_timeouts.clone().unwrap_or_default();
     host_state.set_gate_callback(WorkerGateCallback {
+        callback_timeouts: callback_timeouts.clone(),
         plugin_kind: spec.plugin_id.clone(),
         runtime: runtime_handle.runtime().handle().clone(),
         client: client.clone(),
@@ -664,6 +667,7 @@ fn load_one_worker_plugin(
     };
 
     let instance = Arc::new(WorkerPluginInstance {
+        callback_timeouts,
         plugin_kind: spec.plugin_id.clone(),
         allows_multiple_components: handshake.allows_multiple_components,
         config: spec.config.clone(),
@@ -1556,6 +1560,7 @@ impl WorkerPluginInstance {
 
     fn clone_for_callback(&self) -> WorkerPluginCallback {
         WorkerPluginCallback {
+            callback_timeouts: self.callback_timeouts.clone(),
             plugin_kind: self.plugin_kind.clone(),
             activation_id: self.host_state.activation_id.clone(),
             runtime: self.runtime.handle(),
@@ -1587,6 +1592,7 @@ fn bind_loopback_listener() -> crate::plugin::Result<(TcpListener, SocketAddr)> 
 
 #[derive(Clone)]
 struct WorkerPluginCallback {
+    callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     activation_id: String,
     runtime: tokio::runtime::Handle,
@@ -1596,6 +1602,7 @@ struct WorkerPluginCallback {
 
 #[derive(Clone)]
 struct WorkerGateCallback {
+    callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     runtime: tokio::runtime::Handle,
     client: PluginWorkerClient<Channel>,
@@ -1614,6 +1621,7 @@ impl WorkerGateCallback {
             .upgrade()
             .ok_or_else(|| FlowError::NotFound("worker activation is shutting down".into()))?;
         WorkerPluginCallback {
+            callback_timeouts: self.callback_timeouts.clone(),
             plugin_kind: self.plugin_kind.clone(),
             activation_id: host_state.activation_id.clone(),
             runtime: self.runtime.clone(),
@@ -2340,7 +2348,15 @@ impl WorkerPluginCallback {
                 RegistrationSurface::ToolExecutionIntercept
                 | RegistrationSurface::LlmExecutionIntercept,
             ) => None,
-            _ => Some(WORKER_RPC_TIMEOUT),
+            _ => Some(
+                self.callback_timeouts
+                    .by_name
+                    .get(&callback_name)
+                    .copied()
+                    .or(self.callback_timeouts.default_ms)
+                    .map(|millis| Duration::from_millis(millis.get()))
+                    .unwrap_or(WORKER_RPC_TIMEOUT),
+            ),
         };
         let result = self.invoke_async_with_timeout(request, timeout).await;
         if let Err(error) = &result {
