@@ -1020,7 +1020,7 @@ class ScopeStackEntry:
 class ScopeStackSnapshot:
     """Detached root-to-top entries including implicit and synthetic roots."""
 
-    scopes: tuple[ScopeStackEntry, ...]
+    scopes: list[ScopeStackEntry]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1925,7 +1925,7 @@ class PluginRuntime:
         for entry in response.snapshot.scopes:
             category = categories.get(entry.scope_type, ScopeType.UNKNOWN)
             entries.append(ScopeStackEntry(entry.scope_id, category))
-        return ScopeStackSnapshot(tuple(entries))
+        return ScopeStackSnapshot(entries)
 
     async def runtime_diagnostics(self) -> RuntimeDiagnostics:
         """Return a bounded snapshot of active host runtime diagnostics.

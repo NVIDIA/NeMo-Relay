@@ -3821,11 +3821,12 @@ async def test_scope_stack_snapshot_converts_types_and_reads_each_binding_fresh(
             for identifier, category in zip(identifiers, list(range(1, 12)) + [0, 999], strict=True)
         ]
     )
+    snapshot_response = pb.GetCurrentScopeStackSnapshotResponse(snapshot=snapshot)
     host = mock.Mock()
     host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
         side_effect=[
             pb.GetCurrentScopeStackSnapshotResponse(),
-            pb.GetCurrentScopeStackSnapshotResponse(snapshot=snapshot),
+            snapshot_response,
             pb.GetCurrentScopeStackSnapshotResponse(snapshot=pb.ScopeStackSnapshot(scopes=snapshot.scopes[:1])),
             pb.GetCurrentScopeStackSnapshotResponse(),
         ]
@@ -3837,11 +3838,15 @@ async def test_scope_stack_snapshot_converts_types_and_reads_each_binding_fresh(
         assert retained is not None
         assert [entry.scope_id for entry in retained.scopes] == identifiers
         assert [entry.scope_type for entry in retained.scopes] == list(ScopeType) + [ScopeType.UNKNOWN] * 2
+        retained.scopes.pop()
         with runtime.bind_scope_stack("second", parent_scope_id=identifiers[0]):
             current = await runtime.current_scope_stack_snapshot()
             assert current is not None
             assert len(current.scopes) == 1
-        assert len(retained.scopes) == 13
+            current.scopes.clear()
+        assert [entry.scope_id for entry in retained.scopes] == identifiers[:-1]
+        assert [entry.scope_id for entry in snapshot_response.snapshot.scopes] == identifiers
+        assert [entry.scope_id for entry in snapshot.scopes] == identifiers
     assert await runtime.current_scope_stack_snapshot() is None
     requests = [call.args[0] for call in host.GetCurrentScopeStackSnapshot.await_args_list]
     assert [request.scope.scope_stack_id for request in requests] == ["", "first", "second", ""]
