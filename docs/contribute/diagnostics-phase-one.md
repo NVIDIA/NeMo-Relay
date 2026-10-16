@@ -1,11 +1,11 @@
 ---
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 title: "Diagnostics Foundation Implementation"
 description: "Architecture, component responsibilities, and implementation examples for the shared Relay diagnostics foundation."
 ---
-import { MermaidStyles } from "@/components/MermaidStyles";
 
-{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-SPDX-License-Identifier: Apache-2.0 */}
+# Diagnostics Foundation Implementation
 
 ## Scope and Design Decisions
 
@@ -115,11 +115,6 @@ recording operation: updated local evidence and optional event delivery after
 the state lock is released. Projection delivery does not require the event to
 remain in recent history.
 
-<MermaidStyles />
-
-<div style={{ overflowX: "auto" }}>
-<div style={{ minWidth: "560px" }}>
-
 ```mermaid
 flowchart TB
     Recorder["ComponentRecorder"] --> Accept["Validate and accept<br/>under the state lock"]
@@ -131,13 +126,9 @@ flowchart TB
     class Recorder,Accept,State,Reader,Projection shared;
 ```
 
-</div>
-</div>
-
 Orange identifies the shared foundation or its integration points in these
 diagrams. Each diagram describes one component's responsibilities rather than
-an entire deployment topology. Wider diagrams scroll horizontally on narrow
-pages to preserve label readability.
+an entire deployment topology.
 
 ### Ownership and Producer Lifecycle
 
@@ -363,9 +354,6 @@ component registrations while sharing the subscriber's existing bounded
 compatibility cache. This lets a subscriber retain its aggregate failure
 report while core identifies which pipeline still has an unresolved failure.
 
-<div style={{ overflowX: "auto" }}>
-<div style={{ minWidth: "620px" }}>
-
 ```mermaid
 flowchart TB
     A["Pipeline A"] --> CA["Core component A<br/>condition and epoch"]
@@ -377,9 +365,6 @@ flowchart TB
     classDef shared fill:#FFE0B2,stroke:#D97706,color:#111827;
     class CA,CB shared;
 ```
-
-</div>
-</div>
 
 Each pipeline uses a single shared recording boundary. The adapter then
 updates the existing subscriber cache and, when applicable, mirrors the
@@ -442,9 +427,6 @@ producer category and an opaque configuration-field discriminator. Before
 activation, it uses a temporary registration; dropping its lease closes the
 component while leaving bounded evidence available for inspection.
 
-<div style={{ overflowX: "auto" }}>
-<div style={{ minWidth: "560px" }}>
-
 ```mermaid
 flowchart TB
     Direct["Plugin diagnostic"] --> Entry["Record occurrence<br/>once in core"]
@@ -456,9 +438,6 @@ flowchart TB
     classDef shared fill:#FFE0B2,stroke:#D97706,color:#111827;
     class Entry,State,Project shared;
 ```
-
-</div>
-</div>
 
 ```rust
 fn record_active_plugin_runtime_diagnostic(diagnostic) {
