@@ -156,8 +156,9 @@ Set up agent entries in the top-level config with:
 nemo-relay config
 ```
 
-Edit gateway limits, provider upstreams, and operational logging with the
-structured user-config editor:
+Use the config editor to change gateway limits, provider settings, agent
+commands, and log settings. It supports both `[logging]` and `[daemon.logging]`.
+Run the following command to open the editor:
 
 ```bash
 nemo-relay config edit
