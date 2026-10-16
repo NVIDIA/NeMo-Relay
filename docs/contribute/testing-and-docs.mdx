@@ -15,6 +15,63 @@ members. Dependency versions are locked in the repository-root `Cargo.lock` and
 commands with `uv run --package <example-package>` to select the example while
 sharing the root environment.
 
+## Quick Start Contracts
+
+The quick starts store commands and expected output in their MDX pages. Sample
+files are committed beside the pages and displayed with Fern's `Code` component.
+The checker reads the referenced files, so displayed and tested content share
+the same source. From the repository root, validate contracts, check Relay
+version pins, and run the checker unit tests:
+
+```bash
+just check-quickstarts
+```
+
+The existing CI `Check / Run` job runs this command without inference
+credentials. Every guide in `docs/getting-started/quick-start/`, except
+`index.mdx`, must have a contract. Missing contracts and an empty guide
+directory fail validation.
+
+The committed `scripts/quickstarts/schema.json` defines scenario and block
+metadata, including field types, required fields, and permitted values. Unknown
+fields fail validation. The `schema: 1` field versions this testing format,
+not the Relay release; ordinary Relay version bumps do not change it.
+The Python checker additionally validates relationships such as referenced
+files, command IDs, shell variants, and lifecycle assertions.
+
+After installing the dev dependencies with the command above, use
+`uv run --no-sync python scripts/check-quickstarts.py extract <page> --shell bash` to inspect
+its commands. Replace `<page>` with the guide's MDX path.
+
+The `preflight` mode rejects stale artifacts. The `verify` mode checks expected
+output and artifacts after a successful run. These modes do not execute commands,
+provision credentials, or test operating-system compatibility.
+
+Relay installation version pins follow the Cargo workspace version through
+`just set-version`. Check for version drift with this command:
+
+```bash
+uv run --no-sync python scripts/docs/docs_version_pins.py check
+```
+
+The external Switchyard bundle and its tested Relay version are pinned
+independently.
+
+With `jq` installed, the unit tests also exercise the five agent-runtime guides'
+copyable JSON verification expressions against complete and invalid fixtures.
+If `jq` is missing, those tests report a skip. To check multiple locally installed
+versions on Unix without changing your default `jq`, run:
+
+```bash
+QUICKSTART_JQ_BINARIES=/path/to/jq-1.6:/path/to/jq-1.7.1:/path/to/jq-1.8.1 \
+  uv run --no-sync python -m unittest discover -s scripts/tests -p 'test_quickstart_jq.py'
+```
+
+These are document, checker, and JSON-expression tests, not quickstart execution tests.
+A passing check does not establish that packages have been published, that a
+provider accepts the example, or that the guide runs on every supported system.
+Live execution and cross-platform quickstart validation remain separate work.
+
 ## Testing Rule
 
 Run tests for every language surface whose observable behavior can change. Start

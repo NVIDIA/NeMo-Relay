@@ -47,6 +47,7 @@ dev = [
     "anyio>=4.14.2",
     "beautifulsoup4>=4.14,<5",
     "ipython~=8.20",
+    "jsonschema>=4.26,<5",
     "maturin[zig]>=1.0,<2.0; sys_platform == 'linux'",
     "maturin>=1.0,<2.0; sys_platform != 'linux'",
     "pip-licenses>=5,<6",
