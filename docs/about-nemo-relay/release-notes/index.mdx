@@ -1,7 +1,7 @@
 ---
 title: "Release Notes for NVIDIA NeMo Relay"
 sidebar-title: "Release Notes"
-description: "Review highlights, compatibility updates, fixes, and known issues for NVIDIA NeMo Relay 0.10.1 and 0.10.0."
+description: "Review highlights, compatibility updates, fixes, and known issues for NVIDIA NeMo Relay 0.10, including patch updates through 0.10.3."
 template-library-version: "1.0.0"
 position: 6
 ---
@@ -27,6 +27,129 @@ Relay](/about-nemo-relay/overview).
 
 For the full release history, refer to
 [GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
+
+## Release 0.10.3
+
+NeMo Relay 0.10.3 improves hook security, provider credential handling,
+cache ordering, telemetry, and CLI resource use.
+
+### Compatibility and Migration
+
+Review these behavior changes when upgrading from 0.10.2:
+
+- Restart gateways and daemons to use encrypted local hook delivery with
+  server identity checks. Custom hooks without a policy flag now fail closed
+  for permission and tool checks, as well as unreadable or invalid payloads.
+- Authenticate direct foreground clients to Relay before using its provider
+  credentials. Anonymous daemon clients can use daemon-held credentials only
+  in pass-through mode on a loopback listener.
+- Supply client credentials for unmanaged routes, including model discovery,
+  compaction, and WebSocket APIs. Relay no longer adds its own provider
+  credentials to these requests, even for authenticated clients.
+- Configure final provider URLs directly. Relay no longer follows upstream
+  redirects and removes their `Location` headers. Custom OpenAI endpoints
+  also keep Codex ChatGPT requests when no replacement key is available,
+  except for ChatGPT voice calls.
+- Review custom cache priorities. Large language model (LLM) and tool caches
+  now default to `150`, after NeMo Guardrails at `100`, so cache hits still
+  pass policy checks.
+- Review stream error handling and logging scripts. Early OpenAI Responses
+  stream endings now report errors. Logging level and stderr overrides keep
+  TOML settings for fields they do not set, including file sinks.
+
+For the patch-upgrade steps, refer to
+[Update from NeMo Relay 0.10.2 to 0.10.3](/reference/migration-guides#update-from-nemo-relay-0102-to-0103).
+
+### Fixes and Other Changes
+
+This release includes the following fixes and improvements:
+
+- Local hook delivery verifies the server before sending credentials and
+  payloads over TLS. Bootstrap proofs identify the listener and running
+  instance. Hook clients also use fewer runtime resources and combine
+  readiness checks with delivery on healthy persistent connections.
+- Client-supplied internal dispatch headers no longer control gateway routing
+  or appear in recorded request metadata. Trusted middleware can still set
+  dispatch controls after the request enters the gateway.
+- Provider credential checks now cover foreground gateways, daemon routes,
+  workers, and unmanaged WebSocket upgrades. Codex token recognition also
+  avoids treating unrelated bearer tokens as ChatGPT credentials.
+- Default cache ordering keeps NeMo Guardrails active on cache hits. The LLM
+  cache is bypassed when remote NeMo Guardrails handles a call. Refer to
+  [Response Cache](/configure-plugins/adaptive/response-cache).
+- OpenAI Responses streaming keeps the first final response snapshot,
+  including its usage. A stream that ends without a final response reports
+  an error and logs `llm_stream_incomplete`. Received output is kept, and
+  missing usage is left out. Refer to
+  [OpenTelemetry](/configure-plugins/observability/opentelemetry).
+- Relay can close Codex MCP tool calls with missing end hooks when a later
+  model request contains the matching result. These spans have an unknown
+  outcome, and their recorded duration can be longer than the actual run
+  time. Explicit tool failures use error status. Calls closed without an end
+  hook or result are marked incomplete.
+  Refer to [Codex Captured Events](/nemo-relay-cli/codex#captured-events).
+- Daemon workers pass request codecs to telemetry sanitizers. Request
+  annotations reflect sanitized data while provider requests stay unchanged.
+  Refer to [Provider Codecs](/integrate-into-frameworks/provider-codecs).
+- CLI logging overrides preserve configured file sinks, rotation, and flush
+  settings. The configuration editor also exposes provider timeouts, the
+  ChatGPT backend URL, agent commands, and stderr controls. Refer to
+  [Operational Logging](/reference/operational-logging) and
+  [Edit Gateway Configuration](/nemo-relay-cli/basic-usage#edit-gateway-configuration).
+- Daemon startup no longer loads or checks plugin files. Gateways and workers
+  still verify the plugins they run. Plugin verification reads files in
+  chunks to reduce startup memory use. Hosts that run only the daemon no
+  longer need plugin artifacts. Refer to
+  [Daemon Architecture](/daemon/architecture).
+- Session cleanup reclaims unused locks, reducing retained memory in
+  long-running gateways.
+
+## Release 0.10.2
+
+NeMo Relay 0.10.2 restores layered daemon-worker configuration and fixes
+provider URL checks, managed hook delivery, and sanitized status metadata.
+It also updates a TLS dependency.
+
+### Compatibility and Migration
+
+Review these behavior changes when upgrading from 0.10.1:
+
+- Use HTTPS for remote provider base URLs, including private Kubernetes
+  service addresses. HTTP is allowed only on loopback. Base URLs cannot
+  contain user information, query strings, or fragments. Invalid settings
+  now fail at startup.
+- Review user configuration and dynamic plugins on worker hosts. Workers
+  now merge user and system settings, with system settings taking precedence.
+  OpenTelemetry destinations from both layers are retained. Restart workers
+  to load the updated configuration.
+- Review telemetry consumers that assumed PII redaction removed all status
+  metadata. The personally identifiable information
+  (PII) preset `trajectory_context` now keeps recognized status codes and bounded
+  error classifications.
+
+For the patch-upgrade steps, refer to
+[Update from NeMo Relay 0.10.1 to 0.10.2](/reference/migration-guides#update-from-nemo-relay-0101-to-0102).
+
+### Fixes and Other Changes
+
+This release includes the following fixes and dependency update:
+
+- Managed daemon hooks connect directly to the daemon instead of using
+  system proxy settings. This prevents proxy settings from blocking local
+  hook delivery. Hook timeouts and failure policies are unchanged.
+- Daemon workers load user configuration, plugin manifests, and dynamic
+  plugin lifecycle state alongside the system layer. Users can add a local
+  trace destination while keeping administrator-configured exporters.
+  Refer to [LLM Middleware](/daemon/reference#llm-middleware).
+- Provider base URLs are checked at startup across TOML settings, environment
+  variables, and CLI overrides. Managed forwarding errors now report upstream
+  failures instead of invalid hook payloads. Refer to
+  [Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+- The `trajectory_context` PII preset preserves recognized `otel.status_code`
+  values and fixed `error.type` classifications. Free-form descriptions and
+  exception names remain removed. Refer to
+  [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration).
+- The `rustls` dependency is updated to `0.23.46`.
 
 ## Release 0.10.1
 

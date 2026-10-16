@@ -1,19 +1,143 @@
 ---
 title: "Migration Guides"
-description: "Upgrade to NeMo Relay 0.10, including the update from 0.10.0 to 0.10.1."
+description: "Upgrade to NeMo Relay 0.10, including patch updates through 0.10.3."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Use this page to upgrade from NeMo Relay 0.9.0 to the current 0.10 release.
-If you already use 0.10.0, apply the patch-upgrade steps below.
+If you already use 0.10, apply the steps for each newer patch version below.
 
-If you upgrade directly from 0.9.0, apply both the base-release and patch-upgrade
+If you upgrade directly from 0.9.0, apply the base-release and all patch-upgrade
 steps. The base-release steps also cover configuration and telemetry changes
 from the 0.9 patch releases.
 
 ## Upgrade to NeMo Relay 0.10
+
+### Update from NeMo Relay 0.10.2 to 0.10.3
+
+Update the Relay packages you use to 0.10.3. Review hook delivery, provider
+credentials, cache priorities, telemetry, and logging overrides.
+
+#### Restart Gateways and Daemons for Hook Delivery
+
+Restart Relay gateways and daemons after upgrading. Local hook delivery now
+uses an encrypted TLS connection and checks the server's identity before
+sending credentials or hook payloads. Gateway health checks also verify the
+server's address and running instance.
+
+Review custom hook commands that omit `--fail-open` and `--fail-closed`.
+Gateway and daemon hooks now fail closed for permission and tool checks,
+including `PreToolUse` and `PermissionRequest`. They also fail closed if the
+payload cannot be read, is invalid JSON, has no event name, or exceeds the size
+limit. Other named events fail open.
+
+An explicit policy flag overrides these defaults and
+`NEMO_RELAY_FAIL_CLOSED=1`. With `--fail-open`, Relay sends a pass-through
+response only for named events that do not require a permission check.
+Refer to [Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding).
+For administrator-managed bundles, follow
+[Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back).
+
+#### Check Provider Credentials and Routing
+
+Direct foreground gateway clients must authenticate to Relay before using
+provider credentials from Relay's configuration or environment. Otherwise,
+set the provider credentials in the client. Use `nemo-relay run` to let Relay
+set up client authentication.
+
+Anonymous daemon requests can use daemon-held provider credentials only when
+the daemon runs with `--pass-through` and listens on loopback. A daemon bound
+to `0.0.0.0` requires a bound route for this access, even for requests sent to
+`127.0.0.1`.
+
+Unmanaged routes always forward only the provider credentials sent by the
+client. These routes include model discovery, compaction, images, and realtime
+APIs, including WebSocket upgrades. This rule also applies to authenticated
+clients and pass-through daemons. Set credentials in clients that previously
+relied on Relay to add them to these requests.
+
+A custom `openai_base_url` now keeps Codex ChatGPT requests at that endpoint
+when no replacement credential is available. ChatGPT voice calls still use
+the ChatGPT backend. Relay no longer follows upstream redirects and removes
+their `Location` headers. Configure the final provider URL directly.
+Refer to [Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams) and
+[Requests Without a Bound Credential](/daemon/configuration#requests-without-a-bound-credential).
+
+#### Keep Policy Checks Before Caches
+
+Large language model (LLM) and tool caches now use priority `150` by default.
+NeMo Guardrails uses `100`. Lower values run first. Review explicit priorities so policy checks
+run before caches, including on cache hits. The LLM cache does not run when
+remote NeMo Guardrails handles a call. Refer to
+[Response Cache](/configure-plugins/adaptive/response-cache).
+
+#### Review Telemetry and Stream Consumers
+
+OpenAI Responses streams that end without `response.completed`,
+`response.failed`, or `response.incomplete` now report a stream error.
+Relay keeps received output and leaves out missing usage. Missing usage alone
+does not mean a stream ended early. Review clients and dashboards that treated
+an early stream ending as success.
+
+Codex MCP tool spans can now close when a later model request contains the
+matching result. This recovery requires model traffic to pass through Relay.
+The outcome is `unknown`. The recorded duration can be longer than the actual
+run time. This recovery does not apply to shell tools. To export completion
+metadata as OpenTelemetry span attributes, add `"tool_completion_"` to the trace endpoint's
+`promote_metadata_prefixes`. Refer to
+[Codex Captured Events](/nemo-relay-cli/codex#captured-events).
+
+Daemon workers now pass request codecs to telemetry sanitizers. For manual
+Rust calls, use `LlmCallParams::builder().codec(...)` to supply the request
+codec. Personally identifiable information (PII) rules that target normalized
+fields omit the payload from telemetry if no call codec or matching fallback
+codec is available. The provider request is unchanged. Refer to
+[Provider Codecs](/integrate-into-frameworks/provider-codecs).
+
+#### Review Logging Overrides
+
+Logging level and stderr overrides now change only the fields they set.
+For example, `NEMO_RELAY_LOG=info` keeps TOML file sinks, rotation settings,
+and the flush interval. Review scripts that relied on an override to replace
+the full logging configuration. Explicit logging-file options keep their
+separate rules. Refer to
+[Operational Logging](/reference/operational-logging).
+
+### Update from NeMo Relay 0.10.1 to 0.10.2
+
+Update the Relay packages you use to 0.10.2. Review provider URLs and the user
+configuration loaded by daemon workers.
+
+#### Validate Provider Base URLs
+
+Use HTTPS for remote provider base URLs, including private Kubernetes service
+addresses. Plain HTTP is allowed only for loopback hosts such as `localhost`,
+`127.0.0.1`, and `::1`. Remove user information, query strings, and fragments
+from base URLs. Relay now checks TOML settings, environment variables, and
+command-line overrides at startup. Refer to
+[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+
+#### Review User Configuration in Daemon Workers
+
+Daemon workers now load the user's `config.toml`, `plugins.toml`, and dynamic
+plugins alongside the system configuration. System settings keep higher
+precedence. OpenTelemetry endpoint lists include both layers, with system
+endpoints first. Review user settings and plugins that workers previously
+ignored, then restart workers to load the updated configuration.
+
+Managed workers still ignore provider and gateway environment overrides,
+except for supported authentication variables. Refer to
+[LLM Middleware](/daemon/reference#llm-middleware).
+
+#### Review Sanitized Status Metadata
+
+The `trajectory_context` PII preset now keeps recognized `otel.status_code`
+values and bounded `error.type` classifications. Free-form status descriptions
+and exception names remain removed. Review telemetry consumers that assumed
+all status metadata was removed. Refer to
+[PII Redaction Configuration](/configure-plugins/pii-redaction/configuration).
 
 ### Update from NeMo Relay 0.10.0 to 0.10.1
 
