@@ -127,6 +127,12 @@ Adds a header/metadata entry for the exporter.
 
 Maps an exporter header name to the environment variable supplying its value.
 
+#### `with_allow_insecure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_allow_insecure(self, allow_insecure: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>) -&gt; Self"}} /></pre>
+
+Allows plain HTTP to any host; data and configured headers travel unencrypted.
+
 #### `with_timeout`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_timeout(self, timeout: <a href=\"https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html\">Duration</a>) -&gt; Self"}} /></pre>

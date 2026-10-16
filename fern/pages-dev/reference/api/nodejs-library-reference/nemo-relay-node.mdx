@@ -79,6 +79,8 @@ export interface AtofExporterConfig {
   timeoutMillis?: number
   /** Field name policy applied before sending stream events. */
   fieldNamePolicy?: string
+  /** Allow `http://` or `ws://` to any host; events and configured headers travel unencrypted. */
+  allowInsecure?: boolean
 }
 ```
 
@@ -98,6 +100,8 @@ export interface OpenTelemetryConfig {
   headers?: Json
   /** Header names mapped to environment variables resolved during subscriber activation. */
   headerEnv?: Record<string, string>
+  /** Allow plain HTTP to any host; data and configured headers travel unencrypted. */
+  allowInsecure?: boolean
   /** Extra OpenTelemetry resource attributes as string key/value pairs. */
   resourceAttributes?: Json
   /** `service.name` resource attribute. Defaults to `"unknown_service"`. */
@@ -182,6 +186,8 @@ export interface OpenTelemetryLogConfig {
   headers?: Record<string, string>
   /** Header names mapped to environment variables resolved during subscriber activation. */
   headerEnv?: Record<string, string>
+  /** Allow plain HTTP to any host; data and configured headers travel unencrypted. */
+  allowInsecure?: boolean
   /** Extra OpenTelemetry resource attributes as string key/value pairs. */
   resourceAttributes?: Record<string, string>
   /** `service.name` resource attribute. Defaults to `"unknown_service"`. */
@@ -221,6 +227,8 @@ export interface OpenTelemetryMetricConfig {
   headers?: Record<string, string>
   /** Header names mapped to environment variables resolved during subscriber activation. */
   headerEnv?: Record<string, string>
+  /** Allow plain HTTP to any host; data and configured headers travel unencrypted. */
+  allowInsecure?: boolean
   /** Extra OpenTelemetry resource attributes as string key/value pairs. */
   resourceAttributes?: Record<string, string>
   /** `service.name` resource attribute. Defaults to `"unknown_service"`. */

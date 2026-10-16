@@ -141,9 +141,13 @@ Process-global OTLP headers belong only to the automatic exporter; Relay never
 copies them to independently configured endpoints.
 
 Remote automatic trace endpoints must use HTTPS; plaintext HTTP is allowed
-only for localhost or a loopback IP address. Automatic log and metric headers
-have the same transport requirement, preventing credentials from being sent to
-remote plaintext endpoints.
+only for localhost, a loopback IP address, or a host listed in the
+not-recommended
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts)
+setting. Automatic log and metric headers have the same transport requirement,
+so credentials reach a remote plaintext endpoint only when you list its host.
+An endpoint environment variable that the OTLP exporter cannot parse fails
+activation instead of falling back to `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 Automatic OTLP/HTTP exporters never follow redirects. This applies to traces,
 logs, and metrics, including when no headers are configured, so an endpoint
@@ -299,7 +303,13 @@ All trace projections (`full`, `gen_ai`, and `openinference`) require HTTPS for
 remote collectors, with either HTTP or gRPC transport. HTTP is permitted only
 for `localhost` and loopback IP addresses such as `127.0.0.1` and `[::1]`.
 Redaction does not disable this requirement. Existing remote plaintext trace
-endpoints must migrate to HTTPS or use a loopback collector.
+endpoints must migrate to HTTPS or use a loopback collector. As a
+not-recommended exception, the observability component's top-level
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts) list allows plain HTTP to specific hosts.
+
+When activation fails because no OpenTelemetry endpoint is usable, the error
+lists each skipped endpoint by signal and index, its scheme, host, and port,
+and the reason it was skipped.
 
 Relay-configured OTLP/HTTP exporters do not follow redirects, even to another
 HTTPS endpoint. This keeps an export from bypassing transport checks or sending
@@ -701,8 +711,10 @@ This applies to trace, log, and metric endpoints.
 
 Remote trace endpoints must use HTTPS. When you set any header source
 (`headers`, `header_env`, or `header_file`), remote log and metric endpoints
-must also use HTTPS. HTTP is allowed only for localhost and loopback IP
-addresses. OTLP/HTTP exporters never follow redirects.
+must also use HTTPS. HTTP is allowed only for localhost, loopback IP addresses,
+and hosts listed in the not-recommended
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts)
+setting. OTLP/HTTP exporters never follow redirects.
 For example, an OIDC token-file writer must write the complete value `Bearer
 eyJ...` to the file. Relay does not add the authentication
 scheme for you.
@@ -1281,6 +1293,10 @@ let subscriber = OpenTelemetrySubscriber::new(config)?;
 ```
 </Tab>
 </Tabs>
+
+Direct trace, log, and metric configs accept `allow_insecure` (`allowInsecure`
+in Node.js, `with_allow_insecure` in Rust), which allows plain HTTP to any host.
+It is not recommended. Refer to [Insecure HTTP Hosts](/configure-plugins/observability/configuration#insecure-http-hosts).
 
 Set each referenced environment variable before constructing the subscriber.
 Direct trace, log, and metric configs resolve `header_env` when the subscriber

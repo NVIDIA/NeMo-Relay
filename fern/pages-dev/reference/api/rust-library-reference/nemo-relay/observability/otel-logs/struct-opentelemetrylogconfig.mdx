@@ -46,6 +46,12 @@ Add an exporter header or gRPC metadata entry.
 
 Map an exporter header name to the environment variable supplying its value.
 
+#### `with_allow_insecure`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_allow_insecure(self, allow_insecure: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>) -&gt; Self"}} /></pre>
+
+Allows plain HTTP to any host; data and configured headers travel unencrypted.
+
 #### `with_resource_attribute`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_resource_attribute(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    value: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
