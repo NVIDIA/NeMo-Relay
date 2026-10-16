@@ -167,7 +167,7 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
     })?;
     let local = listener.local_addr()?;
     let public_origin = daemon_origin(&options, local)?;
-    let resolved = crate::configuration::resolve_server_config(&options.gateway)?;
+    let config = crate::configuration::resolve_daemon_config(&options.gateway)?;
     let active_worker_generations = ActiveWorkerGenerations::load()?;
     let restarting_workers = active_worker_generations.snapshot()?;
     let recovery_worker_count = restarting_workers.len();
@@ -183,7 +183,7 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         pass_through: options.pass_through,
         loopback_listener: local.ip().is_loopback(),
         public_origin,
-        config: resolved.gateway,
+        config,
         upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
         worker_clients: WorkerClientPool::new()?,
         challenges: Mutex::new(HashMap::new()),

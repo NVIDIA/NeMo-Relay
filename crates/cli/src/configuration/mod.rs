@@ -115,6 +115,28 @@ pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedC
     Ok(resolved)
 }
 
+/// Loads routing settings for the daemon without reading plugin files.
+/// Gateways and daemon workers check the plugins they run.
+pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayConfig, CliError> {
+    let explicit = args.config.as_ref();
+    let paths = config_paths(explicit)
+        .into_iter()
+        .map(|path| {
+            let required = explicit == Some(&path);
+            (path, required)
+        })
+        .collect();
+    let mut resolved = load_config_from_paths(paths, Vec::new(), apply_env_config)?;
+    apply_server_overrides(&mut resolved.gateway, args)?;
+    log::info!(
+        target: "nemo_relay.configuration",
+        event = "configuration_resolved",
+        mode = "daemon";
+        "Daemon configuration resolved"
+    );
+    Ok(resolved.gateway)
+}
+
 /// Layered configuration for a daemon-managed, machine-user worker.
 ///
 /// System configuration retains precedence over the user's configuration. `plugin_config_path`
