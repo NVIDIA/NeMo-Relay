@@ -17,6 +17,7 @@ use spdlog::terminal_style::StyleMode;
 use spdlog::{ErrorHandler, Level, LevelFilter, Logger, Record, ThreadPool};
 
 use super::config::{LogLevel, LogSinkConfig, LoggingConfig, MAX_FILE_SINK_QUEUE_ENTRIES};
+use super::diagnostics::{LoggingDiagnostics, SinkDiagnostics};
 use super::format::RelayFormatter;
 use super::rotation::{SizeRotatingFileWriter, rotated_log_path};
 use crate::error::{FlowError, Result};
@@ -25,12 +26,22 @@ pub(crate) fn build_logger(
     config: &LoggingConfig,
     root_relay_id: String,
 ) -> Result<(Arc<Logger>, Vec<Arc<ThreadPool>>)> {
+    build_logger_with_diagnostics(config, root_relay_id, None)
+}
+
+pub(super) fn build_logger_with_diagnostics(
+    config: &LoggingConfig,
+    root_relay_id: String,
+    diagnostics: Option<&LoggingDiagnostics>,
+) -> Result<(Arc<Logger>, Vec<Arc<ThreadPool>>)> {
     let mut sinks: Vec<Arc<dyn spdlog::sink::Sink>> = Vec::new();
     let mut thread_pools = Vec::new();
     let mut active_paths: Vec<PathBuf> = Vec::new();
     let mut reserved_paths: Vec<PathBuf> = Vec::new();
 
     if config.stderr_enabled {
+        let diagnostic = diagnostics.and_then(LoggingDiagnostics::stderr);
+        let initialization = SinkInitialization::new(diagnostic.clone());
         let stderr_sink = StdStreamSink::builder()
             .stderr()
             .style_mode(StyleMode::Never)
@@ -39,15 +50,18 @@ pub(crate) fn build_logger(
                 root_relay_id: root_relay_id.clone(),
             })
             .level_filter(spdlog_level_filter(config.level))
-            .error_handler(stderr_error_handler("stderr"))
+            .error_handler(stderr_error_handler("stderr", diagnostic))
             .build_arc()
             .map_err(|error| {
                 FlowError::InvalidArgument(format!("failed to create stderr logging sink: {error}"))
             })?;
         sinks.push(stderr_sink);
+        initialization.complete();
     }
 
-    for sink in &config.sinks {
+    for (index, sink) in config.sinks.iter().enumerate() {
+        let diagnostic = diagnostics.and_then(|diagnostics| diagnostics.file(index));
+        let initialization = SinkInitialization::new(diagnostic.clone());
         let LogSinkConfig::File(file_sink) = sink;
         let resolved_path = resolve_log_path(&file_sink.path)?;
         if active_paths.contains(&resolved_path) {
@@ -79,7 +93,7 @@ pub(crate) fn build_logger(
                     root_relay_id: root_relay_id.clone(),
                 })
                 .level_filter(spdlog_level_filter(file_sink.level))
-                .error_handler(stderr_error_handler(&sink_label))
+                .error_handler(stderr_error_handler(&sink_label, diagnostic.clone()))
                 .build_arc()
                 .map_err(|error| {
                     FlowError::InvalidArgument(format!(
@@ -106,7 +120,7 @@ pub(crate) fn build_logger(
                     root_relay_id: root_relay_id.clone(),
                 })
                 .level_filter(spdlog_level_filter(file_sink.level))
-                .error_handler(stderr_error_handler(&sink_label))
+                .error_handler(stderr_error_handler(&sink_label, diagnostic.clone()))
                 .build_arc()
                 .map_err(|error| {
                     FlowError::InvalidArgument(format!(
@@ -137,7 +151,8 @@ pub(crate) fn build_logger(
                 ))
             })?;
 
-        let async_error_handler: ErrorHandler = async_sink_error_handler(&sink_label).into();
+        let async_error_handler: ErrorHandler =
+            async_sink_error_handler(&sink_label, diagnostic).into();
         let async_sink = AsyncPoolSink::builder()
             .sink(file)
             .thread_pool(Arc::clone(&pool))
@@ -155,6 +170,7 @@ pub(crate) fn build_logger(
 
         thread_pools.push(pool);
         sinks.push(async_sink);
+        initialization.complete();
     }
 
     // Leave the logger unnamed so LogCrateProxy maps log::target into record.logger_name().
@@ -171,6 +187,38 @@ pub(crate) fn build_logger(
     }
 
     Ok((logger, thread_pools))
+}
+
+/// Records early returns during sink construction before a logger is installed.
+struct SinkInitialization {
+    diagnostics: Option<SinkDiagnostics>,
+    completed: bool,
+}
+
+impl SinkInitialization {
+    fn new(diagnostics: Option<SinkDiagnostics>) -> Self {
+        Self {
+            diagnostics,
+            completed: false,
+        }
+    }
+
+    fn complete(mut self) {
+        self.completed = true;
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.initialized();
+        }
+    }
+}
+
+impl Drop for SinkInitialization {
+    fn drop(&mut self) {
+        if !self.completed
+            && let Some(diagnostics) = &self.diagnostics
+        {
+            diagnostics.initialization_failed();
+        }
+    }
 }
 
 /// Routes synchronous `AsyncPoolSink` errors through its per-sink handler.
@@ -312,9 +360,15 @@ fn normalize_path_components(path: &Path) -> PathBuf {
     normalized
 }
 
-fn stderr_error_handler(sink_label: &str) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
+fn stderr_error_handler(
+    sink_label: &str,
+    diagnostics: Option<SinkDiagnostics>,
+) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
     let sink_label = sink_label.to_owned();
     move |error| {
+        if let Some(diagnostics) = &diagnostics {
+            diagnostics.runtime_error(&error);
+        }
         let _ = writeln!(
             io::stderr(),
             "nemo-relay: logging sink error ({sink_label}): {error}"
@@ -365,11 +419,19 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-fn async_sink_error_handler(sink_label: &str) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
+fn async_sink_error_handler(
+    sink_label: &str,
+    diagnostics: Option<SinkDiagnostics>,
+) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
     let sink_label = sink_label.to_owned();
     let dropped_record_rate_limiter = DropNoticeRateLimiter::new();
     let dropped_flush_rate_limiter = DropNoticeRateLimiter::new();
     move |error| {
+        // Retain every loss while the independent emergency notice stays rate-limited.
+        // Sink failures never project back into logging, including errors on async workers.
+        if let Some(diagnostics) = &diagnostics {
+            diagnostics.runtime_error(&error);
+        }
         // A full queue can reject records and periodic flush requests at producer speed. Rate-limit
         // them separately so neither failure class can flood stderr or hide the other. Other errors
         // (disconnected channel and worker-side write failures) are rare and reported immediately.

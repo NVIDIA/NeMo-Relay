@@ -1,0 +1,93 @@
+---
+title: "Runtime Diagnostics"
+description: "Record and inspect bounded Relay diagnostic evidence independently of logging and plugins."
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Relay's Rust diagnostic foundation provides component-scoped recording and
+read-only snapshots. The serializable contracts live in `nemo-relay-types`;
+registration, retention, and queries live in `nemo_relay::diagnostics`.
+
+Diagnostic recording uses bounded memory and synchronization. It does not
+require a logger, plugin activation, a Tokio runtime, or an HTTP listener.
+Operational logging is an optional projection of recorded events. Updating
+diagnostic state does not guarantee that a record reaches an output or survives
+process exit.
+
+## Evidence and Ownership
+
+A source identity describes one diagnostic incarnation. Its UUID distinguishes
+it from another execution using the same PID. Component registrations have
+their own instance identifiers and generations. Recreating a component starts
+a new counter epoch; polling an existing component does not.
+
+Components record occurrences, active conditions, and observed recovery.
+Reading a condition does not record another occurrence. Recovery clears the
+active condition while preserving its bounded history and occurrence count.
+Closing a component retains its diagnostic evidence until retention requires
+eviction; closure does not establish recovery.
+
+The foundation describes observed facts. It does not decide application health,
+readiness, retry policy, admission, or restart behavior. A disconnected source
+does not establish that its process exited.
+
+## Resource and Data Boundaries
+
+Configure limits for component registrations, diagnostic keys, retained events,
+message and correlation sizes, and total retained data. Snapshot coverage
+reports rejected observations, truncated fields, evicted evidence, and saturated
+counts. A saturated count is a lower bound, not an exact value.
+
+Callers are responsible for submitting safe diagnostic text. Size limits are
+not a credential or payload sanitizer. Do not submit prompts, tool arguments,
+credentials, raw configuration, or unreviewed source errors. Use stable codes
+and safe correlation identifiers instead of including request identities in
+aggregation keys.
+
+The versioned JSON contract preserves 64-bit counters and sequences as decimal
+strings. Rust callers use the corresponding typed integer wrappers. Existing
+subscriber and plugin diagnostic APIs retain their established representations.
+
+## Logging and Compatibility Views
+
+```rust
+use nemo_relay::diagnostics::{DiagnosticCorrelation, DiagnosticQuery, Diagnostics};
+
+let diagnostics = Diagnostics::default();
+let component = diagnostics.register_component("exporter.otlp.logs")?;
+component.observe_failure(
+    "otel.logs_export_failed",
+    "The collector request failed",
+    1,
+    DiagnosticCorrelation::default(),
+)?;
+
+let snapshot = diagnostics.snapshot(DiagnosticQuery::default())?;
+assert_eq!(snapshot.components.len(), 1);
+
+component.observe_recovery("otel.logs_export_failed")?;
+```
+
+Create diagnostic state before configuring logging when startup failures need
+to be inspectable. Attach a log projection after the logger is available.
+Logging thresholds affect output, not recording or snapshots. A projection runs
+outside the state lock. Sink failure callbacks record through a state-only path
+so they cannot recursively send a failure into the same sink.
+
+Explicitly configured sinks retain strict initialization behavior. This
+foundation does not introduce optional file sinks, change rotation or queue
+policy, or establish a whole-process shutdown deadline.
+
+Existing OpenTelemetry subscriber diagnostics and plugin reports are
+compatibility views. Projecting evidence into another view must not count a
+second occurrence. Lifetime and reporting limitations of those APIs remain
+explicit: an active-only plugin report cannot be used as a complete process
+history.
+
+## Implementation Scope
+
+This phase provides Rust contracts, recording, state, queries, and core
+instrumentation. CLI HTTP routes, broker collection, language binding exposure,
+and dynamic-plugin transport extensions are subsequent phases. No diagnostics
+listener or background collection service is started by this API.

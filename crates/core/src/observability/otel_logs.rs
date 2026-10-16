@@ -385,7 +385,8 @@ impl OpenTelemetryLogSubscriber {
         let minimum_severity = config.minimum_severity;
         let completed_span_context_ttl = config.completed_span_context_ttl;
         let instrumentation_scope = config.instrumentation_scope.clone();
-        let runtime_diagnostics = SignalRuntimeDiagnostics::new(config.diagnostic_field.clone());
+        let runtime_diagnostics =
+            SignalRuntimeDiagnostics::new_for_signal("logs", config.diagnostic_field.clone());
         let delivery_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
             config.endpoint.clone(),
             runtime_diagnostics.clone(),
@@ -797,7 +798,8 @@ impl LogDeliveryDiagnostics {
             reported_queue_drops: AtomicU64::new(0),
             children: Mutex::new(Vec::new()),
             endpoint,
-            runtime_diagnostics,
+            runtime_diagnostics: runtime_diagnostics
+                .for_exporter("observability.otel.logs.exporter"),
         }
     }
 
@@ -881,6 +883,10 @@ impl<E: LogExporter> LogExporter for DiagnosticLogExporter<E> {
         let result = self.inner.export(batch).await;
         if let Err(error) = &result {
             self.diagnostics.record_export_failure(error);
+        } else {
+            self.diagnostics
+                .runtime_diagnostics
+                .record_recovery("otel.logs_export_failed");
         }
         result
     }
@@ -1120,7 +1126,7 @@ impl LogEventProcessor {
             logger,
             minimum_severity,
             DEFAULT_COMPLETED_SPAN_CONTEXT_TTL,
-            SignalRuntimeDiagnostics::new(diagnostic_field),
+            SignalRuntimeDiagnostics::new_for_signal("logs", diagnostic_field),
         )
     }
 

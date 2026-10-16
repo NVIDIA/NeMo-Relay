@@ -48,6 +48,10 @@ use crate::api::runtime::{
     ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
+use crate::diagnostics::{
+    ComponentRecorder, DiagnosticObservation, DiagnosticOutcome, DiagnosticSeverity, Diagnostics,
+    legacy_component_key, legacy_diagnostic_code,
+};
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
 pub mod dynamic;
@@ -1775,6 +1779,7 @@ fn install_previous_configuration_for_teardown(
         report: previous_state.report.clone(),
         configuration_diagnostics: previous_state.configuration_diagnostics.clone(),
         runtime_diagnostics: previous_state.runtime_diagnostics.clone(),
+        diagnostic_recorders: previous_state.diagnostic_recorders.clone(),
         registrations: Vec::new(),
     });
     Ok(())
@@ -2589,8 +2594,47 @@ pub fn test_plugin_host_report() -> Option<ConfigReport> {
         .and_then(|host| host.as_ref().map(|host| host.report().config))
 }
 
-/// Record a bounded runtime diagnostic against the active plugin report.
+/// Records runtime evidence independently of plugin activation, then updates the
+/// existing active-only plugin report as a compatibility projection.
 pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
+    let recorder = {
+        let mut guard = ACTIVE_PLUGIN_CONFIGURATION
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = legacy_component_key(
+            &format!("plugin.{}", diagnostic.component),
+            diagnostic.field.as_deref(),
+        );
+        match guard.as_mut() {
+            Some(state) => {
+                if !state.diagnostic_recorders.contains_key(&key)
+                    && let Ok(recorder) =
+                        Diagnostics::process_default().register_component(key.clone())
+                {
+                    state.diagnostic_recorders.insert(key.clone(), recorder);
+                }
+                state.diagnostic_recorders.get(&key).cloned()
+            }
+            None => Diagnostics::process_default().register_component(key).ok(),
+        }
+    };
+    if let Some(recorder) = recorder {
+        // Compatibility emitters already own their log records. This is the only
+        // recording boundary; report projection below never records a second event.
+        let mut observation = DiagnosticObservation::occurrence(
+            legacy_diagnostic_code(&diagnostic.code),
+            DiagnosticSeverity::Error,
+            diagnostic.message.clone(),
+            diagnostic.count,
+        );
+        observation.outcome = DiagnosticOutcome::Failure;
+        let _ = recorder.record_without_projection(observation);
+    }
+    project_active_plugin_runtime_diagnostic(diagnostic);
+}
+
+/// Projects already-recorded evidence without counting another core observation.
+pub(crate) fn project_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
     let Ok(mut guard) = ACTIVE_PLUGIN_CONFIGURATION.lock() else {
         return;
     };
@@ -2732,6 +2776,7 @@ struct ActivePluginConfiguration {
     report: ConfigReport,
     configuration_diagnostics: Vec<ConfigDiagnostic>,
     runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
+    diagnostic_recorders: BTreeMap<String, ComponentRecorder>,
     registrations: Vec<PluginRegistration>,
 }
 
@@ -2917,6 +2962,7 @@ fn store_active_plugin_configuration_with_diagnostics(
         report,
         configuration_diagnostics,
         runtime_diagnostics,
+        diagnostic_recorders: BTreeMap::new(),
         registrations,
     });
     if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {

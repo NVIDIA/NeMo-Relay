@@ -23,7 +23,11 @@ use crate::api::event::{
     Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, ScopeCategory,
     ValidatedMetricMeasurement,
 };
-use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
+use crate::diagnostics::{
+    ComponentRecorder, DiagnosticCorrelation, DiagnosticObservation, DiagnosticOutcome,
+    DiagnosticSeverity, Diagnostics, legacy_component_key, legacy_diagnostic_code,
+};
+use crate::plugin::{RuntimeDiagnostic, project_active_plugin_runtime_diagnostic};
 
 use super::otel::{OpenTelemetryError, Result};
 use super::{MetadataPromotionIssue, promote_event_metadata_attributes};
@@ -110,13 +114,24 @@ struct RuntimeDiagnosticEntry {
 pub(super) struct SignalRuntimeDiagnostics {
     state: Arc<Mutex<RuntimeDiagnosticState>>,
     plugin_field: Option<String>,
+    recorder: Option<ComponentRecorder>,
 }
 
 impl SignalRuntimeDiagnostics {
+    #[cfg(test)]
     pub(super) fn new(plugin_field: Option<String>) -> Self {
+        Self::new_for_signal("runtime", plugin_field)
+    }
+
+    pub(super) fn new_for_signal(signal: &str, plugin_field: Option<String>) -> Self {
+        let key = legacy_component_key(
+            &format!("observability.otel.{signal}"),
+            plugin_field.as_deref(),
+        );
         Self {
             state: Arc::new(Mutex::new(RuntimeDiagnosticState::default())),
             plugin_field,
+            recorder: Diagnostics::process_default().register_component(key).ok(),
         }
     }
 
@@ -124,11 +139,31 @@ impl SignalRuntimeDiagnostics {
         let code = code.into();
         let count = count.max(1);
         let message = truncate_runtime_diagnostic_message(message);
+        // Existing emitters own their operational log records and rate limiting. Record the
+        // underlying observation once, without adding a second operational log projection.
+        if let Some(recorder) = &self.recorder {
+            let _ = recorder.record_without_projection(DiagnosticObservation {
+                code: legacy_diagnostic_code(&code),
+                severity: DiagnosticSeverity::Error,
+                outcome: DiagnosticOutcome::Failure,
+                message: message.clone(),
+                count,
+                correlation: DiagnosticCorrelation::default(),
+                activate_condition: matches!(
+                    code.as_str(),
+                    "otel.traces_export_failed"
+                        | "otel.logs_export_failed"
+                        | "otel.metrics_export_failed"
+                ),
+            });
+        }
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let total = if let Some(diagnostic) = state.diagnostics.get_mut(&code) {
+            // This materialized compatibility view includes observations even when
+            // the shared store reports a capacity rejection. It never re-records them.
             diagnostic.diagnostic.count = diagnostic.diagnostic.count.saturating_add(count);
             if diagnostic.messages.insert(message.clone()) {
                 let combined = combine_runtime_diagnostic_messages(&diagnostic.messages);
@@ -179,6 +214,23 @@ impl SignalRuntimeDiagnostics {
 
     pub(super) fn has_plugin_mirror(&self) -> bool {
         self.plugin_field.is_some()
+    }
+
+    pub(super) fn record_recovery(&self, code: &str) {
+        if let Some(recorder) = &self.recorder {
+            let _ = recorder.observe_recovery_without_projection(code);
+        }
+    }
+
+    /// Delivery pipelines share their legacy view, but own independent conditions and epochs.
+    pub(super) fn for_exporter(&self, key: &str) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            plugin_field: self.plugin_field.clone(),
+            recorder: Diagnostics::process_default()
+                .register_component(legacy_component_key(key, self.plugin_field.as_deref()))
+                .ok(),
+        }
     }
 }
 
@@ -652,7 +704,7 @@ pub(super) fn record_signal_runtime_diagnostic(
     message: String,
     count: u64,
 ) {
-    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+    project_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
         code: code.to_string(),
         component: "observability".to_string(),
         field,

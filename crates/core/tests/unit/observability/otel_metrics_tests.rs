@@ -3,6 +3,77 @@
 
 //! Unit tests for Relay OTLP metric routing and recording.
 
+#[test]
+fn metric_resource_pipeline_recovery_is_scoped_while_legacy_totals_are_shared() {
+    let field = format!("metrics.test.{}", uuid::Uuid::now_v7());
+    let shared = SignalRuntimeDiagnostics::new_for_signal("metrics", Some(field.clone()));
+    let base = MetricDeliveryDiagnostics::new("collector".into(), shared.clone());
+    let failed = base.for_pipeline();
+    let healthy = base.for_pipeline();
+    failed.record_export_failure(&"first pipeline failed");
+    healthy.record_export_failure(&"second pipeline failed");
+    healthy
+        .runtime_diagnostics
+        .record_recovery("otel.metrics_export_failed");
+
+    let query = crate::diagnostics::DiagnosticQuery {
+        component_key: Some(crate::diagnostics::legacy_component_key(
+            "observability.otel.metrics.exporter",
+            Some(&field),
+        )),
+        ..Default::default()
+    };
+    let snapshot = crate::diagnostics::Diagnostics::process_default()
+        .snapshot(query.clone())
+        .unwrap();
+    assert_eq!(snapshot.components.len(), 3);
+    assert_eq!(
+        snapshot
+            .components
+            .iter()
+            .flat_map(|component| &component.conditions)
+            .filter(|condition| matches!(
+                condition.state,
+                crate::diagnostics::DiagnosticConditionState::Active
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        base.failure_summary().as_deref(),
+        Some("otel.metrics_export_failed (2)")
+    );
+    assert_eq!(
+        shared
+            .snapshot()
+            .get("otel.metrics_export_failed")
+            .unwrap()
+            .count,
+        2
+    );
+
+    failed
+        .runtime_diagnostics
+        .record_recovery("otel.metrics_export_failed");
+    let snapshot = crate::diagnostics::Diagnostics::process_default()
+        .snapshot(query)
+        .unwrap();
+    assert!(
+        snapshot
+            .components
+            .iter()
+            .flat_map(|component| &component.conditions)
+            .all(|condition| matches!(
+                condition.state,
+                crate::diagnostics::DiagnosticConditionState::Recovered { .. }
+            ))
+    );
+    assert_eq!(
+        base.failure_summary().as_deref(),
+        Some("otel.metrics_export_failed (2)")
+    );
+}
+
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME,
