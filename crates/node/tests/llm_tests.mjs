@@ -3297,9 +3297,31 @@ describe('LLM intercepts', () => {
         content: { messages: [], model: 'test-model' },
       };
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      const events = [];
-      lib.registerSubscriber('collected_close', (event) => events.push(event));
+      const bounded = async (promise, label) => {
+        let timer;
+        const deadline = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(label)), 5000);
+        });
+        try {
+          return await Promise.race([promise, deadline]);
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+      const isEnd = (event) => event.name === 'process-exit-collected-close-llm' && event.scope_category === 'end';
+      let endSeen;
+      const ended = new Promise((resolve) => {
+        endSeen = resolve;
+      });
+      lib.registerSubscriber('collected_close', (event) => {
+        if (isEnd(event)) endSeen(event);
+      });
       const log = [];
+      let collected = false;
+      const registry = new FinalizationRegistry(() => {
+        collected = true;
+      });
+      let first;
       (() => {
         const stream = lib.llmStreamCallExecute(
           'process-exit-collected-close-llm',
@@ -3318,18 +3340,21 @@ describe('LLM intercepts', () => {
             return { log: [...log] };
           },
         );
-        stream.then((handle) => handle.next());
+        first = stream.then((handle) => {
+          registry.register(handle, 'stream');
+          return handle.next();
+        });
       })();
-      // A pending next() pins its handle. Collect after the collector has settled it.
-      await sleep(150);
-      globalThis.gc();
-      await sleep(50);
-      globalThis.gc();
-      await sleep(300);
-      await lib.flushSubscribers();
-      const end = events.find(
-        (event) => event.name === 'process-exit-collected-close-llm' && event.scope_category === 'end',
-      );
+      // A pending next() pins its handle. Collect once the first chunk has been delivered.
+      await first;
+      for (let attempt = 0; attempt < 10 && !collected; attempt += 1) {
+        globalThis.gc();
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      if (!collected) {
+        throw new Error('the stream handle was not collected');
+      }
+      const end = await bounded(ended, 'END was not published after the handle was collected');
       const expected = ['collector done', 'provider aborted', 'finalizer'];
       if (JSON.stringify(end?.data?.log) !== JSON.stringify(expected)) {
         throw new Error('END recorded ' + JSON.stringify(end?.data) + ' instead of a closed stream');
