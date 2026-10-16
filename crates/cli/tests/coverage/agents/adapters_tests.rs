@@ -574,72 +574,6 @@ fn keeps_codex_response_unwrapped() {
 }
 
 #[test]
-fn permission_requests_keep_hook_marks_and_require_exact_tool_identity() {
-    let outcome = claude_code::adapt(
-        json!({
-            "session_id": "claude-session",
-            "hook_event_name": "PermissionRequest",
-            "tool_use_id": "toolu-1",
-            "tool_name": "Write",
-            "tool_input": {"file_path": "README.md"}
-        }),
-        &HeaderMap::new(),
-    );
-    assert!(matches!(outcome.events[0], NormalizedEvent::HookMark(_)));
-    let permission = outcome.permission.unwrap().unwrap();
-    assert_eq!(permission.session_id, "claude-session");
-    assert_eq!(permission.tool_call_id, "toolu-1");
-    assert_eq!(permission.tool_name, "Write");
-    assert_eq!(permission.arguments, json!({"file_path": "README.md"}));
-
-    let claude_without_id = claude_code::adapt(
-        json!({
-            "session_id": "claude-session",
-            "hook_event_name": "PermissionRequest",
-            "tool_name": "Write",
-            "tool_input": {"file_path": "README.md"}
-        }),
-        &HeaderMap::new(),
-    );
-    assert_eq!(
-        claude_without_id.permission.unwrap().unwrap().tool_call_id,
-        ""
-    );
-
-    let codex_permission = codex::adapt(
-        json!({
-            "session_id": "codex-session",
-            "hook_event_name": "PermissionRequest",
-            "tool_call_id": "call-1",
-            "tool_name": "shell",
-            "arguments": {"cmd": "pwd"}
-        }),
-        &HeaderMap::new(),
-    )
-    .permission
-    .unwrap()
-    .unwrap();
-    assert_eq!(codex_permission.session_id, "codex-session");
-    assert_eq!(codex_permission.tool_call_id, "call-1");
-    assert_eq!(codex_permission.tool_name, "shell");
-    assert_eq!(codex_permission.arguments, json!({"cmd": "pwd"}));
-    assert_eq!(codex_permission.agent_kind, AgentKind::Codex);
-
-    let codex_without_id = codex::adapt(
-        json!({
-            "session_id": "codex-session",
-            "hook_event_name": "PermissionRequest",
-            "tool_name": "shell",
-            "tool_input": {"cmd": "pwd"}
-        }),
-        &HeaderMap::new(),
-    );
-    let codex_without_id = codex_without_id.permission.unwrap().unwrap();
-    assert_eq!(codex_without_id.tool_call_id, "");
-    assert_eq!(codex_without_id.arguments, json!({"cmd": "pwd"}));
-}
-
-#[test]
 fn normalizes_mark_style_events_and_header_session_ids() {
     let mut headers = HeaderMap::new();
     headers.insert("x-nemo-relay-session-id", "header-session".parse().unwrap());
@@ -1420,7 +1354,7 @@ fn mcp_tool_hooks_normalize_method_for_supported_harnesses() {
         ),
         (codex::adapt, "toolFailed"),
     ] {
-        for hook in ["PreToolUse", "PostToolUse", failure, "PermissionRequest"] {
+        for hook in ["PreToolUse", "PostToolUse", failure] {
             for name in ["mcp__docs__search", "mcp__plugin_docs_server__read_file"] {
                 let outcome = adapt(
                     json!({
@@ -1429,15 +1363,11 @@ fn mcp_tool_hooks_normalize_method_for_supported_harnesses() {
                     }),
                     &HeaderMap::new(),
                 );
-                let event = if hook == "PermissionRequest" {
-                    outcome.permission.as_ref().unwrap().as_ref().unwrap()
-                } else {
-                    match &outcome.events[0] {
-                        NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => {
-                            event
-                        }
-                        event => panic!("unexpected event: {event:?}"),
+                let event = match &outcome.events[0] {
+                    NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => {
+                        event
                     }
+                    event => panic!("unexpected event: {event:?}"),
                 };
                 assert_eq!(event.metadata["mcp.method.name"], "tools/call");
                 assert_eq!(event.tool_name, name);

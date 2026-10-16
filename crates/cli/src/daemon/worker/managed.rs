@@ -238,12 +238,6 @@ impl ManagedRuntime {
                     );
                     return Err(error);
                 }
-                if let Some(permission) = outcome.permission
-                    && let Err(error) = self.authorize_permission(permission).await
-                {
-                    operational::hook_completed(&operational, "managed_worker_hook", "denied");
-                    return Ok(codex::permission_denial(permission_denial_reason(error)));
-                }
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(outcome.response)
             }
@@ -267,37 +261,6 @@ impl ManagedRuntime {
                         true,
                     );
                     return Err(error);
-                }
-                if let Some(permission) = outcome.permission {
-                    let result = self.authorize_permission(permission).await;
-                    operational::hook_completed(
-                        &operational,
-                        "managed_worker_hook",
-                        if result.is_ok() {
-                            "completed"
-                        } else {
-                            "denied"
-                        },
-                    );
-                    return Ok(match result {
-                        Ok(()) => json!({
-                            "continue": true,
-                            "hookSpecificOutput": {
-                                "hookEventName": "PermissionRequest",
-                                "decision": { "behavior": "allow" },
-                            },
-                        }),
-                        Err(error) => json!({
-                            "continue": true,
-                            "hookSpecificOutput": {
-                                "hookEventName": "PermissionRequest",
-                                "decision": {
-                                    "behavior": "deny",
-                                    "message": permission_denial_reason(error),
-                                },
-                            },
-                        }),
-                    });
                 }
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(outcome.response)
@@ -333,20 +296,6 @@ impl ManagedRuntime {
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(pi::response_with_effects(outcome.response, &effects))
             }
-        }
-    }
-
-    async fn authorize_permission(
-        &self,
-        permission: Result<crate::events::ToolEvent, String>,
-    ) -> Result<(), CliError> {
-        match permission {
-            Ok(permission) => {
-                self.sessions
-                    .authorize_tool_permission(&permission, &self.owner)
-                    .await
-            }
-            Err(reason) => Err(CliError::InvalidPayload(reason)),
         }
     }
 
@@ -1321,13 +1270,6 @@ fn finish_llm_after_dispatch_failure(
             .metadata(metadata)
             .build(),
     );
-}
-
-fn permission_denial_reason(error: CliError) -> String {
-    error
-        .guardrail_rejection_reason()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| error.to_string())
 }
 
 fn merge_object(mut base: Value, extra: Value) -> Value {

@@ -7,13 +7,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
-use nemo_relay::api::event::{CategoryProfile, EventCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmCallEndParams, LlmHandle, LlmRequest, llm_call_end};
 #[cfg(test)]
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
 use nemo_relay::api::runtime::{
     ScopeStackHandle, SubscriberDelivery, TASK_SCOPE_STACK, create_scope_stack, task_scope_push,
-    with_scope_stack,
 };
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeHandle, ScopeType,
@@ -21,10 +19,8 @@ use nemo_relay::api::scope::{
 };
 use nemo_relay::api::tool::{
     ToolCallEndParams, ToolCallParams, ToolHandle, tool_call, tool_call_end,
-    tool_conditional_execution, tool_conditional_execution_with_event_context,
-    tool_request_intercepts,
+    tool_conditional_execution, tool_request_intercepts,
 };
-use nemo_relay::error::FlowError;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, Notify, OwnedMutexGuard};
 
@@ -536,11 +532,6 @@ struct ActiveTool {
     owner_subagent_id: Option<String>,
 }
 
-struct PermissionToolMatch {
-    tool_call_id: String,
-    parent_uuid: Option<uuid::Uuid>,
-}
-
 impl std::ops::Deref for ActiveTool {
     type Target = ToolHandle;
 
@@ -741,132 +732,6 @@ impl SessionManager {
                     .or_insert_with(|| owner.to_string());
             }
         }
-    }
-
-    /// Evaluates a final host permission request inside its existing session scope.
-    pub(crate) async fn authorize_tool_permission(
-        &self,
-        event: &ToolEvent,
-        owner: &str,
-    ) -> Result<(), CliError> {
-        let _activity = self.session_activity.begin();
-        if self.session_activity.is_closing() {
-            return Err(CliError::InvalidPayload(
-                "permission request arrived after session shutdown began".into(),
-            ));
-        }
-        let owners = self.authenticated_owners.lock().await;
-        match owners.get(&event.session_id) {
-            Some(existing) if existing == owner => {}
-            Some(_) => {
-                return Err(CliError::Unauthorized(format!(
-                    "Relay hook client does not own session '{}'",
-                    event.session_id
-                )));
-            }
-            None => {
-                return Err(CliError::InvalidPayload(format!(
-                    "permission request names unknown session '{}'",
-                    event.session_id
-                )));
-            }
-        }
-        drop(owners);
-        let gate = session_gate(&self.session_gates, &event.session_id).await;
-        let _gate = gate.lock().await;
-        let sessions = self.inner.lock().await;
-        let session = sessions.get(&event.session_id).ok_or_else(|| {
-            CliError::InvalidPayload(format!(
-                "permission request names unknown session '{}'",
-                event.session_id
-            ))
-        })?;
-        let matched = session.permission_request_match(event).ok_or_else(|| {
-            CliError::InvalidPayload(format!(
-                "permission request does not match the recorded tool call '{}'",
-                event.tool_call_id
-            ))
-        })?;
-        let stack = session.scope_stack.clone();
-        let name = event.tool_name.clone();
-        let arguments = normalize_tool_arguments(event.arguments.clone());
-        let guardrail_metadata = (!matched.tool_call_id.trim().is_empty()).then(|| {
-            json!({
-                "gen_ai.tool.call.id": matched.tool_call_id.clone(),
-            })
-        });
-        let agent_kind_name = session.agent_kind.as_str().to_string();
-        let event_name = event.event_name.clone();
-        let tool_call_id = matched.tool_call_id.clone();
-        let permission_mode = event
-            .payload
-            .get("permission_mode")
-            .and_then(Value::as_str)
-            .filter(|mode| !mode.is_empty())
-            .map(ToOwned::to_owned);
-        let metadata = session.event_identity_metadata(event.metadata.clone());
-        let matched_tool_call_id = matched.tool_call_id.clone();
-        drop(sessions);
-        let result = TASK_SCOPE_STACK
-            .scope(stack, async move {
-                let authorization = tool_conditional_execution_with_event_context(
-                    &name,
-                    &arguments,
-                    matched.parent_uuid,
-                    guardrail_metadata,
-                )
-                .await;
-                let policy_outcome = match &authorization {
-                    Ok(()) => "pass",
-                    Err(FlowError::GuardrailRejected(_)) => "reject",
-                    Err(_) => "error",
-                };
-                let mut data = json!({
-                    "agent_kind": agent_kind_name,
-                    "event_name": event_name,
-                    "tool_name": name,
-                    "tool_call_id": tool_call_id,
-                    "decision_source": "nemo_relay",
-                    "policy_outcome": policy_outcome,
-                });
-                if let Some(object) = data.as_object_mut() {
-                    if let Some(permission_mode) = permission_mode {
-                        object.insert("harness_permission_mode".into(), json!(permission_mode));
-                    }
-                    if let Err(error) = &authorization {
-                        object.insert("reason".into(), json!(error.to_string()));
-                    }
-                }
-                let _ = emit_mark_event(
-                    EmitMarkEventParams::builder()
-                        .name("nemo_relay.permission.policy_decision")
-                        .data(data)
-                        .metadata(metadata)
-                        .category(EventCategory::custom())
-                        .category_profile(
-                            CategoryProfile::builder()
-                                .subtype("nemo_relay.permission.policy_decision")
-                                .build(),
-                        )
-                        .build(),
-                );
-                authorization
-            })
-            .await;
-        if matches!(result, Err(FlowError::GuardrailRejected(_))) {
-            let mut sessions = self.inner.lock().await;
-            if let Some(session) = sessions.get_mut(&event.session_id)
-                && let Err(error) = session.close_permission_denied_tool(&matched_tool_call_id)
-            {
-                log::warn!(
-                    target: "nemo_relay.session",
-                    event = "permission_denied_tool_close_failed",
-                    error_kind = error.log_kind();
-                    "Failed to close permission-denied tool span"
-                );
-            }
-        }
-        result.map_err(CliError::from)
     }
 
     /// Starts the fail-safe idle closer used by the HTTP gateway.
@@ -1672,62 +1537,6 @@ impl Session {
             active_subagent_gateway_calls: HashMap::new(),
             config,
         }
-    }
-
-    fn permission_request_match(&self, event: &ToolEvent) -> Option<PermissionToolMatch> {
-        let arguments = normalize_tool_arguments(event.arguments.clone());
-        if event.tool_call_id.is_empty() {
-            let mut matches = self.tools.iter().filter(|(_, active)| {
-                active.name == event.tool_name && active.arguments == arguments
-            });
-            let (tool_call_id, active) = matches.next()?;
-            return matches.next().is_none().then(|| PermissionToolMatch {
-                tool_call_id: tool_call_id.clone(),
-                parent_uuid: active.handle.parent_uuid,
-            });
-        }
-        if let Some(active) = self
-            .tools
-            .get(&event.tool_call_id)
-            .filter(|active| active.name == event.tool_name && active.arguments == arguments)
-        {
-            return Some(PermissionToolMatch {
-                tool_call_id: event.tool_call_id.clone(),
-                parent_uuid: active.handle.parent_uuid,
-            });
-        }
-        self.pending_tool_hints
-            .iter()
-            .any(|pending| {
-                pending.hint.tool_call_id.as_deref() == Some(event.tool_call_id.as_str())
-                    && pending.hint.tool_name.as_deref() == Some(event.tool_name.as_str())
-                    && !pending.hint.arguments.is_null()
-                    && pending.hint.arguments == arguments
-            })
-            .then(|| PermissionToolMatch {
-                tool_call_id: event.tool_call_id.clone(),
-                parent_uuid: None,
-            })
-    }
-
-    fn close_permission_denied_tool(&mut self, tool_call_id: &str) -> Result<(), CliError> {
-        let Some(active) = self.tools.remove(tool_call_id) else {
-            return Ok(());
-        };
-        with_scope_stack(self.scope_stack.clone(), || {
-            tool_call_end(
-                ToolCallEndParams::builder()
-                    .handle(&active.handle)
-                    .execution_result(Value::Null.into())
-                    .metadata(json!({
-                        "error.type": "guardrail_rejected",
-                        "otel.status_code": "ERROR",
-                        "status": "denied",
-                    }))
-                    .build(),
-            )
-        })?;
-        Ok(())
     }
 
     // A child session can only be converted into a subagent before any real scope, LLM, or tool

@@ -33,7 +33,7 @@ The package contains these files:
 ## Captured Events
 
 With `codex-cli >= 0.143.0`, persistent installation requires `SessionStart`,
-`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and `PostCompact`. Relay
 requires exactly one enabled and trusted app-server handler for every generated
 event and forwards delivered hooks as scope, tool, mark, or private LLM

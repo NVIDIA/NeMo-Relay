@@ -18,7 +18,7 @@ Install `codex-cli` 0.143.0 or newer. Persistent installation requires one
 discovered, enabled, and trusted handler for each of the 10 events in the
 supported Codex hook schema:
 `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
-`PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
+`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
 `PostCompact`. Persistent setup also requires the `features.hooks` flag,
 plugin app-server metadata, and Relay's built-in OpenAI endpoint override. The
 installer checks the Codex version before it changes any files.
@@ -446,7 +446,7 @@ traffic to pass through the gateway.
 ## Captured Events
 
 The generated hook set includes `SessionStart`, `UserPromptSubmit`,
-`PreToolUse`, `PostToolUse`, `PermissionRequest`, `SubagentStart`,
+`PreToolUse`, `PostToolUse`, `SubagentStart`,
 `SubagentStop`, `Stop`, `PreCompact`, and `PostCompact`. Both compaction hooks
 emit canonical `compaction` marks. Relay requires the Codex app-server to
 discover exactly one enabled, trusted handler for every generated event.
