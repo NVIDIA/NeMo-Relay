@@ -374,6 +374,43 @@ fn cli_jsonl_logging_records_successful_command_lifecycle_without_leaking_secret
 }
 
 #[test]
+fn cli_logging_environment_overrides_keep_configured_file_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let (config_path, log_path) = write_debug_jsonl_logging_config(temp.path());
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_LOG", "info")
+        .env("NEMO_RELAY_LOG_STDERR_FORMAT", "jsonl")
+        .env("NEMO_RELAY_LOG_STDERR", "false")
+        .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
+        .arg("--config")
+        .arg(&config_path)
+        .args(["agents", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{:?}", output);
+    assert!(output.stderr.is_empty());
+    let records = read_jsonl_records(&log_path);
+    assert!(
+        records
+            .iter()
+            .any(|record| record["event"] == "command_started")
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record["event"] == "command_completed")
+    );
+    assert!(
+        records
+            .iter()
+            .all(|record| record["level"] != "debug" && record["level"] != "trace")
+    );
+}
+
+#[test]
 fn cli_explicit_logging_ignores_project_path_alias() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workspace");
