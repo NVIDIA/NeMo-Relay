@@ -42,6 +42,10 @@ operations through `next()` and have no host RPC deadline. This also applies
 while opening an LLM response stream. Caller cancellation stops the invocation
 and releases its continuations, codec capabilities, and scope state.
 
+Timeout errors name the callback and its registration surface. For example,
+`surface=TOOL_REQUEST_INTERCEPT, callback=check_request` identifies which callback
+timed out. The error also shows the time limit: `worker RPC timed out after 30000ms`.
+
 ## Inject Event Metadata
 
 Choose a worker language to register a callback that proposes metadata additions:

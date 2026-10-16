@@ -2056,12 +2056,13 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
         .expect("host should send cancellation after timeout")
         .expect("cancellation channel should remain open");
 
-    assert!(
-        result
-            .expect_err("worker invocation should time out")
-            .to_string()
-            .contains("worker invocation timed out")
-    );
+    let error = result
+        .expect_err("worker invocation should time out")
+        .to_string();
+    assert!(error.contains("worker invocation timed out"), "{error}");
+    assert!(error.contains("surface=TOOL_REQUEST_INTERCEPT"), "{error}");
+    assert!(error.contains("callback=timeout"), "{error}");
+    assert!(error.contains("worker RPC timed out after 10ms"), "{error}");
     assert_eq!(cancellation.invocation_id, invocation_id);
     assert!(cancellation.reason.contains("timed out"));
 }

@@ -2365,6 +2365,10 @@ impl WorkerPluginCallback {
         timeout: Option<Duration>,
     ) -> FlowResult<InvokeResponse> {
         let mut guard = WorkerInvocationGuard::new(self, &request);
+        let callback_name = request.registration_name.clone();
+        let surface_name = RegistrationSurface::try_from(request.surface)
+            .map(|surface| surface.as_str_name())
+            .unwrap_or("UNKNOWN");
         let mut client = self.client.clone();
         let response = client.invoke(worker_rpc_request(request));
         let result = match timeout {
@@ -2380,7 +2384,15 @@ impl WorkerPluginCallback {
         guard.finish();
         result
             .map(|response| report_worker_response(response.into_inner(), &self.plugin_kind))
-            .map_err(|err| worker_status_to_flow("worker invoke failed", err))
+            .map_err(|err| {
+                if err.code() == tonic::Code::DeadlineExceeded {
+                    FlowError::Internal(format!(
+                        "worker invocation timed out (surface={surface_name}, callback={callback_name}): {err}"
+                    ))
+                } else {
+                    worker_status_to_flow("worker invoke failed", err)
+                }
+            })
     }
 }
 
