@@ -207,3 +207,67 @@ fn scope_stack_propagation_entrypoints_round_trip_through_the_ffi() {
         nemo_relay_scope_stack_free(stack);
     }
 }
+
+#[test]
+fn scope_stack_snapshot_ffi_absence_owned_output_and_restore() {
+    std::thread::spawn(|| unsafe {
+        assert!(!nemo_relay_scope_stack_active());
+        assert_eq!(
+            nemo_relay_current_scope_stack_snapshot_json(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        let mut output = ptr::dangling_mut();
+        assert_eq!(
+            nemo_relay_current_scope_stack_snapshot_json(&mut output),
+            NemoRelayStatus::Ok
+        );
+        assert!(output.is_null());
+        assert!(!nemo_relay_scope_stack_active());
+        let mut previous = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_scope_stack_capture_thread(&mut previous),
+            NemoRelayStatus::Ok
+        );
+        let mut stack = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_scope_stack_create(&mut stack),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_scope_stack_set_thread(stack),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_current_scope_stack_snapshot_json(&mut output),
+            NemoRelayStatus::Ok
+        );
+        let first: Json = serde_json::from_str(CStr::from_ptr(output).to_str().unwrap()).unwrap();
+        nemo_relay_string_free(output);
+        assert_eq!(first["scopes"].as_array().unwrap().len(), 1);
+        assert_eq!(first["scopes"][0]["scope_type"], "agent");
+        assert!(
+            !uuid::Uuid::parse_str(first["scopes"][0]["scope_id"].as_str().unwrap())
+                .unwrap()
+                .is_nil()
+        );
+        assert_eq!(
+            nemo_relay_current_scope_stack_snapshot_json(&mut output),
+            NemoRelayStatus::Ok
+        );
+        let second: Json = serde_json::from_str(CStr::from_ptr(output).to_str().unwrap()).unwrap();
+        nemo_relay_string_free(output);
+        assert_eq!(first, second);
+        assert_eq!(
+            nemo_relay_scope_stack_restore_thread(previous),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+        assert_eq!(
+            nemo_relay_current_scope_stack_snapshot_json(&mut output),
+            NemoRelayStatus::Ok
+        );
+        assert!(output.is_null());
+    })
+    .join()
+    .unwrap();
+}

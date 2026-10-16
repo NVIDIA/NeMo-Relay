@@ -2814,6 +2814,20 @@ pub fn with_scope_stack(
     })
 }
 
+/// Return owned scope identities, or null without an explicitly active binding.
+#[napi]
+pub fn current_scope_stack_snapshot(
+    env: Env,
+) -> napi::Result<Option<crate::types::ScopeStackSnapshot>> {
+    let snapshot = match callback_factory::callback_scope_stack(&env)? {
+        Some((stack, _)) => nemo_relay::api::runtime::scope_stack_snapshot(&stack).map(Some),
+        None => nemo_relay::api::runtime::current_scope_stack_snapshot(),
+    };
+    snapshot
+        .map(|snapshot| snapshot.map(Into::into))
+        .map_err(to_napi_err)
+}
+
 /// Returns the current execution context's scope stack handle.
 #[napi]
 pub fn current_scope_stack(env: Env) -> napi::Result<ScopeStack> {

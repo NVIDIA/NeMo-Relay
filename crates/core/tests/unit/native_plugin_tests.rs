@@ -1142,6 +1142,11 @@ fn assert_native_host_api_versions() {
     assert_native_host_api_descriptor(
         current,
         NEMO_RELAY_NATIVE_ABI_VERSION,
+        std::mem::size_of::<NemoRelayNativeHostApiV8>(),
+    );
+    assert_native_host_api_descriptor(
+        native_host_api_v7(),
+        NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT,
         std::mem::size_of::<NemoRelayNativeHostApiV7>(),
     );
     assert_native_host_api_descriptor(
@@ -2386,7 +2391,7 @@ fn assert_native_json_output_and_host_api() {
     assert_eq!(host_api.abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
     assert_eq!(
         host_api.struct_size,
-        std::mem::size_of::<NemoRelayNativeHostApiV7>()
+        std::mem::size_of::<NemoRelayNativeHostApiV8>()
     );
 }
 

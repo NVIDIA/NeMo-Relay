@@ -588,6 +588,22 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
             let rewritten = tool_request_intercepts("demo_tool", json!({ "input": "value" }))
                 .await
                 .expect("worker request intercept should run");
+            let expected = serde_json::to_value(
+                nemo_relay::api::runtime::current_scope_stack_snapshot().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(rewritten["scope_stack_snapshot"], expected);
+            assert_eq!(rewritten["scope_stack_snapshot_after"], expected);
+            let retained = rewritten["scope_stack_snapshot"]["scopes"]
+                .as_array()
+                .unwrap();
+            let inside = rewritten["scope_stack_snapshot_inside"]["scopes"]
+                .as_array()
+                .unwrap();
+            assert_eq!(inside.len(), retained.len() + 1);
+            assert_eq!(&inside[..retained.len()], retained.as_slice());
+            assert_eq!(inside.last().unwrap()["scope_type"], "function");
+            assert_eq!(retained.last().unwrap()["scope_id"], outer_uuid.to_string());
             let tool_result = tool_call_execute(
                 ToolCallExecuteParams::builder()
                     .name("worker-fixture-tool")
@@ -1884,55 +1900,83 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
             response_codec: Arc::new(RuntimeOpenAiChatCodec),
         },
     ] {
-        let provider_only = json!({"lane": case.name, "preserve": true});
-        let expected_provider_only = provider_only.clone();
-        let answer = case.answer;
-        let response = llm_call_execute(
-            LlmCallExecuteParams::builder()
-                .name(format!("python-worker-codec-context-{}", case.name))
-                .request(LlmRequest {
-                    headers: Map::new(),
-                    content: json!({
-                        "model": "caller-model",
-                        "messages": [{"role": "user", "content": "hello"}],
-                        "provider_only": provider_only,
-                    }),
-                })
-                .codec(case.request_codec)
-                .response_codec(case.response_codec)
-                .func(Arc::new(move |request| {
-                    let expected_provider_only = expected_provider_only.clone();
-                    Box::pin(async move {
-                        assert_eq!(request.content["model"], "worker-model");
-                        assert_eq!(request.content["provider_only"], expected_provider_only);
-                        Ok(json!({
-                            "id": "chatcmpl-codec-context",
-                            "object": "chat.completion",
-                            "model": "provider-model",
-                            "choices": [{
-                                "index": 0,
-                                "message": {"role": "assistant", "content": answer},
-                                "finish_reason": "stop",
-                            }],
+        TASK_SCOPE_STACK
+            .scope(create_scope_stack(), async {
+                let agent = push_scope(
+                    PushScopeParams::builder()
+                        .name(&format!("python-worker-snapshot-agent-{}", case.name))
+                        .scope_type(ScopeType::Agent)
+                        .build(),
+                )
+                .unwrap();
+                let expected_snapshot = serde_json::to_value(
+                    nemo_relay::api::runtime::current_scope_stack_snapshot().unwrap(),
+                )
+                .unwrap();
+                let provider_only = json!({"lane": case.name, "preserve": true});
+                let expected_provider_only = provider_only.clone();
+                let answer = case.answer;
+                let response = llm_call_execute(
+                    LlmCallExecuteParams::builder()
+                        .name(format!("python-worker-codec-context-{}", case.name))
+                        .request(LlmRequest {
+                            headers: Map::new(),
+                            content: json!({
+                                "model": "caller-model",
+                                "messages": [{"role": "user", "content": "hello"}],
+                                "provider_only": provider_only,
+                            }),
+                        })
+                        .codec(case.request_codec)
+                        .response_codec(case.response_codec)
+                        .func(Arc::new(move |request| {
+                            let expected_provider_only = expected_provider_only.clone();
+                            Box::pin(async move {
+                                assert_eq!(request.content["model"], "worker-model");
+                                assert_eq!(
+                                    request.content["provider_only"],
+                                    expected_provider_only
+                                );
+                                Ok(json!({
+                                    "id": "chatcmpl-codec-context",
+                                    "object": "chat.completion",
+                                    "model": "provider-model",
+                                    "choices": [{
+                                        "index": 0,
+                                        "message": {"role": "assistant", "content": answer},
+                                        "finish_reason": "stop",
+                                    }],
+                                }))
+                            })
                         }))
-                    })
-                }))
-                .build(),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{} codec-context call failed: {error}", case.name));
+                        .build(),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{} codec-context call failed: {error}", case.name));
 
-        assert_eq!(
-            response["_codec_context_probe"],
-            json!({
-                "request_kind": case.identity_kind,
-                "request_id": case.identity_id,
-                "response_kind": case.identity_kind,
-                "response_id": case.identity_id,
-                "decoded_model": "provider-model",
-                "decoded_message": case.answer,
+                assert_eq!(
+                    response["_codec_context_probe"],
+                    json!({
+                        "request_kind": case.identity_kind,
+                        "request_id": case.identity_id,
+                        "response_kind": case.identity_kind,
+                        "response_id": case.identity_id,
+                        "decoded_model": "provider-model",
+                        "decoded_message": case.answer,
+                    })
+                );
+                assert_eq!(response["_scope_stack_snapshot_probe"], expected_snapshot);
+                assert_eq!(
+                    response["_scope_stack_snapshot_probe"]["scopes"]
+                        .as_array()
+                        .unwrap()
+                        .last()
+                        .unwrap()["scope_id"],
+                    agent.uuid.to_string()
+                );
+                pop_scope(PopScopeParams::builder().handle_uuid(&agent.uuid).build()).unwrap();
             })
-        );
+            .await;
     }
 
     drop(cleanup);
@@ -2215,8 +2259,19 @@ class CodecContextProbe(WorkerPlugin):
             encoded = await request_codec.encode(annotated, request)
             response = await next_call.call(encoded)
             decoded = await response_codec.decode(response)
+            if ctx.runtime is None:
+                raise RuntimeError("host runtime is unavailable")
+            snapshot = await ctx.runtime.current_scope_stack_snapshot()
+            if snapshot is None:
+                raise RuntimeError("enclosing Agent snapshot is unavailable")
 
             result = dict(response)
+            result["_scope_stack_snapshot_probe"] = {
+                "scopes": [
+                    {"scope_id": entry.scope_id, "scope_type": entry.scope_type.value}
+                    for entry in snapshot.scopes
+                ]
+            }
             result["_codec_context_probe"] = {
                 "request_kind": context.request_codec.codec.kind,
                 "request_id": context.request_codec.codec.id,
@@ -2308,4 +2363,81 @@ fn assert_not_parent(
 ) {
     let event = find_event(events, name, scope_category);
     assert_ne!(event.parent_uuid(), Some(excluded_parent));
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scope_stack_snapshot_worker_correlates_parallel_agent_llm_and_tool_callbacks() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let loaded = load_and_initialize_fixture(Map::from_iter([(
+        "inspect_execution_snapshots".into(),
+        json!(true),
+    )]))
+    .await;
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let run_agent = |name: &'static str| {
+        let barrier = barrier.clone();
+        tokio::spawn(TASK_SCOPE_STACK.scope(create_scope_stack(), async move {
+            let agent = push_scope(
+                PushScopeParams::builder()
+                    .name(name)
+                    .scope_type(ScopeType::Agent)
+                    .build(),
+            )
+            .unwrap();
+            let expected = serde_json::to_value(
+                nemo_relay::api::runtime::current_scope_stack_snapshot().unwrap(),
+            )
+            .unwrap();
+            barrier.wait().await;
+            let llm = llm_call_execute(
+                LlmCallExecuteParams::builder()
+                    .name(name)
+                    .request(LlmRequest {
+                        headers: Map::new(),
+                        content: json!({"agent": name}),
+                    })
+                    .func(Arc::new(|_| {
+                        Box::pin(async { Ok(json!({"tool_call_id": "call_1"})) })
+                    }))
+                    .build(),
+            )
+            .await
+            .unwrap();
+            let tool = tool_call_execute(
+                ToolCallExecuteParams::builder()
+                    .name("snapshot-tool")
+                    .args(json!({"agent": name}))
+                    .tool_call_id("call_1")
+                    .func(Arc::new(|arguments| {
+                        Box::pin(async move { Ok(ToolExecutionResult::new(arguments)) })
+                    }))
+                    .build(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(llm["scope_stack_snapshot"], expected);
+            assert_eq!(tool.result["scope_stack_snapshot"], expected);
+            assert_eq!(tool.result["snapshot_tool_call_id"], "call_1");
+            assert_eq!(llm["tool_call_id"], "call_1");
+            let scopes = expected["scopes"].as_array().unwrap();
+            assert_eq!(scopes.last().unwrap()["scope_id"], agent.uuid.to_string());
+            assert_eq!(scopes.last().unwrap()["scope_type"], "agent");
+            pop_scope(PopScopeParams::builder().handle_uuid(&agent.uuid).build()).unwrap();
+            (
+                agent.uuid,
+                llm["scope_stack_snapshot"].clone(),
+                tool.result["scope_stack_snapshot"].clone(),
+            )
+        }))
+    };
+    let (first, second) = tokio::join!(
+        run_agent("snapshot-agent-first"),
+        run_agent("snapshot-agent-second")
+    );
+    let (first_agent, first_llm, first_tool) = first.unwrap();
+    let (second_agent, second_llm, second_tool) = second.unwrap();
+    assert_ne!(first_agent, second_agent);
+    assert_eq!(first_llm, first_tool);
+    assert_eq!(second_llm, second_tool);
+    assert_ne!(first_llm, second_llm);
+    loaded.clear();
 }
