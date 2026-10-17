@@ -432,7 +432,7 @@ func startResourceMetricsCollection() (*resourceMetricsCollection, error) {
 	var collection *resourceMetricsCollection
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	err := checkStatus(C.nemo_relay_resource_metrics_collect_start(&collection))
+	err := callStatus(func() C.int32_t { return C.nemo_relay_resource_metrics_collect_start(&collection) })
 	return collection, err
 }
 
@@ -457,7 +457,7 @@ func collectResourceMetrics(ctx context.Context, start func() (*resourceMetricsC
 		err := func() error {
 			runtime.LockOSThread()
 			defer runtime.UnlockOSThread()
-			return checkStatus(C.nemo_relay_resource_metrics_collect_poll(collection, &done, &out))
+			return callStatus(func() C.int32_t { return C.nemo_relay_resource_metrics_collect_poll(collection, &done, &out) })
 		}()
 		if err != nil || !bool(done) {
 			return false, nil, err

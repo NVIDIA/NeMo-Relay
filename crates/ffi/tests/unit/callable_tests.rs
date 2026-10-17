@@ -406,11 +406,12 @@ unsafe extern "C" fn llm_exec_codec_context_cb(
 
 static COLLECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-unsafe extern "C" fn collector_cb(_chunk: *const c_char) {
+unsafe extern "C" fn collector_cb(_user_data: *mut std::ffi::c_void, _chunk: *const c_char) -> i32 {
     COLLECTED_COUNT.fetch_add(1, Ordering::SeqCst);
+    0
 }
 
-unsafe extern "C" fn finalizer_cb() -> *mut c_char {
+unsafe extern "C" fn finalizer_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
     CString::new(r#"{"done":true}"#).unwrap().into_raw()
 }
 
@@ -454,6 +455,15 @@ unsafe extern "C" fn null_event_sanitize_cb(
     _event: *const FfiEvent,
     _fields_json: *const c_char,
 ) -> *mut c_char {
+    std::ptr::null_mut()
+}
+
+unsafe extern "C" fn failing_event_sanitize_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+    _fields_json: *const c_char,
+) -> *mut c_char {
+    set_last_error("sanitizer boom");
     std::ptr::null_mut()
 }
 
@@ -873,12 +883,16 @@ fn assert_llm_stream_callbacks(runtime: &tokio::runtime::Runtime) {
 
 fn assert_collector_and_finalizer_callbacks() {
     COLLECTED_COUNT.store(0, Ordering::SeqCst);
-    let mut collector = wrap_collector_fn(collector_cb);
+    let (mut collector, finalizer, error) = wrap_stream_callbacks(
+        Some(collector_cb),
+        Some(finalizer_cb),
+        std::ptr::null_mut(),
+        None,
+    );
     collector(json!({"chunk": 1})).unwrap();
     assert_eq!(COLLECTED_COUNT.load(Ordering::SeqCst), 1);
-
-    let finalizer = wrap_finalizer_fn(finalizer_cb);
     assert_eq!(finalizer(), json!({"done": true}));
+    assert!(error.lock().unwrap().is_none());
 }
 
 fn assert_event_callbacks() {
@@ -927,14 +941,21 @@ fn assert_event_callbacks() {
         resolve(invalid(Arc::new(event.clone()), original_fields.clone()))
             .unwrap_err()
             .to_string()
-            .contains("invalid event sanitizer result")
+            .contains("event sanitizer callback failed: invalid JSON")
     );
     let null = wrap_event_sanitize_fn(null_event_sanitize_cb, std::ptr::null_mut(), None);
-    assert!(
-        resolve(null(Arc::new(event), original_fields.clone()))
+    assert_eq!(
+        resolve(null(Arc::new(event.clone()), original_fields.clone()))
             .unwrap_err()
-            .to_string()
-            .contains("invalid event sanitizer result")
+            .to_string(),
+        "internal error: event sanitizer callback failed"
+    );
+    let failing = wrap_event_sanitize_fn(failing_event_sanitize_cb, std::ptr::null_mut(), None);
+    assert_eq!(
+        resolve(failing(Arc::new(event), original_fields.clone()))
+            .unwrap_err()
+            .to_string(),
+        "internal error: sanitizer boom"
     );
 
     let handle = LlmHandle::builder()

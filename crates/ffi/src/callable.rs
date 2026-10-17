@@ -110,7 +110,7 @@ pub fn wrap_conditional_middleware_guardrail_fn(
         let result_ptr = unsafe { cb(ud.ptr, c_kinds, c_name.as_ptr()) };
         unsafe { nemo_relay_string_free_internal(c_kinds) };
         if result_ptr.is_null() {
-            return None;
+            return last_error_message();
         }
         let result = ptr_to_opt_string(result_ptr);
         unsafe { nemo_relay_string_free_internal(result_ptr) };
@@ -358,14 +358,16 @@ pub type NemoRelayLlmRequestInterceptCb = unsafe extern "C" fn(
 
 /// Callback for collecting intercepted stream chunks. Invoked with each chunk
 /// (after stream execution intercepts have been applied) as a null-terminated
-/// C string. The string is only valid for the duration of the call.
-pub type NemoRelayCollectorCb = unsafe extern "C" fn(chunk: *const c_char);
+/// C string. The string is only valid for the duration of the call. Non-zero
+/// ends the stream.
+pub type NemoRelayCollectorCb =
+    unsafe extern "C" fn(user_data: *mut libc::c_void, chunk: *const c_char) -> i32;
 
 /// Callback for finalizing a collected stream. Invoked once when the stream is
-/// exhausted. Must return a JSON C string representing the aggregated response.
-/// The returned string must be allocated with `malloc` or equivalent; the
-/// runtime will free it.
-pub type NemoRelayFinalizerCb = unsafe extern "C" fn() -> *mut c_char;
+/// exhausted or closed early. Must return a JSON C string representing the
+/// aggregated response. The returned string must be allocated with `malloc` or
+/// equivalent; the runtime will free it.
+pub type NemoRelayFinalizerCb = unsafe extern "C" fn(user_data: *mut libc::c_void) -> *mut c_char;
 
 /// Callback for plugin validation.
 /// Receives plugin config JSON and returns a JSON array of diagnostics.
@@ -1123,45 +1125,69 @@ pub fn wrap_llm_stream_exec_fn(
     })
 }
 
-/// Wrap a C collector callback into a `Box<dyn FnMut(Json) -> Result<()> + Send>`
-/// for use by the core runtime. Each intercepted chunk Json is serialized to a
-/// JSON string and passed to the callback.
-///
-/// Because the C collector callback signature returns `void`, the wrapper
-/// always returns `Ok(())`. C callers that need to signal errors from the
-/// collector should use a side-channel (e.g., setting a flag) and check it
-/// after the stream is consumed.
-///
-/// # Safety
-/// The caller must ensure `cb` remains valid for the lifetime of the returned
-/// closure. The C callback is invoked synchronously from the stream-consumption
-/// task.
-pub fn wrap_collector_fn(cb: NemoRelayCollectorCb) -> Box<dyn FnMut(Json) -> Result<()> + Send> {
-    // NemoRelayCollectorCb is a plain `extern "C" fn` pointer (no user_data),
-    // which is Copy + Send, so it can be moved into the closure directly.
-    Box::new(move |chunk: Json| {
-        let c_chunk = json_to_c_string(&chunk);
-        unsafe { cb(c_chunk) };
-        unsafe { nemo_relay_string_free_internal(c_chunk) };
-        Ok(())
-    })
-}
+pub(crate) type StreamCallbackError = Arc<std::sync::Mutex<Option<String>>>;
 
-/// Wrap a C finalizer callback into a `Box<dyn FnOnce() -> Json + Send>` for
-/// use by the core runtime. The callback is invoked exactly once when the
-/// stream is exhausted. The returned C string is parsed as JSON and then freed.
-///
-/// # Safety
-/// The caller must ensure `cb` remains valid until the returned closure is
-/// invoked. The C callback must return a valid, heap-allocated JSON C string
-/// (or null, in which case `Json::Null` is returned).
-pub fn wrap_finalizer_fn(cb: NemoRelayFinalizerCb) -> Box<dyn FnOnce() -> Json + Send> {
-    Box::new(move || {
-        let result_ptr = unsafe { cb() };
-        let result = ptr_to_json(result_ptr);
-        unsafe { nemo_relay_string_free_internal(result_ptr) };
-        result
-    })
+/// Wrap the C collector and finalizer callbacks.
+#[allow(clippy::type_complexity)]
+pub fn wrap_stream_callbacks(
+    collector: Option<NemoRelayCollectorCb>,
+    finalizer: Option<NemoRelayFinalizerCb>,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> (
+    Box<dyn FnMut(Json) -> Result<()> + Send>,
+    Box<dyn FnOnce() -> Json + Send>,
+    StreamCallbackError,
+) {
+    let ud = make_user_data(user_data, free_fn);
+    let error_slot: StreamCallbackError = Arc::new(std::sync::Mutex::new(None));
+
+    let collector_fn: Box<dyn FnMut(Json) -> Result<()> + Send> = match collector {
+        Some(cb) => {
+            let ud = ud.clone();
+            Box::new(move |chunk: Json| {
+                clear_last_error();
+                let c_chunk = json_to_c_string(&chunk);
+                let status = unsafe { cb(ud.ptr, c_chunk) };
+                unsafe { nemo_relay_string_free_internal(c_chunk) };
+                if status == 0 {
+                    return Ok(());
+                }
+                Err(FlowError::Internal(last_error_message().unwrap_or_else(
+                    || format!("stream collector callback failed with status {status}"),
+                )))
+            })
+        }
+        None => Box::new(|_: Json| Ok(())),
+    };
+
+    let finalizer_fn: Box<dyn FnOnce() -> Json + Send> = match finalizer {
+        Some(cb) => {
+            let slot = error_slot.clone();
+            Box::new(move || {
+                clear_last_error();
+                let result_ptr = unsafe { cb(ud.ptr) };
+                let failure = if result_ptr.is_null() {
+                    last_error_message()
+                } else {
+                    let text = unsafe { CStr::from_ptr(result_ptr) }.to_string_lossy();
+                    serde_json::from_str::<Json>(&text)
+                        .err()
+                        .map(|error| format!("stream finalizer returned invalid JSON: {error}"))
+                };
+                let result = ptr_to_json(result_ptr);
+                unsafe { nemo_relay_string_free_internal(result_ptr) };
+                if let Some(message) = failure {
+                    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(message);
+                    return Json::Null;
+                }
+                result
+            })
+        }
+        None => Box::new(|| Json::Null),
+    };
+
+    (collector_fn, finalizer_fn, error_slot)
 }
 
 /// Wrap a C event subscriber callback into a Rust closure.
@@ -1215,14 +1241,18 @@ pub fn wrap_event_sanitize_fn(
     Arc::new(move |event: Arc<Event>, fields: EventSanitizeFields| {
         let ud = ud.clone();
         Box::pin(async move {
+            clear_last_error();
             let ffi_event = FfiEvent((*event).clone());
             let fields_json =
                 json_to_c_string(&serde_json::to_value(&fields).unwrap_or(Json::Null));
             let result_ptr = unsafe { cb(ud.ptr, &ffi_event, fields_json) };
             unsafe { nemo_relay_string_free_internal(fields_json) };
-            let result = serde_json::from_value(ptr_to_json(result_ptr)).map_err(|error| {
-                FlowError::Internal(format!("invalid event sanitizer result: {error}"))
-            });
+            let result = json_result_from_ptr(result_ptr, "event sanitizer callback failed")
+                .and_then(|value| {
+                    serde_json::from_value(value).map_err(|error| {
+                        FlowError::Internal(format!("invalid event sanitizer result: {error}"))
+                    })
+                });
             unsafe { nemo_relay_string_free_internal(result_ptr) };
             result
         })

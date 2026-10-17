@@ -319,6 +319,8 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
                 None,
                 None,
                 None,
+                ptr::null_mut(),
+                None,
                 parent,
                 0,
                 ptr::null(),

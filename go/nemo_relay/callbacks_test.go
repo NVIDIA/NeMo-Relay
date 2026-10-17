@@ -6,6 +6,7 @@ package nemo_relay
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -118,5 +119,43 @@ func TestLlmSanitizeDirectionalContextsPreserveEveryCodecIdentity(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			assertCodecIdentity(t, test)
 		})
+	}
+}
+
+func TestToolExecutionPanicReturnsError(t *testing.T) {
+	_, err := ToolCallExecute("panicking_tool", json.RawMessage(`{}`), func(json.RawMessage) (ToolExecutionResult, error) {
+		panic("tool boom")
+	})
+	if err == nil || !strings.Contains(err.Error(), "tool execution callback panicked: tool boom") {
+		t.Fatalf("ToolCallExecute error = %v, want tool panic", err)
+	}
+	result, err := ToolCallExecute("tool_after_panic", json.RawMessage(`{}`), func(json.RawMessage) (ToolExecutionResult, error) {
+		return ToolExecutionResult{Result: json.RawMessage(`{"ok":true}`)}, nil
+	})
+	if err != nil || string(result.Result) != `{"ok":true}` {
+		t.Fatalf("ToolCallExecute after recovered panic = %+v, %v", result, err)
+	}
+}
+
+func TestSubscriberPanicDoesNotCrash(t *testing.T) {
+	delivered := make(chan struct{}, 16)
+	if err := RegisterSubscriber("go_panicking_subscriber", func(Event) {
+		delivered <- struct{}{}
+		panic("subscriber boom")
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	defer DeregisterSubscriber("go_panicking_subscriber")
+	if _, err := LlmCallExecute("subscriber_panic_llm", map[string]any{"headers": map[string]any{}, "content": map[string]any{}},
+		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil }); err != nil {
+		t.Fatalf("LlmCallExecute failed: %v", err)
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
+	select {
+	case <-delivered:
+	default:
+		t.Fatal("subscriber was not invoked")
 	}
 }

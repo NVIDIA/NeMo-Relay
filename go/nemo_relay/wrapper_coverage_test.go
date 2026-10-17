@@ -160,7 +160,7 @@ func TestNilWrapperConstructors(t *testing.T) {
 	if got := newLLMHandle(nil); got != nil {
 		t.Fatalf("expected nil llm handle, got %#v", got)
 	}
-	if got := newLlmStream(nil, nil, nil); got != nil {
+	if got := newLlmStream(nil, nil); got != nil {
 		t.Fatalf("expected nil llm stream, got %#v", got)
 	}
 }
