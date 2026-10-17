@@ -23,6 +23,14 @@ navigation:
         slug: quick-start
         collapsed: open-by-default
         contents:
+          - section: "Agent Frameworks"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Deep Agents"
+                icon: fa-solid fa-layer-group
+                path: ./getting-started/quick-start/deep-agents.mdx
+                slug: deep-agents
           - section: "Application APIs"
             skip-slug: true
             collapsed: open-by-default
