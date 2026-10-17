@@ -1184,7 +1184,7 @@ async fn disconnected_worker_requests_log_pass_through_without_changing_response
         for (path, body) in [
             (
                 "/hooks/claude-code",
-                r#"{"session_id":"session","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"pwd"}}"#,
+                r#"{"session_id":"session","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"pwd"}}"#,
             ),
             ("/hooks/claude-code", "invalid hook payload"),
             ("/v1/responses", "{}"),

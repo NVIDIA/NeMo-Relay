@@ -15,10 +15,10 @@ local gateway cannot observe provider traffic that never reaches the machine.
 ## Requirements
 
 Install `codex-cli` 0.143.0 or newer. Persistent installation requires one
-discovered, enabled, and trusted handler for each of the 10 events in the
-supported Codex hook schema:
+discovered, enabled, and trusted handler for each of the nine events in the
+Relay-generated Codex hook set:
 `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
-`PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
+`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
 `PostCompact`. Persistent setup also requires the `features.hooks` flag,
 plugin app-server metadata, and Relay's built-in OpenAI endpoint override. The
 installer checks the Codex version before it changes any files.
@@ -446,12 +446,12 @@ traffic to pass through the gateway.
 ## Captured Events
 
 The generated hook set includes `SessionStart`, `UserPromptSubmit`,
-`PreToolUse`, `PostToolUse`, `PermissionRequest`, `SubagentStart`,
+`PreToolUse`, `PostToolUse`, `SubagentStart`,
 `SubagentStop`, `Stop`, `PreCompact`, and `PostCompact`. Both compaction hooks
 emit canonical `compaction` marks. Relay requires the Codex app-server to
 discover exactly one enabled, trusted handler for every generated event.
-`PostToolUseFailure`, `Notification`, and `SessionEnd` are not in the Codex 0.143
-plugin hook schema, so Relay does not generate undiscoverable handlers for them.
+Relay does not generate `PermissionRequest`, `PostToolUseFailure`, `Notification`,
+or `SessionEnd` handlers.
 Codex work exports a `codex-task` agent scope rather than a session-length span.
 Parent turns and delegated agents share this exported ancestor. A child's
 `codex-turn` scope sits under its delegated agent, and owned model and tool calls

@@ -59,7 +59,6 @@ const CODEX_HOOK_EVENTS: &[&str] = &[
     "UserPromptSubmit",
     "PreToolUse",
     "PostToolUse",
-    "PermissionRequest",
     "SubagentStart",
     "SubagentStop",
     "Stop",
@@ -73,7 +72,6 @@ const CLAUDE_HOOK_EVENTS: &[&str] = &[
     "PreToolUse",
     "PostToolUse",
     "PostToolUseFailure",
-    "PermissionRequest",
     "SubagentStart",
     "SubagentStop",
     "Notification",
@@ -656,11 +654,11 @@ fn hook_bytes(
             let mut group = serde_json::Map::new();
             if matches!(
                 *event,
-                "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PermissionRequest"
+                "PreToolUse" | "PostToolUse" | "PostToolUseFailure"
             ) {
                 group.insert("matcher".into(), json!("*"));
             }
-            let command = if matches!(*event, "PreToolUse" | "PermissionRequest") {
+            let command = if *event == "PreToolUse" {
                 &fail_closed
             } else {
                 &fail_open

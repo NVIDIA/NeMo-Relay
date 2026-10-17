@@ -1394,23 +1394,11 @@ async fn codex_hook(
         operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
         return Err(error);
     }
-    if let Some(permission) = outcome.permission
-        && let Err(error) = authorize_hook_permission(&state, permission, &owner).await
-    {
-        if error.guardrail_rejection_reason().is_some() {
-            operational::hook_completed(&operational, "hook_server", "denied");
-        } else {
-            operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
-        }
-        return Ok(Json(codex::permission_denial(permission_denial_reason(
-            error,
-        ))));
-    }
     operational::hook_completed(&operational, "hook_server", "completed");
     Ok(Json(outcome.response))
 }
 
-// Handles Claude Code hooks with the adapter's explicit continuation/permission response. Events
+// Handles Claude Code hooks with the adapter's explicit continuation response. Events
 // are committed before the response so Claude lifecycle hooks can close scopes deterministically.
 async fn claude_code_hook(
     State(state): State<AppState>,
@@ -1437,41 +1425,6 @@ async fn claude_code_hook(
     {
         operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
         return Err(error);
-    }
-    if let Some(permission) = outcome.permission {
-        let result = authorize_hook_permission(&state, permission, &owner).await;
-        match &result {
-            Ok(()) => operational::hook_completed(&operational, "hook_server", "completed"),
-            Err(error) if error.guardrail_rejection_reason().is_some() => {
-                operational::hook_completed(&operational, "hook_server", "denied");
-            }
-            Err(error) => {
-                operational::hook_failed(&operational, "hook_server", error.log_kind(), true);
-            }
-        }
-        return Ok(Json(match result {
-            Ok(()) => serde_json::json!({
-                "continue": true,
-                "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
-                    "decision": {
-                        "behavior": "allow",
-                    }
-                }
-            }),
-            Err(error) => {
-                serde_json::json!({
-                    "continue": true,
-                    "hookSpecificOutput": {
-                        "hookEventName": "PermissionRequest",
-                        "decision": {
-                            "behavior": "deny",
-                            "message": permission_denial_reason(error),
-                        }
-                    }
-                })
-            }
-        }));
     }
     operational::hook_completed(&operational, "hook_server", "completed");
     Ok(Json(outcome.response))
@@ -1517,29 +1470,6 @@ async fn pi_hook(
     // been, so an older extension keeps working unchanged.
     operational::hook_completed(&operational, "hook_server", "completed");
     Ok(Json(pi::response_with_effects(outcome.response, &effects)))
-}
-
-async fn authorize_hook_permission(
-    state: &AppState,
-    permission: Result<crate::events::ToolEvent, String>,
-    owner: &str,
-) -> Result<(), CliError> {
-    match permission {
-        Ok(permission) => {
-            state
-                .sessions
-                .authorize_tool_permission(&permission, owner)
-                .await
-        }
-        Err(reason) => Err(CliError::InvalidPayload(reason)),
-    }
-}
-
-fn permission_denial_reason(error: CliError) -> String {
-    error
-        .guardrail_rejection_reason()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| error.to_string())
 }
 
 fn hook_payload_rejection(

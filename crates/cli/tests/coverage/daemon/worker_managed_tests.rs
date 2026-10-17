@@ -2649,173 +2649,6 @@ async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses()
     assert!(observed.failure.unwrap().contains("truncated"));
 }
 
-#[tokio::test]
-async fn daemon_permission_requests_emit_policy_marks() {
-    use nemo_relay::api::subscriber::{
-        deregister_subscriber, flush_subscribers, register_subscriber,
-    };
-
-    const SUBSCRIBER: &str = "daemon-permission-audit";
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = deregister_subscriber(SUBSCRIBER);
-    let runtime = ManagedRuntime::initialize(
-        GatewayConfig::default(),
-        Vec::new(),
-        "permission-machine-owner".into(),
-    )
-    .await
-    .unwrap();
-    let captured = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
-    let events = Arc::clone(&captured);
-    register_subscriber(
-        SUBSCRIBER,
-        Arc::new(move |event| {
-            if event
-                .metadata()
-                .and_then(|metadata| metadata.get("session_id"))
-                .or_else(|| event.data().and_then(|data| data.get("session_id")))
-                .and_then(Value::as_str)
-                .is_some_and(|session| session.starts_with("daemon-permission-audit"))
-                && matches!(
-                    event.name(),
-                    "hook_mark" | "nemo_relay.permission.policy_decision"
-                )
-            {
-                events.lock().unwrap().push(json!({
-                    "name": event.name(),
-                    "data": event.data(),
-                    "metadata": event.metadata(),
-                }));
-            }
-        }),
-    )
-    .unwrap();
-
-    let session_id = "daemon-permission-audit-claude-code";
-    for event_name in ["PreToolUse", "PermissionRequest"] {
-        let mut payload = json!({
-            "session_id": session_id,
-            "hook_event_name": event_name,
-            "permission_mode": "default",
-            "tool_use_id": "audit-tool-1",
-            "tool_name": "Bash",
-            "tool_input": {"command": "pwd"},
-        });
-        if event_name == "PermissionRequest" {
-            payload.as_object_mut().unwrap().remove("tool_use_id");
-        }
-        let response = runtime
-            .handle_hook(
-                HookRoute::Claude,
-                Request::post("/hooks/claude-code")
-                    .header("content-type", "application/json")
-                    .body(Body::from(payload.to_string()))
-                    .unwrap(),
-            )
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body: Value =
-            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
-                .unwrap();
-        if event_name == "PermissionRequest" {
-            assert_eq!(body["hookSpecificOutput"]["decision"]["behavior"], "allow");
-        }
-    }
-    flush_subscribers().unwrap();
-    {
-        let events = captured.lock().unwrap();
-        let marks: Vec<_> = events
-            .iter()
-            .filter(|event| {
-                event["name"] == "nemo_relay.permission.policy_decision"
-                    && event["metadata"]["session_id"] == session_id
-            })
-            .collect();
-        assert_eq!(marks.len(), 1);
-        assert!(marks[0]["data"].get("decision").is_none());
-        assert_eq!(marks[0]["data"]["policy_outcome"], "pass");
-        assert_eq!(marks[0]["data"]["decision_source"], "nemo_relay");
-        assert_eq!(marks[0]["data"]["tool_call_id"], "audit-tool-1");
-        assert_eq!(marks[0]["data"]["harness_permission_mode"], "default");
-        assert!(events.iter().any(|event| {
-            event["name"] == "hook_mark"
-                && event["data"]["session_id"] == session_id
-                && event["data"]["permission_mode"] == "default"
-        }));
-        assert!(!marks[0].to_string().contains("permission-machine-owner"));
-    }
-    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
-    runtime.close().await.unwrap();
-}
-
-#[tokio::test]
-async fn malformed_permission_hooks_fail_closed_in_each_native_response_shape() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let runtime =
-        ManagedRuntime::initialize(GatewayConfig::default(), Vec::new(), "machine-owner".into())
-            .await
-            .expect("initialize managed runtime");
-
-    let codex = runtime
-        .handle_hook(
-            HookRoute::Codex,
-            Request::post("/hook")
-                .body(Body::from(
-                    json!({
-                        "session_id": "codex-session",
-                        "hook_event_name": "PermissionRequest",
-                        "tool_name": "shell",
-                        "arguments": {"cmd": "pwd"}
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await;
-    assert_eq!(codex.status(), StatusCode::OK);
-    let codex: Value =
-        serde_json::from_slice(&codex.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(
-        codex["hookSpecificOutput"]["hookEventName"],
-        "PermissionRequest"
-    );
-    assert_eq!(codex["hookSpecificOutput"]["decision"]["behavior"], "deny");
-    assert!(
-        codex["hookSpecificOutput"]["decision"]["message"]
-            .as_str()
-            .is_some_and(|message| !message.is_empty())
-    );
-    assert!(codex.get("decision").is_none());
-
-    let claude = runtime
-        .handle_hook(
-            HookRoute::Claude,
-            Request::post("/hook")
-                .body(Body::from(
-                    json!({
-                        "session_id": "claude-session",
-                        "hook_event_name": "PermissionRequest",
-                        "tool_name": "Write",
-                        "tool_input": {"file_path": "README.md"}
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await;
-    assert_eq!(claude.status(), StatusCode::OK);
-    let claude: Value =
-        serde_json::from_slice(&claude.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(claude["hookSpecificOutput"]["decision"]["behavior"], "deny");
-    assert!(
-        claude["hookSpecificOutput"]["decision"]["message"]
-            .as_str()
-            .is_some_and(|message| !message.is_empty())
-    );
-
-    runtime.close().await.expect("close managed runtime");
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn unmanaged_daemon_dispatch_generates_fresh_helper_tokens() {
@@ -3075,4 +2908,63 @@ async fn unmanaged_routes_forward_only_client_credentials() {
         }
         task.abort();
     }
+}
+
+#[tokio::test]
+async fn managed_pre_tool_hooks_reject_when_conditional_guardrail_blocks() {
+    use nemo_relay::api::registry::{
+        deregister_tool_conditional_execution_guardrail,
+        register_tool_conditional_execution_guardrail,
+    };
+
+    const GUARDRAIL: &str = "managed-pre-tool-blocker";
+    const TOOL: &str = "ManagedBlockedTool";
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+        }
+    }
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|name, _args| {
+            Box::pin(async move { Ok((name == TOOL).then(|| "blocked by policy".to_string())) })
+        }),
+    )
+    .unwrap();
+    let _cleanup = Cleanup;
+    let runtime =
+        ManagedRuntime::initialize(GatewayConfig::default(), Vec::new(), "machine-owner".into())
+            .await
+            .unwrap();
+    for route in [HookRoute::Claude, HookRoute::Codex] {
+        let response = runtime
+            .handle_hook(
+                route,
+                Request::post("/hook")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "session_id": "managed-pre-tool-blocked",
+                            "hook_event_name": "PreToolUse",
+                            "tool_use_id": "blocked-tool",
+                            "tool_name": TOOL,
+                            "tool_input": {"command": "pwd"},
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body["error"]["type"], "nemo_relay_guardrail_rejected");
+        assert_eq!(body["error"]["reason"], "blocked by policy");
+    }
+    runtime.close().await.unwrap();
 }
