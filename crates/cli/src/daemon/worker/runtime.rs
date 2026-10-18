@@ -436,16 +436,20 @@ pub(crate) fn worker_connection_builder() -> ConnectionBuilder<TokioExecutor> {
 }
 
 async fn serve_plain(listener: TcpListener, app: Router) -> Result<(), CliError> {
+    let accept_failure_limiter = LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL);
     let mut connections = tokio::task::JoinSet::new();
     loop {
         let (stream, _) = match listener.accept().await {
             Ok(accepted) => accepted,
             Err(error) => {
-                log::warn!(
-                    target: "nemo_relay.daemon.worker",
-                    event = "worker_listener_accept_failed";
-                    "Worker listener accept failed: {error}"
-                );
+                if let Some(suppressed_since_last_emit) = accept_failure_limiter.record() {
+                    log::warn!(
+                        target: "nemo_relay.daemon.worker",
+                        event = "worker_listener_accept_failed",
+                        suppressed_since_last_emit = suppressed_since_last_emit;
+                        "Worker listener accept failed: {error}"
+                    );
+                }
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
