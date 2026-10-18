@@ -20,6 +20,7 @@ use crate::api::optimization::{
 use crate::api::registry::{Guardrail, RuntimeRegistrationKind};
 #[cfg(test)]
 use crate::api::runtime::LlmCodecIdentity;
+use crate::api::runtime::LlmSanitizeRequestFn;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::scope_stack::with_active_event_trace_context;
@@ -30,8 +31,8 @@ use crate::api::runtime::subscriber_dispatcher::{
 };
 use crate::api::runtime::{
     EventSubscriberFn, LlmCollectorFn, LlmExecutionContext, LlmExecutionNextFn, LlmFinalizerFn,
-    LlmJsonStream, LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
-    LlmStreamExecutionNextFn, MiddlewareContinuationContext,
+    LlmJsonStream, LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
+    MiddlewareContinuationContext,
 };
 use crate::api::runtime::{ScopeStackHandle, capture_trace_context, current_scope_stack};
 use crate::api::scope::event;

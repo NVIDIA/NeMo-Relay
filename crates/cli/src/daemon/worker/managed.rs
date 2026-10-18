@@ -1093,7 +1093,6 @@ fn effective_request(
         .request_json
         .as_ref()
         .is_none_or(|source| effective.content == *source)
-        || effective.content.is_null()
     {
         return Ok((headers, prepared.body.clone(), explicit_target));
     }

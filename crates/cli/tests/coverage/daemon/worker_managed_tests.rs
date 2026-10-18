@@ -359,6 +359,17 @@ async fn worker_requirements_follow_registration_and_removal_without_running_gat
         deregister_conditional_middleware_guardrail, deregister_llm_sanitize_request_guardrail,
         register_conditional_middleware_guardrail, register_llm_sanitize_request_guardrail,
     };
+    struct PresenceRegistrations;
+
+    impl Drop for PresenceRegistrations {
+        fn drop(&mut self) {
+            let _ = deregister_conditional_middleware_guardrail("presence-gate");
+            let _ = deregister_llm_execution_intercept("presence-execution");
+            let _ = deregister_llm_sanitize_request_guardrail("presence-sanitize");
+        }
+    }
+
+    let _registrations = PresenceRegistrations;
     let requirements = provider_middleware_requirements().unwrap();
     assert!(!requirements.request_body_decode_required);
     assert!(!requirements.managed_execution_required);
@@ -1530,6 +1541,35 @@ async fn managed_runtime_closes_the_llm_lifecycle_when_provider_dispatch_fails()
     runtime.close().await.expect("close managed runtime");
 }
 
+#[test]
+fn managed_request_body_preserves_null_edits_and_unchanged_wire_bytes() {
+    let mut prepared = prepared_request(HeaderMap::from_iter([
+        (CONTENT_ENCODING, HeaderValue::from_static("gzip")),
+        (CONTENT_LENGTH, HeaderValue::from_static("123")),
+    ]));
+    let effective = LlmRequest {
+        headers: crate::gateway::daemon_observable_headers(&prepared.headers),
+        content: Value::Null,
+    };
+    let (headers, body, _) = effective_request(&prepared, Some(&effective)).unwrap();
+    assert_eq!(body, Bytes::from_static(b"null"));
+    assert!(!headers.contains_key(CONTENT_ENCODING));
+    assert!(!headers.contains_key(CONTENT_LENGTH));
+
+    prepared.request_json = Some(Value::Null);
+    prepared.body = Bytes::from_static(b" \n null \t");
+    let (headers, body, _) = effective_request(&prepared, Some(&effective)).unwrap();
+    assert_eq!(body, prepared.body);
+    assert_eq!(headers[CONTENT_ENCODING], "gzip");
+    assert!(!headers.contains_key(CONTENT_LENGTH));
+
+    prepared.request_json = None;
+    prepared.body = Bytes::from_static(b"opaque unparsed bytes");
+    let (headers, body, _) = effective_request(&prepared, Some(&effective)).unwrap();
+    assert_eq!(body, prepared.body);
+    assert_eq!(headers[CONTENT_ENCODING], "gzip");
+}
+
 struct RequestInterceptRegistration(&'static str);
 
 impl Drop for RequestInterceptRegistration {
@@ -2464,7 +2504,7 @@ fn managed_header_and_observation_helpers_cover_ignored_and_invalid_values() {
     };
     assert_eq!(
         effective_request(&prepared, Some(&null_content)).unwrap().1,
-        prepared.body
+        Bytes::from_static(b"null")
     );
     assert!(!request_streaming_hint(&HeaderMap::from_iter([(
         ACCEPT,
