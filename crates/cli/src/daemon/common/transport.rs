@@ -48,6 +48,10 @@ pub(crate) type PooledHttpClient = Client<HttpConnector, RelayBody>;
 
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const MAX_IDLE_CONNECTIONS_PER_HOST: usize = 256;
+// Larger DATA frames reduce framing and wakeup overhead for large provider bodies without
+// changing the pull-driven body adapter or its backpressure.
+pub(crate) const HTTP2_MAX_FRAME_BYTES: u32 = 64 * 1024;
+pub(crate) const DATA_PLANE_HTTP2_CONNECTION_WINDOW_BYTES: u32 = 8 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub(crate) enum TransportError {
@@ -357,11 +361,23 @@ fn pooled_connector_with<R>(
     })
 }
 
+/// Use the same bounded HTTP/2 receive settings on both daemon data-plane hops.
+pub(crate) fn data_plane_connection_builder()
+-> hyper_util::server::conn::auto::Builder<TokioExecutor> {
+    let mut builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+    builder
+        .http2()
+        .initial_connection_window_size(DATA_PLANE_HTTP2_CONNECTION_WINDOW_BYTES)
+        .max_frame_size(HTTP2_MAX_FRAME_BYTES);
+    builder
+}
+
 pub(crate) fn pooled_builder() -> hyper_util::client::legacy::Builder {
     let mut builder = Client::builder(TokioExecutor::new());
     builder.timer(TokioTimer::new());
     builder.pool_idle_timeout(Duration::from_secs(120));
     builder.pool_max_idle_per_host(MAX_IDLE_CONNECTIONS_PER_HOST);
+    builder.http2_max_frame_size(HTTP2_MAX_FRAME_BYTES);
     builder.http2_keep_alive_interval(Duration::from_secs(15));
     builder.http2_keep_alive_timeout(Duration::from_secs(5));
     builder.http2_keep_alive_while_idle(true);

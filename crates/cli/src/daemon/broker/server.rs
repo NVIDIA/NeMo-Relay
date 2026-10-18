@@ -25,8 +25,7 @@ use bytes::Bytes;
 use hyper::body::Body as HttpBody;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::Connect;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto::Builder as ConnectionBuilder;
+use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::Serialize;
@@ -244,14 +243,7 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
             let tls = load_tls_config(certificate, key)?;
             serve_tls(listener, app, tls).await
         }
-        (None, None) => axum::serve(
-            listener,
-            app.layer(axum::middleware::from_fn(socket::connection_info))
-                .into_make_service_with_connect_info::<socket::SocketInfo>(),
-        )
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(CliError::Io),
+        (None, None) => serve_plain(listener, app, shutdown_signal()).await,
         _ => Err(CliError::Config(
             "--tls-cert and --tls-key must be supplied together".into(),
         )),
@@ -577,7 +569,7 @@ fn register_mcp_blocking(
     };
     let transcript = &request.proof.transcript;
     if transcript.initiator.role != ComponentRole::Mcp
-        || transcript.route_token_digest != Some(credential.digest())
+        || transcript.route_token_digest != Some(credential)
     {
         return control_message(StatusCode::UNAUTHORIZED, "route credential proof mismatch");
     }
@@ -630,7 +622,7 @@ fn register_mcp_blocking(
         &sessions,
         session_id.as_str(),
         transcript.initiator_fingerprint,
-        credential.digest(),
+        credential,
         request.worker_network.hint.clone(),
         now,
         fresh_session_token,
@@ -644,7 +636,7 @@ fn register_mcp_blocking(
     let directive = match state.registry.register_mcp(
         McpRegistration {
             fingerprint: transcript.initiator_fingerprint,
-            token_digest: credential.digest(),
+            token_digest: credential,
             session_id: session_id.clone(),
             lease_expires_at_unix_ms,
         },
@@ -675,7 +667,7 @@ fn register_mcp_blocking(
             session_id.as_str().to_owned(),
             McpControlSession {
                 fingerprint: transcript.initiator_fingerprint,
-                token_digest: credential.digest(),
+                token_digest: credential,
                 secret_digest: TokenDigest::from_token(session_token.expose().as_bytes()),
                 secret: session_token.clone(),
                 lease_expires_at_unix_ms,
@@ -1667,7 +1659,7 @@ async fn public_proxy_inner(
             log_anonymous_pass_through(route, AnonymousReason::MissingCredential);
             (ResolvedTarget::PassThrough, ProviderAccess::Anonymous)
         }
-        Some(credential) => match state.registry.resolve_target(&credential.digest()) {
+        Some(credential) => match state.registry.resolve_target(&credential) {
             Ok(target) => {
                 if matches!(target, ResolvedTarget::PassThrough) {
                     let route_kind = match route {
@@ -1991,17 +1983,11 @@ async fn forward_to_worker(
     worker: WorkerRequest,
 ) -> Response<Body> {
     let fingerprint = worker.fingerprint();
-    let worker_id = worker.target().worker_id().to_owned();
-    let path_and_query = request
-        .uri()
-        .path_and_query()
-        .map_or("/", |value| value.as_str());
-    let destination = format!(
-        "{}{}",
-        worker.target().endpoint().trim_end_matches('/'),
-        path_and_query
-    );
-    let token = worker.session_token().to_owned();
+    let worker_id = worker.target().shared_worker_id();
+    let destination = match worker.target().request_uri(request.uri()) {
+        Ok(destination) => destination,
+        Err(error) => return control_error(StatusCode::BAD_GATEWAY, error),
+    };
     if crate::gateway::websocket::is_websocket(&request) {
         let client = match worker.target().websocket_client() {
             Some(client) => client.clone(),
@@ -2013,8 +1999,11 @@ async fn forward_to_worker(
         return crate::gateway::websocket::forward(
             &client,
             request,
-            &destination,
-            Some((HeaderName::from_static(WORKER_TOKEN_HEADER), token)),
+            &destination.to_string(),
+            Some((
+                HeaderName::from_static(WORKER_TOKEN_HEADER),
+                worker.session_token().to_owned(),
+            )),
             worker,
             &state.config,
             std::future::pending(),
@@ -2022,11 +2011,12 @@ async fn forward_to_worker(
         .await;
     }
     let client = worker.target().client().clone();
-    let mut outcome = forward(
+    let authentication = worker.target().authentication();
+    let mut outcome = forward_prepared(
         &client,
         request,
-        &destination,
-        Some((HeaderName::from_static(WORKER_TOKEN_HEADER), token)),
+        destination,
+        Some((HeaderName::from_static(WORKER_TOKEN_HEADER), authentication)),
         Some(worker),
         &state.config,
     )
@@ -2040,7 +2030,7 @@ async fn forward_to_worker(
             target: "nemo_relay.daemon",
             event = "worker_request_failed",
             fingerprint = fingerprint.as_str(),
-            worker_id = worker_id.as_str(),
+            worker_id = worker_id.as_ref(),
             reason = "response_head_timeout",
             route_mode = "worker";
             "Worker request timed out waiting for response headers"
@@ -2188,6 +2178,32 @@ where
             );
         }
     };
+    let authentication = match authentication {
+        Some((name, value)) => match HeaderValue::from_str(&value) {
+            Ok(value) => Some((name, value)),
+            Err(_) => {
+                return ForwardOutcome::response(control_message(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid worker credential",
+                ));
+            }
+        },
+        None => None,
+    };
+    forward_prepared(client, request, destination, authentication, hold, config).await
+}
+
+async fn forward_prepared<C>(
+    client: &Client<C, RelayBody>,
+    request: Request<Body>,
+    destination: Uri,
+    authentication: Option<(HeaderName, HeaderValue)>,
+    hold: Option<WorkerRequest>,
+    config: &GatewayConfig,
+) -> ForwardOutcome
+where
+    C: Connect + Clone + Send + Sync + 'static,
+{
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
@@ -2199,12 +2215,6 @@ where
         }
     };
     if let Some((name, value)) = authentication {
-        let Ok(value) = HeaderValue::from_str(&value) else {
-            return ForwardOutcome::response(control_message(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "invalid worker credential",
-            ));
-        };
         request.headers_mut().insert(name, value);
     }
     let response = match config.wait_for_response(client.request(request)).await {
@@ -2832,7 +2842,7 @@ fn prune_expired_mcp_control_state(
 /// Returns the single public route credential, `None` when the header is absent, or a 401 for a
 /// malformed or repeated header.
 #[allow(clippy::result_large_err)]
-fn public_credential(headers: &HeaderMap) -> Result<Option<RouteCredential>, Response<Body>> {
+fn public_credential(headers: &HeaderMap) -> Result<Option<TokenDigest>, Response<Body>> {
     let values = headers.get_all(CLIENT_TOKEN_HEADER);
     match values.iter().count() {
         0 => return Ok(None),
@@ -2849,7 +2859,7 @@ fn public_credential(headers: &HeaderMap) -> Result<Option<RouteCredential>, Res
         .next()
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| control_message(StatusCode::UNAUTHORIZED, "invalid route credential"))?;
-    RouteCredential::parse(value.to_owned())
+    RouteCredential::digest_from_str(value)
         .map(Some)
         .map_err(|_| control_message(StatusCode::UNAUTHORIZED, "invalid route credential"))
 }
@@ -3032,6 +3042,66 @@ fn decode_pem_blocks(bytes: &[u8], label: &str) -> Result<Vec<Vec<u8>>, CliError
     Ok(blocks)
 }
 
+async fn serve_plain(
+    listener: TcpListener,
+    app: Router,
+    shutdown: impl std::future::Future<Output = ()>,
+) -> Result<(), CliError> {
+    let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(());
+    let mut connections = tokio::task::JoinSet::new();
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut shutdown => break,
+            _ = connections.join_next(), if !connections.is_empty() => {}
+            accepted = listener.accept() => {
+                let (stream, peer) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        log::warn!(
+                            target: "nemo_relay.daemon", event = "listener_accept_failed";
+                            "Daemon listener accept failed: {error}"
+                        );
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+                let _ = stream.set_nodelay(true);
+                let local = stream.local_addr()?;
+                let service = app.clone()
+                    .layer(axum::Extension(ConnectInfo(peer)))
+                    .layer(axum::Extension(socket::LocalAddress(local)));
+                let shutdown = shutdown_sender.clone();
+                connections.spawn(async move {
+                    let mut builder = crate::daemon::common::transport::data_plane_connection_builder();
+                    builder.http2().enable_connect_protocol();
+                    // Match axum::serve: convert Incoming before entering the router.
+                    let service = hyper::service::service_fn(move |request: Request<hyper::body::Incoming>| {
+                        let mut service = service.clone();
+                        tower_service::Service::call(&mut service, request.map(Body::new))
+                    });
+                    let connection = builder.serve_connection_with_upgrades(
+                        TokioIo::new(stream), service,
+                    );
+                    tokio::pin!(connection);
+                    tokio::select! {
+                        _ = &mut connection => {}
+                        _ = shutdown.closed() => {
+                            connection.as_mut().graceful_shutdown();
+                            let _ = connection.await;
+                        }
+                    }
+                });
+            }
+        }
+    }
+    drop(shutdown_receiver);
+    // Preserve axum::serve's graceful shutdown: admitted responses finish before return.
+    while connections.join_next().await.is_some() {}
+    Ok(())
+}
+
 async fn serve_tls(
     listener: TcpListener,
     app: Router,
@@ -3076,7 +3146,7 @@ async fn serve_tls(
                         return;
                     };
                     drop(handshake_permit);
-                    let builder = ConnectionBuilder::new(TokioExecutor::new());
+                    let builder = crate::daemon::common::transport::data_plane_connection_builder();
                     let connection = builder.serve_connection_with_upgrades(
                         TokioIo::new(stream),
                         TowerToHyperService::new(service),
