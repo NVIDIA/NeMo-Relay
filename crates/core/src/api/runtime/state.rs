@@ -1467,13 +1467,10 @@ impl NemoRelayContextState {
         for entry in entries {
             if let Some(current) = value.take() {
                 let callback = Arc::clone(&entry.payload);
-                let callback_value = current.clone();
                 let callback_context = context.clone();
-                match AssertUnwindSafe(
-                    async move { callback(callback_value, callback_context).await },
-                )
-                .catch_unwind()
-                .await
+                match AssertUnwindSafe(async move { callback(current, callback_context).await })
+                    .catch_unwind()
+                    .await
                 {
                     Ok(Ok(next)) => value = next,
                     Ok(Err(_error)) => {
@@ -1539,13 +1536,10 @@ impl NemoRelayContextState {
         for entry in entries {
             if let Some(current) = value.take() {
                 let callback = Arc::clone(&entry.payload);
-                let callback_value = current.clone();
                 let callback_context = context.clone();
-                match AssertUnwindSafe(
-                    async move { callback(callback_value, callback_context).await },
-                )
-                .catch_unwind()
-                .await
+                match AssertUnwindSafe(async move { callback(current, callback_context).await })
+                    .catch_unwind()
+                    .await
                 {
                     Ok(Ok(next)) => value = next,
                     Ok(Err(_error)) => {

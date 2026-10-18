@@ -369,6 +369,13 @@ async fn run_request_intercepts_with_codec_inner(
         state.llm_request_intercept_entries(&scope_local_refs)
     };
 
+    // Callbacks own their annotations, so preserve a baseline only when they can replace it.
+    let baseline = if entries.is_empty() {
+        None
+    } else {
+        annotated.clone()
+    };
+
     let outcome = crate::api::runtime::NemoRelayContextState::llm_request_intercepts_snapshot_chain_with_recorder(
             name,
             request,
@@ -385,8 +392,11 @@ async fn run_request_intercepts_with_codec_inner(
 
     match (codec, outcome.annotated_request) {
         (Some(codec), Some(annotated)) => {
-            let mut encoded = codec.encode(&annotated, &request)?;
-            encoded.headers.extend(request.headers);
+            let encoded = codec.encode_owned_with_baseline(
+                &annotated,
+                request,
+                baseline.as_ref().unwrap_or(&annotated),
+            )?;
             Ok((
                 encoded,
                 Some(Arc::new(annotated)),

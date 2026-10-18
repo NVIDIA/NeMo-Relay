@@ -27,12 +27,14 @@
 //! finalizer, not that queued observability work.
 
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use futures_util::FutureExt;
 use tokio::sync::oneshot;
 use tokio_stream::Stream;
 
@@ -42,11 +44,13 @@ use crate::api::llm::{EndLlmHandleParams, LlmHandle};
 use crate::api::optimization::finalize_optimization_summary;
 use crate::api::registry::{Guardrail, RuntimeRegistrationKind};
 use crate::api::runtime::NemoRelayContextState;
+use crate::api::runtime::callbacks::LlmStreamResponseCompletionFn;
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{
-    EventSubscriberFn, LlmCollector, LlmCollectorFuture, LlmFinalizer, LlmFinalizerFuture,
-    LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK, current_scope_stack,
+    EventSubscriberFn, LlmBorrowedCollectorFn, LlmCollector, LlmCollectorFuture, LlmFinalizer,
+    LlmFinalizerFuture, LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK,
+    current_scope_stack,
 };
 use crate::api::runtime::{LlmSanitizeResponseContext, LlmSanitizeResponseFn};
 use crate::api::shared::{
@@ -79,8 +83,9 @@ pub struct LlmStreamWrapper {
     inner: LlmJsonStream,
     handle: LlmHandle,
     scope_stack: ScopeStackHandle,
-    collector: LlmCollector,
+    collector: LlmChunkCollector,
     finalizer: Option<LlmFinalizer>,
+    response_completion: Option<LlmStreamResponseCompletionFn>,
     pending_collector: Option<(Json, LlmCollectorFuture)>,
     pending_end: Option<oneshot::Receiver<()>>,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
@@ -95,7 +100,13 @@ pub struct LlmStreamWrapper {
     undelivered_error: Option<FlowError>,
 }
 
+pub(crate) enum LlmChunkCollector {
+    Owned(LlmCollector),
+    Borrowed(LlmBorrowedCollectorFn),
+}
+
 pub(crate) struct ManagedLlmStreamTelemetry {
+    response_completion: Option<LlmStreamResponseCompletionFn>,
     subscribers: Vec<EventSubscriberFn>,
     stream_started_at: Instant,
 }
@@ -105,7 +116,16 @@ impl ManagedLlmStreamTelemetry {
         Self {
             subscribers,
             stream_started_at,
+            response_completion: None,
         }
+    }
+
+    pub(crate) fn with_response_completion(
+        mut self,
+        completion: Option<LlmStreamResponseCompletionFn>,
+    ) -> Self {
+        self.response_completion = completion;
+        self
     }
 }
 
@@ -187,7 +207,7 @@ impl LlmStreamWrapper {
         Self::new_managed(
             inner,
             handle,
-            collector.into(),
+            LlmChunkCollector::Owned(collector.into()),
             finalizer.into(),
             metadata,
             response_codec,
@@ -198,7 +218,7 @@ impl LlmStreamWrapper {
     pub(crate) fn new_managed(
         inner: LlmJsonStream,
         handle: LlmHandle,
-        collector: LlmCollector,
+        collector: LlmChunkCollector,
         finalizer: LlmFinalizer,
         metadata: Option<Json>,
         response_codec: Option<Arc<dyn LlmResponseCodec>>,
@@ -207,6 +227,7 @@ impl LlmStreamWrapper {
         let ManagedLlmStreamTelemetry {
             subscribers,
             stream_started_at,
+            response_completion,
         } = telemetry;
         let scope_stack = handle.captured_scope_stack().clone();
         let sanitize_context =
@@ -224,6 +245,7 @@ impl LlmStreamWrapper {
             metadata,
             subscribers,
             stream_started_at,
+            response_completion,
             first_chunk_elapsed: None,
             chunk_index: 0,
             ended: false,
@@ -328,6 +350,7 @@ impl LlmStreamWrapper {
         let time_to_first_chunk = self
             .first_chunk_elapsed
             .map(|elapsed| elapsed.as_secs_f64());
+        let response_completion = self.response_completion.take();
         let publish = move |finalizer_result: Result<Json>| async move {
             let (aggregated, finalizer_failure) = match finalizer_result {
                 Ok(aggregated) => (aggregated, None),
@@ -340,6 +363,24 @@ impl LlmStreamWrapper {
                     (Json::Null, Some(error))
                 }
             };
+            if let Some(completion) = response_completion {
+                let outcome = AssertUnwindSafe(async { completion(&aggregated).await })
+                    .catch_unwind()
+                    .await;
+                match outcome {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "stream_response_completion_failed";
+                        "Streaming response completion failed: {error}"
+                    ),
+                    Err(_) => log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "stream_response_completion_panicked";
+                        "Streaming response completion panicked"
+                    ),
+                }
+            }
             let finalizer_failed = finalizer_failure.is_some();
             let metadata = match (&finalizer_failure, termination) {
                 (Some(error), StreamTermination::Complete) => {
@@ -585,15 +626,25 @@ impl Stream for LlmStreamWrapper {
                 this.emit_chunk_mark(chunk_index, &raw_chunk);
                 // Feed chunk to the collector; if it returns Err, terminate the stream
                 match &mut this.collector {
-                    LlmCollector::Sync(collector) => match collector(raw_chunk.clone()) {
+                    LlmChunkCollector::Borrowed(collector) => match collector(&raw_chunk) {
                         Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
-                        Err(e) => {
-                            this.finish_with_error(&e);
-                            this.undelivered_error = Some(e);
+                        Err(error) => {
+                            this.finish_with_error(&error);
+                            this.undelivered_error = Some(error);
                             self.poll_next(cx)
                         }
                     },
-                    LlmCollector::Async(collector) => {
+                    LlmChunkCollector::Owned(LlmCollector::Sync(collector)) => {
+                        match collector(raw_chunk.clone()) {
+                            Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
+                            Err(e) => {
+                                this.finish_with_error(&e);
+                                this.undelivered_error = Some(e);
+                                self.poll_next(cx)
+                            }
+                        }
+                    }
+                    LlmChunkCollector::Owned(LlmCollector::Async(collector)) => {
                         let collecting = collector(raw_chunk.clone());
                         this.pending_collector = Some((raw_chunk, collecting));
                         self.poll_next(cx)

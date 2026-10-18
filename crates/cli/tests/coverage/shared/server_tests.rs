@@ -7164,3 +7164,154 @@ async fn unmanaged_routes_forward_only_client_credentials() {
         task.abort();
     }
 }
+
+#[tokio::test]
+async fn gateway_reuses_unchanged_wire_bodies_and_reencodes_execution_edits() {
+    const NAME: &str = "gateway-wire-body-reuse";
+    let _request_cleanup = RequestInterceptCleanup(NAME);
+    let _execution_cleanup = LlmExecutionInterceptCleanup(NAME);
+    let _stream_cleanup = LlmStreamExecutionInterceptCleanup(NAME);
+    register_llm_request_intercept(
+        NAME,
+        1,
+        false,
+        Arc::new(|_, mut request, annotated| {
+            Box::pin(async move {
+                if request.headers.contains_key("x-wire-body-reuse") {
+                    request
+                        .headers
+                        .insert("x-body-header-edit".into(), json!("applied"));
+                    request
+                        .headers
+                        .insert("content-encoding".into(), json!("gzip"));
+                }
+                Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            })
+        }),
+    )
+    .unwrap();
+    register_llm_execution_intercept(
+        NAME,
+        1,
+        Arc::new(|_, mut request, _, next| {
+            Box::pin(async move {
+                if request
+                    .headers
+                    .get("x-wire-body-edit")
+                    .and_then(Value::as_str)
+                    == Some("yes")
+                {
+                    request.content["input"] = json!("edited during execution");
+                }
+                next(request).await
+            })
+        }),
+    )
+    .unwrap();
+    register_llm_stream_execution_intercept(
+        NAME,
+        1,
+        Arc::new(|_, mut request, _, next| {
+            Box::pin(async move {
+                if request
+                    .headers
+                    .get("x-wire-body-edit")
+                    .and_then(Value::as_str)
+                    == Some("yes")
+                {
+                    request.content["input"] = json!("edited during execution");
+                }
+                next(request).await
+            })
+        }),
+    )
+    .unwrap();
+
+    type Captured = Arc<Mutex<Vec<(Bytes, HeaderMap)>>>;
+    async fn provider(State(captured): State<Captured>, request: Request<Body>) -> Response {
+        let headers = request.headers().clone();
+        let body = request.into_body().collect().await.unwrap().to_bytes();
+        let decoded = if headers.get(header::CONTENT_ENCODING).is_some() {
+            zstd::stream::decode_all(body.as_ref()).unwrap()
+        } else {
+            body.to_vec()
+        };
+        let payload: Value = serde_json::from_slice(&decoded).unwrap();
+        captured.lock().unwrap().push((body, headers));
+        let response =
+            json!({"id": "resp_body", "model": "gpt-test", "status": "completed", "output": []});
+        if payload["stream"] == true {
+            (
+                [(header::CONTENT_TYPE, "text/event-stream")],
+                format!(
+                    "data: {}\n\n",
+                    json!({"type": "response.completed", "response": response})
+                ),
+            )
+                .into_response()
+        } else {
+            Json(response).into_response()
+        }
+    }
+    let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+    let upstream_app = Router::new()
+        .route("/v1/responses", post(provider))
+        .with_state(captured.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = TestServer {
+        url: format!("http://{address}"),
+        handle: tokio::spawn(async move { axum::serve(listener, upstream_app).await.unwrap() }),
+    };
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router(config);
+    for streaming in [false, true] {
+        for compressed in [false, true] {
+            for edit_body in [false, true] {
+                let raw = format!(
+                    r#"{{ "model" : "gpt-test", "input" : "original", "stream" : {streaming} }}"#
+                );
+                let wire = if compressed {
+                    zstd::stream::encode_all(raw.as_bytes(), 1).unwrap()
+                } else {
+                    raw.into_bytes()
+                };
+                let mut builder = Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("x-wire-body-reuse", "yes");
+                if compressed {
+                    builder = builder.header(header::CONTENT_ENCODING, "zstd");
+                }
+                if edit_body {
+                    builder = builder.header("x-wire-body-edit", "yes");
+                }
+                let response = app
+                    .clone()
+                    .oneshot(builder.body(Body::from(wire.clone())).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                response.into_body().collect().await.unwrap();
+                let (sent, headers) = captured.lock().unwrap().last().unwrap().clone();
+                assert_eq!(headers["x-body-header-edit"], "applied");
+                if edit_body {
+                    assert!(!headers.contains_key(header::CONTENT_ENCODING));
+                    let payload: Value = serde_json::from_slice(&sent).unwrap();
+                    assert_eq!(payload["input"], "edited during execution");
+                } else {
+                    assert_eq!(sent.as_ref(), wire);
+                    assert_eq!(
+                        headers
+                            .get(header::CONTENT_ENCODING)
+                            .map(|value| value.to_str().unwrap()),
+                        compressed.then_some("zstd")
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(captured.lock().unwrap().len(), 8);
+}

@@ -37,12 +37,12 @@ pub(super) fn hint_match_score(hint: &LlmHintEvent, start: &LlmGatewayStart) -> 
 // hook-only tool events attach to the subagent that received the LLM response proposing the tool.
 pub(super) fn tool_hints_from_llm_response(
     response: &Value,
-    owner_subagent_id: Option<String>,
+    owner_subagent_id: Option<&str>,
 ) -> Vec<ToolHint> {
     let mut hints = Vec::new();
-    collect_openai_chat_tool_hints(response, owner_subagent_id.as_deref(), &mut hints);
-    collect_openai_response_tool_hints(response, owner_subagent_id.as_deref(), &mut hints);
-    collect_anthropic_tool_hints(response, owner_subagent_id.as_deref(), &mut hints);
+    collect_openai_chat_tool_hints(response, owner_subagent_id, &mut hints);
+    collect_openai_response_tool_hints(response, owner_subagent_id, &mut hints);
+    collect_anthropic_tool_hints(response, owner_subagent_id, &mut hints);
     hints
 }
 

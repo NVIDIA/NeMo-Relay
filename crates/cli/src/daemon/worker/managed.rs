@@ -463,10 +463,9 @@ impl ManagedRuntime {
         };
         let sessions = self.sessions.clone();
         tokio::spawn(async move {
-            let observed = observation
+            let mut observed = observation
                 .finish(surface, response_streaming || streaming_hint)
                 .await;
-            let response_value = observed.value.clone().unwrap_or(Value::Null);
             let mut end_metadata = merge_object(metadata, observed.metadata());
             insert_metadata(
                 &mut end_metadata,
@@ -479,12 +478,23 @@ impl ManagedRuntime {
                 insert_metadata(&mut end_metadata, "otel.status_code", json!("ERROR"));
                 insert_metadata(&mut end_metadata, "otel.status_description", json!(failure));
             }
+            // Finish correlation while borrowing the payload, then move it into LLM publication.
+            if let Some(value) = observed.value.as_ref() {
+                sessions
+                    .record_gateway_response_hints(
+                        &session_id,
+                        owner_subagent_id,
+                        std::borrow::Cow::Borrowed(value),
+                    )
+                    .await;
+            }
+            let response_codec = observed.value.as_ref().map(|_| response_codec(surface));
             if let Err(error) = llm_call_end(
                 LlmCallEndParams::builder()
                     .handle(&handle)
-                    .response(response_value)
+                    .response(observed.value.take().unwrap_or(Value::Null))
                     .metadata(end_metadata)
-                    .response_codec_opt(observed.value.as_ref().map(|_| response_codec(surface)))
+                    .response_codec_opt(response_codec)
                     .build(),
             ) {
                 log::warn!(
@@ -493,11 +503,6 @@ impl ManagedRuntime {
                     error_kind = "runtime";
                     "Daemon worker failed to close an observed LLM lifecycle: {error}"
                 );
-            }
-            if let Some(value) = observed.value {
-                sessions
-                    .record_gateway_response_hints(&session_id, owner_subagent_id, value)
-                    .await;
             }
             cleanup.finish().await;
         });
@@ -539,7 +544,7 @@ impl ManagedRuntime {
                 Ok::<_, FlowError>(outcome)
             })
             .await;
-        let outcome = match middleware {
+        let mut outcome = match middleware {
             Ok(outcome) => outcome,
             Err(error) => {
                 cleanup.finish().await;
@@ -552,14 +557,14 @@ impl ManagedRuntime {
                 STREAM_MODE_MUTATION_ERROR.into(),
             )));
         }
-        let annotated_request = outcome.annotated_request.clone().map(Arc::new);
-        let request_for_event = outcome.request.clone();
+        let annotated_request = outcome.annotated_request.take().map(Arc::new);
+        let streaming = prepared_streaming(&outcome.request);
         let handle = TASK_SCOPE_STACK
             .scope(scope_stack, async {
                 llm_call(
                     LlmCallParams::builder()
                         .name(&provider_name)
-                        .request(&request_for_event)
+                        .request(&outcome.request)
                         .codec(codec)
                         .parent_opt(parent.as_ref())
                         .attributes(attributes)
@@ -609,10 +614,7 @@ impl ManagedRuntime {
         };
         let sessions = self.sessions.clone();
         tokio::spawn(async move {
-            let observed = observation
-                .finish(surface, prepared_streaming(&request_for_event))
-                .await;
-            let response_value = observed.value.clone().unwrap_or(Value::Null);
+            let mut observed = observation.finish(surface, streaming).await;
             let mut end_metadata = merge_object(metadata, observed.metadata());
             if observed.failure.is_none() {
                 insert_metadata(&mut end_metadata, "otel.status_code", json!("OK"));
@@ -620,12 +622,23 @@ impl ManagedRuntime {
                 insert_metadata(&mut end_metadata, "otel.status_code", json!("ERROR"));
                 insert_metadata(&mut end_metadata, "otel.status_description", json!(failure));
             }
+            // Finish correlation while borrowing the payload, then move it into LLM publication.
+            if let Some(value) = observed.value.as_ref() {
+                sessions
+                    .record_gateway_response_hints(
+                        &session_id,
+                        owner_subagent_id,
+                        std::borrow::Cow::Borrowed(value),
+                    )
+                    .await;
+            }
+            let response_codec = observed.value.as_ref().map(|_| response_codec(surface));
             if let Err(error) = llm_call_end(
                 LlmCallEndParams::builder()
                     .handle(&handle)
-                    .response(response_value)
+                    .response(observed.value.take().unwrap_or(Value::Null))
                     .metadata(end_metadata)
-                    .response_codec_opt(observed.value.as_ref().map(|_| response_codec(surface)))
+                    .response_codec_opt(response_codec)
                     .build(),
             ) {
                 log::warn!(
@@ -634,11 +647,6 @@ impl ManagedRuntime {
                     error_kind = "runtime";
                     "Daemon worker failed to close an observed LLM lifecycle: {error}"
                 );
-            }
-            if let Some(value) = observed.value {
-                sessions
-                    .record_gateway_response_hints(&session_id, owner_subagent_id, value)
-                    .await;
             }
             cleanup.finish().await;
         });

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -550,6 +551,34 @@ struct PendingLlmHint {
 struct PendingToolHint {
     hint: ToolHint,
     inserted_at: Instant,
+}
+
+// Expensive JSON copies and tool-argument parsing happen while the owning
+// session gate is held, without holding the directory lock shared by all sessions.
+struct PreparedGatewayResponse {
+    hints: Vec<ToolHint>,
+    turn_output: Option<Value>,
+    collect_hints: bool,
+}
+
+impl PreparedGatewayResponse {
+    fn new(
+        response: Cow<'_, Value>,
+        owner_subagent_id: Option<&str>,
+        retain_turn_output: bool,
+        collect_hints: bool,
+    ) -> Self {
+        let hints = if collect_hints {
+            tool_hints_from_llm_response(&response, owner_subagent_id)
+        } else {
+            Vec::new()
+        };
+        Self {
+            hints,
+            turn_output: retain_turn_output.then(|| response.into_owned()),
+            collect_hints,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1290,7 +1319,8 @@ impl SessionManager {
         nemo_relay::api::subscriber::flush_subscribers().map_err(CliError::from)?;
         let mut sessions = self.inner.lock().await;
         if let Some(session) = sessions.get_mut(&session_id) {
-            session.record_completed_llm_response(response_for_hints, owner_subagent_id);
+            session
+                .record_completed_llm_response(Cow::Owned(response_for_hints), owner_subagent_id);
         }
         Ok(())
     }
@@ -1301,11 +1331,13 @@ impl SessionManager {
     /// per-response tool-hint extraction that `end_llm` would normally do has to be triggered
     /// explicitly after the managed pipeline returns. Missing or already-removed sessions are
     /// silently skipped because hints are advisory.
+    /// Borrowed responses are copied only when an active parent turn needs to retain its output;
+    /// owned responses can transfer that output directly into the session.
     pub(crate) async fn record_gateway_response_hints(
         &self,
         session_id: &str,
         owner_subagent_id: Option<String>,
-        response: Value,
+        response: Cow<'_, Value>,
     ) {
         let alias = {
             let alignment_state = self.alignment.lock().await;
@@ -1320,10 +1352,90 @@ impl SessionManager {
         };
         let gate = session_gate(&self.session_gates, &session_id).await;
         let _gate = gate.lock().await;
-        let mut sessions = self.inner.lock().await;
-        if let Some(session) = sessions.get_mut(&session_id) {
-            session.record_completed_llm_response(response, owner_subagent_id);
-        }
+        let policy = {
+            let sessions = self.inner.lock().await;
+            sessions
+                .get(&session_id)
+                .map(|session| session.gateway_response_policy(owner_subagent_id.as_deref()))
+        };
+        let Some((retain_output, collect_hints)) = policy else {
+            return;
+        };
+        let prepared = PreparedGatewayResponse::new(
+            response,
+            owner_subagent_id.as_deref(),
+            retain_output,
+            collect_hints,
+        );
+        let previous_output = {
+            let mut sessions = self.inner.lock().await;
+            sessions.get_mut(&session_id).and_then(|session| {
+                session.record_prepared_gateway_response(prepared, owner_subagent_id.as_deref())
+            })
+        };
+        // Releasing a large previous response can also be costly. Drop it after
+        // releasing the directory so unrelated sessions can finish concurrently.
+        drop(previous_output);
+    }
+
+    /// Record borrowed response hints immediately when all session locks are available.
+    /// Returns false without changing session state if the async path must wait.
+    pub(crate) fn try_record_gateway_response_hints(
+        &self,
+        session_id: &str,
+        owner_subagent_id: Option<String>,
+        response: &Value,
+    ) -> bool {
+        let Ok(alignment) = self.alignment.try_lock() else {
+            return false;
+        };
+        let alias = alignment.alias_for_session(session_id);
+        drop(alignment);
+        let (session_id, owner_subagent_id) = match alias {
+            Some(alias) => (
+                alias.parent_session_id,
+                owner_subagent_id.or(Some(alias.subagent_id)),
+            ),
+            None => (session_id.to_string(), owner_subagent_id),
+        };
+        let Ok(gates) = self.session_gates.try_lock() else {
+            return false;
+        };
+        let Some(gate) = gates.get(&session_id).cloned() else {
+            return false;
+        };
+        drop(gates);
+        let Ok(_gate) = gate.try_lock() else {
+            return false;
+        };
+        let policy = {
+            let Ok(sessions) = self.inner.try_lock() else {
+                return false;
+            };
+            sessions
+                .get(&session_id)
+                .map(|session| session.gateway_response_policy(owner_subagent_id.as_deref()))
+        };
+        let Some((retain_output, collect_hints)) = policy else {
+            return true;
+        };
+        let prepared = PreparedGatewayResponse::new(
+            Cow::Borrowed(response),
+            owner_subagent_id.as_deref(),
+            retain_output,
+            collect_hints,
+        );
+        let Ok(mut sessions) = self.inner.try_lock() else {
+            // Preparing a response does not mutate session state. Contention here
+            // therefore falls back to the async observer without partial updates.
+            return false;
+        };
+        let previous_output = sessions.get_mut(&session_id).and_then(|session| {
+            session.record_prepared_gateway_response(prepared, owner_subagent_id.as_deref())
+        });
+        drop(sessions);
+        drop(previous_output);
+        true
     }
 
     /// Closes every still-open session before gateway teardown.
@@ -2916,7 +3028,7 @@ impl Session {
         }
         self.cleanup_correlation_state();
         let owner_subagent_id = event.subagent_id.clone().or_else(|| event.agent_id.clone());
-        self.add_tool_hints_from_llm_response(event.payload.clone(), owner_subagent_id);
+        self.add_tool_hints_from_llm_response(&event.payload, owner_subagent_id);
         self.pending_llm_hints.push(PendingLlmHint {
             hint: event,
             inserted_at: Instant::now(),
@@ -3535,7 +3647,7 @@ impl Session {
     // the LLM that proposed the call.
     fn add_tool_hints_from_llm_response(
         &mut self,
-        response: Value,
+        response: &Value,
         owner_subagent_id: Option<String>,
     ) {
         // An in-flight gateway response can arrive after SubagentStop removed its owner.
@@ -3548,7 +3660,7 @@ impl Session {
             return;
         }
         self.cleanup_correlation_state();
-        let hints = tool_hints_from_llm_response(&response, owner_subagent_id);
+        let hints = tool_hints_from_llm_response(response, owner_subagent_id.as_deref());
         self.pending_tool_hints
             .extend(hints.into_iter().map(|hint| PendingToolHint {
                 hint,
@@ -3556,25 +3668,49 @@ impl Session {
             }));
     }
 
+    fn gateway_response_policy(&self, owner_subagent_id: Option<&str>) -> (bool, bool) {
+        let retain_output = owner_subagent_id.is_none() && self.turn_scope.is_some();
+        let collect_hints = !(self.agent_kind == AgentKind::Codex
+            && owner_subagent_id.is_some_and(|id| self.completed_subagents.contains(id)));
+        (retain_output, collect_hints)
+    }
+
+    fn record_prepared_gateway_response(
+        &mut self,
+        prepared: PreparedGatewayResponse,
+        owner_subagent_id: Option<&str>,
+    ) -> Option<Value> {
+        self.touch_subagent_activity(owner_subagent_id);
+        if prepared.collect_hints {
+            self.cleanup_correlation_state();
+            let inserted_at = Instant::now();
+            self.pending_tool_hints.extend(
+                prepared
+                    .hints
+                    .into_iter()
+                    .map(|hint| PendingToolHint { hint, inserted_at }),
+            );
+        }
+        prepared
+            .turn_output
+            .and_then(|output| self.last_turn_llm_output.replace(output))
+    }
+
     // Remembers the latest completed LLM response owned by the turn or root Agent scope so the
     // enclosing Custom turn scope can export the final assistant output. Subagent-owned responses are
     // deliberately excluded; otherwise a worker's last local answer can overwrite the parent
     // agent's final synthesis.
+    #[cfg(test)]
     fn record_completed_llm_response(
         &mut self,
-        response: Value,
+        response: Cow<'_, Value>,
         owner_subagent_id: Option<String>,
     ) {
         self.touch_subagent_activity(owner_subagent_id.as_deref());
-        if owner_subagent_id.is_none() {
-            self.record_turn_llm_output(response.clone());
-        }
-        self.add_tool_hints_from_llm_response(response, owner_subagent_id);
-    }
-
-    fn record_turn_llm_output(&mut self, response: Value) {
-        if self.turn_scope.is_some() {
-            self.last_turn_llm_output = Some(response);
+        let retain_turn_output = owner_subagent_id.is_none() && self.turn_scope.is_some();
+        self.add_tool_hints_from_llm_response(&response, owner_subagent_id);
+        if retain_turn_output {
+            self.last_turn_llm_output = Some(response.into_owned());
         }
     }
 
