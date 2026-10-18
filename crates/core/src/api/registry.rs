@@ -165,6 +165,66 @@ fn registration_identity(
     }
 }
 
+/// Check which global registration kinds have entries, without allocating.
+///
+/// Entries count even if their gate is disabled, as in discovery. This function
+/// checks all kinds under one read lock. It does not run gates or copy callbacks.
+/// Later registry changes appear on the next call.
+#[doc(hidden)]
+pub fn runtime_registration_presence<const N: usize>(
+    kinds: [RuntimeRegistrationKind; N],
+) -> Result<[bool; N]> {
+    ensure_runtime_owner()?;
+    let context = global_context();
+    let state = context
+        .read()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    Ok(kinds.map(|kind| match kind {
+        RuntimeRegistrationKind::Subscriber => !state.event_subscribers.is_empty(),
+        RuntimeRegistrationKind::EventMetadataInjector => {
+            !state.event_metadata_injectors.is_empty()
+        }
+        RuntimeRegistrationKind::MarkSanitizeGuardrail => {
+            !state.mark_sanitize_guardrails.is_empty()
+        }
+        RuntimeRegistrationKind::ScopeSanitizeStartGuardrail => {
+            !state.scope_sanitize_start_guardrails.is_empty()
+        }
+        RuntimeRegistrationKind::ScopeSanitizeEndGuardrail => {
+            !state.scope_sanitize_end_guardrails.is_empty()
+        }
+        RuntimeRegistrationKind::ToolSanitizeRequestGuardrail => {
+            !state.tool_sanitize_request_guardrails.is_empty()
+        }
+        RuntimeRegistrationKind::ToolSanitizeResponseGuardrail => {
+            !state.tool_sanitize_response_guardrails.is_empty()
+        }
+        RuntimeRegistrationKind::ToolConditionalExecutionGuardrail => {
+            !state.tool_conditional_execution_guardrails.is_empty()
+        }
+        RuntimeRegistrationKind::ToolRequestIntercept => !state.tool_request_intercepts.is_empty(),
+        RuntimeRegistrationKind::ToolExecutionIntercept => {
+            !state.tool_execution_intercepts.is_empty()
+        }
+        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail => {
+            !state.llm_sanitize_request_guardrails.is_empty()
+        }
+        RuntimeRegistrationKind::LlmSanitizeResponseGuardrail => {
+            !state.llm_sanitize_response_guardrails.is_empty()
+        }
+        RuntimeRegistrationKind::LlmConditionalExecutionGuardrail => {
+            !state.llm_conditional_execution_guardrails.is_empty()
+        }
+        RuntimeRegistrationKind::LlmRequestIntercept => !state.llm_request_intercepts.is_empty(),
+        RuntimeRegistrationKind::LlmExecutionIntercept => {
+            !state.llm_execution_intercepts.is_empty()
+        }
+        RuntimeRegistrationKind::LlmStreamExecutionIntercept => {
+            !state.llm_stream_execution_intercepts.is_empty()
+        }
+    }))
+}
+
 /// List a deterministic snapshot of global gateable runtime registrations.
 pub fn list_runtime_registrations(
     kinds: Option<&BTreeSet<RuntimeRegistrationKind>>,

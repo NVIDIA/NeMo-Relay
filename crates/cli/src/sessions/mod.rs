@@ -192,6 +192,7 @@ pub(crate) struct SessionManager {
     // Applying a hook temporarily takes its session out of the directory while middleware runs.
     // Track those operations so an idle shutdown or teardown cannot mistake them for no work.
     session_activity: SessionActivity,
+    gateway_preparing: Arc<std::sync::Mutex<HashSet<String>>>,
     completions: Arc<Mutex<completion::CompletionCache>>,
     authenticated_owners: AuthenticatedOwners,
     // Ownership is committed only after the hook batch succeeds. Reservations
@@ -631,6 +632,7 @@ impl SessionManager {
             inner: Arc::new(Mutex::new(HashMap::new())),
             session_gates: Arc::new(Mutex::new(HashMap::new())),
             session_activity: SessionActivity::new(),
+            gateway_preparing: Arc::default(),
             completions: Arc::new(Mutex::new(completion::CompletionCache::default())),
             authenticated_owners: Arc::new(Mutex::new(HashMap::new())),
             authenticated_reservations: Arc::new(Mutex::new(HashMap::new())),
@@ -1239,52 +1241,73 @@ impl SessionManager {
     /// `llm_stream_call_execute` so the runtime emits start/end events under the same agent or
     /// subagent scope the prep was opened under.
     ///
-    /// The session manager lock is held only long enough to build the prep; the actual upstream
-    /// HTTP and managed pipeline run outside the lock.
+    /// Request correlation and scope preparation run under the session gate, outside the
+    /// shared directory lock. Cancellation restores the session before releasing its gate.
     pub(crate) async fn prepare_gateway_call(
         &self,
         headers: &HeaderMap,
         start: LlmGatewayStart,
     ) -> Result<GatewayCallPrep, CliError> {
+        let activity = self.session_activity.begin();
+        if self.session_activity.is_closing() {
+            return Err(CliError::Launch("session manager is closing".into()));
+        }
         let mut start = start;
         let config = self.default_config.session_config_from_headers(headers);
         self.resolve_start_alias(&mut start, config.clone()).await?;
         let (session_id, session_finish) = {
             let sessions = self.inner.lock().await;
-            gateway_session_for_call(&start, &sessions)
+            let preparing = self
+                .gateway_preparing
+                .lock()
+                .expect("gateway preparation lock poisoned");
+            gateway_session_for_call_with_preparing(&start, &sessions, &preparing)
         };
         let gate = session_gate(&self.session_gates, &session_id).await;
-        let _gate = gate.lock().await;
-        let mut sessions = self.inner.lock().await;
-        // Match `start_llm`: when this path creates a brand-new session (real agent's gateway
-        // request beats its SessionStart hook), label the session by the provider so ATIF and
-        // Phoenix scopes carry the agent identity instead of freezing on "gateway".
-        let inferred_agent_kind = alignment::agent_kind_for_gateway_provider(&start.provider);
-        let created_session = !sessions.contains_key(&session_id);
-        let session = sessions
-            .entry(session_id.clone())
-            .or_insert_with(|| Session::new(session_id.clone(), inferred_agent_kind, config));
-        let result = session.prepare_gateway_call(start).await;
+        let gate = gate.lock_owned().await;
+        let (session, created_session) = {
+            let mut sessions = self.inner.lock().await;
+            let previous = sessions.remove(&session_id);
+            let created = previous.is_none();
+            let session = previous.unwrap_or_else(|| {
+                Session::new(
+                    session_id.clone(),
+                    alignment::agent_kind_for_gateway_provider(&start.provider),
+                    config,
+                )
+            });
+            self.gateway_preparing
+                .lock()
+                .expect("gateway preparation lock poisoned")
+                .insert(session_id.clone());
+            (session, created)
+        };
+        let mut in_flight = InFlightSession::for_gateway(
+            self.inner.clone(),
+            session_id,
+            session,
+            gate,
+            activity,
+            self.gateway_preparing.clone(),
+        );
+        let result = in_flight.session_mut().prepare_gateway_call(start).await;
         match result {
             Ok(mut prep) => {
-                prep.session_finish = if prep.bypass_managed_pipeline
-                    && sessions
-                        .get(&session_id)
-                        .is_some_and(|session| session.is_empty())
-                {
-                    GatewaySessionFinish::PruneIfEmpty
-                } else {
-                    session_finish
-                };
+                in_flight.gateway_call_prepared(prep.owner_subagent_id.clone());
+                prep.session_finish =
+                    if prep.bypass_managed_pipeline && in_flight.session_mut().is_empty() {
+                        GatewaySessionFinish::PruneIfEmpty
+                    } else {
+                        session_finish
+                    };
+                drop(in_flight.restore().await);
                 Ok(prep)
             }
             Err(error) => {
-                if created_session
-                    && sessions
-                        .get(&session_id)
-                        .is_some_and(|session| session.is_empty())
-                {
-                    sessions.remove(&session_id);
+                if created_session && in_flight.session_mut().is_empty() {
+                    drop(in_flight.discard());
+                } else {
+                    drop(in_flight.restore().await);
                 }
                 Err(error)
             }

@@ -1023,6 +1023,113 @@ fn transforms_preserve_the_captured_propagation_root() {
 }
 
 #[test]
+fn middleware_stages_share_a_runtime_only_within_one_event() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let runtimes = Arc::new(Mutex::new(Vec::new()));
+    for context in ["first", "second"] {
+        let event = Event::Mark(MarkEvent::new(
+            BaseEvent::builder().name(context).build(),
+            None,
+            None,
+        ));
+        let (cancelled_tx, mut cancelled_rx) = tokio::sync::oneshot::channel::<()>();
+        let observed = Arc::clone(&runtimes);
+        let transform: super::EventTransformFn = Box::new(move |event| {
+            Box::pin(async move {
+                assert_eq!(publication_context::<String>().unwrap().as_str(), context);
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(tokio::runtime::Handle::current().id());
+                tokio::spawn(async move {
+                    let _cancelled_tx = cancelled_tx;
+                    std::future::pending::<()>().await;
+                });
+                event
+            })
+        });
+        let observed = Arc::clone(&runtimes);
+        let injector: EventMetadataInjectorFn = Arc::new(move |_| {
+            let observed = Arc::clone(&observed);
+            Box::pin(async move {
+                assert_eq!(publication_context::<String>().unwrap().as_str(), context);
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(tokio::runtime::Handle::current().id());
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                Ok(BTreeMap::from([(
+                    "nv.test.context".into(),
+                    serde_json::json!(context),
+                )]))
+            })
+        });
+        let observed = Arc::clone(&runtimes);
+        let sanitizer: EventSanitizeFn = Arc::new(move |event, fields| {
+            let observed = Arc::clone(&observed);
+            Box::pin(async move {
+                assert_eq!(publication_context::<String>().unwrap().as_str(), context);
+                assert_eq!(event.metadata().unwrap()["nv.test.context"], context);
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(tokio::runtime::Handle::current().id());
+                Ok(fields)
+            })
+        });
+        let (published, nested) = sanitize_event_snapshot(
+            event,
+            Some(transform),
+            vec![RegistryRecord::new("runtime-injector", 0, injector)],
+            vec![RegistryRecord::new("runtime-sanitizer", 0, sanitizer)],
+            Some(Arc::new(context.to_string())),
+        );
+        assert!(published.is_some());
+        assert!(nested.is_empty());
+        assert!(matches!(
+            cancelled_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+    }
+    let runtimes = runtimes.lock().unwrap();
+    assert_eq!(runtimes.len(), 6);
+    assert_eq!(runtimes[0], runtimes[1]);
+    assert_eq!(runtimes[1], runtimes[2]);
+    assert_eq!(runtimes[3], runtimes[4]);
+    assert_eq!(runtimes[4], runtimes[5]);
+    assert_ne!(runtimes[0], runtimes[3]);
+}
+
+#[test]
+fn panicking_transform_cancels_its_detached_tasks() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("panicking-transform").build(),
+        None,
+        None,
+    ));
+    let (cancelled_tx, mut cancelled_rx) = tokio::sync::oneshot::channel::<()>();
+    let transform: super::EventTransformFn = Box::new(move |_| {
+        Box::pin(async move {
+            tokio::spawn(async move {
+                let _cancelled_tx = cancelled_tx;
+                std::future::pending::<()>().await;
+            });
+            panic!("transform failed");
+        })
+    });
+    let (published, nested) =
+        sanitize_event_snapshot(event, Some(transform), Vec::new(), Vec::new(), None);
+    assert!(published.is_none());
+    assert!(nested.is_empty());
+    assert!(matches!(
+        cancelled_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+    ));
+}
+
+#[test]
 fn detached_blocking_sanitizer_work_does_not_stall_publication() {
     let event: crate::api::event::Event = serde_json::from_value(serde_json::json!({
         "kind": "mark",

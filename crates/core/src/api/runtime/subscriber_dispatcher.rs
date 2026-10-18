@@ -471,6 +471,29 @@ mod native {
         build_sanitizer_runtime()
     }
 
+    /// Reuse drivers across one event's middleware stages, but never across events.
+    /// Shutting down without waiting cancels detached async tasks and lets detached
+    /// blocking work finish without stalling subscriber delivery.
+    #[derive(Default)]
+    struct EventMiddlewareRuntime(Option<std::result::Result<tokio::runtime::Runtime, String>>);
+
+    impl EventMiddlewareRuntime {
+        fn get(&mut self) -> std::result::Result<&tokio::runtime::Runtime, String> {
+            self.0
+                .get_or_insert_with(build_sanitizer_invocation_runtime)
+                .as_ref()
+                .map_err(Clone::clone)
+        }
+    }
+
+    impl Drop for EventMiddlewareRuntime {
+        fn drop(&mut self) {
+            if let Some(Ok(runtime)) = self.0.take() {
+                runtime.shutdown_background();
+            }
+        }
+    }
+
     fn start_background_publication_executor()
     -> std::result::Result<tokio::sync::mpsc::UnboundedSender<BackgroundPublication>, String> {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1166,13 +1189,14 @@ mod native {
         event: Event,
         injectors: Vec<EventMetadataInjector>,
         publication_context: Option<PublicationContext>,
+        middleware_runtime: &mut EventMiddlewareRuntime,
     ) -> (Event, Vec<DispatcherMessage>) {
         if injectors.is_empty() {
             return (event, Vec::new());
         }
 
         let state = process_state();
-        let runtime = match build_sanitizer_invocation_runtime() {
+        let runtime = match middleware_runtime.get() {
             Ok(runtime) => runtime,
             Err(error) => {
                 if !state
@@ -1196,11 +1220,10 @@ mod native {
 
         let fallback = event.clone();
         let (injected, nested_publications) = run_with_nested_publication_buffer(
-            &runtime,
+            runtime,
             publication_context,
             NemoRelayContextState::event_metadata_injection_snapshot_chain(event, &injectors),
         );
-        runtime.shutdown_background();
         match injected {
             Ok(event) => (event, nested_publications),
             Err(_) => {
@@ -1218,6 +1241,8 @@ mod native {
     /// thread. A transform failure drops the event because it may be responsible
     /// for inserting the sanitized payload. Injector failures preserve the
     /// original Event. A sanitizer failure clears mutable observability fields.
+    /// Stages share a lazy runtime whose shutdown cancels detached async work
+    /// before subscriber delivery or the next event.
     pub(super) fn sanitize_event_snapshot(
         event: Event,
         transform: Option<EventTransformFn>,
@@ -1226,13 +1251,14 @@ mod native {
         publication_context: Option<PublicationContext>,
     ) -> (Option<Event>, Vec<DispatcherMessage>) {
         let state = process_state();
+        let mut middleware_runtime = EventMiddlewareRuntime::default();
         let propagation_root_uuid = event.propagation_root_uuid();
         let propagation_parent_uuid = event.propagation_parent_uuid();
         let propagation_traceparent = event.propagation_traceparent().map(ToOwned::to_owned);
         let propagation_tracestate = event.propagation_tracestate().map(ToOwned::to_owned);
         let (mut transformed, mut nested_publications) = match transform {
             Some(transform) => {
-                let runtime = match build_sanitizer_invocation_runtime() {
+                let runtime = match middleware_runtime.get() {
                     Ok(runtime) => runtime,
                     Err(error) => {
                         if !state
@@ -1254,11 +1280,10 @@ mod native {
                     }
                 };
                 let (transformed, nested_publications) = run_with_nested_publication_buffer(
-                    &runtime,
+                    runtime,
                     publication_context.clone(),
                     async move { transform(event).await },
                 );
-                runtime.shutdown_background();
                 match transformed {
                     Ok(event) => (event, nested_publications),
                     Err(_) => {
@@ -1277,13 +1302,17 @@ mod native {
         transformed.set_propagation_parent_uuid(propagation_parent_uuid);
         transformed.set_propagation_traceparent(propagation_traceparent);
         transformed.set_propagation_tracestate(propagation_tracestate);
-        let (injected, injector_publications) =
-            inject_event_metadata_snapshot(transformed, injectors, publication_context.clone());
+        let (injected, injector_publications) = inject_event_metadata_snapshot(
+            transformed,
+            injectors,
+            publication_context.clone(),
+            &mut middleware_runtime,
+        );
         nested_publications.extend(injector_publications);
         if sanitizers.is_empty() {
             return (Some(injected), nested_publications);
         }
-        let runtime = match build_sanitizer_invocation_runtime() {
+        let runtime = match middleware_runtime.get() {
             Ok(runtime) => runtime,
             Err(error) => {
                 if !state
@@ -1308,11 +1337,10 @@ mod native {
         };
         let fallback = injected.clone();
         let (sanitized, sanitizer_publications) = run_with_nested_publication_buffer(
-            &runtime,
+            runtime,
             publication_context,
             NemoRelayContextState::event_sanitize_snapshot_chain(injected, &sanitizers),
         );
-        runtime.shutdown_background();
         nested_publications.extend(sanitizer_publications);
         let event = match sanitized {
             Ok(event) => Some(event),

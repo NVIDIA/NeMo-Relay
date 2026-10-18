@@ -969,7 +969,7 @@ fn test_plugin_configuration_registers_event_metadata_injector() {
     let callback = {
         let context = global_context();
         let state = context.read().unwrap();
-        let injectors = state.event_metadata_injectors.sorted_values();
+        let injectors: Vec<_> = state.event_metadata_injectors.sorted_values().collect();
         assert_eq!(injectors.len(), 1);
         Arc::clone(&injectors[0].payload)
     };
@@ -991,7 +991,8 @@ fn test_plugin_configuration_registers_event_metadata_injector() {
             .unwrap()
             .event_metadata_injectors
             .sorted_values()
-            .is_empty()
+            .next()
+            .is_none()
     );
     assert!(deregister_plugin("event-metadata.plugin"));
     reset_global();

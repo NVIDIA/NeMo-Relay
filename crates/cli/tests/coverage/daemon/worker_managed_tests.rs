@@ -13,7 +13,6 @@ use axum::extract::State;
 use axum::routing::post;
 use http_body_util::{BodyExt as _, Full, StreamBody};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
-use nemo_relay::api::registry::{RuntimeRegistrationOwner, RuntimeRegistrationOwnerKind};
 use nemo_relay::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_stream_execution_intercept, register_llm_execution_intercept,
@@ -353,77 +352,47 @@ async fn daemon_hop_cannot_supply_worker_local_dispatch_overrides() {
     );
 }
 
-#[test]
-fn execution_middleware_selects_managed_response_delivery() {
-    let owner = RuntimeRegistrationOwner {
-        kind: RuntimeRegistrationOwnerKind::GlobalApi,
-        plugin_kind: None,
-        component_ordinal: None,
+#[tokio::test]
+async fn worker_requirements_follow_registration_and_removal_without_running_gates() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    use nemo_relay::api::registry::{
+        deregister_conditional_middleware_guardrail, deregister_llm_sanitize_request_guardrail,
+        register_conditional_middleware_guardrail, register_llm_sanitize_request_guardrail,
     };
-    let registrations = [
-        RuntimeRegistrationIdentity {
-            kind: RuntimeRegistrationKind::LlmExecutionIntercept,
-            local_name: "buffered".into(),
-            effective_name: "plugin.buffered".into(),
-            owner: owner.clone(),
-        },
-        RuntimeRegistrationIdentity {
-            kind: RuntimeRegistrationKind::LlmStreamExecutionIntercept,
-            local_name: "streaming".into(),
-            effective_name: "plugin.streaming".into(),
-            owner,
-        },
-        RuntimeRegistrationIdentity {
-            kind: RuntimeRegistrationKind::LlmRequestIntercept,
-            local_name: "request".into(),
-            effective_name: "plugin.request".into(),
-            owner: RuntimeRegistrationOwner {
-                kind: RuntimeRegistrationOwnerKind::GlobalApi,
-                plugin_kind: None,
-                component_ordinal: None,
-            },
-        },
-    ];
-
-    assert!(registration_requires_execution(&registrations[0]));
-    assert!(registration_requires_execution(&registrations[1]));
-    assert!(registration_requires_execution(&registrations[2]));
-}
-
-#[test]
-fn only_request_middleware_requires_request_body_decoding() {
-    let owner = RuntimeRegistrationOwner {
-        kind: RuntimeRegistrationOwnerKind::GlobalApi,
-        plugin_kind: None,
-        component_ordinal: None,
-    };
-    for kind in [
-        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
-        RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
-        RuntimeRegistrationKind::LlmRequestIntercept,
-    ] {
-        assert!(registration_reads_request_body(
-            &RuntimeRegistrationIdentity {
-                kind,
-                local_name: "request-reader".into(),
-                effective_name: "request-reader".into(),
-                owner: owner.clone(),
-            }
-        ));
-    }
-    for kind in [
-        RuntimeRegistrationKind::Subscriber,
-        RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
-    ] {
-        assert!(!registration_reads_request_body(
-            &RuntimeRegistrationIdentity {
-                kind,
-                local_name: "response-only".into(),
-                effective_name: "response-only".into(),
-                owner: owner.clone(),
-            }
-        ));
-    }
+    let requirements = provider_middleware_requirements().unwrap();
+    assert!(!requirements.request_body_decode_required);
+    assert!(!requirements.managed_execution_required);
+    register_llm_sanitize_request_guardrail(
+        "presence-sanitize",
+        1,
+        Arc::new(|_, _| Box::pin(async move { Ok(None) })),
+    )
+    .unwrap();
+    let requirements = provider_middleware_requirements().unwrap();
+    assert!(requirements.request_body_decode_required);
+    assert!(!requirements.managed_execution_required);
+    register_llm_execution_intercept(
+        "presence-execution",
+        1,
+        Arc::new(|_, request, _, next| next(request)),
+    )
+    .unwrap();
+    register_conditional_middleware_guardrail(
+        "presence-gate",
+        std::collections::BTreeSet::from([RuntimeRegistrationKind::LlmExecutionIntercept]),
+        "presence-execution",
+        Arc::new(|_, _| panic!("presence queries must not run gates")),
+    )
+    .unwrap();
+    let requirements = provider_middleware_requirements().unwrap();
+    assert!(requirements.request_body_decode_required);
+    assert!(requirements.managed_execution_required);
+    assert!(deregister_llm_execution_intercept("presence-execution").unwrap());
+    assert!(deregister_llm_sanitize_request_guardrail("presence-sanitize").unwrap());
+    assert!(deregister_conditional_middleware_guardrail("presence-gate").unwrap());
+    let requirements = provider_middleware_requirements().unwrap();
+    assert!(!requirements.request_body_decode_required);
+    assert!(!requirements.managed_execution_required);
 }
 
 struct PendingRequestBody {
@@ -604,7 +573,7 @@ fn managed_worker_canonicalizes_chatgpt_responses_before_alignment() {
         path: "/backend-api/codex/responses".into(),
         path_and_query: "/backend-api/codex/responses?client=codex".into(),
         body: Bytes::from_static(br#"{"model":"test","stream":true}"#),
-        request_json: json!({"model": "test", "stream": true}),
+        request_json: Some(json!({"model": "test", "stream": true})),
         streaming: true,
     };
     let destination = effective_destination(
@@ -638,7 +607,7 @@ fn managed_worker_routes_chatgpt_responses_to_the_configured_chatgpt_base() {
         path: "/backend-api/codex/responses".into(),
         path_and_query: "/backend-api/codex/responses?client=codex".into(),
         body: Bytes::from_static(br#"{"model":"test","stream":true}"#),
-        request_json: json!({"model": "test", "stream": true}),
+        request_json: Some(json!({"model": "test", "stream": true})),
         streaming: true,
     };
     let config = GatewayConfig {
@@ -672,7 +641,7 @@ fn managed_worker_does_not_infer_upstream_authority_from_generic_bearer_tokens()
         path: "/responses".into(),
         path_and_query: "/responses?client=pi".into(),
         body: Bytes::from_static(br#"{"model":"test","stream":true}"#),
-        request_json: json!({"model": "test", "stream": true}),
+        request_json: Some(json!({"model": "test", "stream": true})),
         streaming: true,
     };
     let config = GatewayConfig {
@@ -709,7 +678,7 @@ fn managed_worker_uses_pi_named_provider_endpoint_and_strips_the_routing_header(
         path: "/chat/completions".into(),
         path_and_query: "/chat/completions?client=pi".into(),
         body: Bytes::from_static(br#"{"model":"custom","stream":true}"#),
-        request_json: json!({"model": "custom", "stream": true}),
+        request_json: Some(json!({"model": "custom", "stream": true})),
         streaming: true,
     };
 
@@ -745,7 +714,7 @@ fn unchanged_middleware_headers_preserve_credentials_and_duplicate_values() {
     let prepared = prepared_request(headers);
     let effective = LlmRequest {
         headers: crate::gateway::daemon_observable_headers(&prepared.headers),
-        content: prepared.request_json.clone(),
+        content: prepared.request_json.clone().unwrap(),
     };
 
     let (forwarded, body, explicit_target) =
@@ -780,7 +749,7 @@ fn middleware_header_diff_changes_only_the_named_observable_header() {
     effective_headers.insert("x-changed".into(), json!("after"));
     let effective = LlmRequest {
         headers: effective_headers,
-        content: prepared.request_json.clone(),
+        content: prepared.request_json.clone().unwrap(),
     };
 
     let (forwarded, _, explicit_target) =
@@ -816,7 +785,7 @@ fn explicit_target_removes_hidden_provider_credentials() {
     effective_headers.insert("authorization".into(), json!("Bearer selected-provider"));
     let effective = LlmRequest {
         headers: effective_headers,
-        content: prepared.request_json.clone(),
+        content: prepared.request_json.clone().unwrap(),
     };
 
     let (forwarded, _, explicit_target) =
@@ -836,7 +805,7 @@ fn prepared_request(headers: HeaderMap) -> PreparedProviderRequest {
         path: "/v1/responses".into(),
         path_and_query: "/v1/responses".into(),
         body: Bytes::from_static(br#"{"model":"test","stream":true}"#),
-        request_json: json!({"model": "test", "stream": true}),
+        request_json: Some(json!({"model": "test", "stream": true})),
         streaming: true,
     }
 }
@@ -1020,7 +989,7 @@ async fn prepared_request_enforces_body_limit_and_normalizes_non_json_payloads()
     )
     .await
     .expect("non-json requests remain forwardable");
-    assert_eq!(prepared.request_json, Value::Null);
+    assert_eq!(prepared.request_json, Some(Value::Null));
     assert!(!prepared.streaming);
 }
 
@@ -1627,6 +1596,8 @@ async fn observed_responses_preserve_sanitized_payloads_and_usage_without_a_fall
                         .unwrap();
                     let request: Value = serde_json::from_slice(&body).unwrap();
                     assert_eq!(request["input"], "sk-request-secret");
+                    let expected = format!(r#" {{ "model": "test", "input": "sk-request-\u0073ecret", "stream": {} }} "#, request["stream"]);
+                    assert_eq!(body.as_ref(), expected.as_bytes(), "unchanged bodies must retain their wire bytes");
                     let (content_type, body) = if request["stream"] == true {
                         (
                             "text/event-stream",
@@ -1683,12 +1654,9 @@ async fn observed_responses_preserve_sanitized_payloads_and_usage_without_a_fall
             .proxy_provider(
                 pooled_client().unwrap(),
                 Request::post("/v1/responses")
-                    .body(Body::from(
-                        json!({
-                            "model": "test", "input": "sk-request-secret", "stream": streaming
-                        })
-                        .to_string(),
-                    ))
+                    .body(Body::from(format!(
+                        r#" {{ "model": "test", "input": "sk-request-\u0073ecret", "stream": {streaming} }} "#
+                    )))
                     .unwrap(),
                 ProviderRoute::OpenAi,
             )
