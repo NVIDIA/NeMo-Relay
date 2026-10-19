@@ -151,9 +151,10 @@ print(json.dumps({key: call.get(key) for key in fields}, indent=2))
 ```
 
 The node is an `agent` scope named `emit_marker`. Its `parent_uuid` links to
-the enclosing `langgraph-request` scope, and its `uuid` pairs the node's start
-and end records. `timestamp` records when each event occurred. This local
-graph makes no model request; the records demonstrate workflow structure.
+the immediate `LangGraph` scope, whose parent is the outer `langgraph-request`
+scope. The node's `uuid` pairs its start and end records. `timestamp` records
+when each event occurred. This local graph makes no model request; the records
+demonstrate workflow structure.
 
 </Steps>
 
