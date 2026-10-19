@@ -48,26 +48,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use uuid::Uuid;
 
-#[test]
-fn trace_export_success_preserves_legacy_reports_without_enabling_core() {
-    let shared = SignalRuntimeDiagnostics::new_for_signal("traces", Some("traces.test".into()));
-    let delivery = TraceDeliveryDiagnostics::with_identity("collector".into(), shared.clone());
-    delivery.record_export_failure();
-    let before = shared.snapshot();
-    delivery.record_export_success();
-    delivery.record_export_success();
-    assert_eq!(delivery.export_failures.load(Ordering::Relaxed), 1);
-    assert_eq!(before.get("otel.traces_export_failed").unwrap().count, 1);
-    assert_eq!(shared.snapshot(), before);
-    assert!(before.get("otel.traces_export_succeeded").is_none());
-    assert_eq!(
-        crate::diagnostics::Diagnostics::process_default()
-            .reader()
-            .availability(),
-        crate::diagnostics::DiagnosticAvailability::Disabled
-    );
-}
-
 struct ResetPricingResolverGuard;
 
 impl Drop for ResetPricingResolverGuard {

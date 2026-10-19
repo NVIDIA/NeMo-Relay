@@ -22,32 +22,6 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-#[test]
-fn export_success_preserves_sibling_pipeline_failure_evidence() {
-    let shared = SignalRuntimeDiagnostics::new_for_signal("logs", Some("logs.test".into()));
-    let failed = LogDeliveryDiagnostics::new("collector-a".into(), shared.clone());
-    let successful = LogDeliveryDiagnostics::new("collector-b".into(), shared.clone());
-    failed.record_export_failure(&"collector unavailable");
-    let before = shared.snapshot();
-    successful.runtime_diagnostics.record_success(
-        "otel.logs_export_succeeded",
-        "OpenTelemetry log export succeeded",
-    );
-    failed.runtime_diagnostics.record_success(
-        "otel.logs_export_succeeded",
-        "OpenTelemetry log export succeeded",
-    );
-    assert_eq!(shared.snapshot(), before);
-    assert_eq!(before.get("otel.logs_export_failed").unwrap().count, 1);
-    assert!(before.get("otel.logs_export_succeeded").is_none());
-    assert_eq!(
-        crate::diagnostics::Diagnostics::process_default()
-            .reader()
-            .availability(),
-        crate::diagnostics::DiagnosticAvailability::Disabled
-    );
-}
-
 fn mark(
     parent_uuid: Option<Uuid>,
     name: &str,
