@@ -5,99 +5,34 @@
 
 #[test]
 fn metric_pipeline_success_preserves_failure_evidence_and_legacy_totals() {
-    let field = format!("metrics.test.{}", uuid::Uuid::now_v7());
-    let shared = SignalRuntimeDiagnostics::new_for_signal("metrics", Some(field.clone()));
+    let shared = SignalRuntimeDiagnostics::new_for_signal("metrics", Some("metrics.test".into()));
     let base = MetricDeliveryDiagnostics::new("collector".into(), shared.clone());
     let first = base.for_pipeline();
     let second = base.for_pipeline();
     first.record_export_failure(&"first pipeline failed");
     second.record_export_failure(&"second pipeline failed");
-    let legacy_before = shared.snapshot();
+    let before = shared.snapshot();
     second.runtime_diagnostics.record_success(
         "otel.metrics_export_succeeded",
         "OpenTelemetry metric export succeeded",
     );
-
-    let query = crate::diagnostics::DiagnosticQuery {
-        component_key: Some(crate::diagnostics::legacy_component_key(
-            "observability.otel.metrics.exporter",
-            Some(&field),
-        )),
-        ..Default::default()
-    };
-    let before = crate::diagnostics::Diagnostics::process_default()
-        .snapshot(query.clone())
-        .unwrap();
-    assert_eq!(before.components.len(), 3);
-    let failed_components = before
-        .components
-        .iter()
-        .filter(|component| {
-            component
-                .counters
-                .iter()
-                .any(|counter| counter.code == "otel.metrics_export_failed")
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(failed_components.len(), 2);
-    for component in &failed_components {
-        let failure = component
-            .counters
-            .iter()
-            .find(|counter| counter.code == "otel.metrics_export_failed")
-            .unwrap();
-        assert_eq!(failure.occurrences.value.get(), 1);
-        assert_eq!(failure.epoch, component.identity.instance_id);
-    }
-    assert_eq!(
-        before
-            .components
-            .iter()
-            .flat_map(|component| &component.counters)
-            .filter(|counter| counter.code == "otel.metrics_export_succeeded")
-            .map(|counter| counter.occurrences.value.get())
-            .sum::<u64>(),
-        1
-    );
-    assert_eq!(
-        base.failure_summary().as_deref(),
-        Some("otel.metrics_export_failed (2)")
-    );
-    assert_eq!(shared.snapshot(), legacy_before);
-
     first.runtime_diagnostics.record_success(
         "otel.metrics_export_succeeded",
         "OpenTelemetry metric export succeeded",
     );
-    let after = crate::diagnostics::Diagnostics::process_default()
-        .snapshot(query)
-        .unwrap();
-    for previous in failed_components {
-        let component = after
-            .components
-            .iter()
-            .find(|component| component.identity == previous.identity)
-            .unwrap();
-        assert_eq!(component.counters.len(), 2);
-        let failure = component
-            .counters
-            .iter()
-            .find(|counter| counter.code == "otel.metrics_export_failed")
-            .unwrap();
-        assert!(previous.counters.contains(failure));
-        let success = component
-            .counters
-            .iter()
-            .find(|counter| counter.code == "otel.metrics_export_succeeded")
-            .unwrap();
-        assert_eq!(success.occurrences.value.get(), 1);
-        assert_eq!(success.epoch, component.identity.instance_id);
-    }
+    assert_eq!(before.get("otel.metrics_export_failed").unwrap().count, 2);
     assert_eq!(
         base.failure_summary().as_deref(),
         Some("otel.metrics_export_failed (2)")
     );
-    assert_eq!(shared.snapshot(), legacy_before);
+    assert_eq!(shared.snapshot(), before);
+    assert!(before.get("otel.metrics_export_succeeded").is_none());
+    assert_eq!(
+        crate::diagnostics::Diagnostics::process_default()
+            .reader()
+            .availability(),
+        crate::diagnostics::DiagnosticAvailability::Disabled
+    );
 }
 
 use super::*;

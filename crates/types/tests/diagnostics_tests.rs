@@ -4,12 +4,7 @@
 //! Portable diagnostics wire-contract coverage.
 
 use chrono::{DateTime, Utc};
-use nemo_relay_types::diagnostics::{
-    ComponentIdentity, ComponentSnapshot, DIAGNOSTIC_SCHEMA_VERSION, DiagnosticAvailability,
-    DiagnosticCorrelation, DiagnosticCount, DiagnosticCounter, DiagnosticCoverage, DiagnosticEvent,
-    DiagnosticNumber, DiagnosticOutcome, DiagnosticRetention, DiagnosticSeverity,
-    DiagnosticSnapshot, SourceIdentity,
-};
+use nemo_relay_types::diagnostics::*;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -19,22 +14,44 @@ fn observed_at() -> DateTime<Utc> {
 
 fn snapshot() -> DiagnosticSnapshot {
     let component = ComponentIdentity {
-        key: "exporter.otlp.logs".into(),
+        key: "logging.file_sink".into(),
         instance_id: Uuid::parse_str("0199942f-1000-7000-8000-000000000002").unwrap(),
         generation: DiagnosticNumber::new(2),
     };
-    let counter = DiagnosticCounter {
-        code: "otel.logs_export_failed".into(),
-        epoch: component.instance_id,
-        occurrences: DiagnosticCount {
-            value: DiagnosticNumber::new(u64::MAX),
+    let ownership = ComponentOwnership {
+        configuration_id: Some("configuration-a".into()),
+        responsibility: Some("operational_file_output".into()),
+        ..Default::default()
+    };
+    let totals = DiagnosticTotals {
+        recorded_events_total: DiagnosticCount {
+            value: 7.into(),
+            saturated: false,
+        },
+        occurrences_total: DiagnosticCount {
+            value: u64::MAX.into(),
             saturated: true,
         },
-        last_observed_at: observed_at(),
-        last_message: "Collector is unavailable".into(),
+        history_evictions_total: DiagnosticCount {
+            value: 3.into(),
+            saturated: false,
+        },
+        ..Default::default()
     };
+    let lifetime = DiagnosticLifetimeSummary {
+        totals,
+        elapsed_millis: 50.into(),
+        last_failure_at: Some(observed_at()),
+        since_last_failure_millis: Some(10.into()),
+    };
+    let classification = Classification::failure(
+        FailureCode::Logging(LoggingFailureCode::SinkWriteFailed),
+        FailureClass::Unknown,
+    )
+    .unwrap();
     DiagnosticSnapshot {
         schema_version: DIAGNOSTIC_SCHEMA_VERSION,
+        catalogue_version: DIAGNOSTIC_CATALOGUE_VERSION,
         source: SourceIdentity {
             instance_id: Uuid::parse_str("0199942f-1000-7000-8000-000000000001").unwrap(),
             process_id: Some(42),
@@ -43,20 +60,45 @@ fn snapshot() -> DiagnosticSnapshot {
         },
         captured_at: observed_at(),
         sequence: DiagnosticNumber::new(u64::MAX),
+        lifetime,
         components: vec![ComponentSnapshot {
             identity: component.clone(),
             registered_at: observed_at(),
             closed_at: Some(observed_at()),
-            counters: vec![counter.clone()],
+            lifetime,
+            since_refresh: DiagnosticRefreshSummary {
+                generation: u64::MAX.into(),
+                started_at: observed_at(),
+                elapsed_millis: 30.into(),
+                ownership: ownership.clone(),
+                totals,
+            },
+            counters: vec![DiagnosticCounter {
+                code: classification.code().canonical_name().into(),
+                occurrences: DiagnosticCount {
+                    value: u64::MAX.into(),
+                    saturated: true,
+                },
+                last_observed_at: observed_at(),
+            }],
+            windows: vec![],
         }],
         events: vec![DiagnosticEvent {
             sequence: DiagnosticNumber::new(u64::MAX),
             observed_at: observed_at(),
             component,
-            code: counter.code,
+            origin: DiagnosticOrigin {
+                refresh_generation: u64::MAX.into(),
+                ownership,
+            },
+            classification: classification.into(),
+            context: PluginObservationContext::default(),
             severity: DiagnosticSeverity::Error,
             outcome: DiagnosticOutcome::Failure,
-            message: counter.last_message,
+            detail: Some(DiagnosticDetail {
+                message: "The file delivery attempt failed".into(),
+                truncated: false,
+            }),
             count: DiagnosticNumber::new(9_007_199_254_740_993),
             correlation: DiagnosticCorrelation {
                 session_id: Some("session-1".into()),
@@ -65,14 +107,21 @@ fn snapshot() -> DiagnosticSnapshot {
         }],
         coverage: DiagnosticCoverage {
             retention: DiagnosticRetention {
-                oldest_event_sequence: Some(DiagnosticNumber::new(u64::MAX)),
-                latest_event_sequence: Some(DiagnosticNumber::new(u64::MAX)),
-                events_retained: DiagnosticNumber::new(1),
-                components_retained: DiagnosticNumber::new(1),
+                oldest_event_sequence: Some(u64::MAX.into()),
+                latest_event_sequence: Some(u64::MAX.into()),
+                events_retained: 1.into(),
+                components_retained: 1.into(),
                 query_truncated: true,
             },
             ..Default::default()
         },
+        continuation: Some(DiagnosticCursor {
+            source_instance_id: Uuid::parse_str("0199942f-1000-7000-8000-000000000001").unwrap(),
+            sequence: u64::MAX.into(),
+            component_offset: 1.into(),
+            event_offset: 1.into(),
+            scope: 99.into(),
+        }),
     }
 }
 
@@ -121,7 +170,7 @@ fn diagnostic_numbers_reject_lossy_or_noncanonical_encodings() {
 }
 
 #[test]
-fn snapshots_preserve_identity_epochs_correlation_and_lossless_counts() {
+fn snapshots_preserve_identity_origin_correlation_and_lossless_counts() {
     let expected = snapshot();
     let mut wire = serde_json::to_value(&expected).unwrap();
     assert_eq!(wire["sequence"], json!(u64::MAX.to_string()));
@@ -179,6 +228,7 @@ fn evidence_availability_is_explicit_and_not_inferred_from_an_empty_list() {
         (DiagnosticAvailability::Unavailable, "unavailable"),
         (DiagnosticAvailability::Unsupported, "unsupported"),
         (DiagnosticAvailability::NeverObserved, "never_observed"),
+        (DiagnosticAvailability::Disabled, "disabled"),
     ] {
         let mut expected = snapshot();
         expected.events.clear();
@@ -272,9 +322,21 @@ fn identity_and_observation_schemas_preserve_wire_formats() {
         schema["definitions"]["ComponentIdentity"]["properties"]["instance_id"]["format"],
         json!("uuid"),
     );
-    assert_eq!(
-        schema["definitions"]["DiagnosticCounter"]["properties"]["epoch"]["format"],
-        json!("uuid"),
+    assert!(schema["definitions"].get("CounterEpoch").is_none());
+    assert!(schema["definitions"].get("CounterEpochId").is_none());
+    assert!(
+        schema["definitions"]["DiagnosticEvent"]["properties"]
+            .get("counter_epoch")
+            .is_none()
+    );
+    let origin_generation =
+        &schema["definitions"]["DiagnosticOrigin"]["properties"]["refresh_generation"];
+    let number_ref = json!("#/definitions/DiagnosticNumber");
+    assert!(
+        origin_generation["$ref"] == number_ref
+            || origin_generation["allOf"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["$ref"] == number_ref))
     );
     assert_eq!(
         schema["properties"]["captured_at"]["format"],
@@ -283,5 +345,280 @@ fn identity_and_observation_schemas_preserve_wire_formats() {
     assert_eq!(
         schema["definitions"]["DiagnosticEvent"]["properties"]["observed_at"]["format"],
         json!("date-time"),
+    );
+}
+
+#[test]
+fn lifetime_refresh_origin_and_cursor_values_remain_lossless() {
+    let expected = snapshot();
+    let wire = serde_json::to_value(&expected).unwrap();
+    assert_eq!(
+        wire["catalogue_version"],
+        json!(DIAGNOSTIC_CATALOGUE_VERSION)
+    );
+    assert_eq!(
+        wire["components"][0]["lifetime"]["totals"]["recorded_events_total"]["value"],
+        json!("7")
+    );
+    assert_eq!(
+        wire["components"][0]["lifetime"]["totals"]["occurrences_total"]["value"],
+        json!(u64::MAX.to_string())
+    );
+    assert_eq!(
+        wire["components"][0]["lifetime"]["totals"]["history_evictions_total"]["value"],
+        json!("3")
+    );
+    assert_eq!(
+        wire["components"][0]["since_refresh"]["generation"],
+        wire["events"][0]["origin"]["refresh_generation"]
+    );
+    assert_eq!(
+        wire["continuation"]["sequence"],
+        json!(u64::MAX.to_string())
+    );
+    assert_eq!(
+        wire["components"][0]["since_refresh"]["ownership"]["configuration_id"],
+        json!("configuration-a")
+    );
+    assert_eq!(
+        wire["coverage"]["summary_scope"],
+        json!("whole_component_lifetime")
+    );
+    assert!(
+        wire["components"][0]["counters"][0]
+            .get("last_message")
+            .is_none()
+    );
+    assert!(wire["events"][0].get("code").is_none());
+    assert_eq!(
+        wire["events"][0]["classification"]["canonical_code"],
+        json!("logging.sink.write_failed")
+    );
+    assert_eq!(
+        serde_json::from_value::<DiagnosticSnapshot>(wire).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn future_wire_classifications_remain_opaque_without_reclassifying_them() {
+    let mut expected = snapshot();
+    expected.catalogue_version = DIAGNOSTIC_CATALOGUE_VERSION + 1;
+    expected.events[0].classification = ClassificationWire {
+        canonical_code: "vendor.extension.new_failure".into(),
+        failure_class: Some("new_remote_cause".into()),
+    };
+    let wire = serde_json::to_value(&expected).unwrap();
+    let decoded: DiagnosticSnapshot = serde_json::from_value(wire).unwrap();
+    assert_eq!(decoded, expected);
+    assert!(BuiltinDiagnosticCode::from_canonical_name(decoded.events[0].code()).is_none());
+}
+
+#[test]
+fn unsupported_snapshot_schema_is_rejected_independently_of_catalogue_version() {
+    for version in [0, DIAGNOSTIC_SCHEMA_VERSION + 1, u32::MAX] {
+        let mut wire = serde_json::to_value(snapshot()).unwrap();
+        wire["schema_version"] = json!(version);
+        assert!(serde_json::from_value::<DiagnosticSnapshot>(wire).is_err());
+    }
+    let mut wire = serde_json::to_value(snapshot()).unwrap();
+    wire["catalogue_version"] = json!(u32::MAX);
+    assert!(serde_json::from_value::<DiagnosticSnapshot>(wire).is_ok());
+}
+
+#[test]
+fn count_saturation_distinguishes_exact_maximum_from_an_overflowing_increment() {
+    let mut count = DiagnosticCount {
+        value: (u64::MAX - 1).into(),
+        saturated: false,
+    };
+    count.add(1);
+    assert_eq!(count.value.get(), u64::MAX);
+    assert!(!count.saturated);
+    count.add(1);
+    assert_eq!(count.value.get(), u64::MAX);
+    assert!(count.saturated);
+    count.add(0);
+    assert_eq!(
+        count,
+        DiagnosticCount {
+            value: u64::MAX.into(),
+            saturated: true
+        }
+    );
+}
+
+#[test]
+fn authoring_catalogue_is_fixed_size_and_has_unique_round_trippable_names() {
+    fn requires_copy<T: Copy>() {}
+    requires_copy::<BuiltinDiagnosticCode>();
+    requires_copy::<Classification>();
+    assert!(!std::mem::needs_drop::<Classification>());
+    assert!(std::mem::size_of::<Classification>() <= 16);
+    let mut names = std::collections::BTreeSet::new();
+    for code in BuiltinDiagnosticCode::all() {
+        assert!(
+            names.insert(code.canonical_name()),
+            "duplicate canonical code {}",
+            code.canonical_name()
+        );
+        assert_eq!(
+            BuiltinDiagnosticCode::from_canonical_name(code.canonical_name()),
+            Some(*code)
+        );
+        assert!(!code.canonical_name().is_empty());
+    }
+    assert!(BuiltinDiagnosticCode::from_canonical_name("worker.error").is_none());
+    assert!(
+        BuiltinDiagnosticCode::from_canonical_name("logging.sink.write_failed.extra").is_none()
+    );
+}
+
+#[test]
+fn classification_constructors_enforce_entry_specific_class_contracts() {
+    for code in BuiltinDiagnosticCode::all() {
+        match code {
+            BuiltinDiagnosticCode::Failure(_) => {
+                assert!(!code.allowed_classes().is_empty());
+                assert!(Classification::new(*code, None).is_err());
+                for class in code.allowed_classes() {
+                    let classification = Classification::new(*code, Some(*class)).unwrap();
+                    assert_eq!(classification.code(), *code);
+                    assert_eq!(classification.failure_class(), Some(*class));
+                }
+            }
+            _ => {
+                assert!(Classification::new(*code, None).is_ok());
+                assert!(Classification::new(*code, Some(FailureClass::Unknown)).is_err());
+            }
+        }
+    }
+    let abi = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Native(
+        NativePluginFailureCode::AbiMismatch,
+    )));
+    assert!(Classification::new(abi, Some(FailureClass::Incompatible)).is_ok());
+    assert!(Classification::new(abi, Some(FailureClass::Timeout)).is_err());
+    assert!(Classification::new(abi, Some(FailureClass::Unknown)).is_err());
+}
+
+#[test]
+fn nested_catalogue_selectors_derive_parent_ownership_without_another_record() {
+    let worker = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Worker(
+        WorkerPluginFailureCode::ProtocolMismatch,
+    )));
+    assert_eq!(worker.domain(), DiagnosticDomain::Plugin);
+    assert_eq!(worker.plugin_family(), Some(PluginDiagnosticFamily::Worker));
+    assert_eq!(worker.canonical_name(), "plugin.worker.protocol_mismatch");
+    let upstream =
+        BuiltinDiagnosticCode::Failure(FailureCode::Upstream(UpstreamFailureCode::TimedOut));
+    assert_eq!(upstream.domain(), DiagnosticDomain::Upstream);
+    assert_eq!(upstream.plugin_family(), None);
+    assert_eq!(upstream.canonical_name(), "upstream.timed_out");
+}
+
+#[test]
+fn classifier_trait_supports_concrete_and_borrowed_dynamic_producers_without_a_runtime() {
+    struct ProducerClassifier;
+    impl DiagnosticClassifier<u32> for ProducerClassifier {
+        fn classify(&self, _error: &u32) -> Classification {
+            Classification::failure(
+                FailureCode::Runtime(RuntimeFailureCode::Internal),
+                FailureClass::Internal,
+            )
+            .unwrap()
+        }
+    }
+    let error = 42;
+    let concrete = ProducerClassifier.classify(&error);
+    let selected: &dyn DiagnosticClassifier<u32> = &ProducerClassifier;
+    assert_eq!(selected.classify(&error), concrete);
+    assert_eq!(concrete.code().canonical_name(), "runtime.internal");
+}
+
+#[test]
+fn typed_plugin_context_round_trips_without_requiring_unknown_mechanism_inference() {
+    for (execution, phase) in [
+        (
+            Some(PluginExecution::NativeAbi),
+            Some(PluginPhase::Validation),
+        ),
+        (
+            Some(PluginExecution::WorkerProtocol),
+            Some(PluginPhase::Runtime),
+        ),
+        (None, Some(PluginPhase::Activation)),
+    ] {
+        let mut expected = snapshot();
+        expected.events[0].context = PluginObservationContext { execution, phase };
+        let wire = serde_json::to_value(&expected).unwrap();
+        assert_eq!(
+            serde_json::from_value::<DiagnosticSnapshot>(wire).unwrap(),
+            expected
+        );
+    }
+    let expected = snapshot();
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    wire["events"][0].as_object_mut().unwrap().remove("context");
+    let decoded: DiagnosticSnapshot = serde_json::from_value(wire).unwrap();
+    assert_eq!(
+        decoded.events[0].context,
+        PluginObservationContext::default()
+    );
+}
+
+#[test]
+fn lifetime_and_refresh_totals_are_fixed_copy_values_with_explicit_scopes() {
+    fn requires_copy<T: Copy>() {}
+    requires_copy::<DiagnosticTotals>();
+    requires_copy::<DiagnosticLifetimeSummary>();
+    assert!(!std::mem::needs_drop::<DiagnosticTotals>());
+    let mut totals = DiagnosticTotals::default();
+    totals.record(DiagnosticOutcome::Failure, 2);
+    totals.record(DiagnosticOutcome::Failure, 3);
+    totals.record(DiagnosticOutcome::Success, 4);
+    totals.record(DiagnosticOutcome::Unknown, 1);
+    assert_eq!(totals.recorded_events_total.value.get(), 4);
+    assert_eq!(totals.occurrences_total.value.get(), 10);
+    assert_eq!(totals.failures_total.value.get(), 5);
+    assert_eq!(totals.successes_total.value.get(), 4);
+    assert_eq!(totals.unspecified_total.value.get(), 1);
+
+    let mut expected = snapshot();
+    expected.lifetime.totals = totals;
+    expected.components[0].since_refresh.totals = DiagnosticTotals::default();
+    expected.components[0]
+        .since_refresh
+        .ownership
+        .configuration_id = Some("configuration-b".into());
+    // Original event attribution and lifetime accounting remain independent of
+    // the replacement configuration's one current summary.
+    let wire = serde_json::to_value(&expected).unwrap();
+    assert_eq!(wire["lifetime"]["totals"]["failures_total"]["value"], "5");
+    assert_eq!(
+        wire["components"][0]["since_refresh"]["totals"]["failures_total"]["value"],
+        "0"
+    );
+    assert_eq!(
+        wire["events"][0]["origin"]["ownership"]["configuration_id"],
+        "configuration-a"
+    );
+    assert_eq!(
+        serde_json::from_value::<DiagnosticSnapshot>(wire).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn origin_generation_query_is_lossless_without_a_historical_summary_selector() {
+    let query = DiagnosticQuery {
+        origin_generation: Some(u64::MAX.into()),
+        ..Default::default()
+    };
+    let wire = serde_json::to_value(&query).unwrap();
+    assert_eq!(wire["origin_generation"], u64::MAX.to_string());
+    assert!(wire.get("counter_epoch").is_none());
+    assert_eq!(
+        serde_json::from_value::<DiagnosticQuery>(wire).unwrap(),
+        query
     );
 }

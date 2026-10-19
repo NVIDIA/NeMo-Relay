@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use serde_json::{Map, Value as Json};
 use spdlog::sink::Sink;
 use spdlog::{Logger, ThreadPool};
-use uuid::Uuid;
 
+pub use self::diagnostics::LoggingErrorClassifier;
 use self::diagnostics::{LoggingDiagnostics, LoggingProjection};
 use crate::diagnostics::Diagnostics;
 use crate::error::{FlowError, Result};
@@ -30,6 +30,7 @@ pub use config::{
     FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
     MAX_FILE_SINK_QUEUE_ENTRIES, MAX_FILE_SINK_RETAINED_FILES,
 };
+#[cfg(test)]
 pub(crate) use sink::build_logger;
 use sink::log_level_filter;
 
@@ -127,11 +128,7 @@ impl LoggingRuntime {
     /// opened. Dropping the returned runtime flushes sinks and detaches its logger from the
     /// process-global `log` proxy when it is still installed.
     pub fn configure(config: LoggingConfig) -> Result<Self> {
-        // Install once per process. Subsequent calls (tests / re-entry) reuse the proxy and swap
-        // the receiver logger. A different global logger would prevent Relay sinks from receiving
-        // `log` facade records, so fail instead of returning a nonfunctional runtime.
-        let _lifecycle = lock_logger_lifecycle();
-        Self::configure_with_lifecycle_lock(config)
+        Self::configure_with_diagnostics(config, Diagnostics::process_default())
     }
 
     /// Installs operational logging with diagnostics owned by an independent diagnostic context.
@@ -147,6 +144,11 @@ impl LoggingRuntime {
         config: LoggingConfig,
         context: &Diagnostics,
     ) -> Result<Self> {
+        let _lifecycle = lock_logger_lifecycle();
+        Self::configure_with_lifecycle_lock(config, context)
+    }
+
+    fn configure_with_lifecycle_lock(config: LoggingConfig, context: &Diagnostics) -> Result<Self> {
         let diagnostics = LoggingDiagnostics::new(context, &config);
         let root_relay_id = context.source().instance_id.to_string();
         let built =
@@ -166,7 +168,6 @@ impl LoggingRuntime {
             }
         };
         let installed = {
-            let _lifecycle = lock_logger_lifecycle();
             install_log_crate_proxy().map(|()| {
                 spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&logger)));
                 spdlog::log_crate_proxy().set_filter(None);
@@ -191,32 +192,6 @@ impl LoggingRuntime {
             _thread_pools: thread_pools,
             diagnostics: Some(diagnostics),
             projection,
-        })
-    }
-
-    fn configure_with_lifecycle_lock(config: LoggingConfig) -> Result<Self> {
-        let root_relay_id = Uuid::now_v7().to_string();
-        let (logger, thread_pools) = build_logger(&config, root_relay_id.clone())?;
-
-        install_log_crate_proxy()?;
-        spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&logger)));
-        spdlog::log_crate_proxy().set_filter(None);
-        log::set_max_level(log_level_filter(config.level));
-        set_active_relay_logger(&logger);
-
-        log::info!(
-            target: "nemo_relay.logging",
-            event = "logging_initialized",
-            file_sink_count = config.sinks.len();
-            "Operational logging initialized"
-        );
-
-        Ok(Self {
-            root_relay_id,
-            logger,
-            _thread_pools: thread_pools,
-            diagnostics: None,
-            projection: None,
         })
     }
 
@@ -319,7 +294,10 @@ pub fn initialize_default_logging() -> Result<()> {
         if uses_default_config && active_relay_logger_exists() {
             return Ok(());
         }
-        match LoggingRuntime::configure_with_lifecycle_lock(config.unwrap_or_default()) {
+        match LoggingRuntime::configure_with_lifecycle_lock(
+            config.unwrap_or_default(),
+            Diagnostics::process_default(),
+        ) {
             Ok(configured) => *runtime = Some(configured),
             // Language bindings initialize logging automatically. When Relay was not explicitly
             // configured, defer to an application logger that already owns the process facade.

@@ -1,977 +1,1777 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Process-local diagnostics independent of logging, plugins, and async runtimes.
+//! Bounded, process-local diagnostic evidence, independent of logger startup.
 //!
-//! Components receive scoped recording handles. Readers can inspect bounded evidence
-//! without changing counters or extending component lifetimes.
-//! A projection receives accepted observations after the state lock has been released;
-//! observations describe evidence without inferring health or recovery policy.
-//! Messages and correlation fields must already be safe for diagnostic exposure:
-//! truncation bounds their size and does not remove credentials or user payloads.
-
-use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
+//! Startup composition chooses collection once. Disabled handles skip lazy work;
+//! enabled components reserve summaries before recording. Recent evidence uses a
+//! shared circular history and a reclaimable detail pool. Neither history loss
+//! nor output delivery changes accepted numeric totals. Diagnostic evidence never
+//! assigns readiness, recovery, or deployment health.
+//!
+//! The backing-storage budget excludes caller-owned inputs, producer handles,
+//! independently decoded snapshot copies, allocator overhead, and user callback
+//! captures. Existing operational output and legacy reports have separate budgets.
+//!
+//! # Startup and recording
+//!
+//! Select settings once before giving producers their handles. Install the chosen
+//! context with [`Diagnostics::install_process_default`] before using convenience
+//! constructors, or inject it explicitly into logging and plugin composition.
+//! Neither path requires logging to initialize first.
+//!
+//! ```
+//! use nemo_relay::diagnostics::*;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let diagnostics = Diagnostics::from_settings(
+//!     SourceIdentity {
+//!         instance_id: uuid::Uuid::now_v7(),
+//!         process_id: Some(std::process::id()),
+//!         process_role: "embedded".into(),
+//!         relay_version: env!("CARGO_PKG_VERSION").into(),
+//!     },
+//!     DiagnosticsSettings { enabled: true, ..Default::default() },
+//! )?;
+//! let code = BuiltinDiagnosticCode::Failure(FailureCode::Runtime(RuntimeFailureCode::Internal));
+//! let recorder = diagnostics.register_component(ComponentRegistration::new("example", &[code]))?;
+//! recorder.record_lazy(|| Observation::new(
+//!     Classification::failure(FailureCode::Runtime(RuntimeFailureCode::Internal), FailureClass::Internal)
+//!         .expect("supported catalogue pair"),
+//!     "Producer-approved safe detail",
+//!     1, // occurrence delta, never a cumulative total
+//! ))?;
+//! let page = diagnostics.snapshot(DiagnosticQuery::default())?;
+//! let bounded_json: &[u8] = page.as_bytes();
+//! # assert!(!bounded_json.is_empty());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Disabled contexts use the same producer calls and skip their lazy factories;
+//! reads return [`DiagnosticError::Disabled`]. Held snapshot leases use a reserved
+//! query workspace until dropped. Decoding [`SnapshotLease::to_snapshot`] instead
+//! creates an independent caller-owned DTO outside the service's memory budget.
 
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
+use std::time::Instant;
 use uuid::Uuid;
 
-mod compatibility;
-pub(crate) use compatibility::{legacy_component_key, legacy_diagnostic_code};
+/// Producer-owned pure mappings from existing typed errors to catalogue values.
+pub mod classifiers;
+pub use classifiers::*;
+mod lifecycle;
+use lifecycle::{close_component, refresh_component, register_component, register_extension};
+mod read;
+mod state;
+mod storage;
 
 pub use nemo_relay_types::diagnostics::*;
+pub use read::SnapshotLease;
+use state::*;
 
-const MAX_IDENTITY_BYTES: usize = 128;
-const MAX_CODE_BYTES: usize = 128;
+const MAX_DETAIL_BYTES: usize = 4096;
 const MAX_PROJECTION_DEPTH: usize = 32;
 
-thread_local! {
-    // Independent services can forward to each other. Suppress only a service
-    // already in this thread's projection chain, or an excessively deep chain.
-    static PROJECTING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Resource budgets for one independently owned diagnostic service.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Independent capacities of one diagnostic context. All backing allocations are
+/// admitted during startup; these limits are not a whole-process RSS ceiling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct DiagnosticLimits {
-    /// Active and retained closed components, combined.
+    /// Active and retained closed registration slots shared by this context.
     pub max_components: usize,
-    /// Distinct diagnostic codes retained by each component.
-    pub max_keys_per_component: usize,
-    /// Recent observations retained for inspection.
+    /// Declared lifetime code-counter slots shared by admitted components.
+    pub max_counters: usize,
+    /// Shared circular-history headers; zero retains summaries without event history.
     pub max_events: usize,
-    /// UTF-8 bytes retained in each message, including a truncation marker.
-    pub max_message_bytes: usize,
-    /// UTF-8 bytes retained in each correlation field.
+    /// Aggregate outcome-bucket slots shared by admitted components.
+    pub max_window_buckets: usize,
+    /// Registered extension descriptors across all retained components.
+    pub max_extensions: usize,
+    /// Combined admitted component-key, ownership, and extension-description bytes.
+    pub max_metadata_bytes: usize,
+    /// Bytes admitted per component key or ownership string, at most 128.
+    pub max_identity_bytes: usize,
+    /// Bytes copied or formatted per observation detail, at most 4096.
+    pub max_detail_bytes: usize,
+    /// Bytes admitted per request or session correlation field, at most 128.
     pub max_correlation_bytes: usize,
-    /// Combined encoded bytes of retained component and event evidence.
-    pub max_retained_bytes: usize,
-    /// Maximum encoded size of a query response, including its envelope.
+    /// Payload-byte capacity of the shared detail pool, rounded down to whole blocks.
+    pub detail_pool_bytes: usize,
+    /// Payload bytes per reclaimable detail block, at least four for UTF-8 scalars.
+    pub detail_block_bytes: usize,
+    /// Simultaneously leased query workspaces; held leases retain their permits.
+    pub max_queries: usize,
+    /// Maximum component rows materialized in one query page.
+    pub max_query_components: usize,
+    /// Maximum recent-event rows materialized in one query page.
+    pub max_query_events: usize,
+    /// Serialized bytes per query response, including its envelope and coverage.
     pub max_snapshot_bytes: usize,
-    /// Maximum simultaneously attached operational-log projections.
+    /// Text-arena bytes reserved for each leased query workspace.
+    pub query_text_bytes: usize,
+    /// Simultaneously registered callbacks; arbitrary callback captures are caller-owned.
     pub max_projections: usize,
+    /// Concurrent publications with independent payload and callback-reference storage.
+    pub max_projection_workspaces: usize,
+    /// Startup ceiling for context backing allocations, excluding whole-process RSS.
+    pub max_owned_bytes: usize,
 }
-
 impl Default for DiagnosticLimits {
     fn default() -> Self {
         Self {
-            max_components: 128,
-            max_keys_per_component: 64,
+            max_components: 64,
+            max_counters: 2048,
             max_events: 256,
-            max_message_bytes: 4_096,
+            max_window_buckets: 3840,
+            max_extensions: 128,
+            max_metadata_bytes: 65536,
+            max_identity_bytes: 128,
+            max_detail_bytes: 4096,
             max_correlation_bytes: 128,
-            max_retained_bytes: 512 * 1_024,
-            max_snapshot_bytes: 512 * 1_024,
+            detail_pool_bytes: 262144,
+            detail_block_bytes: 256,
+            max_queries: 4,
+            max_query_components: 64,
+            max_query_events: 256,
+            max_snapshot_bytes: 524288,
+            query_text_bytes: 524288,
             max_projections: 16,
+            max_projection_workspaces: 4,
+            max_owned_bytes: 32 * 1024 * 1024,
+        }
+    }
+}
+impl DiagnosticLimits {
+    fn validate(&self) -> Result<(), DiagnosticError> {
+        if self.max_components == 0
+            || self.max_identity_bytes == 0
+            || self.max_identity_bytes > ID_BYTES
+            || self.max_detail_bytes > MAX_DETAIL_BYTES
+            || self.max_correlation_bytes > ID_BYTES
+            || self.detail_block_bytes < 4
+            || self.max_queries == 0
+            || self.max_query_components == 0
+            || self.max_snapshot_bytes < 4096
+            || self.max_projection_workspaces == 0
+        {
+            return Err(DiagnosticError::InvalidLimits);
+        }
+        let mut total = State::required_bytes(self)?;
+        for bytes in [
+            read::QueryPool::required_bytes(self)?,
+            self.max_projection_workspaces
+                .checked_mul(PublicationWorkspace::required_bytes(self)?)
+                .ok_or(DiagnosticError::InvalidLimits)?,
+            self.max_projection_workspaces
+                .checked_mul(size_of::<Option<PublicationWorkspace>>())
+                .ok_or(DiagnosticError::InvalidLimits)?,
+            self.max_projections
+                .checked_mul(size_of::<Option<(u64, Projection)>>())
+                .ok_or(DiagnosticError::InvalidLimits)?,
+            context_layout_bytes(),
+            ID_BYTES * 2,
+        ] {
+            total = total
+                .checked_add(bytes)
+                .ok_or(DiagnosticError::InvalidLimits)?;
+        }
+        if total > self.max_owned_bytes {
+            return Err(DiagnosticError::InvalidLimits);
+        }
+        Ok(())
+    }
+}
+
+/// Startup-only runtime setting. Collection is compiled normally and off unless
+/// the owner enables this context explicitly.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiagnosticsSettings {
+    /// Enable this context at startup; the default is false.
+    pub enabled: bool,
+    /// Storage capacities validated before an enabled backend is allocated.
+    pub limits: DiagnosticLimits,
+}
+
+/// Fixed-duration component outcome windows; no code/class Cartesian product.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowSettings {
+    /// Positive duration of one bucket on the source monotonic clock.
+    pub resolution_millis: u64,
+    /// Positive circular bucket-slot reservation for the component instance.
+    pub bucket_count: usize,
+}
+impl Default for WindowSettings {
+    fn default() -> Self {
+        Self {
+            resolution_millis: 5000,
+            bucket_count: 60,
         }
     }
 }
 
-/// A query narrows the retained view without changing the underlying evidence.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DiagnosticQuery {
-    /// Match a logical component key across retained registration generations.
-    pub component_key: Option<String>,
-    /// Match one component registration incarnation.
-    pub component_instance_id: Option<Uuid>,
-    /// Retain only this diagnostic code in events and counters.
-    pub code: Option<String>,
-    /// Return events strictly after this sequence. Counters remain cumulative.
-    pub after_sequence: Option<u64>,
-}
-
-/// A validated bounded diagnostic code. Correlation belongs in separate fields.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct DiagnosticCode(String);
-
-impl DiagnosticCode {
-    /// Validate bounded lowercase code segments separated by dots.
-    pub fn new(value: impl Into<String>) -> Result<Self, DiagnosticError> {
-        let value = value.into();
-        if valid_code(&value) {
-            Ok(Self(value))
-        } else {
-            Err(DiagnosticError::InvalidCode)
-        }
-    }
-
-    /// Borrow the validated code.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl AsRef<str> for DiagnosticCode {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-/// One counted observation, accepted atomically with its counter update.
+/// Expected codes and attribution are admitted together with the summary.
 #[derive(Debug, Clone)]
-pub struct DiagnosticObservation {
-    /// Stable code; identifiers such as requests and sessions belong in correlation.
-    pub code: String,
-    /// Severity of the observed evidence, independent of deployment health policy.
-    pub severity: DiagnosticSeverity,
-    /// Observed operation outcome, independent of deployment health policy.
-    pub outcome: DiagnosticOutcome,
-    /// Caller-sanitized explanation; the recorder bounds bytes but does not redact.
-    pub message: String,
-    /// Occurrences represented by this observation; the count must be nonzero.
-    pub count: u64,
-    /// Bounded correlation fields, excluded from aggregation keys.
-    pub correlation: DiagnosticCorrelation,
+pub struct ComponentRegistration<'a> {
+    /// Stable logical responsibility, excluding request and session identifiers.
+    pub key: &'a str,
+    /// Complete built-in vocabulary whose counters are reserved at admission.
+    pub builtin_codes: &'a [BuiltinDiagnosticCode],
+    /// Initial configuration attribution, bounded on admission.
+    pub ownership: ComponentOwnership,
+    /// Optional fixed-resolution outcome series admitted with the component.
+    pub window: Option<WindowSettings>,
+}
+impl<'a> ComponentRegistration<'a> {
+    /// Declare a vocabulary with empty attribution and no outcome window.
+    pub fn new(key: &'a str, builtin_codes: &'a [BuiltinDiagnosticCode]) -> Self {
+        Self {
+            key,
+            builtin_codes,
+            ownership: ComponentOwnership::default(),
+            window: None,
+        }
+    }
 }
 
-impl DiagnosticObservation {
-    /// Build a counted observation of failed operations.
-    pub fn failure(code: impl Into<String>, message: impl Into<String>, count: u64) -> Self {
+/// Extension vocabulary is scoped to a producer namespace and admitted once.
+#[derive(Debug, Clone)]
+pub struct ExtensionRegistration<'a> {
+    /// Producer namespace outside reserved built-in namespaces.
+    pub namespace: &'a str,
+    /// Stable local name combined with the namespace at admission.
+    pub name: &'a str,
+    /// Safe bounded explanation retained once in registration metadata.
+    pub description: &'a str,
+    /// Permitted causes; successful or unspecified extensions admit no class.
+    pub allowed_classes: &'a [FailureClass],
+    /// Declared outcome used to validate extension class requirements.
+    pub outcome: DiagnosticOutcome,
+}
+/// A registered extension identity. A stale handle cannot create a new code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtensionHandle {
+    context_id: Uuid,
+    component: ComponentHandle,
+    slot: usize,
+    generation: u64,
+}
+
+/// Borrowed producer-approved detail. A Display source is formatted into capped
+/// storage only when the enabled recorder invokes its lazy observation factory.
+#[derive(Clone, Copy)]
+pub enum DiagnosticDetailRef<'a> {
+    /// Supply no optional text evidence.
+    None,
+    /// Borrow already-safe text for a capped copy; bounding does not redact secrets.
+    Text(&'a str),
+    /// Format into capped scratch only when enabled; retain no source value.
+    Display(&'a dyn fmt::Display),
+}
+impl fmt::Debug for DiagnosticDetailRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::None => "None",
+            Self::Text(_) => "Text(..)",
+            Self::Display(_) => "Display(..)",
+        })
+    }
+}
+impl<'a> From<&'a str> for DiagnosticDetailRef<'a> {
+    fn from(value: &'a str) -> Self {
+        Self::Text(value)
+    }
+}
+
+/// Correlation is borrowed and capped, and never establishes an aggregate key.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DiagnosticCorrelationRef<'a> {
+    /// Safe optional session identifier, capped independently of message detail.
+    pub session_id: Option<&'a str>,
+    /// Safe optional request identifier, excluded from aggregate identity.
+    pub request_id: Option<&'a str>,
+}
+/// An admitted custom cause descriptor belonging to one registered extension.
+/// Its immutable metadata is bounded and does not create another counter series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtensionClassHandle {
+    extension: ExtensionHandle,
+    index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ObservationCode {
+    Builtin(Classification),
+    Extension(ExtensionHandle, Option<FailureClass>),
+    OpaqueExtension(ExtensionHandle, ExtensionClassHandle),
+    Overflow,
+}
+
+/// One observation. Its count is an input delta, never a cumulative report total.
+#[derive(Debug, Clone, Copy)]
+pub struct Observation<'a> {
+    code: ObservationCode,
+    /// Optional producer-approved explanation; bounding does not perform redaction.
+    pub detail: DiagnosticDetailRef<'a>,
+    /// Positive input occurrence delta, never a cumulative report total.
+    pub count: u64,
+    /// Operational evidence severity, independent of deployment health.
+    pub severity: DiagnosticSeverity,
+    /// Explicit observed operation outcome for summaries and windows.
+    pub outcome: DiagnosticOutcome,
+    /// Borrowed safe correlation, never an aggregate key.
+    pub correlation: DiagnosticCorrelationRef<'a>,
+    /// Fixed-size plugin execution and phase facts, excluded from aggregate keys.
+    pub context: PluginObservationContext,
+}
+impl<'a> Observation<'a> {
+    /// Author built-in evidence with severity/outcome defaults from its code.
+    ///
+    /// Recording validates the count and declared code reservation. Constructing
+    /// this value does not retain its borrowed detail or source error.
+    pub fn new(
+        classification: Classification,
+        detail: impl Into<DiagnosticDetailRef<'a>>,
+        count: u64,
+    ) -> Self {
+        let (severity, outcome) = match classification.code() {
+            BuiltinDiagnosticCode::Failure(_) => {
+                (DiagnosticSeverity::Error, DiagnosticOutcome::Failure)
+            }
+            BuiltinDiagnosticCode::Success(_) => {
+                (DiagnosticSeverity::Info, DiagnosticOutcome::Success)
+            }
+            _ => (DiagnosticSeverity::Info, DiagnosticOutcome::Unknown),
+        };
         Self {
-            code: code.into(),
-            severity: DiagnosticSeverity::Error,
-            outcome: DiagnosticOutcome::Failure,
-            message: message.into(),
+            code: ObservationCode::Builtin(classification),
+            detail: detail.into(),
             count,
-            correlation: DiagnosticCorrelation::default(),
+            severity,
+            outcome,
+            correlation: DiagnosticCorrelationRef::default(),
+            context: PluginObservationContext::default(),
         }
     }
-
-    /// Build a counted observation of successful operations.
-    pub fn success(code: impl Into<String>, message: impl Into<String>, count: u64) -> Self {
-        Self {
-            code: code.into(),
-            severity: DiagnosticSeverity::Info,
-            outcome: DiagnosticOutcome::Success,
-            message: message.into(),
-            count,
-            correlation: DiagnosticCorrelation::default(),
-        }
-    }
-
-    /// Build a counted observation without classifying its operation outcome.
-    pub fn occurrence(
-        code: impl Into<String>,
-        severity: DiagnosticSeverity,
-        message: impl Into<String>,
+    /// Author evidence using an admitted extension handle and supported cause.
+    ///
+    /// Recording validates ownership, descriptor generation, and class. A stale
+    /// handle cannot reserve a replacement code or create another counter.
+    pub fn extension(
+        handle: ExtensionHandle,
+        class: Option<FailureClass>,
+        outcome: DiagnosticOutcome,
+        detail: impl Into<DiagnosticDetailRef<'a>>,
         count: u64,
     ) -> Self {
         Self {
-            code: code.into(),
-            severity,
-            outcome: DiagnosticOutcome::Unknown,
-            message: message.into(),
+            code: ObservationCode::Extension(handle, class),
+            detail: detail.into(),
             count,
-            correlation: DiagnosticCorrelation::default(),
+            severity: DiagnosticSeverity::Info,
+            outcome,
+            correlation: DiagnosticCorrelationRef::default(),
+            context: PluginObservationContext::default(),
         }
     }
-
-    /// Attach separately bounded correlation fields.
-    pub fn with_correlation(mut self, correlation: DiagnosticCorrelation) -> Self {
+    /// Author an extension failure with its own admitted immutable cause name.
+    /// Handles from another code/registration or expired metadata are rejected.
+    pub fn extension_with_class(
+        handle: ExtensionHandle,
+        class: ExtensionClassHandle,
+        detail: impl Into<DiagnosticDetailRef<'a>>,
+        count: u64,
+    ) -> Self {
+        Self {
+            code: ObservationCode::OpaqueExtension(handle, class),
+            detail: detail.into(),
+            count,
+            severity: DiagnosticSeverity::Error,
+            outcome: DiagnosticOutcome::Failure,
+            correlation: DiagnosticCorrelationRef::default(),
+            context: PluginObservationContext::default(),
+        }
+    }
+    /// Explicit summary-only admission when extension vocabulary could not fit.
+    /// This is not a way to reinterpret an invalid or undeclared code.
+    pub fn classification_overflow(outcome: DiagnosticOutcome, count: u64) -> Self {
+        Self {
+            code: ObservationCode::Overflow,
+            detail: DiagnosticDetailRef::None,
+            count,
+            severity: DiagnosticSeverity::Warning,
+            outcome,
+            correlation: DiagnosticCorrelationRef::default(),
+            context: PluginObservationContext::default(),
+        }
+    }
+    /// Attach known plugin execution and lifecycle facts without another series.
+    pub fn with_plugin_context(mut self, context: PluginObservationContext) -> Self {
+        self.context = context;
+        self
+    }
+    /// Set the observed outcome without changing classification or health policy.
+    pub fn with_outcome(mut self, outcome: DiagnosticOutcome) -> Self {
+        self.outcome = outcome;
+        self
+    }
+    /// Set output severity independently of operation outcome and cause.
+    pub fn with_severity(mut self, severity: DiagnosticSeverity) -> Self {
+        self.severity = severity;
+        self
+    }
+    /// Attach safe borrowed correlation to be capped outside aggregate keys.
+    pub fn with_correlation(mut self, correlation: DiagnosticCorrelationRef<'a>) -> Self {
         self.correlation = correlation;
         self
     }
 }
+/// Explicit authoring name for a borrowed observation.
+pub type DiagnosticObservation<'a> = Observation<'a>;
 
-/// Short alias for integrations constructing observations directly.
-pub type Observation = DiagnosticObservation;
-
-/// Acceptance into local memory is independent of delivery through log sinks.
+/// Evidence retention is separate from numeric acceptance and output delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceDisposition {
+    /// The header and supplied optional evidence fit retention budgets.
+    Retained,
+    /// The retained event has shortened or omitted optional detail/correlation.
+    Truncated,
+    /// Numeric acceptance succeeded without retaining an incoming event header.
+    Dropped,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Accepted numeric update, independent of evidence retention and output delivery.
 pub struct RecordReceipt {
-    /// Process-local accepted-update sequence.
+    /// Unique source-local accepted-update sequence, never an occurrence total.
     pub sequence: u64,
-    /// Cumulative occurrences for this component and code, never a second count.
-    pub occurrence_count: u64,
-    /// The cumulative count exceeded its finite representation.
-    pub count_saturated: bool,
+    /// Whether the component lifetime and current refresh summary accepted this call and its delta.
+    pub summary_updated: bool,
+    /// Whether an admitted code counter also received the delta; false for overflow.
+    pub code_counter_updated: bool,
+    /// Updated code total, absent for summary-only classification overflow.
+    pub code_total: Option<DiagnosticCount>,
+    /// Evidence retention disposition, independent of projection delivery.
+    pub evidence: EvidenceDisposition,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Accepted collection or intentional startup disablement.
+pub enum RecordOutcome {
+    /// Accepted numeric state and the independent retention disposition.
+    Recorded(RecordReceipt),
+    /// No factory, receipt, sequence, or loss accounting was produced.
+    Disabled,
 }
 
-/// Validation and capacity failures reported without relying on a logger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+/// Validation, admission, or availability failure, independent of operational logging.
 pub enum DiagnosticError {
+    /// Reads report configured disablement instead of available empty evidence.
+    #[error("diagnostics is disabled by startup configuration")]
+    Disabled,
+    /// Enabled capacities are invalid, overflow arithmetic, or exceed the byte ceiling.
+    #[error("invalid diagnostics capacity profile")]
+    InvalidLimits,
+    /// An admitted startup backing allocation could not be reserved.
+    #[error("diagnostics backing allocation failed")]
+    Allocation,
+    /// The logical key is empty, oversized, or outside the supported syntax.
     #[error("invalid diagnostic component key")]
-    /// Component key is empty, too long, or contains unsupported characters.
     InvalidComponentKey,
-    #[error("invalid diagnostic code")]
-    /// Diagnostic code is empty, too long, or has invalid code segments.
+    /// The code is undeclared or its handle names another/stale registration.
+    #[error("invalid or undeclared diagnostic code")]
     InvalidCode,
-    #[error("an occurrence must have a nonzero count")]
-    /// An observation has zero occurrences.
+    /// The code or extension does not permit the supplied cause.
+    #[error("invalid diagnostic classification")]
+    InvalidClassification,
+    /// Recording requires a positive input occurrence delta.
+    #[error("an observation requires a positive occurrence count")]
     InvalidCount,
+    /// Admission cannot fit another component without displacing active state.
     #[error("diagnostic component capacity exhausted")]
-    /// No component slot is available after evicting retained closed components.
     ComponentCapacity,
-    #[error("diagnostic key capacity exhausted")]
-    /// This component has retained its maximum distinct diagnostic codes.
+    /// Declared built-in or extension counter reservations cannot fit.
+    #[error("diagnostic code-counter capacity exhausted")]
     KeyCapacity,
-    #[error("diagnostic retained byte capacity exhausted")]
-    /// The atomic update cannot fit the retained-evidence byte budget.
-    ByteCapacity,
-    #[error("diagnostic component is closed or no longer retained")]
-    /// This registration is closed or has already been evicted.
+    /// A key, ownership value, or descriptor exceeds metadata capacity.
+    #[error("diagnostic metadata capacity exhausted")]
+    MetadataCapacity,
+    /// The requested outcome series cannot reserve its bucket storage.
+    #[error("diagnostic window capacity exhausted")]
+    WindowCapacity,
+    /// The handle names a closed or replaced registration.
+    #[error("diagnostic component is closed or stale")]
     ComponentClosed,
+    /// A sequence or generation cannot advance without identity reuse.
     #[error("diagnostic sequence exhausted")]
-    /// No unique sequence or registration generation can be allocated.
     SequenceExhausted,
-    #[error("diagnostic snapshot budget cannot hold its envelope")]
-    /// The configured query budget cannot hold the required snapshot envelope.
+    /// Every bounded query workspace is currently leased.
+    #[error("diagnostic query capacity exhausted")]
+    QueryCapacity,
+    /// A selector or page request exceeds its admission constraints.
+    #[error("diagnostic query is invalid")]
+    InvalidQuery,
+    /// Continuation has the wrong source/scope or its captured state changed.
+    #[error("diagnostic continuation is invalid or its capture changed")]
+    InvalidCursor,
+    /// The page cannot fit its required envelope in the response budget.
+    #[error("diagnostic response budget cannot hold its envelope")]
     SnapshotCapacity,
+    /// Subscription slots or unique registration IDs are exhausted.
     #[error("diagnostic projection capacity exhausted")]
-    /// No projection slot or callback registration identifier is available.
     ProjectionCapacity,
+    /// The process context was already installed or consumed, even while disabled.
+    #[error("the process diagnostic context is already installed or used")]
+    AlreadyInitialized,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+/// Subscriber conversion or delivery failure after canonical acceptance.
+pub enum ProjectionError {
+    /// The conversion or output representation exceeded its explicit byte ceiling.
+    #[error("projection payload exceeds its budget")]
+    PayloadTooLarge,
+    /// The bounded formatter could not serialize the accepted observation.
+    #[error("projection serialization failed")]
+    SerializationFailed,
+    /// Delivery failed without undoing accepted canonical state.
+    #[error("projection delivery failed")]
+    DeliveryFailed,
 }
 
-/// Independently owned diagnostic foundation. Clones share only this service.
 #[derive(Clone)]
+/// Independent diagnostics context with immutable startup enablement.
+///
+/// Clones share this context only. State and budgets are independent of logger
+/// lifetime and of any other explicitly isolated embedded contexts.
 pub struct Diagnostics {
     inner: Arc<Inner>,
 }
-
-impl std::fmt::Debug for Diagnostics {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("Diagnostics")
+struct Inner {
+    context_id: Uuid,
+    source: SourceIdentity,
+    limits: DiagnosticLimits,
+    started: Instant,
+    backend: Option<Backend>,
+}
+struct Backend {
+    state: Mutex<State>,
+    queries: Arc<read::QueryPool>,
+    projections: Mutex<Projections>,
+    publication: Mutex<Box<[Option<PublicationWorkspace>]>>,
+    reserved_bytes: usize,
+}
+impl Inner {
+    fn tick(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+impl fmt::Debug for Diagnostics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Diagnostics")
             .field("source", &self.inner.source)
-            .field("limits", &self.inner.limits)
+            .field("enabled", &self.inner.backend.is_some())
             .finish_non_exhaustive()
     }
 }
-
-struct Inner {
-    source: SourceIdentity,
-    limits: DiagnosticLimits,
-    state: Mutex<State>,
-    projections: Mutex<Projections>,
-}
-
-#[derive(Default)]
-struct State {
-    sequence: u64,
-    generation: u64,
-    components: BTreeMap<Uuid, ComponentSnapshot>,
-    component_bytes: BTreeMap<Uuid, usize>,
-    events: VecDeque<DiagnosticEvent>,
-    event_bytes: VecDeque<usize>,
-    // Wide accounting keeps transient replacement totals exact before eviction.
-    retained_bytes: u128,
-    loss: DiagnosticLoss,
-}
-
-type Projection = Arc<dyn Fn(&DiagnosticEvent) + Send + Sync + 'static>;
-
-#[derive(Default)]
-struct Projections {
-    next_id: u64,
-    callbacks: BTreeMap<u64, Projection>,
-}
-
-/// Read-only access does not own or extend the lifetime of a component.
 #[derive(Clone)]
+/// Read capability for one context, without recording or lifecycle authority.
+///
+/// Clones keep the context alive. Materialization requires a bounded lease;
+/// disabled collection is explicit instead of fabricated empty evidence.
 pub struct DiagnosticsReader {
     inner: Arc<Inner>,
 }
-
-impl std::fmt::Debug for DiagnosticsReader {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("DiagnosticsReader")
+impl fmt::Debug for DiagnosticsReader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DiagnosticsReader")
             .field("source", &self.inner.source)
             .finish_non_exhaustive()
     }
 }
-
-/// A component registration. Last-handle drop closes it and retains evidence.
 #[derive(Clone)]
+/// Producer capability scoped to one admitted registration.
+///
+/// Clones share its lease; the last recorder drop closes the component.
+/// Producers cannot refresh or replace registrations. Disabled recorders
+/// have no active identity and skip lazy observation factories.
 pub struct ComponentRecorder {
-    lease: Arc<ComponentLease>,
+    inner: Arc<Inner>,
+    lease: Option<Arc<ComponentLease>>,
 }
-
-impl std::fmt::Debug for ComponentRecorder {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ComponentRecorder")
-            .field("identity", &self.lease.identity)
+impl fmt::Debug for ComponentRecorder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ComponentRecorder")
+            .field("identity", &self.identity())
             .finish_non_exhaustive()
     }
 }
-
 struct ComponentLease {
-    inner: Arc<Inner>,
+    inner: Weak<Inner>,
+    handle: ComponentHandle,
     identity: ComponentIdentity,
 }
-
 impl Drop for ComponentLease {
     fn drop(&mut self) {
-        close_component(&self.inner, self.identity.instance_id);
+        if let Some(inner) = self.inner.upgrade() {
+            let _ = close_component(&inner, self.handle);
+        }
+    }
+}
+/// Restricted lifecycle capability returned only to the registration owner.
+pub struct ComponentOwner {
+    inner: Weak<Inner>,
+    handle: Option<ComponentHandle>,
+}
+impl ComponentOwner {
+    /// Close this registration without erasing retained evidence.
+    ///
+    /// Returns false for already closed/unavailable or disabled handles. Later
+    /// recording receives an explicit closed-handle failure.
+    pub fn close(&self) -> Result<bool, DiagnosticError> {
+        match (self.inner.upgrade(), self.handle) {
+            (Some(inner), Some(handle)) => close_component(&inner, handle),
+            _ => Ok(false),
+        }
+    }
+    /// Reset the current since-refresh summary after a committed reload.
+    ///
+    /// Lifetime totals, code counters, rolling windows, and retained evidence
+    /// remain available. The generation marks the new observation-time period;
+    /// captured operations retain their original attribution. Disabled handles
+    /// return None without allocating or changing diagnostic state.
+    pub fn refresh(
+        &self,
+        ownership: ComponentOwnership,
+    ) -> Result<Option<DiagnosticNumber>, DiagnosticError> {
+        let Some(inner) = self.inner.upgrade() else {
+            return Err(DiagnosticError::ComponentClosed);
+        };
+        let Some(handle) = self.handle else {
+            return Ok(None);
+        };
+        refresh_component(&inner, handle, ownership).map(|value| Some(value.into()))
+    }
+}
+/// An operation's bounded original configuration attribution.
+///
+/// A refresh never invalidates this recorder. Observations update lifetime and
+/// current since-refresh totals at recording time while preserving their origin
+/// on retained events and projections. Closing the registration remains explicit.
+#[derive(Clone, Debug)]
+pub struct OriginRecorder {
+    recorder: ComponentRecorder,
+    origin: Option<CapturedOrigin>,
+}
+impl OriginRecorder {
+    /// Record one completion with its captured origin and optional projections.
+    /// The synchronous factory is skipped while collection is disabled.
+    pub fn record_lazy<'a>(
+        &self,
+        make: impl FnOnce() -> Observation<'a>,
+    ) -> Result<RecordOutcome, DiagnosticError> {
+        self.recorder.record_inner_lazy(make, true, self.origin)
+    }
+    /// Record with captured origin while bypassing optional output projections.
+    pub fn record_without_projection_lazy<'a>(
+        &self,
+        make: impl FnOnce() -> Observation<'a>,
+    ) -> Result<RecordOutcome, DiagnosticError> {
+        self.recorder.record_inner_lazy(make, false, self.origin)
     }
 }
 
-/// Detaches an observation projection when dropped. It cannot keep a service alive.
-/// A callback cloned by an in-flight publisher can still complete after detachment.
+type Projection =
+    Arc<dyn Fn(&DiagnosticEvent) -> Result<(), ProjectionError> + Send + Sync + 'static>;
+struct Projections {
+    next_id: u64,
+    slots: Box<[Option<(u64, Projection)>]>,
+}
+/// Bounded projection subscription, or inert disabled-mode handle.
+///
+/// Dropping unsubscribes future publication. A callback copied before removal
+/// may still finish; adapters can add stronger shutdown ordering when needed.
 pub struct ProjectionGuard {
     inner: Weak<Inner>,
-    id: u64,
+    id: Option<u64>,
 }
-
-impl std::fmt::Debug for ProjectionGuard {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ProjectionGuard")
-            .finish_non_exhaustive()
+impl fmt::Debug for ProjectionGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProjectionGuard").finish_non_exhaustive()
     }
 }
-
 impl Drop for ProjectionGuard {
     fn drop(&mut self) {
-        if let Some(inner) = self.inner.upgrade() {
-            lock(&inner.projections).callbacks.remove(&self.id);
+        if let (Some(inner), Some(id)) = (self.inner.upgrade(), self.id)
+            && let Some(backend) = &inner.backend
+        {
+            let removed = {
+                let mut projections = lock(&backend.projections);
+                projections
+                    .slots
+                    .iter_mut()
+                    .find(|slot| slot.as_ref().is_some_and(|(key, _)| *key == id))
+                    .and_then(Option::take)
+            };
+            // Captured user values can reenter logging/diagnostics on drop.
+            drop(removed);
         }
     }
 }
 
+static PROCESS_DIAGNOSTICS: OnceLock<Diagnostics> = OnceLock::new();
 impl Diagnostics {
-    /// Construct before logging or runtime initialization. Oversized source labels
-    /// are bounded like messages; source incarnation and process ID are preserved.
-    pub fn new(mut source: SourceIdentity, limits: DiagnosticLimits) -> Self {
-        let mut loss = DiagnosticLoss::default();
-        bound_field(&mut source.process_role, MAX_IDENTITY_BYTES, &mut loss);
-        bound_field(&mut source.relay_version, MAX_IDENTITY_BYTES, &mut loss);
-        Self {
+    /// Construct a context using the startup owner's selected mode and capacities.
+    ///
+    /// Enabled mode validates arithmetic and admits backend storage before use.
+    /// Disabled mode retains lightweight source/settings state without registry,
+    /// history, detail, query, or projection pools. Source role/version metadata
+    /// is capped at 128 UTF-8 bytes; the supplied UUID is preserved.
+    pub fn from_settings(
+        source: SourceIdentity,
+        settings: DiagnosticsSettings,
+    ) -> Result<Self, DiagnosticError> {
+        let source = SourceIdentity {
+            instance_id: source.instance_id,
+            process_id: source.process_id,
+            process_role: bounded_str(&source.process_role, ID_BYTES).to_owned(),
+            relay_version: bounded_str(&source.relay_version, ID_BYTES).to_owned(),
+        };
+        let backend = if settings.enabled {
+            settings.limits.validate()?;
+            let state = State::new(&settings.limits)?;
+            let queries =
+                read::QueryPool::new(&settings.limits).map_err(|_| DiagnosticError::Allocation)?;
+            let mut publication = empty_slots(settings.limits.max_projection_workspaces)?;
+            for slot in &mut publication {
+                *slot = Some(PublicationWorkspace::new(&settings.limits)?);
+            }
+            let projections = Projections {
+                next_id: 0,
+                slots: empty_slots(settings.limits.max_projections)?,
+            };
+            let reserved_bytes = state
+                .reserved_bytes()
+                .checked_add(queries.reserved_bytes())
+                .and_then(|v| {
+                    v.checked_add(
+                        publication
+                            .iter()
+                            .flatten()
+                            .map(PublicationWorkspace::reserved_bytes)
+                            .sum::<usize>(),
+                    )
+                })
+                .and_then(|v| {
+                    v.checked_add(projections.slots.len() * size_of::<Option<(u64, Projection)>>())
+                })
+                .and_then(|v| {
+                    v.checked_add(publication.len() * size_of::<Option<PublicationWorkspace>>())
+                })
+                .and_then(|v| v.checked_add(context_layout_bytes()))
+                .and_then(|v| {
+                    v.checked_add(source.process_role.capacity() + source.relay_version.capacity())
+                })
+                .ok_or(DiagnosticError::InvalidLimits)?;
+            if reserved_bytes > settings.limits.max_owned_bytes {
+                return Err(DiagnosticError::InvalidLimits);
+            }
+            Some(Backend {
+                state: Mutex::new(state),
+                queries,
+                projections: Mutex::new(projections),
+                publication: Mutex::new(publication),
+                reserved_bytes,
+            })
+        } else {
+            None
+        };
+        Ok(Self {
             inner: Arc::new(Inner {
+                context_id: Uuid::now_v7(),
                 source,
-                limits,
-                state: Mutex::new(State {
-                    loss,
-                    ..State::default()
-                }),
-                projections: Mutex::new(Projections::default()),
+                limits: settings.limits,
+                started: Instant::now(),
+                backend,
             }),
+        })
+    }
+    /// Install before handing out default handles. Once used, inert handles are
+    /// never silently upgraded to a different startup mode.
+    pub fn install_process_default(
+        source: SourceIdentity,
+        settings: DiagnosticsSettings,
+    ) -> Result<&'static Self, DiagnosticError> {
+        if PROCESS_DIAGNOSTICS.get().is_some() {
+            return Err(DiagnosticError::AlreadyInitialized);
         }
+        let context = Self::from_settings(source, settings)?;
+        PROCESS_DIAGNOSTICS
+            .set(context)
+            .map_err(|_| DiagnosticError::AlreadyInitialized)?;
+        Ok(PROCESS_DIAGNOSTICS.get().expect("installed default"))
     }
-
-    /// Optional process service for existing APIs that do not accept explicit ownership.
+    /// Return the installed process context or initialize a disabled default.
+    ///
+    /// Install enabled settings before the first lookup. Early disabled handles
+    /// are never implicitly upgraded by logger or plugin construction.
     pub fn process_default() -> &'static Self {
-        process_diagnostics()
+        PROCESS_DIAGNOSTICS.get_or_init(Self::default)
     }
-
-    /// Source identity shared by every observation from this service.
+    /// Borrow the stable source identity in either startup mode.
+    /// Configured capacities, independently of current occupancy or disablement.
+    pub fn limits(&self) -> &DiagnosticLimits {
+        &self.inner.limits
+    }
+    /// Source incarnation shared by every observation from this context.
     pub fn source(&self) -> &SourceIdentity {
         &self.inner.source
     }
-
-    /// Alias for the source identity used by integration adapters.
+    /// Borrow the immutable identity also exposed by [`Self::source`].
     pub fn source_identity(&self) -> &SourceIdentity {
         self.source()
     }
-
-    /// Obtain read-only access without extending a component registration lifetime.
+    /// Issue a read capability without materializing or allocating a query page.
     pub fn reader(&self) -> DiagnosticsReader {
         DiagnosticsReader {
             inner: Arc::clone(&self.inner),
         }
     }
-
-    /// Build a bounded snapshot. Reads never update evidence or coverage counters.
-    pub fn snapshot(&self, query: DiagnosticQuery) -> Result<DiagnosticSnapshot, DiagnosticError> {
+    /// Capture a bounded page through this context's reader.
+    ///
+    /// The lease holds a query permit until dropped. Reads never reset counters
+    /// or pin history; configured disablement is returned explicitly.
+    pub fn snapshot(&self, query: DiagnosticQuery) -> Result<SnapshotLease, DiagnosticError> {
         self.reader().snapshot(query)
     }
-
-    /// Register a fresh generation, even when the logical key was used before.
+    /// Reserve a component vocabulary and return its producer lease.
+    ///
+    /// Admission cannot displace active summaries. The final recorder drop closes
+    /// the component. Use [`Self::register_owned_component`] for explicit close
+    /// and refresh authority. Disabled mode returns an inert recorder.
     pub fn register_component(
         &self,
-        key: impl Into<String>,
+        registration: ComponentRegistration<'_>,
     ) -> Result<ComponentRecorder, DiagnosticError> {
-        let key = key.into();
-        let mut state = lock(&self.inner.state);
-        if !valid_component_key(&key) {
-            increment(&mut state.loss.components_rejected, 1);
-            return Err(DiagnosticError::InvalidComponentKey);
-        }
-        while state.components.len() >= self.inner.limits.max_components {
-            if !evict_closed_component(&mut state, None) {
-                increment(&mut state.loss.components_rejected, 1);
-                return Err(DiagnosticError::ComponentCapacity);
-            }
-        }
-        let Some(generation) = state.generation.checked_add(1) else {
-            state.loss.sequence_saturated = true;
-            increment(&mut state.loss.components_rejected, 1);
-            return Err(DiagnosticError::SequenceExhausted);
-        };
-        let sequence = next_sequence(&mut state)?;
-        let identity = ComponentIdentity {
-            key,
-            instance_id: Uuid::now_v7(),
-            generation: generation.into(),
-        };
-        state.components.insert(
-            identity.instance_id,
-            ComponentSnapshot {
-                identity: identity.clone(),
-                registered_at: Utc::now(),
-                closed_at: None,
-                counters: Vec::new(),
-            },
-        );
-        update_component_bytes(&mut state, identity.instance_id);
-        if !enforce_byte_budget(&mut state, &self.inner.limits, identity.instance_id) {
-            remove_component(&mut state, identity.instance_id);
-            increment(&mut state.loss.components_rejected, 1);
-            return Err(DiagnosticError::ByteCapacity);
-        }
-        state.generation = generation;
-        state.sequence = sequence;
-        Ok(ComponentRecorder {
-            lease: Arc::new(ComponentLease {
-                inner: Arc::clone(&self.inner),
-                identity,
-            }),
-        })
+        self.register_owned_component(registration)
+            .map(|(_, recorder)| recorder)
     }
-
-    /// Callbacks run synchronously after releasing all diagnostic locks. Concurrent
-    /// writers may invoke callbacks concurrently and in a different sequence order. They must
-    /// be bounded and avoid capturing strong references that form ownership cycles.
-    /// Nested delivery to a different service is allowed; service cycles and chains
-    /// deeper than 32 are suppressed and counted in coverage metadata.
+    /// Reserve a component and separately issue owner and producer capabilities.
+    ///
+    /// The owner can close or rotate this registration. Disabled mode issues inert
+    /// handles without an active identity or backend reservation. Admission
+    /// failures are explicit and recorded in reserved loss accounting.
+    pub fn register_owned_component(
+        &self,
+        registration: ComponentRegistration<'_>,
+    ) -> Result<(ComponentOwner, ComponentRecorder), DiagnosticError> {
+        let Some(backend) = &self.inner.backend else {
+            return Ok((
+                ComponentOwner {
+                    inner: Arc::downgrade(&self.inner),
+                    handle: None,
+                },
+                ComponentRecorder {
+                    inner: Arc::clone(&self.inner),
+                    lease: None,
+                },
+            ));
+        };
+        let mut state = lock(&backend.state);
+        let admitted = register_component(&mut state, &self.inner, registration);
+        let (handle, identity) = match admitted {
+            Ok(value) => value,
+            Err(error) => {
+                state.loss.components_rejected.add(1);
+                return Err(error);
+            }
+        };
+        Ok((
+            ComponentOwner {
+                inner: Arc::downgrade(&self.inner),
+                handle: Some(handle),
+            },
+            ComponentRecorder {
+                inner: Arc::clone(&self.inner),
+                lease: Some(Arc::new(ComponentLease {
+                    inner: Arc::downgrade(&self.inner),
+                    handle,
+                    identity,
+                })),
+            },
+        ))
+    }
+    /// Attach a bounded synchronous subscriber to future accepted typed events.
+    ///
+    /// Callbacks run outside the store lock, may run concurrently, and have isolated
+    /// panics. Disabled mode retains no callback and returns an inert guard.
+    /// Arbitrary callback captures and retained copies remain caller-owned.
     pub fn subscribe_projection(
         &self,
         callback: impl Fn(&DiagnosticEvent) + Send + Sync + 'static,
     ) -> Result<ProjectionGuard, DiagnosticError> {
-        let mut projections = lock(&self.inner.projections);
-        if projections.callbacks.len() >= self.inner.limits.max_projections {
-            return Err(DiagnosticError::ProjectionCapacity);
-        }
-        let Some(id) = projections.next_id.checked_add(1) else {
-            return Err(DiagnosticError::ProjectionCapacity);
-        };
-        projections.next_id = id;
-        projections.callbacks.insert(id, Arc::new(callback));
-        Ok(ProjectionGuard {
-            inner: Arc::downgrade(&self.inner),
-            id,
+        self.subscribe_fallible_projection(move |event| {
+            callback(event);
+            Ok(())
         })
     }
+    /// Attach a subscriber that reports bounded conversion or delivery failure.
+    ///
+    /// Errors update projection-loss accounting without undoing numeric acceptance.
+    /// Separate publication workspaces cannot pin history. Disabled mode retains
+    /// no callback and returns an inert guard.
+    pub fn subscribe_fallible_projection(
+        &self,
+        callback: impl Fn(&DiagnosticEvent) -> Result<(), ProjectionError> + Send + Sync + 'static,
+    ) -> Result<ProjectionGuard, DiagnosticError> {
+        let Some(backend) = &self.inner.backend else {
+            return Ok(ProjectionGuard {
+                inner: Weak::new(),
+                id: None,
+            });
+        };
+        let mut projections = lock(&backend.projections);
+        let index = projections
+            .slots
+            .iter()
+            .position(Option::is_none)
+            .ok_or(DiagnosticError::ProjectionCapacity)?;
+        let id = projections
+            .next_id
+            .checked_add(1)
+            .ok_or(DiagnosticError::ProjectionCapacity)?;
+        projections.next_id = id;
+        projections.slots[index] = Some((id, Arc::new(callback)));
+        Ok(ProjectionGuard {
+            inner: Arc::downgrade(&self.inner),
+            id: Some(id),
+        })
+    }
+    /// Inspect reserved backend bytes and occupancy without changing evidence.
+    ///
+    /// Disabled contexts report zero backend capacity. Lightweight facade state,
+    /// caller-owned copies, thread stacks, and independent outputs are excluded.
+    pub fn memory_usage(&self) -> DiagnosticMemoryUsage {
+        diagnostic_memory_usage(&self.inner)
+    }
 }
-
 impl Default for Diagnostics {
     fn default() -> Self {
-        Self::new(
+        Self::from_settings(
             SourceIdentity {
                 instance_id: Uuid::now_v7(),
                 process_id: Some(std::process::id()),
-                process_role: "runtime".to_owned(),
-                relay_version: env!("CARGO_PKG_VERSION").to_owned(),
+                process_role: "runtime".into(),
+                relay_version: env!("CARGO_PKG_VERSION").into(),
             },
-            DiagnosticLimits::default(),
+            DiagnosticsSettings::default(),
         )
+        .expect("disabled construction needs no diagnostic backend")
     }
 }
-
-/// The legacy process default is lazy and never reset by logger reconfiguration.
+/// Return the centrally selected process context.
+///
+/// An unconfigured first lookup installs disabled mode; bootstrap must install
+/// an enabled context before distributing default handles.
 pub fn process_diagnostics() -> &'static Diagnostics {
-    static DIAGNOSTICS: OnceLock<Diagnostics> = OnceLock::new();
-    DIAGNOSTICS.get_or_init(Diagnostics::default)
+    Diagnostics::process_default()
 }
-
-impl ComponentRecorder {
-    /// Identity of this particular component registration.
-    pub fn identity(&self) -> &ComponentIdentity {
-        &self.lease.identity
-    }
-
-    /// Obtain read-only access without extending a component registration lifetime.
-    pub fn reader(&self) -> DiagnosticsReader {
-        DiagnosticsReader {
-            inner: Arc::clone(&self.lease.inner),
-        }
-    }
-
-    /// Read this registration's evidence, including closed state if retained.
-    pub fn snapshot(&self) -> Option<ComponentSnapshot> {
-        self.reader()
-            .component_snapshot(self.lease.identity.instance_id)
-    }
-
-    /// Explicit close is idempotent and preserves retained observations.
-    pub fn close(&self) -> bool {
-        close_component(&self.lease.inner, self.lease.identity.instance_id)
-    }
-
-    /// Atomically count failed operations and record the observation.
-    pub fn observe_failure(
-        &self,
-        code: impl Into<String>,
-        message: impl Into<String>,
-        count: u64,
-        correlation: DiagnosticCorrelation,
-    ) -> Result<RecordReceipt, DiagnosticError> {
-        self.record(
-            DiagnosticObservation::failure(code, message, count).with_correlation(correlation),
-        )
-    }
-
-    /// Atomically count successful operations and record the observation.
-    pub fn observe_success(
-        &self,
-        code: impl Into<String>,
-        message: impl Into<String>,
-        count: u64,
-        correlation: DiagnosticCorrelation,
-    ) -> Result<RecordReceipt, DiagnosticError> {
-        self.record(
-            DiagnosticObservation::success(code, message, count).with_correlation(correlation),
-        )
-    }
-
-    /// Count observed evidence without classifying its operation outcome.
-    pub fn observe_occurrence(
-        &self,
-        code: impl Into<String>,
-        severity: DiagnosticSeverity,
-        message: impl Into<String>,
-        count: u64,
-        correlation: DiagnosticCorrelation,
-    ) -> Result<RecordReceipt, DiagnosticError> {
-        self.record(
-            DiagnosticObservation::occurrence(code, severity, message, count)
-                .with_correlation(correlation),
-        )
-    }
-
-    /// Accept an observation and notify attached projections after releasing locks.
-    pub fn record(
-        &self,
-        observation: DiagnosticObservation,
-    ) -> Result<RecordReceipt, DiagnosticError> {
-        self.record_inner(observation, true)
-    }
-
-    /// Sink failures use this path to preserve evidence without projecting into
-    /// the same failed sink or recursively trying other attached logger adapters.
-    pub fn record_without_projection(
-        &self,
-        observation: DiagnosticObservation,
-    ) -> Result<RecordReceipt, DiagnosticError> {
-        self.record_inner(observation, false)
-    }
-
-    fn record_inner(
-        &self,
-        mut observation: DiagnosticObservation,
-        project: bool,
-    ) -> Result<RecordReceipt, DiagnosticError> {
-        let inner = &self.lease.inner;
-        let id = self.lease.identity.instance_id;
-        let mut state = lock(&inner.state);
-        if !valid_code(&observation.code) {
-            increment(&mut state.loss.keys_rejected, 1);
-            return reject(&mut state, DiagnosticError::InvalidCode);
-        }
-        if observation.count == 0 {
-            return reject(&mut state, DiagnosticError::InvalidCount);
-        }
-        let Some(existing) = state.components.get(&id) else {
-            return reject(&mut state, DiagnosticError::ComponentClosed);
-        };
-        if existing.closed_at.is_some() {
-            return reject(&mut state, DiagnosticError::ComponentClosed);
-        }
-        let known_code = existing
-            .counters
-            .iter()
-            .any(|entry| entry.code == observation.code);
-        if !known_code && existing.counters.len() >= inner.limits.max_keys_per_component {
-            increment(&mut state.loss.keys_rejected, 1);
-            return reject(&mut state, DiagnosticError::KeyCapacity);
-        }
-        let sequence = next_sequence(&mut state)?;
-        bound_field(
-            &mut observation.message,
-            inner.limits.max_message_bytes,
-            &mut state.loss,
-        );
-        for value in [
-            &mut observation.correlation.session_id,
-            &mut observation.correlation.request_id,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            bound_field(value, inner.limits.max_correlation_bytes, &mut state.loss);
-        }
-        let now = Utc::now();
-        let previous = state
-            .components
-            .get(&id)
-            .cloned()
-            .expect("component checked above");
-        let component = state
-            .components
-            .get_mut(&id)
-            .expect("component checked above");
-
-        if let Some(counter) = component
-            .counters
-            .iter_mut()
-            .find(|entry| entry.code == observation.code)
-        {
-            increment(&mut counter.occurrences, observation.count);
-            counter.last_observed_at = now;
-            counter.last_message.clone_from(&observation.message);
-        } else {
-            component.counters.push(DiagnosticCounter {
-                code: observation.code.clone(),
-                epoch: id,
-                occurrences: DiagnosticCount {
-                    value: observation.count.into(),
-                    saturated: false,
-                },
-                last_observed_at: now,
-                last_message: observation.message.clone(),
-            });
-            component
-                .counters
-                .sort_by(|left, right| left.code.cmp(&right.code));
-        }
-
-        let (occurrence_count, count_saturated) = counter_receipt(component, &observation.code);
-        let event = DiagnosticEvent {
-            sequence: sequence.into(),
-            observed_at: now,
-            component: self.lease.identity.clone(),
-            code: observation.code,
-            severity: observation.severity,
-            outcome: observation.outcome,
-            message: observation.message,
-            count: observation.count.into(),
-            correlation: observation.correlation,
-        };
-        update_component_bytes(&mut state, id);
-        push_event(&mut state, &inner.limits, event.clone());
-        if !enforce_byte_budget(&mut state, &inner.limits, id) {
-            state.components.insert(id, previous);
-            update_component_bytes(&mut state, id);
-            return reject(&mut state, DiagnosticError::ByteCapacity);
-        }
-        state.sequence = sequence;
-        drop(state);
-        if project {
-            publish(inner, &event);
-        }
-        Ok(RecordReceipt {
-            sequence,
-            occurrence_count,
-            count_saturated,
-        })
-    }
+#[derive(Debug, Default, Clone, Copy, Serialize)]
+/// Backing capacity and current occupancy of one context.
+///
+/// These gauges describe the bounded backend rather than whole-process RSS.
+/// All values are zero when collection is disabled.
+pub struct DiagnosticMemoryUsage {
+    /// Bytes reserved for context-owned backend backing storage.
+    pub reserved_bytes: usize,
+    /// Occupied active or retained closed component slots.
+    pub components: usize,
+    /// Occupied lifetime code-counter slots across admitted components.
+    pub counters: usize,
+    /// Currently retained shared circular-history event headers.
+    pub events: usize,
+    /// Pool payload bytes occupied in whole reclaimable blocks.
+    pub detail_bytes: usize,
+    /// Admitted key, ownership, and extension metadata content bytes.
+    pub metadata_bytes: usize,
+    /// Reserved rolling outcome-bucket slots belonging to components.
+    pub window_buckets: usize,
+    /// Admitted extension descriptors, including retained closed components.
+    pub extensions: usize,
+    /// Query leases currently holding preallocated materialization buffers.
+    pub query_workspaces: usize,
+    /// Optional projection subscriptions currently admitted.
+    pub projections: usize,
+    /// Projection workspaces currently materializing or delivering evidence.
+    pub projection_workspaces: usize,
 }
 
 impl DiagnosticsReader {
-    /// Source identity shared by every observation from this service.
-    pub fn source(&self) -> &SourceIdentity {
-        &self.inner.source
+    /// Inspect reserved backing bytes and occupancy without modifying evidence.
+    pub fn memory_usage(&self) -> DiagnosticMemoryUsage {
+        diagnostic_memory_usage(&self.inner)
     }
-
-    /// Read one registration within the retained-evidence budget, or return none.
-    /// The versioned snapshot response additionally enforces the query byte budget.
-    pub fn component_snapshot(&self, instance_id: Uuid) -> Option<ComponentSnapshot> {
-        lock(&self.inner.state)
-            .components
-            .get(&instance_id)
-            .cloned()
+    /// Inspect configured capacities separately from actual backing allocation.
+    pub fn limits(&self) -> &DiagnosticLimits {
+        &self.inner.limits
     }
-
-    /// Build a bounded snapshot. Reads never update evidence or coverage counters.
-    pub fn snapshot(&self, query: DiagnosticQuery) -> Result<DiagnosticSnapshot, DiagnosticError> {
-        let state = lock(&self.inner.state);
-        let mut components = state
-            .components
-            .values()
-            .filter(|component| component_matches(&component.identity, &query))
-            .cloned()
-            .collect::<Vec<_>>();
-        for component in &mut components {
-            component
-                .counters
-                .retain(|counter| query.code.as_ref().is_none_or(|code| code == &counter.code));
-        }
-        components.sort_by(|left, right| {
-            left.identity
-                .key
-                .cmp(&right.identity.key)
-                .then(left.identity.generation.cmp(&right.identity.generation))
-        });
-        let events = state
-            .events
-            .iter()
-            .filter(|event| component_matches(&event.component, &query))
-            .filter(|event| query.code.as_ref().is_none_or(|code| code == &event.code))
-            .filter(|event| {
-                query
-                    .after_sequence
-                    .is_none_or(|sequence| event.sequence.get() > sequence)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let retained = DiagnosticRetention::default();
-        let availability = if state.sequence == 0 {
-            DiagnosticAvailability::NeverObserved
-        } else {
+    /// Capture a bounded consistent page with continuation and coverage.
+    ///
+    /// A held lease occupies one workspace. Serialization follows store unlocking;
+    /// polling neither increments counters nor resets refresh summaries. Disabled collection
+    /// returns [`DiagnosticError::Disabled`].
+    pub fn snapshot(&self, query: DiagnosticQuery) -> Result<SnapshotLease, DiagnosticError> {
+        read::capture(&self.inner, query)
+    }
+    /// Report configured availability without materializing a snapshot.
+    ///
+    /// Available means enabled, not complete producer integration or deployment health.
+    pub fn availability(&self) -> DiagnosticAvailability {
+        if self.inner.backend.is_some() {
             DiagnosticAvailability::Available
-        };
-        let mut snapshot = DiagnosticSnapshot {
-            schema_version: DIAGNOSTIC_SCHEMA_VERSION,
-            source: self.inner.source.clone(),
-            captured_at: Utc::now(),
-            sequence: state.sequence.into(),
-            components,
-            events,
-            coverage: DiagnosticCoverage {
-                availability,
-                retention: retained,
-                loss: state.loss.clone(),
-            },
-        };
-        drop(state);
-        update_snapshot_retention(&mut snapshot);
-        while encoded_bytes(&snapshot) > self.inner.limits.max_snapshot_bytes {
-            snapshot.coverage.retention.query_truncated = true;
-            if !snapshot.events.is_empty() {
-                snapshot.events.remove(0);
-            } else if snapshot.components.pop().is_none() {
-                return Err(DiagnosticError::SnapshotCapacity);
-            }
-            update_snapshot_retention(&mut snapshot);
+        } else {
+            DiagnosticAvailability::Disabled
         }
-        Ok(snapshot)
     }
 }
-
-fn update_snapshot_retention(snapshot: &mut DiagnosticSnapshot) {
-    snapshot.coverage.retention.oldest_event_sequence =
-        snapshot.events.first().map(|event| event.sequence);
-    snapshot.coverage.retention.latest_event_sequence =
-        snapshot.events.last().map(|event| event.sequence);
-    snapshot.coverage.retention.events_retained = (snapshot.events.len() as u64).into();
-    snapshot.coverage.retention.components_retained = (snapshot.components.len() as u64).into();
-}
-
-fn component_matches(component: &ComponentIdentity, query: &DiagnosticQuery) -> bool {
-    query
-        .component_key
-        .as_ref()
-        .is_none_or(|key| key == &component.key)
-        && query
-            .component_instance_id
-            .is_none_or(|id| id == component.instance_id)
-}
-
-fn counter_receipt(component: &ComponentSnapshot, code: &str) -> (u64, bool) {
-    component
-        .counters
-        .iter()
-        .find(|counter| counter.code == code)
-        .map(|counter| {
-            (
-                counter.occurrences.value.get(),
-                counter.occurrences.saturated,
-            )
+impl ComponentRecorder {
+    /// Borrow the original registration identity, or None while disabled.
+    ///
+    /// Closure or retention cannot relabel this handle as another registration.
+    pub fn identity(&self) -> Option<&ComponentIdentity> {
+        self.lease.as_ref().map(|lease| &lease.identity)
+    }
+    /// Read the same source context without granting lifecycle authority.
+    pub fn reader(&self) -> DiagnosticsReader {
+        DiagnosticsReader {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+    /// Capture bounded configuration attribution for an operation's completion.
+    ///
+    /// Refreshing does not pin history or invalidate the captured origin.
+    /// Disabled collection returns an inert recorder without allocating.
+    pub fn capture_origin(&self) -> Result<OriginRecorder, DiagnosticError> {
+        let origin = if let (Some(backend), Some(lease)) = (&self.inner.backend, &self.lease) {
+            let state = lock(&backend.state);
+            let component = state
+                .component(lease.handle)
+                .filter(|v| v.closed_at.is_none())
+                .ok_or(DiagnosticError::ComponentClosed)?;
+            Some(component.origin())
+        } else {
+            None
+        };
+        Ok(OriginRecorder {
+            recorder: self.clone(),
+            origin,
         })
-        .unwrap_or((0, false))
-}
-
-fn next_sequence(state: &mut State) -> Result<u64, DiagnosticError> {
-    match state.sequence.checked_add(1) {
-        Some(sequence) => Ok(sequence),
-        None => {
-            state.loss.sequence_saturated = true;
-            increment(&mut state.loss.observations_rejected, 1);
-            Err(DiagnosticError::SequenceExhausted)
-        }
     }
-}
-
-fn reject<T>(state: &mut State, error: DiagnosticError) -> Result<T, DiagnosticError> {
-    increment(&mut state.loss.observations_rejected, 1);
-    Err(error)
-}
-
-fn increment(count: &mut DiagnosticCount, amount: u64) {
-    match count.value.get().checked_add(amount) {
-        Some(value) => count.value = value.into(),
-        None => {
-            count.value = u64::MAX.into();
-            count.saturated = true;
-        }
+    /// Admit namespaced extension metadata and its component code counter.
+    ///
+    /// The handle retains registration/descriptor generation scope. Disabled mode
+    /// returns None without backend allocation. Explicit capacity failure may be
+    /// reported using a summary-only classification overflow observation.
+    pub fn register_extension(
+        &self,
+        registration: ExtensionRegistration<'_>,
+    ) -> Result<Option<ExtensionHandle>, DiagnosticError> {
+        let (Some(backend), Some(lease)) = (&self.inner.backend, &self.lease) else {
+            return Ok(None);
+        };
+        let mut state = lock(&backend.state);
+        register_extension(&mut state, &self.inner, lease.handle, registration).map(Some)
     }
-}
-
-fn push_event(state: &mut State, limits: &DiagnosticLimits, event: DiagnosticEvent) {
-    let bytes = encoded_bytes(&event);
-    state.events.push_back(event);
-    state.event_bytes.push_back(bytes);
-    state.retained_bytes += bytes as u128;
-    while state.events.len() > limits.max_events {
-        evict_oldest_event(state);
+    /// Admit a custom failure-class name for a registered extension. Each code
+    /// has four fixed class slots, each at most 32 bytes, within metadata budgets.
+    /// Disabled contexts return None without registering metadata.
+    pub fn register_extension_class(
+        &self,
+        extension: ExtensionHandle,
+        name: &str,
+    ) -> Result<Option<ExtensionClassHandle>, DiagnosticError> {
+        let (Some(backend), Some(lease)) = (&self.inner.backend, &self.lease) else {
+            return Ok(None);
+        };
+        lifecycle::register_extension_class(
+            &mut lock(&backend.state),
+            &self.inner,
+            lease.handle,
+            extension,
+            name,
+        )
+        .map(Some)
     }
-}
-
-fn evict_closed_component(state: &mut State, protected: Option<Uuid>) -> bool {
-    let oldest = state
-        .components
-        .iter()
-        .filter(|(id, component)| Some(**id) != protected && component.closed_at.is_some())
-        .min_by_key(|(_, component)| component.identity.generation)
-        .map(|(id, _)| *id);
-    if let Some(id) = oldest {
-        remove_component(state, id);
-        increment(&mut state.loss.components_evicted, 1);
-        true
-    } else {
-        false
+    /// Build and record one observation synchronously only when enabled.
+    ///
+    /// Reserved summaries accept positive deltas independently of history pressure.
+    /// Projections follow store unlocking. Disabled mode skips the factory and
+    /// returns [`RecordOutcome::Disabled`] without loss accounting.
+    pub fn record_lazy<'a>(
+        &self,
+        make: impl FnOnce() -> Observation<'a>,
+    ) -> Result<RecordOutcome, DiagnosticError> {
+        self.record_inner_lazy(make, true, None)
     }
-}
-
-fn enforce_byte_budget(state: &mut State, limits: &DiagnosticLimits, protected: Uuid) -> bool {
-    while state.retained_bytes > limits.max_retained_bytes as u128 {
-        if !evict_oldest_event(state) && !evict_closed_component(state, Some(protected)) {
-            return false;
-        }
+    /// Use the same recording boundary while bypassing every projection.
+    ///
+    /// Sink feedback and existing operational emitters use this path to avoid output
+    /// recursion or duplicates. Disabled mode skips the factory.
+    pub fn record_without_projection_lazy<'a>(
+        &self,
+        make: impl FnOnce() -> Observation<'a>,
+    ) -> Result<RecordOutcome, DiagnosticError> {
+        self.record_inner_lazy(make, false, None)
     }
-    true
-}
-
-// Serialize only the changed component; unrelated components and previously
-// retained events never participate in an observation's byte-size calculation.
-fn update_component_bytes(state: &mut State, id: Uuid) {
-    let bytes = encoded_bytes(&state.components[&id]);
-    let previous = state.component_bytes.insert(id, bytes).unwrap_or(0);
-    state.retained_bytes = state.retained_bytes - previous as u128 + bytes as u128;
-}
-
-fn remove_component(state: &mut State, id: Uuid) {
-    state.components.remove(&id);
-    if let Some(bytes) = state.component_bytes.remove(&id) {
-        state.retained_bytes -= bytes as u128;
+    /// Record constructed evidence and attempt optional projections.
+    ///
+    /// Disabled mode discards it but cannot undo caller construction work.
+    /// Built-in producers use [`Self::record_lazy`] for diagnostic-only work.
+    pub fn record(&self, observation: Observation<'_>) -> Result<RecordOutcome, DiagnosticError> {
+        self.record_lazy(|| observation)
     }
-}
-
-fn evict_oldest_event(state: &mut State) -> bool {
-    if state.events.pop_front().is_none() {
-        return false;
+    /// Record constructed evidence without any projection callback.
+    ///
+    /// Prefer [`Self::record_without_projection_lazy`] to skip construction while
+    /// disabled. Counting and retention use the same canonical boundary.
+    pub fn record_without_projection(
+        &self,
+        observation: Observation<'_>,
+    ) -> Result<RecordOutcome, DiagnosticError> {
+        self.record_without_projection_lazy(|| observation)
     }
-    let bytes = state
-        .event_bytes
-        .pop_front()
-        .expect("retained event has a byte size");
-    state.retained_bytes -= bytes as u128;
-    increment(&mut state.loss.events_evicted, 1);
-    true
-}
-
-fn encoded_bytes(value: &impl serde::Serialize) -> usize {
-    // All shared diagnostic DTOs serialize without user-supplied serializer hooks.
-    serde_json::to_vec(value).map_or(usize::MAX, |value| value.len())
-}
-
-fn close_component(inner: &Inner, id: Uuid) -> bool {
-    let mut state = lock(&inner.state);
-    let Some(component) = state.components.get_mut(&id) else {
-        return false;
-    };
-    if component.closed_at.is_some() {
-        return false;
-    }
-    component.closed_at = Some(Utc::now());
-    update_component_bytes(&mut state, id);
-    if let Ok(sequence) = next_sequence(&mut state) {
-        state.sequence = sequence;
-    }
-    // Closing increases the encoded timestamp size. Preserve the closed component
-    // if possible, while allowing bounded retention to evict it under byte pressure.
-    while state.retained_bytes > inner.limits.max_retained_bytes as u128 {
-        if !evict_oldest_event(&mut state) && !evict_closed_component(&mut state, None) {
-            break;
-        }
-    }
-    true
-}
-
-fn publish(inner: &Inner, event: &DiagnosticEvent) {
-    PROJECTING.with(|projecting| {
-        let service = std::ptr::from_ref(inner) as usize;
-        let mut chain = projecting.borrow_mut();
-        if chain.len() >= MAX_PROJECTION_DEPTH || chain.contains(&service) {
-            drop(chain);
-            increment(&mut lock(&inner.state).loss.projections_suppressed, 1);
-            return;
-        }
-        chain.push(service);
-        drop(chain);
-        struct Reset<'a>(&'a RefCell<Vec<usize>>);
-        impl Drop for Reset<'_> {
-            fn drop(&mut self) {
-                self.0.borrow_mut().pop();
+    fn record_inner_lazy<'a>(
+        &self,
+        make: impl FnOnce() -> Observation<'a>,
+        project: bool,
+        origin: Option<CapturedOrigin>,
+    ) -> Result<RecordOutcome, DiagnosticError> {
+        let (Some(backend), Some(lease)) = (&self.inner.backend, &self.lease) else {
+            return Ok(RecordOutcome::Disabled);
+        };
+        let observation = make();
+        let mut formatted = [0u8; MAX_DETAIL_BYTES];
+        let (detail, truncated) = prepare_detail(
+            observation.detail,
+            &mut formatted,
+            self.inner.limits.max_detail_bytes,
+        );
+        let projection_requested =
+            project && lock(&backend.projections).slots.iter().any(Option::is_some);
+        let publication = if projection_requested {
+            take_publication(backend)
+        } else {
+            None
+        };
+        let mut publication = publication;
+        let recorded = {
+            let mut state = lock(&backend.state);
+            let result = record_observation(
+                &mut state,
+                &self.inner,
+                lease.handle,
+                origin,
+                &observation,
+                detail,
+                truncated,
+                projection_requested,
+                publication.as_mut().map(|(_, workspace)| workspace),
+            );
+            if result.is_err() {
+                state.loss.observations_rejected.add(1);
             }
-        }
-        let _reset = Reset(projecting);
-        let callbacks = lock(&inner.projections)
-            .callbacks
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        for callback in callbacks {
-            // A projection failure cannot undo an accepted observation or poison state.
-            if catch_unwind(AssertUnwindSafe(|| callback(event))).is_err() {
-                increment(&mut lock(&inner.state).loss.projections_panicked, 1);
+            result
+        };
+        if let Some((index, mut workspace)) = publication {
+            if recorded.is_ok() && workspace.ready {
+                publish(&self.inner, &mut workspace);
             }
+            workspace.reset();
+            lock(&backend.publication)[index] = Some(workspace);
         }
-    });
+        recorded.map(RecordOutcome::Recorded)
+    }
 }
 
-fn bound_field(value: &mut String, max_bytes: usize, loss: &mut DiagnosticLoss) {
-    if value.len() <= max_bytes {
-        return;
-    }
-    increment(&mut loss.messages_truncated, 1);
-    let marker = if max_bytes >= '…'.len_utf8() {
-        "…"
-    } else {
-        ""
-    };
-    let mut end = max_bytes.saturating_sub(marker.len());
+pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+fn bounded_str(value: &str, max: usize) -> &str {
+    let mut end = value.len().min(max);
     while !value.is_char_boundary(end) {
         end -= 1;
     }
-    value.truncate(end);
-    value.push_str(marker);
+    &value[..end]
 }
 
-fn valid_code(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_CODE_BYTES
-        && value.split('.').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+fn prepare_detail<'a>(
+    detail: DiagnosticDetailRef<'a>,
+    buffer: &'a mut [u8],
+    max: usize,
+) -> (Option<&'a str>, bool) {
+    match detail {
+        DiagnosticDetailRef::None => (None, false),
+        DiagnosticDetailRef::Text(text) => {
+            let value = bounded_str(text, max);
+            (Some(value), value.len() != text.len())
+        }
+        DiagnosticDetailRef::Display(value) => {
+            struct BoundedFormat<'a> {
+                buffer: &'a mut [u8],
+                len: usize,
+                truncated: bool,
+            }
+            impl fmt::Write for BoundedFormat<'_> {
+                fn write_str(&mut self, value: &str) -> fmt::Result {
+                    let part = bounded_str(value, self.buffer.len().saturating_sub(self.len));
+                    self.buffer[self.len..self.len + part.len()].copy_from_slice(part.as_bytes());
+                    self.len += part.len();
+                    if part.len() < value.len() {
+                        self.truncated = true;
+                        Err(fmt::Error)
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+            let mut output = BoundedFormat {
+                buffer: &mut buffer[..max],
+                len: 0,
+                truncated: false,
+            };
+            let failed = fmt::write(&mut output, format_args!("{value}")).is_err();
+            let len = output.len;
+            let truncated = output.truncated || failed;
+            (
+                Some(std::str::from_utf8(&buffer[..len]).expect("formatter copies complete UTF-8")),
+                truncated,
+            )
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the borrowed recording inputs explicit at the single acceptance boundary."
+)]
+fn record_observation(
+    state: &mut State,
+    inner: &Inner,
+    handle: ComponentHandle,
+    requested_origin: Option<CapturedOrigin>,
+    observation: &Observation<'_>,
+    detail: Option<&str>,
+    truncated: bool,
+    projection_requested: bool,
+    publication: Option<&mut PublicationWorkspace>,
+) -> Result<RecordReceipt, DiagnosticError> {
+    if observation.count == 0 {
+        return Err(DiagnosticError::InvalidCount);
+    }
+    let component = match state
+        .component(handle)
+        .filter(|v| v.closed_at.is_none())
+        .copied()
+    {
+        Some(component) => component,
+        None => {
+            state.loss.stale_observations.add(1);
+            return Err(DiagnosticError::ComponentClosed);
+        }
+    };
+    let origin = requested_origin.unwrap_or_else(|| component.origin());
+    let (code, class) = match observation.code {
+        ObservationCode::Builtin(classification) => (
+            Some(StoredCode::Builtin(classification.code())),
+            classification
+                .failure_class()
+                .map(StoredFailureClass::Builtin),
+        ),
+        ObservationCode::Extension(extension, class) => {
+            if extension.context_id != inner.context_id || extension.component != handle {
+                return Err(DiagnosticError::InvalidCode);
+            }
+            let descriptor = state
+                .extensions
+                .get(extension.slot)
+                .and_then(Option::as_ref)
+                .filter(|v| v.generation == extension.generation && v.component == handle)
+                .ok_or(DiagnosticError::InvalidCode)?;
+            if descriptor.outcome == DiagnosticOutcome::Failure {
+                if class.is_none_or(|class| {
+                    descriptor.allowed_classes & lifecycle::class_bit(class) == 0
+                }) {
+                    return Err(DiagnosticError::InvalidClassification);
+                }
+            } else if class.is_some() {
+                return Err(DiagnosticError::InvalidClassification);
+            }
+            (
+                Some(StoredCode::Extension {
+                    slot: extension.slot,
+                    generation: extension.generation,
+                }),
+                class.map(StoredFailureClass::Builtin),
+            )
+        }
+        ObservationCode::OpaqueExtension(extension, class) => {
+            if extension.context_id != inner.context_id
+                || extension.component != handle
+                || class.extension != extension
+            {
+                return Err(DiagnosticError::InvalidClassification);
+            }
+            let descriptor = state
+                .extensions
+                .get(extension.slot)
+                .and_then(Option::as_ref)
+                .filter(|v| v.generation == extension.generation && v.component == handle)
+                .ok_or(DiagnosticError::InvalidCode)?;
+            let cause = StoredFailureClass::Extension(class);
+            if descriptor.outcome != DiagnosticOutcome::Failure || state.class_name(cause).is_none()
+            {
+                return Err(DiagnosticError::InvalidClassification);
+            }
+            (
+                Some(StoredCode::Extension {
+                    slot: extension.slot,
+                    generation: extension.generation,
+                }),
+                Some(cause),
+            )
+        }
+        ObservationCode::Overflow => (None, None),
+    };
+    let counter_index = if let Some(code) = code {
+        Some(
+            state
+                .counters
+                .iter()
+                .position(|v| {
+                    v.as_ref()
+                        .is_some_and(|v| v.component == handle && v.code == code)
+                })
+                .ok_or(DiagnosticError::InvalidCode)?,
+        )
+    } else {
+        None
+    };
+    let sequence = state.next_sequence()?;
+    let observed_at = Utc::now();
+    let tick = inner.tick();
+    state
+        .lifetime
+        .record(observation.outcome, observation.count, observed_at, tick);
+    let current = state.components[handle.slot]
+        .as_mut()
+        .expect("validated component");
+    current
+        .lifetime
+        .record(observation.outcome, observation.count, observed_at, tick);
+    current
+        .refresh
+        .totals
+        .record(observation.outcome, observation.count);
+    state.record_window(handle, tick, observation.outcome, observation.count);
+    let code_total = counter_index.map(|index| {
+        let counter = state.counters[index].as_mut().expect("declared counter");
+        counter.occurrences.add(observation.count);
+        counter.last_observed_at = Some(observed_at);
+        counter.occurrences
+    });
+    let Some(code) = code else {
+        state.loss.classifications_overflowed.add(observation.count);
+        state.loss.events_omitted.add(1);
+        return Ok(RecordReceipt {
+            sequence,
+            summary_updated: true,
+            code_counter_updated: false,
+            code_total: None,
+            evidence: EvidenceDisposition::Dropped,
+        });
+    };
+    if truncated {
+        state.loss.messages_truncated.add(1);
+    }
+    let session = observation
+        .correlation
+        .session_id
+        .map(|value| bounded_str(value, inner.limits.max_correlation_bytes));
+    let request = observation
+        .correlation
+        .request_id
+        .map(|value| bounded_str(value, inner.limits.max_correlation_bytes));
+    let session_truncated = observation
+        .correlation
+        .session_id
+        .zip(session)
+        .is_some_and(|(a, b)| a.len() != b.len());
+    let request_truncated = observation
+        .correlation
+        .request_id
+        .zip(request)
+        .is_some_and(|(a, b)| a.len() != b.len());
+    if session_truncated {
+        state.loss.correlations_truncated.add(1);
+    }
+    if request_truncated {
+        state.loss.correlations_truncated.add(1);
+    }
+    if let Some(workspace) = publication {
+        workspace.fill(
+            state,
+            &component,
+            origin,
+            code,
+            class,
+            sequence,
+            observed_at,
+            observation,
+            detail,
+            truncated,
+            session,
+            request,
+        );
+    } else if projection_requested {
+        state.loss.projection_deliveries_omitted.add(1);
+    }
+    let evidence = if inner.limits.max_events == 0 {
+        state.loss.events_omitted.add(1);
+        EvidenceDisposition::Dropped
+    } else {
+        let retained_detail = detail.and_then(|text| {
+            state
+                .allocate_detail(text, inner.limits.max_detail_bytes)
+                .map(|v| v.0)
+        });
+        if detail.is_some() && retained_detail.is_none() {
+            state.loss.details_omitted.add(1);
+        }
+        let retained_session = session.and_then(|text| {
+            state
+                .allocate_detail(text, inner.limits.max_correlation_bytes)
+                .map(|v| v.0)
+        });
+        let retained_request = request.and_then(|text| {
+            state
+                .allocate_detail(text, inner.limits.max_correlation_bytes)
+                .map(|v| v.0)
+        });
+        let correlation_omitted = (session.is_some() && retained_session.is_none()) as u64
+            + (request.is_some() && retained_request.is_none()) as u64;
+        state.loss.correlations_omitted.add(correlation_omitted);
+        let event = StoredObservation {
+            sequence,
+            observed_at,
+            count: observation.count,
+            component: handle,
+            origin,
+            code,
+            failure_class: class,
+            context: observation.context,
+            severity: observation.severity,
+            outcome: observation.outcome,
+            detail: retained_detail,
+            detail_truncated: truncated,
+            session_id: retained_session,
+            request_id: retained_request,
+        };
+        if let Some(evicted) = state.recent.push_back(event) {
+            state.evict_event(evicted);
+        }
+        if truncated || detail.is_some() && retained_detail.is_none() || correlation_omitted > 0 {
+            EvidenceDisposition::Truncated
+        } else {
+            EvidenceDisposition::Retained
+        }
+    };
+    Ok(RecordReceipt {
+        sequence,
+        summary_updated: true,
+        code_counter_updated: true,
+        code_total,
+        evidence,
+    })
+}
+
+struct PublicationWorkspace {
+    event: DiagnosticEvent,
+    detail: String,
+    class: String,
+    session: String,
+    request: String,
+    origin_configuration: String,
+    origin_responsibility: String,
+    callbacks: Box<[Option<Projection>]>,
+    ready: bool,
+}
+fn reserved_string(capacity: usize) -> Result<String, DiagnosticError> {
+    let mut value = String::new();
+    value
+        .try_reserve_exact(capacity)
+        .map_err(|_| DiagnosticError::Allocation)?;
+    Ok(value)
+}
+impl PublicationWorkspace {
+    fn required_bytes(limits: &DiagnosticLimits) -> Result<usize, DiagnosticError> {
+        let text = ID_BYTES
+            .checked_mul(4)
+            .and_then(|v| v.checked_add(32))
+            .and_then(|v| v.checked_add(limits.max_detail_bytes))
+            .and_then(|v| v.checked_add(limits.max_correlation_bytes.checked_mul(2)?))
+            .ok_or(DiagnosticError::InvalidLimits)?;
+        text.checked_add(
+            limits
+                .max_projections
+                .checked_mul(size_of::<Option<Projection>>())
+                .ok_or(DiagnosticError::InvalidLimits)?,
+        )
+        .ok_or(DiagnosticError::InvalidLimits)
+    }
+    fn new(limits: &DiagnosticLimits) -> Result<Self, DiagnosticError> {
+        Ok(Self {
+            event: DiagnosticEvent {
+                sequence: 0.into(),
+                observed_at: Utc::now(),
+                component: ComponentIdentity {
+                    key: reserved_string(ID_BYTES)?,
+                    instance_id: Uuid::nil(),
+                    generation: 0.into(),
+                },
+                origin: DiagnosticOrigin {
+                    refresh_generation: 0.into(),
+                    ownership: ComponentOwnership::default(),
+                },
+                classification: ClassificationWire {
+                    canonical_code: reserved_string(ID_BYTES)?,
+                    failure_class: None,
+                },
+                severity: DiagnosticSeverity::Info,
+                outcome: DiagnosticOutcome::Unknown,
+                context: PluginObservationContext::default(),
+                detail: None,
+                count: 0.into(),
+                correlation: DiagnosticCorrelation::default(),
+            },
+            detail: reserved_string(limits.max_detail_bytes)?,
+            class: reserved_string(32)?,
+            session: reserved_string(limits.max_correlation_bytes)?,
+            request: reserved_string(limits.max_correlation_bytes)?,
+            origin_configuration: reserved_string(ID_BYTES)?,
+            origin_responsibility: reserved_string(ID_BYTES)?,
+            callbacks: empty_slots(limits.max_projections)?,
+            ready: false,
         })
+    }
+    fn reserved_bytes(&self) -> usize {
+        self.event.component.key.capacity()
+            + self.event.classification.canonical_code.capacity()
+            + self.detail.capacity()
+            + self.class.capacity()
+            + self.session.capacity()
+            + self.request.capacity()
+            + self.origin_configuration.capacity()
+            + self.origin_responsibility.capacity()
+            + self.callbacks.len() * size_of::<Option<Projection>>()
+    }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Copy validated observation fields into the existing projection workspace."
+    )]
+    fn fill(
+        &mut self,
+        state: &State,
+        component: &ComponentSlot,
+        origin: CapturedOrigin,
+        code: StoredCode,
+        class: Option<StoredFailureClass>,
+        sequence: u64,
+        observed_at: ObservationTime,
+        observation: &Observation<'_>,
+        detail: Option<&str>,
+        truncated: bool,
+        session: Option<&str>,
+        request: Option<&str>,
+    ) {
+        self.event.sequence = sequence.into();
+        self.event.observed_at = observed_at;
+        self.event.component.key.clear();
+        self.event.component.key.push_str(component.key.as_str());
+        self.event.component.instance_id = component.instance_id;
+        self.event.component.generation = component.handle.generation.into();
+        self.event.origin.refresh_generation = origin.generation.into();
+        self.event.origin.ownership.subscriber_instance_id =
+            origin.ownership.subscriber_instance_id;
+        self.event.origin.ownership.plugin_instance_id = origin.ownership.plugin_instance_id;
+        if let Some(value) = origin.ownership.configuration_id {
+            self.origin_configuration.clear();
+            self.origin_configuration.push_str(value.as_str());
+            self.event.origin.ownership.configuration_id =
+                Some(std::mem::take(&mut self.origin_configuration));
+        }
+        if let Some(value) = origin.ownership.responsibility {
+            self.origin_responsibility.clear();
+            self.origin_responsibility.push_str(value.as_str());
+            self.event.origin.ownership.responsibility =
+                Some(std::mem::take(&mut self.origin_responsibility));
+        }
+        self.event.classification.canonical_code.clear();
+        self.event
+            .classification
+            .canonical_code
+            .push_str(state.code_name(code).expect("admitted code"));
+        if let Some(class) = class {
+            self.class.clear();
+            self.class
+                .push_str(state.class_name(class).expect("admitted class"));
+            self.event.classification.failure_class = Some(std::mem::take(&mut self.class));
+        }
+        self.event.context = observation.context;
+        self.event.severity = observation.severity;
+        self.event.outcome = observation.outcome;
+        self.event.count = observation.count.into();
+        if let Some(detail) = detail {
+            self.detail.clear();
+            self.detail.push_str(detail);
+            self.event.detail = Some(DiagnosticDetail {
+                message: std::mem::take(&mut self.detail),
+                truncated,
+            });
+        }
+        if let Some(value) = session {
+            self.session.clear();
+            self.session.push_str(value);
+            self.event.correlation.session_id = Some(std::mem::take(&mut self.session));
+        }
+        if let Some(value) = request {
+            self.request.clear();
+            self.request.push_str(value);
+            self.event.correlation.request_id = Some(std::mem::take(&mut self.request));
+        }
+        self.ready = true;
+    }
+    fn reset(&mut self) {
+        if let Some(value) = self.event.origin.ownership.configuration_id.take() {
+            self.origin_configuration = value;
+            self.origin_configuration.clear();
+        }
+        if let Some(value) = self.event.origin.ownership.responsibility.take() {
+            self.origin_responsibility = value;
+            self.origin_responsibility.clear();
+        }
+        if let Some(value) = self.event.detail.take() {
+            self.detail = value.message;
+            self.detail.clear();
+        }
+        if let Some(value) = self.event.classification.failure_class.take() {
+            self.class = value;
+            self.class.clear();
+        }
+        if let Some(value) = self.event.correlation.session_id.take() {
+            self.session = value;
+            self.session.clear();
+        }
+        if let Some(value) = self.event.correlation.request_id.take() {
+            self.request = value;
+            self.request.clear();
+        }
+        for callback in &mut self.callbacks {
+            *callback = None;
+        }
+        self.ready = false;
+    }
+}
+fn take_publication(backend: &Backend) -> Option<(usize, PublicationWorkspace)> {
+    let (index, mut workspace) = {
+        let mut pool = lock(&backend.publication);
+        let index = pool.iter().position(Option::is_some)?;
+        (index, pool[index].take().expect("available workspace"))
+    };
+    let projections = lock(&backend.projections);
+    for (target, source) in workspace.callbacks.iter_mut().zip(projections.slots.iter()) {
+        *target = source.as_ref().map(|(_, callback)| Arc::clone(callback));
+    }
+    Some((index, workspace))
+}
+thread_local! {static PROJECTING:RefCell<(usize,[usize;MAX_PROJECTION_DEPTH])>=const{RefCell::new((0,[0;MAX_PROJECTION_DEPTH]))};}
+struct ProjectionScope;
+impl Drop for ProjectionScope {
+    fn drop(&mut self) {
+        PROJECTING.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            stack.0 -= 1;
+        });
+    }
+}
+fn publish(inner: &Inner, workspace: &mut PublicationWorkspace) {
+    let service = std::ptr::from_ref(inner) as usize;
+    let entered = PROJECTING.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        if stack.0 == MAX_PROJECTION_DEPTH || stack.1[..stack.0].contains(&service) {
+            false
+        } else {
+            let index = stack.0;
+            stack.1[index] = service;
+            stack.0 += 1;
+            true
+        }
+    });
+    let Some(backend) = &inner.backend else {
+        return;
+    };
+    if !entered {
+        lock(&backend.state).loss.projections_suppressed.add(1);
+        return;
+    }
+    let _scope = ProjectionScope;
+    for callback in workspace.callbacks.iter().flatten() {
+        match catch_unwind(AssertUnwindSafe(|| callback(&workspace.event))) {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => lock(&backend.state)
+                .loss
+                .projection_deliveries_omitted
+                .add(1),
+            Err(_) => lock(&backend.state).loss.projections_panicked.add(1),
+        }
+    }
 }
 
-fn valid_component_key(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_IDENTITY_BYTES
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':' | b'/')
-        })
+fn diagnostic_memory_usage(inner: &Inner) -> DiagnosticMemoryUsage {
+    let Some(backend) = &inner.backend else {
+        return DiagnosticMemoryUsage::default();
+    };
+    let state = lock(&backend.state);
+    DiagnosticMemoryUsage {
+        reserved_bytes: backend.reserved_bytes,
+        components: state.components.iter().flatten().count(),
+        counters: state.counters.iter().flatten().count(),
+        events: state.recent.len(),
+        detail_bytes: state.detail.used_bytes(),
+        metadata_bytes: state.metadata_used,
+        window_buckets: state.windows.iter().flatten().count(),
+        extensions: state.extensions.iter().flatten().count(),
+        query_workspaces: backend.queries.occupancy(),
+        projections: lock(&backend.projections).slots.iter().flatten().count(),
+        projection_workspaces: lock(&backend.publication)
+            .iter()
+            .filter(|v| v.is_none())
+            .count(),
+    }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+// Arc storage contains its two reference counts and aligned Inner payload. This
+// includes the inline State/Backend mutex headers; dynamic pools are added once.
+fn context_layout_bytes() -> usize {
+    std::alloc::Layout::new::<[usize; 2]>()
+        .extend(std::alloc::Layout::new::<Inner>())
+        .expect("diagnostic context layout fits")
+        .0
+        .pad_to_align()
+        .size()
 }
