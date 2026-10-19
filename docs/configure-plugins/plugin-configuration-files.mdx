@@ -313,7 +313,9 @@ precedence. System config overrides the selected explicit-or-user config.
 TOML tables merge recursively. Top-level lists inside a component's `config`
 concatenate, as do the declared observability destination lists. Entries from
 the higher-precedence layer are placed before entries from the lower-precedence
-layer. Other nested lists replace. For example, the following user
+layer. Other nested lists replace. The observability `insecure_http_hosts` list
+is an exception: the highest-precedence layer that sets it replaces the lists
+below it, and an explicit empty list clears them. For example, the following user
 configuration enables one ATOF file sink:
 
 ```toml

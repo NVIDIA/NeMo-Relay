@@ -33,12 +33,12 @@ The package contains these files:
 ## Captured Events
 
 With `codex-cli >= 0.143.0`, persistent installation requires `SessionStart`,
-`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and `PostCompact`. Relay
 requires exactly one enabled and trusted app-server handler for every generated
 event and forwards delivered hooks as scope, tool, mark, or private LLM
-correlation events. `PostToolUseFailure`, `Notification`, and `SessionEnd` are not
-in the Codex 0.143 plugin hook schema and are not generated.
+correlation events. Relay does not generate `PermissionRequest`,
+`PostToolUseFailure`, `Notification`, or `SessionEnd` handlers.
 
 Each delivered `Stop` closes the active turn and writes a cumulative ATIF
 snapshot. Because the plugin schema does not expose `SessionEnd`, the final
@@ -54,7 +54,7 @@ Persistent installation opens the stable Codex app-server interface and
 selects only hooks whose source is `plugin`, plugin ID is
 `nemo-relay-plugin@nemo-relay-local`, and command exactly matches the generated
 canonical Relay forwarding command. It requires exactly one handler for each
-event in the complete 10-event supported set listed above.
+event in the complete nine-event Relay-generated set listed above.
 
 Unrelated user, project, and plugin hooks are never trusted. If installation
 fails after a trust write, it restores every targeted hook's prior trusted,

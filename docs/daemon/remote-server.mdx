@@ -85,6 +85,17 @@ Provision `/etc/nemo-relay/config.toml` as described in
 routing consistent with the clients so pass-through reaches the intended
 providers. Do not put users' route credentials on the server.
 
+With `--bind 0.0.0.0`, pass-through requests need a bound route to use the
+daemon's provider credentials. Anonymous requests use only provider credentials
+sent by the client. This rule also applies to requests sent to `127.0.0.1`.
+With `--pass-through --bind 127.0.0.1`, anonymous requests can use the daemon's
+provider credentials.
+
+Use TLS on the daemon or a trusted reverse proxy to protect remote traffic.
+Setting `--advertise-address` to an `https://` URL does not turn on TLS.
+If the proxy connects to the daemon over plain HTTP, restrict access to the
+daemon's HTTP port.
+
 ## Provision the HTTPS Certificate
 
 Obtain a server certificate for `relay.example.com` from your organization's

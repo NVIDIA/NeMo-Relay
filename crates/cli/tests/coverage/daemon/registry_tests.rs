@@ -1761,3 +1761,138 @@ fn cancellation_and_delayed_worker_cleanup_are_fenced_by_publication_and_identit
         Ok(ResolvedTarget::Worker(_))
     ));
 }
+
+/// Opt-in measurement of the index lock, admission counters, and control-plane writer delays.
+/// Run in release mode with --ignored --nocapture; timings are informational, never CI gates.
+#[test]
+#[ignore = "opt-in release-mode routing contention benchmark"]
+fn route_lookup_contention_benchmark() {
+    use std::hint::black_box;
+    use std::time::{Duration, Instant};
+
+    fn percentile(samples: &mut [u64], percent: usize) -> u64 {
+        samples.sort_unstable();
+        samples
+            .get(samples.len().saturating_sub(1) * percent / 100)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    let client = Arc::new(crate::daemon::common::transport::pooled_client().unwrap());
+    for routes in [1usize, 64] {
+        let registry = Arc::new(Registry::new(false));
+        let mut tokens = Vec::new();
+        let mut identities = Vec::new();
+        let mut targets = Vec::new();
+        for index in 0..routes {
+            let identity = fingerprint((index + 1) as u8);
+            let token = TokenDigest::from_token(format!("routing-benchmark-{index}").as_bytes());
+            let name = format!("mcp-{index}");
+            registry
+                .register_connected_mcp(registration(identity, token, &name), launch(&name))
+                .unwrap();
+            let target = Arc::new(
+                WorkerTarget::with_shared_client(
+                    format!("worker-{index}"),
+                    "http://127.0.0.1:41000",
+                    SensitiveString::new("benchmark-private-token").unwrap(),
+                    client.clone(),
+                )
+                .unwrap(),
+            );
+            registry
+                .mark_worker_ready(identity, &name, target.clone())
+                .unwrap();
+            tokens.push(token);
+            identities.push((identity, session(&name)));
+            targets.push(target);
+        }
+        for readers in [1usize, 16] {
+            for control_writes in [false, true] {
+                for admission in [false, true] {
+                    let parties = readers + usize::from(control_writes) + 1;
+                    let barrier = Arc::new(Barrier::new(parties));
+                    let mut threads = Vec::new();
+                    for reader in 0..readers {
+                        let registry = registry.clone();
+                        let tokens = tokens.clone();
+                        let barrier = barrier.clone();
+                        threads.push(std::thread::spawn(move || {
+                            let mut samples = Vec::with_capacity(32_768);
+                            let mut calls = 0usize;
+                            barrier.wait();
+                            let deadline = Instant::now() + Duration::from_secs(1);
+                            while Instant::now() < deadline {
+                                for _ in 0..256 {
+                                    let sampled = calls.is_multiple_of(64);
+                                    let started = sampled.then(Instant::now);
+                                    let token = &tokens[(calls + reader) % tokens.len()];
+                                    if admission {
+                                        drop(black_box(registry.resolve_target(token).unwrap()));
+                                    } else {
+                                        let inner = registry.read();
+                                        let identity = inner.tokens.get(token).unwrap();
+                                        black_box(inner.routes.get(identity).unwrap());
+                                    }
+                                    if let Some(started) = started {
+                                        samples.push(started.elapsed().as_nanos() as u64);
+                                    }
+                                    calls += 1;
+                                }
+                            }
+                            (calls, samples)
+                        }));
+                    }
+                    let writer = control_writes.then(|| {
+                        let registry = registry.clone();
+                        let identities = identities.clone();
+                        let barrier = barrier.clone();
+                        std::thread::spawn(move || {
+                            let mut samples = Vec::new();
+                            barrier.wait();
+                            let deadline = Instant::now() + Duration::from_secs(1);
+                            while Instant::now() < deadline {
+                                let (identity, session) =
+                                    &identities[samples.len() % identities.len()];
+                                let started = Instant::now();
+                                registry.renew_mcp(*identity, session, u64::MAX).unwrap();
+                                samples.push(started.elapsed().as_nanos() as u64);
+                                std::thread::sleep(Duration::from_millis(10));
+                            }
+                            samples
+                        })
+                    });
+                    let started = Instant::now();
+                    barrier.wait();
+                    let mut calls = 0usize;
+                    let mut samples = Vec::new();
+                    for thread in threads {
+                        let (count, latencies) = thread.join().unwrap();
+                        calls += count;
+                        samples.extend(latencies);
+                    }
+                    let elapsed = started.elapsed().as_secs_f64();
+                    let mut writer_samples = writer
+                        .map(|thread| thread.join().unwrap())
+                        .unwrap_or_default();
+                    println!(
+                        "routing_contention {}",
+                        serde_json::json!({
+                            "routes": routes, "readers": readers, "control_writes": control_writes,
+                            "operation": if admission { "resolve-and-release" } else { "read-index" },
+                            "lookups": calls, "elapsed_seconds": elapsed,
+                            "lookups_per_second": calls as f64 / elapsed,
+                            "sample_period": 64, "samples": samples.len(),
+                            "p50_ns": percentile(&mut samples, 50),
+                            "p95_ns": percentile(&mut samples, 95),
+                            "p99_ns": percentile(&mut samples, 99),
+                            "control_updates": writer_samples.len(),
+                            "control_p99_ns": percentile(&mut writer_samples, 99),
+                        })
+                    );
+                    assert!(targets.iter().all(|target| target.in_flight() == 0));
+                }
+            }
+        }
+    }
+}

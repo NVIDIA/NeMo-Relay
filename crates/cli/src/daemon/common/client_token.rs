@@ -137,15 +137,20 @@ pub(crate) fn client_token_path() -> Option<PathBuf> {
 /// Invalid or unsafe sources are skipped with one redacted warning per process rather than
 /// failing, so callers apply their own missing-credential policy.
 pub(crate) fn resolve_route_credential() -> Option<ResolvedCredential> {
-    resolve_route_credential_from(
-        std::env::var_os(ROUTE_TOKEN_ENV),
-        client_token_path().as_deref(),
-    )
+    resolve_route_credential_with(std::env::var_os(ROUTE_TOKEN_ENV), client_token_path)
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_route_credential_from(
     environment: Option<OsString>,
     token_file: Option<&Path>,
+) -> Option<ResolvedCredential> {
+    resolve_route_credential_with(environment, || token_file)
+}
+
+fn resolve_route_credential_with<P: AsRef<Path>>(
+    environment: Option<OsString>,
+    token_file: impl FnOnce() -> Option<P>,
 ) -> Option<ResolvedCredential> {
     if let Some(value) = environment.filter(|value| !value.is_empty()) {
         match value
@@ -170,8 +175,8 @@ pub(crate) fn resolve_route_credential_from(
             }),
         }
     }
-    let path = token_file?;
-    match read_client_token_file(path) {
+    let path = token_file()?;
+    match read_client_token_file(path.as_ref()) {
         Ok(Some(credential)) => Some(ResolvedCredential {
             credential,
             source: CredentialSource::File,

@@ -10,7 +10,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use http::header::{HeaderValue, SET_COOKIE, TE, TRAILER};
-use http_body_util::{BodyExt, Empty};
+use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::{Frame, Incoming, SizeHint};
 use hyper::server::conn::{http1, http2};
 use hyper::service::service_fn;
@@ -22,22 +22,36 @@ use tokio::task::JoinHandle;
 use super::*;
 
 #[test]
-fn forwarding_rejects_remote_cleartext_destinations() {
-    let request = Request::get("/")
-        .body(box_body(Empty::<Bytes>::new()))
-        .expect("request");
-    let remote = "http://provider.example/v1/responses"
-        .parse()
-        .expect("remote URI");
-    assert!(prepare_forward_request(request, remote, &[]).is_err());
-
-    let request = Request::get("/")
-        .body(box_body(Empty::<Bytes>::new()))
-        .expect("request");
-    let loopback = "http://127.0.0.1:8080/v1/responses"
-        .parse()
-        .expect("loopback URI");
-    assert!(prepare_forward_request(request, loopback, &[]).is_ok());
+fn forwarding_distinguishes_insecure_and_malformed_destinations() {
+    for destination in [
+        "http://provider.example/v1/responses",
+        "http://172.16.0.223:30919/v1/responses",
+    ] {
+        let error = prepare_forward_request(Request::new(()), destination.parse().unwrap(), &[])
+            .unwrap_err();
+        assert!(matches!(error, TransportError::InsecureDestination));
+        assert_eq!(
+            error.to_string(),
+            "plain HTTP upstreams are allowed only for loopback hosts; use https"
+        );
+    }
+    for destination in ["/v1/responses", "ftp://provider.example/v1/responses"] {
+        assert!(matches!(
+            prepare_forward_request(Request::new(()), destination.parse().unwrap(), &[]),
+            Err(TransportError::InvalidDestination)
+        ));
+    }
+    for destination in [
+        "https://provider.example/v1/responses",
+        "https://172.16.0.223:30443/v1/responses",
+        "http://localhost:8080/v1/responses",
+        "http://127.0.0.1:8080/v1/responses",
+        "http://[::1]:8080/v1/responses",
+    ] {
+        assert!(
+            prepare_forward_request(Request::new(()), destination.parse().unwrap(), &[]).is_ok()
+        );
+    }
 }
 
 struct CausalBody {
@@ -931,9 +945,9 @@ async fn spawn_multiplexed_relay(
                         )
                     }
                 });
-                let mut builder = http2::Builder::new(TokioExecutor::new());
-                builder.max_concurrent_streams(256);
-                builder.max_pending_accept_reset_streams(256);
+                let mut builder = crate::daemon::worker::worker_connection_builder();
+                builder.http2().max_concurrent_streams(256);
+                builder.http2().max_pending_accept_reset_streams(256);
                 let _ = builder
                     .serve_connection(TokioIo::new(stream), service)
                     .await;
@@ -1149,6 +1163,70 @@ async fn websocket_clients_share_the_connection_pool() {
             .await
             .unwrap();
     }
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn worker_http2_flow_control_preserves_concurrent_large_uploads() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let accepted = connections.clone();
+    let server = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            accepted.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let service = service_fn(|request: Request<Incoming>| async move {
+                    let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                    Ok::<_, Infallible>(Response::new(Full::new(bytes)))
+                });
+                let _ = crate::daemon::worker::worker_connection_builder()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    let client = pooled_h2c_client();
+    let uri = format!("http://{address}/upload");
+    let warm = client
+        .request(
+            Request::post(&uri)
+                .body(box_body(Full::new(Bytes::from_static(b"warm"))))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(warm.into_body().collect().await.unwrap().to_bytes(), "warm");
+    let mut uploads = tokio::task::JoinSet::new();
+    for index in 0..16u8 {
+        let client = client.clone();
+        let uri = uri.clone();
+        uploads.spawn(async move {
+            let expected = Bytes::from(vec![index; 1024 * 1024]);
+            let response = client
+                .request(
+                    Request::post(uri)
+                        .body(box_body(Full::new(expected.clone())))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.version(), Version::HTTP_2);
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                expected
+            );
+        });
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(result) = uploads.join_next().await {
+            result.unwrap();
+        }
+    })
+    .await
+    .expect("concurrent uploads must make progress");
     assert_eq!(connections.load(Ordering::SeqCst), 1);
     server.abort();
 }

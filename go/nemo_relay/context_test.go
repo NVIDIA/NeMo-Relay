@@ -6,6 +6,7 @@ package nemo_relay
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -653,4 +654,113 @@ func TestScopeStackRunNestedScopes(t *testing.T) {
 
 		PopScope(s1)
 	})
+}
+
+func TestScopeStackSnapshotSharedFixtureAndCategories(t *testing.T) {
+	payload, err := os.ReadFile("../../crates/types/tests/fixtures/scope_stack_snapshot.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot ScopeStackSnapshot
+	if err := json.Unmarshal(payload, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	expectedCategories := []ScopeType{ScopeTypeAgent, ScopeTypeAgent, ScopeTypeFunction, ScopeTypeTool, ScopeTypeLlm}
+	if len(snapshot.Scopes) != len(expectedCategories) {
+		t.Fatalf("unexpected scope count: %d", len(snapshot.Scopes))
+	}
+	for index, category := range expectedCategories {
+		expectedIdentifier := fmt.Sprintf("019a0000-0000-7000-8000-%012d", index+1)
+		if snapshot.Scopes[index].ScopeID != expectedIdentifier || snapshot.Scopes[index].ScopeType != category {
+			t.Fatalf("unexpected entry %d: %+v", index, snapshot.Scopes[index])
+		}
+	}
+	for index, category := range snapshotScopeTypeNames {
+		entry := ScopeStackEntry{ScopeID: propagationRootUUID, ScopeType: ScopeType(index)}
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(encoded), `"scope_type":"`+category+`"`) {
+			t.Fatalf("unexpected encoding: %s", encoded)
+		}
+		var decoded ScopeStackEntry
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded != entry {
+			t.Fatalf("round trip: %+v != %+v", decoded, entry)
+		}
+	}
+	var future ScopeStackEntry
+	if err := json.Unmarshal([]byte(`{"scope_id":"019a0000-0000-7000-8000-000000000001","scope_type":"future-category"}`), &future); err != nil {
+		t.Fatal(err)
+	}
+	if future.ScopeType != ScopeTypeUnknown {
+		t.Fatalf("future type: %v", future.ScopeType)
+	}
+	for _, invalidIdentifier := range []string{"invalid", "019a0000-0000-7000-8000-000000000001-", "-019a0000-0000-7000-8000-000000000001", "019a0000--0000-7000-8000-000000000001", "--9a0000-0000-7000-8000-000000000001"} {
+		encoded := fmt.Sprintf(`{"scope_id":%q,"scope_type":"agent"}`, invalidIdentifier)
+		if err := json.Unmarshal([]byte(encoded), &future); err == nil {
+			t.Fatalf("invalid UUID accepted: %s", invalidIdentifier)
+		}
+	}
+}
+
+func TestScopeStackSnapshotRunOwnershipAndRestoration(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	before, err := CurrentScopeStackSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack, err := NewScopeStack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stack.Close()
+	var retained *ScopeStackSnapshot
+	stack.Run(func() {
+		root, err := CurrentScopeStackSnapshot()
+		if err != nil || root == nil || len(root.Scopes) != 1 {
+			t.Fatalf("root snapshot: %+v, %v", root, err)
+		}
+		agent, err := PushScope("snapshot-agent", ScopeTypeAgent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tool, err := PushScope("snapshot-tool", ScopeTypeTool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		retained, err = CurrentScopeStackSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(retained.Scopes) != 3 || retained.Scopes[0].ScopeID != root.Scopes[0].ScopeID || retained.Scopes[1].ScopeID != agent.UUID() || retained.Scopes[2].ScopeID != tool.UUID() || retained.Scopes[2].ScopeType != ScopeTypeTool {
+			t.Fatalf("unexpected hierarchy: %+v", retained)
+		}
+		if err := PopScope(tool); err != nil {
+			t.Fatal(err)
+		}
+		current, err := CurrentScopeStackSnapshot()
+		if err != nil || len(current.Scopes) != 2 {
+			t.Fatalf("after pop: %+v, %v", current, err)
+		}
+		if len(retained.Scopes) != 3 {
+			t.Fatal("retained snapshot changed")
+		}
+		if err := PopScope(agent); err != nil {
+			t.Fatal(err)
+		}
+	})
+	after, err := CurrentScopeStackSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeJSON, _ := json.Marshal(before)
+	afterJSON, _ := json.Marshal(after)
+	if string(beforeJSON) != string(afterJSON) {
+		t.Fatalf("binding was not restored: %s != %s", beforeJSON, afterJSON)
+	}
 }

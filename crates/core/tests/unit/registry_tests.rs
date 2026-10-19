@@ -5,6 +5,7 @@
 
 use super::*;
 
+#[derive(Clone)]
 struct PriorityItem {
     name: String,
     priority: i32,
@@ -39,11 +40,7 @@ fn test_sorted_registry() {
 
     reg.register(item("c", 30, "C")).unwrap();
 
-    let sorted: Vec<&str> = reg
-        .sorted_values()
-        .iter()
-        .map(|i| i.value.as_str())
-        .collect();
+    let sorted: Vec<&str> = reg.sorted_values().map(|i| i.value.as_str()).collect();
     assert_eq!(sorted, vec!["A", "B", "C"]);
 
     // duplicate
@@ -53,25 +50,21 @@ fn test_sorted_registry() {
     assert!(reg.deregister("b"));
     assert!(!reg.deregister("b"));
 
-    let sorted: Vec<&str> = reg
-        .sorted_values()
-        .iter()
-        .map(|i| i.value.as_str())
-        .collect();
+    let sorted: Vec<&str> = reg.sorted_values().map(|i| i.value.as_str()).collect();
     assert_eq!(sorted, vec!["A", "C"]);
 }
 
 #[test]
 fn test_empty_registry() {
     let reg = SortedRegistry::<PriorityItem>::new();
-    let sorted = reg.sorted_values();
-    assert!(sorted.is_empty());
+    let mut sorted = reg.sorted_values();
+    assert!(sorted.next().is_none());
 }
 
 #[test]
 fn test_default_registry_is_empty() {
     let reg = SortedRegistry::<PriorityItem>::default();
-    assert!(reg.sorted_values().is_empty());
+    assert!(reg.sorted_values().next().is_none());
 }
 
 #[test]
@@ -81,11 +74,7 @@ fn test_negative_priorities() {
     reg.register(item("neg", -5, "N")).unwrap();
     reg.register(item("zero", 0, "Z")).unwrap();
 
-    let sorted: Vec<&str> = reg
-        .sorted_values()
-        .iter()
-        .map(|i| i.value.as_str())
-        .collect();
+    let sorted: Vec<&str> = reg.sorted_values().map(|i| i.value.as_str()).collect();
     assert_eq!(sorted, vec!["N", "Z", "P"]);
 }
 
@@ -95,11 +84,7 @@ fn test_re_register_after_deregister() {
     reg.register(item("a", 10, "A1")).unwrap();
     reg.deregister("a");
     reg.register(item("a", 5, "A2")).unwrap();
-    let sorted: Vec<&str> = reg
-        .sorted_values()
-        .iter()
-        .map(|i| i.value.as_str())
-        .collect();
+    let sorted: Vec<&str> = reg.sorted_values().map(|i| i.value.as_str()).collect();
     assert_eq!(sorted, vec!["A2"]);
 }
 
@@ -123,18 +108,10 @@ fn test_sorted_values_caching() {
     let mut reg = SortedRegistry::new();
     reg.register(item("a", 1, "A")).unwrap();
     // Sort order is already maintained eagerly by register()
-    let s1: Vec<&str> = reg
-        .sorted_values()
-        .iter()
-        .map(|i| i.value.as_str())
-        .collect();
+    let s1: Vec<&str> = reg.sorted_values().map(|i| i.value.as_str()).collect();
     assert_eq!(s1, vec!["A"]);
     // Second call returns the same result (no re-sort needed)
-    let s2: Vec<&str> = reg
-        .sorted_values()
-        .iter()
-        .map(|i| i.value.as_str())
-        .collect();
+    let s2: Vec<&str> = reg.sorted_values().map(|i| i.value.as_str()).collect();
     assert_eq!(s2, vec!["A"]);
 }
 
@@ -149,7 +126,7 @@ fn test_many_entries_ordering() {
         })
         .unwrap();
     }
-    let sorted: Vec<i32> = reg.sorted_values().iter().map(|i| i.priority).collect();
+    let sorted: Vec<i32> = reg.sorted_values().map(|i| i.priority).collect();
     let expected: Vec<i32> = (0..20).collect();
     assert_eq!(sorted, expected);
 }
@@ -159,10 +136,57 @@ fn test_same_priority_stable() {
     let mut reg = SortedRegistry::new();
     reg.register(item("x", 1, "X")).unwrap();
     reg.register(item("y", 1, "Y")).unwrap();
-    let sorted: Vec<&str> = reg
-        .sorted_values()
-        .iter()
-        .map(|i| i.value.as_str())
-        .collect();
+    let sorted: Vec<&str> = reg.sorted_values().map(|i| i.value.as_str()).collect();
     assert_eq!(sorted, vec!["X", "Y"]);
+}
+
+#[test]
+fn registry_snapshots_share_storage_and_isolate_mutations() {
+    let mut registry = SortedRegistry::new();
+    registry.register(item("a", 10, "A")).unwrap();
+    registry.register(item("b", 20, "B")).unwrap();
+    let mut snapshot = registry.clone();
+    assert!(Arc::ptr_eq(
+        registry.storage.as_ref().unwrap(),
+        snapshot.storage.as_ref().unwrap()
+    ));
+
+    // Failed mutations do not copy the shared registry.
+    assert!(registry.register(item("a", 0, "duplicate")).is_err());
+    assert!(!registry.deregister("missing"));
+    assert!(Arc::ptr_eq(
+        registry.storage.as_ref().unwrap(),
+        snapshot.storage.as_ref().unwrap()
+    ));
+
+    registry.register(item("c", 5, "C")).unwrap();
+    assert_eq!(
+        registry
+            .sorted_values()
+            .map(|entry| entry.name())
+            .collect::<Vec<_>>(),
+        ["c", "a", "b"]
+    );
+    assert_eq!(
+        snapshot
+            .sorted_values()
+            .map(|entry| entry.name())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert!(snapshot.deregister("a"));
+    assert_eq!(
+        snapshot
+            .sorted_values()
+            .map(|entry| entry.name())
+            .collect::<Vec<_>>(),
+        ["b"]
+    );
+    assert_eq!(
+        registry
+            .sorted_values()
+            .map(|entry| entry.name())
+            .collect::<Vec<_>>(),
+        ["c", "a", "b"]
+    );
 }

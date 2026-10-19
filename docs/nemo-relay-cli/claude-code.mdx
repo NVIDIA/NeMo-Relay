@@ -209,7 +209,7 @@ the launched process.
 
 Generated Claude Code hooks include `SessionStart`, `SessionEnd`,
 `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`,
-`PostToolUseFailure`, `PermissionRequest`, `SubagentStart`, `SubagentStop`,
+`PostToolUseFailure`, `SubagentStart`, `SubagentStop`,
 `Notification`, `Stop`, `PreCompact`, and `PostCompact`. Both compaction hooks
 emit canonical `compaction` marks. Relay normalizes the other hooks as scope,
 prompt, tool, notification, subagent, or private LLM correlation events

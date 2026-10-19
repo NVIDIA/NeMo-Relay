@@ -25,12 +25,14 @@ use super::{
 // Event application temporarily removes a session from the shared directory so unrelated sessions
 // can progress during middleware awaits. If the request is cancelled, this guard restores that
 // session before releasing its gate or allowing shutdown to proceed.
-struct InFlightSession {
+pub(super) struct InFlightSession {
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     session_id: String,
     session: Option<Session>,
     gate: Option<OwnedMutexGuard<()>>,
     activity: Option<SessionActivityGuard>,
+    gateway_preparing: Option<Arc<std::sync::Mutex<std::collections::HashSet<String>>>>,
+    gateway_call_owner: Option<Option<String>>,
 }
 
 impl InFlightSession {
@@ -47,29 +49,61 @@ impl InFlightSession {
             session: Some(session),
             gate: Some(gate),
             activity: Some(activity),
+            gateway_preparing: None,
+            gateway_call_owner: None,
         }
     }
 
-    fn session_mut(&mut self) -> &mut Session {
+    pub(super) fn for_gateway(
+        sessions: Arc<Mutex<HashMap<String, Session>>>,
+        session_id: String,
+        session: Session,
+        gate: OwnedMutexGuard<()>,
+        activity: SessionActivityGuard,
+        preparing: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    ) -> Self {
+        let mut in_flight = Self::new(sessions, session_id, session, gate, activity);
+        in_flight.gateway_preparing = Some(preparing);
+        in_flight
+    }
+
+    pub(super) fn gateway_call_prepared(&mut self, owner: Option<String>) {
+        self.gateway_call_owner = Some(owner);
+    }
+
+    fn clear_gateway_preparing(&mut self) {
+        if let Some(preparing) = self.gateway_preparing.take() {
+            preparing
+                .lock()
+                .expect("gateway preparation lock poisoned")
+                .remove(&self.session_id);
+        }
+    }
+
+    pub(super) fn session_mut(&mut self) -> &mut Session {
         self.session
             .as_mut()
             .expect("in-flight session should own its session")
     }
 
-    async fn restore(mut self) -> (OwnedMutexGuard<()>, SessionActivityGuard) {
-        let mut sessions = self.sessions.lock().await;
+    pub(super) async fn restore(mut self) -> (OwnedMutexGuard<()>, SessionActivityGuard) {
+        let directory = self.sessions.clone();
+        let mut sessions = directory.lock().await;
         sessions.insert(
             self.session_id.clone(),
             self.session
                 .take()
                 .expect("in-flight session should own its session"),
         );
+        self.gateway_call_owner = None;
+        self.clear_gateway_preparing();
         drop(sessions);
         self.take_guards()
     }
 
-    fn discard(mut self) -> (OwnedMutexGuard<()>, SessionActivityGuard) {
+    pub(super) fn discard(mut self) -> (OwnedMutexGuard<()>, SessionActivityGuard) {
         self.session.take();
+        self.clear_gateway_preparing();
         self.take_guards()
     }
 
@@ -87,15 +121,27 @@ impl InFlightSession {
 
 impl Drop for InFlightSession {
     fn drop(&mut self) {
-        let Some(session) = self.session.take() else {
+        let Some(mut session) = self.session.take() else {
             return;
         };
+        if let Some(owner) = self.gateway_call_owner.take() {
+            session.finish_gateway_call(owner.as_deref());
+        }
+        let preparing = self.gateway_preparing.take();
         let sessions = Arc::clone(&self.sessions);
         let session_id = self.session_id.clone();
         let gate = self.gate.take();
         let activity = self.activity.take();
         drop(tokio::spawn(async move {
-            sessions.lock().await.insert(session_id, session);
+            let mut directory = sessions.lock().await;
+            directory.insert(session_id.clone(), session);
+            if let Some(preparing) = preparing {
+                preparing
+                    .lock()
+                    .expect("gateway preparation lock poisoned")
+                    .remove(&session_id);
+            }
+            drop(directory);
             drop(gate);
             drop(activity);
         }));

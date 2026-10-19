@@ -46,25 +46,38 @@ impl fmt::Debug for RouteCredential {
 
 impl RouteCredential {
     pub(crate) fn parse(value: String) -> Result<Self, CliError> {
+        let digest = Self::digest_from_str(&value)?;
+        Ok(Self { value, digest })
+    }
+
+    /// Validate a borrowed wire credential without retaining or allocating its plaintext.
+    pub(crate) fn digest_from_str(value: &str) -> Result<TokenDigest, CliError> {
         if value.trim() != value || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
             return Err(CliError::Config(format!(
                 "{ROUTE_TOKEN_ENV} must be an unpadded base64url credential without whitespace"
             )));
         }
-        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&value)
+        if value.len() != 43 {
+            return Err(CliError::Config(format!(
+                "{ROUTE_TOKEN_ENV} must decode to exactly 32 bytes"
+            )));
+        }
+        // The decoder's conservative bound for 43 input bytes is 33; the actual decoded
+        // credential is exactly 32 bytes. The extra byte avoids allocating a decode buffer.
+        let mut decoded = [0u8; 33];
+        let length = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode_slice(value, &mut decoded)
             .map_err(|_| {
                 CliError::Config(format!(
                     "{ROUTE_TOKEN_ENV} must be an unpadded base64url credential"
                 ))
             })?;
-        if decoded.len() != 32 {
+        if length != 32 {
             return Err(CliError::Config(format!(
                 "{ROUTE_TOKEN_ENV} must decode to exactly 32 bytes"
             )));
         }
-        let digest = TokenDigest::from_token(value.as_bytes());
-        Ok(Self { value, digest })
+        Ok(TokenDigest::from_token(value.as_bytes()))
     }
 
     pub(crate) fn expose(&self) -> &str {

@@ -1427,6 +1427,8 @@ fn merge_plugin_components(left: &mut Json, right: Json) {
 /// higher-precedence entries first. Declared observability collections do the
 /// same, except that an explicit empty log or metric endpoint list clears the
 /// lower-precedence list so it remains distinguishable from an omitted list.
+/// Observability `insecure_http_hosts` is replaced so a higher-precedence
+/// layer can narrow plaintext trust.
 /// Deeper implementation-specific lists retain replacement semantics.
 fn merge_plugin_component(existing: &mut Json, higher_priority: Json) {
     let is_observability = component_kind(&higher_priority).or_else(|| component_kind(existing))
@@ -1493,6 +1495,9 @@ fn merge_plugin_config_value(
 }
 
 fn plugin_config_list_concatenates(path: &[String], is_observability: bool) -> bool {
+    if is_observability && matches!(path, [field] if field == "insecure_http_hosts") {
+        return false;
+    }
     path.len() == 1
         || (is_observability
             && (matches!(
