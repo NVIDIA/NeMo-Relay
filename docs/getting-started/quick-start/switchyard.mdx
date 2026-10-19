@@ -94,45 +94,65 @@ credential environment variable together.
 </Note>
 
 <Note icon="circle-info">
-Install commands target the Relay version documented here. If that version has
-not been released, its pinned packages and downloads are not available yet.
-Select a released documentation version to try Relay now.
+These development docs target Relay `0.11.0`. Until that release is published,
+its versioned downloads and registry packages are unavailable. To install a
+published release now, select its documentation version. The versioned paths
+in this guide describe the intended release artifacts.
 </Note>
 
 <Steps toc={true}>
 
 ## Install
 
-Install Relay and download the bundle for your platform. The checksum check
-must succeed before you extract it.
+### Install Relay
+
+Install the documented Relay release with the current installer script. The
+script comes from `main`; `NEMO_RELAY_VERSION` selects the CLI release. On a
+glibc-based Linux host, the installer selects the GNU binary required by the
+native plugin.
 
 <Tabs>
 <Tab title="Unix shell">
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
 ```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.11.0 sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+</Tab>
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":600} */}
+```powershell
+$env:NEMO_RELAY_VERSION = '0.11.0'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+</Tab>
+</Tabs>
+
+### Download the Switchyard Plugin
+
+Create a fresh directory for the configuration and plugin bundle:
+
+{/* quickstart-block {"id":"workspace","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
 mkdir relay-switchyard-quickstart
 cd relay-switchyard-quickstart
-export PATH="$PWD/bin:$PATH"
+```
 
+Download the published Switchyard `0.3.1` bundle for your platform. Its version
+is independent of the Relay CLI version. Verify the checksum before extraction:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"plugin-install","role":"run","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"main","timeout_seconds":600} */}
+```bash
 (
 set -e
 case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64) platform=macos-arm64; target=aarch64-apple-darwin ;;
-  Linux-x86_64) platform=linux-x86_64; target=x86_64-unknown-linux-gnu ;;
-  Linux-aarch64) platform=linux-arm64; target=aarch64-unknown-linux-gnu ;;
+  Darwin-arm64) platform=macos-arm64 ;;
+  Linux-x86_64) platform=linux-x86_64 ;;
+  Linux-aarch64) platform=linux-arm64 ;;
   *) echo "No Switchyard 0.3.1 bundle for this platform" >&2; exit 1 ;;
 esac
-binary="nemo-relay-cli-${target}-0.11.0"
-relay_release="https://github.com/NVIDIA/NeMo-Relay/releases/download/0.11.0"
-curl -fLSs -O "$relay_release/$binary" -O "$relay_release/$binary.sha256"
-if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum -c "$binary.sha256"
-else
-  shasum -a 256 -c "$binary.sha256"
-fi
-mkdir bin
-mv "$binary" bin/nemo-relay
-chmod +x bin/nemo-relay
 archive="switchyard-plugin-0.3.1-${platform}.tar.gz"
 plugin_release="https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/download/switchyard-plugin-0.3.1"
 curl -fLSs -O "$plugin_release/$archive" -O "$plugin_release/$archive.sha256"
@@ -144,16 +164,10 @@ fi
 )
 ```
 </Tab>
-
 <Tab title="Windows PowerShell">
-{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":600} */}
+{/* quickstart-block {"id":"plugin-install","role":"run","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"main","timeout_seconds":600} */}
 ```powershell
 $ErrorActionPreference = 'Stop'
-$env:NEMO_RELAY_VERSION = '0.11.0'
-irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.11.0/install.ps1 | iex
-New-Item -ItemType Directory relay-switchyard-quickstart | Out-Null
-Set-Location relay-switchyard-quickstart
-
 $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
 if ($arch -eq [System.Runtime.InteropServices.Architecture]::Arm64) {
   $platform = 'windows-arm64'
@@ -174,11 +188,8 @@ Expand-Archive $archive -DestinationPath .
 </Tab>
 </Tabs>
 
-<Note icon="circle-info">
 The archive extracts to `switchyard-plugin/`. Keep this directory in place
-while Relay uses the plugin. The Unix commands also keep Relay in the project's
-`bin/` directory, without replacing your existing installation.
-</Note>
+while Relay uses the plugin.
 
 ## Configure
 
@@ -187,10 +198,17 @@ Save this file as `config.toml` in `relay-switchyard-quickstart`:
 {/* quickstart-block {"id":"config","role":"file","cwd":"relay-switchyard-quickstart","path":"config.toml"} */}
 <Code src="_code/switchyard/config.toml" language="toml" title="config.toml" />
 
-Save this sibling file as `plugins.toml`:
+`config.toml` sets the provider endpoint. Save this sibling file as
+`plugins.toml` to enable local ATOF export and load the native Switchyard plugin:
 
 {/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-switchyard-quickstart","path":"plugins.toml"} */}
 <Code src="_code/switchyard/plugins.toml" language="toml" title="plugins.toml" />
+
+The request uses the route ID `switchyard/quickstart`. The plugin configuration
+maps that route to the target model
+`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` through the NVIDIA client. This
+single-target passthrough route demonstrates model resolution; it does not
+choose dynamically between multiple candidate models.
 
 <Warning>
 The checksum and `integrity_only` policy check artifact integrity, not independent
@@ -218,9 +236,9 @@ Enable and validate the plugin, then start Relay:
 
 {/* quickstart-block {"id":"gateway","role":"run","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"gateway","timeout_seconds":300,"background":{"ready":{"tcp":"127.0.0.1:4040","timeout_seconds":60},"stop_before":"verify","stop":"interrupt","shutdown_timeout_seconds":15}} */}
 ```bash
-export PATH="$PWD/bin:$PATH"
-nemo-relay --config "$PWD/config.toml" plugins enable nvidia.switchyard
-nemo-relay --config "$PWD/config.toml" plugins validate nvidia.switchyard
+rm -f -- response.json logs/events.jsonl &&
+nemo-relay --config "$PWD/config.toml" plugins enable nvidia.switchyard &&
+nemo-relay --config "$PWD/config.toml" plugins validate nvidia.switchyard &&
 nemo-relay --config "$PWD/config.toml" --bind 127.0.0.1:4040
 ```
 </Tab>
@@ -236,6 +254,9 @@ Enable and validate the plugin, then start Relay:
 {/* quickstart-block {"id":"gateway","role":"run","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"gateway","timeout_seconds":300,"background":{"ready":{"tcp":"127.0.0.1:4040","timeout_seconds":60},"stop_before":"verify","stop":"interrupt","shutdown_timeout_seconds":15}} */}
 ```powershell
 $env:Path = (Join-Path $env:LOCALAPPDATA 'nemo-relay\bin') + [IO.Path]::PathSeparator + $env:Path
+foreach ($path in @('response.json', 'logs/events.jsonl')) {
+  if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+}
 $config = Join-Path $PWD 'config.toml'
 nemo-relay --config $config plugins enable nvidia.switchyard
 if ($LASTEXITCODE -ne 0) { throw 'Failed to enable the Switchyard plugin' }
@@ -283,7 +304,8 @@ The verification command prints `RELAY_QUICKSTART_RESPONSE_OK` and `RELAY_QUICKS
 
 After the request finishes, stop Relay with Ctrl+C in its terminal to flush
 the event file. Then check the assistant response and confirm that Relay recorded a mark
-named `switchyard.routing.decision`:
+named `switchyard.routing.decision` with the configured target in
+`data.selected_model`:
 
 <Tabs>
 <Tab title="Unix shell">
@@ -293,7 +315,8 @@ jq -e '.choices[0].message | .role == "assistant" and
   (.content | contains("RELAY_QUICKSTART_RESPONSE_OK"))' response.json > /dev/null &&
 jq -se 'length > 0 and
   all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
-  any(.[]; .kind == "mark" and .name == "switchyard.routing.decision")' \
+  any(.[]; .kind == "mark" and .name == "switchyard.routing.decision" and
+    .data.selected_model == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")' \
   logs/events.jsonl > /dev/null &&
 printf 'RELAY_QUICKSTART_RESPONSE_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
 ```
@@ -311,8 +334,9 @@ if (-not $events.Count -or @($events | Where-Object {
   $_.atof_version -ne '0.1' -or $_.kind -notin @('scope', 'mark')
 }).Count) { throw 'Expected nonempty ATOF 0.1 records' }
 if (-not @($events | Where-Object {
-  $_.kind -eq 'mark' -and $_.name -eq 'switchyard.routing.decision'
-}).Count) { throw 'No Switchyard routing decision was recorded' }
+    $_.kind -eq 'mark' -and $_.name -eq 'switchyard.routing.decision' -and
+  $_.data.selected_model -eq 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
+}).Count) { throw 'No Switchyard decision for the configured target was recorded' }
 Write-Output 'RELAY_QUICKSTART_RESPONSE_OK'
 Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
 ```
@@ -333,6 +357,39 @@ RELAY_QUICKSTART_EVENTS_OK
 This is a live provider test; it does not assert identical model wording,
 timestamps, token counts, or event UUIDs.
 </Note>
+
+### Inspect the Routing Decision
+
+The caller requested `switchyard/quickstart`, and the verification above requires
+Switchyard's decision to name the configured target model. Inspect the decision
+to see what served the request:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"inspect","role":"run","cwd":"relay-switchyard-quickstart","shells":["bash"],"session":"client","timeout_seconds":180} */}
+```bash
+jq 'select(.kind == "mark" and .name == "switchyard.routing.decision") |
+  {selected_model: .data.selected_model, served_model: .data.served_model,
+   algorithm: .data.algorithm, fallback_used: .data.fallback_used}' logs/events.jsonl
+```
+</Tab>
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"inspect","role":"run","cwd":"relay-switchyard-quickstart","shells":["powershell"],"session":"client","timeout_seconds":180} */}
+```powershell
+Get-Content logs/events.jsonl |
+  ForEach-Object { ConvertFrom-Json -InputObject $_ } |
+  Where-Object { $_.kind -eq 'mark' -and $_.name -eq 'switchyard.routing.decision' } |
+  ForEach-Object { $_.data } |
+  Select-Object selected_model, served_model, algorithm, fallback_used |
+  ConvertTo-Json -Depth 10
+```
+</Tab>
+</Tabs>
+
+`selected_model` is Switchyard's chosen target. `served_model` is the model
+reported by the provider, when available; `fallback_used` compares those model
+identities. `algorithm` identifies the routing method. Use these values to
+explain the routing result rather than relying only on an OK marker.
 
 </Steps>
 
