@@ -5426,3 +5426,46 @@ fn gateway_skips_optional_plugins_with_failed_integrity_or_attestation() {
         assert!(enforce_required_dynamic_plugin_startup(None, &resolved).is_err());
     }
 }
+
+#[test]
+fn streamed_integrity_hashes_preserve_existing_digest_formats_and_snapshot_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("source");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("empty.bin"), []).unwrap();
+    let payload = vec![b'Z'; 3 * 64 * 1024 + 17];
+    let source = root.join("large.bin");
+    std::fs::write(&source, &payload).unwrap();
+    // These hashes use the old format. Empty files and files larger than one
+    // chunk must keep the same hashes so existing attestations stay valid.
+    let snapshot_digest = "1a09783296332b227ef7ed966085d214181f136f56bb59f8c937efa13c9ffd6b";
+    assert_eq!(snapshot_tree_digest(&root, false).unwrap(), snapshot_digest);
+    assert_eq!(
+        environment::environment_tree_digest(&root).unwrap(),
+        if cfg!(windows) {
+            "f67f5b5c51f9750b11b746c8a72a1aacc9d6785b91bb7c52ebcce13d91caab01"
+        } else {
+            "2db2539838ba8aff0a6f03268048dd9a0051b1902dd368f57f447f2155f2d092"
+        }
+    );
+
+    let mut closure = RuntimeClosureSources::default();
+    for name in ["empty.bin", "large.bin"] {
+        closure.files.insert(
+            PathBuf::from(name),
+            RuntimeClosureSource::File(root.join(name)),
+        );
+    }
+    assert_eq!(closure.digest().unwrap(), snapshot_digest);
+
+    let destination = temp.path().join("copied.bin");
+    copy_snapshot_regular_file(
+        &source,
+        &destination,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        "test payload",
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(destination).unwrap(), payload);
+}

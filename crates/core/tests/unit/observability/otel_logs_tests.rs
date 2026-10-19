@@ -258,6 +258,34 @@ fn log_configured_headers_require_https_except_for_loopback() {
 }
 
 #[test]
+fn log_configured_headers_allow_plain_http_only_to_listed_insecure_hosts() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let config = |endpoint: &str| {
+        OpenTelemetryLogConfig::new(endpoint)
+            .with_header("authorization", "Bearer static")
+            .with_plaintext_policy(
+                PlaintextPolicy::from_hosts(&["release-api".to_string()]).unwrap(),
+            )
+    };
+    assert!(config("http://release-api:4318/v1/logs").validate().is_ok());
+    let error = config("http://collector.example/v1/logs")
+        .validate()
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("hosts listed in insecure_http_hosts"),
+        "{error}"
+    );
+    assert!(
+        OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+            .with_header("authorization", "Bearer static")
+            .with_allow_insecure(true)
+            .validate()
+            .is_ok()
+    );
+}
+
+#[test]
 fn log_config_validates_batch_limits_and_retains_resource_identity() {
     for config in [
         OpenTelemetryLogConfig::new("   "),

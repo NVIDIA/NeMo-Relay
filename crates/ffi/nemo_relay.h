@@ -3103,6 +3103,17 @@ NemoRelayStatus nemo_relay_scope_register_subscriber(const char *scope_uuid,
 NemoRelayStatus nemo_relay_scope_deregister_subscriber(const char *scope_uuid, const char *name);
 
 /**
+ * Return the explicit calling context's root-to-top scope identities as JSON.
+ *
+ * Success with a null output means no active binding. A non-null result must
+ * be released with nemo_relay_string_free. No stack is created or activated.
+ *
+ * # Safety
+ * out must point to valid writable C-string pointer storage.
+ */
+NemoRelayStatus nemo_relay_current_scope_stack_snapshot_json(char **out);
+
+/**
  * Create a new isolated scope stack with its own root scope.
  *
  * Each scope stack is independent: scopes pushed on one do not appear on another.

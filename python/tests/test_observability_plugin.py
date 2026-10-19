@@ -225,6 +225,38 @@ class TestObservabilityConfigHelpers:
             "https://example.com/v1/logs", header_file={"authorization": path}
         ).to_dict()["header_file"] == {"authorization": path}
 
+    def test_insecure_http_hosts_serialize_at_top_level_and_pass_strict_validation(self) -> None:
+        hosts = ["host.docker.internal", "collector.ns.svc.cluster.local"]
+        section = OpenTelemetrySectionConfig(
+            enabled=True,
+            endpoints=[OpenTelemetryEndpointConfig("gen_ai", "http://host.docker.internal:8082/v1/traces")],
+        )
+        config = ObservabilityConfig(
+            opentelemetry=section, policy=ConfigPolicy(unknown_field="error"), insecure_http_hosts=hosts
+        )
+        assert config.to_dict()["insecure_http_hosts"] == hosts
+        assert "insecure_http_hosts" not in ObservabilityConfig().to_dict()
+        assert ObservabilityConfig(insecure_http_hosts=[]).to_dict()["insecure_http_hosts"] == []
+
+        report = validate_plugin_config(plugin.PluginConfig(components=[ComponentSpec(config)]))
+        assert report["diagnostics"] == []
+
+    async def test_insecure_http_hosts_activate_a_listed_plain_http_trace_endpoint(self) -> None:
+        def config(hosts: list[str] | None) -> plugin.PluginConfig:
+            section = OpenTelemetrySectionConfig(
+                enabled=True,
+                endpoints=[OpenTelemetryEndpointConfig("gen_ai", "http://collector.invalid:4318/v1/traces")],
+            )
+            return plugin.PluginConfig(
+                components=[ComponentSpec(ObservabilityConfig(opentelemetry=section, insecure_http_hosts=hosts))]
+            )
+
+        with pytest.raises(ValueError, match="insecure_http_hosts"):
+            await plugin.initialize(config(None))
+        activation = await plugin.initialize(config(["collector.invalid"]))
+        assert activation.is_active
+        await activation.close()
+
     def test_defaults_and_component_wrapper(self) -> None:
         assert AtofConfig().to_dict() == {"enabled": False}
         assert AtifConfig().to_dict() == {

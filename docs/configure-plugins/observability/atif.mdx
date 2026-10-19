@@ -217,7 +217,8 @@ The following table describes HTTP storage settings:
 
 When you set any header source (`headers`, `header_env`, or `header_file`),
 remote HTTP storage must use HTTPS. HTTP is allowed only for localhost and
-loopback IP addresses. Relay does not follow redirects when headers are set.
+loopback IP addresses, unless the host is listed in the not-recommended
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts) setting. Relay does not follow redirects when headers are set.
 Use the final destination URL. A redirect fails that upload and Relay does not
 send headers to the new destination.
 

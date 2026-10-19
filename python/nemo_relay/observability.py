@@ -384,7 +384,8 @@ class ObservabilityConfig:
     """Canonical config document for the top-level observability component.
 
     ``enable_full_payloads`` retains complete sanitized request data on every
-    LLM start event.
+    LLM start event. ``insecure_http_hosts`` lists non-loopback hosts that may
+    receive exports and configured headers over unencrypted HTTP or WebSocket.
     """
 
     version: int = 4
@@ -393,6 +394,7 @@ class ObservabilityConfig:
     opentelemetry: OpenTelemetrySectionConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
     enable_full_payloads: bool = False
+    insecure_http_hosts: list[str] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this observability config to the canonical JSON object shape."""
@@ -404,6 +406,7 @@ class ObservabilityConfig:
                 "opentelemetry": self.opentelemetry,
                 "policy": self.policy,
                 "enable_full_payloads": self.enable_full_payloads,
+                "insecure_http_hosts": self.insecure_http_hosts,
             }
         )
 

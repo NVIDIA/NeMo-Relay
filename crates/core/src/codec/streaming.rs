@@ -22,10 +22,11 @@
 //!
 //! [`AnnotatedLlmResponse`]: crate::codec::response::AnnotatedLlmResponse
 
-use crate::api::runtime::{LlmCollectorFn, LlmFinalizerFn};
+use crate::api::runtime::{LlmBorrowedCollectorFn, LlmCollectorFn, LlmFinalizerFn, LlmJsonStream};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 /// Provider-neutral incremental stream item used by cross-protocol transcoders.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -77,8 +78,24 @@ pub enum NormalizedStreamEvent {
 /// construct a fresh instance per managed-lifecycle call and discard it after the stream
 /// completes.
 pub trait StreamingCodec: Send + Sync {
+    /// Wraps the source stream to check provider completion rules.
+    ///
+    /// Feed the returned stream to this instance's collector and finalizer. The default
+    /// leaves the stream unchanged. An override must forward close and cleanup operations.
+    fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
+        stream
+    }
+
     /// Returns a closure that consumes one decoded provider event per call.
     fn collector(&self) -> LlmCollectorFn;
+
+    /// Returns an optional collector that reads decoded events by reference.
+    ///
+    /// Pass this to `LlmStreamCallExecuteParams::borrowed_collector` to avoid copying
+    /// each whole JSON chunk. The default keeps the owned callback for custom codecs.
+    fn borrowed_collector(&self) -> Option<LlmBorrowedCollectorFn> {
+        None
+    }
 
     /// Returns a closure that, when called once at end of stream, produces the assembled response
     /// payload in the shape the matching [`crate::codec::traits::LlmResponseCodec`] can decode.
@@ -207,20 +224,35 @@ impl SseEventDecoder {
 // frames whose `data:` JSON parsed successfully.
 fn parse_sse_frame(frame: &str) -> Result<Option<SseEvent>> {
     let mut event_name: Option<String> = None;
-    let mut data_parts: Vec<&str> = Vec::new();
+    // Provider frames usually have one data line; borrow it until a second line needs joining.
+    let mut payload: Option<Cow<'_, str>> = None;
     for line in frame.split('\n') {
         if let Some(rest) = line.strip_prefix("event:") {
             event_name = Some(rest.trim().to_string());
         } else if let Some(rest) = line.strip_prefix("data:") {
             // SSE allows a single space after the colon by convention; strip it lazily.
-            data_parts.push(rest.strip_prefix(' ').unwrap_or(rest));
+            let data = rest.strip_prefix(' ').unwrap_or(rest);
+            match &mut payload {
+                None => payload = Some(Cow::Borrowed(data)),
+                Some(Cow::Borrowed(first)) => {
+                    // The complete frame bounds the joined payload, including later data lines.
+                    let mut joined = String::with_capacity(frame.len());
+                    joined.push_str(first);
+                    joined.push('\n');
+                    joined.push_str(data);
+                    payload = Some(Cow::Owned(joined));
+                }
+                Some(Cow::Owned(joined)) => {
+                    joined.push('\n');
+                    joined.push_str(data);
+                }
+            }
         }
         // Other lines (`id:`, `retry:`, comments starting with `:`) are ignored.
     }
-    if data_parts.is_empty() {
+    let Some(payload) = payload else {
         return Ok(None);
-    }
-    let payload = data_parts.join("\n");
+    };
     let trimmed = payload.trim();
     // OpenAI Chat Completions emits a `data: [DONE]` terminator as a wire-level end-of-stream
     // sentinel. It's not a JSON payload — drop it like a heartbeat. Other providers (Anthropic,

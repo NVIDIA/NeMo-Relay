@@ -72,6 +72,35 @@ fn request() -> LlmRequest {
     }
 }
 
+#[test]
+fn request_event_input_preserves_schema_and_moves_payload_storage() {
+    let request = LlmRequest {
+        headers: serde_json::Map::from_iter([("x-request-id".into(), json!("request-123"))]),
+        content: json!({"messages": [{"content": "large request body"}]}),
+    };
+    let expected = serde_json::to_value(&request).unwrap();
+    let content_ptr = request.content["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .as_ptr();
+    let header_ptr = request.headers["x-request-id"].as_str().unwrap().as_ptr();
+
+    let input = super::llm_request_event_input(request);
+
+    assert_eq!(input, expected);
+    assert_eq!(
+        input["content"]["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .as_ptr(),
+        content_ptr
+    );
+    assert_eq!(
+        input["headers"]["x-request-id"].as_str().unwrap().as_ptr(),
+        header_ptr
+    );
+}
+
 fn request_with_credential_headers() -> LlmRequest {
     let mut headers = serde_json::Map::new();
     for (name, value) in [

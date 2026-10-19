@@ -20,6 +20,7 @@ const dataSchema: DataSchema = { name: 'example.fixture', version: '1' };
 const logSubscriber = new OpenTelemetryLogSubscriber({
   endpoint: 'http://localhost:4318/v1/logs',
   headerEnv: { authorization: 'OTEL_LOG_AUTHORIZATION' },
+  allowInsecure: false,
   minimumSeverity: LogSeverity.Warn,
 });
 const metricSubscriber = new OpenTelemetryMetricSubscriber({

@@ -35,7 +35,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::header_file::{
-    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
     has_configured_headers, validate_header_files, validate_header_http_endpoint,
 };
 use super::otel::{
@@ -112,6 +112,7 @@ pub struct OpenTelemetryMetricConfig {
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
+    plaintext: PlaintextPolicy,
     resource_attributes: HashMap<String, String>,
     service_name: Option<String>,
     promote_resource_metadata_prefixes: Vec<String>,
@@ -136,6 +137,7 @@ impl OpenTelemetryMetricConfig {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             header_file: HashMap::new(),
+            plaintext: PlaintextPolicy::LoopbackOnly,
             resource_attributes: HashMap::new(),
             service_name: None,
             promote_resource_metadata_prefixes: Vec::new(),
@@ -176,6 +178,17 @@ impl OpenTelemetryMetricConfig {
     /// Map an exporter header name to the environment variable supplying its value.
     pub fn with_header_env(mut self, key: impl Into<String>, variable: impl Into<String>) -> Self {
         self.header_env.insert(key.into(), variable.into());
+        self
+    }
+
+    /// Allows plain HTTP to any host; data and configured headers travel unencrypted.
+    pub fn with_allow_insecure(mut self, allow_insecure: bool) -> Self {
+        self.plaintext = PlaintextPolicy::from_allow_insecure(allow_insecure);
+        self
+    }
+
+    pub(crate) fn with_plaintext_policy(mut self, plaintext: PlaintextPolicy) -> Self {
+        self.plaintext = plaintext;
         self
     }
 
@@ -296,13 +309,14 @@ impl OpenTelemetryMetricConfig {
         if self.automatic {
             if automatic_signal_headers_configured("OTEL_EXPORTER_OTLP_METRICS_HEADERS") {
                 let endpoint = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+                    .map_err(OpenTelemetryError::ExporterBuild)?
                     .ok_or_else(|| {
                         OpenTelemetryError::ExporterBuild(
                             "automatic metric exporter requires a nonblank OTLP endpoint"
                                 .to_string(),
                         )
                     })?;
-                validate_header_http_endpoint(&endpoint)
+                validate_header_http_endpoint(&endpoint, &self.plaintext)
                     .map_err(OpenTelemetryError::ExporterBuild)?;
             }
         } else {
@@ -312,7 +326,7 @@ impl OpenTelemetryMetricConfig {
             reject_signal_header_environment("OTEL_EXPORTER_OTLP_METRICS_HEADERS")?;
             validate_signal_headers(&self.headers)?;
             if has_configured_headers(&self.headers, &self.header_env, &self.header_file) {
-                validate_header_http_endpoint(&self.endpoint)
+                validate_header_http_endpoint(&self.endpoint, &self.plaintext)
                     .map_err(OpenTelemetryError::ExporterBuild)?;
             }
         }
@@ -470,11 +484,14 @@ impl OpenTelemetryMetricSubscriber {
         Self::new_with_runtime_diagnostics(config)
     }
 
-    pub(crate) fn new_from_automatic_configuration_for_plugin() -> Result<Self> {
+    pub(crate) fn new_from_automatic_configuration_for_plugin(
+        plaintext: PlaintextPolicy,
+    ) -> Result<Self> {
         super::otel_signal::validate_automatic_header_environment(
             "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
         )?;
-        let mut config = OpenTelemetryMetricConfig::from_automatic_configuration();
+        let mut config = OpenTelemetryMetricConfig::from_automatic_configuration()
+            .with_plaintext_policy(plaintext);
         config.diagnostic_field = Some("opentelemetry.automatic.metrics".to_string());
         Self::new_with_runtime_diagnostics(config)
     }
@@ -695,6 +712,7 @@ fn build_metric_provider(
                     builder.with_http_client(HeaderFileHttpClient::new(
                         client,
                         HeaderFileResolver::new(config.header_file.clone()),
+                        config.plaintext.clone(),
                     ))
                 };
                 if !config.headers.is_empty() {

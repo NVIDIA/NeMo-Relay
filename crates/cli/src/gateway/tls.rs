@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 
 const IDENTITY_FILE: &str = "hook-tls-identity.json";
 
@@ -92,6 +93,57 @@ fn ensure_crypto_provider() {
 
 fn identity_path() -> Result<std::path::PathBuf, String> {
     Ok(crate::bootstrap::state::state_dir()?.join(IDENTITY_FILE))
+}
+
+/// Upgrade an HTTP connection to TLS while limiting concurrent handshakes.
+pub(crate) fn upgrade(
+    mut request: axum::http::Request<axum::body::Body>,
+    tls: Arc<rustls::ServerConfig>,
+    app: axum::Router,
+    handshake_permits: Arc<Semaphore>,
+) -> axum::response::Response {
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+    if request
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        != Some("nemo-relay-tls")
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Ok(handshake_permit) = handshake_permits.try_acquire_owned() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let upgrade = hyper::upgrade::on(&mut request);
+    tokio::spawn(async move {
+        let Ok(upgraded) = upgrade.await else {
+            return;
+        };
+        let acceptor = tokio_rustls::TlsAcceptor::from(tls);
+        let handshake = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            acceptor.accept(hyper_util::rt::TokioIo::new(upgraded)),
+        )
+        .await;
+        drop(handshake_permit);
+        let Ok(Ok(encrypted)) = handshake else {
+            return;
+        };
+        let _ = hyper::server::conn::http1::Builder::new()
+            .serve_connection(
+                hyper_util::rt::TokioIo::new(encrypted),
+                hyper_util::service::TowerToHyperService::new(app),
+            )
+            .await;
+    });
+    axum::http::Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header(header::CONNECTION, "upgrade")
+        .header(header::UPGRADE, "nemo-relay-tls")
+        .header(header::CONTENT_LENGTH, "0")
+        .body(axum::body::Body::empty())
+        .expect("TLS upgrade headers are valid")
 }
 
 #[cfg(test)]

@@ -56,3 +56,44 @@ fn identifiers_and_targets_reject_empty_values() {
         Err(crate::daemon::common::protocol::ProtocolError::MissingSensitiveValue)
     ));
 }
+
+#[test]
+fn worker_target_prepares_generation_routing_and_preserves_raw_paths() {
+    for endpoint in ["http://127.0.0.1:41000", "https://[::1]:41000/"] {
+        let target = WorkerTarget::new(
+            "generation",
+            endpoint,
+            SensitiveString::new("secret").unwrap(),
+        )
+        .unwrap();
+        let request: http::Uri = "/v1/responses/a%2Fb?key=x%2Fy&key=z".parse().unwrap();
+        let destination = target.request_uri(&request).unwrap();
+        assert_eq!(destination.path_and_query(), request.path_and_query());
+        assert_eq!(destination.authority(), target.origin.authority());
+        assert_eq!(target.authentication(), "secret");
+        assert!(target.authentication().is_sensitive());
+        assert!(Arc::ptr_eq(
+            &target.shared_worker_id(),
+            &target.shared_worker_id()
+        ));
+        assert!(!format!("{target:?}").contains("secret"));
+    }
+    assert_eq!(
+        WorkerTarget::new(
+            "worker",
+            "relative",
+            SensitiveString::new("secret").unwrap()
+        )
+        .unwrap_err(),
+        LifecycleError::InvalidDestination
+    );
+    assert_eq!(
+        WorkerTarget::new(
+            "worker",
+            "http://127.0.0.1:1",
+            SensitiveString::new("bad\ncredential").unwrap()
+        )
+        .unwrap_err(),
+        LifecycleError::InvalidCredential
+    );
+}

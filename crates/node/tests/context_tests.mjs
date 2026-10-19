@@ -4,6 +4,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -11,6 +13,7 @@ const lib = require('../index.js');
 const {
   createScopeStack,
   currentScopeStack,
+  currentScopeStackSnapshot,
   setThreadScopeStack,
   scopeStackActive,
   getHandle,
@@ -242,5 +245,198 @@ describe('Context isolation', () => {
 
     // Restore original
     setThreadScopeStack(original);
+  });
+});
+
+describe('scope_stack_snapshot', () => {
+  it('returns absence without activating a fresh process stack', () => {
+    const execution = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `
+      const assert = require('node:assert/strict');
+      const library = require(${JSON.stringify(require.resolve('../index.js'))});
+      assert.equal(library.currentScopeStackSnapshot(), null);
+      assert.equal(library.currentScopeStackSnapshot(), null);
+      assert.equal(library.scopeStackActive(), false);
+    `,
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(execution.status, 0, execution.stderr);
+  });
+
+  it('orders actual handles and retains earlier values after pushes and pops', () => {
+    withScopeStack(createScopeStack(), () => {
+      const root = currentScopeStackSnapshot();
+      assert.equal(root.scopes.length, 1);
+      const agent = pushScope('agent', ScopeType.Agent, null, null);
+      const functionScope = pushScope('function', ScopeType.Function, null, null);
+      const tool = pushScope('tool', ScopeType.Tool, null, null);
+      try {
+        const retained = currentScopeStackSnapshot();
+        const expected = [
+          { scopeId: root.scopes[0].scopeId, scopeType: ScopeType.Agent },
+          { scopeId: agent.uuid, scopeType: ScopeType.Agent },
+          { scopeId: functionScope.uuid, scopeType: ScopeType.Function },
+          { scopeId: tool.uuid, scopeType: ScopeType.Tool },
+        ];
+        assert.deepEqual(retained.scopes, expected);
+        assert.deepEqual(currentScopeStackSnapshot().scopes, expected);
+        popScope(tool);
+        assert.deepEqual(currentScopeStackSnapshot().scopes, expected.slice(0, -1));
+        const replacement = pushScope('replacement', ScopeType.Llm, null, null);
+        try {
+          assert.deepEqual(retained.scopes, expected);
+        } finally {
+          popScope(replacement);
+        }
+      } finally {
+        popScope(functionScope);
+        popScope(agent);
+      }
+    });
+  });
+
+  it('isolates awaited siblings and restores nested callback bindings', async () => {
+    const inspectSibling = (name) =>
+      withScopeStack(createScopeStack(), async () => {
+        const agent = pushScope(name, ScopeType.Agent, null, null);
+        try {
+          await new Promise((resolve) => setImmediate(resolve));
+          const before = currentScopeStackSnapshot();
+          assert.equal(before.scopes.at(-1).scopeId, agent.uuid);
+          await withScopeStack(createScopeStack(), async () => {
+            await new Promise((resolve) => setImmediate(resolve));
+            const nested = currentScopeStackSnapshot();
+            assert.equal(nested.scopes.length, 1);
+            assert.notEqual(nested.scopes[0].scopeId, before.scopes[0].scopeId);
+          });
+          assert.deepEqual(currentScopeStackSnapshot(), before);
+          return agent.uuid;
+        } finally {
+          popScope(agent);
+        }
+      });
+    const [first, second] = await Promise.all([inspectSibling('first'), inspectSibling('second')]);
+    assert.notEqual(first, second);
+  });
+});
+
+describe('scope_stack_snapshot propagation fixture', () => {
+  it('preserves canonical UUIDs and synthetic scope types', () => {
+    const entries = JSON.parse(
+      readFileSync(new URL('../../types/tests/fixtures/scope_stack_snapshot.json', import.meta.url), 'utf8'),
+    ).scopes;
+    const rootUuid = entries[0].scope_id;
+    const parentUuid = entries[3].scope_id;
+    const stack = createScopeStackFromPropagation({ version: 1, rootUuid, parentUuid });
+    withScopeStack(stack, () => {
+      assert.deepEqual(currentScopeStackSnapshot().scopes, [
+        { scopeId: rootUuid, scopeType: ScopeType.Agent },
+        { scopeId: parentUuid, scopeType: ScopeType.Unknown },
+      ]);
+    });
+  });
+});
+
+describe('scope_stack_snapshot failure cleanup', () => {
+  it('restores the surrounding binding after an awaited callback rejection', async () => {
+    await withScopeStack(createScopeStack(), async () => {
+      const before = currentScopeStackSnapshot();
+      await assert.rejects(
+        withScopeStack(createScopeStack(), async () => {
+          const agent = pushScope('failing-agent', ScopeType.Agent, null, null);
+          try {
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.equal(currentScopeStackSnapshot().scopes.at(-1).scopeId, agent.uuid);
+            throw new Error('expected callback failure');
+          } finally {
+            popScope(agent);
+          }
+        }),
+        /expected callback failure/,
+      );
+      assert.deepEqual(currentScopeStackSnapshot(), before);
+    });
+  });
+});
+
+describe('scope_stack_snapshot managed callbacks', () => {
+  it('correlates awaited LLM and tool continuations within isolated Agents sharing call_1', async () => {
+    const agentIdentifiers = new Map();
+    const observations = new Map();
+    const observe = (owner, boundary, toolCallId = null) => {
+      const snapshot = currentScopeStackSnapshot();
+      const nearestAgent = snapshot.scopes.findLast((entry) => entry.scopeType === ScopeType.Agent);
+      assert.equal(nearestAgent.scopeId, agentIdentifiers.get(owner));
+      observations.get(owner).push([boundary, toolCallId, nearestAgent.scopeId]);
+    };
+    lib.registerLlmExecutionIntercept('snapshot-llm', 1, async (request, _context, next) => {
+      const owner = request.content.owner;
+      observe(owner, 'llm-before');
+      await new Promise((resolve) => setImmediate(resolve));
+      const result = await next(request);
+      observe(owner, 'llm-after');
+      return result;
+    });
+    lib.registerToolExecutionIntercept('snapshot-tool', 1, async (context, next) => {
+      const owner = context.args.owner;
+      observe(owner, 'tool-before', context.toolCallId);
+      await new Promise((resolve) => setImmediate(resolve));
+      const result = await next(context.args);
+      observe(owner, 'tool-after', context.toolCallId);
+      return result;
+    });
+    const runAgent = (owner) =>
+      withScopeStack(createScopeStack(), async () => {
+        const agent = pushScope(owner, ScopeType.Agent, null, null);
+        agentIdentifiers.set(owner, agent.uuid);
+        observations.set(owner, []);
+        const workflow = pushScope(`workflow-${owner}`, ScopeType.Function, null, null);
+        try {
+          const response = await lib.llmCallExecuteAsync(
+            'snapshot-llm',
+            { headers: {}, content: { messages: [], owner } },
+            async () => ({ tool_call_id: 'call_1' }),
+          );
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const result = await lib.toolCallExecuteAsync(
+              'snapshot-tool',
+              { owner, attempt },
+              async (argumentsValue) => ({ result: argumentsValue }),
+              null,
+              null,
+              null,
+              null,
+              response.tool_call_id,
+            );
+            assert.deepEqual(result, { result: { owner, attempt } });
+          }
+          return agent.uuid;
+        } finally {
+          popScope(workflow);
+          popScope(agent);
+        }
+      });
+    try {
+      const [first, second] = await Promise.all([runAgent('first'), runAgent('second')]);
+      assert.notEqual(first, second);
+      for (const owner of ['first', 'second']) {
+        const identifier = agentIdentifiers.get(owner);
+        assert.deepEqual(observations.get(owner), [
+          ['llm-before', null, identifier],
+          ['llm-after', null, identifier],
+          ['tool-before', 'call_1', identifier],
+          ['tool-after', 'call_1', identifier],
+          ['tool-before', 'call_1', identifier],
+          ['tool-after', 'call_1', identifier],
+        ]);
+      }
+    } finally {
+      lib.deregisterLlmExecutionIntercept('snapshot-llm');
+      lib.deregisterToolExecutionIntercept('snapshot-tool');
+    }
   });
 });

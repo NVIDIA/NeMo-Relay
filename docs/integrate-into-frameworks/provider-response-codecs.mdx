@@ -732,6 +732,36 @@ impl LlmResponseCodec for FrameworkResponseCodec {
 
 Streaming LLM wrappers decode the aggregated response produced by the stream finalizer. The response codec does not see each token or chunk. Use stream collectors for chunk-level behavior, and use response codecs for the final normalized end-event annotation.
 
+### Borrowing Stream Chunks in Rust
+
+Rust callers can use `LlmStreamCallExecuteParams::borrowed_collector` to read each
+JSON chunk without copying the whole chunk. Built-in streaming codecs provide
+this callback through `StreamingCodec::borrowed_collector()`:
+
+```rust
+use nemo_relay::api::llm::LlmStreamCallExecuteParams;
+use nemo_relay::codec::openai_chat::OpenAIChatStreamingCodec;
+use nemo_relay::codec::streaming::StreamingCodec;
+
+let streaming_codec = OpenAIChatStreamingCodec::new();
+let params = LlmStreamCallExecuteParams::builder()
+    .name("openai")
+    .request(request)
+    .func(provider_stream)
+    .collector(streaming_codec.collector())
+    .borrowed_collector_opt(streaming_codec.borrowed_collector())
+    .finalizer(streaming_codec.finalizer())
+    .build();
+```
+
+If you set a borrowed collector, the runtime calls it instead of the owned
+`collector`. Copy any fields you need after the callback returns. If the callback
+returns an error, the runtime stops the stream. It runs the same finalizer and
+cleanup steps as an owned collector.
+
+Custom codecs can keep the default `None` to use their existing owned callback.
+Python, Node.js, and FFI collectors still receive owned chunks.
+
 ## Validation Checklist
 
 Use this checklist to confirm the implementation preserves the expected runtime
