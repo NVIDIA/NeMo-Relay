@@ -116,6 +116,10 @@ reservations, circular event headers, reclaimable detail blocks, outcome buckets
 query workspaces, and projection workspaces have independently enforced limits.
 Recent events share one circular history across components; new evidence can
 evict older evidence while reserved summary counters continue updating.
+History uses a runtime-sized `circular-buffer` allocation with resizing hidden.
+Startup admission includes its header, alignment, and event slots. Allocation
+failure for this history invokes the global allocation-error handler; fallible
+pool reservations return `DiagnosticError::Allocation`.
 
 `DiagnosticLimits.max_owned_bytes` bounds the admitted context backing, not total
 process RSS. It excludes allocator overhead, caller-owned inputs and decoded

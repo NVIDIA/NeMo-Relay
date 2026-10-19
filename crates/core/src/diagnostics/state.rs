@@ -3,7 +3,7 @@
 
 //! Fixed-capacity local state. No wire DTO graph is retained in this store.
 
-use super::storage::{DetailHandle, DetailPool, FixedRing};
+use super::storage::{BoundedHistory, DetailHandle, DetailPool};
 use super::*;
 
 pub(super) const ID_BYTES: usize = 128;
@@ -225,7 +225,7 @@ pub(super) struct State {
     pub counters: Box<[Option<CounterSlot>]>,
     pub windows: Box<[Option<WindowSlot>]>,
     pub extensions: Box<[Option<ExtensionSlot>]>,
-    pub recent: FixedRing<StoredObservation>,
+    pub recent: BoundedHistory<StoredObservation>,
     pub detail: DetailPool,
     // Logical admission bytes for current registration/ownership and extension
     // text. Original event attribution is inline in preallocated event slots.
@@ -243,13 +243,13 @@ pub(super) fn empty_slots<T>(n: usize) -> Result<Box<[Option<T>]>, DiagnosticErr
 }
 impl State {
     pub fn required_bytes(limits: &DiagnosticLimits) -> Result<usize, DiagnosticError> {
-        let mut total = 0usize;
+        let mut total = BoundedHistory::<StoredObservation>::required_bytes(limits.max_events)
+            .map_err(|_| DiagnosticError::InvalidLimits)?;
         for (count, bytes) in [
             (limits.max_components, size_of::<Option<ComponentSlot>>()),
             (limits.max_counters, size_of::<Option<CounterSlot>>()),
             (limits.max_window_buckets, size_of::<Option<WindowSlot>>()),
             (limits.max_extensions, size_of::<Option<ExtensionSlot>>()),
-            (limits.max_events, size_of::<Option<StoredObservation>>()),
         ] {
             total = total
                 .checked_add(
@@ -275,7 +275,7 @@ impl State {
             counters: empty_slots(limits.max_counters)?,
             windows: empty_slots(limits.max_window_buckets)?,
             extensions: empty_slots(limits.max_extensions)?,
-            recent: FixedRing::new(limits.max_events).map_err(|_| DiagnosticError::Allocation)?,
+            recent: BoundedHistory::new(limits.max_events),
             detail: DetailPool::new(limits.detail_pool_bytes, limits.detail_block_bytes)
                 .map_err(|_| DiagnosticError::Allocation)?,
             metadata_used: 0,

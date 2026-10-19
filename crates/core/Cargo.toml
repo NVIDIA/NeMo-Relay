@@ -96,6 +96,7 @@ shell-words = "1"
 log = { version = "0.4", features = ["kv", "kv_serde"] }
 spdlog-rs = { version = "0.5", features = ["log", "multi-thread"] }
 unicode-general-category = "1.1"
+circular-buffer = "2.0.1"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "param"] }

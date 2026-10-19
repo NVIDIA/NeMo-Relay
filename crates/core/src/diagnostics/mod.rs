@@ -728,6 +728,8 @@ impl Diagnostics {
     /// Construct a context using the startup owner's selected mode and capacities.
     ///
     /// Enabled mode validates arithmetic and admits backend storage before use.
+    /// The circular-history allocation uses the global allocation-error handler
+    /// on allocation failure; fallible pool reservations return an error.
     /// Disabled mode retains lightweight source/settings state without registry,
     /// history, detail, query, or projection pools. Source role/version metadata
     /// is capped at 128 UTF-8 bytes; the supplied UUID is preserved.
