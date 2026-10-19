@@ -27,6 +27,10 @@ navigation:
       skip-slug: true
       collapsed: open-by-default
       contents:
+      - page: Deep Agents
+        icon: fa-solid fa-layer-group
+        path: ../pages-dev/getting-started/quick-start/deep-agents.mdx
+        slug: deep-agents
       - page: LangChain
         icon: fa-solid fa-link
         path: ../pages-dev/getting-started/quick-start/langchain.mdx
