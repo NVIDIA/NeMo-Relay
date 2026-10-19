@@ -780,7 +780,7 @@ impl PluginFailureCode {
     }
 }
 
-/// Failure event hierarchy; empty unmapped domains are reserved for future work.
+/// Failure event hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]

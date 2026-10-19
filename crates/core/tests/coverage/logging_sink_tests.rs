@@ -523,7 +523,7 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
         root_relay_id: diagnostics.source().instance_id.to_string(),
         logger,
         _thread_pools: Vec::new(),
-        diagnostics: Some(logging),
+        diagnostics: logging,
         projection: Some(projection),
     };
 
@@ -582,7 +582,7 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
         root_relay_id: diagnostics.source().instance_id.to_string(),
         logger,
         _thread_pools: Vec::new(),
-        diagnostics: Some(logging),
+        diagnostics: logging,
         projection: None,
     }
     .shutdown();

@@ -435,7 +435,7 @@ impl State {
         let _ = self.next_sequence();
         true
     }
-    pub fn allocate_detail(&mut self, value: &str, max: usize) -> Option<(DetailHandle, bool)> {
+    pub fn allocate_detail(&mut self, value: &str, max: usize) -> Option<DetailHandle> {
         if !self.detail.can_fit(value, max) {
             return None;
         }

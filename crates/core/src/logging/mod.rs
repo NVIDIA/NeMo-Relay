@@ -116,7 +116,7 @@ pub struct LoggingRuntime {
     pub(crate) logger: Arc<Logger>,
     /// Keeps per-sink async thread pools alive until shutdown.
     _thread_pools: Vec<Arc<ThreadPool>>,
-    diagnostics: Option<LoggingDiagnostics>,
+    diagnostics: LoggingDiagnostics,
     projection: Option<LoggingProjection>,
 }
 
@@ -190,7 +190,7 @@ impl LoggingRuntime {
             root_relay_id,
             logger,
             _thread_pools: thread_pools,
-            diagnostics: Some(diagnostics),
+            diagnostics,
             projection,
         })
     }
@@ -237,7 +237,7 @@ impl Drop for LoggingRuntime {
         for (index, sink) in self.logger.sinks().iter().enumerate() {
             if let Err(error) = Sink::flush_on_exit(sink.as_ref()) {
                 shutdown_failed = true;
-                if let Some(diagnostics) = self.diagnostics.as_ref().and_then(|d| d.sink(index)) {
+                if let Some(diagnostics) = self.diagnostics.sink(index) {
                     diagnostics.shutdown_failed();
                 }
                 let _ = writeln!(
@@ -246,9 +246,7 @@ impl Drop for LoggingRuntime {
                 );
             }
         }
-        if let Some(diagnostics) = &self.diagnostics {
-            diagnostics.shutdown(shutdown_failed);
-        }
+        self.diagnostics.shutdown(shutdown_failed);
 
         // Detach only if we are still the installed receiver. A later configuration may have
         // replaced us; do not clear that newer install. Installation and teardown are serialized
@@ -328,16 +326,6 @@ pub fn shutdown_default_logging() -> Result<()> {
 
 /// Emits a structured operational record through Relay's configured logger.
 pub fn emit(level: log::Level, target: &str, message: &str, fields: Map<String, Json>) {
-    emit_to_logger(log::logger(), level, target, message, fields);
-}
-
-fn emit_to_logger(
-    logger: &dyn log::Log,
-    level: log::Level,
-    target: &str,
-    message: &str,
-    fields: Map<String, Json>,
-) {
     struct Fields(Map<String, Json>);
     impl log::kv::Source for Fields {
         fn visit<'kvs>(
@@ -361,7 +349,7 @@ fn emit_to_logger(
         .target(target)
         .key_values(&fields)
         .build();
-    logger.log(&record);
+    log::logger().log(&record);
 }
 
 /// Emits a structured record using a binding-facing level name.
