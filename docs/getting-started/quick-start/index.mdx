@@ -16,13 +16,28 @@ inference requests identifies the credentials and model access it needs.
 The application API examples below use local callbacks.
 </Note>
 
-## Agent Runtimes
+## Agent Harnesses
 
 When a coding-agent runtime owns invocation, start with
 [CLI Basic Usage](/nemo-relay-cli/basic-usage). For persistent Claude Code or
 Codex installation, use [Coding Agent Installation](/nemo-relay-cli/plugin-installation).
 For agent-owned integrations, refer to
 [Supported Integrations](/supported-integrations/about).
+
+<CardGroup cols={2}>
+<Card title="Codex" icon="fa-brands fa-openai" href="/getting-started/quick-start/codex">
+Run one Codex CLI task with Relay model and tool observability.
+</Card>
+<Card title="Claude Code" icon="fa-brands fa-claude" href="/getting-started/quick-start/claude-code">
+Run one Claude Code session with Relay model and tool observability.
+</Card>
+<Card title="Hermes Agent" icon="fa-solid fa-terminal" href="/getting-started/quick-start/hermes">
+Configure Hermes Agent's native Relay observability and run one agent turn.
+</Card>
+<Card title="pi" icon="fa-solid fa-pi" href="/getting-started/quick-start/pi">
+Install the proof-of-concept extension and observe one pi task.
+</Card>
+</CardGroup>
 
 ## Featured Plugins
 
@@ -37,6 +52,12 @@ If a framework owns callbacks or tool execution, choose its path in
 <CardGroup cols={3}>
 <Card title="Deep Agents" icon="fa-solid fa-layer-group" href="/getting-started/quick-start/deep-agents">
 Run one Deep Agents workflow with Relay's maintained integration.
+</Card>
+<Card title="LangChain" icon="fa-solid fa-link" href="/getting-started/quick-start/langchain">
+Run one tool-using agent with Relay middleware and callbacks.
+</Card>
+<Card title="LangGraph" icon="fa-solid fa-diagram-project" href="/getting-started/quick-start/langgraph">
+Run one credential-free graph with Relay callbacks.
 </Card>
 </CardGroup>
 
