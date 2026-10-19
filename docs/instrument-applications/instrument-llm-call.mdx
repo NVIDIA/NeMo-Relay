@@ -106,7 +106,7 @@ async def main() -> None:
             )
             print(result)
     finally:
-        nemo_relay.subscribers.flush()
+        await nemo_relay.subscribers.flush_async()
         nemo_relay.subscribers.deregister("llm-check")
 
 asyncio.run(main())
@@ -241,8 +241,9 @@ Check both behavior and instrumentation:
   `annotated_response.usage.cost` only when a response codec decoded model and
   usage fields and a source matched the model.
 
-Native subscriber delivery is asynchronous. Await `flushSubscribers()` and
-then one event-loop turn before validating printed output.
+Native subscriber delivery is asynchronous. From an `asyncio` task, await
+`nemo_relay.subscribers.flush_async()`. In Node.js, await `flushSubscribers()`
+and then one event-loop turn. Do this before validating printed output.
 
 - LLM start input contains the request after request intercepts and
   sanitize-request guardrails. Each owning agent scope starts fresh, and a

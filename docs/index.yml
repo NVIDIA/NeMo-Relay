@@ -23,14 +23,42 @@ navigation:
         slug: quick-start
         collapsed: open-by-default
         contents:
-          - section: "Featured Plugins"
+          - section: "Agent Frameworks"
             skip-slug: true
             collapsed: open-by-default
             contents:
-              - page: "Switchyard"
-                icon: fa-brands fa-nvidia
-                path: ./getting-started/quick-start/switchyard.mdx
-                slug: switchyard
+              - page: "Deep Agents"
+                icon: fa-solid fa-layer-group
+                path: ./getting-started/quick-start/deep-agents.mdx
+                slug: deep-agents
+              - page: "LangChain"
+                icon: fa-solid fa-link
+                path: ./getting-started/quick-start/langchain.mdx
+                slug: langchain
+              - page: "LangGraph"
+                icon: fa-solid fa-diagram-project
+                path: ./getting-started/quick-start/langgraph.mdx
+                slug: langgraph
+          - section: "Agent Harnesses"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Codex"
+                icon: fa-brands fa-openai
+                path: ./getting-started/quick-start/codex.mdx
+                slug: codex
+              - page: "Claude Code"
+                icon: fa-brands fa-claude
+                path: ./getting-started/quick-start/claude-code.mdx
+                slug: claude-code
+              - page: "Hermes Agent"
+                icon: fa-solid fa-terminal
+                path: ./getting-started/quick-start/hermes.mdx
+                slug: hermes
+              - page: "pi"
+                icon: fa-solid fa-pi
+                path: ./getting-started/quick-start/pi.mdx
+                slug: pi
           - section: "Application APIs"
             skip-slug: true
             collapsed: open-by-default
@@ -47,6 +75,14 @@ navigation:
                 icon: fa-brands fa-rust
                 path: ./getting-started/quick-start/rust.mdx
                 slug: rust
+          - section: "Featured Plugins"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "NVIDIA NeMo Switchyard"
+                icon: fa-brands fa-nvidia
+                path: ./getting-started/quick-start/switchyard.mdx
+                slug: switchyard
   - folder: ./nemo-relay-cli
     title: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli
