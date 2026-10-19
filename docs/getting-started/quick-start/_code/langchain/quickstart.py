@@ -60,8 +60,8 @@ async def main() -> None:
             tool_outputs = [
                 str(message.content) for message in result["messages"] if getattr(message, "type", None) == "tool"
             ]
-            if "RELAY_QUICKSTART_TOOL_OK" not in tool_outputs:
-                raise RuntimeError("Expected tool result is missing")
+            if tool_outputs.count("RELAY_QUICKSTART_TOOL_OK") != 1:
+                raise RuntimeError("Expected exactly one marker tool result")
             final_message = result["messages"][-1]
             if getattr(final_message, "type", None) != "ai":
                 raise RuntimeError("Expected a final assistant message")

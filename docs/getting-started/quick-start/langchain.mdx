@@ -60,6 +60,9 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Run one LangChain agent and write its model and tool lifecycle to a local Agent Trajectory Observability Format (ATOF) file.
 
+Use the event relationships to follow model and tool work through a run and
+check where the expected activity occurred.
+
 ## Prerequisites
 
 Before you start, make sure you have:
@@ -69,9 +72,10 @@ Before you start, make sure you have:
 - Inference access: an [NVIDIA API key](https://build.nvidia.com/settings/api-keys) for this example, or credentials for your own provider
 
 <Note icon="circle-info">
-Install commands target the Relay version documented here. If that version has
-not been released, its pinned packages and downloads are not available yet.
-Select a released documentation version to try Relay now.
+These development docs target Relay `0.11.0`. Until that release is published,
+its versioned downloads and registry packages are unavailable. To install a
+published release now, select its documentation version. The versioned paths
+in this guide describe the intended release artifacts.
 </Note>
 
 <Steps toc={true}>
@@ -119,6 +123,11 @@ selects the provider; the remaining `nvidia/...` value is the model ID.
 
 ## Configure
 
+`plugins.toml` enables Relay's observability component and writes its events
+to `logs/events.jsonl`. In your own project, use the same plugin configuration
+with the integration code below; the marker task and success checks are only
+the quick start's validation example.
+
 Save the following configuration as `plugins.toml` in your project directory:
 
 {/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-langchain-quickstart","path":"plugins.toml"} */}
@@ -130,6 +139,18 @@ results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
 ## Run
+
+The example creates a LangChain agent with one marker tool. The
+`require_marker_tool` middleware makes this test request a tool result before
+its final answer; it is test scaffolding rather than required Relay setup.
+`NemoRelayMiddleware` observes model and tool execution, and
+`NemoRelayCallbackHandler` records the framework lifecycle. Plugin activation
+loads `plugins.toml`, the outer scope groups the request, and flushing finishes
+writing queued events before verification.
+
+In your own agent, keep the Relay middleware, callback, activation, scope, and
+flush lifecycle. Replace the marker tool and prompt with your application work;
+the assertions after invocation and event-file checks belong to this example.
 
 Save this file as `quickstart.py` beside `plugins.toml`:
 
@@ -159,6 +180,29 @@ RELAY_QUICKSTART_EVENTS_OK
 The model can use different wording around the response marker. These checks
 validate a live provider call; they do not make the model deterministic.
 </Note>
+
+### Inspect the Recorded Activity
+
+Print one completed model call from the event file:
+
+{/* quickstart-block {"id":"inspect","role":"run","cwd":"relay-langchain-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+uv run python -c "
+import json
+from pathlib import Path
+events = [json.loads(line) for line in Path('logs/events.jsonl').read_text().splitlines()]
+call = next(event for event in events if event.get('scope_category') == 'end' and event.get('category') == 'llm')
+fields = ('name', 'category', 'category_profile', 'uuid', 'parent_uuid', 'timestamp', 'metadata')
+print(json.dumps({key: call.get(key) for key in fields}, indent=2))
+"
+```
+
+`category` and `name` identify the recorded work. The same `uuid` pairs its
+start and end records; `parent_uuid` connects it to its enclosing scope.
+`timestamp` records when this event occurred. For model calls, `category_profile`
+and `metadata` can include the model identity and completion status, depending
+on the integration. These fields let you follow a call through the run without
+requiring full prompt or response capture.
 
 </Steps>
 
