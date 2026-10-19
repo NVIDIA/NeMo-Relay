@@ -17,7 +17,7 @@ SPDX-License-Identifier: Apache-2.0 */}
     "bash",
     "powershell"
   ],
-  "cwd": ".",
+  "cwd": "relay-pi-quickstart",
   "requires": {
     "node": ">=24",
     "npm": "available",
@@ -27,7 +27,10 @@ SPDX-License-Identifier: Apache-2.0 */}
     "A configured pi model and authenticated provider using OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages"
   ],
   "inputs": {
-    "NVIDIA_API_KEY": {"kind": "env", "secret": true}
+    "NVIDIA_API_KEY": {
+      "kind": "env",
+      "secret": true
+    }
   },
   "fresh": [
     "logs/events.jsonl",
@@ -72,6 +75,16 @@ introduce breaking hook changes in minor releases, so this quick start installs
 that exact version.
 </Warning>
 
+<Note icon="circle-info">
+This guide uses disposable local files and wrapped execution to try Relay for
+one run. It is a trial configuration, not an ongoing deployment setup. For
+regular use, configure [user or system settings](/nemo-relay-cli/basic-usage#shared-configuration)
+and follow the agent's [persistent integration setup](/nemo-relay-cli/pi).
+</Note>
+
+Use the event relationships to follow model and tool work through a run and
+check where the expected activity occurred.
+
 ## Prerequisites
 
 Before you start, make sure you have:
@@ -96,9 +109,10 @@ Messages; Gemini and Vertex APIs are not supported by this Relay gateway.
 </Note>
 
 <Note icon="circle-info">
-Install commands target the Relay version documented here. If that version has
-not been released, its pinned packages and downloads are not available yet.
-Select a released documentation version to try Relay now.
+These development docs target Relay `0.11.0`. Until that release is published,
+its versioned downloads and registry packages are unavailable. To install a
+published release now, select its documentation version. The versioned paths
+in this guide describe the intended release artifacts.
 </Note>
 
 <Steps toc={true}>
@@ -112,7 +126,7 @@ Install the pinned pi release and the NeMo Relay version for these docs:
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
 ```bash
 npm install --global @earendil-works/pi-coding-agent@0.84.0
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.11.0/install.sh | NEMO_RELAY_VERSION=0.11.0 sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.11.0 sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 </Tab>
@@ -122,7 +136,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ```powershell
 npm install --global @earendil-works/pi-coding-agent@0.84.0
 $env:NEMO_RELAY_VERSION = '0.11.0'
-irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.11.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 ```
 </Tab>
 </Tabs>
@@ -145,7 +159,15 @@ gateway. Resolve any other installation or extension-loading problems before con
 
 ## Configure
 
-Start in a new working directory and permit the agent to write files there.
+Create a disposable working directory and make sure the agent can write files there:
+
+{/* quickstart-block {"id":"workspace","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+mkdir relay-pi-quickstart
+cd relay-pi-quickstart
+```
+
+Save the following files and run the remaining commands from this directory.
 
 Keep your existing pi model and provider configuration. If you have not
 configured a provider, use pi's `/login` and `/model` selectors first. For an
@@ -153,13 +175,13 @@ NVIDIA provider, set its inference key in the same terminal used to run pi:
 
 <Tabs>
 <Tab title="Unix shell">
-{/* quickstart-block {"id":"credentials","role":"input","cwd":".","shells":["bash"],"session":"main","env":"NVIDIA_API_KEY"} */}
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-pi-quickstart","shells":["bash"],"session":"main","env":"NVIDIA_API_KEY"} */}
 ```bash
 export NVIDIA_API_KEY="your-nvidia-api-key"
 ```
 </Tab>
 <Tab title="Windows PowerShell">
-{/* quickstart-block {"id":"credentials","role":"input","cwd":".","shells":["powershell"],"session":"main","env":"NVIDIA_API_KEY"} */}
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-pi-quickstart","shells":["powershell"],"session":"main","env":"NVIDIA_API_KEY"} */}
 ```powershell
 $env:NVIDIA_API_KEY = 'your-nvidia-api-key'
 ```
@@ -174,12 +196,14 @@ for your endpoint; keys are not interchangeable between inference services.
 
 Save this file as `config.toml` in the directory where you will run the agent:
 
-{/* quickstart-block {"id":"config","role":"file","cwd":".","path":"config.toml"} */}
+{/* quickstart-block {"id":"config","role":"file","cwd":"relay-pi-quickstart","path":"config.toml"} */}
 <Code src="_code/pi/config.toml" language="toml" title="config.toml" />
 
-Save this sibling file as `plugins.toml`:
+The agent entry in `config.toml` tells Relay which executable to launch.
+Save this sibling file as `plugins.toml` to enable ATOF export to
+`logs/events.jsonl`:
 
-{/* quickstart-block {"id":"plugins","role":"file","cwd":".","path":"plugins.toml"} */}
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-pi-quickstart","path":"plugins.toml"} */}
 <Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
 
 <Warning>
@@ -193,15 +217,19 @@ From the directory containing both files, run the common validation prompt:
 
 <Tabs>
 <Tab title="Unix shell">
-{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-pi-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
+rm -f -- relay-check.txt logs/events.jsonl &&
 nemo-relay --config "$PWD/config.toml" pi -- -p "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 </Tab>
 
 <Tab title="Windows PowerShell">
-{/* quickstart-block {"id":"run","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-pi-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
 ```powershell
+foreach ($path in @('relay-check.txt', 'logs/events.jsonl')) {
+  if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+}
 nemo-relay --config (Join-Path $PWD "config.toml") pi -- -p "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
 </Tab>
@@ -225,6 +253,11 @@ confirm the endpoint and exact model ID before changing credentials.
 
 ## Verify
 
+The tool marker proves that the agent created the requested file. The event
+marker proves that Relay recorded matching start/end records for the required
+turn or agent, tool, and model work. The response marker is the agent's reply;
+it is checked separately from the captured lifecycle.
+
 The verification command prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
 
 <details>
@@ -234,7 +267,7 @@ After the task exits, confirm that Relay wrote the local event stream:
 
 <Tabs>
 <Tab title="Unix shell">
-{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-pi-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
 jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt > /dev/null &&
 jq -se '
@@ -255,7 +288,7 @@ printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
 </Tab>
 
 <Tab title="Windows PowerShell">
-{/* quickstart-block {"id":"verify","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-pi-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
 ```powershell
 if ((Get-Content .\relay-check.txt -Raw -ErrorAction Stop).Trim() -ne 'RELAY_QUICKSTART_TOOL_OK') {
   throw 'Expected tool-created marker file is missing'
@@ -284,7 +317,7 @@ Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
 
 The verification command prints the following output when its checks pass:
 
-{/* quickstart-block {"id":"expected","role":"expected","cwd":".","from":"verify","match":"exact-lines"} */}
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-pi-quickstart","from":"verify","match":"exact-lines"} */}
 ```text
 RELAY_QUICKSTART_TOOL_OK
 RELAY_QUICKSTART_EVENTS_OK
@@ -300,7 +333,42 @@ The verification markers confirm the tool-created file and matching start/end
 records for agent, tool, and LLM work.
 </Note>
 
+### Inspect the Recorded Activity
+
+Read the completed model calls from the same event file:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"inspect","role":"run","cwd":"relay-pi-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+jq 'select(.kind == "scope" and .scope_category == "end" and .category == "llm") |
+  {name, category, category_profile, uuid, parent_uuid, timestamp, metadata}' logs/events.jsonl
+```
+</Tab>
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"inspect","role":"run","cwd":"relay-pi-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+Get-Content .\logs\events.jsonl |
+  ForEach-Object { ConvertFrom-Json -InputObject $_ } |
+  Where-Object { $_.kind -eq 'scope' -and $_.scope_category -eq 'end' -and $_.category -eq 'llm' } |
+  Select-Object name, category, category_profile, uuid, parent_uuid, timestamp, metadata |
+  ConvertTo-Json -Depth 10
+```
+</Tab>
+</Tabs>
+
+`category` and `name` identify the recorded work. The same `uuid` pairs its
+start and end records; `parent_uuid` connects it to its enclosing scope.
+`timestamp` records when this event occurred. For model calls, `category_profile`
+and `metadata` can include the model identity and completion status, depending
+on the integration. These fields let you follow a call through the run without
+requiring full prompt or response capture.
+
 </Steps>
+
+This run captured pi's agent, model, and tool activity in `logs/events.jsonl`.
+The temporary gateway ends with this invocation; repeat the wrapped command
+when you want to observe another run.
 
 ## For More Details
 
