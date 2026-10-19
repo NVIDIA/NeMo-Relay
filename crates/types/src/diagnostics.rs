@@ -129,7 +129,6 @@ impl schemars::JsonSchema for DiagnosticNumber {
                 max_length: Some(20),
                 min_length: Some(1),
                 pattern: Some(format!("^({})$", alternatives.join("|"))),
-                ..Default::default()
             })),
             ..Default::default()
         })
@@ -709,55 +708,4 @@ fn deserialize_schema_version<'de, D: Deserializer<'de>>(deserializer: D) -> Res
         return Err(de::Error::custom("unsupported diagnostic snapshot schema"));
     }
     Ok(version)
-}
-
-/// Unit for an explicitly typed future measurement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticMeasurementUnit {
-    /// Nanoseconds of consumed CPU time, not elapsed wall time.
-    Nanoseconds,
-    /// Milliseconds of elapsed lifetime measured with a monotonic clock.
-    Milliseconds,
-}
-
-/// Attribution of an optional measurement; process CPU is never labeled Relay CPU.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticMeasurementAttribution {
-    /// The entire hosting process, including non-Relay work in embedded mode.
-    Process,
-    /// Only work attributable to the owning Relay runtime.
-    RelayRuntime,
-    /// One explicitly instrumented component.
-    Component,
-}
-
-/// Future measurement vocabulary; CPU collection is not enabled by these types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticMeasurementKind {
-    /// Consumed CPU time with an explicitly declared attribution.
-    CpuTime,
-    /// Elapsed lifecycle time measured at the source.
-    Lifetime,
-}
-
-/// Optional future measurement with explicit units, attribution, and availability.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct DiagnosticMeasurement {
-    /// Quantity being measured.
-    pub kind: DiagnosticMeasurementKind,
-    /// Unit of the numeric value.
-    pub unit: DiagnosticMeasurementUnit,
-    /// Work or lifetime to which the value is attributable.
-    pub attribution: DiagnosticMeasurementAttribution,
-    /// Available measurement, absent when unsupported or unavailable.
-    pub value: Option<DiagnosticNumber>,
-    /// Whether a collector actually supplied this quantity.
-    pub availability: DiagnosticAvailability,
 }

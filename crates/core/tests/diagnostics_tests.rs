@@ -72,7 +72,8 @@ fn allocations_during<T>(body: impl FnOnce() -> T) -> (T, usize) {
 const WRITE_FAILURE: FailureCode = FailureCode::Logging(LoggingFailureCode::SinkWriteFailed);
 const WRITE: BuiltinDiagnosticCode = BuiltinDiagnosticCode::Failure(WRITE_FAILURE);
 const SUCCESS: BuiltinDiagnosticCode = BuiltinDiagnosticCode::Success(SuccessCode::SinkInitialized);
-const NOTICE: BuiltinDiagnosticCode = BuiltinDiagnosticCode::Notice(NoticeCode::GuardrailRejected);
+const NOTICE: BuiltinDiagnosticCode =
+    BuiltinDiagnosticCode::Notice(NoticeCode::ConfigurationInherited);
 const CODES: [BuiltinDiagnosticCode; 3] = [WRITE, SUCCESS, NOTICE];
 
 fn limits() -> DiagnosticLimits {
@@ -1220,7 +1221,7 @@ fn outcomes_windows_and_failure_classes_have_independent_scopes() {
     component
         .record_without_projection_lazy(|| {
             Observation::new(
-                Classification::notice(NoticeCode::GuardrailRejected),
+                Classification::notice(NoticeCode::ConfigurationInherited),
                 "notice",
                 1,
             )
@@ -2205,7 +2206,7 @@ fn typed_plugin_context_survives_projection_and_shared_history_without_extra_cou
         ..limits()
     });
     let code = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
-        CommonPluginFailureCode::InvocationFailed,
+        CommonPluginFailureCode::RegistrationFailed,
     )));
     let recorder = service
         .register_component(ComponentRegistration::new("test.plugin_context", &[code]))
@@ -2231,9 +2232,9 @@ fn typed_plugin_context_survives_projection_and_shared_history_without_extra_cou
                 Observation::new(
                     Classification::failure(
                         FailureCode::Plugin(PluginFailureCode::Common(
-                            CommonPluginFailureCode::InvocationFailed,
+                            CommonPluginFailureCode::RegistrationFailed,
                         )),
-                        FailureClass::ExecutionFailed,
+                        FailureClass::Unknown,
                     )
                     .unwrap(),
                     "operation failed",

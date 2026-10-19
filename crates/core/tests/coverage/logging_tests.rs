@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::diagnostics::{
-    Classification, ComponentRegistration, DiagnosticLimits, DiagnosticOutcome, DiagnosticQuery,
-    DiagnosticSeverity, Diagnostics, DiagnosticsSettings, FailureClass, FailureCode, NoticeCode,
-    Observation, RuntimeFailureCode,
+    Classification, CommonPluginFailureCode, ComponentRegistration, DiagnosticLimits,
+    DiagnosticOutcome, DiagnosticQuery, DiagnosticSeverity, Diagnostics, DiagnosticsSettings,
+    FailureClass, FailureCode, NoticeCode, Observation, PluginFailureCode,
 };
 use crate::logging::{
     FileLogRotationConfig, FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
@@ -208,14 +208,16 @@ fn diagnostics_retain_required_sink_initialization_failure_before_logging_exists
 fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_logging() {
     let _guard = lock_logging_tests();
     let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
-    let filtered = Classification::notice(NoticeCode::GuardrailRejected);
+    let filtered = Classification::notice(NoticeCode::ConfigurationInherited);
     let failure = Classification::failure(
-        FailureCode::Runtime(RuntimeFailureCode::Internal),
+        FailureCode::Plugin(PluginFailureCode::Common(CommonPluginFailureCode::Internal)),
         FailureClass::Internal,
     )
     .unwrap();
     let after_shutdown = Classification::failure(
-        FailureCode::Runtime(RuntimeFailureCode::NotFound),
+        FailureCode::Plugin(PluginFailureCode::Common(
+            CommonPluginFailureCode::ResourceNotFound,
+        )),
         FailureClass::NotFound,
     )
     .unwrap();
@@ -254,7 +256,7 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
     let records = output
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .filter(|record| record["event"] == "runtime.internal")
+        .filter(|record| record["event"] == "plugin.internal")
         .collect::<Vec<_>>();
     assert_eq!(records.len(), 1);
     assert_eq!(
@@ -265,7 +267,7 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
         records[0]["fields"]["diagnostic"]["component"]["instance_id"],
         producer.identity().unwrap().instance_id.to_string()
     );
-    assert!(!output.contains("runtime.guardrail_rejected"));
+    assert!(!output.contains("plugin.configuration_inherited"));
     let snapshot = diagnostics
         .snapshot(DiagnosticQuery {
             component_key: Some("test.exporter".into()),
@@ -278,7 +280,7 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
         snapshot
             .events
             .iter()
-            .any(|event| event.code() == "runtime.guardrail_rejected")
+            .any(|event| event.code() == "plugin.configuration_inherited")
     );
     producer
         .record_lazy(|| Observation::new(after_shutdown, "Recorded after logging shutdown", 1))
@@ -297,7 +299,7 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
         final_snapshot.components[0]
             .counters
             .iter()
-            .find(|counter| counter.code == "runtime.not_found")
+            .find(|counter| counter.code == "plugin.resource_not_found")
             .unwrap()
             .occurrences
             .value
@@ -311,12 +313,14 @@ fn replacing_logging_diagnostics_projects_only_into_the_current_runtime() {
     let _guard = lock_logging_tests();
     let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
     let current = Classification::failure(
-        FailureCode::Runtime(RuntimeFailureCode::Internal),
+        FailureCode::Plugin(PluginFailureCode::Common(CommonPluginFailureCode::Internal)),
         FailureClass::Internal,
     )
     .unwrap();
     let still_current = Classification::failure(
-        FailureCode::Runtime(RuntimeFailureCode::NotFound),
+        FailureCode::Plugin(PluginFailureCode::Common(
+            CommonPluginFailureCode::ResourceNotFound,
+        )),
         FailureClass::NotFound,
     )
     .unwrap();
@@ -355,7 +359,7 @@ fn replacing_logging_diagnostics_projects_only_into_the_current_runtime() {
     second.shutdown();
     let first = std::fs::read_to_string(first_path).unwrap();
     let second = std::fs::read_to_string(second_path).unwrap();
-    for code in ["runtime.internal", "runtime.not_found"] {
+    for code in ["plugin.internal", "plugin.resource_not_found"] {
         assert!(!first.contains(code));
         assert_eq!(
             second
