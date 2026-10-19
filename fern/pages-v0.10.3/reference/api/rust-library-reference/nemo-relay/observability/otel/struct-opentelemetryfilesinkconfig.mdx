@@ -1,0 +1,134 @@
+---
+title: "Struct Open Telemetry File Sink Config"
+sidebar-title: "OpenTelemetryFileSinkConfig"
+description: "Configuration for an OpenTelemetry subscriber writing OTLP to a local file."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct OpenTelemetryFileSinkConfig { /* private fields */ }
+```
+
+Configuration for an OpenTelemetry subscriber writing OTLP to a local file.
+
+Carries no endpoint, transport, headers, or timeout: a file destination has no use for any of them, so they are absent rather than rejected.
+
+## Implementations
+
+### `impl OpenTelemetryFileSinkConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `with_service_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_name(self, service_name: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Sets the `service.name` resource attribute.
+
+#### `with_service_namespace`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_namespace(self, namespace: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Sets the optional `service.namespace` resource attribute.
+
+#### `with_service_version`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_version(self, version: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Sets the optional `service.version` resource attribute.
+
+#### `with_instrumentation_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_instrumentation_scope(self, scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Sets the instrumentation scope name.
+
+#### `with_resource_attribute`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_resource_attribute(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    value: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+
+Adds a resource attribute as a string key/value pair.
+
+#### `with_mark_projection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_mark_projection(self, mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>) -&gt; Self"}} /></pre>
+
+Selects how point-in-time marks are represented.
+
+#### `with_mark_exclude_names`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_mark_exclude_names&lt;I, S&gt;(self, names: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
+
+Replaces the mark names excluded from tool projection.
+
+#### `with_attribute_mapping`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_attribute_mapping(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    alias: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+
+Copies a projected attribute to a second attribute name.
+
+#### `with_attribute_mappings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_attribute_mappings&lt;I&gt;(self, mappings: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = <a href=\"../struct-otlpattributemapping\">OtlpAttributeMapping</a>&gt;,"}} /></pre>
+
+Replaces the projected attribute aliases.
+
+#### `with_promote_metadata_prefixes`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_promote_metadata_prefixes&lt;I, S&gt;(self, prefixes: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
+
+Replaces the Event metadata prefixes copied to span attributes.
+
+#### `with_promote_resource_metadata_prefixes`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_promote_resource_metadata_prefixes&lt;I, S&gt;(self, prefixes: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
+
+Replaces the root-scope metadata prefixes copied to resource attributes.
+
+#### `with_completed_span_context_ttl`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_completed_span_context_ttl(self, ttl: <a href=\"https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html\">Duration</a>) -&gt; Self"}} /></pre>
+
+Sets how long completed scopes retain trace context for late marks.
+
+### `impl OpenTelemetryFileSinkConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(otel_type: <a href=\"../enum-opentelemetrytype\">OpenTelemetryType</a>, sink: <a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>) -&gt; Self"}} /></pre>
+
+Creates a config writing OTLP to the file `sink` describes.
+
+#### `sink`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn sink(&amp;self) -&gt; &amp;<a href=\"struct-otlpfilesinksettings\">OtlpFileSinkSettings</a>"}} /></pre>
+
+Returns the file this config writes to.
+
+## Trait Implementations
+
+### `impl Clone for OpenTelemetryFileSinkConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for OpenTelemetryFileSinkConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-opentelemetryfilesinkconfig\">OpenTelemetryFileSinkConfig</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>

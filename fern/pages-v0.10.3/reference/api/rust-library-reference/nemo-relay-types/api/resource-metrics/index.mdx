@@ -1,0 +1,51 @@
+---
+title: "Module resource_metrics"
+sidebar-title: "resource_metrics"
+slug: "/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics"
+description: "Structured system resource metric snapshots. Structured system resource metric snapshot types."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Structured system resource metric snapshots. Structured system resource metric snapshot types.
+
+## Structs
+
+- [AcceleratorDeviceMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-acceleratordevicemetrics): Device-wide accelerator measurements.
+- [AcceleratorProcessMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-acceleratorprocessmetrics): Accelerator measurements attributed to one process in the selected scope.
+- [CpuMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-cpumetrics): CPU measurements and CPU limit events.
+- [DiskMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-diskmetrics): Disk I/O for the measured process scope and filesystem capacity.
+- [FilesystemCapacityMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-filesystemcapacitymetrics): Filesystem capacity for one configured path.
+- [GpuMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-gpumetrics): Accelerator (GPU) device-wide and process-attributed measurements.
+- [MemoryMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-memorymetrics): Memory measurements and memory limit events.
+- [NetworkInterfaceMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-networkinterfacemetrics): Network traffic for one visible interface.
+- [NetworkMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-networkmetrics): System-wide network traffic, regardless of the process measurement scope.
+- [NetworkTrafficMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-networktrafficmetrics): Network counters for one interface or the selected system aggregate.
+- [ProcessMetrics](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-processmetrics): Process counts, process limits, handles, and descriptors.
+- [ProcessSamplingMetadata](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-processsamplingmetadata): Coverage of process queries used for process-summed measurements.
+- [ResourceLimitEventCount](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-resourcelimiteventcount): One typed cumulative resource-limit event counter.
+- [ResourceMeasurement](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-resourcemeasurement): One available resource measurement.
+- [ResourceMetricsSnapshot](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/struct-resourcemetricssnapshot): One point-in-time observation of the selected system and process resources.
+
+## Enums
+
+- [AcceleratorVendor](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-acceleratorvendor): Accelerator vendor associated with a metric record.
+- [BandwidthUnit](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-bandwidthunit): Units for data transferred per second.
+- [CapacityUnit](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-capacityunit): Units for memory and filesystem capacity.
+- [CountUnit](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-countunit): Fixed units for process, resource, and operation counts.
+- [CpuUnit](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-cpuunit): Units for CPU consumption and effective capacity.
+- [DataUnit](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-dataunit): Units for cumulative transferred data.
+- [DurationUnit](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-durationunit): Units for elapsed and cumulative durations.
+- [ResourceLimitEventKind](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-resourcelimiteventkind): Direct operating-system resource-limit event kind.
+- [ResourceLimitResource](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-resourcelimitresource): Resource whose configured boundary produced a limit event.
+- [ResourceMeasurementScope](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-resourcemeasurementscope): System or process boundary measured by a snapshot.
+- [ResourceMetricValue](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-resourcemetricvalue): Exact integral values remain integers; converted fractional values are decimals.
+- [ResourceOperatingSystem](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-resourceoperatingsystem): Operating system that produced a resource metrics snapshot.
+- [UtilizationUnit](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/enum-utilizationunit): Units for GPU compute utilization.
+
+## Traits
+
+- [ResourceUnit](/reference/api/rust-library-reference/nemo-relay-types/api/resource_metrics/trait-resourceunit): A unit with a stable name in snapshots and metric marks.

@@ -1,0 +1,110 @@
+---
+title: "Conditional Middleware Guardrails"
+description: "Understand how Relay controls the eligibility of global runtime registrations."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+A conditional middleware guardrail temporarily excludes an existing global runtime
+registration from future middleware snapshots. The target remains registered and keeps
+its original owner. When no gate suppresses the target, Relay includes it again without
+recreating it.
+
+This control is useful for operational decisions. For example, an application can pause
+an exporter during an outage or exclude an expensive intercept while a dependency is
+unhealthy. A conditional middleware guardrail does not approve or reject a tool or LLM
+call. Use a conditional-execution guardrail for call-level policy.
+
+## Registration Identity
+
+Relay describes each gateable global registration with four identity fields:
+
+- `kind` identifies the subscriber, metadata injector, guardrail, or intercept family.
+- `local_name` is the name that the registration owner supplied.
+- `effective_name` is the runtime name that a conditional middleware guardrail targets.
+- `owner` identifies core, global API, or plugin ownership. Relay-created plugin
+  registrations include the plugin kind and a one-based component ordinal. The ordinal
+  is assigned among enabled components of the same kind in configuration order.
+
+Applications and plugins must discover the effective name from the active runtime.
+Plugin contexts qualify local names, and that qualification can change after a process
+restart or plugin configuration reload. A controller must not persist an effective name
+or construct one from a plugin kind, local name, or component position. In particular,
+singleton plugin component names include ordinal `1`; this normalizes their effective
+names with multi-component registrations. Relay currently emits plugin-component keys
+with the versioned internal grammar
+`nemo-relay-plugin.v1.{percent-encoded-kind}:{one-based-ordinal}:{percent-encoded-local-name}`.
+The kind and local name use UTF-8 percent encoding: unreserved RFC 3986 characters are
+literal, and delimiters, `%`, and non-ASCII bytes are escaped. This grammar is an
+implementation detail, not an application configuration or persistence format.
+
+Discovery reports global registrations even when a gate currently suppresses them. This
+behavior lets another controller inspect or manage an ineligible target. Discovery does
+not report scope-local registrations because global gates never control scope-local
+behavior.
+
+## Matching and Ordering
+
+A gate selects an effective registration name and one or more registration kinds. Relay
+evaluates every matching gate in gate-name order when it creates a middleware or event
+publication snapshot. The target is eligible only when every matching gate returns no
+reason. One gate cannot override another gate that suppresses the target.
+
+A reason describes why the target is ineligible for the snapshot. The reason does not
+deregister the target, transfer its ownership, or change its configuration.
+
+## Failure and Snapshot Semantics
+
+Conditional middleware guardrails fail open. If a callback fails or panics, Relay keeps
+the target eligible and records a bounded runtime diagnostic. This behavior prevents a
+faulty operational control from silently removing observability or execution behavior.
+
+Gate changes affect future snapshots. An in-flight execution chain keeps the decision
+from the snapshot that created it. An event that already entered the queued publication
+path also keeps its existing decision. Registering or removing a gate does not rewrite
+those snapshots.
+
+Relay never applies a gate to gate registration, gate deregistration, target
+deregistration, or plugin teardown. These operations must remain available so the host
+can recover and clean up.
+
+## Ownership Models
+
+An activation-owned gate belongs to one plugin component. The component context
+qualifies the gate name, includes registration in the activation transaction, rolls the
+gate back after failed activation, and removes it during teardown. This model is
+appropriate when configuration determines the target and the gate must exist for the
+component's complete active lifetime.
+
+A runtime-discovered dynamic gate belongs to the application or active dynamic plugin
+that creates it. A timer, health check, or controller can discover a target and add or
+remove the gate while the process runs. The owner must retain the gate handle or name and
+provide an explicit cleanup path. Dynamic plugin hosts also enforce activation ownership
+so one plugin cannot remove another plugin's gate.
+
+Language-binding gates evaluate callbacks against current in-process state. Worker gates
+evaluate their callbacks through the authenticated `grpc-v1` invocation path and fail
+open on callback, transport, or timeout errors. Native gates synchronously enter the
+trusted in-process plugin and fail open when the callback reports an ABI error or returns
+an invalid reason. Relay retains the native library until every owned gate is removed.
+
+## Callback Safety
+
+Gate callbacks run while Relay constructs a snapshot. They must be fast, deterministic,
+and side-effect free. A callback can read state that is already available, such as an
+atomic timer flag or a cached health result.
+
+A callback must not make a reentrant Relay call that produces middleware, flushes
+subscribers, waits for an exporter, or clears plugins. A background task can update the
+state that the callback reads or can register and deregister a dynamic gate.
+
+## Binding Support
+
+Rust, Python, and Node.js expose the primary language-binding APIs. The native Rust SDK,
+Rust worker SDK, and Python worker SDK expose activation-owned and runtime-discovered
+callback controls.
+
+Refer to [Add Middleware](/instrument-applications/advanced-guide) for application
+guidance and [PluginContext](/build-plugins/fundamentals/plugin-context) for plugin
+ownership. The corresponding code-example pages provide binding-specific APIs.

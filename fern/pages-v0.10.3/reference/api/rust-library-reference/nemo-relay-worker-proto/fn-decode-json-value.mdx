@@ -1,0 +1,18 @@
+---
+title: "Function decode_json_value"
+sidebar-title: "decode_json_value"
+description: "Decodes a lossless protocol JSON value into the requested type."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn decode_json_value&lt;T: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.DeserializeOwned.html\">DeserializeOwned</a>&gt;(\n    value: &amp;<a href=\"v1/struct-jsonvalue\">JsonValue</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;T, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+Decodes a lossless protocol JSON value into the requested type.
+
+## Errors
+
+Returns a serde error when the bytes are not valid JSON for `T`.
