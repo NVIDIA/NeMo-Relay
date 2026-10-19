@@ -31,6 +31,10 @@ navigation:
         icon: fa-solid fa-link
         path: ../pages-dev/getting-started/quick-start/langchain.mdx
         slug: langchain
+      - page: LangGraph
+        icon: fa-solid fa-diagram-project
+        path: ../pages-dev/getting-started/quick-start/langgraph.mdx
+        slug: langgraph
     - section: Agent Harnesses
       skip-slug: true
       collapsed: open-by-default
