@@ -28,6 +28,8 @@ use crate::api::registry::{
     list_runtime_registrations, register_conditional_middleware_guardrail,
 };
 use crate::api::runtime::scope_stack::snapshot_scope_stack;
+#[cfg(test)]
+use crate::api::runtime::sync_thread_scope_stack;
 use crate::api::runtime::{
     ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn,
     LlmCodecIdentity, LlmConditionalFn, LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn,
@@ -39,7 +41,7 @@ use crate::api::runtime::{
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
     current_scope_stack, restore_thread_scope_stack, scope_stack_active, set_thread_scope_stack,
-    sync_thread_active_event_for_stack, sync_thread_scope_stack, with_scope_stack,
+    sync_thread_active_event_for_stack, with_scope_stack,
 };
 use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
@@ -60,6 +62,7 @@ use nemo_relay_plugin::{
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
     NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT, NEMO_RELAY_NATIVE_ABI_VERSION_LOGGING,
     NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_CONTROL,
+    NEMO_RELAY_NATIVE_ABI_VERSION_SCOPE_STACK_SNAPSHOT,
     NEMO_RELAY_NATIVE_ABI_VERSION_TOOL_EXECUTION_CONTEXT, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmExecutionCb,
     NemoRelayNativeAsyncLlmStreamOpenCb, NemoRelayNativeAsyncLlmStreamPullCb,
@@ -69,19 +72,20 @@ use nemo_relay_plugin::{
     NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4,
     NemoRelayNativeHostApiV5, NemoRelayNativeHostApiV6, NemoRelayNativeHostApiV7,
-    NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
-    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmExecutionContext,
-    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestContext,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
-    NemoRelayNativeLlmResponseContext, NemoRelayNativeLlmSanitizeRequestCb,
-    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
-    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativeLogLevel, NemoRelayNativePluginContext,
-    NemoRelayNativePluginEntry, NemoRelayNativePluginRuntime, NemoRelayNativePluginV1,
-    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
-    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolExecutionContextCb,
-    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NemoRelayNativeHostApiV8, NemoRelayNativeLlmAsyncStream, NemoRelayNativeLlmCodecKind,
+    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmExecutionContext, NemoRelayNativeLlmRequestCodec,
+    NemoRelayNativeLlmRequestContext, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmResponseContext,
+    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
+    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
+    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativeLogLevel,
+    NemoRelayNativePluginContext, NemoRelayNativePluginEntry, NemoRelayNativePluginRuntime,
+    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
+    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
+    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
+    NemoRelayNativeToolExecutionContextCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -500,9 +504,12 @@ fn load_one_native_plugin(
                     library_path.display()
                 ))
             })?;
-        // ABI v7 changes native LLM execution callback layouts. Do not negotiate
-        // v2-v6: plugins compiled against those tables must rebuild before loading.
-        let status = entry(native_host_api(), &mut plugin);
+        let mut status = entry(native_host_api(), &mut plugin);
+        if status == NemoRelayStatus::InvalidArg {
+            drop_native_plugin_descriptor(&mut plugin);
+            plugin = NemoRelayNativePluginV1::default();
+            status = entry(native_host_api_v7(), &mut plugin);
+        }
         if status != NemoRelayStatus::Ok {
             drop_native_plugin_descriptor(&mut plugin);
             return Err(PluginError::RegistrationFailed(format!(
@@ -1121,6 +1128,18 @@ unsafe extern "C" fn native_llm_response_codec_decode(
 }
 
 fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
+    static HOST_API: OnceLock<NemoRelayNativeHostApiV8> = OnceLock::new();
+    &HOST_API
+        .get_or_init(build_native_host_api_v8)
+        .v7
+        .v6
+        .v5
+        .v4
+        .v3
+        .v1 as *const _
+}
+
+fn native_host_api_v7() -> *const NemoRelayNativeHostApiV1 {
     static HOST_API: OnceLock<NemoRelayNativeHostApiV7> = OnceLock::new();
     &HOST_API
         .get_or_init(build_native_host_api_v7)
@@ -1314,6 +1333,43 @@ fn build_native_host_api_v7() -> NemoRelayNativeHostApiV7 {
         async_stream_llm_request_codec_decode: native_async_stream_llm_request_codec_decode,
         async_stream_llm_request_codec_encode: native_async_stream_llm_request_codec_encode,
     }
+}
+
+fn build_native_host_api_v8() -> NemoRelayNativeHostApiV8 {
+    let mut v7 = build_native_host_api_v7();
+    v7.v6.v5.v4.v3.v1.abi_version = NEMO_RELAY_NATIVE_ABI_VERSION_SCOPE_STACK_SNAPSHOT;
+    v7.v6.v5.v4.v3.v1.struct_size = std::mem::size_of::<NemoRelayNativeHostApiV8>();
+    NemoRelayNativeHostApiV8 {
+        v7,
+        current_scope_stack_snapshot: native_current_scope_stack_snapshot,
+    }
+}
+
+unsafe extern "C" fn native_current_scope_stack_snapshot(
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    if out.is_null() {
+        set_native_last_error("snapshot output pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = ptr::null_mut() };
+    let snapshot = match crate::api::runtime::current_scope_stack_snapshot() {
+        Ok(Some(snapshot)) => snapshot,
+        Ok(None) => return NemoRelayStatus::Ok,
+        Err(error) => {
+            set_native_last_error(error.to_string());
+            return NemoRelayStatus::Internal;
+        }
+    };
+    let text = match serde_json::to_string(&snapshot) {
+        Ok(text) => text,
+        Err(error) => {
+            set_native_last_error(error.to_string());
+            return NemoRelayStatus::Internal;
+        }
+    };
+    unsafe { native_string_new(text.as_ptr(), text.len(), out) }
 }
 
 fn read_native_string(value: *const NemoRelayNativeString) -> crate::plugin::Result<String> {
@@ -2414,7 +2470,8 @@ async fn invoke_native_async_callback_inner(
         // task-local stack into that slot only while entering plugin code so the
         // SDK can capture it before moving the future to its own executor.
         let previous_thread_stack = capture_thread_scope_stack();
-        sync_thread_scope_stack(callback_scope_stack.clone());
+        // Bind explicitly so the SDK captures an active callback context.
+        set_thread_scope_stack(callback_scope_stack.clone());
         sync_thread_active_event_for_stack(&callback_scope_stack);
         let state = with_scope_stack(callback_scope_stack, || {
             catch_unwind(AssertUnwindSafe(|| match callback {
@@ -4278,7 +4335,8 @@ fn wrap_native_incremental_llm_stream_execution_with_user_data(
                 });
                 let stream_ref = Arc::into_raw(stream.clone());
                 let previous_thread_stack = capture_thread_scope_stack();
-                sync_thread_scope_stack(callback_scope_stack.clone());
+                // Bind explicitly so the SDK captures an active callback context.
+                set_thread_scope_stack(callback_scope_stack.clone());
                 sync_thread_active_event_for_stack(&callback_scope_stack);
                 let state = with_scope_stack(callback_scope_stack, || {
                     catch_unwind(AssertUnwindSafe(|| unsafe {

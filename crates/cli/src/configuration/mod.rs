@@ -120,6 +120,28 @@ pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedC
     Ok(resolved)
 }
 
+/// Loads routing settings for the daemon without reading plugin files.
+/// Gateways and daemon workers check the plugins they run.
+pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayConfig, CliError> {
+    let explicit = args.config.as_ref();
+    let paths = config_paths(explicit)
+        .into_iter()
+        .map(|path| {
+            let required = explicit == Some(&path);
+            (path, required)
+        })
+        .collect();
+    let mut resolved = load_config_from_paths(paths, Vec::new(), apply_env_config)?;
+    apply_server_overrides(&mut resolved.gateway, args)?;
+    log::info!(
+        target: "nemo_relay.configuration",
+        event = "configuration_resolved",
+        mode = "daemon";
+        "Daemon configuration resolved"
+    );
+    Ok(resolved.gateway)
+}
+
 /// Layered configuration for a daemon-managed, machine-user worker.
 ///
 /// System configuration retains precedence over the user's configuration. `plugin_config_path`
@@ -564,7 +586,7 @@ pub(crate) fn load_bounded_dynamic_plugin_manifest_bytes(
 
 const BOOTSTRAP_HMAC_KEY_BYTES: usize = 32;
 const BOOTSTRAP_HMAC_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
-const BOOTSTRAP_CHALLENGE_DOMAIN: &[u8] = b"nemo-relay/bootstrap-health/v1\0";
+const BOOTSTRAP_CHALLENGE_DOMAIN: &[u8] = b"nemo-relay/bootstrap-health/v2\0";
 const BOOTSTRAP_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/bootstrap-client/v1\0";
 const HOOK_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/hook-client/v1\0";
 const TRANSPARENT_GATEWAY_DOMAIN: &[u8] = b"nemo-relay/transparent-gateway/v1\0";

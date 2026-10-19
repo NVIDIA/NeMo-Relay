@@ -494,12 +494,16 @@ impl EnvironmentDigest {
     }
 
     fn update(&mut self, entry_type: u8, path: &Path, payload: &[u8]) {
+        self.begin_entry(entry_type, path, payload.len());
+        self.hasher.update(payload);
+    }
+
+    fn begin_entry(&mut self, entry_type: u8, path: &Path, length: usize) {
         let path = raw_path_bytes(path);
         self.hasher.update([entry_type]);
         self.hasher.update((path.len() as u64).to_le_bytes());
         self.hasher.update(&path);
-        self.hasher.update((payload.len() as u64).to_le_bytes());
-        self.hasher.update(payload);
+        self.hasher.update((length as u64).to_le_bytes());
     }
 
     fn finalize(self) -> String {
@@ -605,14 +609,18 @@ fn digest_environment_entry(
             path.display()
         ));
     }
-    let bytes = crate::filesystem::bounded::read_bounded_regular_file(
+    let file = crate::filesystem::bounded::open_bounded_regular_file(
         &source,
         "managed Python environment file",
     )?;
     if charge_bytes {
-        digest.charge_bytes(bytes.len())?;
+        digest.charge_bytes(file.len())?;
     }
-    digest.update(b'f', &relative, &bytes);
+    digest.begin_entry(b'f', &relative, file.len());
+    file.stream(|chunk| {
+        digest.hasher.update(chunk);
+        Ok(())
+    })?;
     Ok(())
 }
 

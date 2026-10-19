@@ -13,7 +13,6 @@ use axum::extract::State;
 use axum::routing::post;
 use http_body_util::{BodyExt as _, Full, StreamBody};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
-use nemo_relay::api::registry::{RuntimeRegistrationOwner, RuntimeRegistrationOwnerKind};
 use nemo_relay::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_stream_execution_intercept, register_llm_execution_intercept,
@@ -353,77 +352,58 @@ async fn daemon_hop_cannot_supply_worker_local_dispatch_overrides() {
     );
 }
 
-#[test]
-fn execution_middleware_selects_managed_response_delivery() {
-    let owner = RuntimeRegistrationOwner {
-        kind: RuntimeRegistrationOwnerKind::GlobalApi,
-        plugin_kind: None,
-        component_ordinal: None,
+#[tokio::test]
+async fn worker_requirements_follow_registration_and_removal_without_running_gates() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    use nemo_relay::api::registry::{
+        deregister_conditional_middleware_guardrail, deregister_llm_sanitize_request_guardrail,
+        register_conditional_middleware_guardrail, register_llm_sanitize_request_guardrail,
     };
-    let registrations = [
-        RuntimeRegistrationIdentity {
-            kind: RuntimeRegistrationKind::LlmExecutionIntercept,
-            local_name: "buffered".into(),
-            effective_name: "plugin.buffered".into(),
-            owner: owner.clone(),
-        },
-        RuntimeRegistrationIdentity {
-            kind: RuntimeRegistrationKind::LlmStreamExecutionIntercept,
-            local_name: "streaming".into(),
-            effective_name: "plugin.streaming".into(),
-            owner,
-        },
-        RuntimeRegistrationIdentity {
-            kind: RuntimeRegistrationKind::LlmRequestIntercept,
-            local_name: "request".into(),
-            effective_name: "plugin.request".into(),
-            owner: RuntimeRegistrationOwner {
-                kind: RuntimeRegistrationOwnerKind::GlobalApi,
-                plugin_kind: None,
-                component_ordinal: None,
-            },
-        },
-    ];
+    struct PresenceRegistrations;
 
-    assert!(registration_requires_execution(&registrations[0]));
-    assert!(registration_requires_execution(&registrations[1]));
-    assert!(registration_requires_execution(&registrations[2]));
-}
+    impl Drop for PresenceRegistrations {
+        fn drop(&mut self) {
+            let _ = deregister_conditional_middleware_guardrail("presence-gate");
+            let _ = deregister_llm_execution_intercept("presence-execution");
+            let _ = deregister_llm_sanitize_request_guardrail("presence-sanitize");
+        }
+    }
 
-#[test]
-fn only_request_middleware_requires_request_body_decoding() {
-    let owner = RuntimeRegistrationOwner {
-        kind: RuntimeRegistrationOwnerKind::GlobalApi,
-        plugin_kind: None,
-        component_ordinal: None,
-    };
-    for kind in [
-        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
-        RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
-        RuntimeRegistrationKind::LlmRequestIntercept,
-    ] {
-        assert!(registration_reads_request_body(
-            &RuntimeRegistrationIdentity {
-                kind,
-                local_name: "request-reader".into(),
-                effective_name: "request-reader".into(),
-                owner: owner.clone(),
-            }
-        ));
-    }
-    for kind in [
-        RuntimeRegistrationKind::Subscriber,
-        RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
-    ] {
-        assert!(!registration_reads_request_body(
-            &RuntimeRegistrationIdentity {
-                kind,
-                local_name: "response-only".into(),
-                effective_name: "response-only".into(),
-                owner: owner.clone(),
-            }
-        ));
-    }
+    let _registrations = PresenceRegistrations;
+    let requirements = provider_middleware_requirements().unwrap();
+    assert!(!requirements.request_body_decode_required);
+    assert!(!requirements.managed_execution_required);
+    register_llm_sanitize_request_guardrail(
+        "presence-sanitize",
+        1,
+        Arc::new(|_, _| Box::pin(async move { Ok(None) })),
+    )
+    .unwrap();
+    let requirements = provider_middleware_requirements().unwrap();
+    assert!(requirements.request_body_decode_required);
+    assert!(!requirements.managed_execution_required);
+    register_llm_execution_intercept(
+        "presence-execution",
+        1,
+        Arc::new(|_, request, _, next| next(request)),
+    )
+    .unwrap();
+    register_conditional_middleware_guardrail(
+        "presence-gate",
+        std::collections::BTreeSet::from([RuntimeRegistrationKind::LlmExecutionIntercept]),
+        "presence-execution",
+        Arc::new(|_, _| panic!("presence queries must not run gates")),
+    )
+    .unwrap();
+    let requirements = provider_middleware_requirements().unwrap();
+    assert!(requirements.request_body_decode_required);
+    assert!(requirements.managed_execution_required);
+    assert!(deregister_llm_execution_intercept("presence-execution").unwrap());
+    assert!(deregister_llm_sanitize_request_guardrail("presence-sanitize").unwrap());
+    assert!(deregister_conditional_middleware_guardrail("presence-gate").unwrap());
+    let requirements = provider_middleware_requirements().unwrap();
+    assert!(!requirements.request_body_decode_required);
+    assert!(!requirements.managed_execution_required);
 }
 
 struct PendingRequestBody {
@@ -604,7 +584,7 @@ fn managed_worker_canonicalizes_chatgpt_responses_before_alignment() {
         path: "/backend-api/codex/responses".into(),
         path_and_query: "/backend-api/codex/responses?client=codex".into(),
         body: Bytes::from_static(br#"{"model":"test","stream":true}"#),
-        request_json: json!({"model": "test", "stream": true}),
+        request_json: Some(json!({"model": "test", "stream": true})),
         streaming: true,
     };
     let destination = effective_destination(
@@ -638,7 +618,7 @@ fn managed_worker_routes_chatgpt_responses_to_the_configured_chatgpt_base() {
         path: "/backend-api/codex/responses".into(),
         path_and_query: "/backend-api/codex/responses?client=codex".into(),
         body: Bytes::from_static(br#"{"model":"test","stream":true}"#),
-        request_json: json!({"model": "test", "stream": true}),
+        request_json: Some(json!({"model": "test", "stream": true})),
         streaming: true,
     };
     let config = GatewayConfig {
@@ -672,7 +652,7 @@ fn managed_worker_does_not_infer_upstream_authority_from_generic_bearer_tokens()
         path: "/responses".into(),
         path_and_query: "/responses?client=pi".into(),
         body: Bytes::from_static(br#"{"model":"test","stream":true}"#),
-        request_json: json!({"model": "test", "stream": true}),
+        request_json: Some(json!({"model": "test", "stream": true})),
         streaming: true,
     };
     let config = GatewayConfig {
@@ -709,7 +689,7 @@ fn managed_worker_uses_pi_named_provider_endpoint_and_strips_the_routing_header(
         path: "/chat/completions".into(),
         path_and_query: "/chat/completions?client=pi".into(),
         body: Bytes::from_static(br#"{"model":"custom","stream":true}"#),
-        request_json: json!({"model": "custom", "stream": true}),
+        request_json: Some(json!({"model": "custom", "stream": true})),
         streaming: true,
     };
 
@@ -745,7 +725,7 @@ fn unchanged_middleware_headers_preserve_credentials_and_duplicate_values() {
     let prepared = prepared_request(headers);
     let effective = LlmRequest {
         headers: crate::gateway::daemon_observable_headers(&prepared.headers),
-        content: prepared.request_json.clone(),
+        content: prepared.request_json.clone().unwrap(),
     };
 
     let (forwarded, body, explicit_target) =
@@ -780,7 +760,7 @@ fn middleware_header_diff_changes_only_the_named_observable_header() {
     effective_headers.insert("x-changed".into(), json!("after"));
     let effective = LlmRequest {
         headers: effective_headers,
-        content: prepared.request_json.clone(),
+        content: prepared.request_json.clone().unwrap(),
     };
 
     let (forwarded, _, explicit_target) =
@@ -816,7 +796,7 @@ fn explicit_target_removes_hidden_provider_credentials() {
     effective_headers.insert("authorization".into(), json!("Bearer selected-provider"));
     let effective = LlmRequest {
         headers: effective_headers,
-        content: prepared.request_json.clone(),
+        content: prepared.request_json.clone().unwrap(),
     };
 
     let (forwarded, _, explicit_target) =
@@ -836,7 +816,7 @@ fn prepared_request(headers: HeaderMap) -> PreparedProviderRequest {
         path: "/v1/responses".into(),
         path_and_query: "/v1/responses".into(),
         body: Bytes::from_static(br#"{"model":"test","stream":true}"#),
-        request_json: json!({"model": "test", "stream": true}),
+        request_json: Some(json!({"model": "test", "stream": true})),
         streaming: true,
     }
 }
@@ -1020,7 +1000,7 @@ async fn prepared_request_enforces_body_limit_and_normalizes_non_json_payloads()
     )
     .await
     .expect("non-json requests remain forwardable");
-    assert_eq!(prepared.request_json, Value::Null);
+    assert_eq!(prepared.request_json, Some(Value::Null));
     assert!(!prepared.streaming);
 }
 
@@ -1567,6 +1547,35 @@ async fn managed_runtime_closes_the_llm_lifecycle_when_provider_dispatch_fails()
     runtime.close().await.expect("close managed runtime");
 }
 
+#[test]
+fn managed_request_body_preserves_null_edits_and_unchanged_wire_bytes() {
+    let mut prepared = prepared_request(HeaderMap::from_iter([
+        (CONTENT_ENCODING, HeaderValue::from_static("gzip")),
+        (CONTENT_LENGTH, HeaderValue::from_static("123")),
+    ]));
+    let effective = LlmRequest {
+        headers: crate::gateway::daemon_observable_headers(&prepared.headers),
+        content: Value::Null,
+    };
+    let (headers, body, _) = effective_request(&prepared, Some(&effective)).unwrap();
+    assert_eq!(body, Bytes::from_static(b"null"));
+    assert!(!headers.contains_key(CONTENT_ENCODING));
+    assert!(!headers.contains_key(CONTENT_LENGTH));
+
+    prepared.request_json = Some(Value::Null);
+    prepared.body = Bytes::from_static(b" \n null \t");
+    let (headers, body, _) = effective_request(&prepared, Some(&effective)).unwrap();
+    assert_eq!(body, prepared.body);
+    assert_eq!(headers[CONTENT_ENCODING], "gzip");
+    assert!(!headers.contains_key(CONTENT_LENGTH));
+
+    prepared.request_json = None;
+    prepared.body = Bytes::from_static(b"opaque unparsed bytes");
+    let (headers, body, _) = effective_request(&prepared, Some(&effective)).unwrap();
+    assert_eq!(body, prepared.body);
+    assert_eq!(headers[CONTENT_ENCODING], "gzip");
+}
+
 struct RequestInterceptRegistration(&'static str);
 
 impl Drop for RequestInterceptRegistration {
@@ -1594,6 +1603,169 @@ impl Drop for LlmGuardrailRegistration {
         let _ = deregister_llm_sanitize_response_guardrail(self.0);
         let _ = nemo_relay::api::subscriber::deregister_subscriber(self.0);
     }
+}
+
+#[tokio::test]
+async fn observed_responses_preserve_sanitized_payloads_and_usage_without_a_fallback_codec() {
+    use nemo_relay::api::event::{Event, ScopeCategory};
+    use nemo_relay::api::subscriber::{flush_subscribers, register_subscriber};
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const SUBSCRIBER: &str = "daemon-worker-responses-pii";
+    let _registration = LlmGuardrailRegistration(SUBSCRIBER);
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::<Event>::new()));
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new({
+            let recorded = recorded.clone();
+            move |event| recorded.lock().unwrap().push(event.clone())
+        }),
+    )
+    .unwrap();
+
+    let provider_response = json!({
+        "id": "resp_pii", "model": "test", "status": "completed",
+        "output": [{"type": "message", "role": "assistant", "content": [
+            {"type": "output_text", "text": "sk-response-secret"}
+        ]}],
+        "usage": {"input_tokens": 17, "output_tokens": 5, "total_tokens": 22}
+    });
+    let app = Router::new().route(
+        "/v1/responses",
+        post({
+            let provider_response = provider_response.clone();
+            move |request: Request<Body>| {
+                let provider_response = provider_response.clone();
+                async move {
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let request: Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(request["input"], "sk-request-secret");
+                    let expected = format!(r#" {{ "model": "test", "input": "sk-request-\u0073ecret", "stream": {} }} "#, request["stream"]);
+                    assert_eq!(body.as_ref(), expected.as_bytes(), "unchanged bodies must retain their wire bytes");
+                    let (content_type, body) = if request["stream"] == true {
+                        (
+                            "text/event-stream",
+                            format!(
+                                "data: {}\n\n",
+                                json!({
+                                    "type": "response.completed", "response": provider_response
+                                })
+                            ),
+                        )
+                    } else {
+                        ("application/json", provider_response.to_string())
+                    };
+                    Response::builder()
+                        .header(CONTENT_TYPE, content_type)
+                        .body(Body::from(body))
+                        .unwrap()
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let runtime = ManagedRuntime::initialize(
+        GatewayConfig {
+            openai_base_url: format!("http://{address}"),
+            plugin_config: Some(json!({
+                "version": 1,
+                "components": [{
+                    "kind": "pii_redaction", "enabled": true,
+                    "config": {
+                        "mode": "builtin", "tool_input": false, "tool_output": false,
+                        "builtin": {
+                            "action": "regex_replace", "pattern": "sk-[A-Za-z0-9_-]+",
+                            "replacement": "[REDACTED]",
+                            "target_paths": ["/messages/0/content", "/message"]
+                        }
+                    }
+                }]
+            })),
+            ..GatewayConfig::default()
+        },
+        Vec::new(),
+        "machine-owner".into(),
+    )
+    .await
+    .unwrap();
+    let requirements = runtime.provider_middleware_requirements().unwrap();
+    assert!(requirements.request_body_decode_required);
+    assert!(!requirements.managed_execution_required);
+    for streaming in [false, true] {
+        let response = runtime
+            .proxy_provider(
+                pooled_client().unwrap(),
+                Request::post("/v1/responses")
+                    .body(Body::from(format!(
+                        r#" {{ "model": "test", "input": "sk-request-\u0073ecret", "stream": {streaming} }} "#
+                    )))
+                    .unwrap(),
+                ProviderRoute::OpenAi,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&body).contains("sk-response-secret"));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            flush_subscribers().unwrap();
+            let end_count = recorded
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    event.scope_category() == Some(ScopeCategory::End)
+                        && event.annotated_response().is_some()
+                })
+                .count();
+            if end_count == 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both observed responses must finish");
+    {
+        let events = recorded.lock().unwrap();
+        let starts = events
+            .iter()
+            .filter(|event| {
+                event.scope_category() == Some(ScopeCategory::Start)
+                    && event.annotated_request().is_some()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(starts.len(), 2);
+        for start in starts {
+            assert_eq!(start.input().unwrap()["content"]["input"], "[REDACTED]");
+            assert!(
+                !start
+                    .to_json_string()
+                    .unwrap()
+                    .contains("sk-request-secret")
+            );
+        }
+        for end in events
+            .iter()
+            .filter(|event| event.annotated_response().is_some())
+        {
+            let annotated = end.annotated_response().unwrap();
+            assert_eq!(annotated.response_text(), Some("[REDACTED]"));
+            let usage = serde_json::to_value(annotated.usage.as_ref().unwrap()).unwrap();
+            assert_eq!(usage["prompt_tokens"], 17);
+            assert_eq!(usage["completion_tokens"], 5);
+            assert_eq!(usage["total_tokens"], 22);
+            assert!(!end.to_json_string().unwrap().contains("sk-response-secret"));
+        }
+    }
+    runtime.close().await.unwrap();
+    server.abort();
 }
 
 #[tokio::test]
@@ -2338,7 +2510,7 @@ fn managed_header_and_observation_helpers_cover_ignored_and_invalid_values() {
     };
     assert_eq!(
         effective_request(&prepared, Some(&null_content)).unwrap().1,
-        prepared.body
+        Bytes::from_static(b"null")
     );
     assert!(!request_streaming_hint(&HeaderMap::from_iter([(
         ACCEPT,
@@ -2485,173 +2657,6 @@ async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses()
     assert!(observed.failure.unwrap().contains("truncated"));
 }
 
-#[tokio::test]
-async fn daemon_permission_requests_emit_policy_marks() {
-    use nemo_relay::api::subscriber::{
-        deregister_subscriber, flush_subscribers, register_subscriber,
-    };
-
-    const SUBSCRIBER: &str = "daemon-permission-audit";
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = deregister_subscriber(SUBSCRIBER);
-    let runtime = ManagedRuntime::initialize(
-        GatewayConfig::default(),
-        Vec::new(),
-        "permission-machine-owner".into(),
-    )
-    .await
-    .unwrap();
-    let captured = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
-    let events = Arc::clone(&captured);
-    register_subscriber(
-        SUBSCRIBER,
-        Arc::new(move |event| {
-            if event
-                .metadata()
-                .and_then(|metadata| metadata.get("session_id"))
-                .or_else(|| event.data().and_then(|data| data.get("session_id")))
-                .and_then(Value::as_str)
-                .is_some_and(|session| session.starts_with("daemon-permission-audit"))
-                && matches!(
-                    event.name(),
-                    "hook_mark" | "nemo_relay.permission.policy_decision"
-                )
-            {
-                events.lock().unwrap().push(json!({
-                    "name": event.name(),
-                    "data": event.data(),
-                    "metadata": event.metadata(),
-                }));
-            }
-        }),
-    )
-    .unwrap();
-
-    let session_id = "daemon-permission-audit-claude-code";
-    for event_name in ["PreToolUse", "PermissionRequest"] {
-        let mut payload = json!({
-            "session_id": session_id,
-            "hook_event_name": event_name,
-            "permission_mode": "default",
-            "tool_use_id": "audit-tool-1",
-            "tool_name": "Bash",
-            "tool_input": {"command": "pwd"},
-        });
-        if event_name == "PermissionRequest" {
-            payload.as_object_mut().unwrap().remove("tool_use_id");
-        }
-        let response = runtime
-            .handle_hook(
-                HookRoute::Claude,
-                Request::post("/hooks/claude-code")
-                    .header("content-type", "application/json")
-                    .body(Body::from(payload.to_string()))
-                    .unwrap(),
-            )
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body: Value =
-            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
-                .unwrap();
-        if event_name == "PermissionRequest" {
-            assert_eq!(body["hookSpecificOutput"]["decision"]["behavior"], "allow");
-        }
-    }
-    flush_subscribers().unwrap();
-    {
-        let events = captured.lock().unwrap();
-        let marks: Vec<_> = events
-            .iter()
-            .filter(|event| {
-                event["name"] == "nemo_relay.permission.policy_decision"
-                    && event["metadata"]["session_id"] == session_id
-            })
-            .collect();
-        assert_eq!(marks.len(), 1);
-        assert!(marks[0]["data"].get("decision").is_none());
-        assert_eq!(marks[0]["data"]["policy_outcome"], "pass");
-        assert_eq!(marks[0]["data"]["decision_source"], "nemo_relay");
-        assert_eq!(marks[0]["data"]["tool_call_id"], "audit-tool-1");
-        assert_eq!(marks[0]["data"]["harness_permission_mode"], "default");
-        assert!(events.iter().any(|event| {
-            event["name"] == "hook_mark"
-                && event["data"]["session_id"] == session_id
-                && event["data"]["permission_mode"] == "default"
-        }));
-        assert!(!marks[0].to_string().contains("permission-machine-owner"));
-    }
-    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
-    runtime.close().await.unwrap();
-}
-
-#[tokio::test]
-async fn malformed_permission_hooks_fail_closed_in_each_native_response_shape() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let runtime =
-        ManagedRuntime::initialize(GatewayConfig::default(), Vec::new(), "machine-owner".into())
-            .await
-            .expect("initialize managed runtime");
-
-    let codex = runtime
-        .handle_hook(
-            HookRoute::Codex,
-            Request::post("/hook")
-                .body(Body::from(
-                    json!({
-                        "session_id": "codex-session",
-                        "hook_event_name": "PermissionRequest",
-                        "tool_name": "shell",
-                        "arguments": {"cmd": "pwd"}
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await;
-    assert_eq!(codex.status(), StatusCode::OK);
-    let codex: Value =
-        serde_json::from_slice(&codex.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(
-        codex["hookSpecificOutput"]["hookEventName"],
-        "PermissionRequest"
-    );
-    assert_eq!(codex["hookSpecificOutput"]["decision"]["behavior"], "deny");
-    assert!(
-        codex["hookSpecificOutput"]["decision"]["message"]
-            .as_str()
-            .is_some_and(|message| !message.is_empty())
-    );
-    assert!(codex.get("decision").is_none());
-
-    let claude = runtime
-        .handle_hook(
-            HookRoute::Claude,
-            Request::post("/hook")
-                .body(Body::from(
-                    json!({
-                        "session_id": "claude-session",
-                        "hook_event_name": "PermissionRequest",
-                        "tool_name": "Write",
-                        "tool_input": {"file_path": "README.md"}
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await;
-    assert_eq!(claude.status(), StatusCode::OK);
-    let claude: Value =
-        serde_json::from_slice(&claude.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(claude["hookSpecificOutput"]["decision"]["behavior"], "deny");
-    assert!(
-        claude["hookSpecificOutput"]["decision"]["message"]
-            .as_str()
-            .is_some_and(|message| !message.is_empty())
-    );
-
-    runtime.close().await.expect("close managed runtime");
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn unmanaged_daemon_dispatch_generates_fresh_helper_tokens() {
@@ -2699,7 +2704,7 @@ async fn unmanaged_daemon_dispatch_generates_fresh_helper_tokens() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn regression_backend_alias_still_uses_provider_helper() {
+async fn regression_backend_alias_preserves_caller_credentials_with_helper() {
     let seen = Arc::new(Mutex::new(None::<HeaderMap>));
     let capture = seen.clone();
     let app = Router::new().route(
@@ -2715,9 +2720,7 @@ async fn regression_backend_alias_still_uses_provider_helper() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let config = GatewayConfig {
         openai_base_url: format!("http://{}", listener.local_addr().unwrap()),
-        openai_api_key_helper: Some(crate::upstream_auth::tests::helper(
-            "printf helper-generated-token",
-        )),
+        openai_api_key_helper: Some(crate::upstream_auth::tests::helper("exit 9")),
         ..GatewayConfig::default()
     };
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -2738,8 +2741,8 @@ async fn regression_backend_alias_still_uses_provider_helper() {
     let actual = seen.lock().unwrap().as_ref().unwrap()[AUTHORIZATION].clone();
     server.abort();
     assert_eq!(
-        actual, "Bearer helper-generated-token",
-        "A configured enterprise endpoint must receive helper authentication for this alias"
+        actual, "Bearer stale-client-api-key",
+        "An unmanaged backend alias must retain caller credentials without executing the helper"
     );
 }
 
@@ -2842,4 +2845,134 @@ async fn unmanaged_provider_response_head_timeout_returns_bad_gateway() {
     assert!(error.to_string().contains("response-head timeout"));
     assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
     provider.abort();
+}
+
+#[tokio::test]
+async fn unmanaged_routes_forward_only_client_credentials() {
+    let _env = crate::test_support::EnvScope::set(&[(
+        "OPENAI_API_KEY",
+        Some(std::ffi::OsStr::new("relay-environment-secret")),
+    )]);
+    for configured in [None, Some("Bearer relay-owned-secret")] {
+        async fn echo(request: Request<Body>) -> Response<Body> {
+            Response::builder()
+                .status(StatusCode::CREATED)
+                .body(Body::from(
+                    request
+                        .headers()
+                        .get("authorization")
+                        .map_or("absent", |value| value.to_str().unwrap())
+                        .to_owned(),
+                ))
+                .unwrap()
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = GatewayConfig {
+            openai_base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            chatgpt_codex_base_url: Some(format!("http://{}", listener.local_addr().unwrap())),
+            openai_auth_header: configured.map(str::to_owned),
+            ..GatewayConfig::default()
+        };
+        let provider = axum::Router::new().fallback(echo);
+        let task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+
+        for path in [
+            "/v1/responses/compact",
+            "/v1/images/generations",
+            "/v1/realtime/calls",
+            "/v1/live/sessions",
+            "/v1/images/edits",
+            "/v1/alpha/search",
+            "/v1/memories/trace_summarize",
+        ] {
+            for credential in [
+                None,
+                Some("Bearer caller-key"),
+                Some("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+            ] {
+                let mut request = Request::post(path)
+                    .header("content-type", "application/json")
+                    .header("x-nemo-relay-worker-token", "data-secret");
+                if let Some(credential) = credential {
+                    request = request.header("authorization", credential);
+                }
+                let request = request.body(Body::from("{}")).unwrap();
+                let response = dispatch_unmanaged(
+                    pooled_client().unwrap(),
+                    request,
+                    ProviderRoute::OpenAi,
+                    &config,
+                )
+                .await
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::CREATED, "{path}");
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                assert_eq!(
+                    bytes.as_ref(),
+                    credential.unwrap_or("absent").as_bytes(),
+                    "{path}"
+                );
+            }
+        }
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn managed_pre_tool_hooks_reject_when_conditional_guardrail_blocks() {
+    use nemo_relay::api::registry::{
+        deregister_tool_conditional_execution_guardrail,
+        register_tool_conditional_execution_guardrail,
+    };
+
+    const GUARDRAIL: &str = "managed-pre-tool-blocker";
+    const TOOL: &str = "ManagedBlockedTool";
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+        }
+    }
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
+    register_tool_conditional_execution_guardrail(
+        GUARDRAIL,
+        1,
+        Arc::new(|name, _args| {
+            Box::pin(async move { Ok((name == TOOL).then(|| "blocked by policy".to_string())) })
+        }),
+    )
+    .unwrap();
+    let _cleanup = Cleanup;
+    let runtime =
+        ManagedRuntime::initialize(GatewayConfig::default(), Vec::new(), "machine-owner".into())
+            .await
+            .unwrap();
+    for route in [HookRoute::Claude, HookRoute::Codex] {
+        let response = runtime
+            .handle_hook(
+                route,
+                Request::post("/hook")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "session_id": "managed-pre-tool-blocked",
+                            "hook_event_name": "PreToolUse",
+                            "tool_use_id": "blocked-tool",
+                            "tool_name": TOOL,
+                            "tool_input": {"command": "pwd"},
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body["error"]["type"], "nemo_relay_guardrail_rejected");
+        assert_eq!(body["error"]["reason"], "blocked by policy");
+    }
+    runtime.close().await.unwrap();
 }

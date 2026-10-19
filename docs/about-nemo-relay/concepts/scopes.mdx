@@ -422,6 +422,78 @@ Use the binding's JSON helpers at the transport boundary: Rust
 `propagationContextToJson(...)` and `propagationContextFromJson(...)`. The
 helpers validate the version and UUIDs before a context is imported.
 
+## Inspect the Visible Stack
+
+Use `current_scope_stack_snapshot()` in Rust/Python or
+`currentScopeStackSnapshot()` in Node.js to read owned scope identities. The
+snapshot contains `scopes` ordered from the implicit root to the current top.
+Each entry contains the actual scope UUID and existing semantic scope type.
+Repeated reads retain those UUIDs; later push/pop operations leave earlier
+snapshots unchanged.
+
+Inspection returns `None` or `null` when no context is explicitly bound and
+creates no stack. An explicitly bound root-only stack returns its root entry.
+Python reads the calling task's context variable; Node.js reads the current
+asynchronous callback binding; Rust resolves override, task, then explicit
+thread bindings. Concurrent agents need separate bound stacks.
+
+Within an application-owned Agent scope, select the nearest Agent entry for
+correlation across LLM and tool callbacks:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+
+snapshot = nemo_relay.current_scope_stack_snapshot()
+agent_scope_uuid = next(
+    (entry.scope_id for entry in reversed(snapshot.scopes)
+     if entry.scope_type == nemo_relay.ScopeType.Agent),
+    None,
+) if snapshot is not None else None
+# Correlate callbacks that share this Agent using (agent_scope_uuid, tool_call_id).
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::runtime::current_scope_stack_snapshot;
+use nemo_relay::api::scope::ScopeType;
+
+let snapshot = current_scope_stack_snapshot()?;
+let agent_scope_uuid = snapshot.as_ref().and_then(|snapshot| {
+    snapshot.scopes.iter().rev()
+        .find(|entry| entry.scope_type == ScopeType::Agent)
+        .map(|entry| entry.scope_id)
+});
+// Correlate callbacks that share this Agent using (agent_scope_uuid, tool_call_id).
+```
+</Tab>
+<Tab title="Node.js" language="javascript">
+```javascript
+const { currentScopeStackSnapshot, ScopeType } = require('nemo-relay-node');
+
+const snapshot = currentScopeStackSnapshot();
+const agentScopeUuid = snapshot?.scopes.findLast(
+  (entry) => entry.scopeType === ScopeType.Agent,
+)?.scopeId ?? null;
+// Correlate callbacks that share this Agent using [agentScopeUuid, toolCallId].
+```
+</Tab>
+</Tabs>
+
+An Agent UUID identifies that scope's lifetime. The visible list includes
+synthetic propagation entries with their stored types, including `Unknown`.
+A rootless imported parent appears as a synthetic Agent root; its Agent type
+alone does not identify a known upstream Agent. The snapshot describes visible
+runtime entries, not a complete distributed ancestry or persistent session ID.
+Managed tool/LLM event identities maintained separately from lexical scopes
+are not added to this list. Callback reads reflect the stack restored at that
+callback boundary, including continuation and streaming polls.
+
+Native and worker plugins expose the same value contract through their
+[runtime scope APIs](/build-plugins/native/runtime-events-and-scopes) and
+[worker scope APIs](/build-plugins/workers/runtime-events-and-scopes).
+
 ## Practical Guidance
 
 Use these practices when applying the concept in application or integration code.

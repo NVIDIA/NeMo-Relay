@@ -5,7 +5,10 @@
 
 import asyncio
 import contextvars
+import json
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from async_helpers import resolve_async_result
@@ -629,3 +632,230 @@ def test_propagate_scope_to_thread_uses_native_active_stack_without_contextvar()
 
     assert result["active"] is True
     assert result["repr"] == "<ScopeStack>"
+
+
+def test_scope_stack_snapshot_absence_and_contextvar_only_root() -> None:
+    """Inspection does not activate a stack and honors Python-only bindings."""
+
+    def inspect_fresh_thread() -> None:
+        assert nemo_relay.current_scope_stack_snapshot() is None
+        assert nemo_relay.current_scope_stack_snapshot() is None
+        assert not nemo_relay.scope_stack_active()
+        stack = nemo_relay.create_scope_stack()
+        token = nemo_relay._scope_stack_var.set(stack)
+        try:
+            snapshot = nemo_relay.current_scope_stack_snapshot()
+            assert snapshot is not None
+            assert len(snapshot.scopes) == 1
+            assert snapshot.scopes[0].scope_type == nemo_relay.ScopeType.Agent
+            uuid.UUID(snapshot.scopes[0].scope_id)
+            from nemo_relay._native import scope_stack_active
+
+            assert not scope_stack_active()
+        finally:
+            nemo_relay._scope_stack_var.reset(token)
+        assert nemo_relay.current_scope_stack_snapshot() is None
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(inspect_fresh_thread).result()
+
+
+def test_scope_stack_snapshot_orders_actual_handles_and_retains_values(restore_native_scope_stack) -> None:
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        root = nemo_relay.current_scope_stack_snapshot()
+        assert root is not None
+        with nemo_relay.scope.scope("agent", nemo_relay.ScopeType.Agent) as agent:
+            with nemo_relay.scope.scope("function", nemo_relay.ScopeType.Function) as function:
+                with nemo_relay.scope.scope("tool", nemo_relay.ScopeType.Tool) as tool:
+                    retained = nemo_relay.current_scope_stack_snapshot()
+                    assert retained is not None
+                    expected = [
+                        (root.scopes[0].scope_id, nemo_relay.ScopeType.Agent),
+                        (agent.uuid, nemo_relay.ScopeType.Agent),
+                        (function.uuid, nemo_relay.ScopeType.Function),
+                        (tool.uuid, nemo_relay.ScopeType.Tool),
+                    ]
+                    assert [(entry.scope_id, entry.scope_type) for entry in retained.scopes] == expected
+                    repeated = nemo_relay.current_scope_stack_snapshot()
+                    assert repeated is not None
+                    assert [(entry.scope_id, entry.scope_type) for entry in repeated.scopes] == expected
+                after_pop = nemo_relay.current_scope_stack_snapshot()
+                assert after_pop is not None
+                assert [entry.scope_id for entry in after_pop.scopes] == [entry[0] for entry in expected[:-1]]
+                with nemo_relay.scope.scope("replacement", nemo_relay.ScopeType.Llm):
+                    assert [(entry.scope_id, entry.scope_type) for entry in retained.scopes] == expected
+                    returned_entries = retained.scopes
+                    returned_entries.clear()
+                    assert [(entry.scope_id, entry.scope_type) for entry in retained.scopes] == expected
+
+
+async def test_scope_stack_snapshot_isolates_awaited_siblings_and_nested_bindings(restore_native_scope_stack) -> None:
+    async def inspect_sibling(name: str) -> str:
+        with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+            with nemo_relay.scope.scope(name, nemo_relay.ScopeType.Agent) as agent:
+                await asyncio.sleep(0)
+                before = nemo_relay.current_scope_stack_snapshot()
+                assert before is not None
+                assert before.scopes[-1].scope_id == agent.uuid
+                with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+                    await asyncio.sleep(0)
+                    nested = nemo_relay.current_scope_stack_snapshot()
+                    assert nested is not None
+                    assert len(nested.scopes) == 1
+                    assert nested.scopes[0].scope_id != before.scopes[0].scope_id
+                await asyncio.sleep(0)
+                restored = nemo_relay.current_scope_stack_snapshot()
+                assert restored is not None
+                assert [entry.scope_id for entry in restored.scopes] == [entry.scope_id for entry in before.scopes]
+                return agent.uuid
+
+    first, second = await asyncio.gather(inspect_sibling("first"), inspect_sibling("second"))
+    assert first != second
+
+
+def test_scope_stack_snapshot_preserves_fixture_propagation_uuids(restore_native_scope_stack) -> None:
+    fixture_path = Path(__file__).resolve().parents[2] / "crates/types/tests/fixtures/scope_stack_snapshot.json"
+    entries = json.loads(fixture_path.read_text())["scopes"]
+    root_identifier, parent_identifier = entries[0]["scope_id"], entries[3]["scope_id"]
+    stack = nemo_relay.create_scope_stack_from_propagation(
+        nemo_relay.PropagationContext(parent_identifier, root_identifier)
+    )
+    with nemo_relay.use_scope_stack(stack):
+        snapshot = nemo_relay.current_scope_stack_snapshot()
+        assert snapshot is not None
+        assert [(entry.scope_id, entry.scope_type) for entry in snapshot.scopes] == [
+            (root_identifier, nemo_relay.ScopeType.Agent),
+            (parent_identifier, nemo_relay.ScopeType.Unknown),
+        ]
+
+
+async def test_scope_stack_snapshot_preserves_parent_after_child_cancellation(restore_native_scope_stack) -> None:
+    ready = asyncio.Event()
+
+    async def child() -> None:
+        with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+            with nemo_relay.scope.scope("cancelled-agent", nemo_relay.ScopeType.Agent):
+                ready.set()
+                await asyncio.Future()
+
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        before = nemo_relay.current_scope_stack_snapshot()
+        assert before is not None
+        task = asyncio.create_task(child())
+        await ready.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        after = nemo_relay.current_scope_stack_snapshot()
+        assert after is not None
+        assert [(entry.scope_id, entry.scope_type) for entry in after.scopes] == [
+            (entry.scope_id, entry.scope_type) for entry in before.scopes
+        ]
+
+
+async def test_scope_stack_snapshot_correlates_managed_callbacks_with_reused_tool_call_ids(
+    restore_native_scope_stack,
+) -> None:
+    """Each callback sees its enclosing Agent before and after awaited continuations."""
+
+    async def run_agent(name: str) -> tuple[str, list[tuple[str, str | None, str]]]:
+        observations: list[tuple[str, str | None, str]] = []
+        with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+            with nemo_relay.scope.scope(name, nemo_relay.ScopeType.Agent) as agent:
+
+                def observe(boundary: str, tool_call_id: str | None = None) -> None:
+                    snapshot = nemo_relay.current_scope_stack_snapshot()
+                    assert snapshot is not None
+                    nearest_agent = next(
+                        entry for entry in reversed(snapshot.scopes) if entry.scope_type == nemo_relay.ScopeType.Agent
+                    )
+                    assert nearest_agent.scope_id == agent.uuid
+                    observations.append((boundary, tool_call_id, nearest_agent.scope_id))
+
+                async def llm_intercept(_name, request, _context, next_call):
+                    observe("llm-before")
+                    await asyncio.sleep(0)
+                    response = await next_call(request)
+                    observe("llm-after")
+                    return response
+
+                async def tool_intercept(context, next_call):
+                    observe("tool-before", context.tool_call_id)
+                    await asyncio.sleep(0)
+                    response = await next_call(context.args)
+                    observe("tool-after", context.tool_call_id)
+                    return nemo_relay.ToolExecutionInterceptOutcome(response.result)
+
+                nemo_relay.scope_local.register_llm_execution(agent, f"snapshot-llm-{name}", 1, llm_intercept)
+                nemo_relay.scope_local.register_tool_execution(agent, f"snapshot-tool-{name}", 1, tool_intercept)
+                with nemo_relay.scope.scope(f"workflow-{name}", nemo_relay.ScopeType.Function):
+                    response = await nemo_relay.llm.execute(
+                        "snapshot-llm",
+                        nemo_relay.LLMRequest({}, {"messages": []}),
+                        lambda request: {"tool_call_id": "call_1"},
+                    )
+                    for attempt in range(2):
+                        result = await nemo_relay.tools.execute(
+                            "snapshot-tool",
+                            {"attempt": attempt},
+                            lambda arguments: nemo_relay.ToolExecutionResult(arguments),
+                            tool_call_id=response["tool_call_id"],
+                        )
+                        assert result.result == {"attempt": attempt}
+                return agent.uuid, observations
+
+    first, second = await asyncio.gather(run_agent("first"), run_agent("second"))
+    assert first[0] != second[0]
+    for identifier, observations in (first, second):
+        assert observations == [
+            ("llm-before", None, identifier),
+            ("llm-after", None, identifier),
+            ("tool-before", "call_1", identifier),
+            ("tool-after", "call_1", identifier),
+            ("tool-before", "call_1", identifier),
+            ("tool-after", "call_1", identifier),
+        ]
+
+
+async def test_scope_stack_snapshot_preserves_agent_while_streaming_and_after_failure(
+    restore_native_scope_stack,
+) -> None:
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        with nemo_relay.scope.scope("stream-agent", nemo_relay.ScopeType.Agent) as agent:
+            retained = nemo_relay.current_scope_stack_snapshot()
+            assert retained is not None
+            observed_identifiers: list[str] = []
+
+            async def stream_response(request):
+                for number in range(2):
+                    await asyncio.sleep(0)
+                    snapshot = nemo_relay.current_scope_stack_snapshot()
+                    assert snapshot is not None
+                    observed_identifiers.append(snapshot.scopes[-1].scope_id)
+                    yield {"number": number}
+                raise ValueError("expected streaming failure")
+
+            collected = []
+            received_chunks = []
+            response_stream = await nemo_relay.llm.stream_execute(
+                "snapshot-stream",
+                nemo_relay.LLMRequest({}, {"messages": []}),
+                stream_response,
+                collected.append,
+                lambda: {"count": len(collected)},
+            )
+            with pytest.raises(ValueError, match="expected streaming failure"):
+                async for chunk in response_stream:
+                    snapshot = nemo_relay.current_scope_stack_snapshot()
+                    assert snapshot is not None
+                    assert snapshot.scopes[-1].scope_id == agent.uuid
+                    received_chunks.append(chunk)
+            expected_chunks = [{"number": 0}, {"number": 1}]
+            assert received_chunks == expected_chunks
+            assert collected == expected_chunks
+            assert observed_identifiers == [agent.uuid, agent.uuid]
+            after = nemo_relay.current_scope_stack_snapshot()
+            assert after is not None
+            assert [(entry.scope_id, entry.scope_type) for entry in after.scopes] == [
+                (entry.scope_id, entry.scope_type) for entry in retained.scopes
+            ]

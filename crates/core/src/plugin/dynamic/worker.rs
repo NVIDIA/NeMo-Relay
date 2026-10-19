@@ -296,6 +296,7 @@ impl Plugin for WorkerPluginAdapter {
 }
 
 struct WorkerPluginInstance {
+    callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     allows_multiple_components: bool,
     config: Map<String, Json>,
@@ -499,6 +500,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("unknown panic payload")
 }
 
+/// Starts and validates a worker, then stores its settings for this activation.
 fn load_one_worker_plugin(
     spec: &WorkerPluginLoadSpec,
     defer_registration: bool,
@@ -633,7 +635,9 @@ fn load_one_worker_plugin(
     .map_err(|err| PluginError::RegistrationFailed(format!("worker handshake failed: {err}")))?;
     let handshake = handshake.into_inner();
     validate_worker_handshake(&spec.plugin_id, &handshake)?;
+    let callback_timeouts = load.callback_timeouts.clone().unwrap_or_default();
     host_state.set_gate_callback(WorkerGateCallback {
+        callback_timeouts: callback_timeouts.clone(),
         plugin_kind: spec.plugin_id.clone(),
         runtime: runtime_handle.runtime().handle().clone(),
         client: client.clone(),
@@ -664,6 +668,7 @@ fn load_one_worker_plugin(
     };
 
     let instance = Arc::new(WorkerPluginInstance {
+        callback_timeouts,
         plugin_kind: spec.plugin_id.clone(),
         allows_multiple_components: handshake.allows_multiple_components,
         config: spec.config.clone(),
@@ -1554,8 +1559,10 @@ impl WorkerPluginInstance {
         }
     }
 
+    /// Shares the worker connection and copies its callback deadline settings.
     fn clone_for_callback(&self) -> WorkerPluginCallback {
         WorkerPluginCallback {
+            callback_timeouts: self.callback_timeouts.clone(),
             plugin_kind: self.plugin_kind.clone(),
             activation_id: self.host_state.activation_id.clone(),
             runtime: self.runtime.handle(),
@@ -1587,6 +1594,7 @@ fn bind_loopback_listener() -> crate::plugin::Result<(TcpListener, SocketAddr)> 
 
 #[derive(Clone)]
 struct WorkerPluginCallback {
+    callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     activation_id: String,
     runtime: tokio::runtime::Handle,
@@ -1596,6 +1604,7 @@ struct WorkerPluginCallback {
 
 #[derive(Clone)]
 struct WorkerGateCallback {
+    callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     runtime: tokio::runtime::Handle,
     client: PluginWorkerClient<Channel>,
@@ -1603,6 +1612,7 @@ struct WorkerGateCallback {
 }
 
 impl WorkerGateCallback {
+    /// Calls a worker-owned conditional guardrail while its activation is available.
     fn invoke(
         &self,
         callback_name: &str,
@@ -1614,6 +1624,7 @@ impl WorkerGateCallback {
             .upgrade()
             .ok_or_else(|| FlowError::NotFound("worker activation is shutting down".into()))?;
         WorkerPluginCallback {
+            callback_timeouts: self.callback_timeouts.clone(),
             plugin_kind: self.plugin_kind.clone(),
             activation_id: host_state.activation_id.clone(),
             runtime: self.runtime.clone(),
@@ -1678,6 +1689,9 @@ impl WorkerInvocationGuard {
             return None;
         }
         self.cancel_on_drop = false;
+        // Revoke inspection before awaiting worker cancellation.
+        self.host_state
+            .cancel_scope_stack_snapshot(&self.scope_stack_id);
         Some((
             self.client.clone(),
             CancelInvocationRequest {
@@ -2330,6 +2344,7 @@ impl WorkerPluginCallback {
         block_on_handle(&self.runtime, self.invoke_async(request))
     }
 
+    /// Runs a callback with its configured deadline unless the caller controls cancellation.
     async fn invoke_async(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
         let callback_name = request.registration_name.clone();
         let surface = request.surface;
@@ -2340,7 +2355,15 @@ impl WorkerPluginCallback {
                 RegistrationSurface::ToolExecutionIntercept
                 | RegistrationSurface::LlmExecutionIntercept,
             ) => None,
-            _ => Some(WORKER_RPC_TIMEOUT),
+            _ => Some(
+                self.callback_timeouts
+                    .by_name
+                    .get(&callback_name)
+                    .copied()
+                    .or(self.callback_timeouts.default_ms)
+                    .map(|millis| Duration::from_millis(millis.get()))
+                    .unwrap_or(WORKER_RPC_TIMEOUT),
+            ),
         };
         let result = self.invoke_async_with_timeout(request, timeout).await;
         if let Err(error) = &result {
@@ -2359,12 +2382,18 @@ impl WorkerPluginCallback {
         result
     }
 
+    /// Invokes a worker callback with an optional deadline.
+    /// On timeout, requests cancellation and reports the surface and callback name.
     async fn invoke_async_with_timeout(
         &self,
         request: InvokeRequest,
         timeout: Option<Duration>,
     ) -> FlowResult<InvokeResponse> {
         let mut guard = WorkerInvocationGuard::new(self, &request);
+        let callback_name = request.registration_name.clone();
+        let surface_name = RegistrationSurface::try_from(request.surface)
+            .map(|surface| surface.as_str_name())
+            .unwrap_or("UNKNOWN");
         let mut client = self.client.clone();
         let response = client.invoke(worker_rpc_request(request));
         let result = match timeout {
@@ -2380,7 +2409,15 @@ impl WorkerPluginCallback {
         guard.finish();
         result
             .map(|response| report_worker_response(response.into_inner(), &self.plugin_kind))
-            .map_err(|err| worker_status_to_flow("worker invoke failed", err))
+            .map_err(|err| {
+                if err.code() == tonic::Code::DeadlineExceeded {
+                    FlowError::Internal(format!(
+                        "worker invocation timed out (surface={surface_name}, callback={callback_name}): {err}"
+                    ))
+                } else {
+                    worker_status_to_flow("worker invoke failed", err)
+                }
+            })
     }
 }
 
@@ -2534,11 +2571,12 @@ struct WorkerHostRuntimeState {
     activation_id: String,
     auth_token: String,
     scope_stacks: Mutex<HashMap<String, StoredScopeStack>>,
+    snapshot_cancelled_bindings: Mutex<std::collections::HashSet<String>>,
     pending_scope_cleanups: Mutex<Vec<PendingScopeCleanup>>,
     scope_stack_cleanups: Mutex<Vec<crate::api::runtime::ScopeStackHandle>>,
     scope_stack_cleanup_complete: Condvar,
     scope_handles: Mutex<HashMap<String, StoredScopeHandle>>,
-    continuations: Mutex<HashMap<String, Continuation>>,
+    continuations: Mutex<HashMap<String, StoredContinuation>>,
     codecs: Mutex<HashMap<String, WorkerCodecCapability>>,
     gates_active: AtomicBool,
     conditional_middleware_guardrails: Mutex<HashMap<String, WorkerOwnedGate>>,
@@ -2634,6 +2672,7 @@ impl WorkerHostRuntimeState {
             activation_id,
             auth_token,
             scope_stacks: Mutex::new(HashMap::new()),
+            snapshot_cancelled_bindings: Mutex::new(std::collections::HashSet::new()),
             pending_scope_cleanups: Mutex::new(Vec::new()),
             scope_stack_cleanups: Mutex::new(Vec::new()),
             scope_stack_cleanup_complete: Condvar::new(),
@@ -2905,6 +2944,18 @@ impl WorkerHostRuntimeState {
         Ok(id)
     }
 
+    fn cancel_scope_stack_snapshot(&self, scope_stack_identifier: &str) {
+        if scope_stack_identifier.is_empty() {
+            return;
+        }
+        // Recover the marker set only to preserve revocation during cleanup.
+        // Inspection reports a poisoned lock as an explicit error.
+        self.snapshot_cancelled_bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(scope_stack_identifier.to_owned());
+    }
+
     fn cleanup_invocation_scope_stack(&self, id: &str) {
         let unwind = self.take_invocation_scope_cleanup(id);
         if let Some((handle, base_depth, continuation_context, publication_buffer)) = unwind {
@@ -2936,7 +2987,12 @@ impl WorkerHostRuntimeState {
         let Ok(mut stacks) = self.scope_stacks.lock() else {
             return None;
         };
-        let stored = stacks.remove(id)?;
+        let stored = stacks.remove(id);
+        self.snapshot_cancelled_bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(id);
+        let stored = stored?;
         let mut base_depth = stored.invocation_base_depth?;
         let Ok(mut pending) = self.pending_scope_cleanups.lock() else {
             return None;
@@ -3006,28 +3062,38 @@ impl WorkerHostRuntimeState {
         }
     }
 
+    /// Store a callback and own the signal that keeps its calls active.
     fn insert_continuation(&self, continuation: Continuation) -> FlowResult<String> {
         let id = format!("next-{}", Uuid::now_v7());
         let mut continuations = self
             .continuations
             .lock()
             .map_err(|err| FlowError::Internal(format!("continuation lock poisoned: {err}")))?;
-        continuations.insert(id.clone(), continuation);
+        let (lifetime, _) = watch::channel(());
+        continuations.insert(
+            id.clone(),
+            StoredContinuation {
+                continuation,
+                lifetime,
+            },
+        );
         Ok(id)
     }
 
+    /// Remove a callback and cancel any provider work still using it.
     fn remove_continuation(&self, id: &str) {
         if let Ok(mut continuations) = self.continuations.lock() {
             continuations.remove(id);
         }
     }
 
-    fn continuation(&self, id: &str) -> Result<Continuation, Status> {
+    /// Get a callback and a signal that closes when its invocation ends.
+    fn continuation(&self, id: &str) -> Result<(Continuation, watch::Receiver<()>), Status> {
         self.continuations
             .lock()
             .map_err(|err| Status::internal(format!("continuation lock poisoned: {err}")))?
             .get(id)
-            .cloned()
+            .map(|stored| (stored.continuation.clone(), stored.lifetime.subscribe()))
             .ok_or_else(|| Status::not_found("continuation not found"))
     }
 
@@ -3078,6 +3144,26 @@ impl StoredInvocationContext {
                 with_scope_stack(self.scope_stack.clone(), callback)
             }),
         }
+    }
+}
+
+/// Keep the cancellation sender in the registry, separate from active calls.
+///
+/// Removing this entry closes all receivers, including those held by provider calls.
+struct StoredContinuation {
+    continuation: Continuation,
+    lifetime: watch::Sender<()>,
+}
+
+/// Poll an operation until it finishes or its invocation ends.
+async fn while_continuation_active<T>(
+    lifetime: &mut watch::Receiver<()>,
+    future: impl Future<Output = T>,
+) -> Result<T, Status> {
+    tokio::select! {
+        biased;
+        _ = lifetime.changed() => Err(Status::cancelled("worker invocation has ended")),
+        result = future => Ok(result),
     }
 }
 
@@ -3231,6 +3317,81 @@ fn registration_surface_from_kind(kind: RuntimeRegistrationKind) -> Registration
 
 #[tonic::async_trait]
 impl RelayHostRuntime for WorkerHostRuntimeService {
+    async fn get_current_scope_stack_snapshot(
+        &self,
+        request: Request<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest>,
+    ) -> Result<Response<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotResponse>, Status>
+    {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let snapshot = match request.scope {
+            None => None,
+            Some(scope) => {
+                if scope.scope_stack_id.trim().is_empty() {
+                    return Err(Status::invalid_argument(
+                        "snapshot scope_stack_id must not be empty",
+                    ));
+                }
+                // Keep registry ownership stable until the detached copy is complete.
+                // Cleanup removes entries under this same lock before unwinding them.
+                let stacks = self.state.scope_stacks.lock().map_err(|error| {
+                    Status::internal(format!("scope stack lock poisoned: {error}"))
+                })?;
+                // Keep revocation ordered with the copy: cancellation either
+                // starts after this read completes, or this read is rejected.
+                let cancelled_bindings =
+                    self.state
+                        .snapshot_cancelled_bindings
+                        .lock()
+                        .map_err(|error| {
+                            Status::internal(format!(
+                                "snapshot cancellation lock poisoned: {error}"
+                            ))
+                        })?;
+                if cancelled_bindings.contains(&scope.scope_stack_id) {
+                    return Err(Status::cancelled("scope stack binding is cancelled"));
+                }
+                let stored = stacks.get(&scope.scope_stack_id).ok_or_else(|| {
+                    Status::not_found("scope stack binding is expired, dropped, or foreign")
+                })?;
+                if !scope.parent_scope_id.is_empty() {
+                    let handles = self.state.scope_handles.lock().map_err(|error| {
+                        Status::internal(format!("scope handle lock poisoned: {error}"))
+                    })?;
+                    let parent = handles
+                        .get(&scope.parent_scope_id)
+                        .ok_or_else(|| Status::not_found("parent scope binding is unavailable"))?;
+                    if parent.scope_stack_id != scope.scope_stack_id {
+                        return Err(Status::permission_denied(
+                            "parent scope belongs to another binding",
+                        ));
+                    }
+                }
+                Some(
+                    crate::api::runtime::scope_stack_snapshot(&stored.handle)
+                        .map_err(status_from_flow)?,
+                )
+            }
+        };
+        let snapshot = snapshot.map(|snapshot| nemo_relay_worker_proto::v1::ScopeStackSnapshot {
+            scopes: snapshot
+                .scopes
+                .into_iter()
+                .map(|scope| nemo_relay_worker_proto::v1::ScopeStackEntry {
+                    scope_id: scope.scope_id.to_string(),
+                    scope_type: snapshot_scope_type_to_proto(scope.scope_type),
+                })
+                .collect(),
+        });
+        Ok(Response::new(
+            nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotResponse {
+                snapshot,
+                error: None,
+            },
+        ))
+    }
+
     async fn log(&self, request: Request<LogRequest>) -> Result<Response<HostAck>, Status> {
         let request = request.into_inner();
         self.state
@@ -3562,6 +3723,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         }))
     }
 
+    /// Run a tool call and drop its future if the worker invocation ends.
     async fn tool_next(
         &self,
         request: Request<ToolNextRequest>,
@@ -3569,7 +3731,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
-        let continuation = self.state.continuation(&request.continuation_id)?;
+        let (continuation, mut lifetime) = self.state.continuation(&request.continuation_id)?;
         let Continuation::Tool { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not a tool continuation",
@@ -3580,18 +3742,21 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             required_envelope(request.value, "tool next value").map_err(status_from_flow)?;
         let value = decode_json_envelope::<Json>(&value)
             .map_err(|err| Status::invalid_argument(format!("invalid tool next JSON: {err}")))?;
-        let result = AssertUnwindSafe(context.invoke(move || next(value)))
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|payload| {
-                Err(FlowError::Internal(format!(
-                    "worker tool continuation panicked: {}",
-                    panic_payload_message(payload.as_ref())
-                )))
-            });
+        let result = while_continuation_active(
+            &mut lifetime,
+            AssertUnwindSafe(context.invoke(move || next(value))).catch_unwind(),
+        )
+        .await?
+        .unwrap_or_else(|payload| {
+            Err(FlowError::Internal(format!(
+                "worker tool continuation panicked: {}",
+                panic_payload_message(payload.as_ref())
+            )))
+        });
         Ok(Response::new(tool_execution_result_response(result)))
     }
 
+    /// Run an LLM call and drop its future if the worker invocation ends.
     async fn llm_next(
         &self,
         request: Request<LlmNextRequest>,
@@ -3599,7 +3764,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
-        let continuation = self.state.continuation(&request.continuation_id)?;
+        let (continuation, mut lifetime) = self.state.continuation(&request.continuation_id)?;
         let Continuation::Llm { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not an LLM continuation",
@@ -3610,21 +3775,24 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             required_envelope(request.request, "llm next request").map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request)
             .map_err(|err| Status::invalid_argument(format!("invalid LLM next request: {err}")))?;
-        let result = AssertUnwindSafe(context.invoke(move || next(request)))
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|payload| {
-                Err(FlowError::Internal(format!(
-                    "worker LLM continuation panicked: {}",
-                    panic_payload_message(payload.as_ref())
-                )))
-            });
+        let result = while_continuation_active(
+            &mut lifetime,
+            AssertUnwindSafe(context.invoke(move || next(request))).catch_unwind(),
+        )
+        .await?
+        .unwrap_or_else(|payload| {
+            Err(FlowError::Internal(format!(
+                "worker LLM continuation panicked: {}",
+                panic_payload_message(payload.as_ref())
+            )))
+        });
         Ok(Response::new(json_result(result)))
     }
 
     type LlmStreamNextStream =
         Pin<Box<dyn tokio_stream::Stream<Item = Result<StreamChunk, Status>> + Send>>;
 
+    /// Open and forward a provider stream while its worker invocation is active.
     async fn llm_stream_next(
         &self,
         request: Request<LlmStreamNextRequest>,
@@ -3632,7 +3800,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
-        let continuation = self.state.continuation(&request.continuation_id)?;
+        let (continuation, mut lifetime) = self.state.continuation(&request.continuation_id)?;
         let Continuation::LlmStream { next, context } = continuation else {
             return Err(Status::invalid_argument(
                 "continuation is not an LLM stream continuation",
@@ -3644,16 +3812,18 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         let request = decode_json_envelope::<LlmRequest>(&request).map_err(|err| {
             Status::invalid_argument(format!("invalid LLM stream next request: {err}"))
         })?;
-        let stream = AssertUnwindSafe(context.invoke(move || next(request)))
-            .catch_unwind()
-            .await
-            .map_err(|payload| {
-                Status::internal(format!(
-                    "worker stream continuation panicked: {}",
-                    panic_payload_message(payload.as_ref())
-                ))
-            })?
-            .map_err(status_from_flow)?;
+        let stream = while_continuation_active(
+            &mut lifetime,
+            AssertUnwindSafe(context.invoke(move || next(request))).catch_unwind(),
+        )
+        .await?
+        .map_err(|payload| {
+            Status::internal(format!(
+                "worker stream continuation panicked: {}",
+                panic_payload_message(payload.as_ref())
+            ))
+        })?
+        .map_err(status_from_flow)?;
         let (tx, rx) = mpsc::channel(16);
         tokio::spawn(async move {
             context
@@ -3662,22 +3832,28 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                     loop {
                         tokio::select! {
                             biased;
+                            _ = lifetime.changed() => break,
                             _ = tx.closed() => break,
                             item = AssertUnwindSafe(stream.next()).catch_unwind() => {
                                 match item {
                                     Ok(Some(item)) => {
-                                        if tx.send(item).await.is_err() {
+                                        if !matches!(
+                                            while_continuation_active(&mut lifetime, tx.send(item)).await,
+                                            Ok(Ok(()))
+                                        ) {
                                             break;
                                         }
                                     }
                                     Ok(None) => break,
                                     Err(payload) => {
-                                        let _ = tx
-                                            .send(Err(FlowError::Internal(format!(
+                                        let _ = while_continuation_active(
+                                            &mut lifetime,
+                                            tx.send(Err(FlowError::Internal(format!(
                                                 "worker stream continuation panicked: {}",
                                                 panic_payload_message(payload.as_ref())
-                                            ))))
-                                            .await;
+                                            )))),
+                                        )
+                                        .await;
                                         break;
                                     }
                                 }
@@ -4216,6 +4392,23 @@ fn worker_error_to_plugin(error: WorkerError, fallback: &str) -> PluginError {
 
 fn status_from_flow(err: FlowError) -> Status {
     Status::internal(err.to_string())
+}
+
+fn snapshot_scope_type_to_proto(scope_type: ScopeType) -> i32 {
+    use nemo_relay_worker_proto::v1::ScopeType as ProtoScopeType;
+    (match scope_type {
+        ScopeType::Agent => ProtoScopeType::Agent,
+        ScopeType::Function => ProtoScopeType::Function,
+        ScopeType::Tool => ProtoScopeType::Tool,
+        ScopeType::Llm => ProtoScopeType::Llm,
+        ScopeType::Retriever => ProtoScopeType::Retriever,
+        ScopeType::Embedder => ProtoScopeType::Embedder,
+        ScopeType::Reranker => ProtoScopeType::Reranker,
+        ScopeType::Guardrail => ProtoScopeType::Guardrail,
+        ScopeType::Evaluator => ProtoScopeType::Evaluator,
+        ScopeType::Custom => ProtoScopeType::Custom,
+        ScopeType::Unknown => ProtoScopeType::Unknown,
+    }) as i32
 }
 
 fn proto_scope_type(scope_type: i32) -> ScopeType {

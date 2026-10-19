@@ -43,8 +43,7 @@ import io
 import json
 import pickle
 import typing
-import weakref
-from typing import AsyncIterator, Awaitable, Callable, Generic, Protocol, TypeVar, cast, overload
+from typing import AsyncIterator, Awaitable, Callable, Generic, Iterable, Protocol, TypeVar, cast, overload
 
 from nemo_relay import Json, llm, tools
 from nemo_relay._native import LLMAttributes, LLMRequest, LlmStream, ScopeHandle, ToolAttributes, ToolExecutionResult
@@ -71,7 +70,6 @@ class _SupportsModelValidate(Protocol[T]):
     def model_validate(cls, data: Json) -> T: ...
 
 
-_RUNTIME_TYPE_REGISTRY: weakref.WeakValueDictionary[str, type[object]] = weakref.WeakValueDictionary()
 _NO_RECONSTRUCTION = object()
 
 
@@ -113,20 +111,6 @@ def _serialize_value(value: object) -> Json:
         except Exception:
             pass  # Intentional: fall through to the default string encoding
     return cast(Json, value)
-
-
-def _register_runtime_type(type_obj: type[object]) -> str:
-    token = f"{type_obj.__module__}.{type_obj.__qualname__}:{id(type_obj)}"
-    _RUNTIME_TYPE_REGISTRY[token] = type_obj
-    return token
-
-
-def _resolve_runtime_type(token: object) -> type[object] | None:
-    if not isinstance(token, str):
-        return None
-
-    resolved = _RUNTIME_TYPE_REGISTRY.get(token)
-    return resolved if isinstance(resolved, type) else None
 
 
 # ---------------------------------------------------------------------------
@@ -276,17 +260,35 @@ class DataclassCodec(Codec[T]):
 class BestEffortAnyCodec(Codec[object]):
     """Best-effort codec for arbitrary Python values.
 
-    It prefers JSON-native encodings, then dataclass or Pydantic-style model
-    support, and finally falls back to pickle or string encoding when needed.
-    Pickle decoding is restricted to a small allowlist of builtin containers;
-    arbitrary classes and callable globals are never reconstructed. Dataclass
-    and Pydantic tags reconstruct only types registered by ``to_json()`` in
-    this process; unregistered tags remain JSON dictionaries.
+    It tries JSON, dataclasses, and Pydantic models first. It falls back to
+    pickle or strings when needed. Pickle decoding allows only a small set of
+    Python built-in containers. It never restores arbitrary classes or calls
+    other globals through pickle.
+
+    Dataclass and Pydantic tags remain JSON dictionaries by default. To restore
+    objects, list their classes in ``allowed_types``. Each codec has its own
+    list. Encoding a value does not add its type to the list.
+
+    Args:
+        allowed_types: Class objects that this codec can restore from dataclass
+            or Pydantic tags. Decoding never imports modules to find a class.
+            Allowed constructors and validators run on the input data. Choose
+            classes that can safely handle the data you expect.
 
     Notes:
-        This codec favors resilience over strictness. If it cannot preserve the
-        original type exactly, it degrades to a string instead of raising.
+        Encoding falls back to a string if other methods fail. Decoding returns
+        the input data if it cannot restore the object.
     """
+
+    def __init__(self, *, allowed_types: Iterable[type[object]] = ()) -> None:
+        self._allowed_types: dict[str, type[object]] = {}
+        for cls in allowed_types:
+            if not isinstance(cls, type):
+                raise TypeError("allowed_types must contain class objects")
+            name = f"{cls.__module__}.{cls.__qualname__}"
+            if name in self._allowed_types and self._allowed_types[name] is not cls:
+                raise ValueError(f"allowed_types contains distinct classes named {name!r}")
+            self._allowed_types[name] = cls
 
     def to_json(self, value: object) -> Json:
         """Serialize an arbitrary Python value to a JSON-serializable form.
@@ -308,7 +310,6 @@ class BestEffortAnyCodec(Codec[object]):
                 dumped = cast(_SupportsModelDump, value).model_dump(mode="json")
                 return {
                     "__nv_pydantic__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
-                    "__nv_runtime_type__": _register_runtime_type(value.__class__),
                     "data": dumped,
                 }
         except Exception:
@@ -318,7 +319,6 @@ class BestEffortAnyCodec(Codec[object]):
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
             return {
                 "__nv_dataclass__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
-                "__nv_runtime_type__": _register_runtime_type(value.__class__),
                 "data": _serialize_dataclass_instance(cast(DataclassInstance, value)),
             }
 
@@ -341,9 +341,9 @@ class BestEffortAnyCodec(Codec[object]):
                     "data": str(value),
                 }
 
-    @staticmethod
-    def _resolve_tagged_type(data: dict[str, Json], tag: str) -> type[object] | None:
-        return _resolve_runtime_type(data.get("__nv_runtime_type__"))
+    def _resolve_tagged_type(self, data: dict[str, Json], tag: str) -> type[object] | None:
+        name = data.get(tag)
+        return self._allowed_types.get(name) if isinstance(name, str) else None
 
     @staticmethod
     def _mapping_payload(data: dict[str, Json]) -> dict[str, object] | None:
@@ -418,7 +418,9 @@ class BestEffortAnyCodec(Codec[object]):
         Recognises the ``__nv_pydantic__``, ``__nv_dataclass__``,
         ``__nv_pickle__``, and ``__nv_fallback_str__`` tags produced by
         ``to_json`` and dispatches to the appropriate reconstruction strategy.
-        Pickle tags are decoded only for allowlisted builtin containers.
+        Dataclass and Pydantic tags restore only classes in ``allowed_types``.
+        The codec ignores old runtime type tokens. Pickle decoding allows only
+        a small set of Python built-in containers.
         Falls through to returning the raw data if no tag is recognised.
         """
         if isinstance(data, dict) and "data" in data:

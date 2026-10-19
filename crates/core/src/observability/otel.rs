@@ -26,8 +26,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::header_file::{
-    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
-    validate_header_files,
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
+    validate_header_files, validate_trace_transport,
 };
 use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 use super::otel_signal::{
@@ -223,7 +223,7 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
 /// userinfo, path, query, or fragment. HTTP(S) origins remain sufficient to
 /// distinguish independently configured collectors without exposing a token
 /// embedded in a URL.
-fn trace_endpoint_log_identity(endpoint: &str) -> String {
+pub(super) fn trace_endpoint_log_identity(endpoint: &str) -> String {
     if endpoint == AUTOMATIC_OTLP_ENDPOINT_MARKER {
         return "the environment-configured OTLP endpoint".to_string();
     }
@@ -248,24 +248,8 @@ fn trace_endpoint_log_identity(endpoint: &str) -> String {
 }
 
 /// Require protected transport for remote OTLP trace exports, regardless of projection.
-pub(super) fn validate_trace_endpoint(endpoint: &str) -> Result<()> {
-    let protected = reqwest::Url::parse(endpoint).is_ok_and(|url| {
-        let host = url.host_str().unwrap_or_default();
-        let loopback = host.eq_ignore_ascii_case("localhost")
-            || host
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback());
-        url.scheme() == "https" || (url.scheme() == "http" && loopback)
-    });
-    if !protected {
-        return Err(OpenTelemetryError::ExporterBuild(
-            "OTLP trace endpoints require HTTPS; HTTP is allowed only for localhost or loopback IP addresses"
-                .to_string(),
-        ));
-    }
-    Ok(())
+pub(super) fn validate_trace_endpoint(endpoint: &str, plaintext: &PlaintextPolicy) -> Result<()> {
+    validate_trace_transport(endpoint, plaintext).map_err(OpenTelemetryError::ExporterBuild)
 }
 
 /// Open mode used when a trace file sink creates its output file.
@@ -468,6 +452,7 @@ pub struct OpenTelemetryConfig {
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
+    plaintext: PlaintextPolicy,
     timeout: Duration,
 }
 
@@ -698,6 +683,7 @@ impl OpenTelemetryConfig {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             header_file: HashMap::new(),
+            plaintext: PlaintextPolicy::LoopbackOnly,
             timeout: Duration::from_secs(3),
         }
     }
@@ -759,6 +745,17 @@ impl OpenTelemetryConfig {
         path: impl Into<String>,
     ) -> Self {
         self.header_file.insert(key.into(), path.into());
+        self
+    }
+
+    /// Allows plain HTTP to any host; data and configured headers travel unencrypted.
+    pub fn with_allow_insecure(mut self, allow_insecure: bool) -> Self {
+        self.plaintext = PlaintextPolicy::from_allow_insecure(allow_insecure);
+        self
+    }
+
+    pub(crate) fn with_plaintext_policy(mut self, plaintext: PlaintextPolicy) -> Self {
+        self.plaintext = plaintext;
         self
     }
 
@@ -907,12 +904,17 @@ impl OpenTelemetrySubscriber {
         )
     }
 
-    pub(crate) fn new_from_automatic_configuration_for_plugin() -> Result<Self> {
+    pub(crate) fn new_from_automatic_configuration_for_plugin(
+        plaintext: PlaintextPolicy,
+    ) -> Result<Self> {
         super::otel_signal::validate_automatic_header_environment(
             "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
         )?;
         Self::new_with_runtime_diagnostics(
-            TraceConfig::Endpoint(OpenTelemetryConfig::from_automatic_configuration()),
+            TraceConfig::Endpoint(
+                OpenTelemetryConfig::from_automatic_configuration()
+                    .with_plaintext_policy(plaintext),
+            ),
             Some("opentelemetry.automatic.traces".to_string()),
         )
     }
@@ -944,20 +946,21 @@ impl OpenTelemetrySubscriber {
         if let TraceConfig::Endpoint(endpoint) = &mut config {
             if endpoint.automatic {
                 let resolved = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+                    .map_err(OpenTelemetryError::ExporterBuild)?
                     .ok_or_else(|| {
                         OpenTelemetryError::ExporterBuild(
                             "automatic trace exporter requires a nonblank OTLP endpoint"
                                 .to_string(),
                         )
                     })?;
-                validate_trace_endpoint(&resolved)?;
+                validate_trace_endpoint(&resolved, &endpoint.plaintext)?;
             } else {
                 if endpoint.endpoint.trim().is_empty() {
                     return Err(OpenTelemetryError::ExporterBuild(
                         "endpoint must be a nonblank string".to_string(),
                     ));
                 }
-                validate_trace_endpoint(&endpoint.endpoint)?;
+                validate_trace_endpoint(&endpoint.endpoint, &endpoint.plaintext)?;
                 reject_global_header_environment()?;
                 validate_headers(&endpoint.headers)?;
                 validate_header_files(
@@ -1462,6 +1465,7 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
                 builder = builder.with_http_client(HeaderFileHttpClient::new(
                     client,
                     HeaderFileResolver::new(settings.header_file.clone()),
+                    settings.plaintext.clone(),
                 ));
             } else {
                 builder = builder.with_http_client(client);

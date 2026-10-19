@@ -26,6 +26,9 @@ class _ToolNodeResultCodec(nemo_relay.typed.BestEffortAnyCodec):
 
     _LIST_TAG = "__nemo_relay_langgraph_list__"
 
+    def __init__(self) -> None:
+        super().__init__(allowed_types=(ToolMessage, Command))
+
     def to_json(self, value: object) -> nemo_relay.Json:
         if isinstance(value, list):
             return {self._LIST_TAG: [self.to_json(item) for item in value]}

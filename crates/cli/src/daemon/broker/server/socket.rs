@@ -954,11 +954,13 @@ fn worker_failure_action_name(action: &WorkerFailureAction) -> &'static str {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub(super) struct SocketInfo {
     peer: SocketAddr,
     local: SocketAddr,
 }
+#[cfg(test)]
 impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, TcpListener>>
     for SocketInfo
 {
@@ -973,6 +975,7 @@ impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, TcpL
         }
     }
 }
+#[cfg(test)]
 pub(super) async fn connection_info(mut request: Request<Body>, next: Next) -> Response<Body> {
     if let Some(ConnectInfo(info)) = request
         .extensions()

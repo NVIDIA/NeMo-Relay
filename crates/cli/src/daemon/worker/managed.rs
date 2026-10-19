@@ -3,7 +3,7 @@
 
 //! Managed worker execution with raw forwarding or JSON middleware delivery.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::error::Error as _;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -22,11 +22,9 @@ use http_body_util::LengthLimitError;
 use hyper::body::{Body as HttpBody, Frame, Incoming, SizeHint};
 use nemo_relay::api::llm::{
     LlmCallEndParams, LlmCallParams, LlmRequest, llm_call, llm_call_end, llm_conditional_execution,
-    llm_request_intercepts,
+    llm_request_intercepts_with_source,
 };
-use nemo_relay::api::registry::{
-    RuntimeRegistrationIdentity, RuntimeRegistrationKind, list_runtime_registrations,
-};
+use nemo_relay::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
 use nemo_relay::api::runtime::TASK_SCOPE_STACK;
 use nemo_relay::codec::resolve::{ProviderSurface, request_codec, response_codec, streaming_codec};
 use nemo_relay::codec::streaming::SseEventDecoder;
@@ -238,12 +236,6 @@ impl ManagedRuntime {
                     );
                     return Err(error);
                 }
-                if let Some(permission) = outcome.permission
-                    && let Err(error) = self.authorize_permission(permission).await
-                {
-                    operational::hook_completed(&operational, "managed_worker_hook", "denied");
-                    return Ok(codex::permission_denial(permission_denial_reason(error)));
-                }
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(outcome.response)
             }
@@ -267,37 +259,6 @@ impl ManagedRuntime {
                         true,
                     );
                     return Err(error);
-                }
-                if let Some(permission) = outcome.permission {
-                    let result = self.authorize_permission(permission).await;
-                    operational::hook_completed(
-                        &operational,
-                        "managed_worker_hook",
-                        if result.is_ok() {
-                            "completed"
-                        } else {
-                            "denied"
-                        },
-                    );
-                    return Ok(match result {
-                        Ok(()) => json!({
-                            "continue": true,
-                            "hookSpecificOutput": {
-                                "hookEventName": "PermissionRequest",
-                                "decision": { "behavior": "allow" },
-                            },
-                        }),
-                        Err(error) => json!({
-                            "continue": true,
-                            "hookSpecificOutput": {
-                                "hookEventName": "PermissionRequest",
-                                "decision": {
-                                    "behavior": "deny",
-                                    "message": permission_denial_reason(error),
-                                },
-                            },
-                        }),
-                    });
                 }
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(outcome.response)
@@ -333,20 +294,6 @@ impl ManagedRuntime {
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(pi::response_with_effects(outcome.response, &effects))
             }
-        }
-    }
-
-    async fn authorize_permission(
-        &self,
-        permission: Result<crate::events::ToolEvent, String>,
-    ) -> Result<(), CliError> {
-        match permission {
-            Ok(permission) => {
-                self.sessions
-                    .authorize_tool_permission(&permission, &self.owner)
-                    .await
-            }
-            Err(reason) => Err(CliError::InvalidPayload(reason)),
         }
     }
 
@@ -404,11 +351,14 @@ impl ManagedRuntime {
                 .proxy_unbuffered(upstream, request, route, surface, prep, operational)
                 .await;
         }
-        let prepared = PreparedProviderRequest::read(request, &self.config).await?;
+        let mut prepared = PreparedProviderRequest::read(request, &self.config).await?;
         let start = crate::gateway::daemon_gateway_start(
             &prepared.headers,
             &prepared.path,
-            prepared.request_json.clone(),
+            prepared
+                .request_json
+                .take()
+                .expect("decoded request content"),
             prepared.streaming,
         )
         .ok_or_else(|| CliError::InvalidPayload("unsupported provider path".into()))?;
@@ -443,6 +393,7 @@ impl ManagedRuntime {
             .await
     }
 
+    /// Forward an undecoded request and observe its response for telemetry.
     async fn proxy_unbuffered(
         &self,
         upstream: PooledClient,
@@ -478,6 +429,7 @@ impl ManagedRuntime {
                     LlmCallParams::builder()
                         .name(&provider_name)
                         .request(&request_for_event)
+                        .codec(request_codec(surface))
                         .parent_opt(parent.as_ref())
                         .attributes(attributes)
                         .metadata(metadata.clone())
@@ -512,10 +464,9 @@ impl ManagedRuntime {
         };
         let sessions = self.sessions.clone();
         tokio::spawn(async move {
-            let observed = observation
+            let mut observed = observation
                 .finish(surface, response_streaming || streaming_hint)
                 .await;
-            let response_value = observed.value.clone().unwrap_or(Value::Null);
             let mut end_metadata = merge_object(metadata, observed.metadata());
             insert_metadata(
                 &mut end_metadata,
@@ -528,12 +479,23 @@ impl ManagedRuntime {
                 insert_metadata(&mut end_metadata, "otel.status_code", json!("ERROR"));
                 insert_metadata(&mut end_metadata, "otel.status_description", json!(failure));
             }
+            // Finish correlation while borrowing the payload, then move it into LLM publication.
+            if let Some(value) = observed.value.as_ref() {
+                sessions
+                    .record_gateway_response_hints(
+                        &session_id,
+                        owner_subagent_id,
+                        std::borrow::Cow::Borrowed(value),
+                    )
+                    .await;
+            }
+            let response_codec = observed.value.as_ref().map(|_| response_codec(surface));
             if let Err(error) = llm_call_end(
                 LlmCallEndParams::builder()
                     .handle(&handle)
-                    .response(response_value)
+                    .response(observed.value.take().unwrap_or(Value::Null))
                     .metadata(end_metadata)
-                    .response_codec_opt(observed.value.as_ref().map(|_| response_codec(surface)))
+                    .response_codec_opt(response_codec)
                     .build(),
             ) {
                 log::warn!(
@@ -543,20 +505,16 @@ impl ManagedRuntime {
                     "Daemon worker failed to close an observed LLM lifecycle: {error}"
                 );
             }
-            if let Some(value) = observed.value {
-                sessions
-                    .record_gateway_response_hints(&session_id, owner_subagent_id, value)
-                    .await;
-            }
             cleanup.finish().await;
         });
         Ok(response)
     }
 
+    /// Forward a decoded request after request middleware runs, then observe its response.
     async fn proxy_managed(
         &self,
         upstream: PooledClient,
-        prepared: PreparedProviderRequest,
+        mut prepared: PreparedProviderRequest,
         route: ProviderRoute,
         surface: ProviderSurface,
         prep: GatewayCallPrep,
@@ -580,14 +538,16 @@ impl ManagedRuntime {
         let middleware = TASK_SCOPE_STACK
             .scope(scope_stack.clone(), async {
                 llm_conditional_execution(&request).await?;
-                let mut outcome = llm_request_intercepts(&provider_name, request).await?;
+                let (mut outcome, source) =
+                    llm_request_intercepts_with_source(&provider_name, request).await?;
+                prepared.request_json = source;
                 if let Some(annotated) = outcome.annotated_request.as_ref() {
                     outcome.request = codec.encode(annotated, &outcome.request)?;
                 }
                 Ok::<_, FlowError>(outcome)
             })
             .await;
-        let outcome = match middleware {
+        let mut outcome = match middleware {
             Ok(outcome) => outcome,
             Err(error) => {
                 cleanup.finish().await;
@@ -600,14 +560,15 @@ impl ManagedRuntime {
                 STREAM_MODE_MUTATION_ERROR.into(),
             )));
         }
-        let annotated_request = outcome.annotated_request.clone().map(Arc::new);
-        let request_for_event = outcome.request.clone();
+        let annotated_request = outcome.annotated_request.take().map(Arc::new);
+        let streaming = prepared_streaming(&outcome.request);
         let handle = TASK_SCOPE_STACK
             .scope(scope_stack, async {
                 llm_call(
                     LlmCallParams::builder()
                         .name(&provider_name)
-                        .request(&request_for_event)
+                        .request(&outcome.request)
+                        .codec(codec)
                         .parent_opt(parent.as_ref())
                         .attributes(attributes)
                         .metadata(metadata.clone())
@@ -656,10 +617,7 @@ impl ManagedRuntime {
         };
         let sessions = self.sessions.clone();
         tokio::spawn(async move {
-            let observed = observation
-                .finish(surface, prepared_streaming(&request_for_event))
-                .await;
-            let response_value = observed.value.clone().unwrap_or(Value::Null);
+            let mut observed = observation.finish(surface, streaming).await;
             let mut end_metadata = merge_object(metadata, observed.metadata());
             if observed.failure.is_none() {
                 insert_metadata(&mut end_metadata, "otel.status_code", json!("OK"));
@@ -667,12 +625,23 @@ impl ManagedRuntime {
                 insert_metadata(&mut end_metadata, "otel.status_code", json!("ERROR"));
                 insert_metadata(&mut end_metadata, "otel.status_description", json!(failure));
             }
+            // Finish correlation while borrowing the payload, then move it into LLM publication.
+            if let Some(value) = observed.value.as_ref() {
+                sessions
+                    .record_gateway_response_hints(
+                        &session_id,
+                        owner_subagent_id,
+                        std::borrow::Cow::Borrowed(value),
+                    )
+                    .await;
+            }
+            let response_codec = observed.value.as_ref().map(|_| response_codec(surface));
             if let Err(error) = llm_call_end(
                 LlmCallEndParams::builder()
                     .handle(&handle)
-                    .response(response_value)
+                    .response(observed.value.take().unwrap_or(Value::Null))
                     .metadata(end_metadata)
-                    .response_codec_opt(observed.value.as_ref().map(|_| response_codec(surface)))
+                    .response_codec_opt(response_codec)
                     .build(),
             ) {
                 log::warn!(
@@ -681,11 +650,6 @@ impl ManagedRuntime {
                     error_kind = "runtime";
                     "Daemon worker failed to close an observed LLM lifecycle: {error}"
                 );
-            }
-            if let Some(value) = observed.value {
-                sessions
-                    .record_gateway_response_hints(&session_id, owner_subagent_id, value)
-                    .await;
             }
             cleanup.finish().await;
         });
@@ -862,7 +826,9 @@ struct PreparedProviderRequest {
     path: String,
     path_and_query: String,
     body: Bytes,
-    request_json: Value,
+    // `None` after interception proves that no callback could change the body.
+    // `Some` retains a comparison baseline, including a parsed JSON null.
+    request_json: Option<Value>,
     streaming: bool,
 }
 
@@ -894,7 +860,7 @@ impl PreparedProviderRequest {
             path,
             path_and_query,
             body: bytes,
-            request_json,
+            request_json: Some(request_json),
             streaming,
         })
     }
@@ -1108,7 +1074,11 @@ fn effective_request(
     }
     strip_internal_headers(&mut headers);
     headers.remove(CONTENT_LENGTH);
-    if effective.content == prepared.request_json || effective.content.is_null() {
+    if prepared
+        .request_json
+        .as_ref()
+        .is_none_or(|source| effective.content == *source)
+    {
         return Ok((headers, prepared.body.clone(), explicit_target));
     }
     let body = serde_json::to_vec(&effective.content)
@@ -1258,18 +1228,17 @@ fn prepared_streaming(request: &LlmRequest) -> bool {
 }
 
 fn provider_middleware_requirements() -> Result<ProviderMiddlewareRequirements, CliError> {
-    let kinds = BTreeSet::from([
+    let [sanitize, conditional, request, execution, streaming] = runtime_registration_presence([
         RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
         RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
         RuntimeRegistrationKind::LlmRequestIntercept,
         RuntimeRegistrationKind::LlmExecutionIntercept,
         RuntimeRegistrationKind::LlmStreamExecutionIntercept,
-    ]);
-    let registrations = list_runtime_registrations(Some(&kinds)).map_err(CliError::from)?;
-    let managed_execution_required = registrations.iter().any(registration_requires_execution);
+    ])
+    .map_err(CliError::from)?;
+    let managed_execution_required = conditional || request || execution || streaming;
     Ok(ProviderMiddlewareRequirements {
-        request_body_decode_required: managed_execution_required
-            || registrations.iter().any(registration_reads_request_body),
+        request_body_decode_required: managed_execution_required || sanitize,
         managed_execution_required,
     })
 }
@@ -1277,25 +1246,6 @@ fn provider_middleware_requirements() -> Result<ProviderMiddlewareRequirements, 
 #[cfg(test)]
 fn request_body_decode_required() -> Result<bool, CliError> {
     provider_middleware_requirements().map(|requirements| requirements.request_body_decode_required)
-}
-
-fn registration_reads_request_body(registration: &RuntimeRegistrationIdentity) -> bool {
-    matches!(
-        registration.kind,
-        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail
-            | RuntimeRegistrationKind::LlmConditionalExecutionGuardrail
-            | RuntimeRegistrationKind::LlmRequestIntercept
-    )
-}
-
-fn registration_requires_execution(registration: &RuntimeRegistrationIdentity) -> bool {
-    matches!(
-        registration.kind,
-        RuntimeRegistrationKind::LlmRequestIntercept
-            | RuntimeRegistrationKind::LlmConditionalExecutionGuardrail
-            | RuntimeRegistrationKind::LlmExecutionIntercept
-            | RuntimeRegistrationKind::LlmStreamExecutionIntercept
-    )
 }
 
 fn finish_llm_after_dispatch_failure(
@@ -1317,13 +1267,6 @@ fn finish_llm_after_dispatch_failure(
             .metadata(metadata)
             .build(),
     );
-}
-
-fn permission_denial_reason(error: CliError) -> String {
-    error
-        .guardrail_rejection_reason()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| error.to_string())
 }
 
 fn merge_object(mut base: Value, extra: Value) -> Value {
