@@ -19,6 +19,49 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+fn enabled_diagnostics() -> crate::diagnostics::Diagnostics {
+    use crate::diagnostics::{Diagnostics, DiagnosticsSettings};
+    Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+fn diagnostic_test_producer(
+    service: &crate::diagnostics::Diagnostics,
+) -> crate::diagnostics::ComponentRecorder {
+    use crate::diagnostics::{
+        BuiltinDiagnosticCode, ComponentRegistration, FailureCode, RuntimeFailureCode,
+    };
+    let code = BuiltinDiagnosticCode::Failure(FailureCode::Runtime(RuntimeFailureCode::Internal));
+    service
+        .register_component(ComponentRegistration::new("test.exporter", &[code]))
+        .unwrap()
+}
+
+fn record_test_failure(recorder: &crate::diagnostics::ComponentRecorder, message: &str) {
+    use crate::diagnostics::{
+        Classification, FailureClass, FailureCode, Observation, RuntimeFailureCode,
+    };
+    recorder
+        .record_lazy(|| {
+            Observation::new(
+                Classification::failure(
+                    FailureCode::Runtime(RuntimeFailureCode::Internal),
+                    FailureClass::Internal,
+                )
+                .unwrap(),
+                message,
+                1,
+            )
+        })
+        .unwrap();
+}
+
 struct BlockingTestSink {
     prop: SinkProp,
     blocked_once: AtomicBool,
@@ -351,10 +394,10 @@ fn async_sink_boundaries_report_each_full_sink_without_blocking_the_caller() {
 
 #[test]
 fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
-    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery, Diagnostics};
+    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery};
     use crate::logging::diagnostics::LoggingDiagnostics;
 
-    let diagnostics = Diagnostics::default();
+    let diagnostics = enabled_diagnostics();
     let config = LoggingConfig {
         stderr_enabled: false,
         sinks: vec![LogSinkConfig::File(FileLogSinkConfig::default())],
@@ -377,7 +420,11 @@ fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
     spdlog::info!(logger: logger, "second dropped record");
     logger.flush();
 
-    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    let snapshot = diagnostics
+        .snapshot(DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
     let sink = snapshot
         .components
         .iter()
@@ -400,7 +447,7 @@ fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
         let observations = snapshot
             .events
             .iter()
-            .filter(|event| event.component == sink.identity && event.code == code)
+            .filter(|event| event.component == sink.identity && event.code() == code)
             .collect::<Vec<_>>();
         assert_eq!(observations.len() as u64, expected);
         assert!(
@@ -444,15 +491,15 @@ impl Sink for FailingRecordSink {
 
 #[test]
 fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failure() {
-    use crate::diagnostics::{DiagnosticQuery, Diagnostics};
+    use crate::diagnostics::DiagnosticQuery;
     use crate::logging::{
         LoggingRuntime,
         diagnostics::{LoggingDiagnostics, attach_projection},
     };
 
     let _guard = crate::logging::lock_test_logging();
-    let diagnostics = Diagnostics::default();
-    let producer = diagnostics.register_component("test.exporter").unwrap();
+    let diagnostics = enabled_diagnostics();
+    let producer = diagnostic_test_producer(&diagnostics);
     let config = LoggingConfig {
         stderr_enabled: false,
         sinks: vec![LogSinkConfig::File(FileLogSinkConfig::default())],
@@ -480,18 +527,15 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
         projection: Some(projection),
     };
 
-    producer
-        .observe_failure(
-            "test.export_failed",
-            "Exporter failed",
-            1,
-            Default::default(),
-        )
-        .unwrap();
+    record_test_failure(&producer, "Exporter failed");
     failed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     runtime.shutdown();
 
-    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    let snapshot = diagnostics
+        .snapshot(DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
     let sink = snapshot
         .components
         .iter()
@@ -517,11 +561,11 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
 
 #[test]
 fn logging_shutdown_records_final_flush_failures_before_closing_component_handles() {
-    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery, Diagnostics};
+    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery};
     use crate::logging::{LoggingRuntime, diagnostics::LoggingDiagnostics};
 
     let _guard = crate::logging::lock_test_logging();
-    let diagnostics = Diagnostics::default();
+    let diagnostics = enabled_diagnostics();
     let config = LoggingConfig {
         stderr_enabled: false,
         sinks: vec![LogSinkConfig::File(FileLogSinkConfig::default())],
@@ -543,7 +587,11 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
     }
     .shutdown();
 
-    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    let snapshot = diagnostics
+        .snapshot(DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
     for (component_key, code) in [
         ("logging", "logging.shutdown_failed"),
         ("logging.file.0", "logging.sink.shutdown_failed"),
@@ -556,7 +604,7 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
         assert!(component.closed_at.is_some());
         assert!(snapshot.events.iter().any(|event| {
             event.component == component.identity
-                && event.code == code
+                && event.code() == code
                 && event.outcome == DiagnosticOutcome::Failure
         }));
         assert_eq!(
@@ -575,10 +623,10 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
 
 #[test]
 fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
-    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery, Diagnostics};
+    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery};
     use crate::logging::diagnostics::LoggingDiagnostics;
 
-    let diagnostics = Diagnostics::default();
+    let diagnostics = enabled_diagnostics();
     let logging = LoggingDiagnostics::new(&diagnostics, &LoggingConfig::default());
     let sink_diagnostics = logging.stderr().unwrap();
     let (sink_tx, sink_rx) = mpsc::channel();
@@ -615,7 +663,11 @@ fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
         logger_rx.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    let snapshot = diagnostics
+        .snapshot(DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
     let sink = snapshot
         .components
         .iter()
@@ -635,7 +687,7 @@ fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
         let events = snapshot
             .events
             .iter()
-            .filter(|event| event.component == sink.identity && event.code == code)
+            .filter(|event| event.component == sink.identity && event.code() == code)
             .collect::<Vec<_>>();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].outcome, DiagnosticOutcome::Failure);
@@ -645,7 +697,7 @@ fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
 #[cfg(unix)]
 #[test]
 fn stderr_backend_failures_record_once_without_projection_recursion() {
-    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery, Diagnostics};
+    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery};
     use crate::logging::LoggingRuntime;
 
     const CHILD_ENV: &str = "NEMO_RELAY_TEST_STDERR_DIAGNOSTICS_CHILD";
@@ -673,8 +725,8 @@ fn stderr_backend_failures_record_once_without_projection_recursion() {
 
     // Stderr is intentionally unwritable; keep child assertion failures visible.
     std::panic::set_hook(Box::new(|info| println!("{info}")));
-    let diagnostics = Diagnostics::default();
-    let producer = diagnostics.register_component("test.exporter").unwrap();
+    let diagnostics = enabled_diagnostics();
+    let producer = diagnostic_test_producer(&diagnostics);
     let runtime = LoggingRuntime::configure_with_diagnostics(
         LoggingConfig {
             level: LogLevel::Error,
@@ -698,19 +750,16 @@ fn stderr_backend_failures_record_once_without_projection_recursion() {
         .unwrap();
 
     log::error!(target: "test.stderr", "An ordinary stderr write fails");
-    producer
-        .observe_failure(
-            "test.export_failed",
-            "The projected stderr write also fails",
-            1,
-            Default::default(),
-        )
-        .unwrap();
+    record_test_failure(&producer, "The projected stderr write also fails");
 
     assert_eq!(logger_failures.load(Ordering::Relaxed), 0);
     assert_eq!(projected.load(Ordering::Relaxed), 1);
     runtime.shutdown();
-    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    let snapshot = diagnostics
+        .snapshot(DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
     let sink = snapshot
         .components
         .iter()
@@ -731,7 +780,7 @@ fn stderr_backend_failures_record_once_without_projection_recursion() {
         .events
         .iter()
         .filter(|event| {
-            event.component == sink.identity && event.code == "logging.sink.write_failed"
+            event.component == sink.identity && event.code() == "logging.sink.write_failed"
         })
         .collect::<Vec<_>>();
     assert_eq!(events.len(), 2);

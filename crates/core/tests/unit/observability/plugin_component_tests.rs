@@ -5642,23 +5642,14 @@ fn log_only_plugin_reports_invalid_reserved_metric_marks_once() {
     assert_eq!(diagnostics[0].count, 2);
     assert_eq!(diagnostics[0].field.as_deref(), None);
 
-    let snapshot = crate::diagnostics::Diagnostics::process_default()
-        .snapshot(crate::diagnostics::DiagnosticQuery {
-            code: Some("otel.metric_mark_invalid".to_owned()),
-            ..Default::default()
-        })
-        .unwrap();
-    let counters = snapshot
-        .components
-        .iter()
-        .flat_map(|component| &component.counters)
-        .collect::<Vec<_>>();
-    assert_eq!(counters.len(), 1);
-    assert_eq!(counters[0].occurrences.value.get(), 2);
-    assert_eq!(snapshot.events.len(), 2);
-    assert!(snapshot.events.iter().all(|event| {
-        event.outcome == crate::diagnostics::DiagnosticOutcome::Failure && event.count.get() == 1
-    }));
+    // This legacy OTel report remains independently observable during phase one;
+    // deferred pipelines cannot activate canonical collection as a side effect.
+    assert_eq!(
+        crate::diagnostics::Diagnostics::process_default()
+            .reader()
+            .availability(),
+        crate::diagnostics::DiagnosticAvailability::Disabled
+    );
 
     test_close_plugin_host().unwrap();
 }

@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::diagnostics::{
+    Classification, ComponentRegistration, DiagnosticLimits, DiagnosticOutcome, DiagnosticQuery,
+    DiagnosticSeverity, Diagnostics, DiagnosticsSettings, FailureClass, FailureCode, NoticeCode,
+    Observation, RuntimeFailureCode,
+};
 use crate::logging::{
     FileLogRotationConfig, FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
     LoggingRuntime, MAX_FILE_SINK_QUEUE_ENTRIES, MAX_FILE_SINK_RETAINED_FILES, build_logger,
@@ -136,16 +141,25 @@ impl Drop for LoggingEnvScope {
     }
 }
 
+fn enabled_diagnostics(limits: DiagnosticLimits) -> Diagnostics {
+    Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits,
+        },
+    )
+    .unwrap()
+}
+
 fn default_config() -> LoggingConfig {
     LoggingConfig::default()
 }
 
 #[test]
 fn diagnostics_retain_required_sink_initialization_failure_before_logging_exists() {
-    use crate::diagnostics::{DiagnosticOutcome, DiagnosticQuery, Diagnostics};
-
     let _guard = lock_logging_tests();
-    let diagnostics = Diagnostics::default();
+    let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
     let temp = tempfile::tempdir().unwrap();
     let blocked_parent = temp.path().join("not-a-directory");
     std::fs::write(&blocked_parent, "file").unwrap();
@@ -160,7 +174,11 @@ fn diagnostics_retain_required_sink_initialization_failure_before_logging_exists
 
     assert!(LoggingRuntime::configure_with_diagnostics(config, &diagnostics).is_err());
 
-    let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+    let snapshot = diagnostics
+        .snapshot(DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
     assert_eq!(snapshot.source, *diagnostics.source());
     let sink = snapshot
         .components
@@ -170,7 +188,7 @@ fn diagnostics_retain_required_sink_initialization_failure_before_logging_exists
     assert!(sink.closed_at.is_some());
     assert!(snapshot.events.iter().any(|event| {
         event.component == sink.identity
-            && event.code == "logging.sink.initialize_failed"
+            && event.code() == "logging.sink.initialize_failed"
             && event.outcome == DiagnosticOutcome::Failure
     }));
     let failures = sink
@@ -188,11 +206,23 @@ fn diagnostics_retain_required_sink_initialization_failure_before_logging_exists
 
 #[test]
 fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_logging() {
-    use crate::diagnostics::{DiagnosticQuery, DiagnosticSeverity, Diagnostics};
-
     let _guard = lock_logging_tests();
-    let diagnostics = Diagnostics::default();
-    let producer = diagnostics.register_component("test.exporter").unwrap();
+    let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+    let filtered = Classification::notice(NoticeCode::GuardrailRejected);
+    let failure = Classification::failure(
+        FailureCode::Runtime(RuntimeFailureCode::Internal),
+        FailureClass::Internal,
+    )
+    .unwrap();
+    let after_shutdown = Classification::failure(
+        FailureCode::Runtime(RuntimeFailureCode::NotFound),
+        FailureClass::NotFound,
+    )
+    .unwrap();
+    let codes = [filtered.code(), failure.code(), after_shutdown.code()];
+    let producer = diagnostics
+        .register_component(ComponentRegistration::new("test.exporter", &codes))
+        .unwrap();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("diagnostics.jsonl");
     let runtime = LoggingRuntime::configure_with_diagnostics(
@@ -203,7 +233,7 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
             sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
                 path: path.clone(),
                 level: LogLevel::Trace,
-                ..FileLogSinkConfig::default()
+                ..Default::default()
             })],
             ..default_config()
         },
@@ -211,29 +241,20 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
     )
     .unwrap();
     producer
-        .observe_occurrence(
-            "test.filtered",
-            DiagnosticSeverity::Debug,
-            "Filtered from log output",
-            1,
-            Default::default(),
-        )
+        .record_lazy(|| {
+            Observation::new(filtered, "Filtered from log output", 1)
+                .with_severity(DiagnosticSeverity::Debug)
+        })
         .unwrap();
     producer
-        .observe_failure(
-            "test.delivery_failed",
-            "Exporter delivery failed",
-            1,
-            Default::default(),
-        )
+        .record_lazy(|| Observation::new(failure, "Exporter delivery failed", 1))
         .unwrap();
     runtime.shutdown();
-
     let output = std::fs::read_to_string(&path).unwrap();
     let records = output
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .filter(|record| record["event"] == "test.delivery_failed")
+        .filter(|record| record["event"] == "runtime.internal")
         .collect::<Vec<_>>();
     assert_eq!(records.len(), 1);
     assert_eq!(
@@ -242,48 +263,67 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
     );
     assert_eq!(
         records[0]["fields"]["diagnostic"]["component"]["instance_id"],
-        producer.identity().instance_id.to_string()
+        producer.identity().unwrap().instance_id.to_string()
     );
-    assert!(!output.contains("test.filtered"));
+    assert!(!output.contains("runtime.guardrail_rejected"));
     let snapshot = diagnostics
         .snapshot(DiagnosticQuery {
             component_key: Some("test.exporter".into()),
             ..Default::default()
         })
+        .unwrap()
+        .to_snapshot()
         .unwrap();
     assert!(
         snapshot
             .events
             .iter()
-            .any(|event| event.code == "test.filtered")
+            .any(|event| event.code() == "runtime.guardrail_rejected")
     );
-
     producer
-        .observe_failure(
-            "test.after_shutdown",
-            "Recorded after logging shutdown",
-            1,
-            Default::default(),
-        )
+        .record_lazy(|| Observation::new(after_shutdown, "Recorded after logging shutdown", 1))
         .unwrap();
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), output);
-    assert!(
-        producer
-            .snapshot()
-            .unwrap()
+    assert_eq!(std::fs::read_to_string(path).unwrap(), output);
+    let final_snapshot = producer
+        .reader()
+        .snapshot(DiagnosticQuery {
+            component_key: Some("test.exporter".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(
+        final_snapshot.components[0]
             .counters
             .iter()
-            .any(|counter| counter.code == "test.after_shutdown")
+            .find(|counter| counter.code == "runtime.not_found")
+            .unwrap()
+            .occurrences
+            .value
+            .get(),
+        1
     );
 }
 
 #[test]
 fn replacing_logging_diagnostics_projects_only_into_the_current_runtime() {
-    use crate::diagnostics::Diagnostics;
-
     let _guard = lock_logging_tests();
-    let diagnostics = Diagnostics::default();
-    let producer = diagnostics.register_component("test.producer").unwrap();
+    let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+    let current = Classification::failure(
+        FailureCode::Runtime(RuntimeFailureCode::Internal),
+        FailureClass::Internal,
+    )
+    .unwrap();
+    let still_current = Classification::failure(
+        FailureCode::Runtime(RuntimeFailureCode::NotFound),
+        FailureClass::NotFound,
+    )
+    .unwrap();
+    let codes = [current.code(), still_current.code()];
+    let producer = diagnostics
+        .register_component(ComponentRegistration::new("test.producer", &codes))
+        .unwrap();
     let temp = tempfile::tempdir().unwrap();
     let first_path = temp.path().join("first.jsonl");
     let second_path = temp.path().join("second.jsonl");
@@ -295,7 +335,7 @@ fn replacing_logging_diagnostics_projects_only_into_the_current_runtime() {
                 flush_interval_millis: 0,
                 sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
                     path,
-                    ..FileLogSinkConfig::default()
+                    ..Default::default()
                 })],
                 ..default_config()
             },
@@ -306,29 +346,17 @@ fn replacing_logging_diagnostics_projects_only_into_the_current_runtime() {
     let first = configure(first_path.clone());
     let second = configure(second_path.clone());
     producer
-        .observe_failure(
-            "test.current",
-            "Current runtime only",
-            1,
-            Default::default(),
-        )
+        .record_lazy(|| Observation::new(current, "Current runtime only", 1))
         .unwrap();
     first.shutdown();
     producer
-        .observe_failure(
-            "test.still_current",
-            "New runtime remains attached",
-            1,
-            Default::default(),
-        )
+        .record_lazy(|| Observation::new(still_current, "New runtime remains attached", 1))
         .unwrap();
     second.shutdown();
-
     let first = std::fs::read_to_string(first_path).unwrap();
     let second = std::fs::read_to_string(second_path).unwrap();
-    assert!(!first.contains("test.current"));
-    assert!(!first.contains("test.still_current"));
-    for code in ["test.current", "test.still_current"] {
+    for code in ["runtime.internal", "runtime.not_found"] {
+        assert!(!first.contains(code));
         assert_eq!(
             second
                 .lines()
@@ -341,21 +369,20 @@ fn replacing_logging_diagnostics_projects_only_into_the_current_runtime() {
 
 #[test]
 fn exhausted_diagnostic_budgets_do_not_prevent_operational_logging_startup() {
-    use crate::diagnostics::{DiagnosticLimits, DiagnosticOutcome, DiagnosticQuery, Diagnostics};
-
     let _guard = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
-    for (case, max_components, max_projections) in [("components", 0, 16), ("projections", 128, 0)]
-    {
-        let source = Diagnostics::default().source().clone();
-        let diagnostics = Diagnostics::new(
-            source,
-            DiagnosticLimits {
-                max_components,
-                max_projections,
-                ..DiagnosticLimits::default()
-            },
-        );
+    for (case, max_components, max_projections) in [("components", 1, 16), ("projections", 64, 0)] {
+        let diagnostics = enabled_diagnostics(DiagnosticLimits {
+            max_components,
+            max_projections,
+            ..Default::default()
+        });
+        // Keep one real registration active: zero component capacity is now an invalid profile.
+        let _occupied = (case == "components").then(|| {
+            diagnostics
+                .register_component(ComponentRegistration::new("test.occupied", &[]))
+                .unwrap()
+        });
         let path = temp.path().join(format!("{case}.jsonl"));
         let runtime = LoggingRuntime::configure_with_diagnostics(
             LoggingConfig {
@@ -364,7 +391,7 @@ fn exhausted_diagnostic_budgets_do_not_prevent_operational_logging_startup() {
                 flush_interval_millis: 0,
                 sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
                     path: path.clone(),
-                    ..FileLogSinkConfig::default()
+                    ..Default::default()
                 })],
                 ..default_config()
             },
@@ -373,7 +400,6 @@ fn exhausted_diagnostic_budgets_do_not_prevent_operational_logging_startup() {
         .unwrap();
         log::info!(target: "nemo_relay.test", event = "logging_despite_budget"; "Operational logging remains available");
         runtime.shutdown();
-
         let records = std::fs::read_to_string(path).unwrap();
         assert!(
             records
@@ -381,15 +407,22 @@ fn exhausted_diagnostic_budgets_do_not_prevent_operational_logging_startup() {
                 .any(|line| serde_json::from_str::<Value>(line).unwrap()["event"]
                     == "logging_despite_budget")
         );
-        let snapshot = diagnostics.snapshot(DiagnosticQuery::default()).unwrap();
+        let snapshot = diagnostics
+            .snapshot(DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
         if case == "components" {
             assert!(snapshot.coverage.loss.components_rejected.value.get() > 0);
         } else {
-            assert!(snapshot.events.iter().any(|event| {
-                event.component.key == "logging"
-                    && event.code == "logging.projection_unavailable"
-                    && event.outcome == DiagnosticOutcome::Failure
-            }));
+            assert!(
+                snapshot
+                    .events
+                    .iter()
+                    .any(|event| event.component.key == "logging"
+                        && event.code() == "logging.projection_unavailable"
+                        && event.outcome == DiagnosticOutcome::Failure)
+            );
         }
     }
 }

@@ -22,6 +22,7 @@ use super::format::RelayFormatter;
 use super::rotation::{SizeRotatingFileWriter, rotated_log_path};
 use crate::error::{FlowError, Result};
 
+#[cfg(test)]
 pub(crate) fn build_logger(
     config: &LoggingConfig,
     root_relay_id: String,

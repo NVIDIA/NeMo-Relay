@@ -86,90 +86,43 @@ fn runtime_diagnostics_truncate_unicode_without_losing_occurrence_counts() {
 
 #[test]
 fn runtime_diagnostics_keep_success_separate_from_legacy_failure_reports() {
-    let service = Diagnostics::default();
-    let diagnostics = SignalRuntimeDiagnostics {
-        state: Arc::new(Mutex::new(RuntimeDiagnosticState::default())),
-        plugin_field: None,
-        recorder: Some(service.register_component("observability.test").unwrap()),
-    };
+    let diagnostics = SignalRuntimeDiagnostics::new_for_signal("logs", None);
     diagnostics.record("otel.logs_export_failed", "export failed".into(), 2);
     diagnostics.record("otel.logs_export_failed", "export failed again".into(), 3);
-
-    let recorder = diagnostics.recorder.as_ref().unwrap();
-    let before = recorder.snapshot().unwrap();
-    let failure = before
-        .counters
-        .iter()
-        .find(|counter| counter.code == "otel.logs_export_failed")
-        .unwrap();
-    assert_eq!(failure.occurrences.value.get(), 5);
-    let legacy_before = diagnostics.snapshot();
+    let before = diagnostics.snapshot();
+    assert_eq!(before.get("otel.logs_export_failed").unwrap().count, 5);
     for _ in 0..3 {
-        assert_eq!(diagnostics.snapshot(), legacy_before);
-        assert_eq!(recorder.snapshot().unwrap(), before);
+        assert_eq!(diagnostics.snapshot(), before);
     }
-
     diagnostics.record_success(
         "otel.logs_export_succeeded",
         "OpenTelemetry log export succeeded",
     );
-    let after = recorder.snapshot().unwrap();
+    assert_eq!(diagnostics.snapshot(), before);
+    assert!(before.get("otel.logs_export_succeeded").is_none());
+    let core = crate::diagnostics::Diagnostics::process_default();
     assert_eq!(
-        after
-            .counters
-            .iter()
-            .find(|counter| counter.code == "otel.logs_export_failed")
-            .unwrap(),
-        failure
+        core.reader().availability(),
+        crate::diagnostics::DiagnosticAvailability::Disabled
     );
-    let success = after
-        .counters
-        .iter()
-        .find(|counter| counter.code == "otel.logs_export_succeeded")
-        .unwrap();
-    assert_eq!(success.occurrences.value.get(), 1);
-    assert_eq!(success.last_message, "OpenTelemetry log export succeeded");
-    assert_eq!(diagnostics.snapshot(), legacy_before);
-    assert!(
-        diagnostics
-            .snapshot()
-            .get("otel.logs_export_succeeded")
-            .is_none()
-    );
-
-    let evidence = service
-        .snapshot(crate::diagnostics::DiagnosticQuery::default())
-        .unwrap();
-    assert_eq!(evidence.events.len(), 3);
-    assert!(
-        evidence.events[..2]
-            .iter()
-            .all(|event| { event.outcome == crate::diagnostics::DiagnosticOutcome::Failure })
-    );
-    let success_event = evidence.events.last().unwrap();
-    assert_eq!(success_event.code, "otel.logs_export_succeeded");
-    assert_eq!(
-        success_event.outcome,
-        crate::diagnostics::DiagnosticOutcome::Success
-    );
-    assert_eq!(success_event.count.get(), 1);
+    assert_eq!(core.memory_usage().reserved_bytes, 0);
 }
 
 #[test]
-fn legacy_metadata_codes_are_normalized_without_changing_subscriber_reports() {
+fn legacy_metadata_codes_remain_in_the_deferred_subscriber_report() {
     let diagnostics = SignalRuntimeDiagnostics::new(None);
     let code = "otel.resource_metadata_invalid.Application/Key";
     diagnostics.record(code, "A selected metadata value was rejected".into(), 1);
     diagnostics.record(code, "A selected metadata value was rejected".into(), 2);
-
-    assert_eq!(diagnostics.snapshot().get(code).unwrap().count, 3);
-    let snapshot = diagnostics.recorder.as_ref().unwrap().snapshot().unwrap();
-    assert_eq!(snapshot.counters.len(), 1);
-    let normalized = &snapshot.counters[0].code;
-    assert!(normalized.starts_with("legacy.code."));
-    assert!(!normalized.contains("Application"));
-    assert!(crate::diagnostics::DiagnosticCode::new(normalized).is_ok());
-    assert_eq!(snapshot.counters[0].occurrences.value.get(), 3);
+    let snapshot = diagnostics.snapshot();
+    assert_eq!(snapshot.get(code).unwrap().count, 3);
+    assert_eq!(snapshot.diagnostics.len(), 1);
+    assert_eq!(
+        crate::diagnostics::Diagnostics::process_default()
+            .reader()
+            .availability(),
+        crate::diagnostics::DiagnosticAvailability::Disabled
+    );
 }
 
 #[test]

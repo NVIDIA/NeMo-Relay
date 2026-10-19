@@ -49,8 +49,13 @@ use crate::api::runtime::{
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 use crate::diagnostics::{
-    ComponentRecorder, DiagnosticObservation, Diagnostics, legacy_component_key,
-    legacy_diagnostic_code,
+    ComponentRecorder, ComponentRegistration, DiagnosticDetailRef, DiagnosticError,
+    DiagnosticObservation, Diagnostics, PluginErrorClassifier, RecordOutcome,
+};
+use nemo_relay_types::diagnostics::{
+    BuiltinDiagnosticCode, Classification, CommonPluginFailureCode, ComponentOwnership,
+    DiagnosticClassifier, FailureClass, FailureCode, PluginFailureCode, PluginObservationContext,
+    PluginPhase,
 };
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
@@ -407,11 +412,39 @@ impl PluginRegistration {
 /// Each `register_*` call both installs the middleware/subscriber into the
 /// NeMo Relay runtime and records the inverse deregistration closure so the host
 /// can roll back partial setup on failure.
-#[derive(Default)]
 pub struct PluginRegistrationContext {
     registrations: Vec<PluginRegistration>,
     activation_diagnostics: Vec<ConfigDiagnostic>,
     namespace: Option<PluginRegistrationNamespace>,
+    // Best-effort admission is separate from the enabled/disabled recorder facade.
+    diagnostic_recorder: Option<ComponentRecorder>,
+}
+
+const PLUGIN_ACTIVATION_CODES: &[BuiltinDiagnosticCode] = &[
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::ConfigurationInvalid,
+    ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::StateConflict,
+    ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::ResourceNotFound,
+    ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::SerializationFailed,
+    ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::Internal,
+    ))),
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::RegistrationFailed,
+    ))),
+];
+
+impl Default for PluginRegistrationContext {
+    fn default() -> Self {
+        Self::with_diagnostics(Diagnostics::process_default())
+    }
 }
 
 enum PluginRegistrationNamespace {
@@ -425,20 +458,93 @@ impl PluginRegistrationContext {
         Self::default()
     }
 
-    /// Creates a plugin registration context that namespaces all registration names.
-    pub fn with_namespace(namespace: impl Into<String>) -> Self {
+    /// Creates an activation context using the owner's selected diagnostics context.
+    ///
+    /// Diagnostic admission failure never prevents plugin registration. Disabled
+    /// collection supplies the same inert recorder interface without producer checks.
+    pub fn with_diagnostics(diagnostics: &Diagnostics) -> Self {
+        Self::in_diagnostic_context(diagnostics, None)
+    }
+
+    fn in_diagnostic_context(
+        diagnostics: &Diagnostics,
+        namespace: Option<PluginRegistrationNamespace>,
+    ) -> Self {
+        let responsibility = namespace.as_ref().map(|namespace| {
+            let (PluginRegistrationNamespace::Plain(name)
+            | PluginRegistrationNamespace::PluginComponent(name)) = namespace;
+            // This is descriptive metadata. Keep even the temporary adapter copy bounded.
+            let mut end = name.len().min(128);
+            while !name.is_char_boundary(end) {
+                end -= 1;
+            }
+            name[..end].to_owned()
+        });
+        let registration = ComponentRegistration {
+            ownership: ComponentOwnership {
+                responsibility,
+                ..ComponentOwnership::default()
+            },
+            ..ComponentRegistration::new("plugin.activation", PLUGIN_ACTIVATION_CODES)
+        };
         Self {
             registrations: vec![],
             activation_diagnostics: vec![],
-            namespace: Some(PluginRegistrationNamespace::Plain(namespace.into())),
+            namespace,
+            diagnostic_recorder: diagnostics.register_component(registration).ok(),
         }
     }
 
+    /// Creates a plugin registration context that namespaces all registration names.
+    pub fn with_namespace(namespace: impl Into<String>) -> Self {
+        Self::in_diagnostic_context(
+            Diagnostics::process_default(),
+            Some(PluginRegistrationNamespace::Plain(namespace.into())),
+        )
+    }
+
     fn with_plugin_component_namespace(namespace: String) -> Self {
-        Self {
-            registrations: vec![],
-            activation_diagnostics: vec![],
-            namespace: Some(PluginRegistrationNamespace::PluginComponent(namespace)),
+        Self::in_diagnostic_context(
+            Diagnostics::process_default(),
+            Some(PluginRegistrationNamespace::PluginComponent(namespace)),
+        )
+    }
+
+    fn record_activation_failure(&self, error: &PluginError) {
+        if let Some(recorder) = &self.diagnostic_recorder {
+            let _ = recorder.record_without_projection_lazy(|| {
+                DiagnosticObservation::new(
+                    PluginErrorClassifier.classify(error),
+                    DiagnosticDetailRef::Text("Plugin component activation failed"),
+                    1,
+                )
+                .with_plugin_context(PluginObservationContext {
+                    phase: Some(PluginPhase::Activation),
+                    ..PluginObservationContext::default()
+                })
+            });
+        }
+    }
+
+    fn record_activation_unwind(&self) {
+        if let Some(recorder) = &self.diagnostic_recorder {
+            let _ = recorder.record_without_projection_lazy(|| {
+                DiagnosticObservation::new(
+                    Classification::failure(
+                        FailureCode::Plugin(PluginFailureCode::Common(
+                            CommonPluginFailureCode::Internal,
+                        )),
+                        FailureClass::Internal,
+                    )
+                    .expect("catalogue permits internal plugin failure"),
+                    "Plugin component activation unwound",
+                    1,
+                )
+                .with_plugin_context(PluginObservationContext {
+                    phase: Some(PluginPhase::Activation),
+                    ..PluginObservationContext::default()
+                })
+            });
         }
     }
 
@@ -464,6 +570,7 @@ impl PluginRegistrationContext {
             registrations: vec![],
             activation_diagnostics: vec![],
             namespace: Some(namespace),
+            diagnostic_recorder: self.diagnostic_recorder.clone(),
         }
     }
 
@@ -1774,7 +1881,6 @@ fn install_previous_configuration_for_teardown(
         report: previous_state.report.clone(),
         configuration_diagnostics: previous_state.configuration_diagnostics.clone(),
         runtime_diagnostics: previous_state.runtime_diagnostics.clone(),
-        diagnostic_recorders: previous_state.diagnostic_recorders.clone(),
         registrations: Vec::new(),
     });
     Ok(())
@@ -2589,44 +2695,34 @@ pub fn test_plugin_host_report() -> Option<ConfigReport> {
         .and_then(|host| host.as_ref().map(|host| host.report().config))
 }
 
-/// Records runtime evidence independently of plugin activation, then updates the
-/// existing active-only plugin report as a compatibility projection.
+/// Updates the existing active-only runtime report.
+///
+/// This legacy view also serves OTel consumers whose canonical migration is deferred.
+/// It never registers components or records into the canonical diagnostics service.
+/// Typed operation owners use [`record_plugin_operation_diagnostic`] with their
+/// injected component recorder instead.
 pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
-    let recorder = {
-        let mut guard = ACTIVE_PLUGIN_CONFIGURATION
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let key = legacy_component_key(
-            &format!("plugin.{}", diagnostic.component),
-            diagnostic.field.as_deref(),
-        );
-        match guard.as_mut() {
-            Some(state) => {
-                if !state.diagnostic_recorders.contains_key(&key)
-                    && let Ok(recorder) =
-                        Diagnostics::process_default().register_component(key.clone())
-                {
-                    state.diagnostic_recorders.insert(key.clone(), recorder);
-                }
-                state.diagnostic_recorders.get(&key).cloned()
-            }
-            None => Diagnostics::process_default().register_component(key).ok(),
-        }
-    };
-    if let Some(recorder) = recorder {
-        // Compatibility emitters already own their log records. This is the only
-        // recording boundary; report projection below never records a second event.
-        let observation = DiagnosticObservation::failure(
-            legacy_diagnostic_code(&diagnostic.code),
-            diagnostic.message.clone(),
-            diagnostic.count,
-        );
-        let _ = recorder.record_without_projection(observation);
-    }
     project_active_plugin_runtime_diagnostic(diagnostic);
 }
 
-/// Projects already-recorded evidence without counting another core observation.
+/// Records one typed plugin operation observation through its owning component.
+///
+/// The classifier and safe detail factory execute only when collection is enabled.
+/// Existing operational emitters and legacy report projections remain independent:
+/// neither should re-record the accepted occurrence. No report contents are replayed.
+pub fn record_plugin_operation_diagnostic<'a, E: ?Sized, C: DiagnosticClassifier<E> + ?Sized>(
+    recorder: &ComponentRecorder,
+    classifier: &C,
+    error: &'a E,
+    detail: impl FnOnce() -> DiagnosticDetailRef<'a>,
+    count: u64,
+) -> std::result::Result<RecordOutcome, DiagnosticError> {
+    recorder.record_without_projection_lazy(|| {
+        DiagnosticObservation::new(classifier.classify(error), detail(), count)
+    })
+}
+
+/// Updates legacy report state without recording a canonical observation.
 pub(crate) fn project_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
     let Ok(mut guard) = ACTIVE_PLUGIN_CONFIGURATION.lock() else {
         return;
@@ -2769,7 +2865,6 @@ struct ActivePluginConfiguration {
     report: ConfigReport,
     configuration_diagnostics: Vec<ConfigDiagnostic>,
     runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
-    diagnostic_recorders: BTreeMap<String, ComponentRecorder>,
     registrations: Vec<PluginRegistration>,
 }
 
@@ -2814,9 +2909,15 @@ async fn initialize_plugin_components(
 
         let mut pending =
             PendingPluginRegistrationContext::new(namespace, rollback_failures.clone());
-        plugin
+        if let Err(error) = plugin
             .register(&component.config, &mut pending.context)
-            .await?;
+            .await
+        {
+            // One owning activation boundary records the typed failure before rollback.
+            // Inner registration wrappers and legacy reports do not record it again.
+            pending.context.record_activation_failure(&error);
+            return Err(error);
+        }
         let (component_registrations, diagnostics) = pending.take();
         registrations.extend(component_registrations);
         registrations.extend_diagnostics(diagnostics);
@@ -2888,6 +2989,10 @@ impl PendingPluginRegistrationContext {
 
 impl Drop for PendingPluginRegistrationContext {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.context.record_activation_unwind();
+        }
+
         let outcome = rollback_registrations_checked(&mut self.context.registrations);
         if !outcome.callbacks_cleared {
             record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
@@ -2955,7 +3060,6 @@ fn store_active_plugin_configuration_with_diagnostics(
         report,
         configuration_diagnostics,
         runtime_diagnostics,
-        diagnostic_recorders: BTreeMap::new(),
         registrations,
     });
     if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
