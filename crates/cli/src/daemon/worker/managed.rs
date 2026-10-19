@@ -3,7 +3,7 @@
 
 //! Managed worker execution with raw forwarding or JSON middleware delivery.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::error::Error as _;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -20,11 +20,9 @@ use http_body_util::LengthLimitError;
 use hyper::body::{Body as HttpBody, Frame, Incoming, SizeHint};
 use nemo_relay::api::llm::{
     LlmCallEndParams, LlmCallParams, LlmRequest, llm_call, llm_call_end, llm_conditional_execution,
-    llm_request_intercepts,
+    llm_request_intercepts_with_source,
 };
-use nemo_relay::api::registry::{
-    RuntimeRegistrationIdentity, RuntimeRegistrationKind, list_runtime_registrations,
-};
+use nemo_relay::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
 use nemo_relay::api::runtime::TASK_SCOPE_STACK;
 use nemo_relay::codec::resolve::{ProviderSurface, request_codec, response_codec, streaming_codec};
 use nemo_relay::codec::streaming::SseEventDecoder;
@@ -402,11 +400,14 @@ impl ManagedRuntime {
                 .proxy_unbuffered(upstream, request, route, surface, prep, operational)
                 .await;
         }
-        let prepared = PreparedProviderRequest::read(request, &self.config).await?;
+        let mut prepared = PreparedProviderRequest::read(request, &self.config).await?;
         let start = crate::gateway::daemon_gateway_start(
             &prepared.headers,
             &prepared.path,
-            prepared.request_json.clone(),
+            prepared
+                .request_json
+                .take()
+                .expect("decoded request content"),
             prepared.streaming,
         )
         .ok_or_else(|| CliError::InvalidPayload("unsupported provider path".into()))?;
@@ -557,7 +558,7 @@ impl ManagedRuntime {
     async fn proxy_managed(
         &self,
         upstream: PooledClient,
-        prepared: PreparedProviderRequest,
+        mut prepared: PreparedProviderRequest,
         route: ProviderRoute,
         surface: ProviderSurface,
         prep: GatewayCallPrep,
@@ -581,7 +582,9 @@ impl ManagedRuntime {
         let middleware = TASK_SCOPE_STACK
             .scope(scope_stack.clone(), async {
                 llm_conditional_execution(&request).await?;
-                let mut outcome = llm_request_intercepts(&provider_name, request).await?;
+                let (mut outcome, source) =
+                    llm_request_intercepts_with_source(&provider_name, request).await?;
+                prepared.request_json = source;
                 if let Some(annotated) = outcome.annotated_request.as_ref() {
                     outcome.request = codec.encode(annotated, &outcome.request)?;
                 }
@@ -846,7 +849,9 @@ struct PreparedProviderRequest {
     path: String,
     path_and_query: String,
     body: Bytes,
-    request_json: Value,
+    // `None` after interception proves that no callback could change the body.
+    // `Some` retains a comparison baseline, including a parsed JSON null.
+    request_json: Option<Value>,
     streaming: bool,
 }
 
@@ -878,7 +883,7 @@ impl PreparedProviderRequest {
             path,
             path_and_query,
             body: bytes,
-            request_json,
+            request_json: Some(request_json),
             streaming,
         })
     }
@@ -1084,7 +1089,11 @@ fn effective_request(
     }
     strip_internal_headers(&mut headers);
     headers.remove(CONTENT_LENGTH);
-    if effective.content == prepared.request_json || effective.content.is_null() {
+    if prepared
+        .request_json
+        .as_ref()
+        .is_none_or(|source| effective.content == *source)
+    {
         return Ok((headers, prepared.body.clone(), explicit_target));
     }
     let body = serde_json::to_vec(&effective.content)
@@ -1259,18 +1268,17 @@ fn prepared_streaming(request: &LlmRequest) -> bool {
 }
 
 fn provider_middleware_requirements() -> Result<ProviderMiddlewareRequirements, CliError> {
-    let kinds = BTreeSet::from([
+    let [sanitize, conditional, request, execution, streaming] = runtime_registration_presence([
         RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
         RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
         RuntimeRegistrationKind::LlmRequestIntercept,
         RuntimeRegistrationKind::LlmExecutionIntercept,
         RuntimeRegistrationKind::LlmStreamExecutionIntercept,
-    ]);
-    let registrations = list_runtime_registrations(Some(&kinds)).map_err(CliError::from)?;
-    let managed_execution_required = registrations.iter().any(registration_requires_execution);
+    ])
+    .map_err(CliError::from)?;
+    let managed_execution_required = conditional || request || execution || streaming;
     Ok(ProviderMiddlewareRequirements {
-        request_body_decode_required: managed_execution_required
-            || registrations.iter().any(registration_reads_request_body),
+        request_body_decode_required: managed_execution_required || sanitize,
         managed_execution_required,
     })
 }
@@ -1278,25 +1286,6 @@ fn provider_middleware_requirements() -> Result<ProviderMiddlewareRequirements, 
 #[cfg(test)]
 fn request_body_decode_required() -> Result<bool, CliError> {
     provider_middleware_requirements().map(|requirements| requirements.request_body_decode_required)
-}
-
-fn registration_reads_request_body(registration: &RuntimeRegistrationIdentity) -> bool {
-    matches!(
-        registration.kind,
-        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail
-            | RuntimeRegistrationKind::LlmConditionalExecutionGuardrail
-            | RuntimeRegistrationKind::LlmRequestIntercept
-    )
-}
-
-fn registration_requires_execution(registration: &RuntimeRegistrationIdentity) -> bool {
-    matches!(
-        registration.kind,
-        RuntimeRegistrationKind::LlmRequestIntercept
-            | RuntimeRegistrationKind::LlmConditionalExecutionGuardrail
-            | RuntimeRegistrationKind::LlmExecutionIntercept
-            | RuntimeRegistrationKind::LlmStreamExecutionIntercept
-    )
 }
 
 fn finish_llm_after_dispatch_failure(

@@ -960,27 +960,25 @@ impl NemoRelayContextState {
                 continue;
             }
 
-            let mut fields = event.sanitize_fields();
-            let mut metadata = match fields.metadata.take() {
-                None => serde_json::Map::new(),
-                Some(Json::Object(metadata)) => metadata,
-                Some(metadata) => {
-                    fields.metadata = Some(metadata);
-                    log::error!(
-                        target: "nemo_relay.runtime",
-                        event = "event_metadata_injector_non_object_metadata",
-                        injector = entry.name.as_str(),
-                        event_name = event.name();
-                        "Event metadata is not an object; omitting injected attributes"
-                    );
-                    continue;
-                }
+            let metadata = match &mut event {
+                Event::Scope(scope) => &mut scope.base.metadata,
+                Event::Mark(mark) => &mut mark.base.metadata,
+            };
+            let Json::Object(metadata) =
+                metadata.get_or_insert_with(|| Json::Object(serde_json::Map::new()))
+            else {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_metadata_injector_non_object_metadata",
+                    injector = entry.name.as_str(),
+                    event_name = event.name();
+                    "Event metadata is not an object; omitting injected attributes"
+                );
+                continue;
             };
             for (key, value) in attributes {
                 metadata.entry(key).or_insert(value);
             }
-            fields.metadata = Some(Json::Object(metadata));
-            event.apply_sanitize_fields(fields);
         }
         event
     }
@@ -1749,7 +1747,9 @@ impl NemoRelayContextState {
         let mut pending_marks = Vec::new();
         let mut optimization_contributions = Vec::new();
         for entry in entries {
-            let input_content = request_value.content.clone();
+            // Raw request intercepts can change content. Keep a comparison copy only
+            // when a codec limits edits to request annotations.
+            let input_content = codec_active.then(|| request_value.content.clone());
             let callback = Arc::clone(&entry.payload.callable);
             let callback_name = name.to_string();
             let outcome = match AssertUnwindSafe(async move {
@@ -1766,7 +1766,10 @@ impl NemoRelayContextState {
                     )));
                 }
             };
-            if codec_active && outcome.request.content != input_content {
+            if input_content
+                .as_ref()
+                .is_some_and(|input| outcome.request.content != *input)
+            {
                 return Err(crate::error::FlowError::InvalidArgument(format!(
                     "LLM request intercept '{}' changed request.content while a request codec is active; modify annotated_request instead",
                     entry.name
