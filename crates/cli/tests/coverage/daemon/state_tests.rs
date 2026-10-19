@@ -418,3 +418,32 @@ fn active_worker_generation_state_is_owner_private_and_rejects_symlinks() {
     symlink(&target, &linked).expect("create state symlink");
     assert!(ActiveWorkerGenerations::load_for_test(linked).is_err());
 }
+
+#[test]
+fn borrowed_route_credentials_match_owned_digests_and_reject_noncanonical_encodings() {
+    let codec = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    for byte in [0, 1, 127, 255] {
+        let value = codec.encode([byte; 32]);
+        assert_eq!(
+            RouteCredential::digest_from_str(&value).unwrap(),
+            TokenDigest::from_token(value.as_bytes())
+        );
+        assert_eq!(
+            RouteCredential::parse(value.clone()).unwrap().digest(),
+            RouteCredential::digest_from_str(&value).unwrap()
+        );
+        for invalid in [
+            format!("{value}="),
+            format!(" {value}"),
+            format!("{value}\n"),
+            codec.encode([byte; 31]),
+            codec.encode([byte; 33]),
+        ] {
+            assert!(RouteCredential::digest_from_str(&invalid).is_err());
+        }
+    }
+    let value = codec.encode([0; 32]);
+    let invalid_tail = format!("{}B", &value[..42]);
+    assert!(RouteCredential::digest_from_str(&invalid_tail).is_err());
+    assert!(RouteCredential::digest_from_str(&"!".repeat(43)).is_err());
+}

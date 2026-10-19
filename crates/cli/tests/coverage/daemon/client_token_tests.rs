@@ -38,6 +38,16 @@ fn resolver_prefers_environment_then_file_then_none() {
 }
 
 #[test]
+fn environment_credential_does_not_resolve_the_fallback_config_path() {
+    let resolved = resolve_route_credential_with::<PathBuf>(Some(OsString::from(token(1))), || {
+        panic!("a valid environment credential must not resolve the fallback path")
+    })
+    .expect("environment credential");
+    assert_eq!(resolved.source, CredentialSource::Environment);
+    assert_eq!(resolved.credential.expose(), token(1));
+}
+
+#[test]
 fn invalid_environment_credential_falls_back_to_the_file() {
     let directory = tempfile::tempdir().expect("tempdir");
     let path = directory.path().join(CLIENT_TOKEN_FILENAME);

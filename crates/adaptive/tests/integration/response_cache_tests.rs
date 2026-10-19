@@ -3096,7 +3096,7 @@ async fn execution_intercepts_outside_the_cache_run_on_hits() {
     let outer_runs = Arc::new(AtomicUsize::new(0));
     register_tool_execution_intercept(
         "response_cache_outer_tool_execution_test",
-        40,
+        100,
         Arc::new({
             let outer_runs = Arc::clone(&outer_runs);
             move |context, next| {
@@ -3603,4 +3603,71 @@ async fn unknown_tool_field_warns_but_valid_class_names_do_not() {
         Some("not_a_field"),
         "the warning must point at the bogus field, never the class name"
     );
+}
+
+#[tokio::test]
+async fn default_cache_keeps_policy_execution_outside_hits() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    let policy_runs = Arc::new(AtomicUsize::new(0));
+    nemo_relay::api::registry::register_llm_execution_intercept(
+        "cache_policy_test",
+        100, // NeMo Guardrails default
+        Arc::new({
+            let policy_runs = Arc::clone(&policy_runs);
+            move |_name, request, _context, next| {
+                let policy_runs = Arc::clone(&policy_runs);
+                Box::pin(async move {
+                    policy_runs.fetch_add(1, Ordering::SeqCst);
+                    let mut response = next(request).await?;
+                    // Output policy is evaluated again, even for a cached answer.
+                    response["policy_run"] = json!(policy_runs.load(Ordering::SeqCst));
+                    Ok(response)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    activate_cache(scoped_cache_config()).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_provider(Arc::clone(&calls), json!({"answer": "cached"}));
+    let first = call(&provider, chat_request("policy hit")).await;
+    let second = call(&provider, chat_request("policy hit")).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "second call must hit");
+    assert_eq!(first["policy_run"], json!(1));
+    assert_eq!(second["policy_run"], json!(2));
+    nemo_relay::api::registry::deregister_llm_execution_intercept("cache_policy_test").unwrap();
+}
+
+#[tokio::test]
+async fn default_stream_cache_keeps_policy_execution_outside_hits() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    let policy_runs = Arc::new(AtomicUsize::new(0));
+    nemo_relay::api::registry::register_llm_stream_execution_intercept(
+        "stream_cache_policy_test",
+        100,
+        Arc::new({
+            let policy_runs = Arc::clone(&policy_runs);
+            move |_name, request, _context, next| {
+                let policy_runs = Arc::clone(&policy_runs);
+                Box::pin(async move {
+                    policy_runs.fetch_add(1, Ordering::SeqCst);
+                    next(request).await
+                })
+            }
+        }),
+    )
+    .unwrap();
+    activate_cache(scoped_cache_config()).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_stream_provider(Arc::clone(&calls), openai_chat_stream_chunks());
+    stream_call(&provider, chat_request("stream policy hit")).await;
+    stream_call(&provider, chat_request("stream policy hit")).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "second call must hit");
+    assert_eq!(policy_runs.load(Ordering::SeqCst), 2);
+    nemo_relay::api::registry::deregister_llm_stream_execution_intercept(
+        "stream_cache_policy_test",
+    )
+    .unwrap();
 }

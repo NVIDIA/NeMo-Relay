@@ -1142,6 +1142,11 @@ fn assert_native_host_api_versions() {
     assert_native_host_api_descriptor(
         current,
         NEMO_RELAY_NATIVE_ABI_VERSION,
+        std::mem::size_of::<NemoRelayNativeHostApiV8>(),
+    );
+    assert_native_host_api_descriptor(
+        native_host_api_v7(),
+        NEMO_RELAY_NATIVE_ABI_VERSION_LLM_EXECUTION_CONTEXT,
         std::mem::size_of::<NemoRelayNativeHostApiV7>(),
     );
     assert_native_host_api_descriptor(
@@ -2386,7 +2391,7 @@ fn assert_native_json_output_and_host_api() {
     assert_eq!(host_api.abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
     assert_eq!(
         host_api.struct_size,
-        std::mem::size_of::<NemoRelayNativeHostApiV7>()
+        std::mem::size_of::<NemoRelayNativeHostApiV8>()
     );
 }
 
@@ -5775,6 +5780,22 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
     assert_registration_entrypoints_accept_valid_names(ctx);
     assert_async_registration_entrypoints_validate_contracts(ctx);
     assert_context_registrations_reject_legacy_relay_contracts();
+
+    let cleanup = crate::plugin::rollback_registrations(&mut registration.into_registrations());
+    let errors = cleanup.errors();
+    assert!(errors.is_empty(), "{errors:?}");
+    let leftovers = crate::api::registry::list_runtime_registrations(None)
+        .unwrap()
+        .into_iter()
+        .map(|identity| identity.effective_name)
+        .filter(|name| {
+            matches!(
+                name.as_str(),
+                "registered" | "async-registered" | "async-stream-registered"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
 #[cfg(unix)]
@@ -6151,7 +6172,7 @@ fn assert_async_registration_entrypoints_validate_contracts(
                 name,
                 0,
                 false,
-                resolve_async_static_json,
+                resolve_async_null_json,
                 ptr::null_mut(),
                 None,
             ),
@@ -6250,6 +6271,19 @@ unsafe extern "C" fn resolve_async_static_json(
         unsafe { native_async_completion_resolve_json(completion, user_data.cast()) },
         NemoRelayStatus::Ok
     );
+    NemoRelayNativeAsyncCallbackState::Complete as u32
+}
+
+#[cfg(unix)]
+unsafe extern "C" fn resolve_async_null_json(
+    _user_data: *mut c_void,
+    _invocation_json: *const NemoRelayNativeString,
+    _next: *const NemoRelayNativeAsyncNext,
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    let document = native_string("null");
+    let _ = unsafe { native_async_completion_resolve_json(completion, document) };
+    unsafe { native_string_free(document) };
     NemoRelayNativeAsyncCallbackState::Complete as u32
 }
 

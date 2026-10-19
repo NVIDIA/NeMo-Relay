@@ -298,7 +298,6 @@ assert 1 <= log.count("Hook UserPromptSubmit") <= 2, log
 assert 1 <= log.count('Hook Stop (Stop) success') <= 2, log
 assert 1 <= log.count("SessionEnd:") <= 2, log
 assert "Hook PreToolUse" in log, log
-assert "Hook PermissionRequest" in log, log
 assert "Hook PostToolUse" in log, log
 assert log.count('MCP server "plugin:nemo-relay-plugin:nemo-relay": Successfully connected') == 1, log
 PY

@@ -2049,3 +2049,32 @@ fn anthropic_streaming_codec_ignores_incomplete_lifecycle_frames() {
         })
     );
 }
+
+#[test]
+fn response_decode_preserves_retained_array_validation_and_unknown_fields() {
+    let codec = AnthropicMessagesCodec;
+    for response in [
+        json!({"content": {}}),
+        json!({"content": "invalid"}),
+        json!([1]),
+    ] {
+        assert!(codec.decode_response(&response).is_err(), "{response}");
+    }
+    for response in [json!({}), json!({"content": null})] {
+        let decoded = codec.decode_response(&response).unwrap();
+        assert!(decoded.message.is_none());
+        assert!(!decoded.extra.contains_key("content"));
+    }
+    let response = json!({
+        "content": [{"type": "vendor_extension", "nested": [{"payload": "🦀\nquoted \"text\"", "value": null}]}],
+        "vendor_field": {"preserved": [1, true, "yes"]}
+    });
+    let decoded = codec.decode_response(&response).unwrap();
+    assert_eq!(decoded.extra["vendor_field"], response["vendor_field"]);
+    assert!(!decoded.extra.contains_key("content"));
+    let retained = match decoded.api_specific.unwrap() {
+        ApiSpecificResponse::AnthropicMessages { content_blocks, .. } => content_blocks,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(retained.as_ref(), response["content"].as_array());
+}

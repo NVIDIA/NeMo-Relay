@@ -167,7 +167,7 @@ class TestDynamicConfigContract:
         assert ResponseCacheConfig().to_dict() == {
             "ttl_seconds": 3600,
             "namespace": "",
-            "priority": 50,
+            "priority": 150,
             "bypass_rate": 0.0,
             "cache_nondeterministic": False,
             "key_strategy": "exact_request",
@@ -249,7 +249,7 @@ class TestDynamicConfigContract:
         assert serialized == {
             "enabled": True,
             "cache_errors": True,
-            "priority": 100,
+            "priority": 150,
             "default": {"cacheable": False, "arg_skip": [], "members": []},
             "classes": {
                 "read_only": {

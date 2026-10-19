@@ -461,7 +461,7 @@ describe('adaptive helpers', () => {
     assert.deepEqual(responseCache, {
       ttlSeconds: 3600,
       namespace: '',
-      priority: 50,
+      priority: 150,
       bypassRate: 0,
       cacheNondeterministic: false,
       keyStrategy: adaptive.ResponseCacheKeyStrategy.ExactRequest,
@@ -473,7 +473,7 @@ describe('adaptive helpers', () => {
       response_cache: {
         ttl_seconds: 3600,
         namespace: '',
-        priority: 50,
+        priority: 150,
         bypass_rate: 0,
         cache_nondeterministic: false,
         key_strategy: 'exact_request',

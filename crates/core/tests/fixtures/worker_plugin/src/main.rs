@@ -177,6 +177,9 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             "fixture_worker_gate_target",
             |_, _| async { Ok(Some("fixture initial gate".into())) },
         );
+        if fixture_flag(config, "inspect_execution_snapshots") {
+            register_snapshot_hooks(ctx, runtime.clone());
+        }
         register_fixture_tool_hooks(
             ctx,
             runtime.clone(),
@@ -267,6 +270,20 @@ fn register_fixture_tool_hooks(
                     "fixture tool request error requested".into(),
                 ));
             }
+            let before = runtime.current_scope_stack_snapshot().await?;
+            let temporary_scope = runtime
+                .push_scope(
+                    None,
+                    "fixture.snapshot",
+                    ScopeType::Function,
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
+            let inside = runtime.current_scope_stack_snapshot().await?;
+            runtime.pop_scope(&temporary_scope, None, None).await?;
+            let after = runtime.current_scope_stack_snapshot().await?;
             if emit_tokenomics_metric {
                 runtime
                     .emit_metric(
@@ -287,7 +304,11 @@ fn register_fixture_tool_hooks(
             } else {
                 emit_runtime_events(runtime).await?;
             }
-            Ok(mark_json(args, "worker_plugin"))
+            let mut result = mark_json(args, "worker_plugin");
+            result["scope_stack_snapshot"] = serde_json::to_value(&before)?;
+            result["scope_stack_snapshot_inside"] = serde_json::to_value(&inside)?;
+            result["scope_stack_snapshot_after"] = serde_json::to_value(&after)?;
+            Ok(result)
         }
     });
     ctx.register_tool_execution_intercept(
@@ -511,4 +532,36 @@ async fn main() {
         eprintln!("fixture worker failed: {error}");
         std::process::exit(1);
     }
+}
+
+fn register_snapshot_hooks(ctx: &mut PluginContext, runtime: nemo_relay_worker::PluginRuntime) {
+    let tool_runtime = runtime.clone();
+    ctx.register_tool_execution_intercept(
+        "fixture_snapshot_tool_execution",
+        -1,
+        move |context, next: ToolNext| {
+            let runtime = tool_runtime.clone();
+            async move {
+                let snapshot = runtime.current_scope_stack_snapshot().await?;
+                let tool_call_id = context.tool_call_id().map(str::to_owned);
+                let mut result = next.call(context.into_args()).await?;
+                result.result["scope_stack_snapshot"] = serde_json::to_value(snapshot)?;
+                result.result["snapshot_tool_call_id"] = serde_json::to_value(tool_call_id)?;
+                Ok(ToolExecutionInterceptOutcome::from(result))
+            }
+        },
+    );
+    ctx.register_llm_execution_intercept(
+        "fixture_snapshot_llm_execution",
+        -1,
+        move |_name, request, _context, next: LlmNext| {
+            let runtime = runtime.clone();
+            async move {
+                let snapshot = runtime.current_scope_stack_snapshot().await?;
+                let mut response = next.call(request).await?;
+                response["scope_stack_snapshot"] = serde_json::to_value(snapshot)?;
+                Ok(response)
+            }
+        },
+    );
 }

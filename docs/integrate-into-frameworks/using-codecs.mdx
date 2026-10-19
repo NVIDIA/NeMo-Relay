@@ -106,7 +106,31 @@ const passthrough = new JsonPassthrough();
 
 Use `BestEffortAnyCodec` only at boundary code where strict schemas are unavailable. Prefer dataclass, Pydantic, or explicit Node.js codecs when the framework owns a stable schema.
 
-Python dataclass and Pydantic tags reconstruct only types registered by `to_json()` in the same process. Unregistered tags remain JSON dictionaries. For stored or cross-process payloads, use an explicit `DataclassCodec` or `PydanticCodec` to select the type.
+By default, Python's `BestEffortAnyCodec` returns tagged dataclass and Pydantic values as JSON dictionaries. This also applies to values encoded by the same codec.
+
+To restore objects, pass their class objects in `allowed_types`. The following example allows the codec to restore `SearchArgs` objects:
+
+```python
+from dataclasses import dataclass
+
+from nemo_relay.typed import BestEffortAnyCodec
+
+@dataclass
+class SearchArgs:
+    query: str
+
+codec = BestEffortAnyCodec(allowed_types=[SearchArgs])
+encoded = codec.to_json(SearchArgs(query="hello"))
+restored = codec.from_json(encoded)  # SearchArgs(query="hello")
+```
+
+The list applies only to that codec. Each class must be listed on its own. Adding a base class does not allow its subclasses. Calling `to_json()` does not add classes to the list.
+
+During decoding, the codec never imports modules. It ignores old `__nv_runtime_type__` tokens. Types outside the list remain dictionaries. Pickle decoding supports only a small set of Python built-in containers. The `allowed_types` option does not change these pickle rules.
+
+Restoring an allowed type runs its constructor or Pydantic validators on the input data. Choose classes that can safely handle the data you expect.
+
+For one known schema, use `DataclassCodec` or `PydanticCodec`. With `allowed_types`, `BestEffortAnyCodec` also supports data saved earlier or encoded in another process.
 
 Use `JsonPassthrough` for model-controlled tool arguments, as the LangChain and LangGraph integrations do.
 

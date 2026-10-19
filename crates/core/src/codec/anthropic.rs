@@ -113,19 +113,23 @@ struct RawAnthropicIterationUsage {
 /// Keep this separate from [`RawAnthropicResponse`]: a malformed token count must not erase a
 /// mixed-model iteration signal before the end-event pricing step sees it.
 #[derive(Deserialize)]
-struct RawAnthropicPricingEligibility {
-    model: Option<String>,
-    usage: Option<RawAnthropicPricingUsage>,
+struct RawAnthropicPricingEligibility<'a> {
+    #[serde(borrow)]
+    model: Option<&'a str>,
+    #[serde(borrow)]
+    usage: Option<RawAnthropicPricingUsage<'a>>,
 }
 
 #[derive(Deserialize)]
-struct RawAnthropicPricingUsage {
-    iterations: Option<Vec<RawAnthropicIterationModel>>,
+struct RawAnthropicPricingUsage<'a> {
+    #[serde(borrow)]
+    iterations: Option<Vec<RawAnthropicIterationModel<'a>>>,
 }
 
 #[derive(Deserialize)]
-struct RawAnthropicIterationModel {
-    model: Option<String>,
+struct RawAnthropicIterationModel<'a> {
+    #[serde(borrow)]
+    model: Option<&'a str>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,24 +1007,39 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
     }
 
     fn allows_estimated_cost(&self, response: &Json) -> bool {
-        serde_json::from_value::<RawAnthropicPricingEligibility>(response.clone()).is_ok_and(
-            |raw| {
-                raw.usage.as_ref().is_none_or(|usage| {
-                    usage.iterations.as_ref().is_none_or(|iterations| {
-                        iterations.iter().all(|iteration| {
-                            iteration
-                                .model
-                                .as_deref()
-                                .is_none_or(|model| Some(model) == raw.model.as_deref())
-                        })
+        RawAnthropicPricingEligibility::deserialize(response).is_ok_and(|raw| {
+            raw.usage.as_ref().is_none_or(|usage| {
+                usage.iterations.as_ref().is_none_or(|iterations| {
+                    iterations.iter().all(|iteration| {
+                        iteration.model.is_none_or(|model| Some(model) == raw.model)
                     })
                 })
-            },
-        )
+            })
+        })
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        let raw: RawAnthropicResponse = serde_json::from_value(response.clone())
+        // The provider payload is already JSON. Clone its retained array directly
+        // instead of deserializing every nested value through Serde a second time.
+        let decode = || -> std::result::Result<RawAnthropicResponse, serde_json::Error> {
+            let Some(object) = response.as_object() else {
+                return RawAnthropicResponse::deserialize(response);
+            };
+            let fields = object
+                .iter()
+                .filter(|(key, _)| key.as_str() != "content")
+                .map(|(key, value)| (key.as_str(), value));
+            let mut raw =
+                RawAnthropicResponse::deserialize(serde::de::value::MapDeserializer::new(fields))?;
+            raw.content = match object.get("content") {
+                None | Some(Json::Null) => None,
+                Some(Json::Array(items)) => Some(items.clone()),
+                // Preserve the codec's existing validation for malformed arrays.
+                Some(value) => Some(Vec::<Json>::deserialize(value)?),
+            };
+            Ok(raw)
+        };
+        let raw = decode()
             .map_err(|e| FlowError::Internal(format!("Anthropic Messages response decode: {e}")))?;
 
         let content_blocks = raw.content.as_deref();
@@ -1035,7 +1054,6 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
         let usage = anthropic_usage(raw.usage, raw.model.as_deref());
 
         // Build API-specific fields: all content blocks + stop_sequence.
-        let api_specific_content_blocks = raw.content.clone();
         let api_specific = Some(ApiSpecificResponse::AnthropicMessages {
             object_type: raw.object_type,
             role: raw.role,
@@ -1043,7 +1061,7 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
             stop_sequence: raw.stop_sequence,
             service_tier: raw.service_tier,
             container: raw.container,
-            content_blocks: api_specific_content_blocks,
+            content_blocks: raw.content,
         });
 
         Ok(AnnotatedLlmResponse {
@@ -1191,15 +1209,24 @@ impl LlmCodec for AnthropicMessagesCodec {
 
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
         let baseline = self.decode(original)?;
+        self.encode_with_baseline(annotated, original, &baseline)
+    }
+
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
         let mut content = original.content.clone();
         let obj = content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
-        patch_anthropic_messages_and_model(obj, annotated, &baseline)?;
-        patch_anthropic_params(obj, annotated, &baseline);
-        patch_anthropic_tools(obj, annotated, &baseline)?;
-        patch_anthropic_common_fields(obj, annotated, &baseline);
-        validate_anthropic_supported_fields(annotated, &baseline)?;
+        patch_anthropic_messages_and_model(obj, annotated, baseline)?;
+        patch_anthropic_params(obj, annotated, baseline);
+        patch_anthropic_tools(obj, annotated, baseline)?;
+        patch_anthropic_common_fields(obj, annotated, baseline);
+        validate_anthropic_supported_fields(annotated, baseline)?;
         patch_anthropic_api_specific(obj, &annotated.api_specific, &baseline.api_specific)?;
         patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
@@ -1259,6 +1286,17 @@ impl super::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
             guard.observe(&event);
             Ok(())
         })
+    }
+
+    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+        let state = std::sync::Arc::clone(&self.state);
+        Some(Box::new(move |event: &Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(event);
+            Ok(())
+        }))
     }
 
     fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {

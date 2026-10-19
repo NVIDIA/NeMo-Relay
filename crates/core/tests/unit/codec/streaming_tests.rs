@@ -22,6 +22,25 @@ fn decodes_complete_frames_in_one_push() {
 }
 
 #[test]
+fn joins_multiline_data_while_preserving_sse_field_rules() {
+    let mut decoder = SseEventDecoder::new();
+    let events = decoder
+        .push_bytes(
+            b"event: old\nevent: message\ndata:\ndata: {\ndata:  \"text\":\"hello\",\n: keepalive\nid: ignored\ndata:\"count\":2\ndata: }\ndata:\n\n",
+        )
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event.as_deref(), Some("message"));
+    assert_eq!(events[0].data, json!({"text": "hello", "count": 2}));
+}
+
+#[test]
+fn empty_data_line_is_a_parse_error_rather_than_a_heartbeat() {
+    let mut decoder = SseEventDecoder::new();
+    assert!(decoder.push_bytes(b"data:\n\n").is_err());
+}
+
+#[test]
 fn buffers_partial_frames_across_pushes() {
     let mut decoder = SseEventDecoder::new();
     assert!(decoder.push_bytes(b"event: m\ndata: ").unwrap().is_empty());

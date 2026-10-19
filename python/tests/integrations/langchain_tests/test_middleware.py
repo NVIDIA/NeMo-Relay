@@ -1661,7 +1661,7 @@ def test_tool_arguments_remain_json(use_async: bool, tag: str) -> None:
     registered = codec.to_json(Payload("original"))
     args = {
         tag: registered["__nv_dataclass__"],
-        "__nv_runtime_type__": registered["__nv_runtime_type__"],
+        "__nv_runtime_type__": f"{Payload.__module__}.{Payload.__qualname__}:{id(Payload)}",
         "data": {"value": "model-controlled"},
     }
     request = ToolCallRequest(
@@ -1688,3 +1688,74 @@ def test_tool_arguments_remain_json(use_async: bool, tag: str) -> None:
     assert seen == [args]
     assert isinstance(result, ToolMessage)
     assert result.content == "done"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        "schema",
+        "auto",
+        "provider",
+        "tool",
+        "union",
+        "raw_union",
+        "auto_union",
+        "raw_typing_union",
+        "auto_typing_union",
+        "none",
+    ],
+)
+@pytest.mark.parametrize("answer_kind", ["first", "second"])
+def test_structured_response_uses_declared_schema(
+    use_async: bool, strategy: str, answer_kind: str, model_request: ModelRequest[Any]
+) -> None:
+    from typing import Union
+
+    from langchain.agents.middleware import ModelResponse
+    from langchain.agents.structured_output import AutoStrategy, ProviderStrategy, ToolStrategy
+    from langchain_core.messages import AIMessage
+    from pydantic import BaseModel
+
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
+
+    class Answer(BaseModel):
+        value: str
+
+    class OtherAnswer(BaseModel):
+        count: int
+
+    formats = {
+        "schema": Answer,
+        "auto": AutoStrategy(Answer),
+        "provider": ProviderStrategy(Answer),
+        "tool": ToolStrategy(Answer),
+        "union": ToolStrategy(Answer | OtherAnswer),
+        "raw_union": Answer | OtherAnswer,
+        "auto_union": AutoStrategy(Answer | OtherAnswer),
+        "raw_typing_union": Union[Answer, OtherAnswer],
+        "auto_typing_union": AutoStrategy(Union[Answer, OtherAnswer]),
+        "none": None,
+    }
+    request = model_request.override(response_format=formats[strategy])
+    answer = Answer(value="done") if answer_kind == "first" else OtherAnswer(count=1)
+
+    def handler(_request):
+        return ModelResponse(result=[AIMessage(content="done")], structured_response=answer)
+
+    async def ahandler(req):
+        return handler(req)
+
+    middleware = NemoRelayMiddleware()
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        result = (
+            asyncio.run(middleware.awrap_model_call(request, ahandler))
+            if use_async
+            else middleware.wrap_model_call(request, handler)
+        )
+    if strategy == "none" or ("union" not in strategy and answer_kind == "second"):
+        assert isinstance(result.structured_response, dict)
+        assert result.structured_response["data"] == answer.model_dump(mode="json")
+    else:
+        assert isinstance(result.structured_response, type(answer))
+        assert result.structured_response == answer

@@ -58,7 +58,14 @@ fn serve_verified_shutdown(
             .unwrap();
         let challenge = read_headers(&mut stream);
         let nonce = header(&challenge, "x-nemo-relay-bootstrap-nonce");
-        let proof = key.proof("fingerprint", &nonce);
+        let proof = key.proof(
+            &crate::gateway::client::listener_fingerprint(
+                "fingerprint",
+                listener.local_addr().unwrap(),
+                "test-instance",
+            ),
+            &nonce,
+        );
         let body = format!(
             "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"test-instance\"}}",
             env!("CARGO_PKG_VERSION"),
@@ -327,7 +334,12 @@ fn health_response_validation_rejects_every_untrusted_shape() {
         classify_health_response(
             headers,
             valid.as_bytes(),
-            Some(("fingerprint", "nonce", &key))
+            Some((
+                "fingerprint",
+                "nonce",
+                &key,
+                "127.0.0.1:1234".parse().unwrap()
+            ))
         ),
         (RelayHealth::Foreign, None)
     );
@@ -336,18 +348,35 @@ fn health_response_validation_rejects_every_untrusted_shape() {
         classify_health_response(
             invalid_proof.as_bytes(),
             valid.as_bytes(),
-            Some(("fingerprint", "nonce", &key)),
+            Some((
+                "fingerprint",
+                "nonce",
+                &key,
+                "127.0.0.1:1234".parse().unwrap()
+            )),
         ),
         (RelayHealth::Foreign, None)
     );
-    let proof = key.proof("fingerprint", "nonce");
+    let proof = key.proof(
+        &listener_fingerprint(
+            "fingerprint",
+            "127.0.0.1:1234".parse().unwrap(),
+            "instance-1",
+        ),
+        "nonce",
+    );
     let authenticated_headers =
         format!("HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\n");
     assert_eq!(
         classify_health_response(
             authenticated_headers.as_bytes(),
             valid.as_bytes(),
-            Some(("fingerprint", "nonce", &key)),
+            Some((
+                "fingerprint",
+                "nonce",
+                &key,
+                "127.0.0.1:1234".parse().unwrap()
+            )),
         ),
         (RelayHealth::Compatible, Some("instance-1".into()))
     );
@@ -414,13 +443,12 @@ fn verified_hook_payload_is_not_sent_before_the_tls_tunnel_is_authenticated() {
     .unwrap_err();
 
     let request = String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
-    assert_eq!(
-        header(
-            &request,
-            crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER
-        ),
-        key.client_token()
+    assert!(
+        !request
+            .to_lowercase()
+            .contains(crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER)
     );
+    assert!(!request.contains(&key.client_token()));
     assert!(
         !request
             .as_bytes()
@@ -448,4 +476,69 @@ fn verified_transport_reuses_loaded_bootstrap_credentials() {
     let first_identity = cached_tls_identity().unwrap();
     let second_identity = cached_tls_identity().unwrap();
     assert!(std::sync::Arc::ptr_eq(&first_identity, &second_identity));
+}
+
+#[test]
+fn relayed_health_proofs_cannot_authenticate_another_listener_or_instance() {
+    let key = BootstrapChallengeKey::from_bytes(b"oracle test key");
+    let real = "127.0.0.1:4340".parse().unwrap();
+    let squatters = ["127.0.0.1:47632", "127.0.0.2:4340"];
+    let proof = key.proof(
+        &listener_fingerprint("fingerprint", real, "real-instance"),
+        "nonce",
+    );
+    let headers = format!("HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\n");
+    let body = serde_json::json!({
+        "status": "ok", "service": "nemo-relay", "bootstrap_protocol": BOOTSTRAP_PROTOCOL_VERSION,
+        "instance_id": "real-instance",
+    })
+    .to_string();
+    assert_eq!(
+        classify_health_response(
+            headers.as_bytes(),
+            body.as_bytes(),
+            Some(("fingerprint", "nonce", &key, real))
+        )
+        .0,
+        RelayHealth::Compatible
+    );
+    for address in squatters {
+        assert_eq!(
+            classify_health_response(
+                headers.as_bytes(),
+                body.as_bytes(),
+                Some(("fingerprint", "nonce", &key, address.parse().unwrap()))
+            )
+            .0,
+            RelayHealth::Foreign
+        );
+    }
+    let tampered = body.replace("real-instance", "impostor-instance");
+    assert_eq!(
+        classify_health_response(
+            headers.as_bytes(),
+            tampered.as_bytes(),
+            Some(("fingerprint", "nonce", &key, real))
+        )
+        .0,
+        RelayHealth::Foreign
+    );
+}
+
+#[test]
+fn old_bootstrap_protocol_requests_a_restart_instead_of_gateway_reuse() {
+    let body = br#"{"status":"ok","service":"nemo-relay","bootstrap_protocol":3,"instance_id":"old-instance"}"#;
+    assert_eq!(
+        classify_health_response(b"HTTP/1.1 200 OK", body, None).0,
+        RelayHealth::Incompatible
+    );
+}
+
+#[test]
+fn verified_loopback_urls_preserve_an_explicit_default_http_port() {
+    assert_eq!(
+        parse_loopback_url("http://127.0.0.1:80").unwrap(),
+        ("127.0.0.1".into(), 80)
+    );
+    assert!(parse_loopback_url("http://127.0.0.1").is_err());
 }

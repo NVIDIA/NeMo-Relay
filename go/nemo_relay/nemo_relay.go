@@ -265,6 +265,7 @@ extern int32_t nemo_relay_scope_stack_set_thread(const FfiScopeStack* stack);
 extern int32_t nemo_relay_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
 extern int32_t nemo_relay_scope_stack_restore_thread(FfiThreadScopeStackBinding* binding);
 extern _Bool nemo_relay_scope_stack_active(void);
+extern int32_t nemo_relay_current_scope_stack_snapshot_json(char** out);
 extern void nemo_relay_scope_stack_free(FfiScopeStack* ptr);
 
 // ATIF exporter
@@ -342,10 +343,12 @@ extern int32_t goLlmRequestInterceptTrampoline(
 import "C"
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 	"unsafe"
 )
@@ -2017,6 +2020,82 @@ func FlushSubscribers() error {
 // Each ScopeStack has its own root scope and is independent of other scope stacks.
 type ScopeStack struct {
 	ptr *C.FfiScopeStack
+}
+
+// ScopeStackEntry identifies one scope in the visible runtime stack.
+type ScopeStackEntry struct {
+	ScopeID   string    `json:"scope_id"`
+	ScopeType ScopeType `json:"-"`
+}
+
+// ScopeStackSnapshot contains owned root-to-top entries, including synthetic roots.
+type ScopeStackSnapshot struct {
+	Scopes []ScopeStackEntry `json:"scopes"`
+}
+
+var snapshotScopeTypeNames = [...]string{"agent", "function", "tool", "llm", "retriever", "embedder", "reranker", "guardrail", "evaluator", "custom", "unknown"}
+
+// MarshalJSON uses the canonical lowercase encoding without changing ScopeType elsewhere.
+func (entry ScopeStackEntry) MarshalJSON() ([]byte, error) {
+	category := "unknown"
+	if entry.ScopeType >= 0 && int(entry.ScopeType) < len(snapshotScopeTypeNames) {
+		category = snapshotScopeTypeNames[entry.ScopeType]
+	}
+	return json.Marshal(struct {
+		ScopeID   string `json:"scope_id"`
+		ScopeType string `json:"scope_type"`
+	}{entry.ScopeID, category})
+}
+
+// UnmarshalJSON validates scope UUIDs and maps future categories to Unknown.
+func (entry *ScopeStackEntry) UnmarshalJSON(payload []byte) error {
+	var encoded struct {
+		ScopeID   string `json:"scope_id"`
+		ScopeType string `json:"scope_type"`
+	}
+	if err := json.Unmarshal(payload, &encoded); err != nil {
+		return err
+	}
+	identifier := encoded.ScopeID
+	if len(identifier) != 36 || identifier[8] != '-' || identifier[13] != '-' || identifier[18] != '-' || identifier[23] != '-' {
+		return errors.New("snapshot scope_id must be a canonical UUID")
+	}
+	hexadecimalIdentifier := strings.ReplaceAll(identifier, "-", "")
+	if len(hexadecimalIdentifier) != 32 {
+		return errors.New("snapshot scope_id must be a canonical UUID")
+	}
+	if _, err := hex.DecodeString(hexadecimalIdentifier); err != nil {
+		return fmt.Errorf("invalid snapshot scope UUID: %w", err)
+	}
+	category := ScopeTypeUnknown
+	for index, name := range snapshotScopeTypeNames {
+		if encoded.ScopeType == name {
+			category = ScopeType(index)
+			break
+		}
+	}
+	entry.ScopeID = strings.ToLower(identifier)
+	entry.ScopeType = category
+	return nil
+}
+
+// CurrentScopeStackSnapshot reads an explicit binding without creating a stack.
+// A nil snapshot means absence. Call inside ScopeStack.Run when a goroutine
+// needs a stable OS-thread binding across CGo calls.
+func CurrentScopeStackSnapshot() (*ScopeStackSnapshot, error) {
+	var output *C.char
+	if err := checkStatus(C.nemo_relay_current_scope_stack_snapshot_json(&output)); err != nil {
+		return nil, err
+	}
+	if output == nil {
+		return nil, nil
+	}
+	defer C.nemo_relay_string_free(output)
+	var snapshot ScopeStackSnapshot
+	if err := json.Unmarshal([]byte(C.GoString(output)), &snapshot); err != nil {
+		return nil, fmt.Errorf("invalid scope stack snapshot: %w", err)
+	}
+	return &snapshot, nil
 }
 
 // PropagationContext is the versioned, transport-neutral causal context used

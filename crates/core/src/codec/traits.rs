@@ -53,6 +53,37 @@ pub trait LlmCodec: Send + Sync {
     /// MUST use merge-not-replace semantics: overlay structured changes onto
     /// the original content, do not construct a fresh content object.
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest>;
+
+    /// Merge changes using the annotation decoded from `original.content`.
+    ///
+    /// Use a baseline from this codec and the same raw request body. Do not change
+    /// the baseline or that body after decoding. Request headers can change while
+    /// middleware runs. The runtime supplies this baseline to avoid decoding twice.
+    /// The default calls [`Self::encode`], so existing custom codecs still work.
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        _baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        self.encode(annotated, original)
+    }
+    /// Encode a request that the caller gives to this codec.
+    ///
+    /// The codec can move the request body or keep it for later use. The baseline
+    /// must match the original request body. If both header maps have the same key,
+    /// keep the value from the original request. The default calls
+    /// [`Self::encode_with_baseline`] and then moves the original headers into the result.
+    fn encode_owned_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        let mut encoded = self.encode_with_baseline(annotated, &original, baseline)?;
+        encoded.headers.extend(original.headers);
+        Ok(encoded)
+    }
 }
 
 // ---------------------------------------------------------------------------
