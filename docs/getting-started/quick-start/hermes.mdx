@@ -14,11 +14,12 @@ SPDX-License-Identifier: Apache-2.0 */}
   "id": "hermes",
   "mode": "live",
   "shells": [
-    "bash"
+    "bash",
+    "powershell"
   ],
   "cwd": "relay-hermes-quickstart",
   "requires": {
-    "jq": ">=1.6"
+    "jq (bash only)": ">=1.6"
   },
   "setup": [
     "Hermes Agent with native Relay integration and NeMo Relay Plugins diagnostics in hermes doctor",
@@ -76,22 +77,41 @@ check where the expected activity occurred.
 
 Before you start, make sure you have:
 
-- Linux, Apple Silicon macOS, or Windows Subsystem for Linux 2 (WSL2)
+- Linux, Apple Silicon macOS, or native Windows 10/11 on x64 or ARM64; Windows Subsystem for Linux 2 (WSL2) is also supported
 - Hermes Agent with native Relay support, plugin diagnostics in `hermes doctor`, and `chat --oneshot`
 - A configured Hermes Agent model with inference access: a provider API key or a supported authenticated session
-- `jq` 1.6 or newer for the JSON event check; check your version with `jq --version`
 - Permission to install Hermes Agent in your user environment
+
+For the Unix-shell instructions, install `jq` 1.6 or newer and check your version
+with `jq --version`. PowerShell uses its built-in JSON parser.
 
 <Steps toc={true}>
 
 ## Install
 
-Install Hermes Agent on Linux, macOS, or WSL2:
+Install Hermes Agent using the commands for your platform:
 
+<Tabs>
+<Tab title="Unix shell">
 {/* quickstart-block {"id":"install","role":"manual","cwd":".","shells":["bash"],"session":"main","reason":"Interactive Hermes Agent installation and provider authentication; pre-provision the declared host for unattended tests"} */}
 ```bash
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"install","role":"manual","cwd":".","shells":["powershell"],"session":"main","reason":"Interactive Hermes Agent installation and provider authentication; pre-provision the declared host for unattended tests"} */}
+```powershell
+iex (irm https://hermes-agent.nousresearch.com/install.ps1)
+```
+</Tab>
+</Tabs>
+
+On Windows, open a new PowerShell terminal after installation if `hermes` is not
+found. Hermes Agent uses Git Bash internally for its terminal tool; WSL2 is
+optional. Refer to the [Hermes Agent native Windows guide](https://hermes-agent.nousresearch.com/docs/user-guide/windows-native)
+for installation and tool prerequisites. These instructions run Hermes Agent from
+the command line in the shell where you select the Relay configuration.
 
 Complete the setup prompts and confirm that `hermes` can use your model
 provider before continuing. Check that `hermes chat --help` lists `--oneshot`;
@@ -112,30 +132,53 @@ version.
 
 Create a disposable working directory and make sure the agent can write files there:
 
+<Tabs>
+<Tab title="Unix shell">
 {/* quickstart-block {"id":"workspace","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
 mkdir relay-hermes-quickstart
 cd relay-hermes-quickstart
 ```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"workspace","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+New-Item -ItemType Directory -Path .\relay-hermes-quickstart -ErrorAction Stop | Out-Null
+Set-Location .\relay-hermes-quickstart
+```
+</Tab>
+</Tabs>
 
 Save the following files and run the remaining commands from this directory.
 
 Save the following configuration as `plugins.toml` in the directory where you
-will start Hermes Agent:
+will start Hermes Agent. Use UTF-8 encoding without a byte order mark:
 
 {/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-hermes-quickstart","path":"plugins.toml"} */}
 <Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
 
 Select that file in the shell that will start Hermes Agent:
 
+<Tabs>
+<Tab title="Unix shell">
 {/* quickstart-block {"id":"environment","role":"run","cwd":"relay-hermes-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
 export HERMES_NEMO_RELAY_PLUGINS_TOML="$PWD/plugins.toml"
 ```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"environment","role":"run","cwd":"relay-hermes-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+$env:HERMES_NEMO_RELAY_PLUGINS_TOML = (Resolve-Path .\plugins.toml -ErrorAction Stop).Path
+```
+</Tab>
+</Tabs>
 
 Run the diagnostic in that same shell:
 
-{/* quickstart-block {"id":"doctor","role":"manual","cwd":"relay-hermes-quickstart","shells":["bash"],"session":"main","reason":"Hermes Agent doctor checks unrelated optional services and can exit nonzero despite a valid Relay configuration; inspect its Relay section"} */}
+{/* quickstart-block {"id":"doctor","role":"manual","cwd":"relay-hermes-quickstart","shells":["bash","powershell"],"session":"main","reason":"Hermes Agent doctor checks unrelated optional services and can exit nonzero despite a valid Relay configuration; inspect its Relay section"} */}
 ```bash
 hermes doctor
 ```
@@ -143,7 +186,10 @@ hermes doctor
 In the **NeMo Relay Plugins** section, confirm that the selected file is listed,
 plugins are enabled, and no Relay configuration problems are reported. If the
 section is missing, update Hermes Agent before continuing. Resolve problems in
-**NeMo Relay Plugins** and your selected inference provider.
+**NeMo Relay Plugins** and your selected inference provider. If the diagnostic
+says NeMo Relay is unavailable on this platform, the installation cannot capture
+the events required by this quick start; check the supported installation for
+your operating system and architecture.
 
 <Note icon="circle-info">
 `hermes doctor` checks configuration without loading plugin code. It also checks
@@ -169,11 +215,26 @@ Protect `logs/events.jsonl` even when full payload export is disabled.
 
 From the same directory, run a one-shot turn with the common validation prompt:
 
+<Tabs>
+<Tab title="Unix shell">
 {/* quickstart-block {"id":"run","role":"run","cwd":"relay-hermes-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
 rm -f -- relay-check.txt logs/events.jsonl &&
 hermes chat --oneshot -q "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
 ```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-hermes-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+foreach ($path in @('relay-check.txt', 'logs/events.jsonl')) {
+  if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+}
+hermes chat --oneshot -q "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
+if ($LASTEXITCODE -ne 0) { throw 'Hermes Agent failed; resolve the reported error before verifying events' }
+```
+</Tab>
+</Tabs>
 
 <Note icon="circle-info">
 Hermes Agent closes the Relay session before this command exits, allowing queued
@@ -194,6 +255,8 @@ The verification command prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART
 
 Run these checks after Hermes Agent exits:
 
+<Tabs>
+<Tab title="Unix shell">
 {/* quickstart-block {"id":"verify","role":"run","cwd":"relay-hermes-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
 ```bash
 jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt > /dev/null &&
@@ -212,6 +275,35 @@ jq -se '
 ' logs/events.jsonl > /dev/null &&
 printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
 ```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-hermes-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+if ((Get-Content .\relay-check.txt -Raw -Encoding UTF8 -ErrorAction Stop).Trim() -cne 'RELAY_QUICKSTART_TOOL_OK') {
+  throw 'Expected tool-created marker file is missing'
+}
+$events = @(Get-Content .\logs\events.jsonl -Encoding UTF8 -ErrorAction Stop | ForEach-Object { ConvertFrom-Json -InputObject $_ -ErrorAction Stop })
+if (-not $events.Count -or @($events | Where-Object {
+  $_.atof_version -cne '0.1' -or $_.kind -cnotin @('scope', 'mark')
+}).Count) { throw 'Expected nonempty ATOF 0.1 records' }
+foreach ($category in @('agent', 'tool', 'llm')) {
+  $paired = @($events | Where-Object {
+    $end = $_
+    $end.kind -ceq 'scope' -and $end.scope_category -ceq 'end' -and
+    $end.category -ceq $category -and @($events | Where-Object {
+      $_.kind -ceq 'scope' -and $_.scope_category -ceq 'start' -and
+      $_.uuid -ceq $end.uuid -and $_.name -ceq $end.name -and
+      $_.category -ceq $end.category -and $_.parent_uuid -ceq $end.parent_uuid
+    }).Count -gt 0
+  })
+  if (-not $paired.Count) { throw "Missing paired $category records" }
+}
+Write-Output 'RELAY_QUICKSTART_TOOL_OK'
+Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
+```
+</Tab>
+</Tabs>
 
 The verification command prints the following output when its checks pass:
 
@@ -241,6 +333,17 @@ Read the completed model calls from the same event file:
 ```bash
 jq 'select(.kind == "scope" and .scope_category == "end" and .category == "llm") |
   {name, category, category_profile, uuid, parent_uuid, timestamp, metadata}' logs/events.jsonl
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"inspect","role":"run","cwd":"relay-hermes-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+Get-Content .\logs\events.jsonl -Encoding UTF8 -ErrorAction Stop |
+  ForEach-Object { ConvertFrom-Json -InputObject $_ -ErrorAction Stop } |
+  Where-Object { $_.kind -ceq 'scope' -and $_.scope_category -ceq 'end' -and $_.category -ceq 'llm' } |
+  Select-Object name, category, category_profile, uuid, parent_uuid, timestamp, metadata |
+  ConvertTo-Json -Depth 10
 ```
 </Tab>
 </Tabs>
