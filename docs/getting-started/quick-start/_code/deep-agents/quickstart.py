@@ -85,8 +85,12 @@ async def main() -> None:
         and event.get("uuid") in starts
         and all(event.get(key) == starts[event["uuid"]].get(key) for key in ("name", "category", "parent_uuid"))
     ]
-    if not {"agent", "tool", "llm"} <= {event.get("category") for event in closed}:
-        raise RuntimeError("Expected paired agent, tool, and LLM lifecycle records")
+    # Match the required identities, not just categories that unrelated work could satisfy.
+    for category, name in (("agent", "deepagents-request"), ("tool", "emit_marker"), ("llm", None)):
+        if not any(
+            event.get("category") == category and (name is None or event.get("name") == name) for event in closed
+        ):
+            raise RuntimeError(f"Expected paired {category} scope: {name or 'model call'}")
     print("RELAY_QUICKSTART_EVENTS_OK")
 
 
