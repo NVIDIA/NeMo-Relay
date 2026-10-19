@@ -66,8 +66,10 @@ async def main() -> None:
         and event.get("uuid") in starts
         and all(event.get(key) == starts[event["uuid"]].get(key) for key in ("name", "category", "parent_uuid"))
     ]
-    if not any(event.get("name") == "emit_marker" and event.get("category") == "agent" for event in closed):
-        raise RuntimeError("Expected the completed emit_marker graph node")
+    # Both scopes are part of this guide's contract; an unrelated completed node is insufficient.
+    for name in ("langgraph-request", "emit_marker"):
+        if not any(event.get("name") == name and event.get("category") == "agent" for event in closed):
+            raise RuntimeError(f"Expected the completed {name} scope")
     print("RELAY_QUICKSTART_EVENTS_OK")
 
 
