@@ -2289,6 +2289,171 @@ fn apply_start_alias_overrides_conflicting_subagent_id() {
 }
 
 #[tokio::test]
+async fn gateway_response_bookkeeping_preserves_parent_output_and_child_tool_hints() {
+    for method in ["owned", "borrowed", "immediate"] {
+        let manager = SessionManager::new(session_test_config());
+        let root_id = "response-bookkeeping";
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::AgentStarted(session_event(
+                    root_id,
+                    "SessionStart",
+                ))],
+            )
+            .await
+            .unwrap();
+        let response = json!({"output_text": "outside a turn"});
+        if method == "immediate" {
+            assert!(manager.try_record_gateway_response_hints(root_id, None, &response));
+        } else {
+            manager
+                .record_gateway_response_hints(root_id, None, Cow::Borrowed(&response))
+                .await;
+        }
+        assert!(
+            manager.inner.lock().await[root_id]
+                .last_turn_llm_output
+                .is_none()
+        );
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![
+                    NormalizedEvent::PromptSubmitted(SessionEvent {
+                        session_id: root_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "UserPromptSubmit".into(),
+                        payload: json!({"prompt": "summarize"}),
+                        metadata: json!({}),
+                    }),
+                    NormalizedEvent::SubagentStarted(SubagentEvent {
+                        session_id: root_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "SubagentStart".into(),
+                        subagent_id: "worker".into(),
+                        payload: json!({}),
+                        metadata: json!({}),
+                    }),
+                ],
+            )
+            .await
+            .unwrap();
+        let parent_response = json!({"output_text": "parent answer"});
+        let child_response = json!({"output": [{
+            "type": "function_call", "call_id": "child-tool", "name": "Bash",
+            "arguments": "{\"command\":\"cargo test\"}"
+        }]});
+        for (response, owner) in [
+            (&parent_response, None),
+            (&child_response, Some("worker".into())),
+        ] {
+            if method == "immediate" {
+                assert!(manager.try_record_gateway_response_hints(root_id, owner, response));
+                continue;
+            }
+            let response = if method == "borrowed" {
+                Cow::Borrowed(response)
+            } else {
+                Cow::Owned(response.clone())
+            };
+            manager
+                .record_gateway_response_hints(root_id, owner, response)
+                .await;
+        }
+        manager.alignment.lock().await.insert_alias(
+            "child-session".into(),
+            SessionAlias::new(root_id.into(), "worker".into(), json!({})),
+        );
+        let mut aliased_response = child_response.clone();
+        aliased_response["output"][0]["call_id"] = json!("aliased-tool");
+        if method == "immediate" {
+            assert!(manager.try_record_gateway_response_hints(
+                "child-session",
+                None,
+                &aliased_response
+            ));
+        } else {
+            manager
+                .record_gateway_response_hints(
+                    "child-session",
+                    None,
+                    Cow::Borrowed(&aliased_response),
+                )
+                .await;
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions[root_id];
+            assert_eq!(root.last_turn_llm_output.as_ref(), Some(&parent_response));
+            let hint = &root.pending_tool_hints.last().unwrap().hint;
+            assert_eq!(hint.subagent_id.as_deref(), Some("worker"));
+            assert_eq!(hint.tool_call_id.as_deref(), Some("aliased-tool"));
+            assert_eq!(hint.tool_name.as_deref(), Some("Bash"));
+            assert_eq!(hint.arguments, json!({"command": "cargo test"}));
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn immediate_gateway_response_bookkeeping_defers_without_partial_updates_when_busy() {
+    let manager = SessionManager::new(session_test_config());
+    let prep = manager
+        .prepare_gateway_call(&HeaderMap::new(), llm_start())
+        .await
+        .unwrap();
+    let id = prep.session_id.as_str();
+    let response = json!({"output": [{
+        "type": "function_call", "call_id": "contended-tool", "name": "Bash",
+        "arguments": "{\"command\":\"cargo test\"}"
+    }]});
+    {
+        let _alignment = manager.alignment.lock().await;
+        assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+    }
+    {
+        let _gates = manager.session_gates.lock().await;
+        assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+    }
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+        assert!(sessions[id].last_turn_llm_output.is_none());
+        assert!(sessions[id].pending_tool_hints.is_empty());
+    }
+    let gate = session_gate(&manager.session_gates, id).await;
+    let held = gate.lock().await;
+    assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+    let pending = manager.record_gateway_response_hints(id, None, Cow::Borrowed(&response));
+    tokio::pin!(pending);
+    assert!(futures_util::poll!(pending.as_mut()).is_pending());
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(sessions[id].last_turn_llm_output.is_none());
+        assert!(sessions[id].pending_tool_hints.is_empty());
+    }
+    drop(held);
+    pending.await;
+    {
+        let sessions = manager.inner.lock().await;
+        assert_eq!(sessions[id].last_turn_llm_output.as_ref(), Some(&response));
+        assert_eq!(sessions[id].pending_tool_hints.len(), 1);
+        assert_eq!(
+            sessions[id].pending_tool_hints[0]
+                .hint
+                .tool_call_id
+                .as_deref(),
+            Some("contended-tool")
+        );
+    }
+    manager
+        .finish_gateway_call(id, prep.owner_subagent_id.as_deref(), prep.session_finish)
+        .await;
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+#[tokio::test]
 async fn turn_output_uses_last_root_owned_llm_response() {
     let subscriber_name = "cli-turn-output-root-llm-test";
     let _ = deregister_subscriber(subscriber_name);
@@ -10009,7 +10174,11 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
             assert_eq!(root.active_subagent_gateway_calls["live"], 2);
         }
         manager
-            .record_gateway_response_hints("activity-root", Some("live".into()), json!({}))
+            .record_gateway_response_hints(
+                "activity-root",
+                Some("live".into()),
+                Cow::Owned(json!({})),
+            )
             .await;
         manager
             .finish_gateway_call(
@@ -10526,10 +10695,10 @@ async fn codex_inferred_child_work_after_parent_stop_preserves_synthesis() {
                 let root = sessions.get_mut(root_id).unwrap();
                 if mode == "tool_hint" {
                     root.record_completed_llm_response(
-                        json!({"output": [{
+                        Cow::Owned(json!({"output": [{
                             "type": "function_call", "call_id": "inferred-tool", "name": "Bash",
                             "arguments": "{\"command\":\"cargo test\"}"
-                        }]}),
+                        }]})),
                         Some(child_id.into()),
                     );
                 } else if mode == "request_affinity" {
@@ -10667,10 +10836,10 @@ async fn codex_finished_child_hooks_do_not_revive_parent_work() {
             let mut sessions = manager.inner.lock().await;
             let root = sessions.get_mut(root_id).unwrap();
             root.record_completed_llm_response(
-                json!({"output": [{
+                Cow::Owned(json!({"output": [{
                     "type": "function_call", "call_id": "late-response-tool", "name": "Bash",
                     "arguments": "{}"
-                }]}),
+                }]})),
                 Some(child_id.into()),
             );
             assert!(root.pending_tool_hints.is_empty());
@@ -10810,4 +10979,54 @@ async fn authenticated_pi_respects_pending_owner_claims() {
         .unwrap_err();
     assert!(matches!(error, CliError::Unauthorized(_)));
     assert!(manager.inner.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn blocked_gateway_response_does_not_block_another_session_and_can_be_cancelled() {
+    let manager = SessionManager::new(session_test_config());
+    for id in ["blocked-response", "parallel-response"] {
+        let mut start = llm_start();
+        start.session_id = Some(id.into());
+        manager
+            .prepare_gateway_call(&HeaderMap::new(), start)
+            .await
+            .unwrap();
+    }
+    let response = json!({"output": [{
+        "type": "function_call", "call_id": "tool", "name": "Bash",
+        "arguments": "{\"command\":\"cargo test\"}"
+    }]});
+    let gate = session_gate(&manager.session_gates, "blocked-response").await;
+    let held = gate.lock().await;
+    {
+        let blocked = manager.record_gateway_response_hints(
+            "blocked-response",
+            None,
+            Cow::Borrowed(&response),
+        );
+        tokio::pin!(blocked);
+        assert!(futures_util::poll!(blocked.as_mut()).is_pending());
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            manager.record_gateway_response_hints(
+                "parallel-response",
+                None,
+                Cow::Borrowed(&response),
+            ),
+        )
+        .await
+        .unwrap();
+        let sessions = manager.inner.lock().await;
+        assert!(sessions["blocked-response"].pending_tool_hints.is_empty());
+        assert!(sessions["blocked-response"].last_turn_llm_output.is_none());
+        assert_eq!(sessions["parallel-response"].pending_tool_hints.len(), 1);
+        assert_eq!(
+            sessions["parallel-response"].last_turn_llm_output.as_ref(),
+            Some(&response)
+        );
+        // Dropping the pending future must leave the blocked session untouched.
+    }
+    drop(held);
+    assert!(manager.try_record_gateway_response_hints("blocked-response", None, &response));
+    manager.close_all("test_shutdown").await.unwrap();
 }

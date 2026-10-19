@@ -519,8 +519,17 @@ fn generation_route_codecs_reject_stream_mode_changes() {
                 headers: Map::new(),
                 content,
             };
-            let mut annotated = codec.decode(&request).unwrap();
+            let baseline = codec.decode(&request).unwrap();
+            let mut annotated = baseline.clone();
             annotated.stream = Some(!original_streaming);
+            let baseline_error = codec
+                .encode_with_baseline(&annotated, &request, &baseline)
+                .unwrap_err();
+            assert!(
+                baseline_error
+                    .to_string()
+                    .contains("cannot change stream mode")
+            );
             let error = codec.encode(&annotated, &request).unwrap_err();
             assert!(
                 error.to_string().contains("cannot change stream mode"),
@@ -881,6 +890,7 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
         Some(&request),
         "http://default.invalid/v1/chat/completions",
         ProviderRoute::OpenAiChatCompletions,
+        None,
     );
     assert_eq!(effective.url, "http://127.0.0.1:9000/v1/responses");
     assert_eq!(effective.target_route, ProviderRoute::OpenAiResponses);
@@ -935,6 +945,7 @@ fn explicit_keyless_target_drops_source_credentials() {
         Some(&request),
         "http://source.invalid/v1/responses",
         ProviderRoute::OpenAiResponses,
+        None,
     );
 
     assert_eq!(
@@ -974,6 +985,7 @@ async fn cross_protocol_target_uses_only_binding_owned_authentication() {
         Some(&request),
         "http://source.invalid/v1/responses",
         ProviderRoute::OpenAiResponses,
+        None,
     );
 
     assert_eq!(effective.target_route, ProviderRoute::AnthropicMessages);
@@ -1016,6 +1028,7 @@ fn same_route_rewrite_without_explicit_dispatch_preserves_source_auth_policy() {
         Some(&request),
         "http://source.invalid/v1/responses",
         ProviderRoute::OpenAiResponses,
+        None,
     );
 
     assert_eq!(
@@ -1051,6 +1064,7 @@ fn malformed_dispatch_route_discards_the_override_url() {
         Some(&request),
         "http://default.invalid/v1/chat/completions",
         ProviderRoute::OpenAiChatCompletions,
+        None,
     );
 
     assert_eq!(effective.url, "http://default.invalid/v1/chat/completions");
@@ -1086,6 +1100,7 @@ fn dispatch_url_without_a_route_remains_supported() {
         Some(&request),
         "http://default.invalid/v1/chat/completions",
         ProviderRoute::OpenAiChatCompletions,
+        None,
     );
 
     assert_eq!(effective.url, "http://127.0.0.1:9000/v1/chat/completions");
@@ -1368,6 +1383,7 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
     let func = build_streaming_func(
         state,
         &prepared,
+        SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
         crate::operational::OperationalContext::new(),
     );
@@ -1439,6 +1455,7 @@ async fn buffered_body_read_failure_stays_structured() {
     let func = build_buffered_func(
         state,
         &prepared,
+        SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
         crate::operational::OperationalContext::new(),
     );
@@ -1493,6 +1510,7 @@ async fn buffered_invalid_json_becomes_safe_upstream_failure() {
     let func = build_buffered_func(
         state,
         &prepared,
+        SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
         crate::operational::OperationalContext::new(),
     );
@@ -2603,7 +2621,7 @@ async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
             manager.clone(),
             prep.session_id,
             prep.owner_subagent_id,
-            Arc::new(Mutex::new(None)),
+            None,
             prep.session_finish,
             crate::operational::OperationalContext::new(),
         ),
@@ -2621,6 +2639,213 @@ async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
         .await
         .unwrap();
     assert_eq!(closed, 1);
+}
+
+#[tokio::test]
+async fn streaming_gateway_call_guard_cancellation_while_waiting_releases_session() {
+    let manager = SessionManager::new(GatewayConfig::default());
+    let prep = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("stream-cancel-wait".into()),
+                provider: "openai.responses".into(),
+                model_name: None,
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: None,
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({"input": "wait"}),
+                },
+                streaming: true,
+                metadata: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+    let (sender, ready) = oneshot::channel();
+    let mut guard = GatewayCallGuard::new(
+        manager.clone(),
+        prep.session_id,
+        prep.owner_subagent_id,
+        Some(ready),
+        prep.session_finish,
+        crate::operational::OperationalContext::new(),
+    );
+    {
+        let finish = guard.finish();
+        tokio::pin!(finish);
+        assert!(futures_util::poll!(finish.as_mut()).is_pending());
+        // Cancelling this wait must leave session ownership available to Drop.
+    }
+    drop(guard);
+    assert_eq!(
+        manager
+            .close_idle_sessions_at(
+                std::time::Instant::now() + Duration::from_secs(1),
+                Duration::from_millis(1),
+                "idle_timeout",
+            )
+            .await
+            .unwrap(),
+        0
+    );
+    // A failed observer drops its sender. Cleanup must proceed on that path too.
+    drop(sender);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let closed = manager
+                .close_idle_sessions_at(
+                    std::time::Instant::now() + Duration::from_secs(1),
+                    Duration::from_millis(1),
+                    "idle_timeout",
+                )
+                .await
+                .unwrap();
+            if closed == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn uncontended_stream_completion_finishes_before_observer_poll_without_copying_response() {
+    let captured_output = Arc::new(Mutex::new(None::<Value>));
+    let captured = captured_output.clone();
+    let subscriber = "inline-response-completion-once";
+    nemo_relay::api::subscriber::register_subscriber(
+        subscriber,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(nemo_relay::api::event::ScopeCategory::End)
+                && event.name() == "codex-turn"
+                && event
+                    .metadata()
+                    .and_then(|m| m.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("inline-completion")
+            {
+                *captured.lock().unwrap() = event.output().cloned();
+            }
+        }),
+    )
+    .unwrap();
+    let manager = SessionManager::new(GatewayConfig::default());
+    let prep = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("inline-completion".into()),
+                provider: "openai.responses".into(),
+                model_name: None,
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: None,
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({"input": "record output"}),
+                },
+                streaming: true,
+                metadata: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+    let response = json!({"output_text": "x".repeat(65536)});
+    let pointer = response["output_text"].as_str().unwrap().as_ptr();
+    let (finalizer, observer, mut ready) = gateway_response_completion(
+        manager.clone(),
+        prep.session_id.clone(),
+        prep.owner_subagent_id.clone(),
+        Box::new(move || response),
+    );
+    let response = finalizer();
+    assert_eq!(response["output_text"].as_str().unwrap().as_ptr(), pointer);
+    // No background observer has run: readiness must come from completed bookkeeping.
+    assert_eq!(ready.try_recv(), Ok(()));
+    let newer_response = json!({"output_text": "a later response"});
+    manager
+        .record_gateway_response_hints(&prep.session_id, None, Cow::Borrowed(&newer_response))
+        .await;
+    // A delayed observer for the previous response must not overwrite newer output.
+    observer(&response).await.unwrap();
+    manager
+        .finish_gateway_call(
+            &prep.session_id,
+            prep.owner_subagent_id.as_deref(),
+            prep.session_finish,
+        )
+        .await;
+    manager.close_all("test_shutdown").await.unwrap();
+    nemo_relay::api::subscriber::flush_subscribers().unwrap();
+    assert_eq!(*captured_output.lock().unwrap(), Some(newer_response));
+    nemo_relay::api::subscriber::deregister_subscriber(subscriber).unwrap();
+}
+
+#[tokio::test]
+async fn stream_completion_observer_finishes_when_the_session_is_already_gone() {
+    let manager = SessionManager::new(GatewayConfig::default());
+    let response = json!({"output_text": "final"});
+    let (finalizer, observer, mut ready) = gateway_response_completion(
+        manager,
+        "removed-session".into(),
+        None,
+        Box::new(move || response),
+    );
+    let response = finalizer();
+    assert!(matches!(
+        ready.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    observer(&response).await.unwrap();
+    assert_eq!(ready.try_recv(), Ok(()));
+    assert_eq!(response["output_text"], "final");
+}
+
+// Exercise the same borrowed observer and finalization path used by the gateway.
+async fn managed_final_response_stream(
+    manager: &SessionManager,
+    prep: &GatewayCallPrep,
+    response: Value,
+    pending: bool,
+) -> (LlmJsonStream, oneshot::Receiver<()>) {
+    let (finalizer, observer, ready) = gateway_response_completion(
+        manager.clone(),
+        prep.session_id.clone(),
+        prep.owner_subagent_id.clone(),
+        Box::new(move || response),
+    );
+    let params = LlmStreamCallExecuteParams::builder()
+        .name("openai.responses")
+        .request(prep.request.clone())
+        .func(Arc::new(move |_| {
+            Box::pin(async move {
+                Ok(if pending {
+                    LlmJsonStream::new(futures_util::stream::pending())
+                } else {
+                    LlmJsonStream::new(futures_util::stream::empty())
+                })
+            })
+        }))
+        .collector(Box::new(|_| Ok(())))
+        .finalizer(finalizer)
+        .parent_opt(prep.parent.clone())
+        .attributes(prep.attributes)
+        .build();
+    let stream = TASK_SCOPE_STACK
+        .scope(
+            prep.scope_stack.clone(),
+            execute_gateway_stream(params, observer),
+        )
+        .await
+        .unwrap();
+    (stream, ready)
 }
 
 #[test]
@@ -2676,9 +2901,12 @@ fn streaming_gateway_call_guard_finishes_without_a_current_runtime() {
         (manager, prep)
     });
     let final_response = json!({ "output_text": "streamed final" });
-    let stream = LlmJsonStream::new(futures_util::stream::pending::<
-        std::result::Result<Value, FlowError>,
-    >());
+    let (stream, ready) = runtime.block_on(managed_final_response_stream(
+        &manager,
+        &prep,
+        final_response.clone(),
+        true,
+    ));
     let body = client_sse_body(
         stream,
         ProviderRoute::OpenAiResponses,
@@ -2686,7 +2914,7 @@ fn streaming_gateway_call_guard_finishes_without_a_current_runtime() {
             manager.clone(),
             prep.session_id,
             prep.owner_subagent_id,
-            Arc::new(Mutex::new(Some(final_response.clone()))),
+            Some(ready),
             prep.session_finish,
             crate::operational::OperationalContext::new(),
         ),
@@ -2757,9 +2985,8 @@ async fn streaming_body_records_final_response_for_turn_output() {
     let session_id = prep.session_id.clone();
     let owner_subagent_id = prep.owner_subagent_id.clone();
     let final_response = json!({ "output_text": "streamed final" });
-    let stream = LlmJsonStream::new(futures_util::stream::empty::<
-        std::result::Result<Value, FlowError>,
-    >());
+    let (stream, ready) =
+        managed_final_response_stream(&manager, &prep, final_response.clone(), false).await;
     let body = client_sse_body(
         stream,
         ProviderRoute::OpenAiResponses,
@@ -2767,7 +2994,7 @@ async fn streaming_body_records_final_response_for_turn_output() {
             manager.clone(),
             session_id,
             owner_subagent_id,
-            Arc::new(Mutex::new(Some(final_response.clone()))),
+            Some(ready),
             prep.session_finish,
             crate::operational::OperationalContext::new(),
         ),
@@ -3257,6 +3484,7 @@ async fn helper_authentication_reaches_gateway_upstream_on_each_dispatch() {
                     body_bytes: &Bytes::from_static(b"{}"),
                     headers: &inbound,
                     effective_request: None,
+                    source_body: None,
                     forwarding: forwarding.clone(),
                     operational: None,
                     streaming,
@@ -3434,6 +3662,7 @@ async fn prepared_gateway_request_strips_untrusted_dispatch_controls() {
         Some(&start.request),
         &prepared.upstream_url,
         prepared.provider,
+        None,
     );
     assert_eq!(effective.url, prepared.upstream_url);
     assert_eq!(effective.target_route, ProviderRoute::OpenAiChatCompletions);
@@ -3448,6 +3677,7 @@ async fn prepared_gateway_request_strips_untrusted_dispatch_controls() {
         Some(&start.request),
         &prepared.upstream_url,
         prepared.provider,
+        None,
     );
     assert_eq!(effective.url, "http://trusted.invalid/v1/chat/completions");
 }
@@ -3504,4 +3734,32 @@ async fn unmanaged_routes_never_inject_configured_or_environment_credentials() {
             );
         }
     }
+}
+
+#[test]
+fn source_request_body_moves_original_storage_and_does_not_live_with_event_codecs() {
+    let codecs = codecs_for_route(ProviderRoute::OpenAiResponses);
+    let codec = Arc::clone(codecs.request.as_ref().unwrap());
+    let original = LlmRequest {
+        headers: Map::new(),
+        content: json!({"model": "gpt-test", "input": "original request text"}),
+    };
+    let text_ptr = original.content["input"].as_str().unwrap().as_ptr();
+    let baseline = codec.decode(&original).unwrap();
+    let encoded = codec
+        .encode_owned_with_baseline(&baseline, original, &baseline)
+        .unwrap();
+    assert!(codecs.source_body.matches(&encoded.content));
+    assert_eq!(
+        codecs.source_body.0.get().unwrap()["input"]
+            .as_str()
+            .unwrap()
+            .as_ptr(),
+        text_ptr
+    );
+    let source = Arc::downgrade(&codecs.source_body.0);
+    drop(codecs);
+    assert!(source.upgrade().is_none());
+    // Retaining a codec for queued event processing must not retain the source body.
+    assert_eq!(codec.decode(&encoded).unwrap(), baseline);
 }

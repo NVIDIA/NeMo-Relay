@@ -13,8 +13,9 @@ pub(crate) use response::strip_redirect_location;
 use response::*;
 use routes::*;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use async_stream::stream;
 use axum::body::{Body, Bytes};
@@ -23,12 +24,13 @@ use axum::http::{
     HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, header,
 };
 use futures_util::StreamExt;
+use nemo_relay::api::llm::gateway::{ResponseCompletionFn, execute as execute_gateway_stream};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
-    llm_stream_call_execute,
 };
 use nemo_relay::api::runtime::{
-    LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
+    LlmCodecIdentity, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmStreamExecutionNextFn,
+    TASK_SCOPE_STACK,
 };
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
@@ -39,6 +41,7 @@ use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::Value;
+use tokio::sync::oneshot;
 
 use crate::agents::shared::alignment::{self, GatewayRouteKind};
 use crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;
@@ -240,7 +243,7 @@ pub(crate) async fn daemon_execute(
         state.sessions.clone(),
         prep.session_id.clone(),
         prep.owner_subagent_id.clone(),
-        Arc::new(Mutex::new(None)),
+        None,
         prep.session_finish,
         operational.clone(),
     );
@@ -492,6 +495,7 @@ async fn run_unmanaged_gateway(
             body_bytes: &prepared.body_bytes,
             headers: &prepared.headers,
             effective_request: None,
+            source_body: None,
             forwarding: ProviderForwarding::new(
                 prepared.provider,
                 prepared.authorization,
@@ -530,10 +534,23 @@ struct RouteCodecs {
     request: Option<Arc<dyn LlmCodec>>,
     streaming: Option<Box<dyn StreamingCodec>>,
     response: Option<Arc<dyn LlmResponseCodec>>,
+    source_body: SourceRequestBody,
+}
+
+// Retain the consumed source content only while upstream execution can retry. Queued
+// event codecs hold weak references so middleware publication cannot prolong its lifetime.
+#[derive(Clone, Default)]
+struct SourceRequestBody(Arc<OnceLock<Value>>);
+
+impl SourceRequestBody {
+    fn matches(&self, content: &Value) -> bool {
+        !content.is_null() && self.0.get().is_some_and(|source| source == content)
+    }
 }
 
 struct GatewayRequestCodec {
     inner: Arc<dyn LlmCodec>,
+    source_body: Weak<OnceLock<Value>>,
 }
 
 impl LlmCodec for GatewayRequestCodec {
@@ -550,7 +567,17 @@ impl LlmCodec for GatewayRequestCodec {
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
     ) -> nemo_relay::error::Result<LlmRequest> {
-        let original_streaming = self.inner.decode(original)?.stream.unwrap_or(false);
+        let baseline = self.inner.decode(original)?;
+        self.encode_with_baseline(annotated, original, &baseline)
+    }
+
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> nemo_relay::error::Result<LlmRequest> {
+        let original_streaming = baseline.stream.unwrap_or(false);
         let edited_streaming = annotated.stream.unwrap_or(false);
         if edited_streaming != original_streaming {
             return Err(FlowError::InvalidArgument(
@@ -558,23 +585,44 @@ impl LlmCodec for GatewayRequestCodec {
                     .into(),
             ));
         }
-        self.inner.encode(annotated, original)
+        self.inner
+            .encode_with_baseline(annotated, original, baseline)
+    }
+
+    fn encode_owned_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> nemo_relay::error::Result<LlmRequest> {
+        let mut encoded = self.encode_with_baseline(annotated, &original, baseline)?;
+        encoded.headers.extend(original.headers);
+        if encoded.content == original.content
+            && let Some(source_body) = self.source_body.upgrade()
+        {
+            let _ = source_body.set(original.content);
+        }
+        Ok(encoded)
     }
 }
 
 fn codecs_for_route(route: ProviderRoute) -> RouteCodecs {
+    let source_body = SourceRequestBody::default();
     match route.provider_surface() {
         Some(surface) => RouteCodecs {
             request: Some(Arc::new(GatewayRequestCodec {
                 inner: build_request_codec(surface),
+                source_body: Arc::downgrade(&source_body.0),
             })),
             streaming: Some(build_streaming_codec(surface)),
             response: Some(build_response_codec(surface)),
+            source_body,
         },
         None => RouteCodecs {
             request: None,
             streaming: None,
             response: None,
+            source_body,
         },
     }
 }
@@ -592,6 +640,7 @@ async fn run_managed_buffered(
     let func = build_buffered_func(
         state.clone(),
         &prepared,
+        codecs.source_body,
         upstream_failures.clone(),
         operational.clone(),
     );
@@ -637,7 +686,7 @@ async fn run_managed_buffered(
                 .record_gateway_response_hints(
                     &session_id,
                     owner_subagent_id.clone(),
-                    response_json,
+                    Cow::Owned(response_json),
                 )
                 .await;
             state
@@ -666,6 +715,7 @@ async fn run_managed_buffered(
 fn build_buffered_func(
     state: AppState,
     prepared: &PreparedGatewayRequest,
+    source_body: SourceRequestBody,
     upstream_failures: CapturedUpstreamFailuresRef,
     operational: OperationalContext,
 ) -> LlmExecutionNextFn {
@@ -687,6 +737,7 @@ fn build_buffered_func(
         let headers = headers.clone();
         let upstream_failures = upstream_failures.clone();
         let operational = operational.clone();
+        let source_body = source_body.clone();
         Box::pin(async move {
             let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
@@ -698,6 +749,7 @@ fn build_buffered_func(
                     body_bytes: &body_bytes,
                     headers: &headers,
                     effective_request: Some(&request),
+                    source_body: Some(&source_body),
                     forwarding,
                     operational: Some(&operational),
                     streaming: false,
@@ -786,6 +838,7 @@ async fn run_managed_streaming(
     let func = build_streaming_func(
         state.clone(),
         &prepared,
+        codecs.source_body,
         upstream_failures.clone(),
         operational.clone(),
     );
@@ -814,16 +867,8 @@ async fn run_managed_streaming(
         Box::pin(async move { Ok(codec.validate_stream(future.await?)) })
     });
     let collector = streaming_codec.collector();
-    let final_response = Arc::new(Mutex::new(None));
-    let final_response_for_finalizer = final_response.clone();
-    let original_finalizer = streaming_codec.finalizer();
-    let finalizer = Box::new(move || {
-        let response = original_finalizer();
-        *final_response_for_finalizer
-            .lock()
-            .expect("stream final response lock poisoned") = Some(response.clone());
-        response
-    });
+    let borrowed_collector = streaming_codec.borrowed_collector();
+    let finalizer = streaming_codec.finalizer();
 
     let GatewayCallPrep {
         scope_stack,
@@ -838,11 +883,18 @@ async fn run_managed_streaming(
         bypass_managed_pipeline: _,
         session_finish,
     } = prep;
+    let (finalizer, response_completion, response_ready) = gateway_response_completion(
+        state.sessions.clone(),
+        session_id.clone(),
+        owner_subagent_id.clone(),
+        finalizer,
+    );
     let params = LlmStreamCallExecuteParams::builder()
         .name(provider_name)
         .request(request)
         .func(func)
         .collector(collector)
+        .borrowed_collector_opt(borrowed_collector)
         .finalizer(finalizer)
         .parent_opt(parent)
         .attributes(attributes)
@@ -852,10 +904,9 @@ async fn run_managed_streaming(
         .response_codec_opt(codecs.response)
         .build();
     let json_stream_result = TASK_SCOPE_STACK
-        .scope(
-            scope_stack,
-            async move { llm_stream_call_execute(params).await },
-        )
+        .scope(scope_stack, async move {
+            execute_gateway_stream(params, response_completion).await
+        })
         .await;
     let json_stream = match json_stream_result {
         Ok(json_stream) => json_stream,
@@ -880,16 +931,65 @@ async fn run_managed_streaming(
         state.sessions.clone(),
         session_id.clone(),
         owner_subagent_id,
-        final_response,
+        Some(response_ready),
         session_finish,
         operational,
     );
     let body = client_sse_body(json_stream, provider_route, guard);
 
-    // Streamed responses are finalized inside the runtime stream wrapper. The small finalizer tap
-    // above copies only the aggregate JSON payload so the session can update turn output and tool
-    // hints after the downstream client consumes the stream, without buffering SSE bytes here.
     build_response(StatusCode::OK, headers, body)
+}
+
+// Borrow the aggregate before runtime sanitization. Complete session bookkeeping
+// inline when uncontended, so client completion does not queue behind unrelated
+// response annotation. The observer retains the async fallback for busy sessions.
+fn gateway_response_completion(
+    sessions: SessionManager,
+    session_id: String,
+    owner_subagent_id: Option<String>,
+    finalizer: LlmFinalizerFn,
+) -> (LlmFinalizerFn, ResponseCompletionFn, oneshot::Receiver<()>) {
+    let (ready, receiver) = oneshot::channel();
+    let ready = Arc::new(Mutex::new(Some(ready)));
+    let finalizer_ready = ready.clone();
+    let finalizer_sessions = sessions.clone();
+    let finalizer_session_id = session_id.clone();
+    let finalizer_owner = owner_subagent_id.clone();
+    let finalizer: LlmFinalizerFn = Box::new(move || {
+        let response = finalizer();
+        if finalizer_sessions.try_record_gateway_response_hints(
+            &finalizer_session_id,
+            finalizer_owner,
+            &response,
+        ) && let Some(ready) = finalizer_ready
+            .lock()
+            .expect("stream completion lock poisoned")
+            .take()
+        {
+            let _ = ready.send(());
+        }
+        response
+    });
+    let observer: ResponseCompletionFn = Box::new(move |response| {
+        let ready = ready
+            .lock()
+            .expect("stream completion lock poisoned")
+            .take();
+        Box::pin(async move {
+            if let Some(ready) = ready {
+                sessions
+                    .record_gateway_response_hints(
+                        &session_id,
+                        owner_subagent_id,
+                        Cow::Borrowed(response),
+                    )
+                    .await;
+                let _ = ready.send(());
+            }
+            Ok(())
+        })
+    });
+    (finalizer, observer, receiver)
 }
 
 // Builds the streaming managed-execution callback. Each failure carries either retry-routing data
@@ -897,6 +997,7 @@ async fn run_managed_streaming(
 fn build_streaming_func(
     state: AppState,
     prepared: &PreparedGatewayRequest,
+    source_body: SourceRequestBody,
     upstream_failures: CapturedUpstreamFailuresRef,
     operational: OperationalContext,
 ) -> LlmStreamExecutionNextFn {
@@ -918,6 +1019,7 @@ fn build_streaming_func(
         let headers = headers.clone();
         let upstream_failures = upstream_failures.clone();
         let operational = operational.clone();
+        let source_body = source_body.clone();
         Box::pin(async move {
             let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
@@ -929,6 +1031,7 @@ fn build_streaming_func(
                     body_bytes: &body_bytes,
                     headers: &headers,
                     effective_request: Some(&request),
+                    source_body: Some(&source_body),
                     forwarding,
                     operational: Some(&operational),
                     streaming: true,
@@ -1114,9 +1217,9 @@ fn client_sse_body(
     route: ProviderRoute,
     mut guard: GatewayCallGuard,
 ) -> Body {
-    let mut json_stream = json_stream;
+    guard.json_stream = Some(json_stream);
     let stream = stream! {
-        while let Some(item) = json_stream.next().await {
+        while let Some(item) = guard.json_stream.as_mut().expect("gateway stream installed").next().await {
             match item {
                 Ok(event_json) => {
                     yield Ok::<Bytes, CliError>(encode_sse_frame(&event_json, route));
@@ -1143,7 +1246,8 @@ struct GatewayCallGuard {
     sessions: Option<SessionManager>,
     session_id: String,
     owner_subagent_id: Option<String>,
-    final_response: Arc<Mutex<Option<Value>>>,
+    response_ready: Option<oneshot::Receiver<()>>,
+    json_stream: Option<LlmJsonStream>,
     session_finish: GatewaySessionFinish,
     operational: OperationalContext,
 }
@@ -1153,7 +1257,7 @@ impl GatewayCallGuard {
         sessions: SessionManager,
         session_id: String,
         owner_subagent_id: Option<String>,
-        final_response: Arc<Mutex<Option<Value>>>,
+        response_ready: Option<oneshot::Receiver<()>>,
         session_finish: GatewaySessionFinish,
         operational: OperationalContext,
     ) -> Self {
@@ -1161,24 +1265,28 @@ impl GatewayCallGuard {
             sessions: Some(sessions),
             session_id,
             owner_subagent_id,
-            final_response,
+            response_ready,
+            json_stream: None,
             session_finish,
             operational,
         }
     }
 
     async fn finish(&mut self) {
+        // Drop first so an interrupted managed stream schedules its observer.
+        drop(self.json_stream.take());
+        // Keep ownership in the guard across this await so cancellation still
+        // runs session cleanup through Drop.
+        if let Some(ready) = self.response_ready.as_mut() {
+            let _ = ready.await;
+        }
+        self.response_ready = None;
         if let Some(sessions) = self.sessions.take() {
-            let response = self
-                .final_response
-                .lock()
-                .expect("stream final response lock poisoned")
-                .take();
             complete_gateway_call(
                 sessions,
                 self.session_id.clone(),
                 self.owner_subagent_id.clone(),
-                response,
+                None,
                 self.session_finish,
             )
             .await;
@@ -1190,13 +1298,11 @@ async fn complete_gateway_call(
     sessions: SessionManager,
     session_id: String,
     owner_subagent_id: Option<String>,
-    response: Option<Value>,
+    response_ready: Option<oneshot::Receiver<()>>,
     session_finish: GatewaySessionFinish,
 ) {
-    if let Some(response) = response {
-        sessions
-            .record_gateway_response_hints(&session_id, owner_subagent_id.clone(), response)
-            .await;
+    if let Some(ready) = response_ready {
+        let _ = ready.await;
     }
     sessions
         .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
@@ -1205,6 +1311,7 @@ async fn complete_gateway_call(
 
 impl Drop for GatewayCallGuard {
     fn drop(&mut self) {
+        drop(self.json_stream.take());
         let Some(sessions) = self.sessions.take() else {
             return;
         };
@@ -1212,16 +1319,11 @@ impl Drop for GatewayCallGuard {
         let session_id = self.session_id.clone();
         let owner_subagent_id = self.owner_subagent_id.clone();
         let session_finish = self.session_finish;
-        let response = self
-            .final_response
-            .lock()
-            .expect("stream final response lock poisoned")
-            .take();
         let cleanup = complete_gateway_call(
             sessions,
             session_id,
             owner_subagent_id,
-            response,
+            self.response_ready.take(),
             session_finish,
         );
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -1274,6 +1376,7 @@ async fn forward_upstream_request(
         body_bytes,
         headers,
         effective_request,
+        source_body,
         forwarding,
         operational,
         streaming,
@@ -1291,6 +1394,7 @@ async fn forward_upstream_request(
         effective_request,
         url,
         forwarding.source_route,
+        source_body,
     );
     let allow_configured_auth = matches!(
         effective.credential_policy,
@@ -1348,6 +1452,7 @@ struct UpstreamForwardRequest<'a> {
     body_bytes: &'a Bytes,
     headers: &'a HeaderMap,
     effective_request: Option<&'a LlmRequest>,
+    source_body: Option<&'a SourceRequestBody>,
     forwarding: ProviderForwarding,
     operational: Option<&'a OperationalContext>,
     streaming: bool,
@@ -1380,6 +1485,7 @@ fn effective_upstream_request(
         effective_request,
         "",
         ProviderRoute::OpenAiChatCompletions,
+        None,
     );
     (effective.body_bytes, effective.headers)
 }
@@ -1390,13 +1496,17 @@ fn effective_dispatch_request(
     effective_request: Option<&LlmRequest>,
     url: &str,
     route: ProviderRoute,
+    source_body: Option<&SourceRequestBody>,
 ) -> EffectiveUpstreamRequest {
     let mut headers = headers.clone();
     strip_internal_dispatch_headers(&mut headers);
     let Some(request) = effective_request else {
         return source_request(body_bytes, headers, url, route);
     };
-    let Some((body_bytes, body_reencoded)) = reencode_request_body(request, body_bytes) else {
+    let body_unchanged = source_body.is_some_and(|source| source.matches(&request.content));
+    let Some((body_bytes, body_reencoded)) =
+        reencode_request_body(request, body_bytes, body_unchanged)
+    else {
         return source_request(body_bytes, headers, url, route);
     };
     let overrides = dispatch_overrides(&request.headers);
@@ -1409,7 +1519,7 @@ fn effective_dispatch_request(
     // Observable source headers exclude credentials. Applying the rewritten map only after source
     // credentials are removed lets an explicit target binding add its own authorization without
     // inheriting credentials intended for the original provider.
-    apply_rewritten_headers(&mut headers, &request.headers);
+    apply_rewritten_headers(&mut headers, &request.headers, body_unchanged);
     if body_reencoded {
         headers.remove(header::CONTENT_ENCODING);
     }
@@ -1437,8 +1547,12 @@ fn source_request(
     }
 }
 
-fn reencode_request_body(request: &LlmRequest, body_bytes: &Bytes) -> Option<(Bytes, bool)> {
-    if request.content.is_null() {
+fn reencode_request_body(
+    request: &LlmRequest,
+    body_bytes: &Bytes,
+    body_unchanged: bool,
+) -> Option<(Bytes, bool)> {
+    if request.content.is_null() || body_unchanged {
         return Some((body_bytes.clone(), false));
     }
     match serde_json::to_vec(&request.content) {
@@ -1498,12 +1612,15 @@ fn dispatch_overrides(headers: &serde_json::Map<String, Value>) -> DispatchOverr
 fn apply_rewritten_headers(
     headers: &mut HeaderMap,
     request_headers: &serde_json::Map<String, Value>,
+    preserve_content_encoding: bool,
 ) {
     for (name, value) in request_headers {
         let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
-        if is_internal_dispatch_header(&name) {
+        if is_internal_dispatch_header(&name)
+            || (preserve_content_encoding && name == header::CONTENT_ENCODING)
+        {
             continue;
         }
         let Some(value) = json_header_value(value) else {
@@ -1584,6 +1701,7 @@ async fn passthrough_streaming(
             body_bytes: &prepared.body_bytes,
             headers: &prepared.headers,
             effective_request: None,
+            source_body: None,
             forwarding: ProviderForwarding::new(
                 prepared.provider,
                 prepared.authorization,

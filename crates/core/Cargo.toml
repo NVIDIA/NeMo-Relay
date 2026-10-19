@@ -26,6 +26,8 @@ atof-streaming = [
     "tokio/time",
 ]
 schema = ["dep:schemars", "nemo-relay-types/schema"]
+# Internal CLI gateway support; no compatibility guarantee.
+__internal-gateway = []
 # Private test hook for suppressing implicit user/system plugin discovery.
 __skip-implicit-config = []
 # Private compatibility-free test harness for migrating legacy lifecycle tests.

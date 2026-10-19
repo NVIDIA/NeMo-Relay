@@ -284,6 +284,10 @@ pub struct LlmStreamCallExecuteParams {
     /// Per-chunk collector used to accumulate stream state.
     #[builder(setter(into))]
     pub collector: LlmCollector,
+    /// Optional callback that reads each chunk by reference.
+    /// If set, the runtime calls this callback instead of `collector`.
+    #[builder(default)]
+    pub borrowed_collector: Option<crate::api::runtime::LlmBorrowedCollectorFn>,
     /// Finalizer used to construct the completed response.
     #[builder(setter(into))]
     pub finalizer: LlmFinalizer,
@@ -1876,11 +1880,37 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 /// The returned stream emits chunk-level results while the runtime defers the
 /// LLM-end event until the collector and finalizer complete.
 pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Result<LlmJsonStream> {
+    llm_stream_call_execute_inner(params, None).await
+}
+
+/// Internal gateway support. This module has no compatibility guarantee.
+#[doc(hidden)]
+#[cfg(feature = "__internal-gateway")]
+pub mod gateway {
+    use super::*;
+
+    /// Internal callback for saving gateway response state before sanitization.
+    pub type ResponseCompletionFn = crate::api::runtime::callbacks::LlmStreamResponseCompletionFn;
+
+    /// Run a gateway stream and save response state before sanitization.
+    pub async fn execute(
+        params: LlmStreamCallExecuteParams,
+        completion: ResponseCompletionFn,
+    ) -> Result<LlmJsonStream> {
+        super::llm_stream_call_execute_inner(params, Some(completion)).await
+    }
+}
+
+async fn llm_stream_call_execute_inner(
+    params: LlmStreamCallExecuteParams,
+    response_completion: Option<crate::api::runtime::callbacks::LlmStreamResponseCompletionFn>,
+) -> Result<LlmJsonStream> {
     let LlmStreamCallExecuteParams {
         name,
         request,
         func,
         collector,
+        borrowed_collector,
         finalizer,
         parent,
         attributes,
@@ -2043,11 +2073,15 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             let wrapper = LlmStreamWrapper::new_managed(
                 raw_stream,
                 handle,
-                collector,
+                match borrowed_collector {
+                    Some(collector) => crate::stream::LlmChunkCollector::Borrowed(collector),
+                    None => crate::stream::LlmChunkCollector::Owned(collector),
+                },
                 finalizer,
                 metadata,
                 response_codec,
-                ManagedLlmStreamTelemetry::new(lifecycle_subscribers, stream_started_at),
+                ManagedLlmStreamTelemetry::new(lifecycle_subscribers, stream_started_at)
+                    .with_response_completion(response_completion),
             );
             completion.disarm();
             Ok(LlmJsonStream::from_closeable(wrapper))
