@@ -1,0 +1,207 @@
+---
+title: "LangChain Quick Start"
+sidebar-title: "LangChain"
+slug: getting-started/quick-start/langchain
+description: "Run one LangChain agent with NeMo Relay observability."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "langchain",
+  "mode": "live",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-langchain-quickstart",
+  "requires": {
+    "python": ">=3.11",
+    "uv": "available"
+  },
+  "setup": [],
+  "inputs": {
+    "NVIDIA_API_KEY": {
+      "kind": "env",
+      "secret": true
+    }
+  },
+  "fresh": [
+    "logs/events.jsonl"
+  ],
+  "checks": [
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent",
+          "name": "langchain-request"
+        },
+        {
+          "category": "tool",
+          "name": "emit_marker"
+        },
+        {
+          "category": "llm"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
+## Goal
+
+Run one LangChain agent and write its model and tool lifecycle to a local Agent Trajectory Observability Format (ATOF) file.
+
+Use the event relationships to follow model and tool work through a run and
+check where the expected activity occurred.
+
+## Prerequisites
+
+Before you start, make sure you have:
+
+- Python 3.11 or newer
+- `uv`
+- Inference access: an [NVIDIA API key](https://build.nvidia.com/settings/api-keys) for this example, or credentials for your own provider
+
+<Steps toc={true}>
+
+## Install
+
+Create a project and install the NeMo Relay version for these docs with the
+LangChain and NVIDIA model provider extras.
+For an existing `uv` project, run only the `uv add` command from its directory.
+
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
+```bash
+mkdir relay-langchain-quickstart
+cd relay-langchain-quickstart
+uv init
+uv add "nemo-relay[langchain,langchain-nvidia]==0.11.0"
+```
+
+Set your NVIDIA API key for the current shell:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-langchain-quickstart","shells":["bash"],"session":"main","env":"NVIDIA_API_KEY"} */}
+```bash
+export NVIDIA_API_KEY="your-api-key"
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-langchain-quickstart","shells":["powershell"],"session":"main","env":"NVIDIA_API_KEY"} */}
+```powershell
+$env:NVIDIA_API_KEY = "your-api-key"
+```
+</Tab>
+</Tabs>
+
+<Note icon="circle-info">
+Relay does not impose a model choice. This copyable example selects the public
+[`nvidia/nemotron-3.5-lightning-30b-a3b`](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b)
+model through the NVIDIA provider. To use another model or provider, replace
+the example's `model` argument and configure that provider's credentials.
+The NVIDIA provider reads `NVIDIA_API_KEY`. In the LangChain string, the first `nvidia:`
+selects the provider; the remaining `nvidia/...` value is the model ID.
+</Note>
+
+## Configure
+
+`plugins.toml` enables Relay's observability component and writes its events
+to `logs/events.jsonl`. In your own project, use the same plugin configuration
+with the integration code below; the marker task and success checks are only
+the quick start's validation example.
+
+Save the following configuration as `plugins.toml` in your project directory:
+
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-langchain-quickstart","path":"plugins.toml"} */}
+<Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
+
+<Warning>
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl` even when full payload export is disabled.
+</Warning>
+
+## Run
+
+The example creates a LangChain agent with one marker tool. The
+`require_marker_tool` middleware makes this test request a tool result before
+its final answer; it is test scaffolding rather than required Relay setup.
+`NemoRelayMiddleware` observes model and tool execution, and
+`NemoRelayCallbackHandler` records the framework lifecycle. Plugin activation
+loads `plugins.toml`, the outer scope groups the request, and flushing finishes
+writing queued events before verification.
+
+In your own agent, keep the Relay middleware, callback, activation, scope, and
+flush lifecycle. Replace the marker tool and prompt with your application work;
+the assertions after invocation and event-file checks belong to this example.
+
+Save this file as `quickstart.py` beside `plugins.toml`:
+
+{/* quickstart-block {"id":"program","role":"file","cwd":"relay-langchain-quickstart","path":"quickstart.py"} */}
+<Code src="_code/langchain/quickstart.py" language="python" title="quickstart.py" />
+
+Run it from the project directory:
+
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-langchain-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+uv run python quickstart.py
+```
+
+## Verify
+
+The program checks the tool result, final assistant response, and paired ATOF
+agent, tool, and LLM records. A successful run prints these markers in order:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-langchain-quickstart","from":"run","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+<Note icon="circle-info">
+The model can use different wording around the response marker. These checks
+validate a live provider call; they do not make the model deterministic.
+</Note>
+
+### Inspect the Recorded Activity
+
+Print one completed model call from the event file:
+
+{/* quickstart-block {"id":"inspect","role":"run","cwd":"relay-langchain-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+uv run python -c "
+import json
+from pathlib import Path
+events = [json.loads(line) for line in Path('logs/events.jsonl').read_text().splitlines()]
+call = next(event for event in events if event.get('scope_category') == 'end' and event.get('category') == 'llm')
+fields = ('name', 'category', 'category_profile', 'uuid', 'parent_uuid', 'timestamp', 'metadata')
+print(json.dumps({key: call.get(key) for key in fields}, indent=2))
+"
+```
+
+`category` and `name` identify the recorded work. The same `uuid` pairs its
+start and end records; `parent_uuid` connects it to its enclosing scope.
+`timestamp` records when this event occurred. For model calls, `category_profile`
+and `metadata` can include the model identity and completion status, depending
+on the integration. These fields let you follow a call through the run without
+requiring full prompt or response capture.
+
+</Steps>
+
+## For More Details
+
+For more details, refer to:
+
+- [LangChain integration guide](/supported-integrations/langchain)
+- [ATOF exporter](/configure-plugins/observability/atof)
