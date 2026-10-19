@@ -23,6 +23,14 @@ navigation:
     slug: quick-start
     collapsed: open-by-default
     contents:
+    - section: Agent Harnesses
+      skip-slug: true
+      collapsed: open-by-default
+      contents:
+      - page: Hermes Agent
+        icon: fa-solid fa-terminal
+        path: ../pages-dev/getting-started/quick-start/hermes.mdx
+        slug: hermes
     - section: Application APIs
       skip-slug: true
       collapsed: open-by-default
