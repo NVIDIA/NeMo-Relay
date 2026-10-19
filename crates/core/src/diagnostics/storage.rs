@@ -8,83 +8,55 @@ use std::collections::TryReserveError;
 use std::fmt;
 use std::io;
 
-/// A circular sequence whose backing allocation never grows.
-pub(super) struct FixedRing<T> {
-    slots: Box<[Option<T>]>,
-    head: usize,
-    len: usize,
+/// Runtime-sized history with fixed backing. The wrapper deliberately exposes
+/// no resize operation; displaced entries remain the state's responsibility.
+pub(super) struct BoundedHistory<T> {
+    buffer: circular_buffer::HeapCircularBuffer<T>,
 }
 
-impl<T> FixedRing<T> {
-    pub(super) fn new(capacity: usize) -> Result<Self, TryReserveError> {
-        let mut slots = Vec::new();
-        slots.try_reserve_exact(capacity)?;
-        slots.resize_with(capacity, || None);
-        Ok(Self {
-            slots: slots.into_boxed_slice(),
-            head: 0,
-            len: 0,
-        })
+impl<T> BoundedHistory<T> {
+    /// Validate and account for the library's aligned header and element array.
+    /// The zero-capacity fixed buffer supplies the header layout without an
+    /// allocation. Actual backing is measured separately after construction.
+    pub(super) fn required_bytes(capacity: usize) -> Result<usize, TryReserveError> {
+        let items = std::alloc::Layout::array::<T>(capacity).map_err(|_| capacity_error())?;
+        std::alloc::Layout::new::<circular_buffer::FixedCircularBuffer<T, 0>>()
+            .extend(items)
+            .map(|(layout, _)| layout.pad_to_align().size())
+            .map_err(|_| capacity_error())
+    }
+
+    /// Call after startup admission has validated the allocation layout.
+    /// The library uses the global allocation-error handler on allocation failure.
+    pub(super) fn new(capacity: usize) -> Self {
+        Self {
+            buffer: circular_buffer::HeapCircularBuffer::with_capacity(capacity),
+        }
     }
 
     pub(super) fn len(&self) -> usize {
-        self.len
-    }
-    pub(super) fn capacity(&self) -> usize {
-        self.slots.len()
+        self.buffer.len()
     }
     pub(super) fn reserved_bytes(&self) -> usize {
-        self.slots.len() * std::mem::size_of::<Option<T>>()
+        std::mem::size_of_val(self.buffer.as_circular_buffer())
     }
 
     pub(super) fn get(&self, index: usize) -> Option<&T> {
-        if index >= self.len {
-            return None;
-        }
-        self.slots[(self.head + index) % self.capacity()].as_ref()
+        self.buffer.get(index)
     }
 
     pub(super) fn pop_front(&mut self) -> Option<T> {
-        if self.len == 0 {
-            return None;
-        }
-        let value = self.slots[self.head].take();
-        self.head = (self.head + 1) % self.capacity();
-        self.len -= 1;
-        value
+        self.buffer.pop_front()
     }
 
-    /// Return the displaced oldest entry. A zero-capacity ring returns the
+    /// Return the displaced oldest entry. A zero-capacity history returns the
     /// incoming entry; its owner must classify that as omitted incoming evidence.
     pub(super) fn push_back(&mut self, value: T) -> Option<T> {
-        if self.capacity() == 0 {
-            return Some(value);
-        }
-        let evicted = if self.len == self.capacity() {
-            self.pop_front()
-        } else {
-            None
-        };
-        let slot = (self.head + self.len) % self.capacity();
-        self.slots[slot] = Some(value);
-        self.len += 1;
-        evicted
+        self.buffer.push_back(value)
     }
 
-    /// Remove a logical entry while preserving order, without a second buffer.
     pub(super) fn remove(&mut self, index: usize) -> Option<T> {
-        if index >= self.len {
-            return None;
-        }
-        let capacity = self.capacity();
-        let value = self.slots[(self.head + index) % capacity].take();
-        for next in index + 1..self.len {
-            let source = (self.head + next) % capacity;
-            let target = (self.head + next - 1) % capacity;
-            self.slots[target] = self.slots[source].take();
-        }
-        self.len -= 1;
-        value
+        self.buffer.remove(index)
     }
 }
 
@@ -381,5 +353,32 @@ impl io::Write for CappedWriter<'_> {
 impl fmt::Write for CappedWriter<'_> {
     fn write_str(&mut self, value: &str) -> fmt::Result {
         io::Write::write_all(self, value.as_bytes()).map_err(|_| fmt::Error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BoundedHistory;
+
+    #[test]
+    fn history_preflight_matches_library_backing_including_alignment() {
+        #[repr(align(64))]
+        struct Aligned;
+
+        fn check<T>() {
+            for capacity in [0, 1, 2, 256] {
+                let history = BoundedHistory::<T>::new(capacity);
+                assert_eq!(
+                    BoundedHistory::<T>::required_bytes(capacity).unwrap(),
+                    history.reserved_bytes(),
+                );
+            }
+        }
+        check::<u8>();
+        check::<u64>();
+        check::<Aligned>();
+        check::<super::super::state::StoredObservation>();
+        assert!(BoundedHistory::<u64>::required_bytes(usize::MAX).is_err());
+        assert!(BoundedHistory::<u8>::required_bytes(isize::MAX as usize).is_err());
     }
 }

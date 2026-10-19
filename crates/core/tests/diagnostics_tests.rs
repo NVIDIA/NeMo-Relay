@@ -589,6 +589,65 @@ fn closed_metadata_reclamation_expires_dependent_events_and_stale_handles() {
 }
 
 #[test]
+fn closed_component_reclamation_preserves_wrapped_history_order_and_reuses_detail() {
+    let service = diagnostics(DiagnosticLimits {
+        max_components: 2,
+        max_events: 4,
+        detail_pool_bytes: 512,
+        detail_block_bytes: 64,
+        ..limits()
+    });
+    let (owner, first) = service
+        .register_owned_component(ComponentRegistration::new("first", &CODES))
+        .unwrap();
+    let second = register(&service, "second");
+    let reserved = service.memory_usage().reserved_bytes;
+    for count in 1..=6 {
+        record(if count % 2 == 0 { &second } else { &first }, count);
+    }
+    assert_eq!(service.memory_usage().detail_bytes, 4 * 64);
+    owner.close().unwrap();
+    let third = register(&service, "third");
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(
+        view.events
+            .iter()
+            .map(|event| event.count.get())
+            .collect::<Vec<_>>(),
+        [4, 6],
+    );
+    assert!(
+        view.events
+            .iter()
+            .all(|event| event.component.key == "second")
+    );
+    assert_eq!(view.coverage.loss.events_evicted.value.get(), 4);
+    assert_eq!(service.memory_usage().detail_bytes, 2 * 64);
+
+    record(&third, 7);
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(
+        view.events
+            .iter()
+            .map(|event| event.count.get())
+            .collect::<Vec<_>>(),
+        [4, 6, 7],
+    );
+    assert!(
+        view.events
+            .windows(2)
+            .all(|pair| pair[0].sequence < pair[1].sequence)
+    );
+    assert!(
+        view.events
+            .iter()
+            .all(|event| event.message() == Some("failure"))
+    );
+    assert_eq!(service.memory_usage().detail_bytes, 3 * 64);
+    assert_eq!(service.memory_usage().reserved_bytes, reserved);
+}
+
+#[test]
 fn final_recorder_drop_closes_without_a_reader_extending_registration_lifetime() {
     let service = diagnostics(limits());
     let component = register(&service, "producer");
