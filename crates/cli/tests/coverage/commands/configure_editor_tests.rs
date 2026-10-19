@@ -7,6 +7,7 @@ fn document(contents: &str) -> ConfigDocument {
     ConfigDocument {
         path: PathBuf::from("config.toml"),
         document: contents.parse().unwrap(),
+        logging_section: "logging",
     }
 }
 
@@ -144,6 +145,18 @@ fn malformed_sections_and_missing_sinks_report_errors() {
             .is_err()
     );
     assert!(malformed.add_sink("relay.log".into()).is_err());
+
+    for section in ["logging", "daemon.logging"] {
+        let mut malformed = document(&format!("[{section}]\nsinks = \"invalid\"\n"));
+        malformed.logging_section = section;
+        let error = malformed.add_sink("relay.log".into()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "configuration error: {section}.sinks must be an array of tables before it can be edited"
+            )
+        );
+    }
 
     let mut document = document("");
     assert!(document.remove_sink(0).is_err());
@@ -345,4 +358,196 @@ fn sink_accessors_report_invalid_and_incomplete_entries() {
         document.sink_string(0, "path").as_deref(),
         Some("relay.log")
     );
+}
+
+#[test]
+fn newly_exposed_settings_round_trip_through_runtime_configuration() {
+    let root = tempfile::tempdir().unwrap();
+    let mut document = document("# preserved\n[agents.codex]\ncommand = \"old-codex\"\n");
+    document.path = root.path().join("config.toml");
+    document
+        .set_integer("upstream", "response_timeout_secs", 0)
+        .unwrap();
+    document
+        .set_string(
+            "upstream",
+            "chatgpt_codex_base_url",
+            "https://chatgpt.example.test/backend-api".into(),
+        )
+        .unwrap();
+    document
+        .set_value("logging", "stderr_enabled", Value::from(false))
+        .unwrap();
+    for agent in ["claude", "codex", "pi"] {
+        document
+            .set_string(
+                &format!("agents.{agent}"),
+                "command",
+                format!("/custom/{agent}"),
+            )
+            .unwrap();
+    }
+    document.write(TargetScope::User).unwrap();
+
+    let _environment = crate::test_support::ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let previous_system =
+        crate::configuration::set_test_system_config_dir(Some(root.path().join("system")));
+    let resolved = crate::configuration::resolve_server_config(&crate::server::GatewayOverrides {
+        config: Some(document.path.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    crate::configuration::set_test_system_config_dir(previous_system);
+    assert_eq!(resolved.gateway.response_timeout_secs, 0);
+    assert_eq!(
+        resolved.gateway.chatgpt_codex_base_url.as_deref(),
+        Some("https://chatgpt.example.test/backend-api")
+    );
+    assert!(!resolved.logging.stderr_enabled);
+    assert_eq!(
+        resolved.agents.claude.command.as_deref(),
+        Some("/custom/claude")
+    );
+    assert_eq!(
+        resolved.agents.codex.command.as_deref(),
+        Some("/custom/codex")
+    );
+    assert_eq!(resolved.agents.pi.command.as_deref(), Some("/custom/pi"));
+
+    document
+        .set_integer("upstream", "response_timeout_secs", 90)
+        .unwrap();
+    document.write(TargetScope::User).unwrap();
+    let reloaded = ConfigDocument::read(document.path.clone()).unwrap();
+    assert_eq!(
+        reloaded.integer("upstream", "response_timeout_secs"),
+        Some(90)
+    );
+    assert_eq!(
+        reloaded.boolean_summary("logging", "stderr_enabled"),
+        "false"
+    );
+    assert!(reloaded.document.to_string().contains("# preserved"));
+
+    for (section, key) in [
+        ("upstream", "response_timeout_secs"),
+        ("upstream", "chatgpt_codex_base_url"),
+        ("logging", "stderr_enabled"),
+        ("agents.claude", "command"),
+        ("agents.codex", "command"),
+        ("agents.pi", "command"),
+    ] {
+        document.clear_key(section, key).unwrap();
+        assert!(!document.has_key(section, key));
+    }
+    assert!(document.document.get("agents").is_none());
+    assert!(document.document.get("logging").is_none());
+    assert!(document.document.get("upstream").is_none());
+}
+
+#[test]
+fn nested_agent_commands_and_boolean_support_all_toml_table_forms() {
+    for contents in [
+        "[agents.codex]\ncommand = \"old\"\n[logging]\nstderr_enabled = false\n",
+        "agents.codex.command = \"old\"\nlogging.stderr_enabled = false\n",
+        "agents = { codex = { command = \"old\" }, pi = { command = \"keep\" } }\nlogging = { stderr_enabled = false }\n",
+    ] {
+        let mut document = document(contents);
+        assert_eq!(document.string_summary("agents.codex", "command"), "old");
+        assert_eq!(document.boolean("logging", "stderr_enabled"), Some(false));
+        document
+            .set_string("agents.codex", "command", "new".into())
+            .unwrap();
+        document
+            .set_value("logging", "stderr_enabled", Value::from(true))
+            .unwrap();
+        let parsed: toml::Value = toml::from_str(&document.document.to_string()).unwrap();
+        assert_eq!(parsed["agents"]["codex"]["command"].as_str(), Some("new"));
+        assert_eq!(parsed["logging"]["stderr_enabled"].as_bool(), Some(true));
+        document.clear_key("agents.codex", "command").unwrap();
+        assert!(!document.has_key("agents.codex", "command"));
+        if contents.contains("keep") {
+            assert_eq!(document.string_summary("agents.pi", "command"), "keep");
+        }
+    }
+    let mut invalid = document("agents = { codex = false }\nlogging = { stderr_enabled = 1 }\n");
+    assert!(
+        invalid
+            .set_string("agents.codex", "command", "codex".into())
+            .is_err()
+    );
+    assert_eq!(
+        invalid.boolean_summary("logging", "stderr_enabled"),
+        "invalid"
+    );
+    invalid.clear_key("logging", "stderr_enabled").unwrap();
+    assert_eq!(
+        invalid.boolean_summary("logging", "stderr_enabled"),
+        "unset"
+    );
+}
+
+#[test]
+fn daemon_logging_edits_preserve_application_logging() {
+    let root = tempfile::tempdir().unwrap();
+    let mut document = document(
+        "[logging]\nlevel = \"warn\"\nstderr_enabled = true\n[[logging.sinks]]\npath = \"app.log\"\n",
+    );
+    document.path = root.path().join("config.toml");
+    document.logging_section = "daemon.logging";
+    document
+        .set_enum("daemon.logging", "level", "debug", LOG_LEVELS)
+        .unwrap();
+    document
+        .set_enum("daemon.logging", "stderr_format", "jsonl", LOG_FORMATS)
+        .unwrap();
+    document
+        .set_value("daemon.logging", "stderr_enabled", Value::from(false))
+        .unwrap();
+    document
+        .set_integer("daemon.logging", "flush_interval_millis", 0)
+        .unwrap();
+    document.add_sink("daemon.log".into()).unwrap();
+    document
+        .set_sink_enum(0, "level", "trace", LOG_LEVELS)
+        .unwrap();
+    document
+        .set_sink_enum(0, "format", "human", LOG_FORMATS)
+        .unwrap();
+    document.set_sink_queue_capacity(0, 128).unwrap();
+    document.set_sink_rotation(0, 1024 * 1024, 2).unwrap();
+    document.write(TargetScope::User).unwrap();
+
+    let _environment = crate::test_support::ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let previous_system =
+        crate::configuration::set_test_system_config_dir(Some(root.path().join("system")));
+    let daemon = crate::configuration::resolve_daemon_logging_config(Some(&document.path)).unwrap();
+    crate::configuration::set_test_system_config_dir(previous_system);
+    assert!(!daemon.stderr_enabled);
+    assert_eq!(daemon.level, nemo_relay::logging::LogLevel::Debug);
+    assert_eq!(daemon.flush_interval_millis, 0);
+    let nemo_relay::logging::LogSinkConfig::File(sink) = &daemon.sinks[0];
+    assert_eq!(sink.path, PathBuf::from("daemon.log"));
+    assert_eq!(sink.queue_capacity, 128);
+    assert!(sink.rotation.is_some());
+
+    document.clear_sink_rotation(0).unwrap();
+    document.remove_sink(0).unwrap();
+    for key in [
+        "level",
+        "stderr_format",
+        "stderr_enabled",
+        "flush_interval_millis",
+    ] {
+        document.clear_key("daemon.logging", key).unwrap();
+    }
+    assert!(document.document.get("daemon").is_none());
+    document.logging_section = "logging";
+    assert_eq!(document.sink_labels(), ["sink 1 (app.log)"]);
+    assert_eq!(document.string_summary("logging", "level"), "warn");
+    assert_eq!(document.boolean("logging", "stderr_enabled"), Some(true));
 }

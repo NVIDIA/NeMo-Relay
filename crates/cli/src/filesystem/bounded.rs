@@ -18,7 +18,26 @@ pub(crate) fn stream_bounded_regular_file(
     description: &str,
     mut consume: impl FnMut(&[u8]),
 ) -> Result<(), String> {
-    const BUFFER_BYTES: usize = 64 * 1024;
+    open_bounded_regular_file(path, description)?.stream(|chunk| {
+        consume(chunk);
+        Ok(())
+    })
+}
+
+/// An open regular file with a checked size.
+/// Hashes use the length and bytes from the same file handle. Reads fail if
+/// the file grows or shrinks.
+pub(crate) struct BoundedFile<'a> {
+    file: std::fs::File,
+    length: usize,
+    path: &'a Path,
+    description: &'a str,
+}
+
+pub(crate) fn open_bounded_regular_file<'a>(
+    path: &'a Path,
+    description: &'a str,
+) -> Result<BoundedFile<'a>, String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         format!(
             "failed to inspect {description} {}: {error}",
@@ -44,7 +63,7 @@ pub(crate) fn stream_bounded_regular_file(
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    let mut file = options
+    let file = options
         .open(path)
         .map_err(|error| format!("failed to read {description} {}: {error}", path.display()))?;
     let opened_metadata = file.metadata().map_err(|error| {
@@ -65,23 +84,56 @@ pub(crate) fn stream_bounded_regular_file(
             path.display()
         ));
     }
-    let mut buffer = [0_u8; BUFFER_BYTES];
-    let mut total = 0_u64;
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| format!("failed to read {description} {}: {error}", path.display()))?;
-        if read == 0 {
-            break;
+    let length = usize::try_from(opened_metadata.len())
+        .map_err(|_| format!("{description} {} is too large", path.display()))?;
+    Ok(BoundedFile {
+        file,
+        length,
+        path,
+        description,
+    })
+}
+
+impl BoundedFile<'_> {
+    pub(crate) fn len(&self) -> usize {
+        self.length
+    }
+
+    pub(crate) fn stream(
+        self,
+        mut consume: impl FnMut(&[u8]) -> Result<(), String>,
+    ) -> Result<(), String> {
+        const BUFFER_BYTES: usize = 64 * 1024;
+        let Self {
+            mut file,
+            length,
+            path,
+            description,
+        } = self;
+        let mut buffer = [0_u8; BUFFER_BYTES];
+        let mut total = 0_usize;
+        loop {
+            let read = file.read(&mut buffer).map_err(|error| {
+                format!("failed to read {description} {}: {error}", path.display())
+            })?;
+            if read == 0 {
+                break;
+            }
+            total = total.saturating_add(read);
+            if total > length {
+                return Err(format!(
+                    "{description} {} changed length while reading",
+                    path.display()
+                ));
+            }
+            consume(&buffer[..read])?;
         }
-        total = total.saturating_add(read as u64);
-        if total > MAX_BOUNDED_FILE_BYTES {
+        if total != length {
             return Err(format!(
-                "{description} {} exceeds the {MAX_BOUNDED_FILE_BYTES}-byte limit",
+                "{description} {} changed length while reading",
                 path.display()
             ));
         }
-        consume(&buffer[..read]);
+        Ok(())
     }
-    Ok(())
 }

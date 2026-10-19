@@ -32,6 +32,11 @@ allow = [
 private = { ignore = true }
 
 [[licenses.exceptions]]
+name = "ar_archive_writer"
+version = "*"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+
+[[licenses.exceptions]]
 name = "target-lexicon"
 version = "*"
 allow = ["Apache-2.0 WITH LLVM-exception"]

@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -27,7 +28,7 @@ use crate::configuration::{
 };
 use crate::error::{CliError, PluginLifecycleFailureKind};
 use crate::filesystem::bounded::{
-    MAX_BOUNDED_FILE_BYTES as MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, read_bounded_regular_file,
+    MAX_BOUNDED_FILE_BYTES as MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, open_bounded_regular_file,
 };
 use crate::plugins::policy::{
     EvaluatedDynamicPluginHostPolicy, evaluate_dynamic_plugin_host_policy,
@@ -1517,15 +1518,20 @@ fn copy_snapshot_regular_file(
     budget: &mut SnapshotBudget,
     description: &str,
 ) -> Result<(), CliError> {
-    let bytes = read_bounded_regular_file(source, &format!("dynamic plugin {description}"))
-        .map_err(CliError::Config)?;
-    budget.record_bytes(source, bytes.len())?;
-    fs::write(destination, bytes).map_err(|error| {
-        CliError::Config(format!(
+    let description = format!("dynamic plugin {description}");
+    let source_file = open_bounded_regular_file(source, &description).map_err(CliError::Config)?;
+    budget.record_bytes(source, source_file.len())?;
+    let write_error = |error| {
+        format!(
             "failed to write dynamic plugin snapshot file {}: {error}",
             destination.display()
-        ))
-    })?;
+        )
+    };
+    let mut output =
+        fs::File::create(destination).map_err(|error| CliError::Config(write_error(error)))?;
+    source_file
+        .stream(|chunk| output.write_all(chunk).map_err(write_error))
+        .map_err(CliError::Config)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1635,10 +1641,13 @@ fn snapshot_tree_digest(root: &Path, stable_identity: bool) -> Result<String, Cl
                 target,
             );
         } else {
-            let bytes = read_bounded_regular_file(&path, "dynamic plugin activation snapshot file")
-                .map_err(CliError::Config)?;
-            budget.record(&path, bytes.len())?;
-            update_snapshot_entry_digest(&mut digest, &relative, SnapshotEntryKind::File, &bytes);
+            digest_snapshot_file(
+                &mut digest,
+                &relative,
+                &path,
+                "dynamic plugin activation snapshot file",
+                &mut budget,
+            )?;
         }
     }
     Ok(digest
@@ -1847,15 +1856,26 @@ impl RuntimeClosureSources {
             if relative == activation_manifest {
                 continue;
             }
-            let bytes = match source {
+            match source {
                 RuntimeClosureSource::File(path) => {
-                    read_bounded_regular_file(&path, "dynamic plugin runtime closure file")
-                        .map_err(CliError::Config)?
+                    digest_snapshot_file(
+                        &mut digest,
+                        &relative,
+                        &path,
+                        "dynamic plugin runtime closure file",
+                        &mut budget,
+                    )?;
                 }
-                RuntimeClosureSource::Bytes(bytes) => bytes,
-            };
-            budget.record(&relative, bytes.len())?;
-            update_snapshot_entry_digest(&mut digest, &relative, SnapshotEntryKind::File, &bytes);
+                RuntimeClosureSource::Bytes(bytes) => {
+                    budget.record(&relative, bytes.len())?;
+                    update_snapshot_entry_digest(
+                        &mut digest,
+                        &relative,
+                        SnapshotEntryKind::File,
+                        &bytes,
+                    );
+                }
+            }
         }
         Ok(digest
             .finalize()
@@ -1877,12 +1897,38 @@ fn update_snapshot_entry_digest(
     kind: SnapshotEntryKind,
     payload: &[u8],
 ) {
+    begin_snapshot_entry_digest(digest, relative, kind, payload.len());
+    digest.update(payload);
+}
+
+fn begin_snapshot_entry_digest(
+    digest: &mut Sha256,
+    relative: &Path,
+    kind: SnapshotEntryKind,
+    length: usize,
+) {
     let relative = relative.as_os_str().as_encoded_bytes();
     digest.update([kind as u8]);
     digest.update((relative.len() as u64).to_le_bytes());
     digest.update(relative);
-    digest.update((payload.len() as u64).to_le_bytes());
-    digest.update(payload);
+    digest.update((length as u64).to_le_bytes());
+}
+
+fn digest_snapshot_file(
+    digest: &mut Sha256,
+    relative: &Path,
+    path: &Path,
+    description: &str,
+    budget: &mut SnapshotBudget,
+) -> Result<(), CliError> {
+    let file = open_bounded_regular_file(path, description).map_err(CliError::Config)?;
+    budget.record(path, file.len())?;
+    begin_snapshot_entry_digest(digest, relative, SnapshotEntryKind::File, file.len());
+    file.stream(|chunk| {
+        digest.update(chunk);
+        Ok(())
+    })
+    .map_err(CliError::Config)
 }
 
 fn collect_declared_runtime_closure_file(

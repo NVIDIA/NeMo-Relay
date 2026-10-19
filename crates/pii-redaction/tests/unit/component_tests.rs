@@ -1671,6 +1671,57 @@ async fn trajectory_preset_preserves_only_bounded_scope_status_metadata() {
     assert_eq!(sanitized.metadata, Some(json!({})));
 }
 
+/// Tool completion fields survive sanitization only when their values are allowed.
+#[tokio::test]
+async fn trajectory_preset_preserves_bounded_tool_completion_semantics() {
+    let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
+    for (category, expected) in [
+        (
+            EventCategory::tool(),
+            json!({
+                "tool_completion_source": "gateway_request", "tool_completion_outcome": "unknown",
+                "tool_completion_timing": "upper_bound",
+            }),
+        ),
+        (EventCategory::agent(), json!({})),
+    ] {
+        let event = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().name("tool-completion").build(),
+            ScopeCategory::End,
+            Vec::new(),
+            category,
+            None,
+        ));
+        let fields = EventSanitizeFields {
+            data: None,
+            category_profile: None,
+            metadata: Some(json!({
+                "tool_completion_source": "gateway_request", "tool_completion_outcome": "unknown",
+                "tool_completion_timing": "upper_bound", "private_note": "private context",
+            })),
+        };
+        assert_eq!(
+            callback(Arc::new(event.clone()), fields.clone())
+                .await
+                .unwrap()
+                .metadata,
+            Some(expected)
+        );
+        let mut invalid = fields;
+        invalid.metadata = Some(json!({
+            "tool_completion_source": "private source", "tool_completion_outcome": "private outcome",
+            "tool_completion_timing": "private time", "otel.status_code": "ERROR",
+            "error.type": "tool_execution_failed", "otel.status_description": "private failure",
+        }));
+        assert_eq!(
+            callback(Arc::new(event), invalid).await.unwrap().metadata,
+            Some(json!({
+                "otel.status_code": "ERROR", "error.type": "tool_execution_failed",
+            }))
+        );
+    }
+}
+
 #[tokio::test]
 async fn trajectory_custom_mark_policy_is_explicit_and_fail_closed() {
     let event = Event::Mark(MarkEvent::new(

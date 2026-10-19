@@ -79,7 +79,14 @@ fn compatible_gateway_is_reused_without_starting_another_process() {
         let mut stream = accept_bounded(&listener);
         let request = read_headers(&mut stream);
         let nonce = header(&request, "x-nemo-relay-bootstrap-nonce");
-        let proof = key.proof("fingerprint", &nonce);
+        let proof = key.proof(
+            &crate::gateway::client::listener_fingerprint(
+                "fingerprint",
+                listener.local_addr().unwrap(),
+                "existing-instance",
+            ),
+            &nonce,
+        );
         let body = format!(
             "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"existing-instance\"}}",
             "compatible-other-version", BOOTSTRAP_PROTOCOL_VERSION
@@ -119,7 +126,7 @@ fn foreign_and_incompatible_listeners_are_never_adopted() {
     for (status, body, expected) in [
         ("200 OK", "{}".to_string(), "not a compatible"),
         ("409 Conflict", incompatible, "different version"),
-        ("200 OK", previous_protocol, "not a compatible"),
+        ("200 OK", previous_protocol, "different version"),
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -203,6 +210,14 @@ fn persistent_gateway_resolution_keeps_server_configuration_in_one_spec() {
         crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES
     );
     assert!(resolved.gateway.bootstrap_fingerprint.is_some());
+    let hook = resolve_hook_gateway(bind).unwrap();
+    assert_eq!(hook.gateway.bind(), resolved.gateway.bind());
+    assert_eq!(
+        hook.gateway.bootstrap_fingerprint,
+        resolved.gateway.bootstrap_fingerprint
+    );
+    assert_eq!(hook.max_hook_payload_bytes, resolved.max_hook_payload_bytes);
+    assert!(hook.gateway.launch_args.is_empty());
     assert!(
         resolved
             .gateway

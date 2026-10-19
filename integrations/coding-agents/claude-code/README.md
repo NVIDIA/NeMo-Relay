@@ -26,7 +26,7 @@ The package contains these files:
 
 The bundle forwards `SessionStart`, `SessionEnd`, `UserPromptSubmit`,
 `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
-`PermissionRequest`, `SubagentStart`, `SubagentStop`, `Notification`, `Stop`,
+`SubagentStart`, `SubagentStop`, `Notification`, `Stop`,
 `PreCompact`, and `PostCompact` as scope, tool, mark, or private LLM
 correlation events.
 

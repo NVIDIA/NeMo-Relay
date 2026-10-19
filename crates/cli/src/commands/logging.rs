@@ -38,62 +38,74 @@ pub(super) struct LoggingArgs {
 impl LoggingArgs {
     /// Returns whether direct command-line, log-file, or environment settings are present.
     pub(super) fn has_explicit_configuration(&self) -> Result<bool, CliError> {
-        Ok(self.resolve_explicit()?.is_some())
+        if self.config_path.is_some() || self.level.is_some() || self.stderr_format.is_some() {
+            return Ok(true);
+        }
+        Ok(LoggingConfig::from_environment()
+            .map_err(logging_config_error)?
+            .is_some())
     }
 
-    /// Selects one logging source: direct CLI settings, environment, file configuration, or
-    /// built-in defaults. Sources are not merged with one another.
+    /// Loads logging settings from files, then applies environment and CLI overrides.
     pub(super) fn resolve(
         &self,
         explicit_config: Option<&Path>,
     ) -> Result<LoggingConfig, CliError> {
-        if let Some(config) = self.resolve_explicit()? {
-            return Ok(config);
-        }
-
-        crate::configuration::resolve_logging_config(explicit_config)
+        self.resolve_with_base(|| crate::configuration::resolve_logging_config(explicit_config))
     }
 
-    /// Selects daemon-only configuration after preserving any explicit process-level override.
+    /// Loads `[daemon.logging]`, then applies environment and CLI overrides.
     pub(super) fn resolve_daemon(
         &self,
         explicit_config: Option<&Path>,
     ) -> Result<LoggingConfig, CliError> {
-        if let Some(config) = self.resolve_explicit()? {
-            return Ok(config);
-        }
-
-        crate::configuration::resolve_daemon_logging_config(explicit_config)
+        self.resolve_with_base(|| {
+            crate::configuration::resolve_daemon_logging_config(explicit_config)
+        })
     }
 
-    /// Resolves direct logging settings without consulting Relay configuration files discovered
-    /// from the environment. Commands that repair or remove Relay state use this so malformed
-    /// ambient configuration cannot block the operation.
+    /// Uses default logging settings plus explicit overrides. Skips config files found
+    /// automatically so repair and removal commands still work if those files are invalid.
     pub(super) fn resolve_without_ambient_config(&self) -> Result<LoggingConfig, CliError> {
-        Ok(self.resolve_explicit()?.unwrap_or_default())
+        self.resolve_with_base(|| Ok(LoggingConfig::default()))
     }
 
-    /// Resolves only command-line, log-file, and environment logging sources.
-    fn resolve_explicit(&self) -> Result<Option<LoggingConfig>, CliError> {
+    fn resolve_with_base(
+        &self,
+        load_base: impl FnOnce() -> Result<LoggingConfig, CliError>,
+    ) -> Result<LoggingConfig, CliError> {
         if let Some(path) = &self.config_path {
-            return LoggingConfig::from_file_path(path)
-                .map(Some)
-                .map_err(logging_config_error);
+            return LoggingConfig::from_file_path(path).map_err(logging_config_error);
         }
 
-        if self.level.is_some() || self.stderr_format.is_some() {
-            let mut config = LoggingConfig::default();
-            if let Some(level) = self.level.as_deref() {
-                config.level = LogLevel::parse(level).map_err(logging_config_error)?;
+        let environment = LoggingConfig::from_environment().map_err(logging_config_error)?;
+        let mut config = match environment {
+            // The named logging file replaces the usual config search, including for the daemon.
+            Some(environment) if std::env::var_os("NEMO_RELAY_LOG_CONFIG_PATH").is_some() => {
+                environment
             }
-            if let Some(stderr_format) = self.stderr_format.as_deref() {
-                config.stderr_format =
-                    LogFormat::parse(stderr_format).map_err(logging_config_error)?;
+            Some(environment) => {
+                let mut config = load_base()?;
+                if std::env::var_os("NEMO_RELAY_LOG").is_some() {
+                    config.level = environment.level;
+                }
+                if std::env::var_os("NEMO_RELAY_LOG_STDERR").is_some() {
+                    config.stderr_enabled = environment.stderr_enabled;
+                }
+                if std::env::var_os("NEMO_RELAY_LOG_STDERR_FORMAT").is_some() {
+                    config.stderr_format = environment.stderr_format;
+                }
+                config
             }
-            return Ok(Some(config));
+            None => load_base()?,
+        };
+        if let Some(level) = self.level.as_deref() {
+            config.level = LogLevel::parse(level).map_err(logging_config_error)?;
         }
-
-        LoggingConfig::from_environment().map_err(logging_config_error)
+        if let Some(stderr_format) = self.stderr_format.as_deref() {
+            config.stderr_format = LogFormat::parse(stderr_format).map_err(logging_config_error)?;
+        }
+        Ok(config)
     }
 }
 

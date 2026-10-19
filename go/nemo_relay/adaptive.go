@@ -89,8 +89,8 @@ type ResponseCacheConfig struct {
 	// key. One configured cache must not span mutually untrusted tenants or
 	// upstreams; the empty constructor value is rejected at validation.
 	Namespace string `json:"namespace,omitempty"`
-	// Priority is the execution-intercept priority; lower runs first/outermost.
-	// Nil delegates to Rust's default (50); a pointer to 0 selects outermost.
+	// Priority is the execution-intercept priority. Lower values run first.
+	// Nil uses Rust's default of 150.
 	Priority *int32 `json:"priority,omitempty"`
 	// BypassRate is the probability in [0.0, 1.0] of skipping the cache and running live.
 	BypassRate float64 `json:"bypass_rate,omitempty"`
@@ -111,8 +111,8 @@ type ResponseCacheConfig struct {
 // ResponseCacheToolsConfig configures caching for read-only, stable tools.
 type ResponseCacheToolsConfig struct {
 	Enabled bool `json:"enabled,omitempty"`
-	// Priority is the execution-intercept priority. Nil delegates to Rust's
-	// default (100); a pointer to 0 selects outermost.
+	// Priority is the execution-intercept priority. Lower values run first.
+	// Nil uses Rust's default of 150.
 	Priority *int32 `json:"priority,omitempty"`
 	// CacheErrors lets error-shaped tool results be cached (default false).
 	CacheErrors bool                              `json:"cache_errors"`
@@ -230,7 +230,7 @@ func NewAcgConfig() AcgConfig {
 // or to tune the in-memory budget.
 func NewResponseCacheConfig() ResponseCacheConfig {
 	ttlSeconds := uint64(3600)
-	priority := int32(50)
+	priority := int32(150)
 	return ResponseCacheConfig{
 		TTLSeconds:            &ttlSeconds,
 		Priority:              &priority,
@@ -260,7 +260,7 @@ func NewRedisResponseCacheBackend(url, keyPrefix string) ResponseCacheBackendCon
 
 // NewResponseCacheToolsConfig returns a disabled tool-result cache config.
 func NewResponseCacheToolsConfig() ResponseCacheToolsConfig {
-	priority := int32(100)
+	priority := int32(150)
 	return ResponseCacheToolsConfig{
 		CacheErrors: false,
 		Priority:    &priority,

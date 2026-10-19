@@ -630,6 +630,49 @@ where
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// stream processing.
 pub type LlmCollectorFn = Box<dyn FnMut(Json) -> Result<()> + Send>;
+/// Future returned by an asynchronous collector.
+pub type LlmCollectorFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+/// Collector that is awaited; see [`LlmCollector`].
+pub type LlmAsyncCollectorFn = Box<dyn FnMut(Json) -> LlmCollectorFuture + Send>;
+
+/// Collector used to accumulate streaming response chunks.
+///
+/// An asynchronous collector still pending at `close()` is awaited after the
+/// producer closes, so it must settle once the producer does. Any
+/// `FnMut(Json) -> Result<()>` converts into the synchronous form.
+#[non_exhaustive]
+pub enum LlmCollector {
+    /// Runs inline while the stream is polled.
+    Sync(LlmCollectorFn),
+    /// Awaited before its chunk is yielded.
+    Async(LlmAsyncCollectorFn),
+}
+
+impl LlmCollector {
+    /// Wrap a future-returning closure as an asynchronous collector.
+    pub fn new_async<F, Fut>(mut collector: F) -> Self
+    where
+        F: FnMut(Json) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        Self::Async(Box::new(move |chunk| Box::pin(collector(chunk))))
+    }
+}
+
+impl<F> From<F> for LlmCollector
+where
+    F: FnMut(Json) -> Result<()> + Send + 'static,
+{
+    fn from(collector: F) -> Self {
+        Self::Sync(Box::new(collector))
+    }
+}
+
+/// Collector that reads each provider JSON chunk without copying it.
+///
+/// Copy any data you need after the callback returns. An error stops the stream
+/// with the same cleanup steps as [`LlmCollectorFn`].
+pub type LlmBorrowedCollectorFn = Box<dyn FnMut(&Json) -> Result<()> + Send>;
 /// Finalizer used to synthesize the aggregate streaming response payload.
 ///
 /// # Parameters
@@ -638,6 +681,53 @@ pub type LlmCollectorFn = Box<dyn FnMut(Json) -> Result<()> + Send>;
 /// # Returns
 /// Aggregate response JSON synthesized from collected stream chunks.
 pub type LlmFinalizerFn = Box<dyn FnOnce() -> Json + Send>;
+/// Finalizer that can fail; see [`LlmFinalizer`].
+pub type LlmFallibleFinalizerFn = Box<dyn FnOnce() -> Result<Json> + Send>;
+/// Future returned by an asynchronous finalizer.
+pub type LlmFinalizerFuture = Pin<Box<dyn Future<Output = Result<Json>> + Send>>;
+/// Finalizer that is awaited; see [`LlmFinalizer`].
+pub type LlmAsyncFinalizerFn = Box<dyn FnOnce() -> LlmFinalizerFuture + Send>;
+
+/// Finalizer used to synthesize the aggregate streaming response payload.
+///
+/// A failed finalizer yields a `null` aggregate with no `data` fallback and
+/// marks the END event ERROR. Any `FnOnce() -> Json` converts into the
+/// infallible form.
+#[non_exhaustive]
+pub enum LlmFinalizer {
+    /// Returns the aggregate directly.
+    Sync(LlmFinalizerFn),
+    /// Returns the aggregate or a failure.
+    Fallible(LlmFallibleFinalizerFn),
+    /// Awaited before the END publication, so a flush inside it does not wait on this
+    /// stream or other unfinished terminal publications.
+    Async(LlmAsyncFinalizerFn),
+}
+
+impl LlmFinalizer {
+    /// Wrap a future-returning closure as an asynchronous finalizer.
+    pub fn new_async<F, Fut>(finalizer: F) -> Self
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Json>> + Send + 'static,
+    {
+        Self::Async(Box::new(move || Box::pin(finalizer())))
+    }
+}
+
+impl<F> From<F> for LlmFinalizer
+where
+    F: FnOnce() -> Json + Send + 'static,
+{
+    fn from(finalizer: F) -> Self {
+        Self::Sync(Box::new(finalizer))
+    }
+}
+// Internal completion hook used by the gateway before response sanitization.
+pub(crate) type LlmStreamResponseCompletionFn = Box<
+    dyn for<'a> FnOnce(&'a Json) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> + Send,
+>;
+
 /// Scope-local registry references passed into streaming execution-chain builders.
 ///
 /// # Returns

@@ -6,14 +6,12 @@ use serde_json::{Value, json};
 
 use crate::agents::shared::adapters::{
     AdapterOutcome, CLAUDE_CODE_PAYLOAD_EXTRACTOR, ClassificationRules, classify,
-    permission_request,
 };
 use crate::events::AgentKind;
 
 /// Normalizes Claude Code hook payloads and returns the hook response Claude expects.
 ///
-/// Claude Code uses permission-bearing tool hooks. Pre-tool events acknowledge guardrail success
-/// without granting host permission; the later `PermissionRequest` receives the final decision.
+/// Pre-tool events evaluate guardrails before the host runs the tool.
 /// Note: Claude's hook output schema rejects `null` for optional string fields like `stopReason`;
 /// omit them entirely instead.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
@@ -47,14 +45,5 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
         },
     );
     let response = json!({ "continue": true });
-    AdapterOutcome {
-        events,
-        response,
-        permission: permission_request(
-            &payload,
-            headers,
-            AgentKind::ClaudeCode,
-            &CLAUDE_CODE_PAYLOAD_EXTRACTOR,
-        ),
-    }
+    AdapterOutcome { events, response }
 }
