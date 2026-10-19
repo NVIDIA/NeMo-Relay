@@ -23,7 +23,7 @@ use crate::api::event::{
     Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, ScopeCategory,
     ValidatedMetricMeasurement,
 };
-use crate::plugin::{RuntimeDiagnostic, project_active_plugin_runtime_diagnostic};
+use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 use super::otel::{OpenTelemetryError, Result};
 use super::{MetadataPromotionIssue, promote_event_metadata_attributes};
@@ -66,11 +66,11 @@ pub(super) fn telemetry_resource(attributes: impl IntoIterator<Item = KeyValue>)
 /// A bounded aggregate describing an OpenTelemetry runtime problem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenTelemetryRuntimeDiagnostic {
-    /// Stable identifier for the reported problem.
+    /// Stable identifier for the diagnostic condition.
     pub code: String,
-    /// Distinct messages recorded for this problem, retained within a bounded budget.
+    /// Distinct messages recorded for this condition, retained within a bounded budget.
     pub message: String,
-    /// Total number of occurrences recorded for this problem.
+    /// Total number of occurrences recorded for this condition.
     pub count: u64,
 }
 
@@ -113,12 +113,7 @@ pub(super) struct SignalRuntimeDiagnostics {
 }
 
 impl SignalRuntimeDiagnostics {
-    #[cfg(test)]
     pub(super) fn new(plugin_field: Option<String>) -> Self {
-        Self::new_for_signal("runtime", plugin_field)
-    }
-
-    pub(super) fn new_for_signal(_signal: &str, plugin_field: Option<String>) -> Self {
         Self {
             state: Arc::new(Mutex::new(RuntimeDiagnosticState::default())),
             plugin_field,
@@ -129,8 +124,6 @@ impl SignalRuntimeDiagnostics {
         let code = code.into();
         let count = count.max(1);
         let message = truncate_runtime_diagnostic_message(message);
-        // Canonical OTel integration is deferred. Keep this legacy cache and plugin
-        // mirror independent of the runtime-controlled diagnostics foundation.
         let mut state = self
             .state
             .lock()
@@ -166,7 +159,7 @@ impl SignalRuntimeDiagnostics {
         };
         drop(state);
 
-        project_signal_runtime_diagnostic(&code, self.plugin_field.clone(), message, count);
+        record_signal_runtime_diagnostic(&code, self.plugin_field.clone(), message, count);
         total
     }
 
@@ -186,16 +179,6 @@ impl SignalRuntimeDiagnostics {
 
     pub(super) fn has_plugin_mirror(&self) -> bool {
         self.plugin_field.is_some()
-    }
-
-    /// Success evidence joins the canonical service in the OTel integration phase.
-    /// The existing report represents failures only, so success changes no legacy state.
-    pub(super) fn record_success(&self, _code: &str, _message: &str) {}
-
-    /// Delivery pipelines continue sharing their existing subscriber-level report.
-    /// Canonical component registration and refresh attribution await OTel integration.
-    pub(super) fn for_exporter(&self, _key: &str) -> Self {
-        self.clone()
     }
 }
 
@@ -634,13 +617,13 @@ pub(super) fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<M
     Ok(metadata)
 }
 
-pub(super) fn project_signal_runtime_diagnostic(
+pub(super) fn record_signal_runtime_diagnostic(
     code: &str,
     field: Option<String>,
     message: String,
     count: u64,
 ) {
-    project_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
         code: code.to_string(),
         component: "observability".to_string(),
         field,

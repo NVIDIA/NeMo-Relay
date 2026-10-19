@@ -85,47 +85,6 @@ fn runtime_diagnostics_truncate_unicode_without_losing_occurrence_counts() {
 }
 
 #[test]
-fn runtime_diagnostics_keep_success_separate_from_legacy_failure_reports() {
-    let diagnostics = SignalRuntimeDiagnostics::new_for_signal("logs", None);
-    diagnostics.record("otel.logs_export_failed", "export failed".into(), 2);
-    diagnostics.record("otel.logs_export_failed", "export failed again".into(), 3);
-    let before = diagnostics.snapshot();
-    assert_eq!(before.get("otel.logs_export_failed").unwrap().count, 5);
-    for _ in 0..3 {
-        assert_eq!(diagnostics.snapshot(), before);
-    }
-    diagnostics.record_success(
-        "otel.logs_export_succeeded",
-        "OpenTelemetry log export succeeded",
-    );
-    assert_eq!(diagnostics.snapshot(), before);
-    assert!(before.get("otel.logs_export_succeeded").is_none());
-    let core = crate::diagnostics::Diagnostics::process_default();
-    assert_eq!(
-        core.reader().availability(),
-        crate::diagnostics::DiagnosticAvailability::Disabled
-    );
-    assert_eq!(core.memory_usage().reserved_bytes, 0);
-}
-
-#[test]
-fn legacy_metadata_codes_remain_in_the_deferred_subscriber_report() {
-    let diagnostics = SignalRuntimeDiagnostics::new(None);
-    let code = "otel.resource_metadata_invalid.Application/Key";
-    diagnostics.record(code, "A selected metadata value was rejected".into(), 1);
-    diagnostics.record(code, "A selected metadata value was rejected".into(), 2);
-    let snapshot = diagnostics.snapshot();
-    assert_eq!(snapshot.get(code).unwrap().count, 3);
-    assert_eq!(snapshot.diagnostics.len(), 1);
-    assert_eq!(
-        crate::diagnostics::Diagnostics::process_default()
-            .reader()
-            .availability(),
-        crate::diagnostics::DiagnosticAvailability::Disabled
-    );
-}
-
-#[test]
 fn exporter_runtime_reports_a_panicking_constructor_without_hanging() {
     let error = build_in_owned_runtime::<(), _>("coverage-panicking-exporter", || {
         panic!("constructor failed");

@@ -3,38 +3,6 @@
 
 //! Unit tests for Relay OTLP metric routing and recording.
 
-#[test]
-fn metric_pipeline_success_preserves_failure_evidence_and_legacy_totals() {
-    let shared = SignalRuntimeDiagnostics::new_for_signal("metrics", Some("metrics.test".into()));
-    let base = MetricDeliveryDiagnostics::new("collector".into(), shared.clone());
-    let first = base.for_pipeline();
-    let second = base.for_pipeline();
-    first.record_export_failure(&"first pipeline failed");
-    second.record_export_failure(&"second pipeline failed");
-    let before = shared.snapshot();
-    second.runtime_diagnostics.record_success(
-        "otel.metrics_export_succeeded",
-        "OpenTelemetry metric export succeeded",
-    );
-    first.runtime_diagnostics.record_success(
-        "otel.metrics_export_succeeded",
-        "OpenTelemetry metric export succeeded",
-    );
-    assert_eq!(before.get("otel.metrics_export_failed").unwrap().count, 2);
-    assert_eq!(
-        base.failure_summary().as_deref(),
-        Some("otel.metrics_export_failed (2)")
-    );
-    assert_eq!(shared.snapshot(), before);
-    assert!(before.get("otel.metrics_export_succeeded").is_none());
-    assert_eq!(
-        crate::diagnostics::Diagnostics::process_default()
-            .reader()
-            .availability(),
-        crate::diagnostics::DiagnosticAvailability::Disabled
-    );
-}
-
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME,

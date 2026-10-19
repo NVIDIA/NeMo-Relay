@@ -5642,15 +5642,6 @@ fn log_only_plugin_reports_invalid_reserved_metric_marks_once() {
     assert_eq!(diagnostics[0].count, 2);
     assert_eq!(diagnostics[0].field.as_deref(), None);
 
-    // This legacy OTel report remains independently observable during phase one;
-    // deferred pipelines cannot activate canonical collection as a side effect.
-    assert_eq!(
-        crate::diagnostics::Diagnostics::process_default()
-            .reader()
-            .availability(),
-        crate::diagnostics::DiagnosticAvailability::Disabled
-    );
-
     test_close_plugin_host().unwrap();
 }
 

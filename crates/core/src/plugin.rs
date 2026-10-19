@@ -2702,28 +2702,6 @@ pub fn test_plugin_host_report() -> Option<ConfigReport> {
 /// Typed operation owners use [`record_plugin_operation_diagnostic`] with their
 /// injected component recorder instead.
 pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
-    project_active_plugin_runtime_diagnostic(diagnostic);
-}
-
-/// Records one typed plugin operation observation through its owning component.
-///
-/// The classifier and safe detail factory execute only when collection is enabled.
-/// Existing operational emitters and legacy report projections remain independent:
-/// neither should re-record the accepted occurrence. No report contents are replayed.
-pub fn record_plugin_operation_diagnostic<'a, E: ?Sized, C: DiagnosticClassifier<E> + ?Sized>(
-    recorder: &ComponentRecorder,
-    classifier: &C,
-    error: &'a E,
-    detail: impl FnOnce() -> DiagnosticDetailRef<'a>,
-    count: u64,
-) -> std::result::Result<RecordOutcome, DiagnosticError> {
-    recorder.record_without_projection_lazy(|| {
-        DiagnosticObservation::new(classifier.classify(error), detail(), count)
-    })
-}
-
-/// Updates legacy report state without recording a canonical observation.
-pub(crate) fn project_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
     let Ok(mut guard) = ACTIVE_PLUGIN_CONFIGURATION.lock() else {
         return;
     };
@@ -2759,6 +2737,23 @@ pub(crate) fn project_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagno
     } else {
         state.report.runtime_diagnostics.push(diagnostic);
     }
+}
+
+/// Records one typed plugin operation observation through its owning component.
+///
+/// The classifier and safe detail factory execute only when collection is enabled.
+/// Existing operational emitters and legacy report projections remain independent:
+/// neither should re-record the accepted occurrence. No report contents are replayed.
+pub fn record_plugin_operation_diagnostic<'a, E: ?Sized, C: DiagnosticClassifier<E> + ?Sized>(
+    recorder: &ComponentRecorder,
+    classifier: &C,
+    error: &'a E,
+    detail: impl FnOnce() -> DiagnosticDetailRef<'a>,
+    count: u64,
+) -> std::result::Result<RecordOutcome, DiagnosticError> {
+    recorder.record_without_projection_lazy(|| {
+        DiagnosticObservation::new(classifier.classify(error), detail(), count)
+    })
 }
 
 /// Return a bounded, active-only runtime-diagnostics snapshot for dynamic plugins.

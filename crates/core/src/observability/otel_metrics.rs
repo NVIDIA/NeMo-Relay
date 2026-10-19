@@ -490,8 +490,7 @@ impl OpenTelemetryMetricSubscriber {
         let instrumentation_scope = config.instrumentation_scope.clone();
         let max_instruments = config.max_instruments;
         let cardinality_limit = config.cardinality_limit;
-        let runtime_diagnostics =
-            SignalRuntimeDiagnostics::new_for_signal("metrics", config.diagnostic_field.clone());
+        let runtime_diagnostics = SignalRuntimeDiagnostics::new(config.diagnostic_field.clone());
         let delivery_diagnostics = Arc::new(MetricDeliveryDiagnostics::new(
             config.endpoint.clone(),
             runtime_diagnostics.clone(),
@@ -784,9 +783,6 @@ fn ensure_dynamic_metric_pipeline(
     let config = config.clone();
     let max_instruments = config.max_instruments;
     let cardinality_limit = config.cardinality_limit;
-    // Resource providers own independent export evidence. Only their materialized
-    // legacy failure total is shared with the subscriber's base provider.
-    let diagnostics = Arc::new(diagnostics.for_pipeline());
     let (provider, runtime) =
         build_in_owned_runtime("nemo-relay-otlp-metrics-resource", move || {
             build_metric_provider(&config, diagnostics, Some(attributes))
@@ -825,26 +821,15 @@ struct DiagnosticMetricExporter<E> {
 struct MetricDeliveryDiagnostics {
     endpoint: String,
     runtime_diagnostics: SignalRuntimeDiagnostics,
-    export_failures: Arc<AtomicU64>,
+    export_failures: AtomicU64,
 }
 
 impl MetricDeliveryDiagnostics {
     fn new(endpoint: String, runtime_diagnostics: SignalRuntimeDiagnostics) -> Self {
         Self {
             endpoint,
-            runtime_diagnostics: runtime_diagnostics
-                .for_exporter("observability.otel.metrics.exporter"),
-            export_failures: Arc::new(AtomicU64::new(0)),
-        }
-    }
-
-    fn for_pipeline(&self) -> Self {
-        Self {
-            endpoint: self.endpoint.clone(),
-            runtime_diagnostics: self
-                .runtime_diagnostics
-                .for_exporter("observability.otel.metrics.exporter"),
-            export_failures: Arc::clone(&self.export_failures),
+            runtime_diagnostics,
+            export_failures: AtomicU64::new(0),
         }
     }
 
@@ -880,11 +865,6 @@ impl<E: PushMetricExporter> PushMetricExporter for DiagnosticMetricExporter<E> {
                     "OpenTelemetry metric export failed: {error}"
                 );
             }
-        } else {
-            self.diagnostics.runtime_diagnostics.record_success(
-                "otel.metrics_export_succeeded",
-                "OpenTelemetry metric export succeeded",
-            );
         }
         result
     }
@@ -984,7 +964,7 @@ impl MetricEventProcessor {
             meter,
             max_instruments,
             cardinality_limit,
-            SignalRuntimeDiagnostics::new_for_signal("metrics", diagnostic_field),
+            SignalRuntimeDiagnostics::new(diagnostic_field),
         )
     }
 
