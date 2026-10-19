@@ -23,6 +23,14 @@ navigation:
         slug: quick-start
         collapsed: open-by-default
         contents:
+          - section: "Agent Frameworks"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "LangChain"
+                icon: fa-solid fa-link
+                path: ./getting-started/quick-start/langchain.mdx
+                slug: langchain
           - section: "Agent Harnesses"
             skip-slug: true
             collapsed: open-by-default
