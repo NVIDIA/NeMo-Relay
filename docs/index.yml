@@ -27,6 +27,10 @@ navigation:
             skip-slug: true
             collapsed: open-by-default
             contents:
+              - page: "Codex"
+                icon: fa-brands fa-openai
+                path: ./getting-started/quick-start/codex.mdx
+                slug: codex
               - page: "Claude Code"
                 icon: fa-brands fa-claude
                 path: ./getting-started/quick-start/claude-code.mdx
