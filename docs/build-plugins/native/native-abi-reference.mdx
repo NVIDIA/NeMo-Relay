@@ -23,9 +23,10 @@ extern "C" fn nemo_relay_register_plugin(
 ) -> NemoRelayStatus
 ```
 
-The current host requires ABI v7. It does not fall back to v6 or earlier tables because the
-LLM execution callback layouts changed; invoking a stale callback through the new
-layout would be unsafe. Rebuild every native plugin for Relay 0.10 and raise its
+The current host supplies the append-only ABI v8 extension and retains v7
+negotiation for existing plugins. The SDK accepts v7 and v8 callback layouts;
+inspection requires v8 and reports unsupported functionality on v7. Versions
+before v7 remain incompatible because the LLM execution callback layouts changed. Rebuild every native plugin for Relay 0.10 and raise its
 `compat.relay` lower bound to `0.10.0`. The authored manifest label remains
 `compat.native_api = "1"`.
 
@@ -54,7 +55,8 @@ function signatures and field order are defined by the public
 | Frozen v4 extension | Completion-scoped LLM request decode and encode plus response decode; pull-based downstream LLM stream open, pull, cancel, and release; completion retain for typed codec facades; output-stream backpressure inspection; extended mark emission; runtime diagnostics; activation-owned runtime capability creation, retain, and release; global runtime-registration discovery; owned conditional middleware guardrail registration and deregistration; and activation-owned and runtime-discovered callback gate registration. The callback registration slots are appended after the original constant-reason slots. |
 | v5 extension | Context-carrying tool execution intercept registration. The callback receives one JSON object containing `tool_name`, `args`, and `tool_call_id`. |
 | v6 extension | Host-routed operational logging with structured fields. |
-| Current v7 extension | Codec context for raw and typed LLM execution callbacks, an execution-specific asynchronous non-streaming registration, context on the asynchronous stream-execution callback, and stream retain plus stream-scoped request decode and encode operations. |
+| Frozen v7 extension | Codec context for raw and typed LLM execution callbacks, an execution-specific asynchronous non-streaming registration, context on the asynchronous stream-execution callback, and stream retain plus stream-scoped request decode and encode operations. |
+| Current v8 extension | `current_scope_stack_snapshot`: owned root-to-top UUID/type JSON, with an unchanged v7 prefix. |
 
 The prefix and descriptor layout are explicit. A plugin fills the descriptor with its
 stable kind, component multiplicity, opaque state, callbacks, and destructor. The host
@@ -252,3 +254,20 @@ waits for completion and stream references to be released, deregisters component
 surfaces, runs component cleanup, and only then unloads the shared library. A plugin that
 retains a completion, continuation, stream, codec, or runtime handle indefinitely can
 therefore delay safe unload.
+
+
+## Scope Snapshot Ownership
+
+`NemoRelayNativeHostApiV8` starts with the complete unchanged v7 table and
+appends `current_scope_stack_snapshot(out)`. Check `abi_version >= 8` and
+`struct_size >= sizeof(NemoRelayNativeHostApiV8)` before accessing that field.
+The callback returns success with a null output for no explicit binding, or an
+owned JSON object with `scopes`, each containing `scope_id` and lowercase
+`scope_type`. An active root-only stack has one entry. Release every non-null
+buffer through the inherited `string_free`, including decode or status-error
+paths. Errors use the existing status and last-error channel; output is
+initialized to null before the read.
+
+The [typed getter](/build-plugins/native/runtime-events-and-scopes#inspect-scope-identities)
+returns a detached value. The host releases its read lock before encoding and
+returns no pointers into stack handles, registries, or Rust containers.

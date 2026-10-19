@@ -173,3 +173,20 @@ fn http_error_statuses_survive_runtime_and_delivery_wrappers() {
         assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
     }
 }
+
+#[tokio::test]
+async fn upstream_transport_errors_return_bad_gateway_without_hook_payload_prefix() {
+    use crate::daemon::common::transport::TransportError;
+    use http_body_util::BodyExt;
+
+    let error = CliError::UpstreamTransport(TransportError::InsecureDestination);
+    assert_eq!(error.log_kind(), "upstream");
+    let response = error.into_response();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        body["error"]["message"],
+        "upstream forwarding error: plain HTTP upstreams are allowed only for loopback hosts; use https"
+    );
+}

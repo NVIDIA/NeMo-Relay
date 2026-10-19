@@ -6921,6 +6921,16 @@ async fn test_runtime_registration_discovery_and_cross_owner_subscriber_gate() {
 
     let kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
     let registrations = list_runtime_registrations(Some(&kinds)).unwrap();
+    assert_eq!(
+        nemo_relay::api::registry::runtime_registration_presence([
+            RuntimeRegistrationKind::Subscriber,
+            RuntimeRegistrationKind::LlmRequestIntercept,
+            RuntimeRegistrationKind::Subscriber,
+        ])
+        .unwrap(),
+        [true, false, true],
+    );
+
     let registration = registrations
         .iter()
         .find(|registration| registration.local_name == "opentelemetry")
@@ -6968,4 +6978,54 @@ async fn test_runtime_registration_discovery_and_cross_owner_subscriber_gate() {
 
     let mut registrations = context.into_registrations();
     rollback_registrations(&mut registrations);
+}
+
+#[tokio::test]
+async fn request_source_handoff_moves_unchanged_content_and_retains_scope_intercept_baseline() {
+    use nemo_relay::api::llm::llm_request_intercepts_with_source;
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let scope = setup_isolated_scope("source_handoff");
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"text": "x".repeat(1024 * 1024)}),
+    };
+    let pointer = request.content["text"].as_str().unwrap().as_ptr();
+    let (outcome, source) = llm_request_intercepts_with_source("test", request)
+        .await
+        .unwrap();
+    assert!(source.is_none());
+    assert_eq!(
+        outcome.request.content["text"].as_str().unwrap().as_ptr(),
+        pointer
+    );
+    scope_register_llm_request_intercept(
+        &scope.uuid,
+        "source_scope_edit",
+        1,
+        false,
+        Arc::new(|_, mut request, annotated| {
+            request.content["text"] = json!("edited");
+            ready(LlmRequestInterceptOutcome::new(request, annotated))
+        }),
+    )
+    .unwrap();
+    // A global-only delivery-path query cannot see this scope-local callback.
+    assert_eq!(
+        nemo_relay::api::registry::runtime_registration_presence([
+            RuntimeRegistrationKind::LlmRequestIntercept,
+        ])
+        .unwrap(),
+        [false]
+    );
+    let (outcome, source) = llm_request_intercepts_with_source("test", outcome.request)
+        .await
+        .unwrap();
+    assert_eq!(outcome.request.content["text"], "edited");
+    assert_eq!(source.unwrap()["text"].as_str().unwrap().len(), 1024 * 1024);
+    nemo_relay::api::registry::scope_deregister_llm_request_intercept(
+        &scope.uuid,
+        "source_scope_edit",
+    )
+    .unwrap();
 }

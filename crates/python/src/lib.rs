@@ -67,6 +67,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         ))
     })?;
     py_types::register(m)?;
+    m.add_class::<py_types::PyScopeStackEntry>()?;
+    m.add_class::<py_types::PyScopeStackSnapshot>()?;
     py_api::register(m)?;
     py_plugin::register(m)?;
     py_adaptive::register(m)?;

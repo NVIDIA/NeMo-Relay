@@ -487,14 +487,26 @@ pub(super) fn reject_signal_header_environment(signal_variable: &'static str) ->
 /// Signal-specific settings take precedence over the generic endpoint, matching
 /// the upstream OTLP exporter's environment resolution. Relay only uses this
 /// value for transport safety checks; the builder still owns URL derivation.
-pub(super) fn automatic_signal_endpoint(signal_variable: &str) -> Option<String> {
-    [signal_variable, "OTEL_EXPORTER_OTLP_ENDPOINT"]
-        .into_iter()
-        .find_map(|variable| {
-            std::env::var(variable)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
+/// A value the builder cannot parse is rejected rather than allowed to fall back
+/// to the generic endpoint, which would bypass the check.
+pub(super) fn automatic_signal_endpoint(
+    signal_variable: &str,
+) -> std::result::Result<Option<String>, String> {
+    for variable in [signal_variable, "OTEL_EXPORTER_OTLP_ENDPOINT"] {
+        let Some(value) = std::env::var(variable)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            continue;
+        };
+        if value.trim() != value || value.parse::<http::Uri>().is_err() {
+            return Err(format!(
+                "{variable} must be a valid URI without surrounding whitespace"
+            ));
+        }
+        return Ok(Some(value));
+    }
+    Ok(None)
 }
 
 /// Reject malformed percent escapes before the SDK can attach any credentials.

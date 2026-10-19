@@ -882,7 +882,8 @@ fn extract_zip(
         zip::ZipArchive::new(File::open(archive)?).map_err(|err| error(err.to_string()))?;
     for index in 0..zip.len() {
         let mut entry = zip.by_index(index).map_err(|err| error(err.to_string()))?;
-        let name = entry.name().trim_end_matches('/');
+        let entry_name = entry.name().map_err(|err| error(err.to_string()))?;
+        let name = entry_name.trim_end_matches('/');
         let mode = entry.unix_mode().unwrap_or(0);
         if !matches!(mode & 0o170000, 0 | 0o040000 | 0o100000) {
             return Err(error("archive links and special files are not allowed"));
