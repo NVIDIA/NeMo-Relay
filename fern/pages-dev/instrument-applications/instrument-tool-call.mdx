@@ -85,7 +85,7 @@ async def main() -> None:
             )
             print(result.result)
     finally:
-        nemo_relay.subscribers.flush()
+        await nemo_relay.subscribers.flush_async()
         nemo_relay.subscribers.deregister("instrumentation-check")
 
 asyncio.run(main())
@@ -230,8 +230,9 @@ Check both behavior and instrumentation:
 - The subscriber prints an agent or request scope event.
 - The subscriber prints tool start and tool end events for `search`.
 
-Native subscriber delivery is asynchronous. Await `flushSubscribers()` and
-then one event-loop turn before validating printed output.
+Native subscriber delivery is asynchronous. From an `asyncio` task, await
+`nemo_relay.subscribers.flush_async()`. In Node.js, await `flushSubscribers()`
+and then one event-loop turn. Do this before validating printed output.
 - Tool start input contains the request arguments after request intercepts and
   sanitize-request guardrails.
 - Tool end output contains the tool result after response guardrails.
