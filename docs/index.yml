@@ -39,6 +39,10 @@ navigation:
                 icon: fa-solid fa-terminal
                 path: ./getting-started/quick-start/hermes.mdx
                 slug: hermes
+              - page: "pi"
+                icon: fa-solid fa-pi
+                path: ./getting-started/quick-start/pi.mdx
+                slug: pi
           - section: "Application APIs"
             skip-slug: true
             collapsed: open-by-default
