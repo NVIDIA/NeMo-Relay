@@ -14,7 +14,6 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCo
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::serve::ListenerExt;
 use axum::{Json, Router};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as ConnectionBuilder;
@@ -348,14 +347,7 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
     let server = async move {
         match tls_config {
             Some(config) => serve_tls(listener, app, config).await,
-            None => axum::serve(
-                listener.tap_io(|stream| {
-                    let _ = stream.set_nodelay(true);
-                }),
-                app,
-            )
-            .await
-            .map_err(CliError::Io),
+            None => serve_plain(listener, app).await,
         }
     };
     tokio::pin!(server);
@@ -437,6 +429,48 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
     result
 }
 
+// Keep HTTP/2 settings identical for loopback and TLS workers. The connection window
+// is shared by every request stream, so the default 1 MiB can stall concurrent large uploads.
+pub(crate) fn worker_connection_builder() -> ConnectionBuilder<TokioExecutor> {
+    crate::daemon::common::transport::data_plane_connection_builder()
+}
+
+async fn serve_plain(listener: TcpListener, app: Router) -> Result<(), CliError> {
+    let accept_failure_limiter = LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL);
+    let mut connections = tokio::task::JoinSet::new();
+    loop {
+        let (stream, _) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                if let Some(suppressed_since_last_emit) = accept_failure_limiter.record() {
+                    log::warn!(
+                        target: "nemo_relay.daemon.worker",
+                        event = "worker_listener_accept_failed",
+                        suppressed_since_last_emit = suppressed_since_last_emit;
+                        "Worker listener accept failed: {error}"
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+        let _ = stream.set_nodelay(true);
+        let service = app.clone();
+        connections.spawn(async move {
+            let mut builder = worker_connection_builder();
+            // Preserve axum::serve's HTTP/2 WebSocket support on the cleartext listener.
+            builder.http2().enable_connect_protocol();
+            let _ = builder
+                .serve_connection_with_upgrades(
+                    TokioIo::new(stream),
+                    TowerToHyperService::new(service),
+                )
+                .await;
+        });
+        while connections.try_join_next().is_some() {}
+    }
+}
+
 async fn serve_tls(
     listener: TcpListener,
     app: Router,
@@ -471,7 +505,7 @@ async fn serve_tls(
                 return;
             };
             drop(handshake_permit);
-            let builder = ConnectionBuilder::new(TokioExecutor::new());
+            let builder = worker_connection_builder();
             let _ = builder
                 .serve_connection_with_upgrades(
                     TokioIo::new(stream),
