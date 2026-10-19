@@ -34,6 +34,14 @@ Built-in codec for the OpenAI Responses API.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../traits/trait-llmcodec\">encode</a>(\n    &amp;self,\n    annotated: &amp;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n    original: &amp;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>&gt;"}} /></pre>
 
+#### `encode_with_baseline`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../traits/trait-llmcodec\">encode_with_baseline</a>(\n    &amp;self,\n    annotated: &amp;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n    original: &amp;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>,\n    baseline: &amp;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>&gt;"}} /></pre>
+
+#### `encode_owned_with_baseline`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../traits/trait-llmcodec\">encode_owned_with_baseline</a>(\n    &amp;self,\n    annotated: &amp;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n    original: <a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>,\n    baseline: &amp;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>&gt;"}} /></pre>
+
 ### `impl LlmResponseCodec for OpenAIResponsesCodec`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../traits/trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"struct-openairesponsescodec\">OpenAIResponsesCodec</a>"}} /></pre>
