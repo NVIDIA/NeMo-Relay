@@ -27,6 +27,18 @@ navigation:
             skip-slug: true
             collapsed: open-by-default
             contents:
+              - page: "Codex"
+                icon: fa-brands fa-openai
+                path: ./getting-started/quick-start/codex.mdx
+                slug: codex
+              - page: "Claude Code"
+                icon: fa-brands fa-claude
+                path: ./getting-started/quick-start/claude-code.mdx
+                slug: claude-code
+              - page: "Hermes Agent"
+                icon: fa-solid fa-terminal
+                path: ./getting-started/quick-start/hermes.mdx
+                slug: hermes
               - page: "pi"
                 icon: fa-solid fa-pi
                 path: ./getting-started/quick-start/pi.mdx
