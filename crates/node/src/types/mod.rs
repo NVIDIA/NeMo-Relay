@@ -28,6 +28,37 @@ use nemo_relay::api::tool::{
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 
+/// Identity of one visible Relay scope.
+#[napi(object)]
+pub struct ScopeStackEntry {
+    /// Canonical UUID of the scope handle.
+    pub scope_id: String,
+    /// Existing Relay scope category.
+    pub scope_type: ScopeType,
+}
+
+/// Detached root-to-top values including implicit and synthetic roots.
+#[napi(object)]
+pub struct ScopeStackSnapshot {
+    /// Ordered owned entries from one coherent read.
+    pub scopes: Vec<ScopeStackEntry>,
+}
+
+impl From<nemo_relay::api::runtime::ScopeStackSnapshot> for ScopeStackSnapshot {
+    fn from(snapshot: nemo_relay::api::runtime::ScopeStackSnapshot) -> Self {
+        Self {
+            scopes: snapshot
+                .scopes
+                .into_iter()
+                .map(|scope| ScopeStackEntry {
+                    scope_id: scope.scope_id.to_string(),
+                    scope_type: scope.scope_type.into(),
+                })
+                .collect(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------

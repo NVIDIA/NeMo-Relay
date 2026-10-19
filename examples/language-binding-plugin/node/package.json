@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "pretest": "npm run build-debug --workspace=nemo-relay-node",
+    "pretest": "npm run build-debug --workspace=nemo-relay-node -- --features __skip-implicit-config",
     "start": "node main.mjs",
     "test": "node --test test-plugin.mjs"
   },

@@ -8,7 +8,7 @@ use crate::error::CliError;
 
 use super::HookForwardRequest;
 
-const HOOK_GATEWAY_RETRY_TIMEOUT: Duration = Duration::from_secs(20);
+pub(super) const HOOK_GATEWAY_RETRY_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(crate) struct HookDestination {
     pub(crate) gateway_url: String,
@@ -76,37 +76,32 @@ pub(crate) fn resolve_hook_destination(
     }
 }
 
-pub(super) async fn wait_for_existing_gateway(
-    gateway: crate::bootstrap::GatewaySpec,
-    gateway_url: String,
+pub(super) fn wait_for_existing_gateway(
+    gateway: &crate::bootstrap::GatewaySpec,
+    gateway_url: &str,
+    deadline: Instant,
 ) -> Result<(), CliError> {
-    tokio::task::spawn_blocking(move || {
-        let deadline = Instant::now() + HOOK_GATEWAY_RETRY_TIMEOUT;
-        loop {
-            match gateway.existing_healthy_instance(&gateway_url) {
-                Ok(Some(_instance_id)) => return Ok(()),
-                Ok(None) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Ok(None) => {
-                    return Err(format!(
-                        "no compatible Relay gateway became ready at {gateway_url}; ensure the host started `nemo-relay mcp`"
-                    ));
-                }
-                Err(error) => return Err(error),
+    loop {
+        match gateway.existing_healthy_instance(gateway_url) {
+            Ok(Some(_instance_id)) => return Ok(()),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
             }
+            Ok(None) => {
+                return Err(CliError::Launch(format!(
+                    "no compatible Relay gateway became ready at {gateway_url}; ensure the host started `nemo-relay mcp`"
+                )));
+            }
+            Err(error) => return Err(CliError::Launch(error)),
         }
-    })
-    .await
-    .map_err(|error| CliError::Launch(format!("hook gateway verification task failed: {error}")))?
-    .map_err(CliError::Launch)
+    }
 }
 
 pub(super) fn recovery_plan(
     gateway_url: &str,
 ) -> Result<crate::bootstrap::PluginGatewaySpec, CliError> {
     let bind = crate::gateway::client::loopback_bind(gateway_url).map_err(CliError::Install)?;
-    crate::bootstrap::resolve_plugin_gateway(&Default::default(), bind)
+    crate::bootstrap::resolve_hook_gateway(bind)
 }
 
 pub(crate) fn transparent_gateway_spec(

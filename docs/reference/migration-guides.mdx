@@ -16,6 +16,20 @@ Use this page to upgrade from NeMo Relay 0.10.0 to 0.11.0.
 
 ### API and Plugin Compatibility
 
+#### Configure Python Object Decoding
+
+`BestEffortAnyCodec()` now returns tagged dataclass and Pydantic values as JSON dictionaries by default. This also applies to values encoded earlier in the same process.
+
+To restore objects, pass the expected class objects in `allowed_types`. For example, use `BestEffortAnyCodec(allowed_types=[SearchArgs, SearchResult])`. Each codec has its own list. Encoding a value does not add its type to the list.
+
+During decoding, the codec uses only classes in this list. It ignores old runtime type tokens and never imports modules. Restoring an object still runs its constructor or validators on the input data.
+
+Use `JsonPassthrough` for tool arguments from a model. Use `DataclassCodec` or `PydanticCodec` for one known schema.
+
+The LangChain and LangGraph integrations still pass tool arguments as JSON. Their result codecs allow only known framework types. For LangChain structured responses, declare the expected classes in the request's `response_format`.
+
+For a complete example, refer to [Using Codecs](/integrate-into-frameworks/using-codecs).
+
 ### Observability and Telemetry Changes
 
 ### Coding-Agent Integration Changes

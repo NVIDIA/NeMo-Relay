@@ -310,7 +310,14 @@ fn version_mismatched_owned_gateway_is_shut_down_and_cleaned_up() {
         let mut health = accept_bounded(&listener);
         let request = read_headers(&mut health);
         let nonce = header(&request, "x-nemo-relay-bootstrap-nonce");
-        let proof = key.proof("fingerprint", &nonce);
+        let proof = key.proof(
+            &crate::gateway::client::listener_fingerprint(
+                "fingerprint",
+                listener.local_addr().unwrap(),
+                "test-instance",
+            ),
+            &nonce,
+        );
         let body = format!(
             "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"test-instance\"}}",
             "previous-version", BOOTSTRAP_PROTOCOL_VERSION
@@ -328,7 +335,14 @@ fn version_mismatched_owned_gateway_is_shut_down_and_cleaned_up() {
         let mut shutdown = accept_bounded(&listener);
         let challenge = read_headers(&mut shutdown);
         let nonce = header(&challenge, "x-nemo-relay-bootstrap-nonce");
-        let proof = key.proof("fingerprint", &nonce);
+        let proof = key.proof(
+            &crate::gateway::client::listener_fingerprint(
+                "fingerprint",
+                listener.local_addr().unwrap(),
+                "test-instance",
+            ),
+            &nonce,
+        );
         shutdown
             .write_all(
                 format!(

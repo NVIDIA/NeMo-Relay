@@ -622,11 +622,8 @@ describe('Scope-local auto-cleanup on scope pop', () => {
     const stream = await llmStreamCallExecute(
       'sl_cleanup_llm_stream_exec_call',
       makeNative(),
-      (wrapper) => {
-        lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
-          sawIntercept: wrapper.__nemo_relay_native.content.fromPoppedScope || false,
-        });
-        lib.endStream(wrapper.__nemo_relay_stream_id);
+      async function* (request) {
+        yield { sawIntercept: request.content.fromPoppedScope || false };
       },
       null,
       null,
@@ -1179,11 +1176,8 @@ describe('Scope-local LLM intercepts', () => {
       const stream = await llmStreamCallExecute(
         'sl_llm_stream_compose_call',
         makeNative(),
-        (wrapper) => {
-          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
-            downstream: wrapper.__nemo_relay_native.content.touchedByScopeStream,
-          });
-          lib.endStream(wrapper.__nemo_relay_stream_id);
+        async function* (request) {
+          yield { downstream: request.content.touchedByScopeStream };
         },
         null,
         null,
@@ -1232,11 +1226,8 @@ describe('Scope-local LLM intercepts', () => {
           llmStreamCallExecute(
             'sl_llm_stream_invalid_call',
             makeNative(),
-            (wrapper) => {
-              lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
-                shouldNotRun: true,
-              });
-              lib.endStream(wrapper.__nemo_relay_stream_id);
+            async function* () {
+              yield { shouldNotRun: true };
             },
             null,
             null,

@@ -90,22 +90,35 @@ Use the source that matches how Relay is launched:
 | Configure the primary daemon service | `[daemon.logging]` in TOML |
 | Embed Relay in a Rust application | `LoggingConfig` and `LoggingRuntime` |
 
-For CLI processes, Relay selects one source in this order:
+For CLI commands, Relay applies logging settings in this order:
 
-1. `--log-*` options or `--log-config-path`
-2. `NEMO_RELAY_LOG*` environment variables
-3. `[logging]` in the resolved Relay `config.toml`
-4. Built-in defaults
+1. Built-in defaults
+2. `[logging]` in the resolved Relay `config.toml`
+3. `NEMO_RELAY_LOG`, `NEMO_RELAY_LOG_STDERR`, and `NEMO_RELAY_LOG_STDERR_FORMAT`
+4. `--log-level` and `--log-stderr-format`
 
-For the primary `nemo-relay daemon` service, step 3 instead reads
-`[daemon.logging]`. It does not inherit `[logging]`; explicit CLI and
-environment sources retain the same precedence.
+Each step changes only the fields it sets. If two steps set the same field,
+Relay uses the later value.
 
-Sources are selected rather than merged. Python, Node.js, and Go install a
-process-lifetime `LoggingRuntime` when the binding loads, using environment
-configuration or built-in defaults. Rust applications explicitly choose which
-`LoggingRuntime` initialization method to use and do not apply the CLI
-precedence rules.
+For example, `NEMO_RELAY_LOG=info` changes the minimum log level. It keeps the
+file sinks, rotation settings, and flush interval from TOML.
+
+For the primary `nemo-relay daemon` service, step 2 reads `[daemon.logging]`.
+The daemon does not use `[logging]`.
+
+You can also choose a logging file directly. Relay then skips its usual search
+for `config.toml`:
+
+- `NEMO_RELAY_LOG_CONFIG_PATH` loads the file you name. You can override its log
+  level and stderr format with CLI options. Do not combine this variable with
+  other logging environment variables.
+- `--log-config-path` loads the file you name and ignores logging environment
+  variables.
+
+Python, Node.js, and Go bindings use environment settings or built-in defaults
+when they start `LoggingRuntime`. The logger stays active until the process
+exits. Rust applications choose how to set up `LoggingRuntime`. The CLI rules
+do not apply to these bindings or to Rust applications.
 
 ## CLI Options
 

@@ -10,11 +10,15 @@ use serde_json::Value;
 /// Missing intermediate keys stop the lookup without error so callers can
 /// express schema precedence by chaining candidate paths.
 pub(crate) fn value_at(payload: &Value, path: &[&str]) -> Option<Value> {
+    borrowed_value_at(payload, path).cloned()
+}
+
+fn borrowed_value_at<'a>(payload: &'a Value, path: &[&str]) -> Option<&'a Value> {
     let mut current = payload;
     for key in path {
         current = current.get(*key)?;
     }
-    Some(current.clone())
+    Some(current)
 }
 
 /// Read the first JSON value from any candidate path.
@@ -31,9 +35,9 @@ pub(crate) fn value_at_any(payload: &Value, paths: &[&[&str]]) -> Option<Value> 
 /// encode identifiers or flags without string types. Empty strings are treated
 /// as absent.
 pub(crate) fn string_at(payload: &Value, path: &[&str]) -> Option<String> {
-    value_at(payload, path)
+    borrowed_value_at(payload, path)
         .and_then(|value| match value {
-            Value::String(value) => Some(value),
+            Value::String(value) => Some(value.clone()),
             Value::Number(value) => Some(value.to_string()),
             Value::Bool(value) => Some(value.to_string()),
             _ => None,
