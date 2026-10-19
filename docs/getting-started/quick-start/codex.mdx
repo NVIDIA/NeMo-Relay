@@ -72,12 +72,18 @@ partially observable because their provider traffic does not cross the local
 Relay gateway.
 </Note>
 
-<Note icon="circle-info">
+<Warning title="Trial configuration">
 This guide uses disposable local files and wrapped execution to try Relay for
-one run. It is a trial configuration, not an ongoing deployment setup. For
-regular use, configure [user or system settings](/nemo-relay-cli/basic-usage#shared-configuration)
+one run. It is a trial configuration, not an ongoing deployment setup.
+</Warning>
+
+<Info title="For regular use">
+For personal use, configure [user or system settings](/nemo-relay-cli/basic-usage#shared-configuration)
 and follow the agent's [persistent integration setup](/nemo-relay-cli/codex).
-</Note>
+
+For administrator-managed deployments, use [daemon mode](/daemon/about) for a
+shared service and centrally managed configuration.
+</Info>
 
 Use the event relationships to follow model and tool work through a run and
 check where the expected activity occurred.
