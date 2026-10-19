@@ -541,6 +541,9 @@ pub struct DynamicPluginWorkerLoadContract {
     pub runtime: WorkerRuntime,
     /// Worker entrypoint or registration target.
     pub entrypoint: String,
+    /// Deadlines for short callbacks in this plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_timeouts: Option<WorkerCallbackTimeouts>,
 }
 
 /// Lane-specific load contract for native shared libraries.

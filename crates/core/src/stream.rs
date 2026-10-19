@@ -23,16 +23,19 @@
 //! terminate the stream immediately. The **finalizer** is called once when the
 //! stream terminates and returns the aggregated response as [`Json`]. That
 //! aggregated response is queued for sanitize response guardrails before being
-//! included in the END event. Stream termination does not await that queued
-//! observability work.
+//! included in the END event. Stream termination awaits an asynchronous
+//! finalizer, not that queued observability work.
 
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use futures_util::FutureExt;
+use tokio::sync::oneshot;
 use tokio_stream::Stream;
 
 use crate::api::event::{BaseEvent, MarkEvent};
@@ -41,10 +44,12 @@ use crate::api::llm::{EndLlmHandleParams, LlmHandle};
 use crate::api::optimization::finalize_optimization_summary;
 use crate::api::registry::{Guardrail, RuntimeRegistrationKind};
 use crate::api::runtime::NemoRelayContextState;
+use crate::api::runtime::callbacks::LlmStreamResponseCompletionFn;
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::runtime::{
-    EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK,
+    EventSubscriberFn, LlmBorrowedCollectorFn, LlmCollector, LlmCollectorFuture, LlmFinalizer,
+    LlmFinalizerFuture, LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK,
     current_scope_stack,
 };
 use crate::api::runtime::{LlmSanitizeResponseContext, LlmSanitizeResponseFn};
@@ -78,8 +83,11 @@ pub struct LlmStreamWrapper {
     inner: LlmJsonStream,
     handle: LlmHandle,
     scope_stack: ScopeStackHandle,
-    collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
-    finalizer: Option<Box<dyn FnOnce() -> Json + Send>>,
+    collector: LlmChunkCollector,
+    finalizer: Option<LlmFinalizer>,
+    response_completion: Option<LlmStreamResponseCompletionFn>,
+    pending_collector: Option<(Json, LlmCollectorFuture)>,
+    pending_end: Option<oneshot::Receiver<()>>,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
     sanitize_context: LlmSanitizeResponseContext,
     metadata: Option<Json>,
@@ -89,10 +97,16 @@ pub struct LlmStreamWrapper {
     chunk_index: u64,
     ended: bool,
     close_result: Option<Result<()>>,
-    terminal_result: Option<Result<Json>>,
+    undelivered_error: Option<FlowError>,
+}
+
+pub(crate) enum LlmChunkCollector {
+    Owned(LlmCollector),
+    Borrowed(LlmBorrowedCollectorFn),
 }
 
 pub(crate) struct ManagedLlmStreamTelemetry {
+    response_completion: Option<LlmStreamResponseCompletionFn>,
     subscribers: Vec<EventSubscriberFn>,
     stream_started_at: Instant,
 }
@@ -102,7 +116,16 @@ impl ManagedLlmStreamTelemetry {
         Self {
             subscribers,
             stream_started_at,
+            response_completion: None,
         }
+    }
+
+    pub(crate) fn with_response_completion(
+        mut self,
+        completion: Option<LlmStreamResponseCompletionFn>,
+    ) -> Self {
+        self.response_completion = completion;
+        self
     }
 }
 
@@ -116,6 +139,26 @@ enum StreamTermination {
 impl StreamTermination {
     const fn is_interrupted(self) -> bool {
         !matches!(self, Self::Complete)
+    }
+}
+
+enum EndPublication {
+    Reserved {
+        aggregate: Result<Json>,
+        barrier: Option<subscriber_dispatcher::AsyncPublication>,
+    },
+    Awaiting {
+        finalizer: LlmFinalizerFuture,
+        finalized: oneshot::Sender<()>,
+    },
+}
+
+impl EndPublication {
+    fn reserve(aggregate: Result<Json>) -> Self {
+        // Register a dispatcher barrier before spawning finalization so a synchronous
+        // subscriber flush after this stream is dropped cannot overtake the END event.
+        let barrier = subscriber_dispatcher::register_async_publication();
+        Self::Reserved { aggregate, barrier }
     }
 }
 
@@ -144,8 +187,8 @@ impl LlmStreamWrapper {
     pub fn new(
         inner: LlmJsonStream,
         handle: LlmHandle,
-        collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
-        finalizer: Box<dyn FnOnce() -> Json + Send>,
+        collector: impl Into<LlmCollector>,
+        finalizer: impl Into<LlmFinalizer>,
         _data: Option<Json>,
         metadata: Option<Json>,
         response_codec: Option<Arc<dyn LlmResponseCodec>>,
@@ -164,8 +207,8 @@ impl LlmStreamWrapper {
         Self::new_managed(
             inner,
             handle,
-            collector,
-            finalizer,
+            LlmChunkCollector::Owned(collector.into()),
+            finalizer.into(),
             metadata,
             response_codec,
             ManagedLlmStreamTelemetry::new(subscribers, Instant::now()),
@@ -175,8 +218,8 @@ impl LlmStreamWrapper {
     pub(crate) fn new_managed(
         inner: LlmJsonStream,
         handle: LlmHandle,
-        collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
-        finalizer: Box<dyn FnOnce() -> Json + Send>,
+        collector: LlmChunkCollector,
+        finalizer: LlmFinalizer,
         metadata: Option<Json>,
         response_codec: Option<Arc<dyn LlmResponseCodec>>,
         telemetry: ManagedLlmStreamTelemetry,
@@ -184,6 +227,7 @@ impl LlmStreamWrapper {
         let ManagedLlmStreamTelemetry {
             subscribers,
             stream_started_at,
+            response_completion,
         } = telemetry;
         let scope_stack = handle.captured_scope_stack().clone();
         let sanitize_context =
@@ -194,16 +238,19 @@ impl LlmStreamWrapper {
             scope_stack,
             collector,
             finalizer: Some(finalizer),
+            pending_collector: None,
+            pending_end: None,
             response_codec,
             sanitize_context,
             metadata,
             subscribers,
             stream_started_at,
+            response_completion,
             first_chunk_elapsed: None,
             chunk_index: 0,
             ended: false,
             close_result: None,
-            terminal_result: None,
+            undelivered_error: None,
         }
     }
 
@@ -268,20 +315,28 @@ impl LlmStreamWrapper {
     ///
     /// Calls the finalizer and queues response sanitization and END publication.
     fn emit_end_event(&mut self, metadata: Option<Json>, termination: StreamTermination) {
-        // The finalizer below runs on the caller's Tokio runtime. Register a
-        // dispatcher barrier before spawning it so a synchronous subscriber
-        // flush after this stream is dropped cannot overtake the END event.
-        let publication_barrier = subscriber_dispatcher::register_async_publication();
         let timestamp = Utc::now();
-        let aggregated = match self.finalizer.take() {
-            Some(finalizer) => finalizer(),
-            None => Json::Null,
-        };
-        let response_was_null_without_fallback = aggregated.is_null() && self.handle.data.is_none();
-        let response = if aggregated.is_null() {
-            self.handle.data.clone().unwrap_or(aggregated)
-        } else {
-            aggregated
+        let (publication, pending_publication) = match self.finalizer.take() {
+            Some(LlmFinalizer::Async(finalizer)) => {
+                // A pending permit makes flushes wait for END without parking the dispatcher.
+                let finalizer = finalizer();
+                let (finalized, pending_end) = oneshot::channel();
+                self.pending_end = Some(pending_end);
+                let pending_publication = (!self.subscribers.is_empty())
+                    .then(subscriber_dispatcher::register_pending_publication)
+                    .flatten();
+                (
+                    EndPublication::Awaiting {
+                        finalizer,
+                        finalized,
+                    },
+                    pending_publication,
+                )
+            }
+            // Runs before the END barrier exists, so a flush inside a synchronous finalizer completes.
+            Some(LlmFinalizer::Sync(finalizer)) => (EndPublication::reserve(Ok(finalizer())), None),
+            Some(LlmFinalizer::Fallible(finalizer)) => (EndPublication::reserve(finalizer()), None),
+            None => (EndPublication::reserve(Ok(Json::Null)), None),
         };
 
         let (entries, sanitizer_snapshot_failed) =
@@ -295,8 +350,51 @@ impl LlmStreamWrapper {
         let time_to_first_chunk = self
             .first_chunk_elapsed
             .map(|elapsed| elapsed.as_secs_f64());
-        let finalize = async move {
-            let sanitized = (!sanitizer_snapshot_failed).then(|| {
+        let response_completion = self.response_completion.take();
+        let publish = move |finalizer_result: Result<Json>| async move {
+            let (aggregated, finalizer_failure) = match finalizer_result {
+                Ok(aggregated) => (aggregated, None),
+                Err(error) => {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "stream_finalizer_failed";
+                        "LLM stream finalizer failed; omitting the aggregated response: {error}"
+                    );
+                    (Json::Null, Some(error))
+                }
+            };
+            if let Some(completion) = response_completion {
+                let outcome = AssertUnwindSafe(async { completion(&aggregated).await })
+                    .catch_unwind()
+                    .await;
+                match outcome {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "stream_response_completion_failed";
+                        "Streaming response completion failed: {error}"
+                    ),
+                    Err(_) => log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "stream_response_completion_panicked";
+                        "Streaming response completion panicked"
+                    ),
+                }
+            }
+            let finalizer_failed = finalizer_failure.is_some();
+            let metadata = match (&finalizer_failure, termination) {
+                (Some(error), StreamTermination::Complete) => {
+                    metadata_with_otel_error(metadata, error)
+                }
+                _ => metadata,
+            };
+            let response_was_null_without_fallback = aggregated.is_null() && handle.data.is_none();
+            let response = if aggregated.is_null() && !finalizer_failed {
+                handle.data.clone().unwrap_or(aggregated)
+            } else {
+                aggregated
+            };
+            let sanitized = (!sanitizer_snapshot_failed && !finalizer_failed).then(|| {
                 NemoRelayContextState::llm_sanitize_response_snapshot_chain(
                     response,
                     sanitize_context,
@@ -389,16 +487,33 @@ impl LlmStreamWrapper {
                 );
             }
         };
+        let finalize = async move {
+            let (aggregate, barrier) = match publication {
+                EndPublication::Reserved { aggregate, barrier } => (aggregate, barrier),
+                EndPublication::Awaiting {
+                    finalizer,
+                    finalized,
+                } => {
+                    let aggregate = finalizer.await;
+                    // Reserve the END position before the consumer observes the end.
+                    let barrier = subscriber_dispatcher::register_async_publication();
+                    let _ = finalized.send(());
+                    (aggregate, barrier)
+                }
+            };
+            subscriber_dispatcher::with_async_publication_context(barrier, publish(aggregate))
+                .await;
+        };
         let finalize = TASK_SCOPE_STACK.scope(finalization_scope_stack, finalize);
         let publication_context = subscriber_dispatcher::capture_publication_context();
         let finalize = subscriber_dispatcher::with_task_publication_context(
             publication_context,
-            subscriber_dispatcher::with_async_publication_context(publication_barrier, finalize),
+            subscriber_dispatcher::with_pending_publication(pending_publication, finalize),
         );
         // Stream finalization is observability-only. Queue it on the shared
         // publication executor so stream termination does not await response
-        // or event sanitizers. The registered barrier keeps subscriber flushes
-        // ordered behind this END event.
+        // or event sanitizers. The reserved barrier or pending permit keeps
+        // subscriber flushes ordered behind this END event.
         let _ = subscriber_dispatcher::spawn_background_publication(finalize);
     }
 
@@ -473,9 +588,30 @@ impl Stream for LlmStreamWrapper {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.as_mut().get_mut();
 
+        if let Some((chunk, mut collecting)) = this.pending_collector.take() {
+            match collecting.as_mut().poll(cx) {
+                Poll::Pending => {
+                    this.pending_collector = Some((chunk, collecting));
+                    return Poll::Pending;
+                }
+                Poll::Ready(Ok(())) => return Poll::Ready(Some(Ok(chunk))),
+                Poll::Ready(Err(e)) => {
+                    this.finish_with_error(&e);
+                    this.undelivered_error = Some(e);
+                    return self.poll_next(cx);
+                }
+            }
+        }
+
         if this.ended {
-            return match this.terminal_result.take() {
-                Some(result) => Poll::Ready(Some(result)),
+            if let Some(pending_end) = this.pending_end.as_mut() {
+                if Pin::new(pending_end).poll(cx).is_pending() {
+                    return Poll::Pending;
+                }
+                this.pending_end = None;
+            }
+            return match this.undelivered_error.take() {
+                Some(error) => Poll::Ready(Some(Err(error))),
                 None => Poll::Ready(None),
             };
         }
@@ -489,18 +625,35 @@ impl Stream for LlmStreamWrapper {
                 this.chunk_index += 1;
                 this.emit_chunk_mark(chunk_index, &raw_chunk);
                 // Feed chunk to the collector; if it returns Err, terminate the stream
-                match (this.collector)(raw_chunk.clone()) {
-                    Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
-                    Err(e) => {
-                        this.finish_with_error(&e);
-                        this.terminal_result = Some(Err(e));
+                match &mut this.collector {
+                    LlmChunkCollector::Borrowed(collector) => match collector(&raw_chunk) {
+                        Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
+                        Err(error) => {
+                            this.finish_with_error(&error);
+                            this.undelivered_error = Some(error);
+                            self.poll_next(cx)
+                        }
+                    },
+                    LlmChunkCollector::Owned(LlmCollector::Sync(collector)) => {
+                        match collector(raw_chunk.clone()) {
+                            Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
+                            Err(e) => {
+                                this.finish_with_error(&e);
+                                this.undelivered_error = Some(e);
+                                self.poll_next(cx)
+                            }
+                        }
+                    }
+                    LlmChunkCollector::Owned(LlmCollector::Async(collector)) => {
+                        let collecting = collector(raw_chunk.clone());
+                        this.pending_collector = Some((raw_chunk, collecting));
                         self.poll_next(cx)
                     }
                 }
             }
             Poll::Ready(Some(Err(e))) => {
                 this.finish_with_error(&e);
-                this.terminal_result = Some(Err(e));
+                this.undelivered_error = Some(e);
                 self.poll_next(cx)
             }
             Poll::Ready(None) => {
@@ -519,13 +672,33 @@ impl LlmStreamInner for LlmStreamWrapper {
             if let Some(result) = &this.close_result {
                 return result.clone();
             }
-            let result = this.inner.close().await;
+            let cleanup = this.inner.close().await;
+            // Close the producer first so a collector waiting on its abort can settle.
+            if let Some((_, collecting)) = this.pending_collector.take()
+                && let Err(error) = collecting.await
+            {
+                this.finish_with_error(&error);
+                this.undelivered_error = Some(error);
+            }
             this.finish();
+            if let Some(pending_end) = this.pending_end.take() {
+                let _ = pending_end.await;
+            }
+            let result = match (this.undelivered_error.take(), cleanup) {
+                (Some(error), cleanup) => {
+                    if let Err(cleanup) = cleanup {
+                        log::warn!(
+                            target: "nemo_relay.runtime",
+                            event = "stream_cleanup_failed";
+                            "LLM stream cleanup failed after the stream failed: {cleanup}"
+                        );
+                    }
+                    Err(error)
+                }
+                (None, cleanup) => cleanup,
+            };
             this.close_result = Some(result.clone());
-            this.close_result
-                .as_ref()
-                .expect("close result was just stored")
-                .clone()
+            result
         })
     }
 }

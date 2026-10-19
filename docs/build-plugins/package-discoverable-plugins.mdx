@@ -200,3 +200,49 @@ Success means package validation passes before activation, tampering causes inte
 validation to fail, the runtime report identifies the dynamic component, and teardown
 removes its registrations before the library unloads or worker exits. The operator-side
 trust policy and file layout are documented in [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins).
+
+## Callback Deadlines
+
+A deadline limits how long Relay waits for a callback to finish. Set deadlines
+for short worker callbacks in `relay-plugin.toml`. These settings work with
+Python, Rust, and workers that you start with a custom command.
+
+The following example sets a default deadline and an override for one callback:
+
+```toml
+[load.callback_timeouts]
+default_ms = 60000
+
+[load.callback_timeouts.by_name]
+check_request = 90000
+```
+
+Use positive whole numbers in milliseconds. In this example, most short callbacks
+have a limit of 60,000 milliseconds. The `check_request` callback has a limit of
+90,000 milliseconds.
+
+Relay chooses the deadline in this order:
+
+1. The value in `by_name` for the callback's exact registration name.
+2. The `default_ms` value, if set.
+3. The built-in default of 30,000 milliseconds.
+
+Names are case-sensitive. They cannot be empty or have spaces at the start or
+end. If several callbacks use the same name, they share the same override, even
+across components or callback types. Use distinct names when callbacks need
+different deadlines. Names that don't match a registered callback have no effect.
+For a conditional middleware guardrail, use the guardrail's callback name.
+
+Plugin authors and operators use the same manifest settings. Edit the manifest
+and reactivate the plugin to apply a change. Relay keeps the settings it read
+when the plugin started until you reactivate it.
+
+The deadline includes any time the callback spends waiting for calls back to
+Relay. When the deadline expires, Relay asks the worker to cancel the callback
+and clears the host state for that call. The callback follows its usual error or
+fallback behavior.
+
+Tool and LLM execution intercepts, including streams, ignore these settings.
+Their callers control cancellation. Other worker calls, such as validation and
+shutdown, keep their 30,000-millisecond timeout. Native plugins run inside Relay
+and don't use worker deadlines.

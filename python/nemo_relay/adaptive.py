@@ -343,8 +343,8 @@ class ToolCacheConfig:
 
     Args:
         enabled: Master switch for the tool surface. Off by default.
-        priority: Tool execution-intercept priority. Defaults to 100; lower runs
-            first/outermost.
+        priority: Tool execution-intercept priority. Defaults to 150.
+            Lower values run first.
         cache_errors: Whether error-shaped tool results may be cached. Off by
             default.
         default: Policy for tools not listed in any class (defaults to not cached).
@@ -356,7 +356,7 @@ class ToolCacheConfig:
     """
 
     enabled: bool = False
-    priority: int = 100
+    priority: int = 150
     cache_errors: bool = False
     default: ToolClass = field(default_factory=ToolClass)
     classes: dict[str, ToolClass] = field(default_factory=dict)
@@ -390,7 +390,9 @@ class ResponseCacheConfig:
         namespace: Required non-empty cache trust domain folded into every key.
             One configured cache must not span mutually untrusted tenants or upstreams;
             the empty default is an unconfigured sentinel rejected at validation.
-        priority: Execution-intercept priority. Lower runs first/outermost.
+        priority: Execution-intercept priority. Defaults to 150.
+            Lower values run first. NeMo Guardrails defaults to 100,
+            so it runs before the cache.
         bypass_rate: Probability in ``[0.0, 1.0]`` of skipping the cache and running live.
         cache_nondeterministic: Cache nondeterministic requests too; ``False``
             caches only requests explicitly pinned deterministic (``temperature`` = 0).
@@ -402,7 +404,7 @@ class ResponseCacheConfig:
 
     ttl_seconds: int = 3600
     namespace: str = ""
-    priority: int = 50
+    priority: int = 150
     bypass_rate: float = 0.0
     cache_nondeterministic: bool = False
     key_strategy: ResponseCacheKeyStrategy = ResponseCacheKeyStrategy.EXACT_REQUEST

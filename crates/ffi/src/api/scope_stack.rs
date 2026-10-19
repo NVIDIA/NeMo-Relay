@@ -13,6 +13,44 @@ use nemo_relay::api::runtime::{
 };
 use uuid::Uuid;
 
+/// Return the explicit calling context's root-to-top scope identities as JSON.
+///
+/// Success with a null output means no active binding. A non-null result must
+/// be released with nemo_relay_string_free. No stack is created or activated.
+///
+/// # Safety
+/// out must point to valid writable C-string pointer storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_current_scope_stack_snapshot_json(
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("snapshot output pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = std::ptr::null_mut() };
+    let result = nemo_relay::api::runtime::current_scope_stack_snapshot().and_then(|snapshot| {
+        snapshot
+            .map(|snapshot| {
+                serde_json::to_string(&snapshot)
+                    .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))
+            })
+            .transpose()
+    });
+    match result {
+        Ok(Some(snapshot)) => {
+            unsafe { *out = str_to_c_string(&snapshot) };
+            NemoRelayStatus::Ok
+        }
+        Ok(None) => NemoRelayStatus::Ok,
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::from(&error)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scope stack isolation
 // ---------------------------------------------------------------------------

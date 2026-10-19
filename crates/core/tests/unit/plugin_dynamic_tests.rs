@@ -19,6 +19,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
     path
 }
 
+/// Builds a valid worker record that tests can change to cover invalid settings.
 fn sample_record() -> DynamicPluginRecord {
     DynamicPluginRecord {
         metadata: DynamicPluginMetadata {
@@ -46,6 +47,7 @@ fn sample_record() -> DynamicPluginRecord {
             worker_protocol: "grpc-v1".into(),
         }),
         load: DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            callback_timeouts: None,
             runtime: WorkerRuntime::Python,
             entrypoint: "acme_guardrails.plugin:register".into(),
         }),
@@ -175,11 +177,13 @@ fn registry_rejects_invalid_raw_record_shapes() {
     }
 }
 
+/// Checks that the registry rejects worker records with invalid load settings.
 #[test]
 fn registry_rejects_invalid_raw_record_load_shapes() {
     let mut registry = DynamicPluginRegistry::new();
     let mut record = sample_record();
     record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        callback_timeouts: None,
         runtime: WorkerRuntime::Python,
         entrypoint: String::new(),
     });
@@ -195,12 +199,14 @@ fn registry_rejects_invalid_raw_record_load_shapes() {
     }
 }
 
+/// Checks that replacing a record cannot bypass load validation.
 #[test]
 fn registry_replacement_rejects_invalid_record_shapes() {
     let mut registry = DynamicPluginRegistry::new();
     registry.add(sample_record()).expect("register plugin");
     let mut replacement = sample_record();
     replacement.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        callback_timeouts: None,
         runtime: WorkerRuntime::Python,
         entrypoint: String::new(),
     });
@@ -300,6 +306,7 @@ fn registry_rejects_missing_raw_record_relay_compatibility() {
     }
 }
 
+/// Checks that the registry trims required strings before storing a record.
 #[test]
 fn registry_add_canonicalizes_required_record_strings_before_storage() {
     let mut registry = DynamicPluginRegistry::new();
@@ -310,6 +317,7 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
         worker_protocol: " grpc-v1 ".into(),
     });
     record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        callback_timeouts: None,
         runtime: WorkerRuntime::Python,
         entrypoint: " acme_guardrails.plugin:register ".into(),
     });
@@ -326,6 +334,7 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
     assert_eq!(
         stored.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            callback_timeouts: None,
             runtime: WorkerRuntime::Python,
             entrypoint: "acme_guardrails.plugin:register".into(),
         })
@@ -576,6 +585,7 @@ symbol = "nemo_relay_register_plugin"
 "#
 }
 
+/// Checks that a worker manifest becomes a record with the expected load settings.
 #[test]
 fn manifest_parse_and_conversion_supports_worker_lane() {
     let manifest =
@@ -584,6 +594,7 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
     assert_eq!(
         manifest.load,
         DynamicPluginManifestLoad::Worker(DynamicPluginManifestWorkerLoad {
+            callback_timeouts: None,
             runtime: Some(WorkerRuntime::Python),
             entrypoint: Some("acme_guardrails.plugin:register".into()),
         })
@@ -598,6 +609,7 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
     assert_eq!(
         record.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            callback_timeouts: None,
             runtime: WorkerRuntime::Python,
             entrypoint: "acme_guardrails.plugin:register".into()
         })
@@ -919,6 +931,7 @@ fn manifest_without_config_schema_resolves_to_none() {
     );
 }
 
+/// Checks that manifest conversion trims required strings in stored records.
 #[test]
 fn manifest_conversion_canonicalizes_required_strings_in_record_state() {
     let manifest = DynamicPluginManifest::parse_toml(
@@ -960,12 +973,14 @@ entrypoint = " acme_guardrails.plugin:register "
     assert_eq!(
         record.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            callback_timeouts: None,
             runtime: WorkerRuntime::Python,
             entrypoint: "acme_guardrails.plugin:register".into(),
         })
     );
 }
 
+/// Checks that manifests accept Rust workers and workers started with custom commands.
 #[test]
 fn manifest_parse_accepts_rust_and_command_worker_runtimes() {
     for (runtime, expected) in [
@@ -1003,6 +1018,7 @@ entrypoint = "acme_guardrails.plugin:register"
         assert_eq!(
             record.load,
             DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+                callback_timeouts: None,
                 runtime: expected,
                 entrypoint: "acme_guardrails.plugin:register".into(),
             })
@@ -1706,6 +1722,7 @@ fn manifest_load_contract_rejects_mixed_and_empty_shapes() {
     assert!(error.to_string().contains("load must declare either"));
 }
 
+/// Checks that each plugin type rejects settings meant for the other type.
 #[test]
 fn manifest_validation_covers_forbidden_cross_lane_fields() {
     let mut native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
@@ -1746,6 +1763,7 @@ fn manifest_validation_covers_forbidden_cross_lane_fields() {
 
     let mut native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
     native.load = DynamicPluginManifestLoad::Worker(DynamicPluginManifestWorkerLoad {
+        callback_timeouts: None,
         runtime: Some(WorkerRuntime::Rust),
         entrypoint: Some("worker".into()),
     });
@@ -1829,6 +1847,7 @@ fn manifest_validation_checks_each_optional_source_and_integrity_field() {
     );
 }
 
+/// Checks that stored records cannot bypass duplicate, identity, or plugin type checks.
 #[test]
 fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
     let record = sample_record();
@@ -1873,6 +1892,7 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
             native_api: "1".into(),
         });
     native.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        callback_timeouts: None,
         runtime: WorkerRuntime::Rust,
         entrypoint: "worker".into(),
     });
@@ -2041,4 +2061,47 @@ fn relay_version_matches_prerelease_hosts_as_their_release() {
     }
     assert!(matches(">=0.10.0-rc.1, <1.0.0", "0.10.0-rc.1"));
     assert!(!matches(">=0.10.0-rc.2", "0.10.0-rc.1"));
+}
+
+/// Checks that valid deadlines survive conversion and invalid values are rejected.
+#[test]
+fn worker_callback_deadlines_validate_and_round_trip() {
+    let source = format!(
+        "{}\n[load.callback_timeouts]\ndefault_ms = 60000\n[load.callback_timeouts.by_name]\nslow_guardrail = 90000\n",
+        valid_worker_manifest_toml()
+    );
+    let manifest = DynamicPluginManifest::parse_toml(&source).unwrap();
+    let DynamicPluginManifestLoad::Worker(load) = &manifest.load else {
+        panic!("worker load")
+    };
+    let timeouts = load.callback_timeouts.as_ref().unwrap();
+    assert_eq!(timeouts.default_ms.unwrap().get(), 60000);
+    assert_eq!(timeouts.by_name["slow_guardrail"].get(), 90000);
+    let serialized = toml::to_string(&manifest).unwrap();
+    assert_eq!(
+        manifest,
+        DynamicPluginManifest::parse_toml(&serialized).unwrap()
+    );
+    let record = manifest.clone().into_record(None).unwrap();
+    let DynamicPluginLoadContract::Worker(record_load) = record.load else {
+        panic!("worker record load")
+    };
+    assert_eq!(record_load.callback_timeouts.as_ref(), Some(timeouts));
+    for invalid in [
+        source.replace("60000", "0"),
+        source.replace("90000", "-1"),
+        source.replace("90000", "0"),
+        source.replace("60000", "1.5"),
+        source.replace("slow_guardrail", "\" \""),
+        source.replace("default_ms", "defaut_ms"),
+        format!(
+            "{}\n[load.callback_timeouts]\ndefault_ms = 1\n",
+            valid_rust_manifest_toml()
+        ),
+    ] {
+        assert!(
+            DynamicPluginManifest::parse_toml(&invalid).is_err(),
+            "accepted {invalid}"
+        );
+    }
 }

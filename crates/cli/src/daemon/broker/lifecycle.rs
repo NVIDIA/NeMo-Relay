@@ -5,6 +5,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use http::{HeaderValue, Uri};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -37,8 +38,10 @@ impl McpSessionId {
 
 /// An immutable destination for one registered worker generation.
 pub(crate) struct WorkerTarget {
-    worker_id: String,
+    worker_id: Arc<str>,
     endpoint: String,
+    origin: Uri,
+    authentication: HeaderValue,
     session_token: SensitiveString,
     client: Arc<PooledClient>,
     websocket_client: Option<PooledClient>,
@@ -81,9 +84,20 @@ impl WorkerTarget {
         if worker_id.is_empty() || endpoint.is_empty() {
             return Err(LifecycleError::EmptyIdentifier);
         }
+        let origin: Uri = endpoint
+            .parse()
+            .map_err(|_| LifecycleError::InvalidDestination)?;
+        if origin.scheme().is_none() || origin.authority().is_none() {
+            return Err(LifecycleError::InvalidDestination);
+        }
+        let mut authentication = HeaderValue::from_str(session_token.expose())
+            .map_err(|_| LifecycleError::InvalidCredential)?;
+        authentication.set_sensitive(true);
         Ok(Self {
-            worker_id,
+            worker_id: Arc::from(worker_id),
             endpoint,
+            origin,
+            authentication,
             session_token,
             client,
             websocket_client: None,
@@ -111,6 +125,21 @@ impl WorkerTarget {
     /// Returns the worker generation identifier.
     pub(crate) fn worker_id(&self) -> &str {
         &self.worker_id
+    }
+
+    pub(crate) fn shared_worker_id(&self) -> Arc<str> {
+        Arc::clone(&self.worker_id)
+    }
+
+    /// Combine a validated worker origin with the incoming path without reparsing either.
+    pub(crate) fn request_uri(&self, request: &Uri) -> Result<Uri, LifecycleError> {
+        let mut parts = self.origin.clone().into_parts();
+        parts.path_and_query = request.path_and_query().cloned();
+        Uri::from_parts(parts).map_err(|_| LifecycleError::InvalidDestination)
+    }
+
+    pub(crate) fn authentication(&self) -> HeaderValue {
+        self.authentication.clone()
     }
 
     /// Returns the daemon-reachable worker endpoint.
@@ -270,6 +299,10 @@ impl RouteState {
 pub(crate) enum LifecycleError {
     #[error("a lifecycle identifier or endpoint cannot be empty")]
     EmptyIdentifier,
+    #[error("invalid worker destination")]
+    InvalidDestination,
+    #[error("invalid worker credential")]
+    InvalidCredential,
     #[error("failed to construct a worker transport pool")]
     #[cfg(test)]
     TransportInitialization,

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Interactive editor for the non-agent sections of Relay's `config.toml`.
+//! Interactive editor for Relay's `config.toml` settings.
 
 use std::path::{Path, PathBuf};
 
@@ -68,6 +68,7 @@ fn ensure_tty_with(stdin_is_terminal: bool) -> Result<(), CliError> {
 struct ConfigDocument {
     path: PathBuf,
     document: DocumentMut,
+    logging_section: &'static str,
 }
 
 impl ConfigDocument {
@@ -79,7 +80,11 @@ impl ConfigDocument {
         } else {
             DocumentMut::new()
         };
-        Ok(Self { path, document })
+        Ok(Self {
+            path,
+            document,
+            logging_section: "logging",
+        })
     }
 
     fn path(&self) -> &Path {
@@ -141,48 +146,60 @@ impl ConfigDocument {
         document.to_string()
     }
 
+    fn section(&self, section: &str) -> Option<&dyn toml_edit::TableLike> {
+        let mut table: &dyn toml_edit::TableLike = self.document.as_table();
+        for part in section.split('.') {
+            table = table.get(part)?.as_table_like()?;
+        }
+        Some(table)
+    }
+
+    fn section_mut(&mut self, section: &str) -> Result<&mut dyn toml_edit::TableLike, CliError> {
+        let mut table: &mut dyn toml_edit::TableLike = self.document.as_table_mut();
+        for part in section.split('.') {
+            if !table.contains_key(part) {
+                table.insert(part, Item::Table(Table::new()));
+            }
+            table = table
+                .get_mut(part)
+                .and_then(Item::as_table_like_mut)
+                .ok_or_else(|| {
+                    CliError::Config(format!(
+                        "[{section}] must be a TOML table before it can be edited"
+                    ))
+                })?;
+        }
+        Ok(table)
+    }
+
     fn item(&self, section: &str, key: &str) -> Option<&Item> {
-        self.document.get(section)?.as_table()?.get(key)
+        self.section(section)?.get(key)
     }
 
     fn has_key(&self, section: &str, key: &str) -> bool {
         self.item(section, key).is_some()
-            || self
-                .document
-                .get(section)
-                .and_then(Item::as_value)
-                .and_then(Value::as_inline_table)
-                .is_some_and(|table| table.contains_key(key))
     }
 
     fn string(&self, section: &str, key: &str) -> Option<String> {
-        self.item(section, key)
-            .and_then(Item::as_value)
-            .and_then(Value::as_str)
-            .or_else(|| {
-                self.document
-                    .get(section)
-                    .and_then(Item::as_value)
-                    .and_then(Value::as_inline_table)
-                    .and_then(|table| table.get(key))
-                    .and_then(Value::as_str)
-            })
-            .map(str::to_owned)
+        self.item(section, key)?.as_str().map(str::to_owned)
     }
 
     fn integer(&self, section: &str, key: &str) -> Option<u64> {
-        self.item(section, key)
-            .and_then(Item::as_value)
-            .and_then(Value::as_integer)
-            .or_else(|| {
-                self.document
-                    .get(section)
-                    .and_then(Item::as_value)
-                    .and_then(Value::as_inline_table)
-                    .and_then(|table| table.get(key))
-                    .and_then(Value::as_integer)
-            })
+        self.item(section, key)?
+            .as_integer()
             .and_then(|value| u64::try_from(value).ok())
+    }
+
+    fn boolean(&self, section: &str, key: &str) -> Option<bool> {
+        self.item(section, key)?.as_bool()
+    }
+
+    fn boolean_summary(&self, section: &str, key: &str) -> String {
+        match (self.has_key(section, key), self.boolean(section, key)) {
+            (false, _) => "unset".into(),
+            (true, Some(value)) => value.to_string(),
+            (true, None) => "invalid".into(),
+        }
     }
 
     fn string_summary(&self, section: &str, key: &str) -> String {
@@ -233,17 +250,6 @@ impl ConfigDocument {
         } else {
             "defaults"
         }
-    }
-
-    fn table_mut(&mut self, section: &str) -> Result<&mut Table, CliError> {
-        if self.document.get(section).is_none() {
-            self.document[section] = Item::Table(Table::new());
-        }
-        self.document[section].as_table_mut().ok_or_else(|| {
-            CliError::Config(format!(
-                "[{section}] must be a TOML table before it can be edited"
-            ))
-        })
     }
 
     fn set_string(&mut self, section: &str, key: &str, new_value: String) -> Result<(), CliError> {
@@ -299,47 +305,48 @@ impl ConfigDocument {
     }
 
     fn clear_key(&mut self, section: &str, key: &str) -> Result<(), CliError> {
-        let empty = match self.document.get_mut(section) {
-            Some(item) => {
-                if let Some(table) = item.as_table_mut() {
-                    table.remove(key);
-                    table.is_empty()
-                } else if let Some(table) = item.as_value_mut().and_then(Value::as_inline_table_mut)
-                {
-                    table.remove(key);
-                    table.is_empty()
-                } else {
-                    return Err(CliError::Config(format!(
-                        "[{section}] must be a TOML table before it can be edited"
-                    )));
+        if self.section(section).is_none() {
+            // Missing sections are already clear; malformed sections still report an error.
+            let mut table = self.document.as_item();
+            for part in section.split('.') {
+                match table.get(part) {
+                    Some(item) => table = item,
+                    None => return Ok(()),
                 }
             }
-            None => false,
-        };
-        if empty {
-            self.document.remove(section);
+        }
+        let table = self.section_mut(section)?;
+        table.remove(key);
+        if table.is_empty() {
+            if let Some((parent, child)) = section.rsplit_once('.') {
+                self.clear_key(parent, child)?;
+            } else {
+                self.document.remove(section);
+            }
         }
         Ok(())
     }
 
     fn sinks(&self) -> Option<&ArrayOfTables> {
-        self.document
-            .get("logging")?
-            .as_table()?
+        self.section(self.logging_section)?
             .get("sinks")?
             .as_array_of_tables()
     }
 
     fn sinks_mut(&mut self) -> Result<&mut ArrayOfTables, CliError> {
-        let logging = self.table_mut("logging")?;
+        let section = self.logging_section;
+        let logging = self.section_mut(section)?;
         if logging.get("sinks").is_none() {
-            logging["sinks"] = Item::ArrayOfTables(ArrayOfTables::new());
+            logging.insert("sinks", Item::ArrayOfTables(ArrayOfTables::new()));
         }
-        logging["sinks"].as_array_of_tables_mut().ok_or_else(|| {
-            CliError::Config(
-                "logging.sinks must be an array of tables before it can be edited".into(),
-            )
-        })
+        logging
+            .get_mut("sinks")
+            .and_then(Item::as_array_of_tables_mut)
+            .ok_or_else(|| {
+                CliError::Config(format!(
+                    "{section}.sinks must be an array of tables before it can be edited"
+                ))
+            })
     }
 
     fn sink_count(&self) -> usize {
@@ -395,7 +402,7 @@ impl ConfigDocument {
             sinks.is_empty()
         };
         if empty {
-            self.clear_key("logging", "sinks")?;
+            self.clear_key(self.logging_section, "sinks")?;
         }
         Ok(())
     }
@@ -532,21 +539,9 @@ impl ConfigDocument {
     }
 
     fn set_value(&mut self, section: &str, key: &str, new_value: Value) -> Result<(), CliError> {
-        if self.document.get(section).is_none() {
-            self.document[section] = Item::Table(Table::new());
-        }
-        let item = &mut self.document[section];
-        if let Some(table) = item.as_table_mut() {
-            table[key] = Item::Value(new_value);
-            Ok(())
-        } else if let Some(table) = item.as_value_mut().and_then(Value::as_inline_table_mut) {
-            table.insert(key, new_value);
-            Ok(())
-        } else {
-            Err(CliError::Config(format!(
-                "[{section}] must be a TOML table before it can be edited"
-            )))
-        }
+        self.section_mut(section)?
+            .insert(key, Item::Value(new_value));
+        Ok(())
     }
 }
 

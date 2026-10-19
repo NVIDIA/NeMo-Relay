@@ -29,7 +29,7 @@ pub(crate) struct ConfigCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum ConfigSubcommand {
-    /// Interactively edit gateway, upstream, and operational logging configuration.
+    /// Edit gateway limits, provider settings, agent commands, and log settings.
     Edit(ConfigEditCommand),
 }
 

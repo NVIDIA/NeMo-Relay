@@ -2838,6 +2838,8 @@ struct MockHost {
     runtime_registration_requests: Arc<Mutex<RuntimeRegistrationRequests>>,
     scope_requests: Arc<Mutex<ScopeRequests>>,
     registration_response: Arc<Mutex<Option<ListRuntimeRegistrationsResponse>>>,
+    snapshot_response:
+        Arc<Mutex<Option<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotResponse>>>,
 }
 
 impl MockHost {
@@ -2882,6 +2884,23 @@ impl MockHost {
 
 #[tonic::async_trait]
 impl RelayHostRuntime for MockHost {
+    async fn get_current_scope_stack_snapshot(
+        &self,
+        request: Request<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest>,
+    ) -> std::result::Result<
+        Response<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotResponse>,
+        Status,
+    > {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.snapshot_response
+            .lock()
+            .unwrap()
+            .clone()
+            .map(Response::new)
+            .ok_or_else(|| Status::unimplemented("snapshot extension unavailable"))
+    }
+
     async fn log(
         &self,
         request: Request<LogRequest>,
@@ -4001,4 +4020,189 @@ fn authorize_host(activation_id: &str, auth_token: &str) -> std::result::Result<
         return Err(Status::permission_denied("invalid host auth"));
     }
     Ok(())
+}
+
+struct SnapshotPlugin;
+impl WorkerPlugin for SnapshotPlugin {
+    fn plugin_id(&self) -> &str {
+        PLUGIN_ID
+    }
+    fn register(&self, context: &mut PluginContext, _: &Json) -> Result<()> {
+        let runtime = context.runtime().unwrap();
+        context.register_tool_request_intercept("snapshot", 1, false, move |_, _| {
+            let runtime = runtime.clone();
+            async move {
+                Ok(serde_json::to_value(
+                    runtime.current_scope_stack_snapshot().await?,
+                )?)
+            }
+        });
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scope_stack_snapshot_worker_decodes_fresh_values_and_explicit_errors() {
+    use nemo_relay_worker_proto::v1::{
+        GetCurrentScopeStackSnapshotResponse, ScopeStackEntry, ScopeStackSnapshot,
+    };
+    let host = MockHost::default();
+    let (host_handle, host_endpoint) = spawn_host(host.clone()).await;
+    let (worker_handle, mut client) =
+        spawn_worker(Arc::new(SnapshotPlugin), tcp_endpoint(&host_endpoint)).await;
+    register_plugin(&mut client).await;
+    assert_worker_error(
+        client
+            .invoke(Request::new(tool_invoke(
+                "snapshot",
+                RegistrationSurface::ToolRequestIntercept,
+                json!({}),
+            )))
+            .await
+            .unwrap()
+            .into_inner(),
+        "unsupported",
+    );
+    let fixture: nemo_relay_types::api::scope::ScopeStackSnapshot = serde_json::from_str(
+        include_str!("../../types/tests/fixtures/scope_stack_snapshot.json"),
+    )
+    .unwrap();
+    let scopes = fixture
+        .scopes
+        .iter()
+        .map(|entry| ScopeStackEntry {
+            scope_id: entry.scope_id.to_string(),
+            scope_type: match entry.scope_type {
+                ScopeType::Agent => 1,
+                ScopeType::Function => 2,
+                ScopeType::Tool => 3,
+                ScopeType::Llm => 4,
+                _ => 11,
+            },
+        })
+        .collect();
+    *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
+        snapshot: Some(ScopeStackSnapshot { scopes }),
+        error: None,
+    });
+    let first = invoke_json(
+        &mut client,
+        tool_invoke(
+            "snapshot",
+            RegistrationSurface::ToolRequestIntercept,
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(first, serde_json::to_value(&fixture).unwrap());
+    for (discriminant, expected_type) in [
+        (1, "agent"),
+        (2, "function"),
+        (3, "tool"),
+        (4, "llm"),
+        (5, "retriever"),
+        (6, "embedder"),
+        (7, "reranker"),
+        (8, "guardrail"),
+        (9, "evaluator"),
+        (10, "custom"),
+        (11, "unknown"),
+    ] {
+        *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
+            snapshot: Some(ScopeStackSnapshot {
+                scopes: vec![ScopeStackEntry {
+                    scope_id: fixture.scopes[0].scope_id.to_string(),
+                    scope_type: discriminant,
+                }],
+            }),
+            error: None,
+        });
+        let value = invoke_json(
+            &mut client,
+            tool_invoke(
+                "snapshot",
+                RegistrationSurface::ToolRequestIntercept,
+                json!({}),
+            ),
+        )
+        .await;
+        assert_eq!(value["scopes"][0]["scope_type"], expected_type);
+    }
+    for discriminant in [0, i32::MAX] {
+        *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
+            snapshot: Some(ScopeStackSnapshot {
+                scopes: vec![ScopeStackEntry {
+                    scope_id: fixture.scopes[0].scope_id.to_string(),
+                    scope_type: discriminant,
+                }],
+            }),
+            error: None,
+        });
+        let value = invoke_json(
+            &mut client,
+            tool_invoke(
+                "snapshot",
+                RegistrationSurface::ToolRequestIntercept,
+                json!({}),
+            ),
+        )
+        .await;
+        assert_eq!(value["scopes"][0]["scope_type"], "unknown");
+    }
+    *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
+        snapshot: None,
+        error: None,
+    });
+    assert_eq!(
+        invoke_json(
+            &mut client,
+            tool_invoke(
+                "snapshot",
+                RegistrationSurface::ToolRequestIntercept,
+                json!({})
+            )
+        )
+        .await,
+        Json::Null
+    );
+    *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
+        snapshot: Some(ScopeStackSnapshot {
+            scopes: vec![ScopeStackEntry {
+                scope_id: "invalid".into(),
+                scope_type: 1,
+            }],
+        }),
+        error: None,
+    });
+    assert_worker_error(
+        client
+            .invoke(Request::new(tool_invoke(
+                "snapshot",
+                RegistrationSurface::ToolRequestIntercept,
+                json!({}),
+            )))
+            .await
+            .unwrap()
+            .into_inner(),
+        "invalid snapshot scope UUID",
+    );
+    *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
+        snapshot: None,
+        error: Some(worker_error("expired snapshot binding")),
+    });
+    assert_worker_error(
+        client
+            .invoke(Request::new(tool_invoke(
+                "snapshot",
+                RegistrationSurface::ToolRequestIntercept,
+                json!({}),
+            )))
+            .await
+            .unwrap()
+            .into_inner(),
+        "expired snapshot binding",
+    );
+    assert_eq!(first, serde_json::to_value(&fixture).unwrap());
+    worker_handle.abort();
+    host_handle.abort();
 }

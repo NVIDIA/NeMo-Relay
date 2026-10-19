@@ -173,11 +173,11 @@ the Codex app-server API to select hooks by plugin ID, exact canonical command,
 and event definition. It never trusts unrelated user, project, or plugin hooks.
 If Codex does not discover exactly one enabled and trusted handler for every
 generated event—`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
-`PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
+`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
 `PostCompact`—installation restores the previous Codex config, legacy hooks,
-Relay backup files, and every original targeted trust entry. These 10 events are
-the complete supported Codex 0.143 plugin hook schema; Relay does not generate
-undiscoverable `PostToolUseFailure`, `Notification`, or `SessionEnd` handlers.
+Relay backup files, and every original targeted trust entry. These nine events are
+the complete Relay-generated Codex hook set; Relay does not generate
+`PermissionRequest`, `PostToolUseFailure`, `Notification`, or `SessionEnd` handlers.
 Upgrade removes legacy Relay groups from
 `~/.codex/hooks.json` while preserving unrelated hooks.
 

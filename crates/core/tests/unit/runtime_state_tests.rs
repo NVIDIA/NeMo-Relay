@@ -390,3 +390,141 @@ async fn sanitizer_snapshot_chains_fail_closed_on_callback_panics() {
         FlowError::Internal(ref message) if message.contains("llm-intercept-panic")
     ));
 }
+
+#[tokio::test]
+async fn metadata_injection_preserves_payload_profile_and_existing_metadata_storage() {
+    use crate::api::event::CategoryProfile;
+    use std::sync::atomic::AtomicUsize;
+
+    for scope in [false, true] {
+        let base = BaseEvent::builder()
+            .name("metadata-storage-identity")
+            .data(json!({"text": "large payload".repeat(1024)}))
+            .metadata(json!({"existing": "existing metadata"}))
+            .build();
+        let profile = Some(CategoryProfile {
+            model_name: Some("unchanged model".into()),
+            ..CategoryProfile::default()
+        });
+        let event = if scope {
+            Event::Scope(ScopeEvent::new(
+                base,
+                ScopeCategory::Start,
+                vec![],
+                EventCategory::llm(),
+                profile,
+            ))
+        } else {
+            Event::Mark(MarkEvent::new(base, None, profile))
+        };
+        let data_ptr = event.data().unwrap()["text"].as_str().unwrap().as_ptr() as usize;
+        let metadata_ptr = event.metadata().unwrap()["existing"]
+            .as_str()
+            .unwrap()
+            .as_ptr() as usize;
+        let model_ptr = event
+            .category_profile()
+            .unwrap()
+            .model_name
+            .as_deref()
+            .unwrap()
+            .as_ptr() as usize;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed_calls = calls.clone();
+        let injector: EventMetadataInjectorFn = Arc::new(move |event| {
+            assert_eq!(
+                event.data().unwrap()["text"].as_str().unwrap().as_ptr() as usize,
+                data_ptr
+            );
+            assert_eq!(
+                event.metadata().unwrap()["existing"]
+                    .as_str()
+                    .unwrap()
+                    .as_ptr() as usize,
+                metadata_ptr
+            );
+            assert_eq!(
+                event
+                    .category_profile()
+                    .unwrap()
+                    .model_name
+                    .as_deref()
+                    .unwrap()
+                    .as_ptr() as usize,
+                model_ptr
+            );
+            let index = observed_calls.fetch_add(1, Ordering::Relaxed);
+            Box::pin(
+                async move { Ok(BTreeMap::from([(format!("injected.{index}"), json!(true))])) },
+            )
+        });
+        let injected = NemoRelayContextState::event_metadata_injection_snapshot_chain(
+            event,
+            &[
+                RegistryRecord::new("first", 0, injector.clone()),
+                RegistryRecord::new("second", 1, injector),
+            ],
+        )
+        .await;
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            injected.data().unwrap()["text"].as_str().unwrap().as_ptr() as usize,
+            data_ptr
+        );
+        assert_eq!(
+            injected.metadata().unwrap()["existing"]
+                .as_str()
+                .unwrap()
+                .as_ptr() as usize,
+            metadata_ptr
+        );
+        assert_eq!(
+            injected
+                .category_profile()
+                .unwrap()
+                .model_name
+                .as_deref()
+                .unwrap()
+                .as_ptr() as usize,
+            model_ptr
+        );
+        assert_eq!(injected.metadata().unwrap()["injected.0"], true);
+        assert_eq!(injected.metadata().unwrap()["injected.1"], true);
+    }
+}
+
+#[tokio::test]
+async fn request_intercept_content_rewrites_are_allowed_only_without_an_active_codec() {
+    let rewrite: LlmRequestInterceptFn = Arc::new(|_, mut request, annotated| {
+        Box::pin(async move {
+            request.content["prompt"] = json!("rewritten");
+            Ok(crate::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
+        })
+    });
+    let entries = [RegistryRecord::new(
+        "rewrite",
+        0,
+        RequestIntercept::new(false, rewrite),
+    )];
+    for codec_active in [false, true] {
+        let result = NemoRelayContextState::llm_request_intercepts_snapshot_chain(
+            "provider",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "original"}),
+            },
+            None,
+            &entries,
+            codec_active,
+        )
+        .await;
+        if codec_active {
+            assert!(matches!(result, Err(FlowError::InvalidArgument(message))
+                if message.contains("changed request.content")));
+        } else {
+            assert_eq!(result.unwrap().request.content["prompt"], "rewritten");
+        }
+    }
+}

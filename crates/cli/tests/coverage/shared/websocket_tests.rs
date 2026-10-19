@@ -38,7 +38,11 @@ pub(crate) async fn provider() -> (String, tokio::task::JoinHandle<()>, Arc<Atom
             let active = active.clone();
             let sessions = Arc::clone(&sessions);
             async move {
-                assert_eq!(headers[header::AUTHORIZATION], "Bearer caller-voice-key");
+                if uri.query() == Some("model=voice&credential=absent") {
+                    assert!(!crate::provider_auth::has_provider_credential(&headers));
+                } else {
+                    assert_eq!(headers[header::AUTHORIZATION], "Bearer caller-voice-key");
+                }
                 assert!(
                     headers
                         .keys()
@@ -72,7 +76,10 @@ pub(crate) async fn provider() -> (String, tokio::task::JoinHandle<()>, Arc<Atom
                         return StatusCode::NOT_FOUND.into_response();
                     }
                 } else {
-                    assert_eq!(uri.query(), Some("model=voice"));
+                    assert!(matches!(
+                        uri.query(),
+                        Some("model=voice" | "model=voice&credential=absent")
+                    ));
                     assert!(matches!(uri.path(), "/v1/live" | "/v1/realtime"));
                 }
                 ws.protocols(["voice"])
@@ -312,6 +319,23 @@ async fn sideband_path(response: reqwest::Response, prefix: &str, mode: u8) -> S
 }
 
 pub(crate) async fn exercise(origin: &str, token: Option<&str>, active: &AtomicUsize) {
+    for path in ["/v1/live", "/v1/realtime"] {
+        let mut request = format!(
+            "{}{path}?model=voice&credential=absent",
+            origin.replacen("http", "ws", 1)
+        )
+        .into_client_request()
+        .unwrap();
+        if let Some(token) = token {
+            request
+                .headers_mut()
+                .insert("x-nemo-relay-client-token", token.parse().unwrap());
+        }
+        let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        exchange_frames(&mut socket).await;
+        drop(socket);
+        wait_disconnected(active).await;
+    }
     for path in ["/live", "/v1/live", "/realtime", "/v1/realtime"] {
         let url = format!("{}{path}?model=voice", origin.replacen("http", "ws", 1));
         let mut request = url.into_client_request().unwrap();
@@ -465,6 +489,7 @@ async fn standalone_websocket_proxy_preserves_frames_and_handshake_failures() {
     let (upstream, provider_task, active) = provider().await;
     let config = GatewayConfig {
         openai_base_url: upstream,
+        openai_auth_header: Some("Bearer relay-owned-secret".into()),
         ..GatewayConfig::default()
     };
     let (origin, task) = serve(crate::server::router(config)).await;
@@ -475,7 +500,7 @@ async fn standalone_websocket_proxy_preserves_frames_and_handshake_failures() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn websocket_helper_auth_generates_fresh_tokens_for_each_handshake() {
+async fn websocket_unmanaged_routes_preserve_caller_credentials_with_helper() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let capture = Arc::clone(&seen);
     let upstream = Router::new().route(
@@ -483,7 +508,7 @@ async fn websocket_helper_auth_generates_fresh_tokens_for_each_handshake() {
         get(move |ws: WebSocketUpgrade, headers: HeaderMap| {
             let capture = Arc::clone(&capture);
             async move {
-                assert!(!headers.contains_key("x-api-key"));
+                assert_eq!(headers["x-api-key"], "stale-key");
                 capture
                     .lock()
                     .unwrap()
@@ -497,7 +522,7 @@ async fn websocket_helper_auth_generates_fresh_tokens_for_each_handshake() {
     let (upstream_url, upstream_task) = serve(upstream).await;
     let config = GatewayConfig {
         openai_base_url: upstream_url,
-        openai_api_key_helper: Some(crate::upstream_auth::tests::helper("printf 'token-%s' $$")),
+        openai_api_key_helper: Some(crate::upstream_auth::tests::helper("exit 9")),
         ..GatewayConfig::default()
     };
     let (origin, relay_task) = serve(crate::server::router(config)).await;
@@ -521,92 +546,62 @@ async fn websocket_helper_auth_generates_fresh_tokens_for_each_handshake() {
     }
     let tokens = seen.lock().unwrap();
     assert_eq!(tokens.len(), 2);
-    assert_ne!(tokens[0], tokens[1]);
+    assert_eq!(tokens[0], tokens[1]);
     assert!(
         tokens
             .iter()
-            .all(|token| token.to_str().unwrap().starts_with("Bearer token-"))
+            .all(|token| token == "Bearer stale-caller-token")
     );
     relay_task.abort();
     upstream_task.abort();
 }
 
-#[cfg(unix)]
+/// A failed WebSocket handshake cannot redirect the caller and its provider credential.
 #[tokio::test]
-async fn websocket_helpers_use_a_separate_pool_from_ordinary_handshakes() {
-    use axum::extract::ConnectInfo;
-    use std::net::SocketAddr;
-
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let capture = Arc::clone(&seen);
-    let app = Router::new().route(
-        "/v1/realtime",
-        get(
-            move |ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap| {
-                let capture = Arc::clone(&capture);
-                async move {
-                    capture
-                        .lock()
-                        .unwrap()
-                        .push((peer, headers[header::AUTHORIZATION].clone()));
-                    // A rejected handshake leaves a reusable HTTP/1 connection in the pool.
-                    StatusCode::UNAUTHORIZED
-                }
-            },
-        ),
-    );
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream_url = format!("http://{}", listener.local_addr().unwrap());
-    let upstream_task = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
+async fn websocket_proxy_removes_upstream_redirect_targets() {
+    let sink = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let location = format!("http://{}/collect", sink.local_addr().unwrap());
+    let app = Router::new().fallback(move || {
+        let location = location.clone();
+        async move {
+            (
+                StatusCode::TEMPORARY_REDIRECT,
+                [(header::LOCATION, location)],
+            )
+        }
     });
-    let config = GatewayConfig {
-        openai_base_url: upstream_url,
+    let (upstream, provider_task) = serve(app).await;
+    let (origin, task) = serve(crate::server::router(GatewayConfig {
+        openai_base_url: upstream,
         ..GatewayConfig::default()
+    }))
+    .await;
+    let mut request = format!("{}/v1/live", origin.replacen("http", "ws", 1))
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer caller-owned"),
+    );
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio_tungstenite::connect_async(request),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+        panic!("{error}");
     };
-    let (ordinary_origin, ordinary_task) = serve(crate::server::router(config.clone())).await;
-    let helper_config = GatewayConfig {
-        openai_api_key_helper: Some(crate::upstream_auth::tests::helper("printf 'token-%s' $$")),
-        ..config
-    };
-    let (helper_origin, helper_task) = serve(crate::server::router(helper_config)).await;
-    for origin in [&ordinary_origin, &helper_origin, &helper_origin] {
-        let mut request = format!("{}/v1/realtime", origin.replacen("http", "ws", 1))
-            .into_client_request()
-            .unwrap();
-        request.headers_mut().insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer caller-key"),
-        );
-        let error = tokio_tungstenite::connect_async(request).await.unwrap_err();
-        let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
-            panic!("{error}");
-        };
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-    let requests = seen.lock().unwrap();
-    assert_eq!(requests.len(), 3);
-    assert_eq!(requests[0].1, "Bearer caller-key");
-    assert_ne!(
-        requests[0].0, requests[1].0,
-        "helper traffic must use its own pool"
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert!(!response.headers().contains_key(header::LOCATION));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), sink.accept())
+            .await
+            .is_err()
     );
-    assert_eq!(
-        requests[1].0, requests[2].0,
-        "helper pool should reuse connections"
-    );
-    assert_ne!(
-        requests[1].1, requests[2].1,
-        "connection reuse must still resolve fresh tokens"
-    );
-    ordinary_task.abort();
-    helper_task.abort();
-    upstream_task.abort();
+    task.abort();
+    provider_task.abort();
 }
 
 #[tokio::test]

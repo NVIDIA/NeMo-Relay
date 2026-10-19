@@ -19,7 +19,7 @@ scope context while the `RelayHostRuntime` service performs the real work.
 | Create or drop an isolated stack | Await `create_scope_stack` and `drop_scope_stack`. | Await the same operations and retain the returned stack ID only for its owned lifetime. |
 | Bind and restore a stack | Run a future through `with_scope_stack`. | Enter `bind_scope_stack`; use `clear_scope_stack` when code must deliberately run without a bound stack. |
 | Push and pop a scope | Await `push_scope`, retain its handle, and await `pop_scope`. Use `push_scope_at` and `pop_scope_at` when replaying captured work at its original `SystemTime`. | Await the same pair; pass a timezone-aware `timestamp` when replaying captured work. The handle, not a guessed scope ID, owns the pop. |
-| Inspect inherited context | The runtime proxy carries the task scope snapshot. | `current_scope_stack_id` and `current_parent_scope_id` expose the current binding. |
+| Inspect scope identities | Await `current_scope_stack_snapshot`. | Await `current_scope_stack_snapshot`; existing binding-ID helpers remain transport-context helpers. |
 | Emit typed telemetry | Use `emit_mark_with_options` or `emit_metric`. | Use the matching async runtime methods. |
 | Read runtime diagnostics | Await `runtime_diagnostics`. | Await `runtime_diagnostics`. |
 | Discover global runtime registrations | Await `list_runtime_registrations`. | Await `list_runtime_registrations`. |
@@ -29,6 +29,55 @@ Every host request carries the activation ID, token, and relevant scope context.
 must not expose, log, or persist the activation token or codec capability IDs. Those
 values identify a live local capability and expire with the activation or invocation.
 Ordinary scope calls omit the timestamp and retain Relay's current-time behavior.
+
+## Inspect Scope Identities
+
+The Relay application starts the worker process and serves authenticated
+host-runtime RPCs. Each getter request carries the current callback or explicit
+stack binding; the host validates ownership and lifetime before reading it.
+Select the nearest Agent entry inside an application-owned Agent context:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay_plugin import ScopeType
+
+snapshot = await ctx.runtime.current_scope_stack_snapshot()
+agent_scope_uuid = next(
+    (entry.scope_id for entry in reversed(snapshot.scopes)
+     if entry.scope_type == ScopeType.AGENT),
+    None,
+) if snapshot is not None else None
+# Correlate callbacks that share this Agent using (agent_scope_uuid, tool_call_id).
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay_worker::ScopeType;
+
+let snapshot = runtime.current_scope_stack_snapshot().await?;
+let agent_scope_uuid = snapshot.as_ref().and_then(|snapshot| {
+    snapshot.scopes.iter().rev()
+        .find(|entry| entry.scope_type == ScopeType::Agent)
+        .map(|entry| entry.scope_id)
+});
+// Correlate callbacks that share this Agent using (agent_scope_uuid, tool_call_id).
+```
+</Tab>
+</Tabs>
+
+Each call reads fresh root-to-top UUID/type entries, including the implicit
+root. Earlier snapshots survive later push/pop unchanged. Unbound calls return
+`None`; actively bound root-only stacks return their root. Invalid, foreign,
+expired, cancelled, or dropped bindings return explicit errors. A missing RPC
+on an older host returns unsupported functionality, including for unbound
+calls. The operation never substitutes an ambient host-thread stack.
+
+Scope UUIDs are actual runtime identities; `scope_stack_id`, activation IDs,
+and invocation IDs remain transport capabilities. Synthetic propagation
+entries retain their stored types, including Unknown. See the
+[visible-stack contract](/about-nemo-relay/concepts/scopes#inspect-the-visible-stack)
+for callback timing and Agent-lifetime limitations.
 
 ## Control a Registration from a Background Task
 
