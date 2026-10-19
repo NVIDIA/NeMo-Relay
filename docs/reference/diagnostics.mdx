@@ -6,100 +6,153 @@ description: "Record and inspect bounded Relay diagnostic evidence independently
 SPDX-License-Identifier: Apache-2.0 */}
 
 Relay's Rust diagnostic foundation provides component-scoped recording and
-read-only snapshots. The serializable contracts live in `nemo-relay-types`;
+read-only snapshots. Serializable contracts live in `nemo-relay-types`;
 registration, retention, and queries live in `nemo_relay::diagnostics`.
+Recording requires no logger, plugin activation, Tokio runtime, or HTTP listener.
 
-Diagnostic recording uses bounded memory and synchronization. It does not
-require a logger, plugin activation, a Tokio runtime, or an HTTP listener.
-Operational logging is an optional projection of recorded events. Updating
-diagnostic state does not guarantee that a record reaches an output or survives
-process exit.
+## Startup Enablement
 
-## Evidence and Ownership
+Diagnostics is compiled in and **disabled by default**. The runtime owner selects
+`DiagnosticsSettings.enabled` when creating a context. This is a startup runtime
+setting, with no Cargo feature or live enable/disable switch.
 
-A source identity describes one diagnostic incarnation. Its UUID distinguishes
-it from another execution using the same PID. Component registrations have
-their own instance identifiers and generations. Recreating a component starts
-a new counter epoch; polling an existing component does not.
+Pass the same context to producers and readers. Disabled recorders preserve the
+producer interface, skip lazy observation factories, and allocate no backend
+pools. Reading a disabled context returns `DiagnosticError::Disabled`.
 
-Components record occurrences with observed outcomes. Counters aggregate by
-registration and code; producers use distinct failure and success codes when
-those outcomes need separate counts. A later success leaves
-historical failure counts intact; reads add no occurrences. Closing a recording
-registration retains its diagnostic evidence until retention requires eviction.
-It does not classify the component's health or prove that a process exited.
+For process-wide convenience constructors, call
+`Diagnostics::install_process_default` before creating logging or plugin
+components. The first `Diagnostics::process_default()` lookup otherwise installs
+a disabled context; existing handles are never implicitly upgraded.
 
-The foundation describes observed facts. It does not decide application health,
-readiness, retry policy, admission, or restart behavior. A disconnected source
-does not establish that its process exited.
+## Recording and Reading
 
-The embedding application or deployment owner interprets these observations.
-The common contract has no active/recovered conditions, activation flags, or
-error-code closure operation. A successful export describes that attempt and
-does not establish that an earlier failed batch was delivered.
-
-## Resource and Data Boundaries
-
-Configure limits for component registrations, diagnostic keys, retained events,
-message and correlation sizes, and total retained data. Snapshot coverage
-reports rejected observations, truncated fields, evicted evidence, and saturated
-counts. A saturated count is a lower bound, not an exact value.
-
-Callers are responsible for submitting safe diagnostic text. Size limits are
-not a credential or payload sanitizer. Do not submit prompts, tool arguments,
-credentials, raw configuration, or unreviewed source errors. Use stable codes
-and safe correlation identifiers instead of including request identities in
-aggregation keys.
-
-The versioned JSON contract preserves 64-bit counters and sequences as decimal
-strings. Rust callers use the corresponding typed integer wrappers. Existing
-subscriber and plugin diagnostic APIs retain their established representations.
-
-## Logging and Compatibility Views
+Register the component's expected codes before recording. Each observation
+supplies an occurrence delta, rather than a previously accumulated total.
+This example records typed evidence for a sink without configuring logging.
+Supply the deployed Relay version in the source identity.
 
 ```rust
-use nemo_relay::diagnostics::{DiagnosticCorrelation, DiagnosticQuery, Diagnostics};
+use nemo_relay::diagnostics::{
+    BuiltinDiagnosticCode, Classification, ComponentRegistration, DiagnosticQuery,
+    Diagnostics, DiagnosticsSettings, FailureClass, FailureCode, LoggingFailureCode,
+    Observation, SourceIdentity, SuccessCode,
+};
 
-let diagnostics = Diagnostics::default();
-let component = diagnostics.register_component("exporter.otlp.logs")?;
-component.observe_failure(
-    "otel.logs_export_failed",
-    "The collector request failed",
-    1,
-    DiagnosticCorrelation::default(),
+let diagnostics = Diagnostics::from_settings(
+    SourceIdentity {
+        instance_id: uuid::Uuid::now_v7(),
+        process_id: Some(std::process::id()),
+        process_role: "embedded".into(),
+        relay_version: "0.11.0".into(),
+    },
+    DiagnosticsSettings { enabled: true, ..Default::default() },
 )?;
+let failure_code = FailureCode::Logging(LoggingFailureCode::SinkWriteFailed);
+let success_code = SuccessCode::SinkInitialized;
+let codes = [
+    BuiltinDiagnosticCode::Failure(failure_code),
+    BuiltinDiagnosticCode::Success(success_code),
+];
+let component = diagnostics.register_component(ComponentRegistration::new(
+    "example.logging_sink", &codes,
+))?;
+component.record_lazy(|| Observation::new(
+    Classification::failure(failure_code, FailureClass::Io)
+        .expect("supported sink failure class"),
+    "The sink write failed",
+    2,
+))?;
+component.record_lazy(|| Observation::new(
+    Classification::success(success_code),
+    "The sink initialized",
+    1,
+))?;
 
-let snapshot = diagnostics.snapshot(DiagnosticQuery::default())?;
+let page = diagnostics.snapshot(DiagnosticQuery::default())?;
+let encoded: &[u8] = page.as_bytes();
+assert!(!encoded.is_empty());
+let snapshot = page.to_snapshot()?;
 assert_eq!(snapshot.components.len(), 1);
-
-component.observe_success(
-    "otel.logs_export_succeeded",
-    "The export attempt succeeded",
-    1,
-    DiagnosticCorrelation::default(),
-)?;
-// The earlier failure count remains unchanged.
+assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 2);
+drop(page); // Return the leased query workspace.
 ```
 
-Create diagnostic state before configuring logging when startup failures need
-to be inspectable. Attach a log projection after the logger is available.
-Logging thresholds affect output, not recording or snapshots. A projection runs
-outside the state lock. Sink failure callbacks record through a state-only path
-so they cannot recursively send a failure into the same sink.
+`SnapshotLease::as_bytes()` borrows the canonical JSON page. The lease occupies a
+reserved query workspace until dropped. `to_snapshot()` decodes a separate
+caller-owned value; those allocations are outside the service's memory budget.
+Reads add no occurrences and reset no counters. Later success leaves earlier
+failure counts intact.
 
-Explicitly configured sinks retain strict initialization behavior. This
-foundation does not introduce optional file sinks, change rotation or queue
-policy, or establish a whole-process shutdown deadline.
+## Accounting and Ownership
 
-Existing OpenTelemetry subscriber diagnostics and plugin reports are
-compatibility views. Projecting evidence into another view must not count a
-second occurrence. Lifetime and reporting limitations of those APIs remain
-explicit: an active-only plugin report cannot be used as a complete process
-history.
+A source UUID distinguishes a context incarnation from another execution with
+the same PID. Each component registration has its own instance and generation.
+Recreating a component starts a new component lifetime.
+
+The service maintains context lifetime totals, component-instance lifetime
+totals, and one current `since_refresh` summary per component. A successful
+`ComponentOwner::refresh` resets only the current summary and updates its
+configuration attribution. Lifetime code counters and rolling outcome windows
+continue; no historical refresh-summary store accumulates.
+
+Every accepted observation updates lifetime and current-summary totals when it
+is recorded. Work captured before a refresh can retain its original attribution
+on events and projections while counting in the current summary.
+
+Event eviction preserves numeric totals. Closing a component retains its row
+until bounded reclamation requires space. Reclaiming that closed row removes
+its component aggregates; context lifetime totals remain available. Closing the
+registration does not prove that its process exited.
+
+The embedding application or deployment owner decides health, readiness,
+alerts, and recovery. Relay records observations, outcomes, timing, and coverage;
+it has no active/recovered conditions or error-code closure operation.
+
+## Resource and Wire Boundaries
+
+An enabled context reserves its backing storage at startup. Component/code
+reservations, circular event headers, reclaimable detail blocks, outcome buckets,
+query workspaces, and projection workspaces have independently enforced limits.
+Recent events share one circular history across components; new evidence can
+evict older evidence while reserved summary counters continue updating.
+
+`DiagnosticLimits.max_owned_bytes` bounds the admitted context backing, not total
+process RSS. It excludes allocator overhead, caller-owned inputs and decoded
+snapshots, producer handles, callback captures, and operational output storage.
+File-sink queues and on-disk retention remain governed by logging configuration.
+
+Snapshot coverage reports rejected observations, truncated detail, eviction,
+and saturated counts. A saturated count is a lower bound. Inspect coverage when
+interpreting missing evidence. JSON encodes 64-bit counts and sequences as decimal
+strings to preserve precision in every supported language.
+
+Producers must submit safe diagnostic detail. Byte limits do not redact payloads
+or credentials. Keep request/session correlation out of aggregate keys and avoid
+raw configuration or unreviewed source-error text.
+
+## Operational Logging and Legacy Reports
+
+Create the context before logging when startup failures need to be inspectable.
+Pass it to `LoggingRuntime::configure_with_diagnostics` to reuse existing
+filters, formatters, stderr, and file sinks. Eligible typed observations use an
+optional logging projection; ordinary operational log lines do not automatically
+enter diagnostic history.
+
+Recording is independent of log thresholds. Projections execute outside the
+state lock, and sink failures use a state-only recording path to avoid recursive
+delivery through a failing sink. Shutdown detaches projections before draining
+sinks. Explicitly configured file sinks remain required, with existing queue,
+rotation, and delivery behavior.
+
+OpenTelemetry subscriber diagnostics and OTel-dependent plugin reports remain
+legacy-only. They are not projections of this canonical store. Their integration,
+report deduplication, and reader migration are deferred to a separate phase.
 
 ## Implementation Scope
 
-This phase provides Rust contracts, recording, state, queries, and core
-instrumentation. CLI HTTP routes, broker collection, language binding exposure,
-and dynamic-plugin transport extensions are subsequent phases. No diagnostics
-listener or background collection service is started by this API.
+This phase provides Rust contracts, bounded recording/state/queries, logging,
+and selected plugin adapters. CLI and daemon composition, HTTP routes, broker
+collection, public language-binding APIs, and dynamic-plugin transport follow
+in later phases. CPU attribution and restart persistence are also deferred.
+This API starts no diagnostics listener or background collection service.
