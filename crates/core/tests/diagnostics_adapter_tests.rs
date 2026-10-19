@@ -10,7 +10,7 @@ use nemo_relay::diagnostics::{
     BuiltinDiagnosticCode, Classification, CommonPluginFailureCode, ComponentRegistration,
     DiagnosticAvailability, DiagnosticClassifier, DiagnosticDetailRef, DiagnosticError,
     DiagnosticQuery, Diagnostics, DiagnosticsSettings, FailureClass, FailureCode, Observation,
-    PluginErrorClassifier, PluginFailureCode, RecordOutcome, RuntimeFailureCode,
+    PluginErrorClassifier, PluginFailureCode, RecordOutcome,
 };
 use nemo_relay::logging::{
     FileLogSinkConfig, LogLevel, LogSinkConfig, LoggingConfig, LoggingRuntime,
@@ -19,8 +19,9 @@ use nemo_relay::plugin::PluginError;
 use serde_json::Value;
 
 static LOGGING: Mutex<()> = Mutex::new(());
-const RUNTIME_ERROR: BuiltinDiagnosticCode =
-    BuiltinDiagnosticCode::Failure(FailureCode::Runtime(RuntimeFailureCode::Internal));
+const PLUGIN_ERROR: BuiltinDiagnosticCode = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(
+    PluginFailureCode::Common(CommonPluginFailureCode::Internal),
+));
 
 fn enabled() -> Diagnostics {
     Diagnostics::from_settings(
@@ -53,7 +54,7 @@ fn file_logging(service: &Diagnostics, path: std::path::PathBuf) -> LoggingRunti
 fn internal(message: &str) -> Observation<'_> {
     Observation::new(
         Classification::failure(
-            FailureCode::Runtime(RuntimeFailureCode::Internal),
+            FailureCode::Plugin(PluginFailureCode::Common(CommonPluginFailureCode::Internal)),
             FailureClass::Internal,
         )
         .unwrap(),
@@ -70,10 +71,7 @@ fn disabled_diagnostics_preserve_operational_file_output() {
     let path = temp.path().join("disabled.jsonl");
     let runtime = file_logging(&service, path.clone());
     let recorder = service
-        .register_component(ComponentRegistration::new(
-            "test.disabled",
-            &[RUNTIME_ERROR],
-        ))
+        .register_component(ComponentRegistration::new("test.disabled", &[PLUGIN_ERROR]))
         .unwrap();
     assert!(recorder.identity().is_none());
     assert_eq!(
@@ -102,7 +100,7 @@ fn disabled_diagnostics_preserve_operational_file_output() {
         })
         .count();
     assert_eq!(matching, 1);
-    assert!(!output.contains("runtime.internal"));
+    assert!(!output.contains("plugin.internal"));
 }
 
 #[test]
@@ -198,10 +196,7 @@ fn typed_projection_reuses_logging_without_replaying_history_or_pinning_reader()
     let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
     let service = enabled();
     let producer = service
-        .register_component(ComponentRegistration::new(
-            "test.producer",
-            &[RUNTIME_ERROR],
-        ))
+        .register_component(ComponentRegistration::new("test.producer", &[PLUGIN_ERROR]))
         .unwrap();
     producer
         .record_without_projection_lazy(|| internal("Earlier retained evidence"))
@@ -217,13 +212,13 @@ fn typed_projection_reuses_logging_without_replaying_history_or_pinning_reader()
     let records: Vec<Value> = output
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
-        .filter(|record: &Value| record["event"] == "runtime.internal")
+        .filter(|record: &Value| record["event"] == "plugin.internal")
         .collect();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["message"], "One projected observation");
     assert_eq!(
         records[0]["fields"]["diagnostic"]["classification"]["canonical_code"],
-        "runtime.internal"
+        "plugin.internal"
     );
     assert_eq!(
         records[0]["fields"]["diagnostic"]["component"]["instance_id"],
@@ -263,10 +258,7 @@ fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs()
     let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
     let service = enabled();
     let producer = service
-        .register_component(ComponentRegistration::new(
-            "test.producer",
-            &[RUNTIME_ERROR],
-        ))
+        .register_component(ComponentRegistration::new("test.producer", &[PLUGIN_ERROR]))
         .unwrap();
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("capped.jsonl");
@@ -314,5 +306,5 @@ fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs()
             .any(|line| serde_json::from_str::<Value>(line).unwrap()["event"]
                 == "operational_after_projection_limit")
     );
-    assert!(!output.contains("runtime.internal"));
+    assert!(!output.contains("plugin.internal"));
 }

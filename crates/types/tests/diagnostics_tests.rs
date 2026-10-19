@@ -468,7 +468,7 @@ fn authoring_catalogue_is_fixed_size_and_has_unique_round_trippable_names() {
         );
         assert!(!code.canonical_name().is_empty());
     }
-    assert!(BuiltinDiagnosticCode::from_canonical_name("worker.error").is_none());
+    assert!(BuiltinDiagnosticCode::from_canonical_name("vendor.unregistered_failure").is_none());
     assert!(
         BuiltinDiagnosticCode::from_canonical_name("logging.sink.write_failed.extra").is_none()
     );
@@ -493,27 +493,26 @@ fn classification_constructors_enforce_entry_specific_class_contracts() {
             }
         }
     }
-    let abi = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Native(
-        NativePluginFailureCode::AbiMismatch,
-    )));
-    assert!(Classification::new(abi, Some(FailureClass::Incompatible)).is_ok());
-    assert!(Classification::new(abi, Some(FailureClass::Timeout)).is_err());
-    assert!(Classification::new(abi, Some(FailureClass::Unknown)).is_err());
+    let dropped =
+        BuiltinDiagnosticCode::Failure(FailureCode::Logging(LoggingFailureCode::SinkRecordDropped));
+    assert!(Classification::new(dropped, Some(FailureClass::ResourceExhausted)).is_ok());
+    assert!(Classification::new(dropped, Some(FailureClass::Timeout)).is_err());
+    assert!(Classification::new(dropped, Some(FailureClass::Unknown)).is_err());
 }
 
 #[test]
 fn nested_catalogue_selectors_derive_parent_ownership_without_another_record() {
-    let worker = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Worker(
-        WorkerPluginFailureCode::ProtocolMismatch,
+    let plugin = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::RegistrationFailed,
     )));
-    assert_eq!(worker.domain(), DiagnosticDomain::Plugin);
-    assert_eq!(worker.plugin_family(), Some(PluginDiagnosticFamily::Worker));
-    assert_eq!(worker.canonical_name(), "plugin.worker.protocol_mismatch");
-    let upstream =
-        BuiltinDiagnosticCode::Failure(FailureCode::Upstream(UpstreamFailureCode::TimedOut));
-    assert_eq!(upstream.domain(), DiagnosticDomain::Upstream);
-    assert_eq!(upstream.plugin_family(), None);
-    assert_eq!(upstream.canonical_name(), "upstream.timed_out");
+    assert_eq!(plugin.domain(), DiagnosticDomain::Plugin);
+    assert_eq!(plugin.plugin_family(), Some(PluginDiagnosticFamily::Common));
+    assert_eq!(plugin.canonical_name(), "plugin.registration_failed");
+    let logging =
+        BuiltinDiagnosticCode::Failure(FailureCode::Logging(LoggingFailureCode::SinkWriteFailed));
+    assert_eq!(logging.domain(), DiagnosticDomain::Logging);
+    assert_eq!(logging.plugin_family(), None);
+    assert_eq!(logging.canonical_name(), "logging.sink.write_failed");
 }
 
 #[test]
@@ -522,7 +521,7 @@ fn classifier_trait_supports_concrete_and_borrowed_dynamic_producers_without_a_r
     impl DiagnosticClassifier<u32> for ProducerClassifier {
         fn classify(&self, _error: &u32) -> Classification {
             Classification::failure(
-                FailureCode::Runtime(RuntimeFailureCode::Internal),
+                FailureCode::Plugin(PluginFailureCode::Common(CommonPluginFailureCode::Internal)),
                 FailureClass::Internal,
             )
             .unwrap()
@@ -532,7 +531,7 @@ fn classifier_trait_supports_concrete_and_borrowed_dynamic_producers_without_a_r
     let concrete = ProducerClassifier.classify(&error);
     let selected: &dyn DiagnosticClassifier<u32> = &ProducerClassifier;
     assert_eq!(selected.classify(&error), concrete);
-    assert_eq!(concrete.code().canonical_name(), "runtime.internal");
+    assert_eq!(concrete.code().canonical_name(), "plugin.internal");
 }
 
 #[test]

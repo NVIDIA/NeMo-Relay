@@ -156,7 +156,21 @@ report deduplication, and reader migration are deferred to a separate phase.
 ## Implementation Scope
 
 This phase provides Rust contracts, bounded recording/state/queries, logging,
-and selected plugin adapters. CLI and daemon composition, HTTP routes, broker
-collection, public language-binding APIs, and dynamic-plugin transport follow
-in later phases. CPU attribution and restart persistence are also deferred.
+and selected plugin activation observations. The shared `DiagnosticClassifier<E>`
+interface returns `Classification` values without recording or changing source
+errors. The production adapters are `PluginErrorClassifier` and
+`LoggingErrorClassifier`.
+
+The phase-one built-in catalogue contains logging failures/successes, six common
+plugin failures, and the shared `ConfigurationInherited` and
+`ComponentReenabled` notices. Runtime/upstream, dynamic trust/policy,
+native-status, binding, and worker classifiers and their unused code families
+follow their actual producer
+integrations. OTel failures, export successes, and context-expiration
+observations arrive with phase-two integration.
+
+CLI and daemon composition, HTTP routes, broker collection, public
+language-binding APIs, and dynamic-plugin transport follow in later phases.
+CPU collection and generic measurement types/schema are also deferred; existing
+lifetime/timing fields remain available. Restart persistence remains later work.
 This API starts no diagnostics listener or background collection service.

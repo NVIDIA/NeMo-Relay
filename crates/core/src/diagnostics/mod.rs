@@ -33,10 +33,10 @@
 //!     },
 //!     DiagnosticsSettings { enabled: true, ..Default::default() },
 //! )?;
-//! let code = BuiltinDiagnosticCode::Failure(FailureCode::Runtime(RuntimeFailureCode::Internal));
+//! let code = BuiltinDiagnosticCode::Failure(FailureCode::Logging(LoggingFailureCode::SinkWriteFailed));
 //! let recorder = diagnostics.register_component(ComponentRegistration::new("example", &[code]))?;
 //! recorder.record_lazy(|| Observation::new(
-//!     Classification::failure(FailureCode::Runtime(RuntimeFailureCode::Internal), FailureClass::Internal)
+//!     Classification::failure(FailureCode::Logging(LoggingFailureCode::SinkWriteFailed), FailureClass::Io)
 //!         .expect("supported catalogue pair"),
 //!     "Producer-approved safe detail",
 //!     1, // occurrence delta, never a cumulative total

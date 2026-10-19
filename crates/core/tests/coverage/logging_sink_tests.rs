@@ -35,9 +35,12 @@ fn diagnostic_test_producer(
     service: &crate::diagnostics::Diagnostics,
 ) -> crate::diagnostics::ComponentRecorder {
     use crate::diagnostics::{
-        BuiltinDiagnosticCode, ComponentRegistration, FailureCode, RuntimeFailureCode,
+        BuiltinDiagnosticCode, CommonPluginFailureCode, ComponentRegistration, FailureCode,
+        PluginFailureCode,
     };
-    let code = BuiltinDiagnosticCode::Failure(FailureCode::Runtime(RuntimeFailureCode::Internal));
+    let code = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::Internal,
+    )));
     service
         .register_component(ComponentRegistration::new("test.exporter", &[code]))
         .unwrap()
@@ -45,13 +48,16 @@ fn diagnostic_test_producer(
 
 fn record_test_failure(recorder: &crate::diagnostics::ComponentRecorder, message: &str) {
     use crate::diagnostics::{
-        Classification, FailureClass, FailureCode, Observation, RuntimeFailureCode,
+        Classification, CommonPluginFailureCode, FailureClass, FailureCode, Observation,
+        PluginFailureCode,
     };
     recorder
         .record_lazy(|| {
             Observation::new(
                 Classification::failure(
-                    FailureCode::Runtime(RuntimeFailureCode::Internal),
+                    FailureCode::Plugin(PluginFailureCode::Common(
+                        CommonPluginFailureCode::Internal,
+                    )),
                     FailureClass::Internal,
                 )
                 .unwrap(),
