@@ -30,6 +30,9 @@ use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
 struct ToolGuardrailCleanup(&'static str);
 
+#[path = "gateway_preparation_tests.rs"]
+mod gateway_preparation;
+
 #[tokio::test(start_paused = true)]
 async fn idle_sweeper_reclaims_unused_session_gates_without_idle_sessions() {
     let manager = SessionManager::new(session_test_config());

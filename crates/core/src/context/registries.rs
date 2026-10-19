@@ -97,7 +97,7 @@ pub(crate) fn merge_event_metadata_injector_entries<'a>(
     scope_locals: &'a [&'a SortedRegistry<EventMetadataInjector>],
 ) -> Vec<&'a EventMetadataInjector> {
     let mut all = Vec::new();
-    all.extend(global.sorted_values().into_iter().filter(|entry| {
+    all.extend(global.sorted_values().filter(|entry| {
         runtime_registration_is_enabled(RuntimeRegistrationKind::EventMetadataInjector, &entry.name)
     }));
     for registry in scope_locals {
@@ -138,7 +138,6 @@ pub(crate) fn merge_guardrail_entries<'a, F>(
     all.extend(
         global
             .sorted_values()
-            .into_iter()
             .filter(|entry| runtime_registration_is_enabled(kind, &entry.name)),
     );
     for registry in scope_locals {
@@ -165,7 +164,6 @@ pub(crate) fn merge_intercept_entries<'a, F>(
     all.extend(
         global
             .sorted_values()
-            .into_iter()
             .filter(|entry| runtime_registration_is_enabled(kind, &entry.name)),
     );
     for registry in scope_locals {

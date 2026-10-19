@@ -314,6 +314,7 @@ pub(super) fn event_agent_kind(event: &NormalizedEvent) -> AgentKind {
 
 // Returns a session id only when exactly one session is active. Gateway requests without explicit
 // session headers use this narrow fallback to avoid cross-correlating concurrent agents.
+#[cfg(test)]
 pub(super) fn single_active_session_id(sessions: &HashMap<String, Session>) -> Option<String> {
     let now = std::time::Instant::now();
     let mut active = sessions
@@ -327,17 +328,26 @@ pub(super) fn single_active_session_id(sessions: &HashMap<String, Session>) -> O
 // the sole active session is safe to retain. With no sessions, the stable synthetic root preserves
 // pure-proxy continuity. When multiple sessions are active and the request carries no join key,
 // isolate that request in a unique short-lived root instead of cross-correlating unrelated agents.
-pub(super) fn gateway_session_for_call(
+pub(super) fn gateway_session_for_call_with_preparing(
     start: &LlmGatewayStart,
     sessions: &HashMap<String, Session>,
+    preparing: &HashSet<String>,
 ) -> (String, GatewaySessionFinish) {
     if let Some(session_id) = start.session_id.clone() {
         return (session_id, GatewaySessionFinish::Retain);
     }
-    if let Some(session_id) = single_active_session_id(sessions) {
-        return (session_id, GatewaySessionFinish::Retain);
+    let now = std::time::Instant::now();
+    let mut active = sessions
+        .iter()
+        .filter(|(_, session)| session.is_active_or_recent(now))
+        .map(|(id, _)| id)
+        .chain(preparing.iter());
+    if let Some(session_id) = active.next()
+        && active.next().is_none()
+    {
+        return (session_id.clone(), GatewaySessionFinish::Retain);
     }
-    if sessions.is_empty() {
+    if sessions.is_empty() && preparing.is_empty() {
         return (
             format!("{}-gateway", AgentKind::Gateway.as_str()),
             GatewaySessionFinish::Retain,
