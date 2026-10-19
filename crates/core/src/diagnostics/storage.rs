@@ -176,18 +176,12 @@ impl DetailPool {
     /// Copy at most max_bytes from already-safe borrowed text. None means that
     /// the caller should reclaim evidence or omit detail; backing never grows.
     /// An empty/truncated-to-empty string consumes no block.
-    pub(super) fn allocate(
-        &mut self,
-        text: &str,
-        max_bytes: usize,
-    ) -> Option<(DetailHandle, bool)> {
+    pub(super) fn allocate(&mut self, text: &str, max_bytes: usize) -> Option<DetailHandle> {
         let mut end = text.len().min(max_bytes);
         while !text.is_char_boundary(end) {
             end -= 1;
         }
-        let truncated = end < text.len();
         self.allocate_prefix(&text[..end])
-            .map(|handle| (handle, truncated))
     }
 
     fn allocate_prefix(&mut self, text: &str) -> Option<DetailHandle> {

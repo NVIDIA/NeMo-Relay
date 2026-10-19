@@ -679,7 +679,7 @@ pub struct DiagnosticQuery {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DiagnosticSnapshot {
-    /// Supported envelope version, independent of document and catalogue versions.
+    /// Supported envelope version, independent of the catalogue version.
     #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     /// Stable catalogue revision; unknown names stay opaque in this envelope.

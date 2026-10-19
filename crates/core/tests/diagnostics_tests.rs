@@ -1821,7 +1821,6 @@ fn custom_extension_classes_are_admitted_once_and_overflow_is_summary_only() {
     assert!(matches!(
         overflow,
         RecordOutcome::Recorded(RecordReceipt {
-            code_counter_updated: false,
             code_total: None,
             evidence: EvidenceDisposition::Dropped,
             ..

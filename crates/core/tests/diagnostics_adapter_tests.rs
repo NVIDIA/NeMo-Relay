@@ -15,7 +15,7 @@ use nemo_relay::diagnostics::{
 use nemo_relay::logging::{
     FileLogSinkConfig, LogLevel, LogSinkConfig, LoggingConfig, LoggingRuntime,
 };
-use nemo_relay::plugin::{PluginError, record_plugin_operation_diagnostic};
+use nemo_relay::plugin::PluginError;
 use serde_json::Value;
 
 static LOGGING: Mutex<()> = Mutex::new(());
@@ -122,14 +122,12 @@ fn typed_plugin_error_records_once_without_projections_or_legacy_replay() {
         })
         .unwrap();
     let original = PluginError::RegistrationFailed("private registration context".into());
-    let outcome = record_plugin_operation_diagnostic(
-        &recorder,
-        &PluginErrorClassifier,
-        &original,
-        || DiagnosticDetailRef::Text("Plugin registration failed"),
-        3,
-    )
-    .unwrap();
+    let detail = || DiagnosticDetailRef::Text("Plugin registration failed");
+    let outcome = recorder
+        .record_without_projection_lazy(|| {
+            Observation::new(PluginErrorClassifier.classify(&original), detail(), 3)
+        })
+        .unwrap();
     assert!(matches!(outcome, RecordOutcome::Recorded(_)));
     assert!(matches!(original, PluginError::RegistrationFailed(_)));
     let page = service
@@ -178,20 +176,18 @@ impl DiagnosticClassifier<PluginError> for DisabledClassifier {
 }
 
 #[test]
-fn disabled_plugin_adapter_skips_classifier_and_detail_factory() {
+fn disabled_plugin_recording_skips_classifier_and_detail_factory() {
     let service = Diagnostics::default();
     let recorder = service
         .register_component(ComponentRegistration::new("test.plugin", &[]))
         .unwrap();
     let error = PluginError::Internal("operation error remains available".into());
-    let outcome = record_plugin_operation_diagnostic(
-        &recorder,
-        &DisabledClassifier,
-        &error,
-        || panic!("disabled detail factory ran"),
-        1,
-    )
-    .unwrap();
+    let detail = || -> DiagnosticDetailRef<'_> { panic!("disabled detail factory ran") };
+    let outcome = recorder
+        .record_without_projection_lazy(|| {
+            Observation::new(DisabledClassifier.classify(&error), detail(), 1)
+        })
+        .unwrap();
     assert_eq!(outcome, RecordOutcome::Disabled);
     assert!(matches!(error, PluginError::Internal(_)));
     assert_eq!(service.memory_usage().components, 0);

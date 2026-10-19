@@ -446,14 +446,10 @@ pub enum EvidenceDisposition {
     Dropped,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Accepted numeric update, independent of evidence retention and output delivery.
+/// Accepted lifetime and current-summary update, independent of retention and delivery.
 pub struct RecordReceipt {
     /// Unique source-local accepted-update sequence, never an occurrence total.
     pub sequence: u64,
-    /// Whether the component lifetime and current refresh summary accepted this call and its delta.
-    pub summary_updated: bool,
-    /// Whether an admitted code counter also received the delta; false for overflow.
-    pub code_counter_updated: bool,
     /// Updated code total, absent for summary-only classification overflow.
     pub code_total: Option<DiagnosticCount>,
     /// Evidence retention disposition, independent of projection delivery.
@@ -824,7 +820,6 @@ impl Diagnostics {
     pub fn process_default() -> &'static Self {
         PROCESS_DIAGNOSTICS.get_or_init(Self::default)
     }
-    /// Borrow the stable source identity in either startup mode.
     /// Configured capacities, independently of current occupancy or disablement.
     pub fn limits(&self) -> &DiagnosticLimits {
         &self.inner.limits
@@ -832,10 +827,6 @@ impl Diagnostics {
     /// Source incarnation shared by every observation from this context.
     pub fn source(&self) -> &SourceIdentity {
         &self.inner.source
-    }
-    /// Borrow the immutable identity also exposed by [`Self::source`].
-    pub fn source_identity(&self) -> &SourceIdentity {
-        self.source()
     }
     /// Issue a read capability without materializing or allocating a query page.
     pub fn reader(&self) -> DiagnosticsReader {
@@ -974,13 +965,6 @@ impl Default for Diagnostics {
         )
         .expect("disabled construction needs no diagnostic backend")
     }
-}
-/// Return the centrally selected process context.
-///
-/// An unconfigured first lookup installs disabled mode; bootstrap must install
-/// an enabled context before distributing default handles.
-pub fn process_diagnostics() -> &'static Diagnostics {
-    Diagnostics::process_default()
 }
 #[derive(Debug, Default, Clone, Copy, Serialize)]
 /// Backing capacity and current occupancy of one context.
@@ -1392,8 +1376,6 @@ fn record_observation(
         state.loss.events_omitted.add(1);
         return Ok(RecordReceipt {
             sequence,
-            summary_updated: true,
-            code_counter_updated: false,
             code_total: None,
             evidence: EvidenceDisposition::Dropped,
         });
@@ -1447,24 +1429,15 @@ fn record_observation(
         state.loss.events_omitted.add(1);
         EvidenceDisposition::Dropped
     } else {
-        let retained_detail = detail.and_then(|text| {
-            state
-                .allocate_detail(text, inner.limits.max_detail_bytes)
-                .map(|v| v.0)
-        });
+        let retained_detail =
+            detail.and_then(|text| state.allocate_detail(text, inner.limits.max_detail_bytes));
         if detail.is_some() && retained_detail.is_none() {
             state.loss.details_omitted.add(1);
         }
-        let retained_session = session.and_then(|text| {
-            state
-                .allocate_detail(text, inner.limits.max_correlation_bytes)
-                .map(|v| v.0)
-        });
-        let retained_request = request.and_then(|text| {
-            state
-                .allocate_detail(text, inner.limits.max_correlation_bytes)
-                .map(|v| v.0)
-        });
+        let retained_session = session
+            .and_then(|text| state.allocate_detail(text, inner.limits.max_correlation_bytes));
+        let retained_request = request
+            .and_then(|text| state.allocate_detail(text, inner.limits.max_correlation_bytes));
         let correlation_omitted = (session.is_some() && retained_session.is_none()) as u64
             + (request.is_some() && retained_request.is_none()) as u64;
         state.loss.correlations_omitted.add(correlation_omitted);
@@ -1495,8 +1468,6 @@ fn record_observation(
     };
     Ok(RecordReceipt {
         sequence,
-        summary_updated: true,
-        code_counter_updated: true,
         code_total,
         evidence,
     })
