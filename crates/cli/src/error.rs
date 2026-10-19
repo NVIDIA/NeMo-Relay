@@ -114,6 +114,8 @@ pub(crate) enum CliError {
     RouteCredentialRejected(String),
     #[error("gateway upstream error: {0}")]
     Upstream(#[from] reqwest::Error),
+    #[error("upstream forwarding error: {0}")]
+    UpstreamTransport(#[from] crate::daemon::common::transport::TransportError),
     #[error("{0}")]
     ProviderFailure(UpstreamFailure),
     #[error("hook gateway returned HTTP {status}: {message}")]
@@ -176,7 +178,7 @@ impl CliError {
             Self::PayloadTooLarge(_) => "payload_too_large",
             Self::Unauthorized(_) => "unauthorized",
             Self::RouteCredentialRejected(_) => "route_credential_rejected",
-            Self::Upstream(_) => "upstream",
+            Self::Upstream(_) | Self::UpstreamTransport(_) => "upstream",
             Self::ProviderFailure(_) => "provider_failure",
             Self::HookHttpFailure { .. } => "hook_http",
             Self::Http(_) => "http",
@@ -259,7 +261,7 @@ fn response_status(error: &CliError) -> StatusCode {
         }
         CliError::InvalidPayload(_) => StatusCode::BAD_REQUEST,
         CliError::HookHttpFailure { status, .. } => *status,
-        CliError::Upstream(_) => StatusCode::BAD_GATEWAY,
+        CliError::Upstream(_) | CliError::UpstreamTransport(_) => StatusCode::BAD_GATEWAY,
         CliError::ProviderFailure(failure) | CliError::Flow(FlowError::Upstream(failure)) => {
             failure
                 .status

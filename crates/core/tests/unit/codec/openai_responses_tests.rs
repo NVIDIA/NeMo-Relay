@@ -1586,6 +1586,75 @@ fn assert_responses_tool_and_choice_branches() {
 
 use super::super::streaming::StreamingCodec;
 
+/// Later lifecycle and terminal events cannot replace the first final snapshot.
+#[test]
+fn openai_responses_streaming_codec_retains_first_terminal_snapshot() {
+    for terminal_type in [
+        "response.completed",
+        "response.failed",
+        "response.incomplete",
+    ] {
+        for later_type in [
+            "response.created",
+            "response.in_progress",
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+        ] {
+            let codec = OpenAIResponsesStreamingCodec::new();
+            let mut collector = codec.collector();
+            let finalizer = codec.finalizer();
+            let mut terminal = full_responses_response();
+            terminal["status"] = json!(terminal_type.strip_prefix("response.").unwrap());
+            collector(json!({"type": terminal_type, "response": terminal})).unwrap();
+            collector(json!({
+                "type": later_type,
+                "response": {"id": "resp_abc123", "status": "in_progress", "output": [], "usage": null}
+            }))
+            .unwrap();
+
+            assert_eq!(finalizer(), terminal, "{terminal_type} then {later_type}");
+        }
+    }
+}
+
+#[test]
+fn terminal_output_releases_fallback_items_and_ignores_later_items() {
+    for event_type in [
+        "response.completed",
+        "response.failed",
+        "response.incomplete",
+    ] {
+        let mut state = OpenAIResponsesStreamingState::default();
+        let item = json!({"type": "message", "content": [{"text": "fallback"}]});
+        let item_event =
+            json!({"type": "response.output_item.done", "output_index": 0, "item": item});
+        state.observe(&item_event);
+        assert_eq!(state.items.len(), 1);
+
+        let response = json!({"id": "resp_1", "output": [{"type": "message", "content": [{"text": "final"}]}]});
+        state.observe(&json!({"type": event_type, "response": response}));
+        assert!(state.items.is_empty());
+        state.observe(&item_event);
+        assert!(state.items.is_empty());
+        assert_eq!(state.finalize(), response);
+    }
+}
+
+#[test]
+fn terminal_snapshots_without_output_keep_accepting_fallback_items() {
+    for output in [Json::Null, json!([]), json!({}), json!("invalid")] {
+        let mut state = OpenAIResponsesStreamingState::default();
+        state.observe(&json!({"type": "response.completed", "response": {"output": output}}));
+        let item = json!({"type": "message", "content": [{"text": "fallback"}]});
+        state.observe(
+            &json!({"type": "response.output_item.done", "output_index": 0, "item": item}),
+        );
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.finalize()["output"], json!([item]));
+    }
+}
+
 #[test]
 fn openai_responses_streaming_codec_uses_terminal_snapshot() {
     // Common case: response.completed carries the full final state. Streaming codec emits that
@@ -1818,4 +1887,33 @@ fn openai_responses_streaming_codec_ignores_incomplete_lifecycle_frames() {
     collector(json!({"type": "response.output_item.done", "output_index": 0})).unwrap();
 
     assert_eq!(finalizer(), json!({}));
+}
+
+#[test]
+fn response_decode_preserves_retained_array_validation_and_unknown_fields() {
+    let codec = OpenAIResponsesCodec;
+    for response in [
+        json!({"output": {}}),
+        json!({"output": "invalid"}),
+        json!([1]),
+    ] {
+        assert!(codec.decode_response(&response).is_err(), "{response}");
+    }
+    for response in [json!({}), json!({"output": null})] {
+        let decoded = codec.decode_response(&response).unwrap();
+        assert!(decoded.message.is_none());
+        assert!(!decoded.extra.contains_key("output"));
+    }
+    let response = json!({
+        "output": [{"type": "vendor_extension", "nested": [{"payload": "🦀\nquoted \"text\"", "value": null}]}],
+        "vendor_field": {"preserved": [1, true, "yes"]}
+    });
+    let decoded = codec.decode_response(&response).unwrap();
+    assert_eq!(decoded.extra["vendor_field"], response["vendor_field"]);
+    assert!(!decoded.extra.contains_key("output"));
+    let retained = match decoded.api_specific.unwrap() {
+        ApiSpecificResponse::OpenAIResponses { output_items, .. } => output_items,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(retained.as_ref(), response["output"].as_array());
 }

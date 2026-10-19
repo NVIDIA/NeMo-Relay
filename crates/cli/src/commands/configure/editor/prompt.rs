@@ -43,6 +43,8 @@ pub(super) fn edit(
             format!("Gateway limits ({})", document.gateway_summary()),
             format!("Provider upstreams ({})", document.upstream_summary()),
             format!("Operational logging ({})", document.logging_summary()),
+            "Agent commands".into(),
+            "Daemon logging".into(),
             "Preview".into(),
             "Save".into(),
             "Cancel".into(),
@@ -50,14 +52,16 @@ pub(super) fn edit(
         match select(&theme, "config.toml", &choices)? {
             0 => edit_gateway(&theme, &mut document)?,
             1 => edit_upstream(&theme, &mut document)?,
-            2 => edit_logging(&theme, &mut document)?,
-            3 => print_preview(&document),
-            4 => {
+            2 => edit_logging(&theme, &mut document, "logging")?,
+            3 => edit_agents(&theme, &mut document)?,
+            4 => edit_logging(&theme, &mut document, "daemon.logging")?,
+            5 => print_preview(&document),
+            6 => {
                 document.write(scope)?;
                 println!("  ✓ Saved {}", document.path().display());
                 return Ok(());
             }
-            5 => return Err(CliError::Config(EDIT_CANCELLED_MESSAGE.into())),
+            7 => return Err(CliError::Config(EDIT_CANCELLED_MESSAGE.into())),
             _ => unreachable!("select returns an in-range index"),
         }
     }
@@ -126,6 +130,14 @@ fn edit_upstream(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result
                 "Anthropic authorization header: {}",
                 document.secret_summary("anthropic_auth_header")
             ),
+            format!(
+                "ChatGPT/Codex base URL: {}",
+                document.string_summary("upstream", "chatgpt_codex_base_url")
+            ),
+            format!(
+                "Response timeout (seconds, 0 disables): {}",
+                document.integer_summary("upstream", "response_timeout_secs")
+            ),
             "Back".into(),
         ];
         match select(theme, "Provider upstreams", &choices)? {
@@ -133,33 +145,105 @@ fn edit_upstream(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result
             1 => edit_secret(theme, document, "openai_auth_header")?,
             2 => edit_string(theme, document, "upstream", "anthropic_base_url")?,
             3 => edit_secret(theme, document, "anthropic_auth_header")?,
-            4 => return Ok(()),
+            4 => edit_string(theme, document, "upstream", "chatgpt_codex_base_url")?,
+            5 => edit_nonnegative_integer(
+                theme,
+                document,
+                "upstream",
+                "response_timeout_secs",
+                "Seconds (0 disables the response timeout)",
+            )?,
+            6 => return Ok(()),
             _ => unreachable!(),
         }
     }
 }
 
-fn edit_logging(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result<(), CliError> {
+fn edit_agents(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result<(), CliError> {
+    const AGENTS: &[&str] = &["claude", "codex", "pi"];
+    loop {
+        let mut choices = AGENTS
+            .iter()
+            .map(|agent| {
+                format!(
+                    "{agent} command: {}",
+                    document.string_summary(&format!("agents.{agent}"), "command")
+                )
+            })
+            .collect::<Vec<_>>();
+        choices.push("Back".into());
+        match select(theme, "Agent commands", &choices)? {
+            index if index < AGENTS.len() => edit_string(
+                theme,
+                document,
+                &format!("agents.{}", AGENTS[index]),
+                "command",
+            )?,
+            _ => return Ok(()),
+        }
+    }
+}
+
+fn edit_boolean(
+    theme: &ColorfulTheme,
+    document: &mut ConfigDocument,
+    section: &str,
+    key: &str,
+) -> Result<(), CliError> {
+    let configured = document.has_key(section, key);
+    match choose_action(theme, configured)? {
+        0 => {
+            let selected = Select::with_theme(theme)
+                .with_prompt("Value")
+                .items(["true", "false"])
+                .default(usize::from(document.boolean(section, key) == Some(false)))
+                .interact()
+                .map_err(prompt_error)?;
+            document.set_value(section, key, toml_edit::Value::from(selected == 0))?;
+        }
+        1 if configured => document.clear_key(section, key)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn edit_logging(
+    theme: &ColorfulTheme,
+    document: &mut ConfigDocument,
+    section: &'static str,
+) -> Result<(), CliError> {
+    document.logging_section = section;
     loop {
         let choices = [
-            format!("Level: {}", document.string_summary("logging", "level")),
+            format!("Level: {}", document.string_summary(section, "level")),
             format!(
                 "Stderr format: {}",
-                document.string_summary("logging", "stderr_format")
+                document.string_summary(section, "stderr_format")
             ),
             format!(
                 "Flush interval (ms): {}",
-                document.integer_summary("logging", "flush_interval_millis")
+                document.integer_summary(section, "flush_interval_millis")
+            ),
+            format!(
+                "Stderr enabled: {}",
+                document.boolean_summary(section, "stderr_enabled")
             ),
             format!("File sinks ({})", document.sink_count()),
             "Back".into(),
         ];
-        match select(theme, "Operational logging", &choices)? {
-            0 => edit_enum(theme, document, "logging", "level", LOG_LEVELS)?,
-            1 => edit_enum(theme, document, "logging", "stderr_format", LOG_FORMATS)?,
-            2 => edit_nonnegative_integer(theme, document, "logging", "flush_interval_millis")?,
-            3 => edit_sinks(theme, document)?,
-            4 => return Ok(()),
+        match select(theme, section, &choices)? {
+            0 => edit_enum(theme, document, section, "level", LOG_LEVELS)?,
+            1 => edit_enum(theme, document, section, "stderr_format", LOG_FORMATS)?,
+            2 => edit_nonnegative_integer(
+                theme,
+                document,
+                section,
+                "flush_interval_millis",
+                "Milliseconds (0 flushes on shutdown)",
+            )?,
+            3 => edit_boolean(theme, document, section, "stderr_enabled")?,
+            4 => edit_sinks(theme, document)?,
+            5 => return Ok(()),
             _ => unreachable!(),
         }
     }
@@ -188,15 +272,12 @@ fn edit_nonnegative_integer(
     document: &mut ConfigDocument,
     section: &str,
     key: &str,
+    prompt: &str,
 ) -> Result<(), CliError> {
     let configured = document.has_key(section, key);
     match choose_action(theme, configured)? {
         0 => {
-            let value = prompt_u64(
-                theme,
-                "Milliseconds (0 flushes on shutdown)",
-                document.integer(section, key),
-            )?;
+            let value = prompt_u64(theme, prompt, document.integer(section, key))?;
             document.set_integer(section, key, value)?;
         }
         1 if configured => document.clear_key(section, key)?,

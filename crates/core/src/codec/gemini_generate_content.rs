@@ -1328,12 +1328,12 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        let raw: RawGeminiGenerateContentResponse = serde_json::from_value(response.clone())
+        let raw = RawGeminiGenerateContentResponse::deserialize(response)
             .map_err(|e| FlowError::Internal(format!("Gemini response decode: {e}")))?;
 
-        let candidate = raw.candidates.as_ref().and_then(|c| c.first());
+        let candidate = raw.candidates.and_then(|c| c.into_iter().next());
 
-        let (message, tool_calls, has_tool_calls) = if let Some(c) = candidate {
+        let (message, tool_calls, has_tool_calls) = if let Some(c) = candidate.as_ref() {
             let parts = c.content.as_ref().and_then(|ct| ct.parts.as_deref());
             let msg = parts
                 .map(extract_parts_message_content)
@@ -1348,17 +1348,18 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
 
         let prompt_block_reason = prompt_feedback_block_reason(&raw.extra)?;
         let finish_reason = candidate
+            .as_ref()
             .and_then(|c| map_finish_reason(c.finish_reason.as_deref(), has_tool_calls))
             .or_else(|| map_prompt_block_reason(prompt_block_reason));
 
-        let model = raw.model_version.clone();
+        let model = raw.model_version;
         let (usage, thoughts_tokens) = map_usage(raw.usage_metadata, model.as_deref());
 
         // Capture candidate-level metadata (safetyRatings, groundingMetadata,
         // citationMetadata, thinking token count, …) that cannot be normalized
         // across providers.  thoughts_tokens lives here, not in shared Usage.
         let api_specific = {
-            let mut extra = candidate.map(|c| c.extra.clone()).unwrap_or_default();
+            let mut extra = candidate.map(|c| c.extra).unwrap_or_default();
             extra.remove("api");
             let has_candidate_data = !extra.is_empty() || thoughts_tokens.is_some();
             if !has_candidate_data {
@@ -1449,7 +1450,16 @@ impl LlmCodec for GeminiGenerateContentCodec {
 
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
         let baseline = self.decode(original)?;
-        validate_gemini_supported_fields(annotated, &baseline)?;
+        self.encode_with_baseline(annotated, original, &baseline)
+    }
+
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        validate_gemini_supported_fields(annotated, baseline)?;
         let mut content = original.content.clone();
         let obj = content
             .as_object_mut()
@@ -2865,6 +2875,17 @@ impl super::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
             guard.observe(&event)?;
             Ok(())
         })
+    }
+
+    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+        let state = std::sync::Arc::clone(&self.state);
+        Some(Box::new(move |event: &Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(event)?;
+            Ok(())
+        }))
     }
 
     fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {

@@ -376,22 +376,15 @@ fn grouped_hooks(events: &[&str], commands: &GeneratedHookCommands) -> Value {
     json!({ "hooks": Value::Object(hooks) })
 }
 
+/// Whether an event uses a tool matcher in generated hook configuration.
 pub(crate) fn event_matches_tools(event: &str) -> bool {
-    matches!(
-        event,
-        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PermissionRequest"
-    )
+    matches!(event, "PreToolUse" | "PostToolUse" | "PostToolUseFailure")
 }
 
+/// Whether a hook delivery failure must block the operation before execution.
 pub(crate) fn event_requires_fail_closed(event: &str) -> bool {
     matches!(
         event,
-        "PreToolUse"
-            | "PermissionRequest"
-            | "pre_tool_call"
-            | "tool_call"
-            | "toolCall"
-            | "user_bash"
-            | "userBash"
+        "PreToolUse" | "pre_tool_call" | "tool_call" | "toolCall" | "user_bash" | "userBash"
     )
 }

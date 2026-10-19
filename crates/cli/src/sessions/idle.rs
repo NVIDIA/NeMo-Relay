@@ -45,6 +45,13 @@ pub(super) async fn close_idle_sessions_from_parts(
     timeout: Duration,
     reason: &str,
 ) -> Result<usize, CliError> {
+    // Acquisitions clone under this same map lock. A map-only owner therefore has no
+    // holder or waiter, and a later acquisition can safely create a replacement gate.
+    // Run even when there are no idle sessions so finished sessions leave no stale gates.
+    session_gates
+        .lock()
+        .await
+        .retain(|_, gate| Arc::strong_count(gate) > 1);
     let candidate_ids = idle_session_ids(inner, now, timeout).await;
     if candidate_ids.is_empty() {
         return Ok(0);

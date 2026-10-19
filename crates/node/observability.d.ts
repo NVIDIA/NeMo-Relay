@@ -169,6 +169,8 @@ export interface Config {
   policy?: ConfigPolicy;
   /** Retain complete sanitized request data on every LLM start event. */
   enable_full_payloads?: boolean;
+  /** Non-loopback hosts allowed unencrypted HTTP or WebSocket exports, including headers. */
+  insecure_http_hosts?: string[];
 }
 
 export interface ComponentSpec {

@@ -204,7 +204,9 @@ pub struct ResponseCacheConfig {
     /// or upstreams. The empty default is an unconfigured sentinel rejected
     /// when the response-cache section is enabled.
     pub namespace: String,
-    /// Execution-intercept priority; lower runs first/outermost (default `50`).
+    /// Execution-intercept priority. Defaults to `150`.
+    /// Lower values run first. The default places NeMo Guardrails (`100`)
+    /// before the cache, so guardrails runs on cache hits.
     pub priority: i32,
     /// Probability in `[0.0, 1.0]` of skipping the cache and running live.
     pub bypass_rate: f64,
@@ -228,7 +230,7 @@ impl Default for ResponseCacheConfig {
         Self {
             ttl_seconds: 3600,
             namespace: String::new(),
-            priority: 50,
+            priority: 150,
             bypass_rate: 0.0,
             cache_nondeterministic: false,
             key_strategy: ResponseCacheKeyStrategy::ExactRequest,

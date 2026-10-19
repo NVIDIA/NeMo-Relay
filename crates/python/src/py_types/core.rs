@@ -589,6 +589,38 @@ impl From<CoreScopeType> for PyScopeType {
     }
 }
 
+/// Immutable identity of one visible Relay scope.
+#[pyclass(name = "ScopeStackEntry", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyScopeStackEntry {
+    #[pyo3(get)]
+    pub scope_id: String,
+    #[pyo3(get)]
+    pub scope_type: PyScopeType,
+}
+
+/// Detached root-to-top scope identities, including implicit/synthetic roots.
+#[pyclass(name = "ScopeStackSnapshot", frozen)]
+pub struct PyScopeStackSnapshot {
+    pub inner: nemo_relay::api::runtime::ScopeStackSnapshot,
+}
+
+#[pymethods]
+impl PyScopeStackSnapshot {
+    /// Return owned entries; mutating the returned list cannot change this snapshot.
+    #[getter]
+    fn scopes(&self) -> Vec<PyScopeStackEntry> {
+        self.inner
+            .scopes
+            .iter()
+            .map(|scope| PyScopeStackEntry {
+                scope_id: scope.scope_id.to_string(),
+                scope_type: scope.scope_type.into(),
+            })
+            .collect()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ScopeHandle
 // ---------------------------------------------------------------------------

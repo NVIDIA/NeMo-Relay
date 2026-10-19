@@ -723,6 +723,32 @@ fn test_layer_config_preserves_signal_endpoint_option_semantics() {
 }
 
 #[test]
+fn test_layer_config_lets_higher_precedence_replace_insecure_http_hosts() {
+    let layer = |hosts: Option<Json>| {
+        let mut config = json!({"version": 4});
+        if let Some(hosts) = hosts {
+            config["insecure_http_hosts"] = hosts;
+        }
+        json!({"components": [{"kind": "observability", "config": config}]})
+    };
+    for (higher, expected) in [
+        (
+            Some(json!(["managed-collector"])),
+            json!(["managed-collector"]),
+        ),
+        (Some(json!([])), json!([])),
+        (None, json!(["user-collector"])),
+    ] {
+        let mut merged = layer(Some(json!(["user-collector"])));
+        layer_config(&mut merged, layer(higher));
+        assert_eq!(
+            merged["components"][0]["config"]["insecure_http_hosts"],
+            expected
+        );
+    }
+}
+
+#[test]
 fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins() {
     let mut merged = json!({
         "components": [{
@@ -969,7 +995,7 @@ fn test_plugin_configuration_registers_event_metadata_injector() {
     let callback = {
         let context = global_context();
         let state = context.read().unwrap();
-        let injectors = state.event_metadata_injectors.sorted_values();
+        let injectors: Vec<_> = state.event_metadata_injectors.sorted_values().collect();
         assert_eq!(injectors.len(), 1);
         Arc::clone(&injectors[0].payload)
     };
@@ -991,7 +1017,8 @@ fn test_plugin_configuration_registers_event_metadata_injector() {
             .unwrap()
             .event_metadata_injectors
             .sorted_values()
-            .is_empty()
+            .next()
+            .is_none()
     );
     assert!(deregister_plugin("event-metadata.plugin"));
     reset_global();

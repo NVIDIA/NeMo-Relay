@@ -45,6 +45,7 @@ pub enum ScopeType {
     /// A caller-defined custom scope category.
     Custom,
     /// A fallback for unknown or unsupported scope categories.
+    #[serde(other)]
     Unknown,
 }
 
@@ -65,6 +66,25 @@ impl ScopeType {
             Self::Unknown => "unknown",
         }
     }
+}
+
+/// Identity of one entry in the visible Relay scope stack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeStackEntry {
+    /// Actual scope handle UUID, never a transport binding identifier.
+    pub scope_id: uuid::Uuid,
+    /// Canonical semantic category; future encoded categories become Unknown.
+    pub scope_type: ScopeType,
+}
+
+/// Owned root-to-top values from one coherent read of a visible scope stack.
+///
+/// Includes implicit and synthetic roots. It does not guarantee complete
+/// distributed ancestry. Later stack mutations do not modify this value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeStackSnapshot {
+    /// Ordered scope identities, including the implicit root.
+    pub scopes: Vec<ScopeStackEntry>,
 }
 
 /// Attribute bitflags attached to a concrete handle kind.
