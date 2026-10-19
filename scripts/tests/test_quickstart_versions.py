@@ -16,6 +16,15 @@ SPEC.loader.exec_module(VERSIONS)
 
 
 class QuickstartVersionTests(unittest.TestCase):
+    def test_main_installer_source_stays_independent_of_release_selection(self):
+        for script in ("install.sh", "install.ps1"):
+            source = f"https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/{script}"
+            line = f"curl -fsSL {source} | NEMO_RELAY_VERSION=0.10.0 sh"
+            updated = VERSIONS.replace_version(line, "0.10.0", "0.11.0")
+            self.assertIn(source, updated)
+            self.assertIn("NEMO_RELAY_VERSION=0.11.0", updated)
+            self.assertEqual(len(list(VERSIONS.matches(updated))), 1)
+
     def test_copyable_installer_forms_update_only_the_relay_pin(self):
         examples = (
             'uv add "nemo-relay[langchain,langchain-nvidia]==0.10.0" # SDK 0.10.0',
