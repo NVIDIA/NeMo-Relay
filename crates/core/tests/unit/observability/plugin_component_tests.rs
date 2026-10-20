@@ -2394,6 +2394,90 @@ fn skipped_endpoint_reasons_never_echo_endpoint_userinfo() {
 }
 
 #[test]
+fn automatic_grpc_skips_tls_for_http_and_rejects_certificate_settings() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let signals = ["TRACES", "LOGS", "METRICS"];
+    let suffixes = [
+        "ENDPOINT",
+        "CERTIFICATE",
+        "CLIENT_CERTIFICATE",
+        "CLIENT_KEY",
+    ];
+    let variables: Vec<_> = std::iter::once(String::new())
+        .chain(signals.map(|signal| format!("{signal}_")))
+        .flat_map(|prefix| suffixes.map(|suffix| format!("OTEL_EXPORTER_OTLP_{prefix}{suffix}")))
+        .collect();
+    let _environment = EnvironmentGuard::capture(&variables);
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        for variable in &variables {
+            std::env::remove_var(variable);
+        }
+    }
+
+    for signal in signals {
+        let endpoint_variable = format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT");
+        for (generic, specific) in [
+            (None, None),
+            (Some("http://127.0.0.1:4317"), None),
+            (
+                Some("https://collector.example:4317"),
+                Some("http://127.0.0.1:4317"),
+            ),
+        ] {
+            unsafe {
+                for (name, value) in [
+                    ("OTEL_EXPORTER_OTLP_ENDPOINT", generic),
+                    (endpoint_variable.as_str(), specific),
+                ] {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+            assert!(
+                crate::observability::otel_signal::automatic_otlp_grpc_tls(signal)
+                    .unwrap()
+                    .is_none(),
+                "{signal}: HTTP must not load trusted certificates"
+            );
+
+            for prefix in [String::new(), format!("{signal}_")] {
+                for fields in [
+                    &["CERTIFICATE"][..],
+                    &["CLIENT_CERTIFICATE", "CLIENT_KEY"][..],
+                ] {
+                    unsafe {
+                        for field in fields {
+                            std::env::set_var(
+                                format!("OTEL_EXPORTER_OTLP_{prefix}{field}"),
+                                "unused.pem",
+                            );
+                        }
+                    }
+                    let error = crate::observability::otel_signal::automatic_otlp_grpc_tls(signal)
+                        .unwrap_err()
+                        .to_string();
+                    unsafe {
+                        for field in fields {
+                            std::env::remove_var(format!("OTEL_EXPORTER_OTLP_{prefix}{field}"));
+                        }
+                    }
+                    assert!(
+                        error.contains("TLS settings require an HTTPS endpoint"),
+                        "{error}"
+                    );
+                }
+            }
+        }
+        unsafe {
+            std::env::remove_var(endpoint_variable);
+        }
+    }
+}
+
+#[test]
 fn automatic_otel_rejects_an_unparseable_signal_endpoint_instead_of_falling_back() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let variables = [

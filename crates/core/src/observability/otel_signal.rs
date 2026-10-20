@@ -577,11 +577,22 @@ pub(super) fn automatic_otlp_http_client(signal: &str) -> Result<reqwest::Client
     super::OpenTelemetryTlsConfig::from_environment(signal)?.http_client(&endpoint, None)
 }
 
-pub(super) fn automatic_otlp_grpc_tls(signal: &str) -> Result<tonic::transport::ClientTlsConfig> {
+pub(super) fn automatic_otlp_grpc_tls(
+    signal: &str,
+) -> Result<Option<tonic::transport::ClientTlsConfig>> {
     let endpoint = automatic_signal_endpoint(&format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"))
         .map_err(OpenTelemetryError::ExporterBuild)?
         .unwrap_or_else(|| "http://localhost:4317".into());
-    super::OpenTelemetryTlsConfig::from_environment(signal)?.grpc_config(&endpoint)
+    let tls = super::OpenTelemetryTlsConfig::from_environment(signal)?;
+    tls.validate(&endpoint)?;
+    if endpoint
+        .parse::<reqwest::Url>()
+        .is_ok_and(|url| url.scheme() == "https")
+    {
+        tls.grpc_config(&endpoint).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 pub(super) fn resolve_http_signal_endpoint<'a>(endpoint: &'a str, signal: &str) -> Cow<'a, str> {

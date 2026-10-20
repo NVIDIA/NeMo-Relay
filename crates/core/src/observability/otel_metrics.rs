@@ -690,9 +690,11 @@ fn build_metric_provider(
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL") {
+            let mut builder = builder.with_tonic();
+            if let Some(tls) = super::otel_signal::automatic_otlp_grpc_tls("METRICS")? {
+                builder = builder.with_tls_config(tls);
+            }
             builder
-                .with_tonic()
-                .with_tls_config(super::otel_signal::automatic_otlp_grpc_tls("METRICS")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         } else {
