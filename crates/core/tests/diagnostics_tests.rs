@@ -207,24 +207,150 @@ fn disabled_facade_has_no_identity_backend_or_lazy_work() {
     assert_eq!(service.memory_usage().reserved_bytes, 0);
     assert_eq!(service.memory_usage().components, 0);
     assert_eq!(service.memory_usage().query_workspaces, 0);
+    let usage = serde_json::to_value(service.reader().memory_usage()).unwrap();
+    assert!(
+        usage
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|value| value.as_u64() == Some(0))
+    );
+}
+
+// Process-default selection is permanent. Run only the selected public-contract
+// scenario in a child rather than resetting globals or relying on test ordering.
+fn isolated_process_default_test(body: impl FnOnce()) {
+    const CHILD: &str = "NEMO_RELAY_TEST_DIAGNOSTICS_INSTALL_CHILD";
+    let current = thread::current();
+    let name = current.name().expect("test thread should be named");
+    if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new(name)) {
+        body();
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture"])
+        .env(CHILD, name)
+        .output()
+        .expect("isolated process-default test should start");
+    assert!(
+        output.status.success(),
+        "isolated test {name} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+fn assert_process_default_installation(enabled: bool) {
+    let identity = source();
+    let settings = DiagnosticsSettings {
+        enabled,
+        limits: DiagnosticLimits {
+            max_events: 7,
+            ..limits()
+        },
+    };
+    let installed =
+        Diagnostics::install_process_default(identity.clone(), settings.clone()).unwrap();
+    let reader = installed.reader();
+    let expected_availability = if enabled {
+        DiagnosticAvailability::Available
+    } else {
+        DiagnosticAvailability::Disabled
+    };
+    assert_eq!(
+        (
+            installed.source(),
+            installed.limits(),
+            reader.availability()
+        ),
+        (&identity, &settings.limits, expected_availability),
+    );
+    let reserved = installed.memory_usage().reserved_bytes;
+    if enabled {
+        assert!(reserved > 0 && reserved <= settings.limits.max_owned_bytes);
+    } else {
+        assert_eq!(reserved, 0);
+    }
+    for _ in 0..3 {
+        let selected = Diagnostics::process_default();
+        assert!(std::ptr::eq(selected, installed));
+        assert_eq!(
+            (
+                selected.source(),
+                selected.limits(),
+                selected.memory_usage().reserved_bytes,
+            ),
+            (&identity, &settings.limits, reserved),
+        );
+    }
+    for replacement_enabled in [enabled, !enabled] {
+        let replacement = DiagnosticsSettings {
+            enabled: replacement_enabled,
+            limits: DiagnosticLimits {
+                max_events: 11,
+                ..limits()
+            },
+        };
+        assert_eq!(
+            Diagnostics::install_process_default(source(), replacement).unwrap_err(),
+            DiagnosticError::AlreadyInitialized,
+        );
+        let selected = Diagnostics::process_default();
+        assert!(std::ptr::eq(selected, installed));
+        assert_eq!(
+            (
+                selected.source(),
+                selected.limits(),
+                selected.memory_usage().reserved_bytes,
+            ),
+            (&identity, &settings.limits, reserved),
+        );
+        assert_eq!(reader.availability(), expected_availability);
+        assert_eq!(selected.reader().availability(), expected_availability);
+    }
+}
+
+#[test]
+fn enabled_process_default_installation_preserves_configuration_and_rejects_replacement() {
+    isolated_process_default_test(|| assert_process_default_installation(true));
+}
+
+#[test]
+fn disabled_process_default_installation_preserves_configuration_and_rejects_replacement() {
+    isolated_process_default_test(|| assert_process_default_installation(false));
 }
 
 #[test]
 fn an_early_process_default_cannot_be_silently_upgraded() {
-    let early = Diagnostics::process_default();
-    assert_eq!(
-        early.reader().availability(),
-        DiagnosticAvailability::Disabled
-    );
-    let identity = early.source().instance_id;
-    assert_eq!(
-        Diagnostics::install_process_default(source(), DiagnosticsSettings::default()).unwrap_err(),
-        DiagnosticError::AlreadyInitialized
-    );
-    assert_eq!(
-        Diagnostics::process_default().source().instance_id,
-        identity
-    );
+    isolated_process_default_test(|| {
+        let early = Diagnostics::process_default();
+        assert_eq!(
+            early.reader().availability(),
+            DiagnosticAvailability::Disabled
+        );
+        let identity = early.source().instance_id;
+        assert_eq!(
+            Diagnostics::install_process_default(
+                source(),
+                DiagnosticsSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap_err(),
+            DiagnosticError::AlreadyInitialized,
+        );
+        assert!(std::ptr::eq(Diagnostics::process_default(), early));
+        assert_eq!(
+            Diagnostics::process_default().source().instance_id,
+            identity
+        );
+        assert_eq!(
+            early.reader().availability(),
+            DiagnosticAvailability::Disabled
+        );
+        assert_eq!(early.memory_usage().reserved_bytes, 0);
+    });
 }
 
 #[test]
@@ -611,7 +737,16 @@ fn zero_history_still_counts_and_projects_without_fabricating_evictions() {
     assert_eq!(view.coverage.loss.events_evicted.value.get(), 0);
     assert_eq!(code_total(row(&view, "producer"), WRITE), 2);
     assert_eq!(observed.load(Ordering::Relaxed), 1);
-    assert_eq!(service.memory_usage().detail_bytes, 0);
+    let usage = service.memory_usage();
+    assert!(usage.event_slot_bytes > 0);
+    assert_eq!(usage.event_capacity, 0);
+    assert_eq!(usage.history_occupied_bytes, 0);
+    assert_eq!(usage.detail_reserved_bytes, 0);
+    assert_eq!(usage.detail_capacity_bytes, 0);
+    assert_eq!(usage.detail_metadata_bytes, 0);
+    assert_eq!(usage.detail_bytes, 0);
+    assert_eq!(usage.detail_logical_bytes, 0);
+    assert_eq!(usage.detail_slack_bytes, 0);
 }
 
 #[test]
@@ -780,6 +915,10 @@ fn closed_component_reclamation_preserves_wrapped_history_order_and_reuses_detai
         record(if count % 2 == 0 { &second } else { &first }, count);
     }
     assert_eq!(service.memory_usage().detail_bytes, 4 * 64);
+    assert_eq!(
+        service.memory_usage().detail_logical_bytes,
+        4 * "failure".len()
+    );
     owner.close().unwrap();
     let third = register(&service, "third");
     let view = snapshot(&service, DiagnosticQuery::default());
@@ -796,7 +935,15 @@ fn closed_component_reclamation_preserves_wrapped_history_order_and_reuses_detai
             .all(|event| event.component.key == "second")
     );
     assert_eq!(view.coverage.loss.events_evicted.value.get(), 4);
-    assert_eq!(service.memory_usage().detail_bytes, 2 * 64);
+    let reclaimed = service.memory_usage();
+    assert_eq!(reclaimed.detail_bytes, 2 * 64);
+    assert_eq!(reclaimed.detail_logical_bytes, 2 * "failure".len());
+    assert_eq!(reclaimed.detail_slack_bytes, 2 * (64 - "failure".len()));
+    assert_eq!(
+        reclaimed.history_occupied_bytes,
+        2 * reclaimed.event_slot_bytes
+    );
+    assert_eq!(reclaimed.reserved_bytes, reserved);
 
     record(&third, 7);
     let view = snapshot(&service, DiagnosticQuery::default());
@@ -2548,13 +2695,147 @@ fn impossible_query_capacities_are_invalid_limits() {
 }
 
 #[test]
+fn memory_usage_distinguishes_history_capacity_from_occupied_slots() {
+    let service = diagnostics(DiagnosticLimits {
+        max_events: 2,
+        detail_pool_bytes: 0,
+        ..limits()
+    });
+    let component = register(&service, "producer");
+    let initial = service.memory_usage();
+    assert!(initial.event_slot_bytes > 0);
+    assert_eq!(initial.event_capacity, 2);
+    assert_eq!(initial.events, 0);
+    assert_eq!(initial.history_occupied_bytes, 0);
+    assert!(initial.history_reserved_bytes >= initial.event_capacity * initial.event_slot_bytes);
+    assert_eq!(
+        (
+            initial.detail_reserved_bytes,
+            initial.detail_capacity_bytes,
+            initial.detail_metadata_bytes
+        ),
+        (0, 0, 0),
+    );
+
+    for count in 1..=3 {
+        component
+            .record_without_projection_lazy(|| {
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    DiagnosticDetailRef::None,
+                    1,
+                )
+            })
+            .unwrap();
+        let usage = service.memory_usage();
+        assert_eq!(usage.events, count.min(initial.event_capacity));
+        assert_eq!(
+            usage.history_occupied_bytes,
+            usage.events * usage.event_slot_bytes
+        );
+        assert_eq!(usage.history_reserved_bytes, initial.history_reserved_bytes);
+        assert_eq!(usage.reserved_bytes, initial.reserved_bytes);
+    }
+    let reader = service.reader();
+    let (usage, allocations) = allocations_during(|| reader.memory_usage());
+    assert_eq!(allocations, 0);
+    let wire = serde_json::to_value(usage).unwrap();
+    assert_eq!(wire["event_slot_bytes"], usage.event_slot_bytes);
+    assert_eq!(wire["event_capacity"], 2);
+    assert_eq!(wire["history_occupied_bytes"], 2 * usage.event_slot_bytes);
+    assert_eq!(wire["history_reserved_bytes"], usage.history_reserved_bytes);
+}
+
+#[test]
+fn memory_usage_reports_retained_text_and_utf8_block_slack() {
+    let service = diagnostics(DiagnosticLimits {
+        max_events: 1,
+        detail_pool_bytes: 63,
+        detail_block_bytes: 4,
+        ..limits()
+    });
+    let component = register(&service, "producer");
+    let initial = service.memory_usage();
+    assert_eq!(initial.detail_capacity_bytes, 60);
+    assert!(initial.detail_metadata_bytes > 0);
+    assert_eq!(
+        initial.detail_reserved_bytes,
+        initial.detail_capacity_bytes + initial.detail_metadata_bytes
+    );
+    assert_eq!(
+        (
+            initial.detail_bytes,
+            initial.detail_logical_bytes,
+            initial.detail_slack_bytes
+        ),
+        (0, 0, 0),
+    );
+
+    let session = String::from("xy");
+    let request = String::from("z");
+    component
+        .record_without_projection_lazy(|| {
+            Observation::new(classification(FailureClass::Unknown), "€€€", 1).with_correlation(
+                DiagnosticCorrelation {
+                    session_id: Some(session.as_str().into()),
+                    request_id: Some(request.as_str().into()),
+                },
+            )
+        })
+        .unwrap();
+    let reader = service.reader();
+    let (occupied, allocations) = allocations_during(|| reader.memory_usage());
+    assert_eq!(allocations, 0);
+    // Each three-byte scalar occupies its own four-byte block; correlation
+    // fields each use a separate block, even though their text is shorter.
+    assert_eq!(occupied.detail_bytes, 5 * 4);
+    assert_eq!(
+        occupied.detail_logical_bytes,
+        "€€€".len() + session.len() + request.len()
+    );
+    assert_eq!(occupied.detail_slack_bytes, 8);
+    assert_eq!(
+        (
+            occupied.detail_reserved_bytes,
+            occupied.detail_metadata_bytes
+        ),
+        (initial.detail_reserved_bytes, initial.detail_metadata_bytes),
+    );
+
+    component
+        .record_without_projection_lazy(|| {
+            Observation::new(classification(FailureClass::Unknown), "q", 1)
+        })
+        .unwrap();
+    let replaced = service.memory_usage();
+    assert_eq!(replaced.events, 1);
+    assert_eq!(replaced.detail_bytes, 4);
+    assert_eq!(replaced.detail_logical_bytes, 1);
+    assert_eq!(replaced.detail_slack_bytes, 3);
+    assert_eq!(replaced.history_occupied_bytes, replaced.event_slot_bytes);
+    assert_eq!(
+        replaced.detail_reserved_bytes,
+        initial.detail_reserved_bytes
+    );
+    assert_eq!(
+        replaced.detail_metadata_bytes,
+        initial.detail_metadata_bytes
+    );
+    assert_eq!(replaced.reserved_bytes, initial.reserved_bytes);
+}
+
+#[test]
 fn default_profile_reports_bounded_compiled_backing_capacity() {
     let profile = DiagnosticLimits::default();
     let service = diagnostics(profile.clone());
     let usage = service.memory_usage();
     eprintln!(
-        "default diagnostics backing bytes: {}",
-        usage.reserved_bytes
+        "default diagnostics backing bytes: {}; event_slot_bytes={}; history_reserved_bytes={}; detail_capacity_bytes={}; detail_metadata_bytes={}",
+        usage.reserved_bytes,
+        usage.event_slot_bytes,
+        usage.history_reserved_bytes,
+        usage.detail_capacity_bytes,
+        usage.detail_metadata_bytes,
     );
     assert!(usage.reserved_bytes > 0);
     assert!(usage.reserved_bytes <= profile.max_owned_bytes);

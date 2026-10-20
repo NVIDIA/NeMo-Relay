@@ -17,6 +17,7 @@ use super::{
     DynamicPluginValidationStatus, EvaluatedDynamicPluginHostPolicy, FileDynamicPluginHostPolicy,
     evaluate_dynamic_plugin_host_policy, validate_dynamic_plugin_config_schema,
 };
+use crate::diagnostics::Diagnostics;
 use crate::plugin::{
     PluginConfig, PluginError, Result, plugin_config_paths, resolve_plugin_config_documents,
 };
@@ -227,8 +228,9 @@ const fn default_state_schema_version() -> u32 {
 pub(crate) fn resolve_plugin_host_config(
     programmatic: PluginConfig,
     explicit_path: Option<&Path>,
+    diagnostic_context: Option<&Diagnostics>,
 ) -> Result<ResolvedPluginHostConfig> {
-    resolve_plugin_host_config_inner(programmatic, explicit_path, true)
+    resolve_plugin_host_config_inner(programmatic, explicit_path, true, diagnostic_context)
 }
 
 /// Validates the process-wide static and dynamic plugin host.
@@ -266,6 +268,7 @@ pub(crate) fn validate_request(request: PluginHostValidationRequest) -> Result<P
         request.config,
         request.additional_plugins_toml.as_deref(),
         false,
+        None,
     )?;
     let mut config_report = crate::plugin::validate_static_plugin_config(&resolved.config);
     config_report
@@ -316,6 +319,7 @@ fn resolve_plugin_host_config_inner(
     programmatic: PluginConfig,
     explicit_path: Option<&Path>,
     reject_required_failures: bool,
+    diagnostic_context: Option<&Diagnostics>,
 ) -> Result<ResolvedPluginHostConfig> {
     let paths = plugin_config_paths(explicit_path, crate::plugin::user_config_dir());
     let (files, mut diagnostics) = read_plugin_files(&paths, explicit_path)?;
@@ -326,6 +330,7 @@ fn resolve_plugin_host_config_inner(
             .iter()
             .map(|document| (document.source.clone(), document.value.clone()))
             .collect(),
+        diagnostic_context,
     )?;
     diagnostics.extend(resolved.diagnostics.iter().cloned());
     let (mut policy, declarations) = resolve_dynamic_plugin_declarations(files)?;

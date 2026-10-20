@@ -25,6 +25,12 @@ For process-wide convenience constructors, call
 components. The first `Diagnostics::process_default()` lookup otherwise installs
 a disabled context; existing handles are never implicitly upgraded.
 
+For an explicitly owned plugin host, use
+`nemo_relay::plugin::initialize_with_diagnostics(config, additional_plugins_toml, &diagnostics)`.
+The host passes that same context through configuration resolution and common
+component activation. The existing `initialize` convenience API selects the
+process default. Standalone validation and discovery do not consume that default.
+
 ## Recording and Reading
 
 Register the component's expected codes before recording. Each observation
@@ -153,6 +159,40 @@ process RSS. It excludes allocator overhead, caller-owned inputs and decoded
 snapshots, producer handles, callback captures, and operational output storage.
 File-sink queues and on-disk retention remain governed by logging configuration.
 
+### Memory Inspection
+
+`Diagnostics::memory_usage()` and `DiagnosticsReader::memory_usage()` return the
+same `DiagnosticMemoryUsage` view. The history and detail-pool fields distinguish
+reserved backing, occupied capacity, and logical text:
+
+| Fields | Meaning |
+| --- | --- |
+| `event_slot_bytes`, `event_capacity` | Compiled size of one private retained event header and the admitted number of history slots. |
+| `history_reserved_bytes` | Complete circular-buffer allocation, including shared header, alignment, and all event slots. |
+| `history_occupied_bytes` | Retained event count multiplied by `event_slot_bytes`; excludes the shared buffer header and unused slots. |
+| `detail_capacity_bytes`, `detail_metadata_bytes`, `detail_reserved_bytes` | Whole-block payload capacity, metadata reserved for every block, and their combined backing bytes. |
+| `detail_bytes` | Existing gauge for occupied payload blocks, including unused space within those blocks. |
+| `detail_logical_bytes`, `detail_slack_bytes` | Retained UTF-8 message/correlation bytes and unused payload space within occupied blocks. |
+
+`detail_reserved_bytes` equals `detail_capacity_bytes + detail_metadata_bytes`.
+`detail_bytes` equals `detail_logical_bytes + detail_slack_bytes`. Free payload
+capacity is `detail_capacity_bytes - detail_bytes`. Block metadata differs from
+the existing `metadata_bytes` gauge, which describes admitted registration text.
+A pool rounds payload capacity down to whole blocks; block size comes from
+`DiagnosticLimits.detail_block_bytes` and defaults to 256 bytes.
+
+Inspection derives the breakdown from existing storage. Logical text bytes
+require a bounded scan of block metadata when the view is requested; recording
+adds no size ledger, per-event size field, or additional retained store. Disabled
+contexts report zero for every gauge. Eviction reduces occupancy and returns
+blocks for reuse while the reserved backing remains allocated. These values do
+not measure resident pages or whole-process working-set memory.
+
+This remains a separate Rust inspection API; the canonical diagnostic snapshot
+and runtime endpoints do not acquire memory fields in phase one. Per-entry and
+per-component attribution, process-memory correlation, and integration with the
+existing resource-metrics surfaces are deferred to a later development phase.
+
 Snapshot coverage reports rejected observations, truncated detail, eviction,
 and saturated counts. A saturated count is a lower bound. Inspect coverage when
 interpreting missing evidence. JSON encodes 64-bit counts and sequences as decimal
@@ -183,7 +223,8 @@ report deduplication, and reader migration are deferred to a separate phase.
 ## Implementation Scope
 
 This phase provides Rust contracts, bounded recording/state/queries, logging,
-and selected plugin activation observations. The shared `DiagnosticClassifier<E>`
+configuration-inheritance notices, and selected plugin activation observations.
+The shared `DiagnosticClassifier<E>`
 interface returns `Classification` values without recording or changing source
 errors. The production adapters are `PluginErrorClassifier` and
 `LoggingErrorClassifier`.
@@ -216,7 +257,7 @@ with their production recording sites in the owning integration phase.
 ### Plugin Producer Boundaries
 
 Phase one owns the shared diagnostics foundation and generic host configuration
-and component activation boundaries in `core`. The phase-five plugin workstream
+and component activation boundaries in `core`. The phase 5 plugin workstream
 owns mechanism-specific producer integrations in the native loader, worker
 client/SDK, and `worker-proto` transport. Crate location alone does not determine
 scope: `core` also contains deferred native and worker code.
@@ -225,7 +266,7 @@ scope: `core` also contains deferred native and worker code.
 | --- | --- | --- |
 | Logging adapter and sinks | Typed recording and optional log projection | Phase one |
 | Common component activation | Registration failures and activation unwinds, recorded once at the owning operation | Phase one |
-| Shared host configuration | Existing configuration diagnostics/reports; canonical inheritance recording remains a phase-one integration gap | Phase one |
+| Shared host configuration | One canonical inheritance notice per contributing ambient file, preserving existing warnings/reports | Phase one |
 | Native ABI and dynamic trust/policy | Existing execution/report behavior; no canonical mechanism-specific adapter | Phase five |
 | Worker launch, handshake, RPC, remote observations, and protocol transport | Existing execution/report behavior; no canonical worker integration | Phase five |
 
@@ -251,12 +292,15 @@ materialization. The schema permits future names within a supported snapshot
 envelope; unsupported envelope versions still require negotiation.
 
 The phase-one built-in catalogue contains logging failures/successes, six common
-plugin failures, and `ConfigurationInherited`. The inheritance notice has a live
-legacy configuration producer, but is not yet recorded into the canonical store.
-Its phase-one integration must record once at configuration resolution using
-an explicitly selected diagnostic context, while keeping existing warning/report
-behavior. Shared validation and discovery helpers must remain usable without
-initializing process diagnostics.
+plugin failures, and `ConfigurationInherited`. The inheritance notice records once per
+contributing ambient file at configuration resolution, using a separate
+`plugin.configuration` recorder in the host's selected context. The explicitly
+supplied file is excluded from inheritance notices. This state-only producer
+retains generic safe detail; paths remain in the established operational warning
+and configuration report. Reading or copying that report never records again.
+Disabled collection or exhausted diagnostic capacity does not change configuration
+results. Standalone validation and discovery use the same resolution helpers
+without canonical recording or process-default initialization.
 
 `ComponentReenabled` is deferred from the canonical catalogue until a production
 producer is integrated. Its existing test-only helper and legacy report strings
@@ -264,10 +308,12 @@ remain unchanged; there is no production emitter today.
 Runtime/upstream, binding, native-status, dynamic trust/policy, and worker
 classifiers and their unused code families arrive with their owning producer
 integrations. OTel failures, export successes, and context-expiration
-observations arrive with phase-two integration.
+observations arrive with the separately scheduled OTel integration.
 
-CLI and daemon composition, HTTP routes, broker collection, public
-language-binding APIs, and dynamic-plugin transport follow in later phases.
+CLI composition and HTTP hosting follow in phase 2; daemon workers and broker
+collection in phase 3; public language-binding APIs in phase 4; dynamic-plugin
+transport in phase 5; and API conformance in phase 6. Detailed memory attribution
+and resource-metrics integration follow in phase 7.
 CPU collection and generic measurement types/schema are also deferred; existing
 lifetime/timing fields remain available. Restart persistence remains later work.
 This API starts no diagnostics listener or background collection service.

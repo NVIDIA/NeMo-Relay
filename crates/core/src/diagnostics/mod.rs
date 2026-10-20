@@ -947,6 +947,7 @@ impl Diagnostics {
     }
     /// Inspect reserved backend bytes and occupancy without changing evidence.
     ///
+    /// Inspection scans admitted slots and detail-block metadata without allocating.
     /// Disabled contexts report zero backend capacity. Lightweight facade state,
     /// caller-owned copies, thread stacks, and independent outputs are excluded.
     pub fn memory_usage(&self) -> DiagnosticMemoryUsage {
@@ -971,6 +972,9 @@ impl Default for Diagnostics {
 /// Backing capacity and current occupancy of one context.
 ///
 /// These gauges describe the bounded backend rather than whole-process RSS.
+/// Reserved bytes describe allocated capacity; occupied bytes describe its use
+/// and are not additional allocations. History and detail totals are subsets of
+/// `reserved_bytes`; logical detail and slack are subsets of `detail_bytes`.
 /// All values are zero when collection is disabled.
 pub struct DiagnosticMemoryUsage {
     /// Bytes reserved for context-owned backend backing storage.
@@ -981,8 +985,26 @@ pub struct DiagnosticMemoryUsage {
     pub counters: usize,
     /// Currently retained shared circular-history event headers.
     pub events: usize,
+    /// Compiled size of one fixed event slot, excluding separately stored text.
+    pub event_slot_bytes: usize,
+    /// Event slots admitted for the shared circular history.
+    pub event_capacity: usize,
+    /// Complete history allocation, including all slots, shared header, and padding.
+    pub history_reserved_bytes: usize,
+    /// Retained slot bytes; excludes the shared history header and separate text pool.
+    pub history_occupied_bytes: usize,
     /// Pool payload bytes occupied in whole reclaimable blocks.
     pub detail_bytes: usize,
+    /// Actual payload capacity, rounded down to whole detail blocks.
+    pub detail_capacity_bytes: usize,
+    /// Complete detail-pool backing: payload capacity plus all block metadata.
+    pub detail_reserved_bytes: usize,
+    /// Reserved metadata bytes for all detail blocks, occupied or free.
+    pub detail_metadata_bytes: usize,
+    /// Retained UTF-8 message and correlation bytes, excluding block slack.
+    pub detail_logical_bytes: usize,
+    /// Unused payload bytes inside occupied blocks; excludes entirely free blocks.
+    pub detail_slack_bytes: usize,
     /// Admitted key, ownership, and extension metadata content bytes.
     pub metadata_bytes: usize,
     /// Reserved rolling outcome-bucket slots belonging to components.
@@ -1758,12 +1780,24 @@ fn diagnostic_memory_usage(inner: &Inner) -> DiagnosticMemoryUsage {
         return DiagnosticMemoryUsage::default();
     };
     let state = lock(&backend.state);
+    let event_slot_bytes = size_of::<StoredObservation>();
+    let detail_bytes = state.detail.used_bytes();
+    let detail_logical_bytes = state.detail.logical_bytes();
     DiagnosticMemoryUsage {
         reserved_bytes: backend.reserved_bytes,
         components: state.components.iter().flatten().count(),
         counters: state.counters.iter().flatten().count(),
         events: state.recent.len(),
-        detail_bytes: state.detail.used_bytes(),
+        event_slot_bytes,
+        event_capacity: inner.limits.max_events,
+        history_reserved_bytes: state.recent.reserved_bytes(),
+        history_occupied_bytes: state.recent.len() * event_slot_bytes,
+        detail_bytes,
+        detail_capacity_bytes: state.detail.capacity_bytes(),
+        detail_reserved_bytes: state.detail.reserved_bytes(),
+        detail_metadata_bytes: state.detail.metadata_bytes(),
+        detail_logical_bytes,
+        detail_slack_bytes: detail_bytes - detail_logical_bytes,
         metadata_bytes: state.metadata_used,
         window_buckets: state.windows.iter().flatten().count(),
         extensions: state.extensions.iter().flatten().count(),
