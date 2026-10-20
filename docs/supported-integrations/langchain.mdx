@@ -96,6 +96,8 @@ the model call, where the selected LangChain model adapter prepares it for its
 provider. Tool count, order, and function-tool names must remain unchanged.
 
 Relay uses Pydantic's `TypeAdapter` for structured responses, as LangChain does.
+It uses field names for encoding and decoding, so different input and output
+aliases work together. The `langchain` extra includes Pydantic 2.11 or later.
 It restores objects only when their types match a declared schema. Plain JSON
 values pass through. Other Python objects cause a validation error. Encoding
 and validation errors reach the caller.

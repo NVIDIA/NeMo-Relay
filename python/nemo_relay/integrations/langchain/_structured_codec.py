@@ -33,7 +33,7 @@ class LangChainStructuredResponseCodec(Codec[object]):
                 return {
                     "schema_index": index,
                     "data": cast(
-                        Json, adapter.dump_python(value, mode="json", warnings="error", by_alias=True, round_trip=True)
+                        Json, adapter.dump_python(value, mode="json", warnings="error", by_alias=False, round_trip=True)
                     ),
                 }
         return {"schema_index": None, "data": cast(Json, self._json.validate_python(value, strict=True))}
@@ -47,4 +47,4 @@ class LangChainStructuredResponseCodec(Codec[object]):
             return self._json.validate_python(data["data"], strict=True)
         if type(index) is not int or not 0 <= index < len(self._schemas):
             raise ValueError("Invalid structured response schema index")
-        return self._schemas[index][1].validate_python(data["data"])
+        return self._schemas[index][1].validate_python(data["data"], by_alias=False, by_name=True)

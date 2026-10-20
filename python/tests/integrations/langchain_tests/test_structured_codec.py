@@ -137,11 +137,11 @@ def test_nested_dataclass_fields_are_restored():
 
 
 @pytest.mark.parametrize("nested_dataclass", [False, True])
-@pytest.mark.parametrize("kind", ["alias", "json", "separate_aliases"])
+@pytest.mark.parametrize("kind", ["alias", "json", "separate_aliases", "distinct_aliases", "alias_path"])
 def test_validation_compatible_serialization_round_trips(kind, nested_dataclass):
     from dataclasses import make_dataclass
 
-    from pydantic import AliasChoices, BaseModel, Field, Json, TypeAdapter
+    from pydantic import AliasChoices, AliasPath, BaseModel, Field, Json, TypeAdapter
 
     from nemo_relay.integrations.langchain._structured_codec import LangChainStructuredResponseCodec
 
@@ -154,10 +154,18 @@ def test_validation_compatible_serialization_round_trips(kind, nested_dataclass)
     class SeparateAliasesAnswer(BaseModel):
         value: int = Field(validation_alias=AliasChoices("answer", "output"), serialization_alias="output")
 
+    class DistinctAliasesAnswer(BaseModel):
+        value: int = Field(validation_alias="answer", serialization_alias="output")
+
+    class AliasPathAnswer(BaseModel):
+        value: int = Field(validation_alias=AliasPath("input", "answer"), serialization_alias="output")
+
     schema, data = {
         "alias": (AliasedAnswer, {"answer": 42}),
         "json": (JsonAnswer, {"items": "[1,2]"}),
         "separate_aliases": (SeparateAliasesAnswer, {"answer": 42}),
+        "distinct_aliases": (DistinctAliasesAnswer, {"answer": 42}),
+        "alias_path": (AliasPathAnswer, {"input": {"answer": 42}}),
     }[kind]
     value = TypeAdapter(schema).validate_python(data)
     if nested_dataclass:
@@ -168,17 +176,3 @@ def test_validation_compatible_serialization_round_trips(kind, nested_dataclass)
     restored = LangChainStructuredResponseCodec([schema]).from_json(encoded)
     assert type(restored) is schema
     assert restored == value
-
-
-def test_incompatible_serialization_alias_raises_validation_error():
-    from pydantic import BaseModel, Field, ValidationError
-
-    from nemo_relay.integrations.langchain._structured_codec import LangChainStructuredResponseCodec
-
-    class Answer(BaseModel):
-        value: int = Field(validation_alias="answer", serialization_alias="output")
-
-    codec = LangChainStructuredResponseCodec([Answer])
-    encoded = codec.to_json(Answer.model_validate({"answer": 42}))
-    with pytest.raises(ValidationError, match="answer"):
-        codec.from_json(encoded)

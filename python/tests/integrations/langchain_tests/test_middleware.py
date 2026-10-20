@@ -1801,11 +1801,11 @@ def test_declared_structured_response_decode_error_reaches_caller(use_async, mod
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-@pytest.mark.parametrize("kind", ["alias", "json"])
+@pytest.mark.parametrize("kind", ["alias", "json", "distinct_aliases", "alias_path"])
 def test_structured_response_round_trip_serialization(use_async, kind, model_request):
     from langchain.agents.middleware import ModelResponse
     from langchain_core.messages import AIMessage
-    from pydantic import BaseModel, Field, Json, TypeAdapter
+    from pydantic import AliasPath, BaseModel, Field, Json, TypeAdapter
 
     from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
 
@@ -1815,7 +1815,18 @@ def test_structured_response_round_trip_serialization(use_async, kind, model_req
     class JsonAnswer(BaseModel):
         items: Json[list[int]]
 
-    schema, data = (AliasedAnswer, {"answer": 42}) if kind == "alias" else (JsonAnswer, {"items": "[1,2]"})
+    class DistinctAliasesAnswer(BaseModel):
+        value: int = Field(validation_alias="answer", serialization_alias="output")
+
+    class AliasPathAnswer(BaseModel):
+        value: int = Field(validation_alias=AliasPath("input", "answer"), serialization_alias="output")
+
+    schema, data = {
+        "alias": (AliasedAnswer, {"answer": 42}),
+        "json": (JsonAnswer, {"items": "[1,2]"}),
+        "distinct_aliases": (DistinctAliasesAnswer, {"answer": 42}),
+        "alias_path": (AliasPathAnswer, {"input": {"answer": 42}}),
+    }[kind]
     answer = TypeAdapter(schema).validate_python(data)
 
     def handler(_request):
