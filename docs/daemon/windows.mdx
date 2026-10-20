@@ -178,14 +178,22 @@ key, in `C:\ProgramData\nemo-relay`, created with the read-only user ACL from
 service's `XDG_CONFIG_HOME`, for example with a one-time task:
 
 ```powershell
+$Task = 'NeMoRelay-Publish-Hook-Certificate'
 $Publish = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument '/d /c set "XDG_CONFIG_HOME=C:\ProgramData\NVIDIA\NeMoRelayDaemon\config" && "C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay.exe" daemon tls-certificate > "C:\ProgramData\nemo-relay\hook-tls-certificate.pem"'
-Register-ScheduledTask -TaskName 'NeMoRelay-Publish-Hook-Certificate' -Action $Publish -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest)
-Start-ScheduledTask -TaskName 'NeMoRelay-Publish-Hook-Certificate'
-# Start-ScheduledTask returns once the task is queued; wait for it to finish.
-while ((Get-ScheduledTask -TaskName 'NeMoRelay-Publish-Hook-Certificate').State -eq 'Running') { Start-Sleep -Seconds 1 }
-$Result = (Get-ScheduledTaskInfo -TaskName 'NeMoRelay-Publish-Hook-Certificate').LastTaskResult
-Unregister-ScheduledTask -TaskName 'NeMoRelay-Publish-Hook-Certificate' -Confirm:$false
-if ($Result -ne 0) { throw "Publishing the hook certificate failed with task result $Result" }
+Register-ScheduledTask -TaskName $Task -Action $Publish -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest)
+$Before = (Get-ScheduledTaskInfo -TaskName $Task).LastRunTime
+Start-ScheduledTask -TaskName $Task
+# Start-ScheduledTask only queues the run: wait until this run has started and finished.
+$Deadline = (Get-Date).AddMinutes(2)
+do {
+  Start-Sleep -Seconds 1
+  $Info = Get-ScheduledTaskInfo -TaskName $Task
+  $Pending = $Info.LastRunTime -eq $Before -or (Get-ScheduledTask -TaskName $Task).State -eq 'Running'
+} while ($Pending -and (Get-Date) -lt $Deadline)
+if ($Pending) { Stop-ScheduledTask -TaskName $Task }
+Unregister-ScheduledTask -TaskName $Task -Confirm:$false
+if ($Pending) { throw 'Publishing the hook certificate did not finish within 2 minutes' }
+if ($Info.LastTaskResult -ne 0) { throw "Publishing the hook certificate failed with task result $($Info.LastTaskResult)" }
 Get-Content 'C:\ProgramData\nemo-relay\hook-tls-certificate.pem'
 ```
 
