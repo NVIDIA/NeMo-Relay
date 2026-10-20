@@ -133,7 +133,6 @@ navigation:
         collapsed: open-by-default
         contents:
           - page: "NeMo Switchyard"
-            icon: fa-brands fa-nvidia
             path: ./configure-plugins/switchyard.mdx
             slug: switchyard
   - folder: ./integrate-into-frameworks
