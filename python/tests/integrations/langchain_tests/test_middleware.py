@@ -1798,3 +1798,39 @@ def test_declared_structured_response_decode_error_reaches_caller(use_async, mod
                 asyncio.run(middleware.awrap_model_call(request, ahandler))
             else:
                 middleware.wrap_model_call(request, handler)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("kind", ["alias", "json"])
+def test_structured_response_round_trip_serialization(use_async, kind, model_request):
+    from langchain.agents.middleware import ModelResponse
+    from langchain_core.messages import AIMessage
+    from pydantic import BaseModel, Field, Json, TypeAdapter
+
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
+
+    class AliasedAnswer(BaseModel):
+        value: int = Field(alias="answer")
+
+    class JsonAnswer(BaseModel):
+        items: Json[list[int]]
+
+    schema, data = (AliasedAnswer, {"answer": 42}) if kind == "alias" else (JsonAnswer, {"items": "[1,2]"})
+    answer = TypeAdapter(schema).validate_python(data)
+
+    def handler(_request):
+        return ModelResponse(result=[AIMessage(content="done")], structured_response=answer)
+
+    async def ahandler(request):
+        return handler(request)
+
+    request = model_request.override(response_format=schema)
+    middleware = NemoRelayMiddleware()
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        result = (
+            asyncio.run(middleware.awrap_model_call(request, ahandler))
+            if use_async
+            else middleware.wrap_model_call(request, handler)
+        )
+    assert type(result.structured_response) is schema
+    assert result.structured_response == answer

@@ -134,3 +134,51 @@ def test_nested_dataclass_fields_are_restored():
     decoded = codec.from_json(codec.to_json(Answer(inner=Inner(value=42))))
     assert isinstance(decoded, Answer)
     assert decoded == Answer(inner=Inner(value=42))
+
+
+@pytest.mark.parametrize("nested_dataclass", [False, True])
+@pytest.mark.parametrize("kind", ["alias", "json", "separate_aliases"])
+def test_validation_compatible_serialization_round_trips(kind, nested_dataclass):
+    from dataclasses import make_dataclass
+
+    from pydantic import AliasChoices, BaseModel, Field, Json, TypeAdapter
+
+    from nemo_relay.integrations.langchain._structured_codec import LangChainStructuredResponseCodec
+
+    class AliasedAnswer(BaseModel):
+        value: int = Field(alias="answer")
+
+    class JsonAnswer(BaseModel):
+        items: Json[list[int]]
+
+    class SeparateAliasesAnswer(BaseModel):
+        value: int = Field(validation_alias=AliasChoices("answer", "output"), serialization_alias="output")
+
+    schema, data = {
+        "alias": (AliasedAnswer, {"answer": 42}),
+        "json": (JsonAnswer, {"items": "[1,2]"}),
+        "separate_aliases": (SeparateAliasesAnswer, {"answer": 42}),
+    }[kind]
+    value = TypeAdapter(schema).validate_python(data)
+    if nested_dataclass:
+        schema = make_dataclass("Envelope", [("answer", schema)])
+        value = schema(answer=value)
+    codec = LangChainStructuredResponseCodec([schema])
+    encoded = codec.to_json(value)
+    restored = LangChainStructuredResponseCodec([schema]).from_json(encoded)
+    assert type(restored) is schema
+    assert restored == value
+
+
+def test_incompatible_serialization_alias_raises_validation_error():
+    from pydantic import BaseModel, Field, ValidationError
+
+    from nemo_relay.integrations.langchain._structured_codec import LangChainStructuredResponseCodec
+
+    class Answer(BaseModel):
+        value: int = Field(validation_alias="answer", serialization_alias="output")
+
+    codec = LangChainStructuredResponseCodec([Answer])
+    encoded = codec.to_json(Answer.model_validate({"answer": 42}))
+    with pytest.raises(ValidationError, match="answer"):
+        codec.from_json(encoded)

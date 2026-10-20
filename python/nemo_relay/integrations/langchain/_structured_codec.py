@@ -32,7 +32,9 @@ class LangChainStructuredResponseCodec(Codec[object]):
             if type(value) is schema:
                 return {
                     "schema_index": index,
-                    "data": cast(Json, adapter.dump_python(value, mode="json", warnings="error")),
+                    "data": cast(
+                        Json, adapter.dump_python(value, mode="json", warnings="error", by_alias=True, round_trip=True)
+                    ),
                 }
         return {"schema_index": None, "data": cast(Json, self._json.validate_python(value, strict=True))}
 
