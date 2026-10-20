@@ -346,6 +346,11 @@ or other users, or hooks refuse it. The platform guides show the commands for a
 [Linux system service](/daemon/linux#system-service), and
 [Windows task or service](/daemon/windows#publish-the-hook-certificate).
 
+This certificate applies only to a daemon reached at a plain `http://` loopback
+address. A daemon started with `--tls-cert` and `--tls-key` serves that
+certificate at an `https://` address instead, and hooks verify it through the
+platform trust store, so there is nothing to publish.
+
 ## Run a Daemon-Attached Worker
 
 The broker normally asks MCP to start the worker. Use this command shape for
