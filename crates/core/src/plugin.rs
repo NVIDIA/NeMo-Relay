@@ -54,8 +54,8 @@ use crate::diagnostics::{
 };
 use nemo_relay_types::diagnostics::{
     BuiltinDiagnosticCode, Classification, CommonPluginFailureCode, ComponentOwnership,
-    DiagnosticClassifier, FailureClass, FailureCode, PluginFailureCode, PluginObservationContext,
-    PluginPhase,
+    DiagnosticClassifier, DiagnosticSeverity, FailureClass, FailureCode, NoticeCode,
+    PluginFailureCode, PluginObservationContext, PluginPhase,
 };
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
@@ -506,9 +506,9 @@ impl PluginRegistrationContext {
         )
     }
 
-    fn with_plugin_component_namespace(namespace: String) -> Self {
+    fn with_plugin_component_namespace(namespace: String, diagnostics: &Diagnostics) -> Self {
         Self::in_diagnostic_context(
-            Diagnostics::process_default(),
+            diagnostics,
             Some(PluginRegistrationNamespace::PluginComponent(namespace)),
         )
     }
@@ -1763,15 +1763,23 @@ pub(crate) async fn initialize_plugins_exact_for_host(
     owner_id: u64,
     rollback_failures: Arc<Mutex<Vec<String>>>,
     diagnostics: Vec<ConfigDiagnostic>,
+    diagnostic_context: Diagnostics,
 ) -> Result<ConfigReport> {
     verify_plugin_host_owner(owner_id)?;
-    initialize_plugins_exact_inner(config, Some(rollback_failures), diagnostics).await
+    initialize_plugins_exact_inner(
+        config,
+        Some(rollback_failures),
+        diagnostics,
+        &diagnostic_context,
+    )
+    .await
 }
 
 async fn initialize_plugins_exact_inner(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     diagnostics: Vec<ConfigDiagnostic>,
+    diagnostic_context: &Diagnostics,
 ) -> Result<ConfigReport> {
     let enabled_component_count = config
         .components
@@ -1810,6 +1818,7 @@ async fn initialize_plugins_exact_inner(
                 previous_state,
                 rollback_failures,
                 enabled_component_count,
+                diagnostic_context,
             )
             .await
         }
@@ -1819,6 +1828,7 @@ async fn initialize_plugins_exact_inner(
                 report,
                 rollback_failures,
                 enabled_component_count,
+                diagnostic_context,
             )
             .await
         }
@@ -1830,9 +1840,14 @@ async fn activate_initial_plugin_configuration(
     report: ConfigReport,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     enabled_component_count: usize,
+    diagnostic_context: &Diagnostics,
 ) -> Result<ConfigReport> {
-    let initialized =
-        initialize_plugin_components_catching_panics(config.clone(), rollback_failures).await?;
+    let initialized = initialize_plugin_components_catching_panics(
+        config.clone(),
+        rollback_failures,
+        diagnostic_context,
+    )
+    .await?;
     let configuration_diagnostics = report.diagnostics.clone();
     let mut report = report;
     extend_activation_diagnostics(&mut report, &initialized.diagnostics);
@@ -1857,6 +1872,7 @@ async fn replace_plugin_configuration(
     mut previous_state: ActivePluginConfiguration,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     enabled_component_count: usize,
+    diagnostic_context: &Diagnostics,
 ) -> Result<ConfigReport> {
     install_previous_configuration_for_teardown(&previous_state)?;
     let teardown = rollback_registrations_checked(&mut previous_state.registrations);
@@ -1874,6 +1890,7 @@ async fn replace_plugin_configuration(
         previous_state,
         rollback_failures,
         enabled_component_count,
+        diagnostic_context,
     )
     .await
 }
@@ -1925,9 +1942,14 @@ async fn activate_replacement_or_restore(
     previous_state: ActivePluginConfiguration,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     enabled_component_count: usize,
+    diagnostic_context: &Diagnostics,
 ) -> Result<ConfigReport> {
-    match initialize_plugin_components_catching_panics(config.clone(), rollback_failures.clone())
-        .await
+    match initialize_plugin_components_catching_panics(
+        config.clone(),
+        rollback_failures.clone(),
+        diagnostic_context,
+    )
+    .await
     {
         Ok(initialized) => {
             let configuration_diagnostics = report.diagnostics.clone();
@@ -1948,7 +1970,13 @@ async fn activate_replacement_or_restore(
             Ok(report)
         }
         Err(err) => {
-            restore_previous_plugin_configuration(previous_state, rollback_failures, err).await
+            restore_previous_plugin_configuration(
+                previous_state,
+                rollback_failures,
+                err,
+                diagnostic_context,
+            )
+            .await
         }
     }
 }
@@ -1957,10 +1985,12 @@ async fn restore_previous_plugin_configuration(
     previous_state: ActivePluginConfiguration,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     err: PluginError,
+    diagnostic_context: &Diagnostics,
 ) -> Result<ConfigReport> {
     match initialize_plugin_components_catching_panics(
         previous_state.config.clone(),
         rollback_failures,
+        diagnostic_context,
     )
     .await
     {
@@ -2000,14 +2030,18 @@ async fn restore_previous_plugin_configuration(
 async fn initialize_plugin_components_catching_panics(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    diagnostic_context: &Diagnostics,
 ) -> Result<InitializedPluginComponents> {
-    tokio::spawn(async move { initialize_plugin_components(&config, rollback_failures).await })
-        .await
-        .map_err(|error| {
-            PluginError::Internal(format!(
-                "plugin component initialization task failed: {error}"
-            ))
-        })?
+    let diagnostic_context = diagnostic_context.clone();
+    tokio::spawn(async move {
+        initialize_plugin_components(&config, rollback_failures, &diagnostic_context).await
+    })
+    .await
+    .map_err(|error| {
+        PluginError::Internal(format!(
+            "plugin component initialization task failed: {error}"
+        ))
+    })?
 }
 
 /// Resolves a plugin host configuration from already-read file documents, then
@@ -2016,6 +2050,7 @@ pub(crate) fn resolve_plugin_config_documents(
     config: PluginConfig,
     explicit_path: Option<&Path>,
     documents: Vec<(PathBuf, Json)>,
+    diagnostic_context: Option<&Diagnostics>,
 ) -> Result<ResolvedPluginConfig> {
     let explicit_path = explicit_path.map(Path::to_path_buf);
     let (file_value, mut sources) = merge_plugin_config_documents(documents)?
@@ -2032,7 +2067,7 @@ pub(crate) fn resolve_plugin_config_documents(
     Ok(ResolvedPluginConfig {
         resolved_config: value.clone(),
         config: serde_json::from_value(value)?,
-        diagnostics: inherited_plugin_config_diagnostics(&sources),
+        diagnostics: inherited_plugin_config_diagnostics(&sources, diagnostic_context),
         config_paths,
     })
 }
@@ -2127,10 +2162,33 @@ where
     Ok(documents)
 }
 
-fn inherited_plugin_config_diagnostics(sources: &[PathBuf]) -> Vec<ConfigDiagnostic> {
+fn inherited_plugin_config_diagnostics(
+    sources: &[PathBuf],
+    diagnostic_context: Option<&Diagnostics>,
+) -> Vec<ConfigDiagnostic> {
+    let codes = [BuiltinDiagnosticCode::Notice(
+        NoticeCode::ConfigurationInherited,
+    )];
+    let recorder = diagnostic_context
+        .filter(|_| !sources.is_empty())
+        .and_then(|context| {
+            context
+                .register_component(ComponentRegistration::new("plugin.configuration", &codes))
+                .ok()
+        });
     sources
         .iter()
         .map(|source| {
+            if let Some(recorder) = &recorder {
+                let _ = recorder.record_without_projection_lazy(|| {
+                    DiagnosticObservation::new(
+                        Classification::notice(NoticeCode::ConfigurationInherited),
+                        "Inherited plugin configuration from a discovered file",
+                        1,
+                    )
+                    .with_severity(DiagnosticSeverity::Warning)
+                });
+            }
             let source = source.display().to_string();
             log::warn!(
                 target: "nemo_relay.plugin",
@@ -2187,7 +2245,7 @@ fn resolve_programmatic_plugin_config(
     discovered: TestDiscoveredPluginConfig,
     config: PluginConfig,
 ) -> Result<ResolvedPluginConfig> {
-    let mut diagnostics = inherited_plugin_config_diagnostics(&discovered.sources);
+    let mut diagnostics = inherited_plugin_config_diagnostics(&discovered.sources, None);
     diagnostics.extend(programmatic_enable_override_diagnostics(
         &discovered.value,
         &discovered.enabled_sources,
@@ -2869,6 +2927,7 @@ fn extend_activation_diagnostics(report: &mut ConfigReport, diagnostics: &[Confi
 async fn initialize_plugin_components(
     config: &PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    diagnostic_context: &Diagnostics,
 ) -> Result<InitializedPluginComponents> {
     ensure_builtin_plugins_registered()?;
     let mut ordinals: HashMap<&str, usize> = HashMap::new();
@@ -2892,8 +2951,11 @@ async fn initialize_plugin_components(
             .or_insert(1);
         let namespace = component_namespace(&component.kind, *ordinal);
 
-        let mut pending =
-            PendingPluginRegistrationContext::new(namespace, rollback_failures.clone());
+        let mut pending = PendingPluginRegistrationContext::new(
+            namespace,
+            rollback_failures.clone(),
+            diagnostic_context,
+        );
         if let Err(error) = plugin
             .register(&component.config, &mut pending.context)
             .await
@@ -2957,9 +3019,16 @@ struct PendingPluginRegistrationContext {
 }
 
 impl PendingPluginRegistrationContext {
-    fn new(namespace: String, rollback_failures: Option<Arc<Mutex<Vec<String>>>>) -> Self {
+    fn new(
+        namespace: String,
+        rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+        diagnostic_context: &Diagnostics,
+    ) -> Self {
         Self {
-            context: PluginRegistrationContext::with_plugin_component_namespace(namespace),
+            context: PluginRegistrationContext::with_plugin_component_namespace(
+                namespace,
+                diagnostic_context,
+            ),
             rollback_failures,
         }
     }

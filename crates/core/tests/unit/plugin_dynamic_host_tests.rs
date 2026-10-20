@@ -288,7 +288,8 @@ manifest = {manifest_ref:?}
         ),
     )
     .unwrap();
-    let resolved = resolve_plugin_host_config(PluginConfig::default(), Some(&config_path)).unwrap();
+    let resolved =
+        resolve_plugin_host_config(PluginConfig::default(), Some(&config_path), None).unwrap();
     let report = &resolved
         .dynamic_reports
         .iter()
@@ -338,6 +339,7 @@ manifest = {manifest_ref:?}
             resolved.diagnostics,
             resolved.load_trust,
             resolved.native_artifacts,
+            crate::diagnostics::Diagnostics::process_default().clone(),
         )
         .await
         .expect("activation must load the verified fixture, without reopening source paths");
@@ -426,6 +428,7 @@ sha256 = "sha256:000000000000000000000000000000000000000000000000000000000000000
             Vec::new(),
             HashMap::from([("fixture.skipped".into(), context)]),
             Vec::new(),
+            crate::diagnostics::Diagnostics::process_default().clone(),
         )
         .await
         .unwrap();

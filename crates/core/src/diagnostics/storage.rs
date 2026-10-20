@@ -150,6 +150,17 @@ impl DetailPool {
     pub(super) fn used_bytes(&self) -> usize {
         (self.blocks.len() - self.free_blocks) * self.block_bytes
     }
+    pub(super) fn capacity_bytes(&self) -> usize {
+        self.bytes.len()
+    }
+    pub(super) fn metadata_bytes(&self) -> usize {
+        self.blocks.len() * std::mem::size_of::<Block>()
+    }
+    /// Inspect live UTF-8 content without adding recording-path bookkeeping.
+    /// Free blocks have zero length, including after reclamation.
+    pub(super) fn logical_bytes(&self) -> usize {
+        self.blocks.iter().map(|block| block.len).sum()
+    }
 
     /// Whether the bounded prefix can fit after reclaiming retained history.
     /// Pending observation handles are protected: they cannot be reclaimed by

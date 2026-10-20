@@ -179,7 +179,7 @@ manifest = {:?}
     );
 
     let startup_error =
-        match resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)) {
+        match resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml), None) {
             Err(error) => error.to_string(),
             Ok(_) => panic!("required trust failure must reject startup"),
         };
@@ -213,7 +213,7 @@ manifest = {:?}
         Some("integrity_failed")
     );
     let optional_resolved =
-        resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)).unwrap();
+        resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml), None).unwrap();
     assert!(optional_resolved.dynamic_plugins.is_empty());
     assert!(optional_resolved.load_trust.is_empty());
 
@@ -570,7 +570,8 @@ fn policy_and_utf8_file_loading_fail_closed_with_secure_defaults() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing.toml");
     let resolved =
-        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&missing), false).unwrap();
+        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&missing), false, None)
+            .unwrap();
     assert!(resolved.diagnostics.iter().any(|diagnostic| {
         diagnostic.level == DiagnosticLevel::Warning
             && diagnostic.code == "plugin.configuration_file_missing"
@@ -599,7 +600,7 @@ attestation = "integrity_only"
     )
     .unwrap();
     let policy =
-        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&plugins_toml), false)
+        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&plugins_toml), false, None)
             .unwrap()
             .policy;
     assert_eq!(policy.defaults.allowed, Some(true));
@@ -614,7 +615,7 @@ attestation = "integrity_only"
 
     fs::write(&plugins_toml, "{").unwrap();
     assert!(
-        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&plugins_toml), false)
+        resolve_plugin_host_config_inner(PluginConfig::default(), Some(&plugins_toml), false, None)
             .is_err()
     );
 
@@ -687,7 +688,7 @@ attestation = "integrity_only"
         ..PluginConfig::default()
     };
 
-    let resolved = resolve_plugin_host_config_inner(programmatic, Some(&plugins_toml), false)
+    let resolved = resolve_plugin_host_config_inner(programmatic, Some(&plugins_toml), false, None)
         .expect("static and dynamic policies should resolve independently");
 
     assert_eq!(
@@ -836,7 +837,8 @@ manifest = "relay-plugin.toml"
                     code,
                     "{kind}/{startup}/{failure}"
                 );
-                match resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml)) {
+                match resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml), None)
+                {
                     Ok(resolved) => {
                         assert_eq!(startup, "optional");
                         assert!(resolved.dynamic_plugins.is_empty());
