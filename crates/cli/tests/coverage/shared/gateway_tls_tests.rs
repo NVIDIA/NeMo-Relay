@@ -209,3 +209,244 @@ async fn tunnel_handshake_limit_rejects_excess_clients_and_recovers() {
     server.abort();
     let _ = server.await;
 }
+
+/// Points the system config directory at a test directory for this thread.
+struct SystemConfigDir(Option<std::path::PathBuf>);
+
+impl SystemConfigDir {
+    fn set(path: &std::path::Path) -> Self {
+        Self(crate::configuration::set_test_system_config_dir(Some(
+            path.to_path_buf(),
+        )))
+    }
+}
+
+impl Drop for SystemConfigDir {
+    fn drop(&mut self) {
+        crate::configuration::set_test_system_config_dir(self.0.take());
+    }
+}
+
+fn generated_identity() -> RelayTlsIdentity {
+    let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    RelayTlsIdentity {
+        record: IdentityRecord {
+            certificate_der: certified.cert.der().to_vec(),
+            private_key_der: certified.key_pair.serialize_der(),
+        },
+    }
+}
+
+/// Runs one TLS handshake between a hook client and a listener presenting `server`.
+async fn handshake(
+    client: Arc<rustls::ClientConfig>,
+    server: &RelayTlsIdentity,
+) -> Result<(), String> {
+    let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
+    let acceptor = tokio_rustls::TlsAcceptor::from(server.server_config().unwrap());
+    let server_task = tokio::spawn(async move { acceptor.accept(server_stream).await.map(drop) });
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio_rustls::TlsConnector::from(client).connect(
+            rustls::pki_types::ServerName::try_from("localhost").unwrap(),
+            client_stream,
+        ),
+    )
+    .await
+    .expect("handshake finishes")
+    .map(drop)
+    .map_err(|error| error.to_string());
+    server_task.abort();
+    result
+}
+
+#[test]
+fn certificate_pem_exports_only_the_certificate() {
+    let identity = generated_identity();
+    let pem = identity.certificate_pem();
+
+    assert!(pem.starts_with("-----BEGIN CERTIFICATE-----\n"));
+    assert!(pem.ends_with("-----END CERTIFICATE-----\n"));
+    assert!(!pem.contains("PRIVATE KEY"));
+    assert!(pem.lines().all(|line| line.len() <= 64));
+    assert_eq!(
+        decode_pem_blocks(pem.as_bytes(), "CERTIFICATE").unwrap(),
+        vec![identity.record.certificate_der.clone()]
+    );
+}
+
+#[test]
+fn daemon_trust_requires_an_identity_or_a_published_certificate() {
+    let temp = tempfile::tempdir().unwrap();
+    let user = temp.path().join("user");
+    let system = temp.path().join("system");
+    std::fs::create_dir_all(&system).unwrap();
+    let _environment = Environment::set(&[
+        ("XDG_CONFIG_HOME", user.as_os_str()),
+        ("HOME", user.as_os_str()),
+    ]);
+    let _system = SystemConfigDir::set(&system);
+
+    let error = daemon_client_config().unwrap_err();
+
+    assert!(
+        error.contains("no pinned certificate for the daemon"),
+        "{error}"
+    );
+    assert!(
+        error.contains(&system.join(DAEMON_CERTIFICATE_FILE).display().to_string()),
+        "{error}"
+    );
+    assert!(
+        error.contains("nemo-relay daemon tls-certificate"),
+        "{error}"
+    );
+    // Checking for trust must not create per-user state for hook-only users.
+    assert!(!user.join("nemo-relay").exists());
+}
+
+#[tokio::test]
+async fn daemon_trust_pins_the_certificate_published_for_another_account() {
+    let temp = tempfile::tempdir().unwrap();
+    let user = temp.path().join("user");
+    let system = temp.path().join("system");
+    std::fs::create_dir_all(&system).unwrap();
+    let daemon = generated_identity();
+    std::fs::write(
+        system.join(DAEMON_CERTIFICATE_FILE),
+        daemon.certificate_pem(),
+    )
+    .unwrap();
+    let client = {
+        let _environment = Environment::set(&[
+            ("XDG_CONFIG_HOME", user.as_os_str()),
+            ("HOME", user.as_os_str()),
+        ]);
+        let _system = SystemConfigDir::set(&system);
+        daemon_client_config().unwrap()
+    };
+
+    handshake(Arc::clone(&client), &daemon).await.unwrap();
+    // A listener that squats the port cannot present the published certificate.
+    let error = handshake(client, &generated_identity()).await.unwrap_err();
+    assert!(error.contains("certificate"), "{error}");
+    assert!(!user.join("nemo-relay").exists());
+}
+
+#[tokio::test]
+async fn daemon_trust_keeps_the_same_account_identity_next_to_a_published_certificate() {
+    let temp = tempfile::tempdir().unwrap();
+    let user = temp.path().join("user");
+    let system = temp.path().join("system");
+    std::fs::create_dir_all(&system).unwrap();
+    let daemon = generated_identity();
+    std::fs::write(
+        system.join(DAEMON_CERTIFICATE_FILE),
+        daemon.certificate_pem(),
+    )
+    .unwrap();
+    let (own, client) = {
+        let _environment = Environment::set(&[
+            ("XDG_CONFIG_HOME", user.as_os_str()),
+            ("HOME", user.as_os_str()),
+        ]);
+        let _system = SystemConfigDir::set(&system);
+        let own = RelayTlsIdentity::load_or_create().unwrap();
+        (own, daemon_client_config().unwrap())
+    };
+
+    handshake(Arc::clone(&client), &own).await.unwrap();
+    handshake(Arc::clone(&client), &daemon).await.unwrap();
+    assert!(handshake(client, &generated_identity()).await.is_err());
+}
+
+#[tokio::test]
+async fn daemon_trust_without_a_published_certificate_matches_the_same_account_daemon() {
+    let temp = tempfile::tempdir().unwrap();
+    let user = temp.path().join("user");
+    let system = temp.path().join("system");
+    std::fs::create_dir_all(&system).unwrap();
+    let (own, client) = {
+        let _environment = Environment::set(&[
+            ("XDG_CONFIG_HOME", user.as_os_str()),
+            ("HOME", user.as_os_str()),
+        ]);
+        let _system = SystemConfigDir::set(&system);
+        let own = RelayTlsIdentity::load_or_create().unwrap();
+        (own, daemon_client_config().unwrap())
+    };
+
+    handshake(Arc::clone(&client), &own).await.unwrap();
+    assert!(handshake(client, &generated_identity()).await.is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn published_daemon_certificate_must_be_one_administrator_controlled_block() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let user = temp.path().join("user");
+    let system = temp.path().join("system");
+    std::fs::create_dir_all(&system).unwrap();
+    std::fs::set_permissions(&system, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = system.join(DAEMON_CERTIFICATE_FILE);
+    let daemon = generated_identity();
+    let _environment = Environment::set(&[
+        ("XDG_CONFIG_HOME", user.as_os_str()),
+        ("HOME", user.as_os_str()),
+    ]);
+    let _system = SystemConfigDir::set(&system);
+    let publish = |contents: &str, mode: u32| {
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, contents).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+
+    publish(&daemon.certificate_pem(), 0o644);
+    daemon_client_config().unwrap();
+
+    publish(&daemon.certificate_pem(), 0o664);
+    let error = daemon_client_config().unwrap_err();
+    assert!(
+        error.contains("must not be writable by group or other users"),
+        "{error}"
+    );
+
+    publish(&daemon.certificate_pem(), 0o644);
+    std::fs::set_permissions(&system, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let error = daemon_client_config().unwrap_err();
+    assert!(
+        error.contains("directory of the published daemon TLS certificate"),
+        "{error}"
+    );
+    std::fs::set_permissions(&system, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let twice = format!(
+        "{}{}",
+        daemon.certificate_pem(),
+        generated_identity().certificate_pem()
+    );
+    publish(&twice, 0o644);
+    let error = daemon_client_config().unwrap_err();
+    assert!(error.contains("exactly one CERTIFICATE block"), "{error}");
+
+    publish("not a certificate", 0o644);
+    let error = daemon_client_config().unwrap_err();
+    assert!(error.contains("exactly one CERTIFICATE block"), "{error}");
+
+    publish(
+        "-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n",
+        0o644,
+    );
+    let error = daemon_client_config().unwrap_err();
+    assert!(error.contains("invalid CERTIFICATE base64"), "{error}");
+
+    // A symlink could point at a file that a user controls.
+    let elsewhere = temp.path().join("elsewhere.pem");
+    std::fs::write(&elsewhere, daemon.certificate_pem()).unwrap();
+    let _ = std::fs::remove_file(&path);
+    std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+    let error = daemon_client_config().unwrap_err();
+    assert!(error.contains("must be a regular file"), "{error}");
+}

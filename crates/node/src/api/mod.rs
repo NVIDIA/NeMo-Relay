@@ -810,6 +810,9 @@ fn build_otel_config(
     for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
         config = config.with_header_env(key, variable);
     }
+    if let Some(allow_insecure) = options.allow_insecure {
+        config = config.with_allow_insecure(allow_insecure);
+    }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
@@ -906,6 +909,9 @@ fn build_otel_log_config(
     for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
         config = config.with_header_env(key, variable);
     }
+    if let Some(allow_insecure) = options.allow_insecure {
+        config = config.with_allow_insecure(allow_insecure);
+    }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
@@ -956,6 +962,9 @@ fn build_otel_metric_config(
     }
     for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
         config = config.with_header_env(key, variable);
+    }
+    if let Some(allow_insecure) = options.allow_insecure {
+        config = config.with_allow_insecure(allow_insecure);
     }
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
@@ -1021,6 +1030,9 @@ fn build_atof_config(
                 nemo_relay::observability::atof::AtofStreamSinkConfig::new(url, transport);
             if let Some(timeout_millis) = options.timeout_millis {
                 sink = sink.with_timeout_millis(timeout_millis.into());
+            }
+            if let Some(allow_insecure) = options.allow_insecure {
+                sink = sink.with_allow_insecure(allow_insecure);
             }
             if let Some(field_name_policy) = options.field_name_policy {
                 let Some(field_name_policy) =
@@ -5586,6 +5598,8 @@ pub struct AtofExporterConfig {
     pub timeout_millis: Option<u32>,
     /// Field name policy applied before sending stream events.
     pub field_name_policy: Option<String>,
+    /// Allow `http://` or `ws://` to any host; events and configured headers travel unencrypted.
+    pub allow_insecure: Option<bool>,
 }
 
 /// Single-sink Agent Trajectory Observability Format (ATOF) exporter.
@@ -5666,6 +5680,8 @@ pub struct OpenTelemetryConfig {
     /// Header names mapped to environment variables resolved during subscriber activation.
     #[napi(ts_type = "Record<string, string>")]
     pub header_env: Option<Json>,
+    /// Allow plain HTTP to any host; data and configured headers travel unencrypted.
+    pub allow_insecure: Option<bool>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     pub resource_attributes: Option<Json>,
     /// `service.name` resource attribute. Defaults to `"unknown_service"`.
@@ -5879,6 +5895,8 @@ pub struct OpenTelemetryLogConfig {
     /// Header names mapped to environment variables resolved during subscriber activation.
     #[napi(ts_type = "Record<string, string>")]
     pub header_env: Option<Json>,
+    /// Allow plain HTTP to any host; data and configured headers travel unencrypted.
+    pub allow_insecure: Option<bool>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub resource_attributes: Option<Json>,
@@ -5978,6 +5996,8 @@ pub struct OpenTelemetryMetricConfig {
     /// Header names mapped to environment variables resolved during subscriber activation.
     #[napi(ts_type = "Record<string, string>")]
     pub header_env: Option<Json>,
+    /// Allow plain HTTP to any host; data and configured headers travel unencrypted.
+    pub allow_insecure: Option<bool>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     #[napi(ts_type = "Record<string, string>")]
     pub resource_attributes: Option<Json>,

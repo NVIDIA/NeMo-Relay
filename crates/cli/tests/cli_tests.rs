@@ -1131,6 +1131,7 @@ enum FakeBootstrapProof {
     Missing,
     Wrong,
     Valid,
+    ValidWithWrongUpgrade,
 }
 
 fn bootstrap_request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
@@ -1185,24 +1186,25 @@ fn write_test_tls_identity(bootstrap_dir: &Path) -> Arc<rustls::ServerConfig> {
 }
 
 fn run_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String>) {
-    run_fake_bootstrap_listener_with_options(proof, None, false)
+    run_fake_bootstrap_listener_with_options(proof, None, false, false)
 }
 
 fn run_fake_bootstrap_listener_with_hook_delay(
     proof: FakeBootstrapProof,
     hook_delay: Option<Duration>,
 ) -> (Output, Vec<String>) {
-    run_fake_bootstrap_listener_with_options(proof, hook_delay, false)
+    run_fake_bootstrap_listener_with_options(proof, hook_delay, false, false)
 }
 
 fn run_forward_only_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String>) {
-    run_fake_bootstrap_listener_with_options(proof, None, true)
+    run_fake_bootstrap_listener_with_options(proof, None, true, false)
 }
 
 fn run_fake_bootstrap_listener_with_options(
     proof: FakeBootstrapProof,
     hook_delay: Option<Duration>,
     forward_only: bool,
+    refuse_first_tunnel: bool,
 ) -> (Output, Vec<String>) {
     let temp = tempfile::tempdir().unwrap();
     let generation = write_active_generation(temp.path());
@@ -1221,6 +1223,7 @@ fn run_fake_bootstrap_listener_with_options(
         .join("fingerprint-hmac.key");
     let tls = write_test_tls_identity(key_path.parent().unwrap());
     let server = thread::spawn(move || {
+        let mut refuse_tunnel = refuse_first_tunnel;
         while !server_stopped.load(Ordering::Relaxed) {
             let (mut stream, _) = match listener.accept() {
                 Ok(connection) => connection,
@@ -1236,6 +1239,11 @@ fn run_fake_bootstrap_listener_with_options(
                 .unwrap();
             let request = read_http_request(&mut stream);
             server_requests.lock().unwrap().push(request.clone());
+            if refuse_tunnel && request.starts_with("GET /bootstrap/tunnel ") {
+                refuse_tunnel = false;
+                stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                continue;
+            }
             if request.starts_with("GET /healthz ") {
                 write_fake_bootstrap_health(&mut stream, &request, proof, &key_path);
                 continue;
@@ -1310,7 +1318,7 @@ fn fake_bootstrap_proof_header(
         FakeBootstrapProof::Wrong => {
             "X-NeMo-Relay-Bootstrap-Proof: hmac-sha256:0000000000000000000000000000000000000000000000000000000000000000\r\n".into()
         }
-        FakeBootstrapProof::Valid => format!(
+        FakeBootstrapProof::Valid | FakeBootstrapProof::ValidWithWrongUpgrade => format!(
             "X-NeMo-Relay-Bootstrap-Proof: {}\r\n",
             fake_bootstrap_proof(
                 &std::fs::read(key_path).unwrap(),
@@ -1373,10 +1381,15 @@ fn handle_fake_bootstrap_tunnel(
         nonce,
         stream.local_addr().unwrap(),
     );
+    let upgrade = if matches!(proof, FakeBootstrapProof::ValidWithWrongUpgrade) {
+        "unexpected-protocol"
+    } else {
+        "nemo-relay-tls"
+    };
     stream
         .write_all(
             format!(
-                "HTTP/1.1 101 Switching Protocols\r\n{proof_header}X-NeMo-Relay-Instance-Id: test-instance\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
+                "HTTP/1.1 101 Switching Protocols\r\n{proof_header}X-NeMo-Relay-Instance-Id: test-instance\r\nConnection: upgrade\r\nUpgrade: {upgrade}\r\nContent-Length: 0\r\n\r\n"
             )
             .as_bytes(),
         )
@@ -5260,6 +5273,43 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
 }
 
 #[test]
+fn cli_hook_forward_preserves_large_utf8_payload_through_verified_tls() {
+    let temp = tempfile::tempdir().unwrap();
+    let (server_url, received) =
+        spawn_verified_hook_server(temp.path(), 200, r#"{"continue":true}"#);
+    let payload = serde_json::json!({
+        "hook_event_name": "sessionStart",
+        "context": "\u{03c0}".repeat(32 * 1024),
+    })
+    .to_string();
+    let mut child = Command::new(gateway_bin())
+        .args(["hook-forward", "codex", "--fail-closed"])
+        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let output = wait_child_with_output(child);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(request.split_once("\r\n\r\n").unwrap().1, payload);
+    assert_eq!(output.stdout, b"{\"continue\":true}\n");
+}
+
+#[test]
 fn cli_hook_forward_debug_records_are_safe_and_do_not_include_hook_details() {
     let temp = tempfile::tempdir().unwrap();
     let (config_path, log_path) = write_debug_jsonl_logging_config(temp.path());
@@ -5353,15 +5403,50 @@ fn cli_forward_only_unfenced_hook_posts_to_an_authenticated_gateway_without_reco
             .iter()
             .any(|request| request.starts_with("POST /hooks/codex "))
     );
+    assert_eq!(requests.len(), 3, "healthy forwarding uses one connection");
+    assert!(requests[0].starts_with("GET /bootstrap/tunnel "));
+    assert!(requests[1].starts_with("GET /healthz "));
+    assert!(requests[2].starts_with("POST /hooks/codex "));
 }
 
 #[test]
-fn cli_forward_only_unfenced_hook_rejects_a_foreign_listener_before_posting() {
-    let (output, requests) = run_forward_only_fake_bootstrap_listener(FakeBootstrapProof::Missing);
+fn cli_forward_only_preserves_readiness_fallback_before_authentication() {
+    let (output, requests) =
+        run_fake_bootstrap_listener_with_options(FakeBootstrapProof::Valid, None, true, true);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(requests.len(), 5);
+    assert!(requests[0].starts_with("GET /bootstrap/tunnel "));
+    assert!(requests[1].starts_with("GET /healthz "));
+    assert!(requests[2].starts_with("GET /bootstrap/tunnel "));
+    assert!(requests[3].starts_with("GET /healthz "));
+    assert!(requests[4].starts_with("POST /hooks/codex "));
+}
 
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("not a compatible"));
-    assert!(requests.iter().all(|request| !request.starts_with("POST ")));
+#[test]
+fn cli_forward_only_rejects_invalid_tunnel_responses_without_readiness_fallback() {
+    for proof in [
+        FakeBootstrapProof::Missing,
+        FakeBootstrapProof::Wrong,
+        FakeBootstrapProof::ValidWithWrongUpgrade,
+    ] {
+        let (output, requests) = run_forward_only_fake_bootstrap_listener(proof);
+
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("gateway did not establish an authenticated Relay TLS tunnel")
+        );
+        assert_eq!(
+            requests.len(),
+            1,
+            "invalid tunnel must not retry: {requests:#?}"
+        );
+        assert!(requests[0].starts_with("GET /bootstrap/tunnel "));
+    }
 }
 
 #[test]
@@ -5464,6 +5549,11 @@ fn cli_forward_only_never_reconnects_payload_after_authenticated_connection_clos
 
     assert_eq!(authenticated_phases, 2);
     assert!(!output.status.success());
+    assert_eq!(
+        requests.len(),
+        1,
+        "authenticated failure must not reconnect: {requests:#?}"
+    );
     assert_eq!(
         requests
             .iter()

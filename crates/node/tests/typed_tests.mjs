@@ -29,6 +29,11 @@ async function* emitHelloWorldStream() {
   };
 }
 
+async function* failingSource() {
+  yield { token: 'first' };
+  throw new RangeError('typed source boom');
+}
+
 async function* emitEnvelopeStream() {
   yield 'alpha';
   yield 'beta';
@@ -841,11 +846,6 @@ describe('typedLlmStreamExecute', () => {
 
   it('propagates iterator errors to the consumer instead of ending the stream', async () => {
     const passthrough = new JsonPassthrough();
-    async function* failingSource() {
-      yield { token: 'first' };
-      throw new RangeError('typed source boom');
-    }
-
     const stream = await typedLlmStreamExecute(
       'stream_iterator_error',
       makeNative(),

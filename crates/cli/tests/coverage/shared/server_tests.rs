@@ -699,119 +699,6 @@ async fn codex_hook_keeps_codex_response_shape() {
 }
 
 #[tokio::test]
-async fn codex_permission_request_without_tool_call_id_requires_one_matching_active_tool() {
-    let app = router(test_config());
-    macro_rules! send_codex_hook {
-        ($payload:expr) => {{
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/hooks/codex")
-                        .header("content-type", "application/json")
-                        .body(Body::from($payload.to_string()))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            serde_json::from_slice::<Value>(
-                &response.into_body().collect().await.unwrap().to_bytes(),
-            )
-            .unwrap()
-        }};
-    }
-
-    // Codex's documented shapes: PermissionRequest carries an approval `description` that the
-    // matching PreToolUse does not.
-    let permission = |session_id, command| {
-        json!({
-            "session_id": session_id,
-            "hook_event_name": "PermissionRequest",
-            "tool_name": "Bash",
-            "tool_input": {"command": command, "description": "needs approval"}
-        })
-    };
-    let pre_tool = |session_id, command| {
-        json!({
-            "session_id": session_id,
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": command}
-        })
-    };
-    let assert_denied = |body: Value| {
-        assert_eq!(body.as_object().map(|object| object.len()), Some(1));
-        let output = &body["hookSpecificOutput"];
-        assert_eq!(output["hookEventName"], json!("PermissionRequest"));
-        assert_eq!(output["decision"]["behavior"], json!("deny"));
-        assert!(
-            output["decision"]["message"]
-                .as_str()
-                .is_some_and(|message| !message.is_empty())
-        );
-    };
-
-    let single_match = "codex-permission-single-match";
-    for payload in [
-        json!({"session_id": single_match, "hook_event_name": "SessionStart"}),
-        pre_tool(single_match, "pwd"),
-        permission(single_match, "pwd"),
-    ] {
-        assert_eq!(send_codex_hook!(payload), json!({}));
-    }
-
-    let no_match = "codex-permission-no-match";
-    assert_eq!(
-        send_codex_hook!(json!({"session_id": no_match, "hook_event_name": "SessionStart"})),
-        json!({})
-    );
-    assert_eq!(send_codex_hook!(pre_tool(no_match, "pwd")), json!({}));
-    assert_denied(send_codex_hook!(permission(no_match, "whoami")));
-
-    let ambiguous = "codex-permission-ambiguous";
-    assert_eq!(
-        send_codex_hook!(json!({"session_id": ambiguous, "hook_event_name": "SessionStart"})),
-        json!({})
-    );
-    assert_eq!(send_codex_hook!(pre_tool(ambiguous, "pwd")), json!({}));
-    assert_eq!(send_codex_hook!(pre_tool(ambiguous, "pwd")), json!({}));
-    assert_denied(send_codex_hook!(permission(ambiguous, "pwd")));
-
-    let session_one = "codex-permission-session-one";
-    let session_two = "codex-permission-session-two";
-    assert_eq!(
-        send_codex_hook!(json!({"session_id": session_one, "hook_event_name": "SessionStart"})),
-        json!({})
-    );
-    assert_eq!(
-        send_codex_hook!(json!({"session_id": session_two, "hook_event_name": "SessionStart"})),
-        json!({})
-    );
-    assert_eq!(send_codex_hook!(pre_tool(session_two, "pwd")), json!({}));
-    assert_denied(send_codex_hook!(permission(session_one, "pwd")));
-
-    // MCP tools forward their real arguments, so a `description` argument must still match.
-    let mcp = "codex-permission-mcp-description";
-    let mcp_tool = |event| {
-        json!({
-            "session_id": mcp,
-            "hook_event_name": event,
-            "tool_name": "mcp__docs__create_page",
-            "tool_input": {"title": "Notes", "description": "page summary"}
-        })
-    };
-    for payload in [
-        json!({"session_id": mcp, "hook_event_name": "SessionStart"}),
-        mcp_tool("PreToolUse"),
-        mcp_tool("PermissionRequest"),
-    ] {
-        assert_eq!(send_codex_hook!(payload), json!({}));
-    }
-}
-
-#[tokio::test]
 async fn hook_operational_records_derive_session_tags_from_payloads_and_headers() {
     let app = router(test_config());
     let operation_id = "018f0f3f-3f7a-7b72-9d0d-e0d8ced91d8b";
@@ -3299,211 +3186,6 @@ async fn claude_code_hook_returns_continue_shape() {
 }
 
 #[tokio::test]
-async fn gateway_permission_requests_emit_policy_marks() {
-    const SUBSCRIBER: &str = "gateway-permission-audit";
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = deregister_subscriber(SUBSCRIBER);
-    let app = router(test_config());
-    let captured = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
-    let events = Arc::clone(&captured);
-    register_subscriber(
-        SUBSCRIBER,
-        Arc::new(move |event| {
-            if event
-                .metadata()
-                .and_then(|metadata| metadata.get("session_id"))
-                .or_else(|| event.data().and_then(|data| data.get("session_id")))
-                .and_then(Value::as_str)
-                .is_some_and(|session| session.starts_with("gateway-permission-audit"))
-                && matches!(
-                    event.name(),
-                    "hook_mark" | "nemo_relay.permission.policy_decision"
-                )
-            {
-                events.lock().unwrap().push(json!({
-                    "name": event.name(),
-                    "data": event.data(),
-                    "metadata": event.metadata(),
-                }));
-            }
-        }),
-    )
-    .unwrap();
-    let _subscriber_cleanup = SubscriberCleanup(SUBSCRIBER);
-
-    let session_id = "gateway-permission-audit-codex";
-    for event_name in ["PreToolUse", "PermissionRequest"] {
-        let mut payload = json!({
-            "session_id": session_id,
-            "hook_event_name": event_name,
-            "permission_mode": "default",
-            "tool_use_id": "audit-tool-1",
-            "tool_name": "Bash",
-            "tool_input": {"command": "pwd"},
-        });
-        if event_name == "PermissionRequest" {
-            payload.as_object_mut().unwrap().remove("tool_use_id");
-        }
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post("/hooks/codex")
-                    .header("content-type", "application/json")
-                    .body(Body::from(payload.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body: Value =
-            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
-                .unwrap();
-        if event_name == "PermissionRequest" {
-            assert_eq!(body, json!({}));
-        }
-    }
-    flush_subscribers().unwrap();
-    let events = captured.lock().unwrap();
-    let marks: Vec<_> = events
-        .iter()
-        .filter(|event| {
-            event["name"] == "nemo_relay.permission.policy_decision"
-                && event["metadata"]["session_id"] == session_id
-        })
-        .collect();
-    assert_eq!(marks.len(), 1);
-    assert!(marks[0]["data"].get("decision").is_none());
-    assert_eq!(marks[0]["data"]["policy_outcome"], "pass");
-    assert_eq!(marks[0]["data"]["decision_source"], "nemo_relay");
-    assert_eq!(marks[0]["data"]["tool_call_id"], "audit-tool-1");
-    assert_eq!(marks[0]["data"]["harness_permission_mode"], "default");
-    assert!(events.iter().any(|event| {
-        event["name"] == "hook_mark"
-            && event["data"]["session_id"] == session_id
-            && event["data"]["permission_mode"] == "default"
-    }));
-    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
-}
-
-#[tokio::test]
-async fn claude_permission_request_allows_an_exact_active_tool() {
-    let app = router(test_config());
-    let pre_tool = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/hooks/claude-code")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "session_id": "claude-permission",
-                        "hook_event_name": "PreToolUse",
-                        "tool_use_id": "tool-1",
-                        "tool_name": "Read",
-                        "tool_input": {"file_path": "README.md"}
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(pre_tool.status(), StatusCode::OK);
-    let bytes = pre_tool.into_body().collect().await.unwrap().to_bytes();
-    let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(body, json!({"continue": true}));
-
-    let permission = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/hooks/claude-code")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "session_id": "claude-permission",
-                        "hook_event_name": "PermissionRequest",
-                        "tool_name": "Read",
-                        "tool_input": {"file_path": "README.md"}
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(permission.status(), StatusCode::OK);
-    let bytes = permission.into_body().collect().await.unwrap().to_bytes();
-    let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        body["hookSpecificOutput"]["hookEventName"],
-        json!("PermissionRequest")
-    );
-    assert_eq!(
-        body["hookSpecificOutput"]["decision"]["behavior"],
-        json!("allow")
-    );
-
-    let second_pre_tool = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/hooks/claude-code")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "session_id": "claude-permission",
-                        "hook_event_name": "PreToolUse",
-                        "tool_use_id": "tool-2",
-                        "tool_name": "Read",
-                        "tool_input": {"file_path": "README.md"}
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(second_pre_tool.status(), StatusCode::OK);
-
-    let ambiguous = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/hooks/claude-code")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "session_id": "claude-permission",
-                        "hook_event_name": "PermissionRequest",
-                        "tool_name": "Read",
-                        "tool_input": {"file_path": "README.md"}
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(ambiguous.status(), StatusCode::OK);
-    let bytes = ambiguous.into_body().collect().await.unwrap().to_bytes();
-    let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        body["hookSpecificOutput"]["decision"]["behavior"],
-        json!("deny")
-    );
-    assert!(
-        body["hookSpecificOutput"]["decision"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("does not match")
-    );
-}
-
-#[tokio::test]
 async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = deregister_tool_conditional_execution_guardrail("cli-pre-tool-blocker");
@@ -3520,36 +3202,38 @@ async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
     .unwrap();
     let _cleanup = ToolGuardrailCleanup("cli-pre-tool-blocker");
 
-    let app = router(test_config());
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/hooks/claude-code")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "session_id": "guardrail-session",
-                        "hook_event_name": "PreToolUse",
-                        "tool_use_id": "tool-1",
-                        "tool_name": BLOCKED_TEST_TOOL,
-                        "tool_input": { "command": "rm -rf /tmp/demo" }
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    for path in ["/hooks/claude-code", "/hooks/codex"] {
+        let app = router(test_config());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "session_id": "guardrail-session",
+                            "hook_event_name": "PreToolUse",
+                            "tool_use_id": "tool-1",
+                            "tool_name": BLOCKED_TEST_TOOL,
+                            "tool_input": { "command": "rm -rf /tmp/demo" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        body["error"]["type"],
-        json!("nemo_relay_guardrail_rejected")
-    );
-    assert_eq!(body["error"]["reason"], json!("blocked by policy"));
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body["error"]["type"],
+            json!("nemo_relay_guardrail_rejected")
+        );
+        assert_eq!(body["error"]["reason"], json!("blocked by policy"));
+    }
 }
 
 // pi's extension gates a tool call on this endpoint's verdict, so the 403 shape
@@ -7479,4 +7163,155 @@ async fn unmanaged_routes_forward_only_client_credentials() {
         }
         task.abort();
     }
+}
+
+#[tokio::test]
+async fn gateway_reuses_unchanged_wire_bodies_and_reencodes_execution_edits() {
+    const NAME: &str = "gateway-wire-body-reuse";
+    let _request_cleanup = RequestInterceptCleanup(NAME);
+    let _execution_cleanup = LlmExecutionInterceptCleanup(NAME);
+    let _stream_cleanup = LlmStreamExecutionInterceptCleanup(NAME);
+    register_llm_request_intercept(
+        NAME,
+        1,
+        false,
+        Arc::new(|_, mut request, annotated| {
+            Box::pin(async move {
+                if request.headers.contains_key("x-wire-body-reuse") {
+                    request
+                        .headers
+                        .insert("x-body-header-edit".into(), json!("applied"));
+                    request
+                        .headers
+                        .insert("content-encoding".into(), json!("gzip"));
+                }
+                Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            })
+        }),
+    )
+    .unwrap();
+    register_llm_execution_intercept(
+        NAME,
+        1,
+        Arc::new(|_, mut request, _, next| {
+            Box::pin(async move {
+                if request
+                    .headers
+                    .get("x-wire-body-edit")
+                    .and_then(Value::as_str)
+                    == Some("yes")
+                {
+                    request.content["input"] = json!("edited during execution");
+                }
+                next(request).await
+            })
+        }),
+    )
+    .unwrap();
+    register_llm_stream_execution_intercept(
+        NAME,
+        1,
+        Arc::new(|_, mut request, _, next| {
+            Box::pin(async move {
+                if request
+                    .headers
+                    .get("x-wire-body-edit")
+                    .and_then(Value::as_str)
+                    == Some("yes")
+                {
+                    request.content["input"] = json!("edited during execution");
+                }
+                next(request).await
+            })
+        }),
+    )
+    .unwrap();
+
+    type Captured = Arc<Mutex<Vec<(Bytes, HeaderMap)>>>;
+    async fn provider(State(captured): State<Captured>, request: Request<Body>) -> Response {
+        let headers = request.headers().clone();
+        let body = request.into_body().collect().await.unwrap().to_bytes();
+        let decoded = if headers.get(header::CONTENT_ENCODING).is_some() {
+            zstd::stream::decode_all(body.as_ref()).unwrap()
+        } else {
+            body.to_vec()
+        };
+        let payload: Value = serde_json::from_slice(&decoded).unwrap();
+        captured.lock().unwrap().push((body, headers));
+        let response =
+            json!({"id": "resp_body", "model": "gpt-test", "status": "completed", "output": []});
+        if payload["stream"] == true {
+            (
+                [(header::CONTENT_TYPE, "text/event-stream")],
+                format!(
+                    "data: {}\n\n",
+                    json!({"type": "response.completed", "response": response})
+                ),
+            )
+                .into_response()
+        } else {
+            Json(response).into_response()
+        }
+    }
+    let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+    let upstream_app = Router::new()
+        .route("/v1/responses", post(provider))
+        .with_state(captured.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = TestServer {
+        url: format!("http://{address}"),
+        handle: tokio::spawn(async move { axum::serve(listener, upstream_app).await.unwrap() }),
+    };
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router(config);
+    for streaming in [false, true] {
+        for compressed in [false, true] {
+            for edit_body in [false, true] {
+                let raw = format!(
+                    r#"{{ "model" : "gpt-test", "input" : "original", "stream" : {streaming} }}"#
+                );
+                let wire = if compressed {
+                    zstd::stream::encode_all(raw.as_bytes(), 1).unwrap()
+                } else {
+                    raw.into_bytes()
+                };
+                let mut builder = Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("x-wire-body-reuse", "yes");
+                if compressed {
+                    builder = builder.header(header::CONTENT_ENCODING, "zstd");
+                }
+                if edit_body {
+                    builder = builder.header("x-wire-body-edit", "yes");
+                }
+                let response = app
+                    .clone()
+                    .oneshot(builder.body(Body::from(wire.clone())).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                response.into_body().collect().await.unwrap();
+                let (sent, headers) = captured.lock().unwrap().last().unwrap().clone();
+                assert_eq!(headers["x-body-header-edit"], "applied");
+                if edit_body {
+                    assert!(!headers.contains_key(header::CONTENT_ENCODING));
+                    let payload: Value = serde_json::from_slice(&sent).unwrap();
+                    assert_eq!(payload["input"], "edited during execution");
+                } else {
+                    assert_eq!(sent.as_ref(), wire);
+                    assert_eq!(
+                        headers
+                            .get(header::CONTENT_ENCODING)
+                            .map(|value| value.to_str().unwrap()),
+                        compressed.then_some("zstd")
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(captured.lock().unwrap().len(), 8);
 }

@@ -66,6 +66,24 @@ def _llm_event(events: list[Event], name: str, scope_category: str) -> ScopeEven
 
 
 class TestLLM:
+    @pytest.mark.parametrize("failed", [False, True])
+    def test_manual_call_end_status(self, subscribed_events: list[Event], failed: bool) -> None:
+        metadata: dict[str, Json] = {"request_id": "request-123"}
+        if failed:
+            metadata.update(
+                {
+                    "otel.status_code": "ERROR",
+                    "otel.status_description": "provider timed out",
+                    "error.type": "TimeoutError",
+                }
+            )
+        handle = llm.call("manual_status", make_request())
+        llm.call_end(handle, None if failed else {"text": "hello"}, metadata=metadata)
+        subscribers.flush()
+
+        end = _llm_event(subscribed_events, "manual_status", "end")
+        assert end.metadata == {**metadata, "otel.status_code": "ERROR" if failed else "OK"}
+
     def test_call_and_call_end(self) -> None:
         request = make_request()
         handle = llm.call("my_llm", request)

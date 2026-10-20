@@ -113,6 +113,32 @@ function unprintableError() {
 // ===========================================================================
 
 describe('LLM lifecycle', () => {
+  it('manual llm end preserves explicit errors and defaults to OK', async () => {
+    const events = [];
+    registerSubscriber('manual_llm_status', (event) => events.push(event));
+    try {
+      for (const failed of [false, true]) {
+        const name = failed ? 'manual_llm_error' : 'manual_llm_ok';
+        const metadata = { request_id: 'request-123' };
+        if (failed) {
+          Object.assign(metadata, {
+            'otel.status_code': 'ERROR',
+            'otel.status_description': 'provider timed out',
+            'error.type': 'TimeoutError',
+          });
+        }
+        const handle = llmCall(name, makeNative());
+        llmCallEnd(handle, failed ? null : { text: 'hello' }, null, metadata);
+        await flushSubscriberCallbacks();
+        const end = events.find((event) => event.name === name && event.scope_category === 'end');
+        assert.ok(end);
+        assert.deepEqual(end.metadata, { ...metadata, 'otel.status_code': failed ? 'ERROR' : 'OK' });
+      }
+    } finally {
+      deregisterSubscriber('manual_llm_status');
+    }
+  });
+
   it('llm call and end', () => {
     const native = makeNative();
     const handle = llmCall('test_llm', native, null, null, null, null, null);
@@ -198,9 +224,9 @@ describe('LLM execute', () => {
     // startup stack than Python, so use a 512 KiB worker stack here. This limits
     // bridge construction on the JavaScript thread; native polling runs on Tokio
     // threads and has separate coverage in api/llm_stack_tests.rs.
-    const workerSource = `
+    const workerSource = String.raw`
       const { writeSync } = require('node:fs');
-      const stage = value => writeSync(2, 'small-stack worker: ' + value + '\\n');
+      const stage = value => writeSync(2, 'small-stack worker: ' + value + '\n');
       stage('JavaScript startup');
       const assert = require('node:assert/strict');
       const { parentPort } = require('node:worker_threads');
@@ -2317,9 +2343,9 @@ describe('LLM intercepts', () => {
     );
     await assert.rejects(
       () =>
-        llmStreamCallExecute('provider_reject_stream_llm', makeNative(), async () =>
-          Promise.reject(new Error('provider rejected')),
-        ),
+        llmStreamCallExecute('provider_reject_stream_llm', makeNative(), async () => {
+          throw new Error('provider rejected');
+        }),
       /provider rejected/,
     );
     await assert.rejects(
@@ -2329,7 +2355,7 @@ describe('LLM intercepts', () => {
     await assert.rejects(
       () =>
         llmStreamCallExecute('provider_empty_message_stream_llm', makeNative(), () => {
-          throw new Error();
+          throw new Error(); // NOSONAR javascript:S7722: verify the fallback for a provider error with no message.
         }),
       /unknown error/,
     );
@@ -2477,7 +2503,7 @@ describe('LLM intercepts', () => {
           } finally {
             await new Promise((resolve) => setTimeout(resolve, 100));
             cleaned = true;
-            throw new Error('downstream cleanup failure');
+            throw new Error('downstream cleanup failure'); // NOSONAR javascript:S1143: deliberately fail generator cleanup to test error propagation.
           }
         },
       );
@@ -2499,7 +2525,7 @@ describe('LLM intercepts', () => {
         try {
           yield 1n;
         } finally {
-          throw new Error('cleanup boom');
+          throw new Error('cleanup boom'); // NOSONAR javascript:S1143: deliberately fail generator cleanup to test error propagation.
         }
       });
       await assert.rejects(
@@ -2527,7 +2553,7 @@ describe('LLM intercepts', () => {
           yield { token: 'first' };
           await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
         } finally {
-          throw new Error('cleanup boom');
+          throw new Error('cleanup boom'); // NOSONAR javascript:S1143: deliberately fail generator cleanup to test error propagation.
         }
       },
     );
@@ -2592,7 +2618,7 @@ describe('LLM intercepts', () => {
                 await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
               }
             } finally {
-              throw new Error('cleanup boom');
+              throw new Error('cleanup boom'); // NOSONAR javascript:S1143: deliberately fail generator cleanup to test error propagation.
             }
           },
           async () => {
@@ -3001,7 +3027,7 @@ describe('LLM intercepts', () => {
   });
 
   it('a collector may call next() on its own stream', async () => {
-    let inner;
+    let inner = Promise.resolve(null);
     const stream = await llmStreamCallExecute(
       'reentrant_next_llm',
       makeNative(),
@@ -3094,7 +3120,7 @@ describe('LLM intercepts', () => {
               yield { token: 'first' };
               await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
             } finally {
-              throw new Error('cleanup boom');
+              throw new Error('cleanup boom'); // NOSONAR javascript:S1143: deliberately fail generator cleanup to test error propagation.
             }
           },
           null,

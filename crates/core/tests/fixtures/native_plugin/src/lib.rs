@@ -328,51 +328,7 @@ impl NativePlugin for FixtureNativePlugin {
                 }
             }
         })?;
-        ctx.register_llm_stream_execution_intercept("fixture_llm_stream_execution", 0, {
-            let runtime = runtime.clone();
-            move |_name, request, _context, next| {
-                let runtime = runtime.clone();
-                async move {
-                    if request.content["native_http_error"].as_bool() == Some(true) {
-                        return Err(nemo_relay_plugin::http_error_message(
-                            403,
-                            "provider denied access",
-                        )?);
-                    }
-                    let inspect_snapshot =
-                        request.content["inspect_scope_stack"].as_bool() == Some(true);
-                    let stream = next
-                        .call(mark_llm_request(
-                            request,
-                            "native_plugin_llm_stream_execution_request",
-                        ))
-                        .await?;
-                    let snapshot = if inspect_snapshot {
-                        tokio::task::yield_now().await;
-                        serde_json::to_value(runtime.current_scope_stack_snapshot()?)
-                            .map_err(|error| error.to_string())?
-                    } else {
-                        Json::Null
-                    };
-                    let stream: LlmJsonAsyncStream = Box::pin(stream.then(move |chunk| {
-                        let runtime = runtime.clone();
-                        let snapshot = snapshot.clone();
-                        async move {
-                            let mut chunk = mark_json(chunk?, "native_plugin_llm_stream_execution");
-                            if inspect_snapshot {
-                                tokio::task::yield_now().await;
-                                chunk["scope_stack_snapshot"] = snapshot;
-                                chunk["scope_stack_snapshot_polled"] =
-                                    serde_json::to_value(runtime.current_scope_stack_snapshot()?)
-                                        .map_err(|error| error.to_string())?;
-                            }
-                            Ok(chunk)
-                        }
-                    }));
-                    Ok(stream)
-                }
-            }
-        })?;
+        register_fixture_llm_stream_execution(ctx, &runtime)?;
         ctx.register_llm_execution_intercept("fixture_llm_execution_cancellation", -1, {
             let runtime = runtime.clone();
             move |name, request, _context, next| {
@@ -418,6 +374,57 @@ impl NativePlugin for FixtureNativePlugin {
 
         Ok(())
     }
+}
+
+fn register_fixture_llm_stream_execution(
+    ctx: &mut PluginContext<'_>,
+    runtime: &PluginRuntime,
+) -> nemo_relay_plugin::Result<()> {
+    ctx.register_llm_stream_execution_intercept("fixture_llm_stream_execution", 0, {
+        let runtime = runtime.clone();
+        move |_name, request, _context, next| {
+            let runtime = runtime.clone();
+            async move {
+                if request.content["native_http_error"].as_bool() == Some(true) {
+                    return Err(nemo_relay_plugin::http_error_message(
+                        403,
+                        "provider denied access",
+                    )?);
+                }
+                let inspect_snapshot =
+                    request.content["inspect_scope_stack"].as_bool() == Some(true);
+                let stream = next
+                    .call(mark_llm_request(
+                        request,
+                        "native_plugin_llm_stream_execution_request",
+                    ))
+                    .await?;
+                let snapshot = if inspect_snapshot {
+                    tokio::task::yield_now().await;
+                    serde_json::to_value(runtime.current_scope_stack_snapshot()?)
+                        .map_err(|error| error.to_string())?
+                } else {
+                    Json::Null
+                };
+                let stream: LlmJsonAsyncStream = Box::pin(stream.then(move |chunk| {
+                    let runtime = runtime.clone();
+                    let snapshot = snapshot.clone();
+                    async move {
+                        let mut chunk = mark_json(chunk?, "native_plugin_llm_stream_execution");
+                        if inspect_snapshot {
+                            tokio::task::yield_now().await;
+                            chunk["scope_stack_snapshot"] = snapshot;
+                            chunk["scope_stack_snapshot_polled"] =
+                                serde_json::to_value(runtime.current_scope_stack_snapshot()?)
+                                    .map_err(|error| error.to_string())?;
+                        }
+                        Ok(chunk)
+                    }
+                }));
+                Ok(stream)
+            }
+        }
+    })
 }
 
 fn register_fixture_tool_execution(

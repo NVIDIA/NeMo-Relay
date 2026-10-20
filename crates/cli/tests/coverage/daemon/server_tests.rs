@@ -1184,7 +1184,7 @@ async fn disconnected_worker_requests_log_pass_through_without_changing_response
         for (path, body) in [
             (
                 "/hooks/claude-code",
-                r#"{"session_id":"session","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"pwd"}}"#,
+                r#"{"session_id":"session","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"pwd"}}"#,
             ),
             ("/hooks/claude-code", "invalid hook payload"),
             ("/v1/responses", "{}"),
@@ -4659,4 +4659,53 @@ async fn unmanaged_routes_forward_only_client_credentials() {
         }
         task.abort();
     }
+}
+
+#[tokio::test]
+async fn daemon_plain_listener_preserves_peer_identity_and_drains_http2_connections() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/upload",
+        axum::routing::post(move |request: Request<Body>| async move {
+            let peer = request
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .unwrap()
+                .0;
+            let local = request
+                .extensions()
+                .get::<socket::LocalAddress>()
+                .unwrap()
+                .0;
+            assert!(peer.ip().is_loopback());
+            assert_eq!(local, address);
+            Response::new(request.into_body())
+        }),
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(serve_plain(listener, app, async {
+        let _ = stopped.await;
+    }));
+    let client = reqwest::Client::builder()
+        .http2_prior_knowledge()
+        .build()
+        .unwrap();
+    let response = client
+        .post(format!("http://{address}/upload"))
+        .body(vec![42u8; 1024 * 1024])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.version(), http::Version::HTTP_2);
+    stop.send(()).unwrap();
+    assert_eq!(
+        response.bytes().await.unwrap().as_ref(),
+        vec![42u8; 1024 * 1024].as_slice()
+    );
+    tokio::time::timeout(Duration::from_secs(3), server)
+        .await
+        .expect("listener should drain admitted response")
+        .unwrap()
+        .unwrap();
 }

@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
-use nemo_relay::api::llm::{LlmCallParams, llm_call};
+use nemo_relay::api::llm::{
+    LlmCallParams, LlmStreamCallExecuteParams, llm_call, llm_stream_call_execute,
+};
 use nemo_relay::api::optimization::LlmOptimizationRecorder;
 use nemo_relay::api::registry::{
     deregister_llm_sanitize_response_guardrail, register_llm_sanitize_response_guardrail,
@@ -23,7 +25,8 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
 use nemo_relay::api::runtime::{
-    LlmCollector, LlmFinalizer, LlmJsonStream, LlmStreamInner, NemoRelayContextState,
+    LlmBorrowedCollectorFn, LlmCollector, LlmFinalizer, LlmJsonStream, LlmStreamInner,
+    NemoRelayContextState,
 };
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
@@ -149,6 +152,331 @@ impl Drop for DropTrackingStream {
 fn captured_snapshot<T: Clone>(items: &Arc<Mutex<Vec<T>>>) -> Vec<T> {
     flush_subscribers().unwrap();
     items.lock().unwrap().clone()
+}
+
+#[cfg(feature = "__internal-gateway")]
+#[tokio::test]
+async fn response_completion_borrows_raw_aggregate_before_sanitization_and_publication() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    for (sanitize, asynchronous) in [(false, false), (true, false), (false, true), (true, true)] {
+        reset_global();
+        let response = json!({"text": "private final response"});
+        let pointer = response["text"].as_str().unwrap().as_ptr() as usize;
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let observed = Arc::new(AtomicUsize::new(0));
+        let published = Arc::new(AtomicUsize::new(0));
+        let finalized = Arc::new(AtomicUsize::new(0));
+        if sanitize {
+            nemo_relay::api::registry::register_llm_sanitize_response_guardrail(
+                "observer-order",
+                1,
+                Arc::new({
+                    let observed = observed.clone();
+                    move |mut response, _| {
+                        assert_eq!(observed.load(Ordering::SeqCst), 1);
+                        assert_eq!(
+                            response["text"].as_str().unwrap().as_ptr() as usize,
+                            pointer
+                        );
+                        Box::pin(async move {
+                            response["text"] = json!("redacted");
+                            Ok(Some(response))
+                        })
+                    }
+                }),
+            )
+            .unwrap();
+        }
+        register_subscriber(
+            "observer-publication",
+            Arc::new({
+                let observed = observed.clone();
+                let published = published.clone();
+                move |event| {
+                    if is_llm_end(event) {
+                        assert_eq!(observed.load(Ordering::SeqCst), 1);
+                        let text = event.data().unwrap()["text"].as_str().unwrap();
+                        if sanitize {
+                            assert_eq!(text, "redacted");
+                        } else {
+                            assert_eq!(text.as_ptr() as usize, pointer);
+                        }
+                        published.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }),
+        )
+        .unwrap();
+        let observer: nemo_relay::api::llm::gateway::ResponseCompletionFn = Box::new({
+            let started = started.clone();
+            let release = release.clone();
+            move |response| {
+                Box::pin(async move {
+                    assert_eq!(
+                        response["text"].as_str().unwrap().as_ptr() as usize,
+                        pointer
+                    );
+                    started.notify_one();
+                    release.notified().await;
+                    assert_eq!(response["text"], "private final response");
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            }
+        });
+        let finalizer_calls = finalized.clone();
+        let finalize = move || {
+            finalizer_calls.fetch_add(1, Ordering::SeqCst);
+            response
+        };
+        let finalizer = if asynchronous {
+            LlmFinalizer::new_async(move || async move {
+                tokio::task::yield_now().await;
+                Ok(finalize())
+            })
+        } else {
+            finalize.into()
+        };
+        let mut stream = nemo_relay::api::llm::gateway::execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("observer-order")
+                .request(LlmRequest {
+                    headers: Default::default(),
+                    content: json!({}),
+                })
+                .func(Arc::new(|_| Box::pin(async { Ok(make_stream(vec![])) })))
+                .collector(Box::new(|_| Ok(())))
+                .finalizer(finalizer)
+                .build(),
+            observer,
+        )
+        .await
+        .unwrap();
+        assert!(stream.next().await.is_none());
+        assert_eq!(finalized.load(Ordering::SeqCst), 1);
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        assert_eq!(published.load(Ordering::SeqCst), 0);
+        release.notify_one();
+        drop(stream);
+        flush_subscribers().unwrap();
+        assert_eq!(published.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(feature = "__internal-gateway")]
+#[tokio::test]
+async fn response_completion_termination_and_failures_preserve_single_end_publication() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    for termination in ["complete", "error", "close", "drop"] {
+        for outcome in ["ok", "error", "creation-panic", "future-panic"] {
+            reset_global();
+            let observed = Arc::new(AtomicUsize::new(0));
+            let finalized = Arc::new(AtomicUsize::new(0));
+            let published = Arc::new(AtomicUsize::new(0));
+            register_subscriber(
+                "observer-failures",
+                Arc::new({
+                    let published = published.clone();
+                    move |event| {
+                        if is_llm_end(event) {
+                            assert_eq!(event.data(), Some(&json!({"text": "final"})));
+                            published.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }),
+            )
+            .unwrap();
+            let observer_calls = observed.clone();
+            let observer: nemo_relay::api::llm::gateway::ResponseCompletionFn =
+                Box::new(move |_| {
+                    observer_calls.fetch_add(1, Ordering::SeqCst);
+                    assert_ne!(
+                        outcome, "creation-panic",
+                        "expected observer creation panic"
+                    );
+                    Box::pin(async move {
+                        tokio::task::yield_now().await;
+                        assert_ne!(outcome, "future-panic", "expected observer future panic");
+                        if outcome == "error" {
+                            Err(FlowError::Internal("expected observer error".into()))
+                        } else {
+                            Ok(())
+                        }
+                    })
+                });
+            let finalizer_calls = finalized.clone();
+            let mut stream = nemo_relay::api::llm::gateway::execute(
+                LlmStreamCallExecuteParams::builder()
+                    .name("observer-failures")
+                    .request(LlmRequest {
+                        headers: Default::default(),
+                        content: json!({}),
+                    })
+                    .func(Arc::new(move |_| {
+                        Box::pin(async move {
+                            Ok(match termination {
+                                "complete" => make_stream(vec![]),
+                                "error" => {
+                                    make_stream(vec![Err(FlowError::Internal("upstream".into()))])
+                                }
+                                _ => LlmJsonStream::new(tokio_stream::pending()),
+                            })
+                        })
+                    }))
+                    .collector(Box::new(|_| Ok(())))
+                    .finalizer(Box::new(move || {
+                        finalizer_calls.fetch_add(1, Ordering::SeqCst);
+                        json!({"text": "final"})
+                    }))
+                    .build(),
+                observer,
+            )
+            .await
+            .unwrap();
+            match termination {
+                "complete" => assert!(stream.next().await.is_none()),
+                "error" => assert!(stream.next().await.unwrap().is_err()),
+                "close" => {
+                    stream.close().await.unwrap();
+                    stream.close().await.unwrap();
+                }
+                _ => {}
+            }
+            drop(stream);
+            flush_subscribers().unwrap();
+            assert_eq!(finalized.load(Ordering::SeqCst), 1);
+            assert_eq!(observed.load(Ordering::SeqCst), 1);
+            assert_eq!(published.load(Ordering::SeqCst), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn borrowed_collection_preserves_chunk_identity_and_owned_collection_isolation() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    for borrowed in [false, true] {
+        reset_global();
+        let source = Arc::new(Mutex::new(Some(json!({"text": "original chunk"}))));
+        let collected_pointer = Arc::new(AtomicUsize::new(0));
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let finalizer_calls = Arc::new(AtomicUsize::new(0));
+        let owned_pointer = Arc::clone(&collected_pointer);
+        let borrowed_pointer = Arc::clone(&collected_pointer);
+        let source_close_calls = Arc::clone(&close_calls);
+        let finalized = Arc::clone(&finalizer_calls);
+        let collector: Option<LlmBorrowedCollectorFn> = borrowed.then(|| {
+            Box::new(move |chunk: &Json| {
+                borrowed_pointer.store(
+                    chunk["text"].as_str().unwrap().as_ptr() as usize,
+                    Ordering::SeqCst,
+                );
+                Ok(())
+            }) as LlmBorrowedCollectorFn
+        });
+        let mut stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("collector-ownership")
+                .request(LlmRequest {
+                    headers: Default::default(),
+                    content: json!({}),
+                })
+                .func(Arc::new(move |_| {
+                    let chunk = source.lock().unwrap().take().unwrap();
+                    let close_calls = Arc::clone(&source_close_calls);
+                    Box::pin(async move {
+                        Ok(LlmJsonStream::from_closeable(CloseTrackingStream {
+                            stream: Box::pin(tokio_stream::iter(vec![Ok(chunk)])),
+                            close_calls,
+                            close_error: None,
+                            closed: false,
+                        }))
+                    })
+                }))
+                .collector(Box::new(move |mut chunk: Json| {
+                    assert!(!borrowed, "the owned fallback must not run when borrowing");
+                    owned_pointer.store(
+                        chunk["text"].as_str().unwrap().as_ptr() as usize,
+                        Ordering::SeqCst,
+                    );
+                    chunk["text"] = json!("collector-only mutation");
+                    Ok(())
+                }))
+                .borrowed_collector_opt(collector)
+                .finalizer(Box::new(move || {
+                    finalized.fetch_add(1, Ordering::SeqCst);
+                    json!({"text": "final"})
+                }))
+                .build(),
+        )
+        .await
+        .unwrap();
+        let chunk = stream.next().await.unwrap().unwrap();
+        assert_eq!(chunk["text"], "original chunk");
+        let forwarded_pointer = chunk["text"].as_str().unwrap().as_ptr() as usize;
+        assert_ne!(collected_pointer.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            collected_pointer.load(Ordering::SeqCst) == forwarded_pointer,
+            borrowed
+        );
+        stream.close().await.unwrap();
+        stream.close().await.unwrap();
+        assert!(stream.next().await.is_none());
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(finalizer_calls.load(Ordering::SeqCst), 1);
+        flush_subscribers().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn borrowed_collector_errors_finalize_and_close_once() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let source_close_calls = Arc::clone(&close_calls);
+    let finalizer_calls = Arc::new(AtomicUsize::new(0));
+    let finalized = Arc::clone(&finalizer_calls);
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("borrowed-collector-error")
+            .request(LlmRequest {
+                headers: Default::default(),
+                content: json!({}),
+            })
+            .func(Arc::new(move |_| {
+                let close_calls = Arc::clone(&source_close_calls);
+                Box::pin(async move {
+                    Ok(LlmJsonStream::from_closeable(CloseTrackingStream {
+                        stream: Box::pin(tokio_stream::iter(vec![Ok(json!({"text": "chunk"}))])),
+                        close_calls,
+                        close_error: None,
+                        closed: false,
+                    }))
+                })
+            }))
+            .collector(Box::new(|_| panic!("owned fallback was invoked")))
+            .borrowed_collector(Box::new(|_| {
+                Err(FlowError::Internal("borrowed collector failed".into()))
+            }))
+            .finalizer(Box::new(move || {
+                finalized.fetch_add(1, Ordering::SeqCst);
+                json!({"partial": true})
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(stream.next().await, Some(Err(FlowError::Internal(error))) if error == "borrowed collector failed")
+    );
+    assert!(stream.next().await.is_none());
+    stream.close().await.unwrap();
+    stream.close().await.unwrap();
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(finalizer_calls.load(Ordering::SeqCst), 1);
+    flush_subscribers().unwrap();
 }
 
 /// Helper that creates a collector/finalizer pair backed by a shared `Vec<Json>`.

@@ -517,6 +517,20 @@ class TestAtofExporterType:
         assert config.timeout_millis == 1000
         assert config.field_name_policy == "replace_dots"
 
+    def test_stream_sink_headers_over_plain_http_need_allow_insecure(self) -> None:
+        config = AtofExporterConfig()
+        config.sink_type = "stream"
+        config.url = "http://collector.example:8080/events"
+        config.headers = {"authorization": "Bearer token"}
+        assert config.allow_insecure is False
+
+        with pytest.raises(RuntimeError, match="configured headers require https"):
+            AtofExporter(config)
+
+        config.allow_insecure = True
+        exporter = AtofExporter(config)
+        exporter.shutdown()
+
     def test_stream_sink_requires_url(self) -> None:
         config = AtofExporterConfig()
         config.sink_type = "stream"
@@ -627,6 +641,7 @@ class TestOpenTelemetryTypes:
         assert log_config.scheduled_delay_millis == 1000
         assert log_config.completed_span_context_ttl_millis == 60000
         assert log_config.header_env == {}
+        assert log_config.allow_insecure is False
         log_config.minimum_severity = LogSeverity.Warn
         log_config.headers = {"authorization": "Bearer token"}
         log_config.set_header_from_env("x-relay-route", variable)
@@ -649,6 +664,7 @@ class TestOpenTelemetryTypes:
         assert metric_config.max_instruments == 256
         assert metric_config.cardinality_limit == 2000
         assert metric_config.header_env == {}
+        assert metric_config.allow_insecure is False
         metric_config.temporality = MetricTemporality.Delta
         metric_config.headers = {"authorization": "Bearer token"}
         metric_config.set_header_from_env("x-relay-route", variable)
@@ -680,6 +696,27 @@ class TestOpenTelemetryTypes:
         metric_config.cardinality_limit = 0
         with pytest.raises(RuntimeError, match="cardinality_limit must be greater than 0"):
             OpenTelemetryMetricSubscriber(metric_config)
+
+    def test_otel_configs_need_allow_insecure_for_remote_plain_http(self) -> None:
+        trace_config = OpenTelemetryConfig("full", "http://collector.example:4318/v1/traces")
+        with pytest.raises(RuntimeError, match="require HTTPS"):
+            OpenTelemetrySubscriber(trace_config)
+        trace_config.allow_insecure = True
+        OpenTelemetrySubscriber(trace_config).shutdown()
+
+        log_config = OpenTelemetryLogConfig("http://collector.example:4318/v1/logs")
+        log_config.headers = {"authorization": "Bearer token"}
+        with pytest.raises(RuntimeError, match="configured headers require https"):
+            OpenTelemetryLogSubscriber(log_config)
+        log_config.allow_insecure = True
+        OpenTelemetryLogSubscriber(log_config).shutdown()
+
+        metric_config = OpenTelemetryMetricConfig("http://collector.example:4318/v1/metrics")
+        metric_config.headers = {"authorization": "Bearer token"}
+        with pytest.raises(RuntimeError, match="configured headers require https"):
+            OpenTelemetryMetricSubscriber(metric_config)
+        metric_config.allow_insecure = True
+        OpenTelemetryMetricSubscriber(metric_config).shutdown()
 
     def test_signal_subscribers_export_to_signal_relative_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
         with _OtelCollector() as collector:

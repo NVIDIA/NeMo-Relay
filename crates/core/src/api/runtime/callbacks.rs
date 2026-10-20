@@ -668,6 +668,11 @@ where
     }
 }
 
+/// Collector that reads each provider JSON chunk without copying it.
+///
+/// Copy any data you need after the callback returns. An error stops the stream
+/// with the same cleanup steps as [`LlmCollectorFn`].
+pub type LlmBorrowedCollectorFn = Box<dyn FnMut(&Json) -> Result<()> + Send>;
 /// Finalizer used to synthesize the aggregate streaming response payload.
 ///
 /// # Parameters
@@ -718,6 +723,11 @@ where
         Self::Sync(Box::new(finalizer))
     }
 }
+// Internal completion hook used by the gateway before response sanitization.
+pub(crate) type LlmStreamResponseCompletionFn = Box<
+    dyn for<'a> FnOnce(&'a Json) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> + Send,
+>;
+
 /// Scope-local registry references passed into streaming execution-chain builders.
 ///
 /// # Returns

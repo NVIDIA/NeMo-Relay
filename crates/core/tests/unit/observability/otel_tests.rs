@@ -4024,7 +4024,10 @@ fn all_trace_projections_require_protected_remote_transport() {
         "http://127.0.0.2:4318/v1/traces",
         "http://[::1]:4318/v1/traces",
     ] {
-        assert!(validate_trace_endpoint(endpoint).is_ok(), "{endpoint}");
+        assert!(
+            validate_trace_endpoint(endpoint, &PlaintextPolicy::LoopbackOnly).is_ok(),
+            "{endpoint}"
+        );
     }
     for endpoint in [
         "http://collector.example/v1/traces",
@@ -4051,6 +4054,32 @@ fn all_trace_projections_require_protected_remote_transport() {
             }
         }
     }
+}
+
+#[test]
+fn trace_endpoints_allow_plain_http_only_to_listed_insecure_hosts() {
+    let trusted = PlaintextPolicy::from_hosts(&["host.docker.internal".to_string()]).unwrap();
+    assert!(
+        validate_trace_endpoint("http://host.docker.internal:8082/v1/traces", &trusted).is_ok()
+    );
+    let error = validate_trace_endpoint("http://collector.example/v1/traces", &trusted)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("hosts listed in insecure_http_hosts"),
+        "{error}"
+    );
+}
+
+#[test]
+fn allow_insecure_permits_plain_http_trace_export_to_any_host() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let config =
+        || OpenTelemetryConfig::new(OpenTelemetryType::GenAi, "http://collector.example:4318");
+    assert!(OpenTelemetrySubscriber::new(config()).is_err());
+    let subscriber = OpenTelemetrySubscriber::new(config().with_allow_insecure(true)).unwrap();
+    subscriber.shutdown().unwrap();
+    assert!(OpenTelemetrySubscriber::new(config().with_allow_insecure(false)).is_err());
 }
 
 #[test]

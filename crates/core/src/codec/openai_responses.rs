@@ -1226,10 +1226,29 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        let raw: RawResponsesResponse = serde_json::from_value(response.clone())
+        // The provider payload is already JSON. Clone its retained array directly
+        // instead of deserializing every nested value through Serde a second time.
+        let decode = || -> std::result::Result<RawResponsesResponse, serde_json::Error> {
+            let Some(object) = response.as_object() else {
+                return RawResponsesResponse::deserialize(response);
+            };
+            let fields = object
+                .iter()
+                .filter(|(key, _)| key.as_str() != "output")
+                .map(|(key, value)| (key.as_str(), value));
+            let mut raw =
+                RawResponsesResponse::deserialize(serde::de::value::MapDeserializer::new(fields))?;
+            raw.output = match object.get("output") {
+                None | Some(Json::Null) => None,
+                Some(Json::Array(items)) => Some(items.clone()),
+                // Preserve the codec's existing validation for malformed arrays.
+                Some(value) => Some(Vec::<Json>::deserialize(value)?),
+            };
+            Ok(raw)
+        };
+        let raw = decode()
             .map_err(|e| FlowError::Internal(format!("OpenAI Responses response decode: {e}")))?;
 
-        let all_output_items = raw.output.clone();
         let (text_parts, tool_calls) = collect_output_parts(raw.output.as_deref());
         let message =
             message_from_text_parts(text_parts).or_else(|| top_level_output_text(response));
@@ -1280,7 +1299,7 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
 
         // Build API-specific fields.
         let api_specific = Some(ApiSpecificResponse::OpenAIResponses {
-            output_items: all_output_items,
+            output_items: raw.output,
             status: raw.status,
             incomplete_details: raw.incomplete_details,
             previous_response_id: raw.previous_response_id,
@@ -1455,14 +1474,23 @@ impl LlmCodec for OpenAIResponsesCodec {
 
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
         let baseline = self.decode(original)?;
+        self.encode_with_baseline(annotated, original, &baseline)
+    }
+
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
         let mut content = original.content.clone();
         let obj = content
             .as_object_mut()
             .ok_or_else(|| FlowError::Internal("original content is not an object".into()))?;
-        patch_responses_messages(obj, annotated, &baseline, original)?;
-        patch_responses_model_and_params(obj, annotated, &baseline)?;
-        patch_responses_tools(obj, annotated, &baseline)?;
-        patch_responses_common_fields(obj, annotated, &baseline);
+        patch_responses_messages(obj, annotated, baseline, original)?;
+        patch_responses_model_and_params(obj, annotated, baseline)?;
+        patch_responses_tools(obj, annotated, baseline)?;
+        patch_responses_common_fields(obj, annotated, baseline);
         patch_responses_api_specific(obj, &annotated.api_specific, &baseline.api_specific)?;
         patch_extra_fields(obj, &baseline.extra, &annotated.extra);
 
@@ -1551,6 +1579,17 @@ impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
         })
     }
 
+    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+        let state = std::sync::Arc::clone(&self.state);
+        Some(Box::new(move |event: &Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(event);
+            Ok(())
+        }))
+    }
+
     /// Takes the collected state and returns the final provider response.
     fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
         let state = std::sync::Arc::clone(&self.state);
@@ -1631,6 +1670,8 @@ struct OpenAIResponsesStreamingState {
     /// Latest response snapshot. Keep the first final response even if more snapshots arrive.
     response: Option<serde_json::Map<String, Json>>,
     terminal_response_received: bool,
+    /// A nonempty terminal output makes per-item fallback data unnecessary.
+    has_terminal_output: bool,
     /// Items keyed by `output_index`. Captured from `response.output_item.added` (initial) and
     /// replaced on `response.output_item.done` (final). Used as a fallback for `output` when the
     /// terminal `response` snapshot lacks it.
@@ -1666,13 +1707,24 @@ impl OpenAIResponsesStreamingState {
             return;
         };
         if let Json::Object(map) = response {
-            self.response = Some(map.clone());
             self.terminal_response_received = is_terminal_response_event(event);
+            self.has_terminal_output = self.terminal_response_received
+                && map
+                    .get("output")
+                    .and_then(Json::as_array)
+                    .is_some_and(|output| !output.is_empty());
+            if self.has_terminal_output {
+                self.items.clear();
+            }
+            self.response = Some(map.clone());
         }
     }
 
     /// Stores the latest output item at its provider index.
     fn observe_output_item(&mut self, event: &Json) {
+        if self.has_terminal_output {
+            return;
+        }
         let Some(index) = event.get("output_index").and_then(Json::as_u64) else {
             return;
         };

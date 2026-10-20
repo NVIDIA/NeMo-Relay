@@ -1,19 +1,18 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
-use nemo_relay::api::event::{CategoryProfile, EventCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmCallEndParams, LlmHandle, LlmRequest, llm_call_end};
 #[cfg(test)]
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
 use nemo_relay::api::runtime::{
     ScopeStackHandle, SubscriberDelivery, TASK_SCOPE_STACK, create_scope_stack, task_scope_push,
-    with_scope_stack,
 };
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeHandle, ScopeType,
@@ -21,10 +20,8 @@ use nemo_relay::api::scope::{
 };
 use nemo_relay::api::tool::{
     ToolCallEndParams, ToolCallParams, ToolHandle, tool_call, tool_call_end,
-    tool_conditional_execution, tool_conditional_execution_with_event_context,
-    tool_request_intercepts,
+    tool_conditional_execution, tool_request_intercepts,
 };
-use nemo_relay::error::FlowError;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, Notify, OwnedMutexGuard};
 
@@ -192,6 +189,7 @@ pub(crate) struct SessionManager {
     // Applying a hook temporarily takes its session out of the directory while middleware runs.
     // Track those operations so an idle shutdown or teardown cannot mistake them for no work.
     session_activity: SessionActivity,
+    gateway_preparing: Arc<std::sync::Mutex<HashSet<String>>>,
     completions: Arc<Mutex<completion::CompletionCache>>,
     authenticated_owners: AuthenticatedOwners,
     // Ownership is committed only after the hook batch succeeds. Reservations
@@ -536,11 +534,6 @@ struct ActiveTool {
     owner_subagent_id: Option<String>,
 }
 
-struct PermissionToolMatch {
-    tool_call_id: String,
-    parent_uuid: Option<uuid::Uuid>,
-}
-
 impl std::ops::Deref for ActiveTool {
     type Target = ToolHandle;
 
@@ -559,6 +552,34 @@ struct PendingLlmHint {
 struct PendingToolHint {
     hint: ToolHint,
     inserted_at: Instant,
+}
+
+// Expensive JSON copies and tool-argument parsing happen while the owning
+// session gate is held, without holding the directory lock shared by all sessions.
+struct PreparedGatewayResponse {
+    hints: Vec<ToolHint>,
+    turn_output: Option<Value>,
+    collect_hints: bool,
+}
+
+impl PreparedGatewayResponse {
+    fn new(
+        response: Cow<'_, Value>,
+        owner_subagent_id: Option<&str>,
+        retain_turn_output: bool,
+        collect_hints: bool,
+    ) -> Self {
+        let hints = if collect_hints {
+            tool_hints_from_llm_response(&response, owner_subagent_id)
+        } else {
+            Vec::new()
+        };
+        Self {
+            hints,
+            turn_output: retain_turn_output.then(|| response.into_owned()),
+            collect_hints,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -631,6 +652,7 @@ impl SessionManager {
             inner: Arc::new(Mutex::new(HashMap::new())),
             session_gates: Arc::new(Mutex::new(HashMap::new())),
             session_activity: SessionActivity::new(),
+            gateway_preparing: Arc::default(),
             completions: Arc::new(Mutex::new(completion::CompletionCache::default())),
             authenticated_owners: Arc::new(Mutex::new(HashMap::new())),
             authenticated_reservations: Arc::new(Mutex::new(HashMap::new())),
@@ -741,132 +763,6 @@ impl SessionManager {
                     .or_insert_with(|| owner.to_string());
             }
         }
-    }
-
-    /// Evaluates a final host permission request inside its existing session scope.
-    pub(crate) async fn authorize_tool_permission(
-        &self,
-        event: &ToolEvent,
-        owner: &str,
-    ) -> Result<(), CliError> {
-        let _activity = self.session_activity.begin();
-        if self.session_activity.is_closing() {
-            return Err(CliError::InvalidPayload(
-                "permission request arrived after session shutdown began".into(),
-            ));
-        }
-        let owners = self.authenticated_owners.lock().await;
-        match owners.get(&event.session_id) {
-            Some(existing) if existing == owner => {}
-            Some(_) => {
-                return Err(CliError::Unauthorized(format!(
-                    "Relay hook client does not own session '{}'",
-                    event.session_id
-                )));
-            }
-            None => {
-                return Err(CliError::InvalidPayload(format!(
-                    "permission request names unknown session '{}'",
-                    event.session_id
-                )));
-            }
-        }
-        drop(owners);
-        let gate = session_gate(&self.session_gates, &event.session_id).await;
-        let _gate = gate.lock().await;
-        let sessions = self.inner.lock().await;
-        let session = sessions.get(&event.session_id).ok_or_else(|| {
-            CliError::InvalidPayload(format!(
-                "permission request names unknown session '{}'",
-                event.session_id
-            ))
-        })?;
-        let matched = session.permission_request_match(event).ok_or_else(|| {
-            CliError::InvalidPayload(format!(
-                "permission request does not match the recorded tool call '{}'",
-                event.tool_call_id
-            ))
-        })?;
-        let stack = session.scope_stack.clone();
-        let name = event.tool_name.clone();
-        let arguments = normalize_tool_arguments(event.arguments.clone());
-        let guardrail_metadata = (!matched.tool_call_id.trim().is_empty()).then(|| {
-            json!({
-                "gen_ai.tool.call.id": matched.tool_call_id.clone(),
-            })
-        });
-        let agent_kind_name = session.agent_kind.as_str().to_string();
-        let event_name = event.event_name.clone();
-        let tool_call_id = matched.tool_call_id.clone();
-        let permission_mode = event
-            .payload
-            .get("permission_mode")
-            .and_then(Value::as_str)
-            .filter(|mode| !mode.is_empty())
-            .map(ToOwned::to_owned);
-        let metadata = session.event_identity_metadata(event.metadata.clone());
-        let matched_tool_call_id = matched.tool_call_id.clone();
-        drop(sessions);
-        let result = TASK_SCOPE_STACK
-            .scope(stack, async move {
-                let authorization = tool_conditional_execution_with_event_context(
-                    &name,
-                    &arguments,
-                    matched.parent_uuid,
-                    guardrail_metadata,
-                )
-                .await;
-                let policy_outcome = match &authorization {
-                    Ok(()) => "pass",
-                    Err(FlowError::GuardrailRejected(_)) => "reject",
-                    Err(_) => "error",
-                };
-                let mut data = json!({
-                    "agent_kind": agent_kind_name,
-                    "event_name": event_name,
-                    "tool_name": name,
-                    "tool_call_id": tool_call_id,
-                    "decision_source": "nemo_relay",
-                    "policy_outcome": policy_outcome,
-                });
-                if let Some(object) = data.as_object_mut() {
-                    if let Some(permission_mode) = permission_mode {
-                        object.insert("harness_permission_mode".into(), json!(permission_mode));
-                    }
-                    if let Err(error) = &authorization {
-                        object.insert("reason".into(), json!(error.to_string()));
-                    }
-                }
-                let _ = emit_mark_event(
-                    EmitMarkEventParams::builder()
-                        .name("nemo_relay.permission.policy_decision")
-                        .data(data)
-                        .metadata(metadata)
-                        .category(EventCategory::custom())
-                        .category_profile(
-                            CategoryProfile::builder()
-                                .subtype("nemo_relay.permission.policy_decision")
-                                .build(),
-                        )
-                        .build(),
-                );
-                authorization
-            })
-            .await;
-        if matches!(result, Err(FlowError::GuardrailRejected(_))) {
-            let mut sessions = self.inner.lock().await;
-            if let Some(session) = sessions.get_mut(&event.session_id)
-                && let Err(error) = session.close_permission_denied_tool(&matched_tool_call_id)
-            {
-                log::warn!(
-                    target: "nemo_relay.session",
-                    event = "permission_denied_tool_close_failed",
-                    error_kind = error.log_kind();
-                    "Failed to close permission-denied tool span"
-                );
-            }
-        }
-        result.map_err(CliError::from)
     }
 
     /// Starts the fail-safe idle closer used by the HTTP gateway.
@@ -1239,52 +1135,73 @@ impl SessionManager {
     /// `llm_stream_call_execute` so the runtime emits start/end events under the same agent or
     /// subagent scope the prep was opened under.
     ///
-    /// The session manager lock is held only long enough to build the prep; the actual upstream
-    /// HTTP and managed pipeline run outside the lock.
+    /// Request correlation and scope preparation run under the session gate, outside the
+    /// shared directory lock. Cancellation restores the session before releasing its gate.
     pub(crate) async fn prepare_gateway_call(
         &self,
         headers: &HeaderMap,
         start: LlmGatewayStart,
     ) -> Result<GatewayCallPrep, CliError> {
+        let activity = self.session_activity.begin();
+        if self.session_activity.is_closing() {
+            return Err(CliError::Launch("session manager is closing".into()));
+        }
         let mut start = start;
         let config = self.default_config.session_config_from_headers(headers);
         self.resolve_start_alias(&mut start, config.clone()).await?;
         let (session_id, session_finish) = {
             let sessions = self.inner.lock().await;
-            gateway_session_for_call(&start, &sessions)
+            let preparing = self
+                .gateway_preparing
+                .lock()
+                .expect("gateway preparation lock poisoned");
+            gateway_session_for_call_with_preparing(&start, &sessions, &preparing)
         };
         let gate = session_gate(&self.session_gates, &session_id).await;
-        let _gate = gate.lock().await;
-        let mut sessions = self.inner.lock().await;
-        // Match `start_llm`: when this path creates a brand-new session (real agent's gateway
-        // request beats its SessionStart hook), label the session by the provider so ATIF and
-        // Phoenix scopes carry the agent identity instead of freezing on "gateway".
-        let inferred_agent_kind = alignment::agent_kind_for_gateway_provider(&start.provider);
-        let created_session = !sessions.contains_key(&session_id);
-        let session = sessions
-            .entry(session_id.clone())
-            .or_insert_with(|| Session::new(session_id.clone(), inferred_agent_kind, config));
-        let result = session.prepare_gateway_call(start).await;
+        let gate = gate.lock_owned().await;
+        let (session, created_session) = {
+            let mut sessions = self.inner.lock().await;
+            let previous = sessions.remove(&session_id);
+            let created = previous.is_none();
+            let session = previous.unwrap_or_else(|| {
+                Session::new(
+                    session_id.clone(),
+                    alignment::agent_kind_for_gateway_provider(&start.provider),
+                    config,
+                )
+            });
+            self.gateway_preparing
+                .lock()
+                .expect("gateway preparation lock poisoned")
+                .insert(session_id.clone());
+            (session, created)
+        };
+        let mut in_flight = InFlightSession::for_gateway(
+            self.inner.clone(),
+            session_id,
+            session,
+            gate,
+            activity,
+            self.gateway_preparing.clone(),
+        );
+        let result = in_flight.session_mut().prepare_gateway_call(start).await;
         match result {
             Ok(mut prep) => {
-                prep.session_finish = if prep.bypass_managed_pipeline
-                    && sessions
-                        .get(&session_id)
-                        .is_some_and(|session| session.is_empty())
-                {
-                    GatewaySessionFinish::PruneIfEmpty
-                } else {
-                    session_finish
-                };
+                in_flight.gateway_call_prepared(prep.owner_subagent_id.clone());
+                prep.session_finish =
+                    if prep.bypass_managed_pipeline && in_flight.session_mut().is_empty() {
+                        GatewaySessionFinish::PruneIfEmpty
+                    } else {
+                        session_finish
+                    };
+                drop(in_flight.restore().await);
                 Ok(prep)
             }
             Err(error) => {
-                if created_session
-                    && sessions
-                        .get(&session_id)
-                        .is_some_and(|session| session.is_empty())
-                {
-                    sessions.remove(&session_id);
+                if created_session && in_flight.session_mut().is_empty() {
+                    drop(in_flight.discard());
+                } else {
+                    drop(in_flight.restore().await);
                 }
                 Err(error)
             }
@@ -1425,7 +1342,8 @@ impl SessionManager {
         nemo_relay::api::subscriber::flush_subscribers().map_err(CliError::from)?;
         let mut sessions = self.inner.lock().await;
         if let Some(session) = sessions.get_mut(&session_id) {
-            session.record_completed_llm_response(response_for_hints, owner_subagent_id);
+            session
+                .record_completed_llm_response(Cow::Owned(response_for_hints), owner_subagent_id);
         }
         Ok(())
     }
@@ -1436,11 +1354,13 @@ impl SessionManager {
     /// per-response tool-hint extraction that `end_llm` would normally do has to be triggered
     /// explicitly after the managed pipeline returns. Missing or already-removed sessions are
     /// silently skipped because hints are advisory.
+    /// Borrowed responses are copied only when an active parent turn needs to retain its output;
+    /// owned responses can transfer that output directly into the session.
     pub(crate) async fn record_gateway_response_hints(
         &self,
         session_id: &str,
         owner_subagent_id: Option<String>,
-        response: Value,
+        response: Cow<'_, Value>,
     ) {
         let alias = {
             let alignment_state = self.alignment.lock().await;
@@ -1455,10 +1375,90 @@ impl SessionManager {
         };
         let gate = session_gate(&self.session_gates, &session_id).await;
         let _gate = gate.lock().await;
-        let mut sessions = self.inner.lock().await;
-        if let Some(session) = sessions.get_mut(&session_id) {
-            session.record_completed_llm_response(response, owner_subagent_id);
-        }
+        let policy = {
+            let sessions = self.inner.lock().await;
+            sessions
+                .get(&session_id)
+                .map(|session| session.gateway_response_policy(owner_subagent_id.as_deref()))
+        };
+        let Some((retain_output, collect_hints)) = policy else {
+            return;
+        };
+        let prepared = PreparedGatewayResponse::new(
+            response,
+            owner_subagent_id.as_deref(),
+            retain_output,
+            collect_hints,
+        );
+        let previous_output = {
+            let mut sessions = self.inner.lock().await;
+            sessions.get_mut(&session_id).and_then(|session| {
+                session.record_prepared_gateway_response(prepared, owner_subagent_id.as_deref())
+            })
+        };
+        // Releasing a large previous response can also be costly. Drop it after
+        // releasing the directory so unrelated sessions can finish concurrently.
+        drop(previous_output);
+    }
+
+    /// Record borrowed response hints immediately when all session locks are available.
+    /// Returns false without changing session state if the async path must wait.
+    pub(crate) fn try_record_gateway_response_hints(
+        &self,
+        session_id: &str,
+        owner_subagent_id: Option<String>,
+        response: &Value,
+    ) -> bool {
+        let Ok(alignment) = self.alignment.try_lock() else {
+            return false;
+        };
+        let alias = alignment.alias_for_session(session_id);
+        drop(alignment);
+        let (session_id, owner_subagent_id) = match alias {
+            Some(alias) => (
+                alias.parent_session_id,
+                owner_subagent_id.or(Some(alias.subagent_id)),
+            ),
+            None => (session_id.to_string(), owner_subagent_id),
+        };
+        let Ok(gates) = self.session_gates.try_lock() else {
+            return false;
+        };
+        let Some(gate) = gates.get(&session_id).cloned() else {
+            return false;
+        };
+        drop(gates);
+        let Ok(_gate) = gate.try_lock() else {
+            return false;
+        };
+        let policy = {
+            let Ok(sessions) = self.inner.try_lock() else {
+                return false;
+            };
+            sessions
+                .get(&session_id)
+                .map(|session| session.gateway_response_policy(owner_subagent_id.as_deref()))
+        };
+        let Some((retain_output, collect_hints)) = policy else {
+            return true;
+        };
+        let prepared = PreparedGatewayResponse::new(
+            Cow::Borrowed(response),
+            owner_subagent_id.as_deref(),
+            retain_output,
+            collect_hints,
+        );
+        let Ok(mut sessions) = self.inner.try_lock() else {
+            // Preparing a response does not mutate session state. Contention here
+            // therefore falls back to the async observer without partial updates.
+            return false;
+        };
+        let previous_output = sessions.get_mut(&session_id).and_then(|session| {
+            session.record_prepared_gateway_response(prepared, owner_subagent_id.as_deref())
+        });
+        drop(sessions);
+        drop(previous_output);
+        true
     }
 
     /// Closes every still-open session before gateway teardown.
@@ -1672,62 +1672,6 @@ impl Session {
             active_subagent_gateway_calls: HashMap::new(),
             config,
         }
-    }
-
-    fn permission_request_match(&self, event: &ToolEvent) -> Option<PermissionToolMatch> {
-        let arguments = normalize_tool_arguments(event.arguments.clone());
-        if event.tool_call_id.is_empty() {
-            let mut matches = self.tools.iter().filter(|(_, active)| {
-                active.name == event.tool_name && active.arguments == arguments
-            });
-            let (tool_call_id, active) = matches.next()?;
-            return matches.next().is_none().then(|| PermissionToolMatch {
-                tool_call_id: tool_call_id.clone(),
-                parent_uuid: active.handle.parent_uuid,
-            });
-        }
-        if let Some(active) = self
-            .tools
-            .get(&event.tool_call_id)
-            .filter(|active| active.name == event.tool_name && active.arguments == arguments)
-        {
-            return Some(PermissionToolMatch {
-                tool_call_id: event.tool_call_id.clone(),
-                parent_uuid: active.handle.parent_uuid,
-            });
-        }
-        self.pending_tool_hints
-            .iter()
-            .any(|pending| {
-                pending.hint.tool_call_id.as_deref() == Some(event.tool_call_id.as_str())
-                    && pending.hint.tool_name.as_deref() == Some(event.tool_name.as_str())
-                    && !pending.hint.arguments.is_null()
-                    && pending.hint.arguments == arguments
-            })
-            .then(|| PermissionToolMatch {
-                tool_call_id: event.tool_call_id.clone(),
-                parent_uuid: None,
-            })
-    }
-
-    fn close_permission_denied_tool(&mut self, tool_call_id: &str) -> Result<(), CliError> {
-        let Some(active) = self.tools.remove(tool_call_id) else {
-            return Ok(());
-        };
-        with_scope_stack(self.scope_stack.clone(), || {
-            tool_call_end(
-                ToolCallEndParams::builder()
-                    .handle(&active.handle)
-                    .execution_result(Value::Null.into())
-                    .metadata(json!({
-                        "error.type": "guardrail_rejected",
-                        "otel.status_code": "ERROR",
-                        "status": "denied",
-                    }))
-                    .build(),
-            )
-        })?;
-        Ok(())
     }
 
     // A child session can only be converted into a subagent before any real scope, LLM, or tool
@@ -3107,7 +3051,7 @@ impl Session {
         }
         self.cleanup_correlation_state();
         let owner_subagent_id = event.subagent_id.clone().or_else(|| event.agent_id.clone());
-        self.add_tool_hints_from_llm_response(event.payload.clone(), owner_subagent_id);
+        self.add_tool_hints_from_llm_response(&event.payload, owner_subagent_id);
         self.pending_llm_hints.push(PendingLlmHint {
             hint: event,
             inserted_at: Instant::now(),
@@ -3726,7 +3670,7 @@ impl Session {
     // the LLM that proposed the call.
     fn add_tool_hints_from_llm_response(
         &mut self,
-        response: Value,
+        response: &Value,
         owner_subagent_id: Option<String>,
     ) {
         // An in-flight gateway response can arrive after SubagentStop removed its owner.
@@ -3739,7 +3683,7 @@ impl Session {
             return;
         }
         self.cleanup_correlation_state();
-        let hints = tool_hints_from_llm_response(&response, owner_subagent_id);
+        let hints = tool_hints_from_llm_response(response, owner_subagent_id.as_deref());
         self.pending_tool_hints
             .extend(hints.into_iter().map(|hint| PendingToolHint {
                 hint,
@@ -3747,25 +3691,49 @@ impl Session {
             }));
     }
 
+    fn gateway_response_policy(&self, owner_subagent_id: Option<&str>) -> (bool, bool) {
+        let retain_output = owner_subagent_id.is_none() && self.turn_scope.is_some();
+        let collect_hints = !(self.agent_kind == AgentKind::Codex
+            && owner_subagent_id.is_some_and(|id| self.completed_subagents.contains(id)));
+        (retain_output, collect_hints)
+    }
+
+    fn record_prepared_gateway_response(
+        &mut self,
+        prepared: PreparedGatewayResponse,
+        owner_subagent_id: Option<&str>,
+    ) -> Option<Value> {
+        self.touch_subagent_activity(owner_subagent_id);
+        if prepared.collect_hints {
+            self.cleanup_correlation_state();
+            let inserted_at = Instant::now();
+            self.pending_tool_hints.extend(
+                prepared
+                    .hints
+                    .into_iter()
+                    .map(|hint| PendingToolHint { hint, inserted_at }),
+            );
+        }
+        prepared
+            .turn_output
+            .and_then(|output| self.last_turn_llm_output.replace(output))
+    }
+
     // Remembers the latest completed LLM response owned by the turn or root Agent scope so the
     // enclosing Custom turn scope can export the final assistant output. Subagent-owned responses are
     // deliberately excluded; otherwise a worker's last local answer can overwrite the parent
     // agent's final synthesis.
+    #[cfg(test)]
     fn record_completed_llm_response(
         &mut self,
-        response: Value,
+        response: Cow<'_, Value>,
         owner_subagent_id: Option<String>,
     ) {
         self.touch_subagent_activity(owner_subagent_id.as_deref());
-        if owner_subagent_id.is_none() {
-            self.record_turn_llm_output(response.clone());
-        }
-        self.add_tool_hints_from_llm_response(response, owner_subagent_id);
-    }
-
-    fn record_turn_llm_output(&mut self, response: Value) {
-        if self.turn_scope.is_some() {
-            self.last_turn_llm_output = Some(response);
+        let retain_turn_output = owner_subagent_id.is_none() && self.turn_scope.is_some();
+        self.add_tool_hints_from_llm_response(&response, owner_subagent_id);
+        if retain_turn_output {
+            self.last_turn_llm_output = Some(response.into_owned());
         }
     }
 

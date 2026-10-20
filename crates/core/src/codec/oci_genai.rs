@@ -1095,6 +1095,15 @@ impl LlmCodec for OCIGenAIChatCodec {
 
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
         let baseline = self.decode(original)?;
+        self.encode_with_baseline(annotated, original, &baseline)
+    }
+
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
         let mut content = original.content.clone();
         let obj = content
             .as_object_mut()
@@ -1115,7 +1124,7 @@ impl LlmCodec for OCIGenAIChatCodec {
         };
         let api_format = request_api_format(&chat_request);
 
-        validate_oci_supported_fields(annotated, &baseline)?;
+        validate_oci_supported_fields(annotated, baseline)?;
 
         if annotated.messages != baseline.messages {
             if api_format == "COHERE" {
@@ -1527,6 +1536,17 @@ impl super::streaming::StreamingCodec for OCIGenAIStreamingCodec {
             guard.observe(&event);
             Ok(())
         })
+    }
+
+    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+        let state = std::sync::Arc::clone(&self.state);
+        Some(Box::new(move |event: &Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(event);
+            Ok(())
+        }))
     }
 
     fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {

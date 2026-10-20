@@ -9,6 +9,7 @@
 //! with eager re-sorting on every mutation.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// A named, priority-ordered registry entry.
 ///
@@ -30,6 +31,9 @@ pub(crate) trait RegistryEntry {
 /// [`deregister`](SortedRegistry::deregister) call re-sorts immediately, so
 /// [`sorted_values`](SortedRegistry::sorted_values) is a read-only lookup.
 ///
+/// Clones share immutable storage. A successful mutation copies shared storage,
+/// leaving snapshots unchanged; failed mutations keep sharing the original storage.
+///
 /// # Priority ordering
 ///
 /// Entries are sorted in **ascending** priority order (lower numbers run first).
@@ -42,6 +46,12 @@ pub(crate) trait RegistryEntry {
 /// to remove an existing entry before re-registering.
 #[derive(Clone)]
 pub(crate) struct SortedRegistry<T: RegistryEntry> {
+    // Empty registries remain allocation-free. Snapshots share populated storage until mutation.
+    storage: Option<Arc<RegistryStorage<T>>>,
+}
+
+#[derive(Clone)]
+struct RegistryStorage<T: RegistryEntry> {
     entries: HashMap<String, T>,
     sorted_keys: Vec<String>,
 }
@@ -52,25 +62,7 @@ impl<T: RegistryEntry> SortedRegistry<T> {
     /// # Returns
     /// A new empty [`SortedRegistry`] with no entries.
     pub(crate) fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-            sorted_keys: Vec::new(),
-        }
-    }
-
-    /// Re-sorts the cached key order by priority. Called eagerly on every mutation.
-    fn resort(&mut self) {
-        let entries = &self.entries;
-        let mut keys: Vec<String> = entries.keys().cloned().collect();
-        keys.sort_by(|left, right| {
-            let left_entry = entries.get(left).unwrap();
-            let right_entry = entries.get(right).unwrap();
-            left_entry
-                .priority()
-                .cmp(&right_entry.priority())
-                .then_with(|| left.cmp(right))
-        });
-        self.sorted_keys = keys;
+        Self { storage: None }
     }
 
     /// Register a new entry under its embedded name.
@@ -86,13 +78,28 @@ impl<T: RegistryEntry> SortedRegistry<T> {
     ///
     /// # Notes
     /// Successful registration eagerly re-sorts the cached priority order.
-    pub(crate) fn register(&mut self, entry: T) -> Result<(), String> {
-        let name = entry.name().to_string();
-        if self.entries.contains_key(&name) {
+    pub(crate) fn register(&mut self, entry: T) -> Result<(), String>
+    where
+        T: Clone,
+    {
+        let name = entry.name();
+        if self
+            .storage
+            .as_ref()
+            .is_some_and(|storage| storage.entries.contains_key(name))
+        {
             return Err(format!("{name} already exists"));
         }
-        self.entries.insert(name, entry);
-        self.resort();
+        let name = name.to_string();
+        let storage = self.storage.get_or_insert_with(|| {
+            Arc::new(RegistryStorage {
+                entries: HashMap::new(),
+                sorted_keys: Vec::new(),
+            })
+        });
+        let storage = Arc::make_mut(storage);
+        storage.entries.insert(name, entry);
+        storage.resort();
         Ok(())
     }
 
@@ -107,13 +114,20 @@ impl<T: RegistryEntry> SortedRegistry<T> {
     ///
     /// # Notes
     /// Successful removal eagerly re-sorts the cached priority order.
-    pub(crate) fn deregister(&mut self, name: &str) -> bool {
-        if self.entries.remove(name).is_some() {
-            self.resort();
-            true
-        } else {
-            false
+    pub(crate) fn deregister(&mut self, name: &str) -> bool
+    where
+        T: Clone,
+    {
+        let Some(storage) = self.storage.as_mut() else {
+            return false;
+        };
+        if !storage.entries.contains_key(name) {
+            return false;
         }
+        let storage = Arc::make_mut(storage);
+        storage.entries.remove(name);
+        storage.resort();
+        true
     }
 
     /// Return entries sorted by priority (ascending).
@@ -122,18 +136,46 @@ impl<T: RegistryEntry> SortedRegistry<T> {
     /// on every [`register`](SortedRegistry::register) / [`deregister`](SortedRegistry::deregister) call.
     ///
     /// # Returns
-    /// A newly allocated [`Vec`] of shared references ordered from lowest
-    /// priority to highest priority.
-    pub(crate) fn sorted_values(&self) -> Vec<&T> {
-        self.sorted_keys
-            .iter()
-            .filter_map(|k| self.entries.get(k))
-            .collect()
+    /// Shared references ordered from lowest priority to highest priority,
+    /// without allocating an intermediate collection.
+    pub(crate) fn sorted_values(&self) -> impl Iterator<Item = &T> {
+        self.storage.iter().flat_map(|storage| {
+            storage
+                .sorted_keys
+                .iter()
+                .filter_map(|key| storage.entries.get(key))
+        })
+    }
+
+    /// Whether this registry contains no entries, without scanning retained storage.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.storage
+            .as_ref()
+            .is_none_or(|storage| storage.entries.is_empty())
     }
 
     /// Return every entry without imposing priority order.
     pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
-        self.entries.values()
+        self.storage
+            .iter()
+            .flat_map(|storage| storage.entries.values())
+    }
+}
+
+impl<T: RegistryEntry> RegistryStorage<T> {
+    /// Re-sorts the cached key order by priority. Called eagerly on every mutation.
+    fn resort(&mut self) {
+        let entries = &self.entries;
+        let mut keys: Vec<String> = entries.keys().cloned().collect();
+        keys.sort_by(|left, right| {
+            let left_entry = entries.get(left).unwrap();
+            let right_entry = entries.get(right).unwrap();
+            left_entry
+                .priority()
+                .cmp(&right_entry.priority())
+                .then_with(|| left.cmp(right))
+        });
+        self.sorted_keys = keys;
     }
 }
 

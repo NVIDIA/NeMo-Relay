@@ -3327,7 +3327,9 @@ fn plugin_launch_carries_effective_hook_limit_below_and_above_default() {
         .unwrap();
         let launch =
             crate::bootstrap::resolve_plugin_gateway(&GatewayOverrides::default(), bind).unwrap();
+        let hook = crate::bootstrap::resolve_hook_gateway(bind).unwrap();
         assert_eq!(launch.max_hook_payload_bytes, limit);
+        assert_eq!(hook.max_hook_payload_bytes, limit);
     }
 }
 

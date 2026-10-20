@@ -572,7 +572,7 @@ fn merge_hooks_rejects_malformed_shapes() {
 
 #[test]
 fn helper_formatting_and_headers_cover_optional_paths() {
-    assert!(event_matches_tools("PermissionRequest"));
+    assert!(event_requires_fail_closed("PreToolUse"));
     assert!(!event_matches_tools("SessionStart"));
 
     let headers = gateway_headers(
@@ -684,7 +684,6 @@ fn codex_generation_uses_exactly_the_supported_hook_schema() {
     assert_eq!(
         events,
         std::collections::BTreeSet::from([
-            "PermissionRequest",
             "PostCompact",
             "PostToolUse",
             "PreCompact",

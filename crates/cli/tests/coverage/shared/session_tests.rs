@@ -8,9 +8,7 @@ use nemo_relay::api::registry::{
     deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
 };
 use nemo_relay::api::runtime::EventSubscriberFn;
-use nemo_relay::api::subscriber::{
-    deregister_subscriber, flush_subscribers, register_subscriber, scope_register_subscriber,
-};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::resolve::{
     ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
 };
@@ -24,7 +22,6 @@ use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use super::*;
@@ -32,6 +29,100 @@ use crate::events::{LlmHintEvent, SessionEvent, ToolEvent};
 use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
 struct ToolGuardrailCleanup(&'static str);
+
+#[path = "gateway_preparation_tests.rs"]
+mod gateway_preparation;
+
+#[tokio::test(start_paused = true)]
+async fn idle_sweeper_reclaims_unused_session_gates_without_idle_sessions() {
+    let manager = SessionManager::new(session_test_config());
+    manager.start_idle_sweeper();
+    // Let the interval's immediate first tick run before creating the gates.
+    tokio::task::yield_now().await;
+
+    for index in 0..1_000 {
+        drop(session_gate(&manager.session_gates, &format!("ended-{index}")).await);
+    }
+    assert_eq!(manager.session_gates.lock().await.len(), 1_000);
+    assert!(manager.inner.lock().await.is_empty());
+
+    tokio::time::advance(AGENT_IDLE_SWEEP_INTERVAL).await;
+    tokio::task::yield_now().await;
+
+    assert!(manager.session_gates.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn idle_sweep_preserves_session_gates_before_lock_acquisition() {
+    let manager = SessionManager::new(session_test_config());
+    let gate = session_gate(&manager.session_gates, "about-to-lock").await;
+
+    manager
+        .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+        .await
+        .unwrap();
+
+    let current = session_gate(&manager.session_gates, "about-to-lock").await;
+    assert!(Arc::ptr_eq(&gate, &current));
+    let _held = gate.lock().await;
+    assert!(current.try_lock().is_err());
+}
+
+#[tokio::test]
+async fn idle_sweep_preserves_held_and_waiting_session_gates() {
+    let manager = SessionManager::new(session_test_config());
+    let gate = session_gate(&manager.session_gates, "busy").await;
+    let held = gate.lock_owned().await;
+    let waiting = session_gate(&manager.session_gates, "busy")
+        .await
+        .lock_owned();
+    tokio::pin!(waiting);
+    assert!(futures_util::poll!(&mut waiting).is_pending());
+
+    manager
+        .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+        .await
+        .unwrap();
+    let current = session_gate(&manager.session_gates, "busy").await;
+    assert!(Arc::ptr_eq(
+        tokio::sync::OwnedMutexGuard::mutex(&held),
+        &current
+    ));
+    assert!(current.try_lock().is_err());
+
+    drop(current);
+    drop(held);
+    // The queued acquisition is now the only owner outside the directory.
+    manager
+        .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+        .await
+        .unwrap();
+    let current = session_gate(&manager.session_gates, "busy").await;
+    let held = tokio::time::timeout(Duration::from_secs(1), &mut waiting)
+        .await
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        tokio::sync::OwnedMutexGuard::mutex(&held),
+        &current
+    ));
+    drop(current);
+
+    manager
+        .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+        .await
+        .unwrap();
+    assert_eq!(manager.session_gates.lock().await.len(), 1);
+    drop(held);
+
+    manager
+        .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+        .await
+        .unwrap();
+    assert!(manager.session_gates.lock().await.is_empty());
+
+    let recreated = session_gate(&manager.session_gates, "busy").await;
+    assert!(recreated.try_lock().is_ok());
+}
 
 impl Drop for ToolGuardrailCleanup {
     fn drop(&mut self) {
@@ -1009,807 +1100,6 @@ async fn gateway_alias_resolution_rechecks_a_pending_route_after_waiting_for_own
         .expect("gateway start should succeed without the removed alias");
     assert_eq!(active.session_id, "child-thread");
     manager.end_llm(active, json!({}), json!({})).await.unwrap();
-}
-
-#[tokio::test]
-async fn permission_requests_require_an_exact_recorded_tool_call() {
-    let manager = SessionManager::new(session_test_config());
-    let mut session = Session::new(
-        "permission-session".into(),
-        AgentKind::ClaudeCode,
-        SessionConfig::default(),
-    );
-    session.pending_tool_hints.push(PendingToolHint {
-        hint: ToolHint {
-            tool_call_id: Some("call-1".into()),
-            tool_name: Some("Read".into()),
-            subagent_id: None,
-            arguments: json!({"path": "README.md"}),
-            source: "test".into(),
-        },
-        inserted_at: Instant::now(),
-    });
-    manager
-        .inner
-        .lock()
-        .await
-        .insert("permission-session".into(), session);
-
-    let request = ToolEvent {
-        session_id: "permission-session".into(),
-        agent_kind: AgentKind::ClaudeCode,
-        event_name: "PermissionRequest".into(),
-        tool_call_id: "call-1".into(),
-        tool_name: "Read".into(),
-        subagent_id: None,
-        arguments: json!({"path": "README.md"}),
-        result: Value::Null,
-        status: None,
-        payload: json!({}),
-        metadata: json!({}),
-    };
-    manager
-        .authenticated_owners
-        .lock()
-        .await
-        .insert("permission-session".into(), "client-a".into());
-    manager
-        .authorize_tool_permission(&request, "client-a")
-        .await
-        .unwrap();
-
-    assert!(
-        manager
-            .authorize_tool_permission(&request, "client-b")
-            .await
-            .is_err()
-    );
-
-    let mut changed = request.clone();
-    changed.arguments = json!({"path": "secrets.txt"});
-    assert!(
-        manager
-            .authorize_tool_permission(&changed, "client-a")
-            .await
-            .is_err()
-    );
-
-    let mut changed = request.clone();
-    changed.tool_call_id = "call-2".into();
-    assert!(
-        manager
-            .authorize_tool_permission(&changed, "client-a")
-            .await
-            .is_err()
-    );
-
-    let mut changed = request;
-    changed.tool_name = "Write".into();
-    assert!(
-        manager
-            .authorize_tool_permission(&changed, "client-a")
-            .await
-            .is_err()
-    );
-}
-
-#[tokio::test]
-async fn permission_requests_correlate_guardrails_and_close_rejected_tools() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    const GUARDRAIL: &str = "cli-permission-tool-correlation";
-    const DENIED_TOOL: &str = "PermissionDeniedTool";
-    const ALLOWED_TOOL: &str = "PermissionAllowedTool";
-    const SUBSCRIBER: &str = "cli-permission-tool-correlation-capture";
-    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
-    let _ = deregister_subscriber(SUBSCRIBER);
-
-    let denied_invocations = Arc::new(AtomicUsize::new(0));
-    register_tool_conditional_execution_guardrail(
-        GUARDRAIL,
-        1,
-        Arc::new({
-            let denied_invocations = Arc::clone(&denied_invocations);
-            move |name, _| {
-                let denied_invocations = Arc::clone(&denied_invocations);
-                Box::pin(async move {
-                    if name == DENIED_TOOL
-                        && denied_invocations.fetch_add(1, Ordering::SeqCst) % 2 == 1
-                    {
-                        Ok(Some("blocked by host permission".into()))
-                    } else {
-                        Ok(None)
-                    }
-                })
-            }
-        }),
-    )
-    .unwrap();
-    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
-
-    let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
-    let captured = Arc::clone(&captured_events);
-    register_subscriber(
-        SUBSCRIBER,
-        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
-    )
-    .unwrap();
-
-    let manager = SessionManager::new(session_test_config());
-    let scope_local_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
-    for (session_id, agent_kind, tool_call_id, permission_tool_call_id) in [
-        (
-            "claude-permission-denied",
-            AgentKind::ClaudeCode,
-            "claude-call",
-            "",
-        ),
-        (
-            "codex-permission-denied",
-            AgentKind::Codex,
-            "codex-call",
-            "codex-call",
-        ),
-    ] {
-        let arguments = json!({"path": "README.md"});
-        manager
-            .apply_authenticated_events(
-                &HeaderMap::new(),
-                vec![NormalizedEvent::ToolStarted(ToolEvent {
-                    session_id: session_id.into(),
-                    agent_kind,
-                    event_name: "PreToolUse".into(),
-                    tool_call_id: tool_call_id.into(),
-                    tool_name: DENIED_TOOL.into(),
-                    subagent_id: None,
-                    arguments: arguments.clone(),
-                    result: Value::Null,
-                    status: None,
-                    payload: json!({}),
-                    metadata: json!({}),
-                })],
-                "client-a",
-            )
-            .await
-            .unwrap();
-
-        if agent_kind == AgentKind::ClaudeCode {
-            let sessions = manager.inner.lock().await;
-            let session = sessions.get(session_id).unwrap();
-            let scope_stack = session.scope_stack.clone();
-            let parent_uuid = session.tools[tool_call_id].handle.parent_uuid.unwrap();
-            drop(sessions);
-            let scope_local = Arc::clone(&scope_local_events);
-            with_scope_stack(scope_stack, || {
-                scope_register_subscriber(
-                    &parent_uuid,
-                    "permission-denied-tool-close",
-                    Arc::new(move |event| scope_local.lock().unwrap().push(event.clone())),
-                )
-            })
-            .unwrap();
-        }
-
-        let result = manager
-            .authorize_tool_permission(
-                &ToolEvent {
-                    session_id: session_id.into(),
-                    agent_kind,
-                    event_name: "PermissionRequest".into(),
-                    tool_call_id: permission_tool_call_id.into(),
-                    tool_name: DENIED_TOOL.into(),
-                    subagent_id: None,
-                    arguments,
-                    result: Value::Null,
-                    status: None,
-                    payload: json!({}),
-                    metadata: json!({}),
-                },
-                "client-a",
-            )
-            .await;
-        assert!(matches!(
-            result,
-            Err(CliError::Flow(FlowError::GuardrailRejected(_)))
-        ));
-        assert!(
-            manager
-                .inner
-                .lock()
-                .await
-                .get(session_id)
-                .is_some_and(|session| !session.tools.contains_key(tool_call_id)),
-            "a rejected permission must close the active {agent_kind:?} tool"
-        );
-    }
-
-    let allowed_session = "codex-permission-allowed";
-    let allowed_call = "codex-allowed-call";
-    let allowed_arguments = json!({"path": "CONTRIBUTING.md"});
-    manager
-        .apply_authenticated_events(
-            &HeaderMap::new(),
-            vec![NormalizedEvent::ToolStarted(ToolEvent {
-                session_id: allowed_session.into(),
-                agent_kind: AgentKind::Codex,
-                event_name: "PreToolUse".into(),
-                tool_call_id: allowed_call.into(),
-                tool_name: ALLOWED_TOOL.into(),
-                subagent_id: None,
-                arguments: allowed_arguments.clone(),
-                result: Value::Null,
-                status: None,
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-            "client-a",
-        )
-        .await
-        .unwrap();
-    manager
-        .authorize_tool_permission(
-            &ToolEvent {
-                session_id: allowed_session.into(),
-                agent_kind: AgentKind::Codex,
-                event_name: "PermissionRequest".into(),
-                tool_call_id: allowed_call.into(),
-                tool_name: ALLOWED_TOOL.into(),
-                subagent_id: None,
-                arguments: allowed_arguments.clone(),
-                result: Value::Null,
-                status: None,
-                payload: json!({}),
-                metadata: json!({}),
-            },
-            "client-a",
-        )
-        .await
-        .unwrap();
-    assert!(
-        manager
-            .inner
-            .lock()
-            .await
-            .get(allowed_session)
-            .is_some_and(|session| session.tools.contains_key(allowed_call)),
-        "an allowed permission must leave the tool active"
-    );
-    manager
-        .apply_authenticated_events(
-            &HeaderMap::new(),
-            vec![NormalizedEvent::ToolEnded(ToolEvent {
-                session_id: allowed_session.into(),
-                agent_kind: AgentKind::Codex,
-                event_name: "PostToolUse".into(),
-                tool_call_id: allowed_call.into(),
-                tool_name: ALLOWED_TOOL.into(),
-                subagent_id: None,
-                arguments: allowed_arguments,
-                result: json!({"ok": true}),
-                status: Some("success".into()),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-            "client-a",
-        )
-        .await
-        .unwrap();
-
-    flush_subscribers().unwrap();
-    deregister_subscriber(SUBSCRIBER).unwrap();
-    let events = captured_events.lock().unwrap();
-    for tool_call_id in ["claude-call", "codex-call", "codex-allowed-call"] {
-        let tool_events = events
-            .iter()
-            .filter(|event| event.tool_call_id() == Some(tool_call_id))
-            .collect::<Vec<_>>();
-        let tool_start = tool_events
-            .iter()
-            .find(|event| event.scope_category() == Some(ScopeCategory::Start))
-            .unwrap();
-        let permission_events = events
-            .iter()
-            .filter(|event| {
-                event.scope_type() == Some(ScopeType::Guardrail)
-                    && event.name() == GUARDRAIL
-                    && event.metadata().is_some_and(|metadata| {
-                        metadata["gen_ai.tool.call.id"] == json!(tool_call_id)
-                    })
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(permission_events.len(), 2);
-        assert!(
-            permission_events
-                .iter()
-                .all(|event| event.parent_uuid() == tool_start.parent_uuid()),
-            "permission guardrail events must share the exact tool parent"
-        );
-    }
-
-    for tool_call_id in ["claude-call", "codex-call"] {
-        let denied_end = events
-            .iter()
-            .find(|event| {
-                event.tool_call_id() == Some(tool_call_id)
-                    && event.scope_category() == Some(ScopeCategory::End)
-            })
-            .unwrap();
-        let metadata = denied_end.metadata().unwrap();
-        assert_eq!(metadata["error.type"], "guardrail_rejected");
-        assert_eq!(metadata["otel.status_code"], "ERROR");
-        assert_eq!(metadata["status"], "denied");
-    }
-    let scope_local_events = scope_local_events.lock().unwrap();
-    let scoped_permission_events = scope_local_events
-        .iter()
-        .filter(|event| {
-            event.scope_type() == Some(ScopeType::Guardrail)
-                && event.name() == GUARDRAIL
-                && event
-                    .metadata()
-                    .is_some_and(|metadata| metadata["gen_ai.tool.call.id"] == json!("claude-call"))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(scoped_permission_events.len(), 2);
-    assert!(
-        [ScopeCategory::Start, ScopeCategory::End]
-            .into_iter()
-            .all(|category| scoped_permission_events
-                .iter()
-                .any(|event| event.scope_category() == Some(category)))
-    );
-    let scoped_denied_tool_ends = scope_local_events
-        .iter()
-        .filter(|event| {
-            event.tool_call_id() == Some("claude-call")
-                && event.scope_category() == Some(ScopeCategory::End)
-                && event
-                    .metadata()
-                    .is_some_and(|metadata| metadata["error.type"] == "guardrail_rejected")
-        })
-        .count();
-    assert_eq!(scoped_denied_tool_ends, 1);
-    assert!(scope_local_events.iter().all(|event| {
-        !matches!(
-            event.tool_call_id(),
-            Some("codex-call" | "codex-allowed-call")
-        ) && event.metadata().is_none_or(|metadata| {
-            !matches!(
-                metadata["gen_ai.tool.call.id"].as_str(),
-                Some("codex-call" | "codex-allowed-call")
-            )
-        })
-    }));
-    drop(scope_local_events);
-
-    let allowed_permission_end = events
-        .iter()
-        .find(|event| {
-            event.scope_type() == Some(ScopeType::Guardrail)
-                && event.scope_category() == Some(ScopeCategory::End)
-                && event
-                    .metadata()
-                    .is_some_and(|metadata| metadata["gen_ai.tool.call.id"] == json!(allowed_call))
-        })
-        .unwrap();
-    assert_eq!(allowed_permission_end.data().unwrap()["allowed"], true);
-}
-
-#[tokio::test]
-async fn close_all_waits_for_an_in_flight_permission_decision() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    const GUARDRAIL: &str = "cli-permission-close-all-drain";
-    const SUBSCRIBER: &str = "cli-permission-close-all-capture";
-    const TOOL: &str = "PermissionCloseAllDrain";
-    const SESSION: &str = "permission-close-all-session";
-    const TOOL_CALL: &str = "permission-close-all-tool";
-    let _ = deregister_tool_conditional_execution_guardrail(GUARDRAIL);
-    let _ = deregister_subscriber(SUBSCRIBER);
-
-    let invocation = Arc::new(AtomicUsize::new(0));
-    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
-    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-    let release_rx = Arc::new(StdMutex::new(Some(release_rx)));
-    register_tool_conditional_execution_guardrail(
-        GUARDRAIL,
-        1,
-        Arc::new({
-            let invocation = Arc::clone(&invocation);
-            move |name, _| {
-                let invocation = Arc::clone(&invocation);
-                let started_tx = Arc::clone(&started_tx);
-                let release_rx = Arc::clone(&release_rx);
-                Box::pin(async move {
-                    if name == TOOL && invocation.fetch_add(1, Ordering::SeqCst) == 1 {
-                        if let Some(started) = started_tx.lock().unwrap().take() {
-                            let _ = started.send(());
-                        }
-                        let release = { release_rx.lock().unwrap().take() };
-                        if let Some(release) = release {
-                            let _ = release.await;
-                        }
-                        return Ok(Some("blocked by host permission".into()));
-                    }
-                    Ok(None)
-                })
-            }
-        }),
-    )
-    .unwrap();
-    let _guardrail_cleanup = ToolGuardrailCleanup(GUARDRAIL);
-
-    let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
-    let captured = Arc::clone(&captured_events);
-    register_subscriber(
-        SUBSCRIBER,
-        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
-    )
-    .unwrap();
-
-    let manager = SessionManager::new(session_test_config());
-    let arguments = json!({"path": "README.md"});
-    manager
-        .apply_authenticated_events(
-            &HeaderMap::new(),
-            vec![NormalizedEvent::ToolStarted(ToolEvent {
-                session_id: SESSION.into(),
-                agent_kind: AgentKind::Codex,
-                event_name: "PreToolUse".into(),
-                tool_call_id: TOOL_CALL.into(),
-                tool_name: TOOL.into(),
-                subagent_id: None,
-                arguments: arguments.clone(),
-                result: Value::Null,
-                status: None,
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-            "client-a",
-        )
-        .await
-        .unwrap();
-
-    let authorizing_manager = manager.clone();
-    let authorizing = tokio::spawn(async move {
-        authorizing_manager
-            .authorize_tool_permission(
-                &ToolEvent {
-                    session_id: SESSION.into(),
-                    agent_kind: AgentKind::Codex,
-                    event_name: "PermissionRequest".into(),
-                    tool_call_id: TOOL_CALL.into(),
-                    tool_name: TOOL.into(),
-                    subagent_id: None,
-                    arguments,
-                    result: Value::Null,
-                    status: None,
-                    payload: json!({}),
-                    metadata: json!({}),
-                },
-                "client-a",
-            )
-            .await
-    });
-    tokio::time::timeout(Duration::from_secs(1), started_rx)
-        .await
-        .expect("permission guardrail should start")
-        .unwrap();
-
-    let closing_manager = manager.clone();
-    let mut closing = tokio::spawn(async move { closing_manager.close_all("test_shutdown").await });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut closing)
-            .await
-            .is_err(),
-        "close_all must wait until the permission decision closes the denied tool"
-    );
-    let late_request = tokio::time::timeout(
-        Duration::from_millis(100),
-        manager.authorize_tool_permission(
-            &ToolEvent {
-                session_id: SESSION.into(),
-                agent_kind: AgentKind::Codex,
-                event_name: "PermissionRequest".into(),
-                tool_call_id: TOOL_CALL.into(),
-                tool_name: TOOL.into(),
-                subagent_id: None,
-                arguments: json!({"path": "README.md"}),
-                result: Value::Null,
-                status: None,
-                payload: json!({}),
-                metadata: json!({}),
-            },
-            "client-a",
-        ),
-    )
-    .await
-    .expect("a permission request arriving during shutdown must not await the session gate");
-    assert!(matches!(
-        late_request,
-        Err(CliError::InvalidPayload(reason))
-            if reason == "permission request arrived after session shutdown began"
-    ));
-
-    release_tx.send(()).unwrap();
-    assert!(matches!(
-        authorizing.await.unwrap(),
-        Err(CliError::Flow(FlowError::GuardrailRejected(_)))
-    ));
-    closing.await.unwrap().unwrap();
-    assert!(manager.inner.lock().await.is_empty());
-
-    flush_subscribers().unwrap();
-    deregister_subscriber(SUBSCRIBER).unwrap();
-    let events = captured_events.lock().unwrap();
-    let tool_start = events
-        .iter()
-        .position(|event| {
-            event.tool_call_id() == Some(TOOL_CALL)
-                && event.scope_category() == Some(ScopeCategory::Start)
-        })
-        .unwrap();
-    let denied_tool_ends = events
-        .iter()
-        .enumerate()
-        .filter(|(_, event)| {
-            event.tool_call_id() == Some(TOOL_CALL)
-                && event.scope_category() == Some(ScopeCategory::End)
-                && event
-                    .metadata()
-                    .is_some_and(|metadata| metadata["error.type"] == "guardrail_rejected")
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(denied_tool_ends.len(), 1);
-    let containing_scope = events[tool_start].parent_uuid().unwrap();
-    let containing_scope_end = events
-        .iter()
-        .position(|event| {
-            event.uuid() == containing_scope && event.scope_category() == Some(ScopeCategory::End)
-        })
-        .unwrap();
-    assert!(denied_tool_ends[0].0 < containing_scope_end);
-}
-
-#[tokio::test]
-async fn invalid_permission_requests_do_not_emit_policy_marks() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    const SUBSCRIBER: &str = "cli-invalid-permission-policy-mark-test";
-    let _ = deregister_subscriber(SUBSCRIBER);
-    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
-    let events = Arc::clone(&captured);
-    register_subscriber(
-        SUBSCRIBER,
-        Arc::new(move |event| events.lock().unwrap().push(event.clone())),
-    )
-    .unwrap();
-
-    let manager = SessionManager::new(session_test_config());
-    let session_id = "permission-policy-mark-invalid";
-    let arguments = json!({"outcome": "pass"});
-    let mut session = Session::new(
-        session_id.into(),
-        AgentKind::ClaudeCode,
-        SessionConfig::default(),
-    );
-    session.pending_tool_hints.push(PendingToolHint {
-        hint: ToolHint {
-            tool_call_id: Some("call-1".into()),
-            tool_name: Some("PermissionAuditTool".into()),
-            subagent_id: None,
-            arguments: arguments.clone(),
-            source: "test".into(),
-        },
-        inserted_at: Instant::now(),
-    });
-    manager
-        .inner
-        .lock()
-        .await
-        .insert(session_id.into(), session);
-    manager
-        .authenticated_owners
-        .lock()
-        .await
-        .insert(session_id.into(), "client-a".into());
-
-    let result = manager
-        .authorize_tool_permission(
-            &ToolEvent {
-                session_id: session_id.into(),
-                agent_kind: AgentKind::ClaudeCode,
-                event_name: "PermissionRequest".into(),
-                tool_call_id: "call-1".into(),
-                tool_name: "DifferentTool".into(),
-                subagent_id: None,
-                arguments,
-                result: Value::Null,
-                status: None,
-                payload: json!({"permission_mode": "default"}),
-                metadata: json!({}),
-            },
-            "client-a",
-        )
-        .await;
-    assert!(result.is_err());
-
-    flush_subscribers().unwrap();
-    assert!(captured.lock().unwrap().iter().all(|event| {
-        event.name() != "nemo_relay.permission.policy_decision"
-            || event
-                .metadata()
-                .and_then(|metadata| metadata.get("session_id"))
-                .and_then(Value::as_str)
-                != Some(session_id)
-    }));
-    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
-}
-
-#[tokio::test]
-async fn permission_requests_emit_policy_decision_marks() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let temp = tempfile::tempdir().unwrap();
-    let exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
-    const SUBSCRIBER: &str = "cli-permission-policy-mark-atof-test";
-    let _ = deregister_subscriber(SUBSCRIBER);
-    register_subscriber(SUBSCRIBER, exporter.subscriber()).unwrap();
-
-    const GUARDRAIL: &str = "cli-permission-policy-mark-guardrail";
-    register_tool_conditional_execution_guardrail(
-        GUARDRAIL,
-        1,
-        Arc::new(|name, args| {
-            Box::pin(async move {
-                if name != "PermissionAuditTool" {
-                    return Ok(None);
-                }
-                match args["outcome"].as_str() {
-                    Some("reject") => Ok(Some("blocked by permission test".into())),
-                    Some("error") => {
-                        Err(FlowError::Internal("permission backend unavailable".into()))
-                    }
-                    _ => Ok(None),
-                }
-            })
-        }),
-    )
-    .unwrap();
-    let _cleanup = ToolGuardrailCleanup(GUARDRAIL);
-    let manager = SessionManager::new(session_test_config());
-
-    for (index, (outcome, policy_outcome, reason_fragment)) in [
-        ("pass", "pass", None),
-        ("reject", "reject", Some("blocked by permission test")),
-        ("error", "error", Some("permission backend unavailable")),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let session_id = format!("permission-policy-mark-{index}");
-        let arguments = json!({"outcome": outcome});
-        let mut session = Session::new(
-            session_id.clone(),
-            AgentKind::ClaudeCode,
-            SessionConfig::default(),
-        );
-        session.pending_tool_hints.push(PendingToolHint {
-            hint: ToolHint {
-                tool_call_id: Some("call-1".into()),
-                tool_name: Some("PermissionAuditTool".into()),
-                subagent_id: None,
-                arguments: arguments.clone(),
-                source: "test".into(),
-            },
-            inserted_at: Instant::now(),
-        });
-        manager
-            .inner
-            .lock()
-            .await
-            .insert(session_id.clone(), session);
-        manager
-            .authenticated_owners
-            .lock()
-            .await
-            .insert(session_id.clone(), "client-a".into());
-        let payload = match index {
-            0 => json!({"permission_mode": "future-mode"}),
-            1 => json!({}),
-            _ => json!({"permission_mode": false}),
-        };
-        let metadata = match index {
-            0 => json!({
-                "hook_event_name": "PermissionRequest",
-                "session_id": "spoofed-session",
-                "agent_version": "spoofed-version",
-                "test_context": "preserved",
-            }),
-            1 => json!({}),
-            _ => Value::Null,
-        };
-        let request = ToolEvent {
-            session_id: session_id.clone(),
-            agent_kind: AgentKind::ClaudeCode,
-            event_name: "PermissionRequest".into(),
-            tool_call_id: "call-1".into(),
-            tool_name: "PermissionAuditTool".into(),
-            subagent_id: None,
-            arguments,
-            result: Value::Null,
-            status: None,
-            payload,
-            metadata,
-        };
-
-        let result = manager
-            .authorize_tool_permission(&request, "client-a")
-            .await;
-        assert_eq!(result.is_ok(), outcome == "pass");
-        if outcome == "reject" {
-            assert_eq!(
-                result.unwrap_err().guardrail_rejection_reason(),
-                Some("blocked by permission test")
-            );
-        } else if outcome == "error" {
-            assert!(result.unwrap_err().guardrail_rejection_reason().is_none());
-        }
-        flush_subscribers().unwrap();
-        exporter.force_flush().unwrap();
-        let events = read_atof_events(exporter.path().expect("file sink path"));
-        let marks: Vec<_> = events
-            .iter()
-            .filter(|event| {
-                event["name"] == "nemo_relay.permission.policy_decision"
-                    && event["metadata"]["session_id"] == session_id
-            })
-            .collect();
-        assert_eq!(marks.len(), 1);
-        let mark = marks[0];
-        assert_eq!(mark["kind"], "mark");
-        assert_eq!(mark["category"], "custom");
-        assert_eq!(
-            mark["category_profile"]["subtype"],
-            "nemo_relay.permission.policy_decision"
-        );
-        assert!(mark["data"].get("decision").is_none());
-        assert_eq!(mark["data"]["decision_source"], "nemo_relay");
-        assert_eq!(mark["data"]["policy_outcome"], policy_outcome);
-        assert_eq!(mark["data"]["agent_kind"], "claude-code");
-        assert_eq!(mark["data"]["event_name"], "PermissionRequest");
-        assert_eq!(mark["data"]["tool_call_id"], "call-1");
-        assert_eq!(mark["data"]["tool_name"], "PermissionAuditTool");
-        assert_eq!(mark["metadata"]["session_id"], session_id);
-        assert_eq!(mark["metadata"]["turn_id"], "0");
-        assert_eq!(mark["metadata"]["harness"], "claude-code");
-        assert_eq!(mark["metadata"]["source"], "hook");
-        assert_eq!(mark["metadata"]["identity_quality"], "native");
-        if index == 0 {
-            assert_eq!(mark["metadata"]["hook_event_name"], "PermissionRequest");
-            assert_eq!(mark["metadata"]["test_context"], "preserved");
-            assert!(mark["metadata"].get("agent_version").is_none());
-        }
-        assert!(mark["metadata"].get("owner").is_none());
-        assert!(!mark.to_string().contains("client-a"));
-        assert_eq!(
-            mark["data"].get("harness_permission_mode"),
-            request
-                .payload
-                .get("permission_mode")
-                .filter(|value| value.as_str().is_some_and(|mode| !mode.is_empty()))
-        );
-        assert!(mark["metadata"].get("permission_mode").is_none());
-        match reason_fragment {
-            Some(fragment) => assert!(
-                mark["data"]["reason"]
-                    .as_str()
-                    .is_some_and(|reason| reason.contains(fragment)),
-                "unexpected policy reason: {}",
-                mark["data"]["reason"]
-            ),
-            None => assert!(mark["data"].get("reason").is_none()),
-        }
-    }
-
-    assert!(deregister_subscriber(SUBSCRIBER).unwrap());
 }
 
 #[test]
@@ -2996,6 +2286,171 @@ fn apply_start_alias_overrides_conflicting_subagent_id() {
     assert_eq!(start.subagent_id.as_deref(), Some("child-session"));
     assert_eq!(start.metadata["request"], json!("metadata"));
     assert_eq!(start.metadata["alias"], json!("metadata"));
+}
+
+#[tokio::test]
+async fn gateway_response_bookkeeping_preserves_parent_output_and_child_tool_hints() {
+    for method in ["owned", "borrowed", "immediate"] {
+        let manager = SessionManager::new(session_test_config());
+        let root_id = "response-bookkeeping";
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::AgentStarted(session_event(
+                    root_id,
+                    "SessionStart",
+                ))],
+            )
+            .await
+            .unwrap();
+        let response = json!({"output_text": "outside a turn"});
+        if method == "immediate" {
+            assert!(manager.try_record_gateway_response_hints(root_id, None, &response));
+        } else {
+            manager
+                .record_gateway_response_hints(root_id, None, Cow::Borrowed(&response))
+                .await;
+        }
+        assert!(
+            manager.inner.lock().await[root_id]
+                .last_turn_llm_output
+                .is_none()
+        );
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![
+                    NormalizedEvent::PromptSubmitted(SessionEvent {
+                        session_id: root_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "UserPromptSubmit".into(),
+                        payload: json!({"prompt": "summarize"}),
+                        metadata: json!({}),
+                    }),
+                    NormalizedEvent::SubagentStarted(SubagentEvent {
+                        session_id: root_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "SubagentStart".into(),
+                        subagent_id: "worker".into(),
+                        payload: json!({}),
+                        metadata: json!({}),
+                    }),
+                ],
+            )
+            .await
+            .unwrap();
+        let parent_response = json!({"output_text": "parent answer"});
+        let child_response = json!({"output": [{
+            "type": "function_call", "call_id": "child-tool", "name": "Bash",
+            "arguments": "{\"command\":\"cargo test\"}"
+        }]});
+        for (response, owner) in [
+            (&parent_response, None),
+            (&child_response, Some("worker".into())),
+        ] {
+            if method == "immediate" {
+                assert!(manager.try_record_gateway_response_hints(root_id, owner, response));
+                continue;
+            }
+            let response = if method == "borrowed" {
+                Cow::Borrowed(response)
+            } else {
+                Cow::Owned(response.clone())
+            };
+            manager
+                .record_gateway_response_hints(root_id, owner, response)
+                .await;
+        }
+        manager.alignment.lock().await.insert_alias(
+            "child-session".into(),
+            SessionAlias::new(root_id.into(), "worker".into(), json!({})),
+        );
+        let mut aliased_response = child_response.clone();
+        aliased_response["output"][0]["call_id"] = json!("aliased-tool");
+        if method == "immediate" {
+            assert!(manager.try_record_gateway_response_hints(
+                "child-session",
+                None,
+                &aliased_response
+            ));
+        } else {
+            manager
+                .record_gateway_response_hints(
+                    "child-session",
+                    None,
+                    Cow::Borrowed(&aliased_response),
+                )
+                .await;
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            let root = &sessions[root_id];
+            assert_eq!(root.last_turn_llm_output.as_ref(), Some(&parent_response));
+            let hint = &root.pending_tool_hints.last().unwrap().hint;
+            assert_eq!(hint.subagent_id.as_deref(), Some("worker"));
+            assert_eq!(hint.tool_call_id.as_deref(), Some("aliased-tool"));
+            assert_eq!(hint.tool_name.as_deref(), Some("Bash"));
+            assert_eq!(hint.arguments, json!({"command": "cargo test"}));
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn immediate_gateway_response_bookkeeping_defers_without_partial_updates_when_busy() {
+    let manager = SessionManager::new(session_test_config());
+    let prep = manager
+        .prepare_gateway_call(&HeaderMap::new(), llm_start())
+        .await
+        .unwrap();
+    let id = prep.session_id.as_str();
+    let response = json!({"output": [{
+        "type": "function_call", "call_id": "contended-tool", "name": "Bash",
+        "arguments": "{\"command\":\"cargo test\"}"
+    }]});
+    {
+        let _alignment = manager.alignment.lock().await;
+        assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+    }
+    {
+        let _gates = manager.session_gates.lock().await;
+        assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+    }
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+        assert!(sessions[id].last_turn_llm_output.is_none());
+        assert!(sessions[id].pending_tool_hints.is_empty());
+    }
+    let gate = session_gate(&manager.session_gates, id).await;
+    let held = gate.lock().await;
+    assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+    let pending = manager.record_gateway_response_hints(id, None, Cow::Borrowed(&response));
+    tokio::pin!(pending);
+    assert!(futures_util::poll!(pending.as_mut()).is_pending());
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(sessions[id].last_turn_llm_output.is_none());
+        assert!(sessions[id].pending_tool_hints.is_empty());
+    }
+    drop(held);
+    pending.await;
+    {
+        let sessions = manager.inner.lock().await;
+        assert_eq!(sessions[id].last_turn_llm_output.as_ref(), Some(&response));
+        assert_eq!(sessions[id].pending_tool_hints.len(), 1);
+        assert_eq!(
+            sessions[id].pending_tool_hints[0]
+                .hint
+                .tool_call_id
+                .as_deref(),
+            Some("contended-tool")
+        );
+    }
+    manager
+        .finish_gateway_call(id, prep.owner_subagent_id.as_deref(), prep.session_finish)
+        .await;
+    manager.close_all("test_shutdown").await.unwrap();
 }
 
 #[tokio::test]
@@ -9195,7 +8650,6 @@ async fn mcp_harness_metadata_reaches_tool_events_and_promoted_spans() {
             "Cancelled",
             "CANCELED",
             "ERROR",
-            "permission-denied",
         ] {
             assert_mcp_harness_metadata(kind, ending).await;
         }
@@ -9236,14 +8690,7 @@ async fn assert_mcp_harness_metadata(kind: AgentKind, ending: &str) {
         .iter()
         .find(|event| event.scope_category() == Some(ScopeCategory::End))
         .unwrap();
-    // A denied close has no completion hook, so its method may exist only
-    // on the start. Ordinary completion must expose it to metric subscribers.
-    if ending != "permission-denied" {
-        assert_eq!(end.metadata().unwrap()["mcp.method.name"], "tools/call");
-    } else {
-        assert_eq!(end.metadata().unwrap()["status"], "denied");
-        assert_eq!(end.metadata().unwrap()["error.type"], "guardrail_rejected");
-    }
+    assert_eq!(end.metadata().unwrap()["mcp.method.name"], "tools/call");
     if ["interrupted", "Interrupted", "Cancelled", "CANCELED"].contains(&ending) {
         assert_eq!(
             end.metadata().unwrap()["tool_completion_outcome"],
@@ -9295,7 +8742,7 @@ fn assert_mcp_genai_projection(events: &[Event], ending: &str) {
     if ["interrupted", "Interrupted", "Cancelled", "CANCELED"].contains(&ending) {
         assert!(matches!(tool.status, opentelemetry::trace::Status::Unset));
     }
-    if ["permission-denied", "failure", "mcp-error", "ERROR"].contains(&ending) {
+    if ["failure", "mcp-error", "ERROR"].contains(&ending) {
         assert!(matches!(
             tool.status,
             opentelemetry::trace::Status::Error { .. }
@@ -9348,17 +8795,6 @@ async fn apply_mcp_harness_hooks(
     let headers = HeaderMap::new();
     for hook in ["SessionStart", "PreToolUse", "PostToolUse", "SessionEnd"] {
         if ending == "post-only" && hook == "PreToolUse" {
-            continue;
-        }
-        if ending == "permission-denied" && hook == "PostToolUse" {
-            manager
-                .inner
-                .lock()
-                .await
-                .get_mut(session_id)
-                .unwrap()
-                .close_permission_denied_tool("mcp-call")
-                .unwrap();
             continue;
         }
         let hook = if matches!(ending, "failure" | "interrupted") && hook == "PostToolUse" {
@@ -10738,7 +10174,11 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
             assert_eq!(root.active_subagent_gateway_calls["live"], 2);
         }
         manager
-            .record_gateway_response_hints("activity-root", Some("live".into()), json!({}))
+            .record_gateway_response_hints(
+                "activity-root",
+                Some("live".into()),
+                Cow::Owned(json!({})),
+            )
             .await;
         manager
             .finish_gateway_call(
@@ -11255,10 +10695,10 @@ async fn codex_inferred_child_work_after_parent_stop_preserves_synthesis() {
                 let root = sessions.get_mut(root_id).unwrap();
                 if mode == "tool_hint" {
                     root.record_completed_llm_response(
-                        json!({"output": [{
+                        Cow::Owned(json!({"output": [{
                             "type": "function_call", "call_id": "inferred-tool", "name": "Bash",
                             "arguments": "{\"command\":\"cargo test\"}"
-                        }]}),
+                        }]})),
                         Some(child_id.into()),
                     );
                 } else if mode == "request_affinity" {
@@ -11396,10 +10836,10 @@ async fn codex_finished_child_hooks_do_not_revive_parent_work() {
             let mut sessions = manager.inner.lock().await;
             let root = sessions.get_mut(root_id).unwrap();
             root.record_completed_llm_response(
-                json!({"output": [{
+                Cow::Owned(json!({"output": [{
                     "type": "function_call", "call_id": "late-response-tool", "name": "Bash",
                     "arguments": "{}"
-                }]}),
+                }]})),
                 Some(child_id.into()),
             );
             assert!(root.pending_tool_hints.is_empty());
@@ -11539,4 +10979,54 @@ async fn authenticated_pi_respects_pending_owner_claims() {
         .unwrap_err();
     assert!(matches!(error, CliError::Unauthorized(_)));
     assert!(manager.inner.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn blocked_gateway_response_does_not_block_another_session_and_can_be_cancelled() {
+    let manager = SessionManager::new(session_test_config());
+    for id in ["blocked-response", "parallel-response"] {
+        let mut start = llm_start();
+        start.session_id = Some(id.into());
+        manager
+            .prepare_gateway_call(&HeaderMap::new(), start)
+            .await
+            .unwrap();
+    }
+    let response = json!({"output": [{
+        "type": "function_call", "call_id": "tool", "name": "Bash",
+        "arguments": "{\"command\":\"cargo test\"}"
+    }]});
+    let gate = session_gate(&manager.session_gates, "blocked-response").await;
+    let held = gate.lock().await;
+    {
+        let blocked = manager.record_gateway_response_hints(
+            "blocked-response",
+            None,
+            Cow::Borrowed(&response),
+        );
+        tokio::pin!(blocked);
+        assert!(futures_util::poll!(blocked.as_mut()).is_pending());
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            manager.record_gateway_response_hints(
+                "parallel-response",
+                None,
+                Cow::Borrowed(&response),
+            ),
+        )
+        .await
+        .unwrap();
+        let sessions = manager.inner.lock().await;
+        assert!(sessions["blocked-response"].pending_tool_hints.is_empty());
+        assert!(sessions["blocked-response"].last_turn_llm_output.is_none());
+        assert_eq!(sessions["parallel-response"].pending_tool_hints.len(), 1);
+        assert_eq!(
+            sessions["parallel-response"].last_turn_llm_output.as_ref(),
+            Some(&response)
+        );
+        // Dropping the pending future must leave the blocked session untouched.
+    }
+    drop(held);
+    assert!(manager.try_record_gateway_response_hints("blocked-response", None, &response));
+    manager.close_all("test_shutdown").await.unwrap();
 }

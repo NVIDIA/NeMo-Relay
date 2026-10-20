@@ -225,6 +225,29 @@ impl GatewaySpec {
             max_response_bytes,
         )
     }
+
+    pub(crate) fn post_verified_preflight(
+        &self,
+        url: &str,
+        path: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+        timeout: Duration,
+        max_response_bytes: usize,
+    ) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
+        let Some(fingerprint) = self.bootstrap_fingerprint.as_deref() else {
+            return Err(VerifiedHttpError::missing_fingerprint());
+        };
+        gateway_client::post_verified_preflight(
+            url,
+            fingerprint,
+            path,
+            headers,
+            body,
+            timeout,
+            max_response_bytes,
+        )
+    }
 }
 
 fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
@@ -627,6 +650,22 @@ fn read_ready_file(path: &Path) -> Result<Option<GatewayEndpoint>, String> {
 pub(crate) struct PluginGatewaySpec {
     pub(crate) gateway: GatewaySpec,
     pub(crate) max_hook_payload_bytes: usize,
+}
+
+/// Resolves the same persistent identity and limits without constructing server launch arguments.
+pub(crate) fn resolve_hook_gateway(bind: SocketAddr) -> Result<PluginGatewaySpec, CliError> {
+    let resolved = resolve_persistent_server_config(&GatewayOverrides {
+        bind: Some(bind),
+        ..Default::default()
+    })?;
+    Ok(PluginGatewaySpec {
+        gateway: GatewaySpec::new(bind).with_fingerprint(
+            resolved
+                .bootstrap_fingerprint
+                .expect("persistent gateway resolution sets a bootstrap fingerprint"),
+        ),
+        max_hook_payload_bytes: resolved.gateway.max_hook_payload_bytes,
+    })
 }
 
 pub(crate) fn resolve_plugin_gateway(

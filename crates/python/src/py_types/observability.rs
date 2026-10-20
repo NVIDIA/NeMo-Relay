@@ -235,6 +235,8 @@ pub struct PyAtofEndpointConfig {
     pub(crate) timeout_millis: u64,
     #[pyo3(get, set)]
     pub(crate) field_name_policy: String,
+    #[pyo3(get, set)]
+    pub(crate) allow_insecure: bool,
 }
 
 impl PyAtofEndpointConfig {
@@ -258,7 +260,9 @@ impl PyAtofEndpointConfig {
                 "endpoint field_name_policy must be 'preserve' or 'replace_dots'",
             ));
         };
-        config = config.with_field_name_policy(field_name_policy);
+        config = config
+            .with_field_name_policy(field_name_policy)
+            .with_allow_insecure(self.allow_insecure);
         for (key, value) in &self.headers {
             config = config.with_header(key.clone(), value.clone());
         }
@@ -272,7 +276,7 @@ impl PyAtofEndpointConfig {
 #[pymethods]
 impl PyAtofEndpointConfig {
     #[new]
-    #[pyo3(signature = (url, *, transport="http_post".to_string(), headers=None, header_env=None, timeout_millis=3000, field_name_policy="preserve".to_string()))]
+    #[pyo3(signature = (url, *, transport="http_post".to_string(), headers=None, header_env=None, timeout_millis=3000, field_name_policy="preserve".to_string(), allow_insecure=false))]
     pub(crate) fn new(
         url: String,
         transport: String,
@@ -280,6 +284,7 @@ impl PyAtofEndpointConfig {
         header_env: Option<&Bound<'_, PyAny>>,
         timeout_millis: u64,
         field_name_policy: String,
+        allow_insecure: bool,
     ) -> PyResult<Self> {
         let headers = match headers {
             Some(headers) if !headers.is_none() => py_string_map(headers, "headers")?,
@@ -296,6 +301,7 @@ impl PyAtofEndpointConfig {
             header_env,
             timeout_millis,
             field_name_policy,
+            allow_insecure,
         })
     }
 
@@ -330,6 +336,8 @@ pub struct PyAtofExporterConfig {
     pub(crate) timeout_millis: u64,
     #[pyo3(get, set)]
     pub(crate) field_name_policy: String,
+    #[pyo3(get, set)]
+    pub(crate) allow_insecure: bool,
 }
 
 impl PyAtofExporterConfig {
@@ -352,6 +360,7 @@ impl PyAtofExporterConfig {
                     header_env: self.header_env.clone(),
                     timeout_millis: self.timeout_millis,
                     field_name_policy: self.field_name_policy.clone(),
+                    allow_insecure: self.allow_insecure,
                 }
                 .to_rust_config()
                 .map(|sink| {
@@ -382,6 +391,7 @@ impl PyAtofExporterConfig {
             header_env: HashMap::new(),
             timeout_millis: 3000,
             field_name_policy: "preserve".to_string(),
+            allow_insecure: false,
         }
     }
 
@@ -491,6 +501,8 @@ pub struct PyOpenTelemetryConfig {
     pub(crate) mark_exclude_names: Vec<String>,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) header_env: HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub(crate) allow_insecure: bool,
     pub(crate) resource_attributes: HashMap<String, String>,
     pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
     #[pyo3(get, set)]
@@ -725,6 +737,7 @@ impl PyOpenTelemetryConfig {
         for (key, variable) in &self.header_env {
             config = config.with_header_env(key.clone(), variable.clone());
         }
+        config = config.with_allow_insecure(self.allow_insecure);
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
@@ -770,6 +783,7 @@ impl PyOpenTelemetryConfig {
             mark_exclude_names: nemo_relay::observability::default_mark_exclude_names(),
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            allow_insecure: false,
             resource_attributes: HashMap::new(),
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
@@ -1025,6 +1039,8 @@ pub struct PyOpenTelemetryLogConfig {
     pub(crate) completed_span_context_ttl_millis: u64,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) header_env: HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub(crate) allow_insecure: bool,
     pub(crate) resource_attributes: HashMap<String, String>,
 }
 
@@ -1059,6 +1075,7 @@ impl PyOpenTelemetryLogConfig {
         for (key, variable) in &self.header_env {
             config = config.with_header_env(key.clone(), variable.clone());
         }
+        config = config.with_allow_insecure(self.allow_insecure);
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
@@ -1085,6 +1102,7 @@ impl PyOpenTelemetryLogConfig {
             completed_span_context_ttl_millis: 60_000,
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            allow_insecure: false,
             resource_attributes: HashMap::new(),
         }
     }
@@ -1248,6 +1266,8 @@ pub struct PyOpenTelemetryMetricConfig {
     pub(crate) cardinality_limit: usize,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) header_env: HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub(crate) allow_insecure: bool,
     pub(crate) resource_attributes: HashMap<String, String>,
 }
 
@@ -1279,6 +1299,7 @@ impl PyOpenTelemetryMetricConfig {
         for (key, variable) in &self.header_env {
             config = config.with_header_env(key.clone(), variable.clone());
         }
+        config = config.with_allow_insecure(self.allow_insecure);
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
@@ -1304,6 +1325,7 @@ impl PyOpenTelemetryMetricConfig {
             cardinality_limit: 2_000,
             headers: HashMap::new(),
             header_env: HashMap::new(),
+            allow_insecure: false,
             resource_attributes: HashMap::new(),
         }
     }
