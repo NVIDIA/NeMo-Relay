@@ -60,6 +60,11 @@ pub(crate) enum DaemonSubcommand {
     ManagedBundle(DaemonManagedBundleCommand),
     /// Manage this user's daemon client route token file.
     Token(DaemonTokenCommand),
+    /// Print this account's daemon hook TLS certificate for administrator publication.
+    #[command(
+        long_about = "Print the certificate that a daemon run by this account presents to hooks, as one PEM CERTIFICATE block. The private key is never printed. The identity is created the same way the daemon creates it at startup, so this can run before or after the daemon first starts.\n\nHooks of other users trust a daemon that runs under a different account, such as a system service account, only through a certificate an administrator publishes at <system config dir>/hook-tls-certificate.pem (/etc/nemo-relay on Unix, %ProgramData%\\nemo-relay on Windows). Run this command as the daemon's account, with the same HOME and XDG_CONFIG_HOME as the service, and install its output there. On Unix the file and its directory must be owned by root and not writable by group or other users. Publish it again whenever the daemon's identity file is removed.\n\nThis applies only to a daemon reached at a plain http:// loopback address. A daemon started with --tls-cert and --tls-key serves that certificate at an https:// address instead, and hooks verify it through the platform trust store."
+    )]
+    TlsCertificate,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -255,6 +260,11 @@ pub(crate) async fn execute(
             })?;
             let status = daemon::common::client_token::ensure_client_token(&path)?;
             println!("{}", render_token_ensure(status, &path, command.json)?);
+        }
+        Some(DaemonSubcommand::TlsCertificate) => {
+            let identity = crate::gateway::tls::RelayTlsIdentity::load_or_create()
+                .map_err(CliError::Config)?;
+            print!("{}", identity.certificate_pem());
         }
     }
 
