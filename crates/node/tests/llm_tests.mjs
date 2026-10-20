@@ -113,6 +113,32 @@ function unprintableError() {
 // ===========================================================================
 
 describe('LLM lifecycle', () => {
+  it('manual llm end preserves explicit errors and defaults to OK', async () => {
+    const events = [];
+    registerSubscriber('manual_llm_status', (event) => events.push(event));
+    try {
+      for (const failed of [false, true]) {
+        const name = failed ? 'manual_llm_error' : 'manual_llm_ok';
+        const metadata = { request_id: 'request-123' };
+        if (failed) {
+          Object.assign(metadata, {
+            'otel.status_code': 'ERROR',
+            'otel.status_description': 'provider timed out',
+            'error.type': 'TimeoutError',
+          });
+        }
+        const handle = llmCall(name, makeNative());
+        llmCallEnd(handle, failed ? null : { text: 'hello' }, null, metadata);
+        await flushSubscriberCallbacks();
+        const end = events.find((event) => event.name === name && event.scope_category === 'end');
+        assert.ok(end);
+        assert.deepEqual(end.metadata, { ...metadata, 'otel.status_code': failed ? 'ERROR' : 'OK' });
+      }
+    } finally {
+      deregisterSubscriber('manual_llm_status');
+    }
+  });
+
   it('llm call and end', () => {
     const native = makeNative();
     const handle = llmCall('test_llm', native, null, null, null, null, null);
