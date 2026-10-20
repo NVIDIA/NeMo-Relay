@@ -39,9 +39,9 @@ bitflags! {
 
 /// Canonical application-visible result of tool execution.
 ///
-/// Relay transports `result` and `annotation` without interpreting either
-/// value. The annotation is an adjacent metadata channel and does not impose a
-/// schema on the application-owned result.
+/// Relay keeps `result` and `annotation` separate. It reads display content and
+/// failure status from results that use the shared JSON format. The returned
+/// result stays unchanged. Relay copies the annotation without reading its contents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolExecutionResult {
     /// Application-owned tool result.
