@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from types import UnionType
-from typing import TYPE_CHECKING, Any, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Union, get_args, get_origin
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.structured_output import AutoStrategy, ProviderStrategy, ToolStrategy
@@ -24,6 +24,8 @@ from nemo_relay.integrations.langchain._serialization import (
     model_response_to_json,
     payload_to_model_request,
 )
+from nemo_relay.integrations.langchain._structured_codec import LangChainStructuredResponseCodec
+from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
 from nemo_relay.utils import run_sync
 
 if TYPE_CHECKING:
@@ -90,9 +92,7 @@ class NemoRelayMiddleware(AgentMiddleware):
             schemas = _schema_types(response_format.schema)
         else:
             schemas = _schema_types(response_format)
-        object_codec = nemo_relay.typed.BestEffortAnyCodec(
-            allowed_types=[schema for schema in schemas if isinstance(schema, type)]
-        )
+        object_codec = LangChainStructuredResponseCodec(schemas)
         model_name = get_model_name(request.model)
         llm_request = nemo_relay.LLMRequest({}, model_request_to_payload(model_name, request))
         model_codec = LangChainCodec()
@@ -145,10 +145,10 @@ class NemoRelayMiddleware(AgentMiddleware):
     def _prepare_tool_call(self, request: ToolCallRequest) -> tuple:
         """Boilerplate code common to both wrap_tool_call and awrap_tool_call"""
         parent = nemo_relay.scope.get_handle()
-        codec = nemo_relay.typed.BestEffortAnyCodec(allowed_types=(ToolMessage, Command))
         tool_name = request.tool_call["name"]
         tool_args = request.tool_call.get("args") or {}
         tool_call_id = request.tool_call.get("id")
+        codec = LangChainToolResultCodec(tool_call_id)
         return (parent, codec, tool_name, tool_args, tool_call_id)
 
     def wrap_tool_call(
@@ -191,7 +191,7 @@ class NemoRelayMiddleware(AgentMiddleware):
             raise
         if graph_bubble is not None:
             raise graph_bubble
-        return cast("ToolMessage | Command[Any]", outcome.result)
+        return outcome.result
 
     async def awrap_tool_call(
         self,
@@ -230,4 +230,4 @@ class NemoRelayMiddleware(AgentMiddleware):
             raise
         if graph_bubble is not None:
             raise graph_bubble
-        return cast("ToolMessage | Command[Any]", outcome.result)
+        return outcome.result
