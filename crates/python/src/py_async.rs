@@ -7,6 +7,7 @@
 //! worker or blocking-pool round trip to get back to Python.
 
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -89,6 +90,35 @@ impl FutureWake {
     }
 }
 
+/// Sets the thread's pending exception aside so a wake inside a deallocation cannot consume it.
+struct PendingException<'py> {
+    parts: [*mut pyo3::ffi::PyObject; 3],
+    _py: PhantomData<Python<'py>>,
+}
+
+impl<'py> PendingException<'py> {
+    fn take(_py: Python<'py>) -> Self {
+        let mut parts = [std::ptr::null_mut(); 3];
+        let [kind, value, traceback] = &mut parts;
+        // SAFETY: The GIL is held while PyErr_Fetch transfers references into
+        // these slots and clears the error indicator.
+        unsafe { pyo3::ffi::PyErr_Fetch(kind, value, traceback) };
+        Self {
+            parts,
+            _py: PhantomData,
+        }
+    }
+}
+
+impl Drop for PendingException<'_> {
+    fn drop(&mut self) {
+        let [kind, value, traceback] = self.parts;
+        // SAFETY: The GIL is still held while PyErr_Restore takes back the
+        // references from take and replaces any error raised since.
+        unsafe { pyo3::ffi::PyErr_Restore(kind, value, traceback) };
+    }
+}
+
 struct EventLoopWake {
     event_loop: Py<PyAny>,
     callback: Py<FutureWake>,
@@ -107,6 +137,7 @@ impl Wake for EventLoopWake {
             return;
         }
         Python::attach(|py| {
+            let _pending = PendingException::take(py);
             let event_loop = self.event_loop.bind(py);
             let delivered = if on_event_loop(py, event_loop) {
                 self.callback.borrow(py).__call__(py).is_ok()
