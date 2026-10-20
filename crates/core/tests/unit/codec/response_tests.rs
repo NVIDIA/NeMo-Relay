@@ -1478,6 +1478,7 @@ fn test_attach_estimated_cost_bills_gemini_thinking_tokens_as_output() {
     usage.cache_write_tokens = None;
     response.api_specific = Some(ApiSpecificResponse::GeminiGenerateContent {
         thoughts_tokens: Some(30),
+        tool_use_prompt_tokens: None,
         safety_ratings: None,
         grounding_metadata: None,
         citation_metadata: None,
@@ -1489,6 +1490,150 @@ fn test_attach_estimated_cost_bills_gemini_thinking_tokens_as_output() {
     assert_eq!(usage.completion_tokens, Some(20));
     let total = usage.cost.as_ref().unwrap().total.unwrap();
     assert!((total - 0.00011).abs() < 1e-12, "{total}");
+}
+
+#[test]
+fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_as_input() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let catalog = pricing_catalog(json!([flat_pricing_entry(
+        "configured",
+        "configured-model",
+        1.0,
+        2.0
+    )]));
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+
+    let mut response = full_response();
+    response.model = Some("configured-model".into());
+    let usage = response.usage.as_mut().unwrap();
+    usage.cache_read_tokens = None;
+    usage.cache_write_tokens = None;
+    response.api_specific = Some(ApiSpecificResponse::GeminiGenerateContent {
+        thoughts_tokens: None,
+        tool_use_prompt_tokens: Some(30),
+        safety_ratings: None,
+        grounding_metadata: None,
+        citation_metadata: None,
+        extra: serde_json::Map::new(),
+    });
+    attach_estimated_cost_for_provider(&mut response, Some("configured"));
+
+    let usage = response.usage.as_ref().unwrap();
+    assert_eq!(usage.prompt_tokens, Some(10));
+    let cost = usage.cost.as_ref().unwrap();
+    assert!((cost.input.unwrap() - 0.00004).abs() < 1e-12, "{cost:?}");
+    assert!((cost.total.unwrap() - 0.00008).abs() < 1e-12, "{cost:?}");
+}
+
+#[test]
+fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_by_grounding_source() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let catalog = pricing_catalog(json!([flat_pricing_entry(
+        "configured",
+        "configured-model",
+        1.0,
+        2.0
+    )]));
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+
+    for (grounding_metadata, expected_total) in [
+        (json!({"webSearchQueries": ["weather in Rome"]}), 0.00005),
+        (
+            json!({"groundingChunks": [{"maps": {"uri": "https://maps.example", "placeId": "places/1"}}]}),
+            0.00005,
+        ),
+        (json!({"googleMapsWidgetContextToken": "token"}), 0.00005),
+        (
+            json!({"groundingChunks": [{"web": {"uri": "https://example.test", "title": "Rome"}}]}),
+            0.00008,
+        ),
+    ] {
+        let mut response = full_response();
+        response.model = Some("configured-model".into());
+        let usage = response.usage.as_mut().unwrap();
+        usage.cache_read_tokens = None;
+        usage.cache_write_tokens = None;
+        response.api_specific = Some(ApiSpecificResponse::GeminiGenerateContent {
+            thoughts_tokens: None,
+            tool_use_prompt_tokens: Some(30),
+            safety_ratings: None,
+            grounding_metadata: Some(grounding_metadata.clone()),
+            citation_metadata: None,
+            extra: serde_json::Map::new(),
+        });
+        attach_estimated_cost_for_provider(&mut response, Some("configured"));
+
+        let total = response.usage.unwrap().cost.unwrap().total.unwrap();
+        assert!(
+            (total - expected_total).abs() < 1e-12,
+            "{grounding_metadata}: {total}"
+        );
+    }
+}
+
+#[test]
+fn test_attach_estimated_cost_selects_rate_tier_from_reported_prompt_tokens() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![
+        threshold_pricing_catalog("separate"),
+    ]))
+    .unwrap();
+
+    let mut response = full_response();
+    response.model = Some("threshold-model".into());
+    let usage = response.usage.as_mut().unwrap();
+    usage.prompt_tokens = Some(199_990);
+    usage.cache_read_tokens = None;
+    usage.cache_write_tokens = None;
+    response.api_specific = Some(ApiSpecificResponse::GeminiGenerateContent {
+        thoughts_tokens: None,
+        tool_use_prompt_tokens: Some(20),
+        safety_ratings: None,
+        grounding_metadata: None,
+        citation_metadata: None,
+        extra: serde_json::Map::new(),
+    });
+    attach_estimated_cost_for_provider(&mut response, Some("threshold-ai"));
+
+    let cost = response.usage.unwrap().cost.unwrap();
+    assert!((cost.input.unwrap() - 0.20001).abs() < 1e-12, "{cost:?}");
+    assert!((cost.total.unwrap() - 0.20005).abs() < 1e-12, "{cost:?}");
+}
+
+#[test]
+fn test_attach_estimated_cost_omits_cost_when_billed_input_tokens_overflow() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let catalog = pricing_catalog(json!([flat_pricing_entry(
+        "configured",
+        "configured-model",
+        1.0,
+        2.0
+    )]));
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+
+    let mut response = full_response();
+    response.model = Some("configured-model".into());
+    let usage = response.usage.as_mut().unwrap();
+    usage.prompt_tokens = Some(u64::MAX);
+    usage.cache_read_tokens = None;
+    usage.cache_write_tokens = None;
+    response.api_specific = Some(ApiSpecificResponse::GeminiGenerateContent {
+        thoughts_tokens: None,
+        tool_use_prompt_tokens: Some(1),
+        safety_ratings: None,
+        grounding_metadata: None,
+        citation_metadata: None,
+        extra: serde_json::Map::new(),
+    });
+    attach_estimated_cost_for_provider(&mut response, Some("configured"));
+
+    let usage = response.usage.as_ref().unwrap();
+    assert_eq!(usage.prompt_tokens, Some(u64::MAX));
+    assert_eq!(usage.cost, None);
 }
 
 #[test]
@@ -1511,6 +1656,7 @@ fn test_attach_estimated_cost_omits_cost_when_billed_output_tokens_overflow() {
     usage.cache_write_tokens = None;
     response.api_specific = Some(ApiSpecificResponse::GeminiGenerateContent {
         thoughts_tokens: Some(1),
+        tool_use_prompt_tokens: None,
         safety_ratings: None,
         grounding_metadata: None,
         citation_metadata: None,
@@ -1892,6 +2038,7 @@ fn test_api_specific_anthropic_messages_round_trip() {
 fn test_api_specific_gemini_generate_content_round_trip_empty_extra() {
     let api = ApiSpecificResponse::GeminiGenerateContent {
         thoughts_tokens: Some(3),
+        tool_use_prompt_tokens: None,
         safety_ratings: None,
         grounding_metadata: None,
         citation_metadata: None,
@@ -1907,6 +2054,7 @@ fn test_api_specific_gemini_generate_content_round_trip_empty_extra() {
 fn test_api_specific_gemini_generate_content_round_trip_extra() {
     let api = ApiSpecificResponse::GeminiGenerateContent {
         thoughts_tokens: None,
+        tool_use_prompt_tokens: None,
         safety_ratings: Some(json!([{"category": "HARM_CATEGORY_HATE_SPEECH"}])),
         grounding_metadata: None,
         citation_metadata: None,
@@ -1923,6 +2071,7 @@ fn test_api_specific_gemini_generate_content_round_trip_extra() {
 fn test_api_specific_gemini_generate_content_extra_cannot_override_api_tag() {
     let api = ApiSpecificResponse::GeminiGenerateContent {
         thoughts_tokens: None,
+        tool_use_prompt_tokens: None,
         safety_ratings: None,
         grounding_metadata: None,
         citation_metadata: None,

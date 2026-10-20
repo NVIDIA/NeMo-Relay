@@ -685,7 +685,7 @@ fn trajectory_typed_api_specific_variants_fail_closed() {
         json!({"api": "openai_responses", "output_items": [{"text": "SECRET"}], "status": "completed", "previous_response_id": "SECRET", "store": true}),
         json!({"api": "anthropic_messages", "object_type": "message", "role": "assistant", "stop_reason": "end_turn", "stop_sequence": "SECRET", "content_blocks": [{"text": "SECRET"}]}),
         json!({"api": "oci_genai", "api_format": "GENERIC", "model_version": "oci-model-v1"}),
-        json!({"api": "gemini_generate_content", "thoughts_tokens": 9, "safety_ratings": {"secret": "SECRET"}, "future": "SECRET"}),
+        json!({"api": "gemini_generate_content", "thoughts_tokens": 9, "tool_use_prompt_tokens": 4, "safety_ratings": {"secret": "SECRET"}, "future": "SECRET"}),
         json!({"api": "custom", "api_name": "SECRET", "data": {"secret": "SECRET"}}),
     ];
     for api_specific in response_cases {
@@ -700,7 +700,24 @@ fn trajectory_typed_api_specific_variants_fail_closed() {
             .unwrap();
         let serialized = serde_json::to_string(&sanitized).unwrap();
         assert!(!serialized.contains("SECRET"), "{serialized}");
-        assert!(serde_json::to_value(&sanitized).unwrap()["finish_reason"].is_null());
+        let value = serde_json::to_value(&sanitized).unwrap();
+        assert!(value["finish_reason"].is_null());
+        match value["api_specific"]["api"].as_str() {
+            Some("openai_chat") => {
+                assert_eq!(value["api_specific"]["system_fingerprint"], "[REDACTED]");
+            }
+            Some("openai_responses") => assert_eq!(value["api_specific"]["status"], "completed"),
+            Some("anthropic_messages") => {
+                assert_eq!(value["api_specific"]["stop_reason"], "end_turn");
+            }
+            Some("oci_genai") => assert_eq!(value["api_specific"]["model_version"], "oci-model-v1"),
+            Some("gemini_generate_content") => {
+                assert_eq!(value["api_specific"]["thoughts_tokens"], 9);
+                assert_eq!(value["api_specific"]["tool_use_prompt_tokens"], 4);
+            }
+            Some("custom") => assert_eq!(value["api_specific"]["data"], json!({})),
+            other => panic!("unexpected API-specific response variant: {other:?}"),
+        }
     }
 }
 

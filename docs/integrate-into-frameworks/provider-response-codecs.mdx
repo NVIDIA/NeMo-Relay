@@ -181,7 +181,9 @@ Relay selects exactly one tier from `prompt_tokens` and applies that tier to the
 full request. It does not price only the overflow tokens at the higher rate.
 This matches providers that publish "short context" and "long context" prices
 for the entire request/session. If `prompt_tokens` is missing for a thresholded
-entry, Relay omits the estimate instead of guessing.
+entry, Relay omits the estimate instead of guessing. Counts that the estimate
+folds in from `api_specific`, such as Gemini tool-use prompt tokens, are priced
+at the selected tier's rates.
 
 ```json
 {
@@ -378,12 +380,16 @@ Built-in codecs normalize provider field names as follows:
 |---|---|---|---|---|---|
 | `prompt_tokens` | `prompt_tokens` | `input_tokens` | `input_tokens` | `promptTokens` | `promptTokenCount` |
 | `completion_tokens` | `completion_tokens` | `output_tokens` | `output_tokens` | `completionTokens` | `candidatesTokenCount` |
-| `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokens` | `totalTokenCount` (or computed as prompt + candidates + thinking) |
+| `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokens` | `totalTokenCount`, or computed as prompt + candidates + tool-use prompt + thinking |
 | `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | `promptTokensDetails.cachedTokens` | `cachedContentTokenCount` |
 | `cache_write_tokens` | — | — | `cache_creation_input_tokens` | — | — |
 | `cost` | `cost_usd`, structured `cost`, or scalar `cost` (OpenRouter; USD provider-reported total) | `cost_usd` or structured `cost` | `cost_usd` or structured `cost` | — | — |
 
-Gemini `generateContent` thinking tokens (`thoughtsTokenCount`) are stored in `api_specific.thoughts_tokens` rather than `completion_tokens`, because Google bills them as output tokens but reports them separately. The cost estimate folds them into the effective output-token count so that the pricing table reflects the real billing cost. Relay applies the same rule to any response annotation that reports `thoughts_tokens` through the `gemini_generate_content` `api_specific` variant.
+Gemini `generateContent` thinking tokens (`thoughtsTokenCount`) are stored in `api_specific.thoughts_tokens` rather than `completion_tokens`, because Google bills them as output tokens but reports them separately. The cost estimate folds them into the effective output-token count so that the pricing table reflects the real billing cost.
+
+Gemini tool-use prompt tokens, reported as `toolUsePromptTokenCount`, are stored in `api_specific.tool_use_prompt_tokens` and counted in a computed `total_tokens`. The cost estimate bills them at the input-token rate, except in responses grounded with Google Search or Google Maps.
+
+Relay applies both rules to any response annotation that reports `thoughts_tokens` or `tool_use_prompt_tokens` through the `gemini_generate_content` `api_specific` variant.
 
 Built-in codecs preserve only modeled provider-specific usage details under
 `api_specific`; other usage fields are dropped. For example, OpenAI Responses

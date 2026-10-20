@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::response::{AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, Usage};
+use crate::json::Json;
 
 const PRICING_CATALOG_VERSION: u32 = 1;
 
@@ -260,6 +261,17 @@ impl PricingResolver {
         self.pricing_for(provider, model)
             .and_then(|pricing| pricing.estimate_cost(usage))
     }
+
+    pub(crate) fn estimate_billed_cost(
+        &self,
+        provider: Option<&str>,
+        model: &str,
+        billed: &BilledUsage<'_>,
+    ) -> Option<CostEstimate> {
+        self.pricing_for(provider, model).and_then(|pricing| {
+            pricing.estimate_cost_in_tier(&billed.usage, billed.rate_tier_prompt_tokens)
+        })
+    }
 }
 
 /// Per-token model pricing expressed in USD per one million tokens.
@@ -297,6 +309,14 @@ impl ModelPricing {
     /// Estimates cost for the provided token usage.
     #[must_use]
     pub fn estimate_cost(&self, usage: &Usage) -> Option<CostEstimate> {
+        self.estimate_cost_in_tier(usage, usage.prompt_tokens)
+    }
+
+    fn estimate_cost_in_tier(
+        &self,
+        usage: &Usage,
+        rate_tier_prompt_tokens: Option<u64>,
+    ) -> Option<CostEstimate> {
         if self.unit != PricingUnit::PerToken {
             return None;
         }
@@ -304,7 +324,7 @@ impl ModelPricing {
         let completion_tokens = usage.completion_tokens.unwrap_or(0);
         let cache_read_tokens = usage.cache_read_tokens.unwrap_or(0);
         let cache_write_tokens = usage.cache_write_tokens.unwrap_or(0);
-        let rates = self.rates_for_usage(usage)?;
+        let rates = self.rates_for_prompt_tokens(rate_tier_prompt_tokens)?;
 
         if prompt_tokens == 0
             && completion_tokens == 0
@@ -353,9 +373,9 @@ impl ModelPricing {
         })
     }
 
-    fn rates_for_usage(&self, usage: &Usage) -> Option<TokenPricingRates> {
+    fn rates_for_prompt_tokens(&self, prompt_tokens: Option<u64>) -> Option<TokenPricingRates> {
         if let Some(schedule) = &self.rate_schedule {
-            return schedule.rates_for_usage(usage);
+            return schedule.rates_for_prompt_tokens(prompt_tokens);
         }
         self.rates
     }
@@ -486,13 +506,13 @@ pub enum TokenRateSchedule {
 }
 
 impl TokenRateSchedule {
-    fn rates_for_usage(&self, usage: &Usage) -> Option<TokenPricingRates> {
+    fn rates_for_prompt_tokens(&self, prompt_tokens: Option<u64>) -> Option<TokenPricingRates> {
         match self {
             Self::PromptTokenThreshold { applies_to, tiers } => {
                 if *applies_to != RateScheduleApplication::FullRequest {
                     return None;
                 }
-                let prompt_tokens = usage.prompt_tokens?;
+                let prompt_tokens = prompt_tokens?;
                 tiers
                     .iter()
                     .find(|tier| tier.matches_prompt_tokens(prompt_tokens))
@@ -617,6 +637,14 @@ pub fn estimate_cost_for_provider(
     active_pricing_resolver().estimate_cost_for_provider(provider, model, usage)
 }
 
+pub(crate) fn estimate_billed_cost_for_provider(
+    provider: Option<&str>,
+    model: &str,
+    billed: &BilledUsage<'_>,
+) -> Option<CostEstimate> {
+    active_pricing_resolver().estimate_billed_cost(provider, model, billed)
+}
+
 /// Estimates USD cost using the provided catalog.
 #[must_use]
 pub fn estimate_cost_with_catalog(
@@ -691,33 +719,131 @@ pub fn attach_estimated_cost_for_provider(
     let Some(model) = response.model.clone() else {
         return;
     };
-    let thoughts_tokens = match &response.api_specific {
+    let gemini = match &response.api_specific {
         Some(ApiSpecificResponse::GeminiGenerateContent {
-            thoughts_tokens, ..
-        }) => *thoughts_tokens,
+            thoughts_tokens,
+            tool_use_prompt_tokens,
+            grounding_metadata,
+            ..
+        }) => Some(GeminiBilling {
+            separate: SeparateUsageCounts {
+                thoughts_tokens: *thoughts_tokens,
+                tool_use_prompt_tokens: *tool_use_prompt_tokens,
+            },
+            tool_use_billing: ToolUsePromptBilling::from_grounding_metadata(
+                grounding_metadata.as_ref(),
+            ),
+        }),
         _ => None,
     };
     let Some(usage) = response.usage.as_mut() else {
         return;
     };
 
-    let cost = billed_usage(usage, thoughts_tokens)
-        .and_then(|billed| estimate_cost_for_provider(provider, &model, &billed));
+    let cost = billed_usage(usage, gemini)
+        .ok()
+        .and_then(|billed| estimate_billed_cost_for_provider(provider, &model, &billed));
     usage.cost = cost;
 }
 
-pub(crate) fn billed_usage(usage: &Usage, thoughts_tokens: Option<u64>) -> Option<Cow<'_, Usage>> {
-    let Some(thoughts) = thoughts_tokens else {
-        return Some(Cow::Borrowed(usage));
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SeparateUsageCounts {
+    pub(crate) thoughts_tokens: Option<u64>,
+    pub(crate) tool_use_prompt_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolUsePromptBilling {
+    InputTokens,
+    GroundingRequests,
+}
+
+impl ToolUsePromptBilling {
+    pub(crate) fn from_grounding_metadata(grounding_metadata: Option<&Json>) -> Self {
+        let Some(metadata) = grounding_metadata else {
+            return Self::InputTokens;
+        };
+        let executed_web_search = metadata
+            .get("webSearchQueries")
+            .and_then(Json::as_array)
+            .is_some_and(|queries| {
+                queries
+                    .iter()
+                    .any(|query| query.as_str().is_some_and(|query| !query.is_empty()))
+            });
+        let maps_result = metadata
+            .get("groundingChunks")
+            .and_then(Json::as_array)
+            .is_some_and(|chunks| chunks.iter().any(|chunk| chunk.get("maps").is_some()));
+        let maps_widget = metadata
+            .get("googleMapsWidgetContextToken")
+            .and_then(Json::as_str)
+            .is_some_and(|token| !token.is_empty());
+        if executed_web_search || maps_result || maps_widget {
+            Self::GroundingRequests
+        } else {
+            Self::InputTokens
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GeminiBilling {
+    pub(crate) separate: SeparateUsageCounts,
+    pub(crate) tool_use_billing: ToolUsePromptBilling,
+}
+
+pub(crate) struct BilledUsage<'a> {
+    pub(crate) usage: Cow<'a, Usage>,
+    pub(crate) rate_tier_prompt_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TokenOverflow;
+
+pub(crate) fn billed_usage<'a>(
+    usage: &'a Usage,
+    gemini: Option<GeminiBilling>,
+) -> Result<BilledUsage<'a>, TokenOverflow> {
+    let rate_tier_prompt_tokens = usage.prompt_tokens;
+    let Some(GeminiBilling {
+        separate,
+        tool_use_billing,
+    }) = gemini
+    else {
+        return Ok(BilledUsage {
+            usage: Cow::Borrowed(usage),
+            rate_tier_prompt_tokens,
+        });
     };
-    let completion_tokens = match usage.completion_tokens {
-        Some(visible) => visible.checked_add(thoughts)?,
-        None => thoughts,
+    let input_rate_tool_use_prompt_tokens = match tool_use_billing {
+        ToolUsePromptBilling::InputTokens => separate.tool_use_prompt_tokens,
+        ToolUsePromptBilling::GroundingRequests => None,
     };
-    Some(Cow::Owned(Usage {
-        completion_tokens: Some(completion_tokens),
-        ..usage.clone()
-    }))
+    let prompt_tokens = add_separate_count(usage.prompt_tokens, input_rate_tool_use_prompt_tokens)?;
+    let completion_tokens = add_separate_count(usage.completion_tokens, separate.thoughts_tokens)?;
+    Ok(BilledUsage {
+        usage: Cow::Owned(Usage {
+            prompt_tokens,
+            completion_tokens,
+            ..usage.clone()
+        }),
+        rate_tier_prompt_tokens,
+    })
+}
+
+fn add_separate_count(
+    reported: Option<u64>,
+    separate: Option<u64>,
+) -> Result<Option<u64>, TokenOverflow> {
+    match (reported, separate) {
+        (reported, None) => Ok(reported),
+        (None, Some(separate)) => Ok(Some(separate)),
+        (Some(reported), Some(separate)) => reported
+            .checked_add(separate)
+            .map(Some)
+            .ok_or(TokenOverflow),
+    }
 }
 
 fn validate_nonempty(
