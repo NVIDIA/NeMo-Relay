@@ -168,6 +168,27 @@ Get-Service NeMoRelayDaemon
 Inspect `NeMoRelayService.out.log` and `NeMoRelayService.err.log` under the log
 directory. Startup failures can also appear in the Windows Application event log.
 
+### Publish the Hook Certificate
+
+Hooks run as each user and check the daemon's TLS certificate before they send
+anything. A daemon run as `SYSTEM`, by the system task or by WinSW, keeps its
+identity in a directory users cannot read. Publish its certificate, never the
+key, in `C:\ProgramData\nemo-relay`, created with the read-only user ACL from
+[System Configuration](/daemon/configuration). Export it as `SYSTEM` with the
+service's `XDG_CONFIG_HOME`, for example with a one-time task:
+
+```powershell
+$Publish = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument '/d /c set "XDG_CONFIG_HOME=C:\ProgramData\NVIDIA\NeMoRelayDaemon\config" && "C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay.exe" daemon tls-certificate > "C:\ProgramData\nemo-relay\hook-tls-certificate.pem"'
+Register-ScheduledTask -TaskName 'NeMoRelay-Publish-Hook-Certificate' -Action $Publish -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest)
+Start-ScheduledTask -TaskName 'NeMoRelay-Publish-Hook-Certificate'
+Get-Content 'C:\ProgramData\nemo-relay\hook-tls-certificate.pem'
+Unregister-ScheduledTask -TaskName 'NeMoRelay-Publish-Hook-Certificate' -Confirm:$false
+```
+
+The certificate stays the same across restarts and upgrades. Publish it again
+only if the service identity under the daemon's `config\nemo-relay\bootstrap`
+directory is removed.
+
 ## Verify and Maintain
 
 For tasks, inspect the matching task and its log:

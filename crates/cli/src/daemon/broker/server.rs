@@ -20,6 +20,8 @@ use axum::middleware::{Next, from_fn_with_state};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+// The coverage modules below rely on this import through `use super::*`.
+#[cfg(test)]
 use base64::Engine;
 use bytes::Bytes;
 use hyper::body::Body as HttpBody;
@@ -3012,34 +3014,7 @@ fn load_tls_config(
 }
 
 fn decode_pem_blocks(bytes: &[u8], label: &str) -> Result<Vec<Vec<u8>>, CliError> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|error| CliError::Config(format!("TLS PEM is not UTF-8: {error}")))?;
-    let begin = format!("-----BEGIN {label}-----");
-    let end = format!("-----END {label}-----");
-    let mut blocks = Vec::new();
-    let mut remainder = text;
-    while let Some((_, after_begin)) = remainder.split_once(&begin) {
-        let Some((encoded, after_end)) = after_begin.split_once(&end) else {
-            return Err(CliError::Config(format!(
-                "TLS PEM has an unterminated {label} block"
-            )));
-        };
-        let compact = encoded
-            .chars()
-            .filter(|character| !character.is_ascii_whitespace())
-            .collect::<String>();
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(compact)
-            .map_err(|_| CliError::Config(format!("TLS PEM contains invalid {label} base64")))?;
-        if decoded.is_empty() {
-            return Err(CliError::Config(format!(
-                "TLS PEM contains an empty {label} block"
-            )));
-        }
-        blocks.push(decoded);
-        remainder = after_end;
-    }
-    Ok(blocks)
+    crate::gateway::tls::decode_pem_blocks(bytes, label).map_err(CliError::Config)
 }
 
 async fn serve_plain(
