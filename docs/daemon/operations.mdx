@@ -126,7 +126,7 @@ The supplied service runbooks use these default locations to capture daemon stde
 | --- | --- |
 | Linux daemon | `journalctl --user -u nemo-relay-daemon` or `sudo journalctl -u nemo-relay-daemon` |
 | macOS user daemon | `~/Library/Logs/NeMoRelay/daemon.err.log` |
-| macOS system daemon | `/Library/Logs/NeMoRelay/daemon.err.log` |
+| macOS system daemon | `/var/lib/nemo-relay/logs/daemon.err.log` |
 | Windows user task | `%LOCALAPPDATA%\nemo-relay-daemon\logs\daemon.err.log` |
 | Windows system task | `C:\ProgramData\NVIDIA\NeMoRelayDaemon\logs\daemon.err.log` |
 | WinSW daemon | `NeMoRelayService.err.log` and `.out.log` in the configured log directory |
