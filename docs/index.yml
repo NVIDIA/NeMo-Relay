@@ -75,14 +75,6 @@ navigation:
                 icon: fa-brands fa-rust
                 path: ./getting-started/quick-start/rust.mdx
                 slug: rust
-          - section: "Featured Plugins"
-            skip-slug: true
-            collapsed: open-by-default
-            contents:
-              - page: "NVIDIA NeMo Switchyard"
-                icon: fa-brands fa-nvidia
-                path: ./getting-started/quick-start/switchyard.mdx
-                slug: switchyard
   - folder: ./nemo-relay-cli
     title: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli
@@ -99,7 +91,7 @@ navigation:
     title: "Instrument Applications"
     slug: instrument-applications
     title-source: frontmatter
-  - section: "Configure Plugins"
+  - section: "Relay Plugins"
     slug: configure-plugins
     contents:
       - page: "About"
@@ -108,30 +100,42 @@ navigation:
       - page: "Configure and Initialize Plugins"
         path: ./configure-plugins/initialize-plugins.mdx
         slug: initialize-plugins
-      - folder: ./configure-plugins/observability
-        title: "Observability"
-        title-source: frontmatter
-      - folder: ./configure-plugins/adaptive
-        title: "Adaptive"
-        title-source: frontmatter
-      - folder: ./configure-plugins/nemo-guardrails
-        title: "NeMo Guardrails (Deprecated)"
-        title-source: frontmatter
-      - folder: ./configure-plugins/pii-redaction
-        title: "PII Redaction"
-        title-source: frontmatter
-      - page: "Model Pricing"
-        path: ./configure-plugins/model-pricing.mdx
-        slug: model-pricing
-      - page: "Resource Metrics"
-        path: ./configure-plugins/resource-metrics.mdx
-        slug: resource-metrics
-      - page: "Configure Discoverable Plugins"
+      - page: "Manage Discoverable Plugins"
         path: ./configure-plugins/discoverable-plugins.mdx
         slug: discoverable-plugins
       - page: "Plugin Configuration Files"
         path: ./configure-plugins/plugin-configuration-files.mdx
         slug: plugin-configuration-files
+      - section: "Built-In Plugins"
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - folder: ./configure-plugins/observability
+            title: "Observability"
+            title-source: frontmatter
+          - folder: ./configure-plugins/adaptive
+            title: "Adaptive"
+            title-source: frontmatter
+          - folder: ./configure-plugins/nemo-guardrails
+            title: "NeMo Guardrails (Deprecated)"
+            title-source: frontmatter
+          - folder: ./configure-plugins/pii-redaction
+            title: "PII Redaction"
+            title-source: frontmatter
+          - page: "Model Pricing"
+            path: ./configure-plugins/model-pricing.mdx
+            slug: model-pricing
+          - page: "Resource Metrics"
+            path: ./configure-plugins/resource-metrics.mdx
+            slug: resource-metrics
+      - section: "First-Party Plugins"
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - page: "NeMo Switchyard"
+            icon: fa-brands fa-nvidia
+            path: ./configure-plugins/switchyard.mdx
+            slug: switchyard
   - folder: ./integrate-into-frameworks
     title: "Integrate into Frameworks"
     slug: integrate-into-frameworks

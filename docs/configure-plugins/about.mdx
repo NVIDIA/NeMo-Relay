@@ -1,5 +1,5 @@
 ---
-title: "Configure Plugins"
+title: "Relay Plugins"
 sidebar-title: "About"
 description: "Configure built-in and discoverable NeMo Relay plugins with plugins.toml."
 position: 1
@@ -18,12 +18,12 @@ Choose the path that matches your goal:
 | --- | --- |
 | Configure a plugin host in an application | [Configure and Initialize Plugins](/configure-plugins/initialize-plugins) |
 | Configure a built-in Relay component | Choose the component guide below. Use `plugins.toml` or the binding API. |
-| Add a plugin someone else packaged | [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins) |
+| Add a plugin someone else packaged | [Manage Discoverable Plugins](/configure-plugins/discoverable-plugins) |
 | Create a reusable plugin | [Build Plugins](/build-plugins/about) |
 
-## Built-in Plugins
+## Built-In Plugins
 
-Relay ships these first-party components. Configure them as `[[components]]`
+Relay includes these built-in components. Configure them as `[[components]]`
 entries in `plugins.toml`.
 
 - [Observability](/configure-plugins/observability/about) exports ATOF, ATIF,
@@ -41,6 +41,15 @@ entries in `plugins.toml`.
   polling marks and on-demand snapshots for CPU, memory, processes, disk,
   network, and GPUs.
 
+## First-Party Plugins
+
+First-party plugins are published separately by NVIDIA. Install and manage them
+with the Relay CLI for a user account or a system-wide deployment.
+
+- [NeMo Switchyard](/configure-plugins/switchyard) routes model requests across
+  models and providers. The guide covers installation, configuration, a routed
+  request, and removal.
+
 ## Guides
 
 Follow the guides below to configure plugins.
@@ -51,7 +60,7 @@ Follow the guides below to configure plugins.
 - [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
   explains runtime `plugins.toml` discovery, precedence, merging, and CLI
   editing.
-- [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
+- [Manage Discoverable Plugins](/configure-plugins/discoverable-plugins)
   explains manifest-backed native and worker plugin installation, validation,
   trust policy, and activation.
 

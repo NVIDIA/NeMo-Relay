@@ -1,33 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-version = 1
-
-[policy]
-unknown_component = "error"
-unknown_field = "error"
-unsupported_value = "error"
-
-[[components]]
-kind = "observability"
-enabled = true
-
-[components.config]
-version = 4
-enable_full_payloads = false
-
-[components.config.atof]
-enabled = true
-
-[[components.config.atof.sinks]]
-type = "file"
-output_directory = "logs"
-filename = "events.jsonl"
-mode = "overwrite"
-
-[[plugins.dynamic]]
-manifest = "./switchyard-plugin/relay-plugin.toml"
-
+# Add these tables to the installed Switchyard entry; retain its manifest path.
 [plugins.dynamic.config]
 priority = 0
 
@@ -50,3 +24,20 @@ target = "default"
 
 [plugins.policy.overrides."nvidia.switchyard"]
 attestation = "integrity_only"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"

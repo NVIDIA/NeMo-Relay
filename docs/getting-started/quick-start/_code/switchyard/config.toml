@@ -1,5 +1,0 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
-[upstream]
-openai_base_url = "https://integrate.api.nvidia.com/v1"
