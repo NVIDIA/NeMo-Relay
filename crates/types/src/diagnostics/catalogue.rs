@@ -128,6 +128,8 @@ pub enum PluginPhase {
 #[serde(rename_all = "snake_case")]
 pub enum CommonPluginFailureCode {
     /// Observation identified by `plugin.configuration_invalid`.
+    /// Generic configuration errors may include file-read failures, so their
+    /// cause remains unknown without structured producer evidence.
     ConfigurationInvalid,
     /// Observation identified by `plugin.registration_failed`.
     RegistrationFailed,
@@ -158,7 +160,7 @@ impl CommonPluginFailureCode {
     #[must_use]
     pub const fn allowed_classes(self) -> &'static [FailureClass] {
         match self {
-            Self::ConfigurationInvalid => &[FailureClass::InvalidInput],
+            Self::ConfigurationInvalid => &[FailureClass::Unknown, FailureClass::InvalidInput],
             Self::RegistrationFailed => &[
                 FailureClass::Unknown,
                 FailureClass::InvalidInput,
