@@ -7,6 +7,7 @@
 //! providers, aliases, or cache-accounting rules does not require editing
 //! [`AnnotatedLlmResponse`](super::response::AnnotatedLlmResponse).
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::PathBuf;
 #[cfg(test)]
@@ -16,7 +17,7 @@ use std::sync::{Arc, LazyLock, RwLock};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
+use super::response::{AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, Usage};
 
 const PRICING_CATALOG_VERSION: u32 = 1;
 
@@ -690,11 +691,33 @@ pub fn attach_estimated_cost_for_provider(
     let Some(model) = response.model.clone() else {
         return;
     };
+    let thoughts_tokens = match &response.api_specific {
+        Some(ApiSpecificResponse::GeminiGenerateContent {
+            thoughts_tokens, ..
+        }) => *thoughts_tokens,
+        _ => None,
+    };
     let Some(usage) = response.usage.as_mut() else {
         return;
     };
 
-    usage.cost = estimate_cost_for_provider(provider, &model, usage);
+    let cost = billed_usage(usage, thoughts_tokens)
+        .and_then(|billed| estimate_cost_for_provider(provider, &model, &billed));
+    usage.cost = cost;
+}
+
+pub(crate) fn billed_usage(usage: &Usage, thoughts_tokens: Option<u64>) -> Option<Cow<'_, Usage>> {
+    let Some(thoughts) = thoughts_tokens else {
+        return Some(Cow::Borrowed(usage));
+    };
+    let completion_tokens = match usage.completion_tokens {
+        Some(visible) => visible.checked_add(thoughts)?,
+        None => thoughts,
+    };
+    Some(Cow::Owned(Usage {
+        completion_tokens: Some(completion_tokens),
+        ..usage.clone()
+    }))
 }
 
 fn validate_nonempty(

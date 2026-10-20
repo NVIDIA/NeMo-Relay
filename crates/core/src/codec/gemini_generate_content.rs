@@ -20,6 +20,7 @@ use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
+use super::model_pricing::billed_usage;
 use super::request::{
     AnnotatedLlmRequest, ContentPart, FunctionCall, FunctionDefinition, GenerationParams, Message,
     MessageContent, ToolCall, ToolDefinition,
@@ -504,34 +505,18 @@ fn map_usage(meta: Option<RawUsageMetadata>, model: Option<&str>) -> (Option<Usa
     // available.  Thinking tokens count as billable output and must be included even
     // when candidatesTokenCount is missing (e.g. thinking-only partial responses).
     let total = m.total_token_count.or_else(|| {
-        let has_any = prompt.is_some() || completion.is_some() || thoughts_token_count.is_some();
-        has_any.then(|| {
-            prompt.unwrap_or(0) + completion.unwrap_or(0) + thoughts_token_count.unwrap_or(0)
-        })
+        let counts = [prompt, completion, thoughts_token_count];
+        if counts.iter().all(Option::is_none) {
+            return None;
+        }
+        counts
+            .into_iter()
+            .flatten()
+            .try_fold(0_u64, u64::checked_add)
     });
-    // For cost estimation: treat thinking tokens as additional completion tokens
-    // so the pricing table applies the output-token rate to them even when
-    // candidatesTokenCount is absent.
-    let completion_for_cost = match (completion, thoughts_token_count) {
-        (Some(c), Some(t)) => Some(c + t),
-        (Some(c), None) => Some(c),
-        (None, Some(t)) => Some(t),
-        (None, None) => None,
-    };
     let uncached_input_tokens = prompt
         .zip(m.cached_content_token_count)
         .and_then(|(total, cached)| total.checked_sub(cached));
-    let usage_for_cost = Usage {
-        prompt_tokens: prompt,
-        completion_tokens: completion_for_cost,
-        total_tokens: total,
-        cache_read_tokens: m.cached_content_token_count,
-        cache_write_tokens: None,
-        uncached_input_tokens,
-        cost: None,
-    };
-    let cost = model
-        .and_then(|m| estimate_cost_for_provider(model_provider.as_deref(), m, &usage_for_cost));
     let usage = Usage {
         prompt_tokens: prompt,
         completion_tokens: completion,
@@ -539,9 +524,13 @@ fn map_usage(meta: Option<RawUsageMetadata>, model: Option<&str>) -> (Option<Usa
         cache_read_tokens: m.cached_content_token_count,
         cache_write_tokens: None,
         uncached_input_tokens,
-        cost,
+        cost: None,
     };
-    (Some(usage), thoughts_token_count)
+    let cost = model.and_then(|m| {
+        let billed = billed_usage(&usage, thoughts_token_count)?;
+        estimate_cost_for_provider(model_provider.as_deref(), m, &billed)
+    });
+    (Some(Usage { cost, ..usage }), thoughts_token_count)
 }
 
 /// Validate the shape of a Gemini `systemInstruction` value.
