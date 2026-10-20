@@ -183,19 +183,23 @@ impl QueryPool {
             (limits.max_snapshot_bytes, 1),
         ] {
             per_page = per_page
-                .checked_add(count.checked_mul(size).ok_or(DiagnosticError::Allocation)?)
-                .ok_or(DiagnosticError::Allocation)?;
+                .checked_add(
+                    count
+                        .checked_mul(size)
+                        .ok_or(DiagnosticError::InvalidLimits)?,
+                )
+                .ok_or(DiagnosticError::InvalidLimits)?;
         }
         let header = std::alloc::Layout::new::<[usize; 2]>()
             .extend(std::alloc::Layout::new::<Self>())
-            .map_err(|_| DiagnosticError::Allocation)?
+            .map_err(|_| DiagnosticError::InvalidLimits)?
             .0
             .pad_to_align()
             .size();
         let slots = limits
             .max_queries
             .checked_mul(std::mem::size_of::<Option<PageWorkspace>>())
-            .ok_or(DiagnosticError::Allocation)?;
+            .ok_or(DiagnosticError::InvalidLimits)?;
         header
             .checked_add(slots)
             .and_then(|n| {
@@ -204,7 +208,7 @@ impl QueryPool {
                     .checked_mul(per_page)
                     .and_then(|pages| n.checked_add(pages))
             })
-            .ok_or(DiagnosticError::Allocation)
+            .ok_or(DiagnosticError::InvalidLimits)
     }
     pub(super) fn new(limits: &DiagnosticLimits) -> Result<Arc<Self>, TryReserveError> {
         let mut slots = reserved(limits.max_queries)?;
