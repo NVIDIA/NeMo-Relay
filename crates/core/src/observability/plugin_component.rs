@@ -3332,8 +3332,9 @@ impl AtifDispatcher {
                         event = "atif_remote_delivery_failed",
                         plugin_kind = OBSERVABILITY_PLUGIN_KIND,
                         exporter = "atif",
-                        storage_index = *index;
-                        "ATIF remote storage upload failed"
+                        storage_index = *index,
+                        trajectory_id = agent_uuid.to_string().as_str();
+                        "ATIF remote storage upload failed: {message}"
                     ),
                 }
                 self.record_runtime_failure(
