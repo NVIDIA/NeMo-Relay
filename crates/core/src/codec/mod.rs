@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! LLM codec types, traits, and built-in implementations.
+//! LLM codecs and the shared JSON format for tool results.
 //!
 //! This module provides the type system and traits for bidirectional
 //! request codecs ([`traits::LlmCodec`] / [`request::AnnotatedLlmRequest`]),
@@ -13,6 +13,7 @@
 //!
 //! [`resolve`] is the detect-then-decode entry point for selecting a built-in
 //! provider codec from a raw payload when no codec annotation is present.
+//! [`tool`] defines the shared JSON format for tool results.
 
 pub mod anthropic;
 pub mod gemini_generate_content;
@@ -25,6 +26,7 @@ pub mod request;
 pub mod resolve;
 pub mod response;
 pub mod streaming;
+pub mod tool;
 pub mod traits;
 
 use nemo_relay_types::Json;

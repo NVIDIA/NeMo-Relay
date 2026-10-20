@@ -113,6 +113,32 @@ function unprintableError() {
 // ===========================================================================
 
 describe('LLM lifecycle', () => {
+  it('manual llm end preserves explicit errors and defaults to OK', async () => {
+    const events = [];
+    registerSubscriber('manual_llm_status', (event) => events.push(event));
+    try {
+      for (const failed of [false, true]) {
+        const name = failed ? 'manual_llm_error' : 'manual_llm_ok';
+        const metadata = { request_id: 'request-123' };
+        if (failed) {
+          Object.assign(metadata, {
+            'otel.status_code': 'ERROR',
+            'otel.status_description': 'provider timed out',
+            'error.type': 'TimeoutError',
+          });
+        }
+        const handle = llmCall(name, makeNative());
+        llmCallEnd(handle, failed ? null : { text: 'hello' }, null, metadata);
+        await flushSubscriberCallbacks();
+        const end = events.find((event) => event.name === name && event.scope_category === 'end');
+        assert.ok(end);
+        assert.deepEqual(end.metadata, { ...metadata, 'otel.status_code': failed ? 'ERROR' : 'OK' });
+      }
+    } finally {
+      deregisterSubscriber('manual_llm_status');
+    }
+  });
+
   it('llm call and end', () => {
     const native = makeNative();
     const handle = llmCall('test_llm', native, null, null, null, null, null);
@@ -3152,18 +3178,23 @@ describe('LLM intercepts', () => {
   it('ignored next() and close() rejections stay unhandled', () => {
     const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
     const script = `
+      import assert from 'node:assert/strict';
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
       const lib = require(${modulePath});
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const request = {
         headers: {},
         content: { messages: [], model: 'test-model' },
       };
-      const unhandled = [];
-      process.on('unhandledRejection', (error) => unhandled.push(error.message));
       for (const forwarded of [false, true]) {
         lib.__testForceStreamForwarding(forwarded);
+        const unhandled = [];
+        const rejections = Promise.withResolvers();
+        const onUnhandled = (error) => {
+          unhandled.push(error.message);
+          if (unhandled.length === 2) rejections.resolve();
+        };
+        process.on('unhandledRejection', onUnhandled);
         const failing = await lib.llmStreamCallExecute(
           'unhandled-next-llm',
           request,
@@ -3192,11 +3223,26 @@ describe('LLM intercepts', () => {
         );
         await closing.next();
         void closing.close();
-        await sleep(100);
-      }
-      const expected = ['provider boom', 'cleanup boom', 'provider boom', 'cleanup boom'];
-      if (!unhandled.every((message, index) => message.includes(expected[index])) || unhandled.length !== 4) {
-        throw new Error('unhandled rejections were ' + JSON.stringify(unhandled));
+        let timer;
+        try {
+          await Promise.race([
+            rejections.promise,
+            new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error(
+                'timed out waiting for unhandled rejections: ' + JSON.stringify(unhandled),
+              )), 2000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+          process.off('unhandledRejection', onUnhandled);
+        }
+        // Independent streams may reject in either order in each execution mode.
+        assert.equal(unhandled.length, 2);
+        for (const expected of ['provider boom', 'cleanup boom']) {
+          assert.equal(unhandled.filter((message) => message.includes(expected)).length, 1,
+            'forwarded=' + forwarded + ': unhandled rejections were ' + JSON.stringify(unhandled));
+        }
       }
     `;
 

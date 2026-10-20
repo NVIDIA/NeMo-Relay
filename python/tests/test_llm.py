@@ -9,8 +9,8 @@ import subprocess
 import sys
 import textwrap
 import threading
-from collections.abc import AsyncIterator, Awaitable
-from typing import Never, NoReturn, cast
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Never, NoReturn, TypeAlias, cast
 
 import pytest
 from async_helpers import resolve_async_result
@@ -21,6 +21,7 @@ from nemo_relay import (
     EventSanitizeFields,
     Json,
     LLMAttributes,
+    LlmExecutionContext,
     LLMHandle,
     LLMRequest,
     LLMRequestInterceptOutcome,
@@ -66,6 +67,24 @@ def _llm_event(events: list[Event], name: str, scope_category: str) -> ScopeEven
 
 
 class TestLLM:
+    @pytest.mark.parametrize("failed", [False, True])
+    def test_manual_call_end_status(self, subscribed_events: list[Event], failed: bool) -> None:
+        metadata: dict[str, Json] = {"request_id": "request-123"}
+        if failed:
+            metadata.update(
+                {
+                    "otel.status_code": "ERROR",
+                    "otel.status_description": "provider timed out",
+                    "error.type": "TimeoutError",
+                }
+            )
+        handle = llm.call("manual_status", make_request())
+        llm.call_end(handle, None if failed else {"text": "hello"}, metadata=metadata)
+        subscribers.flush()
+
+        end = _llm_event(subscribed_events, "manual_status", "end")
+        assert end.metadata == {**metadata, "otel.status_code": "ERROR" if failed else "OK"}
+
     def test_call_and_call_end(self) -> None:
         request = make_request()
         handle = llm.call("my_llm", request)
@@ -1933,6 +1952,64 @@ class TestLLMStreaming:
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_direct_error")
 
+    @pytest.mark.parametrize("chunks_before_error", [0, 1])
+    async def test_stream_execution_intercept_forwards_a_provider_stream_error(self, chunks_before_error: int) -> None:
+        def forward(
+            name: str, request: LLMRequest, context: LlmExecutionContext, next_call: _StreamNext
+        ) -> AsyncIterator[Json]:
+            async def gen() -> AsyncIterator[Json]:
+                async for chunk in await next_call(request):
+                    yield chunk
+
+            return gen()
+
+        intercepts.register_llm_stream_execution("py_llm_stream_forwarded_error", 1, forward)
+        try:
+            stream = await llm.stream_execute(
+                "stream_forwarded_error_llm",
+                make_request(),
+                lambda request: _failing_stream(chunks_before_error),
+                lambda chunk: None,
+                lambda: {},
+            )
+            chunks: list[Json] = []
+            with pytest.raises(ConnectionError, match="provider stream cut"):
+                async for chunk in stream:
+                    chunks.append(chunk)
+            assert chunks == [{"token": index} for index in range(chunks_before_error)]
+        finally:
+            intercepts.deregister_llm_stream_execution("py_llm_stream_forwarded_error")
+
+    @pytest.mark.parametrize("chunks_before_error", [0, 1])
+    async def test_stream_execution_intercept_recovers_from_a_provider_stream_error(
+        self, chunks_before_error: int
+    ) -> None:
+        def recover(
+            name: str, request: LLMRequest, context: LlmExecutionContext, next_call: _StreamNext
+        ) -> AsyncIterator[Json]:
+            async def gen() -> AsyncIterator[Json]:
+                try:
+                    async for chunk in await next_call(request):
+                        yield chunk
+                except ConnectionError:
+                    yield {"token": "recovered"}
+
+            return gen()
+
+        intercepts.register_llm_stream_execution("py_llm_stream_recovered_error", 1, recover)
+        try:
+            stream = await llm.stream_execute(
+                "stream_recovered_error_llm",
+                make_request(),
+                lambda request: _failing_stream(chunks_before_error),
+                lambda chunk: None,
+                lambda: {},
+            )
+            chunks = [chunk async for chunk in stream]
+            assert chunks == [*({"token": index} for index in range(chunks_before_error)), {"token": "recovered"}]
+        finally:
+            intercepts.deregister_llm_stream_execution("py_llm_stream_recovered_error")
+
     async def test_stream_execution_intercept_failure_emits_exception_type(self) -> None:
         events = []
         subscribers.register("py_llm_stream_intercept_failure_sub", events.append)
@@ -2110,6 +2187,15 @@ class TestLLMStreaming:
 
 async def _single_chunk_stream():
     yield {"token": "downstream"}
+
+
+_StreamNext: TypeAlias = Callable[[LLMRequest], Awaitable[AsyncIterator[Json]]]
+
+
+async def _failing_stream(chunks: int) -> AsyncIterator[Json]:
+    for index in range(chunks):
+        yield {"token": index}
+    raise ConnectionError("provider stream cut")
 
 
 class _ImmediateStopAsyncIter:

@@ -218,6 +218,36 @@ class TestTypedHelpers:
 
 
 class TestTypedToolExecute:
+    async def test_best_effort_tool_result_envelope_reaches_events(self, subscribed_events) -> None:
+        def execute(_args: Json) -> ToolExecutionResult[object]:
+            return ToolExecutionResult("answer", {"source": "test"})
+
+        outcome = await typed.tool_execute(
+            "best_effort_tool_result",
+            {},
+            execute,
+            JsonPassthrough(),
+            BestEffortAnyCodec(tool_result=True),
+        )
+        assert outcome.result == "answer"
+        assert outcome.annotation == {"source": "test"}
+        await subscribers.flush_async()
+        event = next(
+            event
+            for event in subscribed_events
+            if isinstance(event, ScopeEvent)
+            and event.name == "best_effort_tool_result"
+            and event.scope_category == "end"
+        )
+        assert event.data == {
+            "schema": "nemo.relay.tool_result@1",
+            "content": "answer",
+            "is_error": False,
+            "result": "answer",
+        }
+        assert event.category_profile is not None
+        assert event.category_profile["tool_result_annotation"] == {"source": "test"}
+
     async def test_dataclass_roundtrip(self) -> None:
         async def search(args: SearchArgs) -> ToolExecutionResult[SearchResult]:
             return ToolExecutionResult(SearchResult(items=[args.query], total=1), {"provider": "typed"})
@@ -750,6 +780,87 @@ class TestBestEffortAnyCodec:
     def test_roundtrip_nested(self) -> None:
         val = {"items": [1, "two", None, {"nested": True}]}
         assert self.codec.from_json(self.codec.to_json(val)) == val
+
+    @pytest.mark.parametrize(
+        ("value", "content"),
+        [
+            ("answer", "answer"),
+            ("", ""),
+            (
+                ["answer", {"type": "text", "text": "42"}],
+                [{"type": "text", "text": "answer"}, {"type": "text", "text": "42"}],
+            ),
+            ({"answer": 42, "status": "error"}, None),
+            ([1, 2], None),
+            (42, None),
+            (None, None),
+        ],
+    )
+    def test_tool_result_projection_and_legacy_decoding(self, value, content) -> None:
+        codec = BestEffortAnyCodec(tool_result=True)
+        encoded = cast(JsonObject, codec.to_json(value))
+        assert encoded["schema"] == "nemo.relay.tool_result@1"
+        assert encoded["content"] == content
+        assert encoded["is_error"] is False
+        assert encoded["result"] == value
+        # Either codec configuration accepts both legacy and enveloped input.
+        assert self.codec.from_json(encoded) == value
+        assert codec.from_json(encoded) == value
+        assert codec.from_json(self.codec.to_json(value)) == value
+
+    def test_tool_result_keeps_explicit_content_and_failure_status(self) -> None:
+        envelope = {
+            "schema": "nemo.relay.tool_result@1",
+            "content": "handled failure",
+            "is_error": True,
+            "result": {"native": "failure payload"},
+        }
+        codec = BestEffortAnyCodec(tool_result=True)
+        assert codec.to_json(envelope) == envelope
+        assert codec.from_json(envelope) == envelope["result"]
+
+    @pytest.mark.parametrize("allowed", [False, True])
+    def test_tool_result_preserves_type_allowlist(self, allowed: bool) -> None:
+        point = BEPoint(1, 2)
+        encoded = cast(JsonObject, BestEffortAnyCodec(tool_result=True).to_json(point))
+        assert encoded["content"] is None
+        codec = BestEffortAnyCodec(allowed_types=[BEPoint] if allowed else [])
+        restored = codec.from_json(encoded)
+        assert restored == (point if allowed else encoded["result"])
+
+    def test_tool_result_does_not_authorize_python_imports(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+        marker = tmp_path / "import-marker"
+        module = tmp_path / "untrusted_tool_result.py"
+        module.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\nclass Payload: pass\n")
+        monkeypatch.syspath_prepend(str(tmp_path))
+        payload = {"__nv_pydantic__": "untrusted_tool_result.Payload", "data": {}}
+        envelope = {
+            "schema": "nemo.relay.tool_result@1",
+            "content": "answer",
+            "is_error": False,
+            "result": payload,
+        }
+        assert self.codec.from_json(envelope) is payload
+        assert not marker.exists()
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"schema": "nemo.relay.tool_result@2"},
+            {"content": 42},
+            {"is_error": "true"},
+        ],
+    )
+    def test_unrecognized_tool_result_envelopes_remain_json(self, change) -> None:
+        envelope = {"schema": "nemo.relay.tool_result@1", "content": "answer", "is_error": False, "result": 42}
+        envelope.update(change)
+        assert self.codec.from_json(envelope) is envelope
+
+    @pytest.mark.parametrize("missing", ["content", "is_error", "result"])
+    def test_incomplete_tool_result_envelopes_remain_json(self, missing) -> None:
+        envelope = {"schema": "nemo.relay.tool_result@1", "content": "answer", "is_error": False, "result": 42}
+        del envelope[missing]
+        assert self.codec.from_json(envelope) is envelope
 
     # -- Round-trip: dataclass --
 

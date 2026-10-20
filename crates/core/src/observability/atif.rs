@@ -579,6 +579,8 @@ fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<J
 }
 
 fn observation_content_value(value: &Json) -> Option<Json> {
+    let value =
+        crate::codec::tool::projected_tool_result(value).map_or(value, |(content, _)| content);
     match value {
         Json::String(_) => Some(value.clone()),
         _ => canonicalize_atif_content_parts(value),
@@ -588,6 +590,12 @@ fn observation_content_value(value: &Json) -> Option<Json> {
 fn observation_extra(event: &Event, output: Option<&Json>, content: Option<&Json>) -> Json {
     let mut extra = event_extra(event);
     if let Json::Object(extra_object) = &mut extra {
+        if output
+            .and_then(crate::codec::tool::projected_tool_result)
+            .is_some_and(|(_, is_error)| is_error)
+        {
+            extra_object.insert("is_error".to_string(), Json::Bool(true));
+        }
         // Keep the raw tool result unless the observation content already carries it unchanged.
         if let Some(tool_result) =
             output.filter(|output| !output.is_null() && content != Some(*output))

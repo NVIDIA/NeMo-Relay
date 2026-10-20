@@ -573,6 +573,7 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
             subscribers,
         )
     };
+    let metadata = tool_result_metadata(params.metadata, &params.execution_result.result);
     let ToolExecutionResult { result, annotation } = params.execution_result;
     let fallback = params.data;
     let event = {
@@ -584,7 +585,7 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
             EndToolHandleParams::builder()
                 .handle(params.handle)
                 .data(Json::Null)
-                .metadata_opt(params.metadata)
+                .metadata_opt(metadata)
                 .timestamp_opt(params.timestamp)
                 .build(),
         )
@@ -651,6 +652,7 @@ async fn tool_call_end_with_pending_marks(
         (entries, subscribers)
     };
     let subscribers = lifecycle_subscribers.unwrap_or(&subscribers);
+    let metadata = tool_result_metadata(params.metadata, &params.execution_result.result);
     let event = {
         let context = global_context();
         let state = context
@@ -660,7 +662,7 @@ async fn tool_call_end_with_pending_marks(
             EndToolHandleParams::builder()
                 .handle(params.handle)
                 .data(Json::Null)
-                .metadata_opt(params.metadata)
+                .metadata_opt(metadata)
                 .timestamp_opt(params.timestamp)
                 .build(),
         )
@@ -732,6 +734,15 @@ async fn tool_call_end_with_pending_marks(
         dispatch_sanitized_event(mark, sanitizers, subscribers, scope_stack.clone());
     }
     Ok(())
+}
+
+// A handled failure remains a returned result, while its tool span reports ERROR.
+fn tool_result_metadata(metadata: Option<Json>, result: &Json) -> Option<Json> {
+    if crate::codec::tool::projected_tool_result(result).is_some_and(|(_, is_error)| is_error) {
+        metadata_with_otel_status(metadata, "ERROR", None)
+    } else {
+        metadata
+    }
 }
 
 fn attach_tool_result_annotation(event: &mut Event, annotation: Option<Json>) {

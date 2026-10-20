@@ -285,11 +285,14 @@ The hook process performs the following actions:
    for named events that do not require a permission check. A fail-closed hook
    reports an error and exits with code `2`. It does not send an allow response.
 3. Checks the daemon's identity before sending the hook payload. For local
-   HTTP addresses, the daemon must run as the same user. Relay uses an
-   encrypted TLS connection and a saved certificate for that user account.
-   For remote HTTPS addresses, Relay checks the certificate against the
-   trusted certificates on your system. It sends the payload to the agent's
-   hook path at the daemon root.
+   HTTP addresses, Relay uses an encrypted TLS connection and trusts only
+   pinned certificates: the saved certificate of the current user account,
+   for a daemon run by the same user, and the certificate an administrator
+   published at `<system config dir>/hook-tls-certificate.pem`, for a daemon
+   run under another account. Without either, the hook fails before it
+   contacts the daemon. For remote HTTPS addresses, Relay checks the
+   certificate against the trusted certificates on your system. It sends the
+   payload to the agent's hook path at the daemon root.
 4. Adds `x-nemo-relay-client-token` exactly once.
 5. Writes a successful, nonempty hook response to standard output without
    changing its bytes.
@@ -319,6 +322,34 @@ overwrites an invalid or unsafe file. It never prints the token. With `--json`,
 standard output is `{"status":"created"|"existing","path":"..."}`. See
 [Credential Resolution](/daemon/configuration#credential-resolution) for the
 resolution order and file safety checks.
+
+## Publish the Hook Certificate
+
+Print the certificate that a daemon run by the current account presents to
+hooks:
+
+```text
+nemo-relay daemon tls-certificate
+```
+
+Standard output is one PEM `CERTIFICATE` block. The private key is never
+printed. The command creates the identity the same way daemon startup does, so
+it can run before or after the daemon first starts. Run it as the daemon's
+account, with the same `HOME` and `XDG_CONFIG_HOME` as the service.
+
+When the daemon runs under a different account than the coding agents, install
+the output as `hook-tls-certificate.pem` in the system configuration directory
+(`/etc/nemo-relay` on Unix, `%ProgramData%\nemo-relay` on Windows). On Unix, the
+file and its directory must be owned by root and must not be writable by group
+or other users, or hooks refuse it. The platform guides show the commands for a
+[macOS LaunchDaemon](/daemon/macos#system-launchdaemon),
+[Linux system service](/daemon/linux#system-service), and
+[Windows task or service](/daemon/windows#publish-the-hook-certificate).
+
+This certificate applies only to a daemon reached at a plain `http://` loopback
+address. A daemon started with `--tls-cert` and `--tls-key` serves that
+certificate at an `https://` address instead, and hooks verify it through the
+platform trust store, so there is nothing to publish.
 
 ## Run a Daemon-Attached Worker
 
