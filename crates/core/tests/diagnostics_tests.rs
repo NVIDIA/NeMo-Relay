@@ -526,6 +526,56 @@ fn utf8_detail_and_correlation_are_bounded_without_creating_keys() {
 }
 
 #[test]
+fn shortened_correlation_reports_truncated_without_detail_loss() {
+    let service = diagnostics(DiagnosticLimits {
+        max_correlation_bytes: 4,
+        ..limits()
+    });
+    let component = register(&service, "producer");
+    for (session_id, request_id, expected) in [
+        (Some("session"), None, EvidenceDisposition::Truncated),
+        (None, Some("request"), EvidenceDisposition::Truncated),
+        (None, Some("🙂request"), EvidenceDisposition::Truncated),
+        (Some("sess"), Some("🙂"), EvidenceDisposition::Retained),
+    ] {
+        let outcome = component
+            .record_without_projection_lazy(|| {
+                Observation::new(classification(FailureClass::Unknown), "ok", 1).with_correlation(
+                    DiagnosticCorrelationRef {
+                        session_id,
+                        request_id,
+                    },
+                )
+            })
+            .unwrap();
+        let RecordOutcome::Recorded(receipt) = outcome else {
+            panic!("fixture must be enabled");
+        };
+        assert_eq!(receipt.evidence, expected);
+    }
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.events.len(), 4);
+    assert_eq!(
+        view.events[0].correlation.session_id.as_deref(),
+        Some("sess")
+    );
+    assert_eq!(
+        view.events[1].correlation.request_id.as_deref(),
+        Some("requ")
+    );
+    assert_eq!(view.events[2].correlation.request_id.as_deref(), Some("🙂"));
+    assert!(view.events.iter().all(|event| {
+        event
+            .detail
+            .as_ref()
+            .is_some_and(|detail| !detail.truncated && detail.message == "ok")
+    }));
+    assert_eq!(view.coverage.loss.messages_truncated.value.get(), 0);
+    assert_eq!(view.coverage.loss.correlations_truncated.value.get(), 3);
+    assert_eq!(view.coverage.loss.correlations_omitted.value.get(), 0);
+}
+
+#[test]
 fn live_registration_reservations_are_never_displaced() {
     let service = diagnostics(DiagnosticLimits {
         max_components: 1,

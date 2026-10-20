@@ -1464,7 +1464,12 @@ fn record_observation(
         if let Some(evicted) = state.recent.push_back(event) {
             state.evict_event(evicted);
         }
-        if truncated || detail.is_some() && retained_detail.is_none() || correlation_omitted > 0 {
+        if truncated
+            || session_truncated
+            || request_truncated
+            || detail.is_some() && retained_detail.is_none()
+            || correlation_omitted > 0
+        {
             EvidenceDisposition::Truncated
         } else {
             EvidenceDisposition::Retained
