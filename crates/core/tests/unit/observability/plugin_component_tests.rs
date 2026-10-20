@@ -1378,6 +1378,7 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
     );
 
     let custom = vec![OpenTelemetrySignalEndpointConfig {
+        tls: None,
         endpoint: "https://collector.example/custom/metric-intake".to_string(),
         transport: default_otlp_transport(),
         headers: HashMap::new(),
@@ -1435,6 +1436,7 @@ fn signal_endpoint_resolution_skips_ambiguous_trace_paths_and_preserves_indexes(
 #[test]
 fn signal_endpoint_resolution_rejects_explicit_wrong_signal_paths() {
     let mut explicit = OpenTelemetrySignalEndpointConfig {
+        tls: None,
         endpoint: "https://collector.example/v1/traces".to_string(),
         transport: default_otlp_transport(),
         headers: HashMap::new(),
@@ -1619,6 +1621,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
         enabled: true,
         file_sinks: Vec::new(),
         endpoints: vec![OpenTelemetryEndpointConfig {
+            tls: None,
             otel_type: OpenTelemetryType::Full,
             endpoint: "http://localhost:4318/v1/traces".to_string(),
             transport: default_otlp_transport(),
@@ -1815,6 +1818,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
     let config = build_otel_config(
         0,
         OpenTelemetryEndpointConfig {
+            tls: None,
             otel_type: OpenTelemetryType::GenAi,
             endpoint: "http://localhost:4318/v1/traces".to_string(),
             transport: default_otlp_transport(),
@@ -1847,6 +1851,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
 
 fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
     OpenTelemetryEndpointConfig {
+        tls: None,
         otel_type: OpenTelemetryType::Full,
         endpoint: "http://localhost:4318/v1/traces".to_string(),
         transport: default_otlp_transport(),
@@ -1921,6 +1926,7 @@ fn trace_endpoint_completed_context_ttl_is_applied_and_must_be_positive() {
 
 fn test_signal_endpoint() -> OpenTelemetrySignalEndpointConfig {
     OpenTelemetrySignalEndpointConfig {
+        tls: None,
         endpoint: "http://localhost:4318/v1/logs".to_string(),
         transport: default_otlp_transport(),
         headers: HashMap::new(),

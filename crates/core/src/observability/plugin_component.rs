@@ -18,6 +18,8 @@
 //! metadata; their declared scope type is preserved in the exported event
 //! stream.
 
+use super::OpenTelemetryTlsConfig;
+
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -208,6 +210,9 @@ pub struct OpenTelemetrySectionConfig {
 pub struct OpenTelemetrySignalEndpointConfig {
     /// Required OTLP endpoint. Bare HTTP authorities gain the signal path.
     pub endpoint: String,
+    /// Certificate and private key file paths for this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<OpenTelemetryTlsConfig>,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
@@ -340,6 +345,9 @@ pub struct OpenTelemetryEndpointConfig {
     pub otel_type: OpenTelemetryType,
     /// Required OTLP endpoint.
     pub endpoint: String,
+    /// Certificate and private key file paths for this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<OpenTelemetryTlsConfig>,
     /// Representation used for point-in-time marks.
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
@@ -858,6 +866,26 @@ const fn otel_list_editor_field(
     }
 }
 
+impl EditorConfig for OpenTelemetryTlsConfig {
+    fn editor_schema() -> &'static EditorSchema {
+        static SCHEMA: EditorSchema = EditorSchema {
+            fields: &[
+                otel_editor_field("certificate", EditorFieldKind::String, &[], true),
+                otel_editor_field("client_certificate", EditorFieldKind::String, &[], true),
+                otel_editor_field("private_key", EditorFieldKind::String, &[], true),
+            ],
+        };
+        &SCHEMA
+    }
+}
+
+const fn otel_tls_editor_field() -> EditorFieldSpec {
+    EditorFieldSpec {
+        nested_schema: Some(<OpenTelemetryTlsConfig as EditorConfig>::editor_schema),
+        ..otel_editor_field("tls", EditorFieldKind::Section, &[], true)
+    }
+}
+
 impl EditorConfig for OpenTelemetryEndpointConfig {
     fn editor_schema() -> &'static EditorSchema {
         static SCHEMA: EditorSchema = EditorSchema {
@@ -868,6 +896,7 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                     &["full", "gen_ai", "openinference"],
                     false,
                 ),
+                otel_tls_editor_field(),
                 otel_editor_field("endpoint", EditorFieldKind::String, &[], false),
                 otel_editor_field(
                     "mark_projection",
@@ -1015,6 +1044,7 @@ impl EditorConfig for OpenTelemetrySignalEndpointConfig {
     fn editor_schema() -> &'static EditorSchema {
         static SCHEMA: EditorSchema = EditorSchema {
             fields: &[
+                otel_tls_editor_field(),
                 otel_editor_field("endpoint", EditorFieldKind::String, &[], false),
                 otel_editor_field(
                     "transport",
@@ -2569,6 +2599,7 @@ fn derive_signal_endpoint(
         headers: trace.headers.clone(),
         header_env: trace.header_env.clone(),
         header_file: trace.header_file.clone(),
+        tls: trace.tls.clone(),
         resource_attributes: trace.resource_attributes.clone(),
         promote_resource_metadata_prefixes: trace.promote_resource_metadata_prefixes.clone(),
         service_name: trace.service_name.clone(),
@@ -2803,6 +2834,12 @@ fn build_log_config(
         .with_promote_resource_metadata_prefixes(
             endpoint.promote_resource_metadata_prefixes.clone(),
         );
+    if let Some(tls) = &endpoint.tls {
+        tls.validate(&endpoint.endpoint).map_err(|error| {
+            PluginError::InvalidConfig(format!("OpenTelemetry endpoints[{index}] {error}"))
+        })?;
+        config = config.with_tls(tls.clone());
+    }
     if endpoint.service_name != default_otel_service_name() {
         config = config.with_service_name(endpoint.service_name.clone());
     }
@@ -2819,6 +2856,11 @@ fn build_metric_config(
 ) -> PluginResult<CoreOpenTelemetryMetricConfig> {
     let transport = parse_signal_transport("metrics", index, &endpoint.transport)?;
     let (headers, header_file) = resolve_signal_headers("metrics", index, &endpoint)?;
+    if let Some(tls) = &endpoint.tls {
+        tls.validate(&endpoint.endpoint).map_err(|error| {
+            PluginError::InvalidConfig(format!("OpenTelemetry endpoints[{index}] {error}"))
+        })?;
+    }
     let mut config = CoreOpenTelemetryMetricConfig::new(endpoint.endpoint)
         .with_transport(transport)
         .with_instrumentation_scope(endpoint.instrumentation_scope)
@@ -2831,6 +2873,9 @@ fn build_metric_config(
         .with_promote_resource_metadata_prefixes(
             endpoint.promote_resource_metadata_prefixes.clone(),
         );
+    if let Some(tls) = endpoint.tls {
+        config = config.with_tls(tls);
+    }
     if endpoint.service_name != default_otel_service_name() {
         config = config.with_service_name(endpoint.service_name);
     }
@@ -3955,6 +4000,9 @@ fn build_otel_config(
         .with_attribute_mappings(section.attribute_mappings)
         .with_promote_metadata_prefixes(section.promote_metadata_prefixes)
         .with_promote_resource_metadata_prefixes(section.promote_resource_metadata_prefixes);
+    if let Some(tls) = section.tls {
+        config = config.with_tls(tls);
+    }
     if section.service_name != default_otel_service_name() {
         config = config.with_service_name(section.service_name);
     }
@@ -4391,6 +4439,7 @@ fn validate_opentelemetry_signal_fields(
 ) {
     const COMMON_ENDPOINT_FIELDS: &[&str] = &[
         "endpoint",
+        "tls",
         "transport",
         "headers",
         "header_env",
@@ -4468,6 +4517,7 @@ fn validate_opentelemetry_endpoint_fields(
     const ALLOWED: &[&str] = &[
         "type",
         "endpoint",
+        "tls",
         "mark_projection",
         "mark_exclude_names",
         "attribute_mappings",
@@ -4819,6 +4869,20 @@ fn validate_opentelemetry_section(
     }
     validate_opentelemetry_file_sinks(diagnostics, policy, section);
     for (index, endpoint) in section.endpoints.iter().enumerate() {
+        if let Some(Err(error)) = endpoint
+            .tls
+            .as_ref()
+            .map(|tls| tls.validate(&endpoint.endpoint))
+        {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("endpoints[{index}].tls")),
+                error.to_string(),
+            );
+        }
         if endpoint.endpoint.trim().is_empty() {
             push_policy_diag(
                 diagnostics,
@@ -5051,6 +5115,19 @@ fn validate_opentelemetry_signal_endpoint_values(
     index: usize,
     endpoint: &OpenTelemetrySignalEndpointConfig,
 ) {
+    if let Some(Err(error)) = endpoint
+        .tls
+        .as_ref()
+        .map(|tls| tls.validate(&endpoint.endpoint))
+    {
+        push_otel_signal_diagnostic(
+            diagnostics,
+            policy,
+            signal,
+            &format!("endpoints[{index}].tls"),
+            &error.to_string(),
+        );
+    }
     if endpoint.endpoint.trim().is_empty() {
         push_otel_signal_diagnostic(
             diagnostics,
@@ -6747,3 +6824,7 @@ fn normalize_storage_key_prefix(raw: Option<&str>) -> String {
 #[cfg(test)]
 #[path = "../../tests/unit/observability/plugin_component_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/observability/otel_tls_tests.rs"]
+mod tls_tests;

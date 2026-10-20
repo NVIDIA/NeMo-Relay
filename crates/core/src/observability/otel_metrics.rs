@@ -3,6 +3,8 @@
 
 //! OpenTelemetry metric export for Relay metric marks.
 
+use super::OpenTelemetryTlsConfig;
+
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -112,6 +114,7 @@ pub struct OpenTelemetryMetricConfig {
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
+    tls: Option<OpenTelemetryTlsConfig>,
     plaintext: PlaintextPolicy,
     resource_attributes: HashMap<String, String>,
     service_name: Option<String>,
@@ -137,6 +140,7 @@ impl OpenTelemetryMetricConfig {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             header_file: HashMap::new(),
+            tls: None,
             plaintext: PlaintextPolicy::LoopbackOnly,
             resource_attributes: HashMap::new(),
             service_name: None,
@@ -189,6 +193,12 @@ impl OpenTelemetryMetricConfig {
 
     pub(crate) fn with_plaintext_policy(mut self, plaintext: PlaintextPolicy) -> Self {
         self.plaintext = plaintext;
+        self
+    }
+
+    /// Sets the certificate and private key file paths for this endpoint.
+    pub fn with_tls(mut self, tls: OpenTelemetryTlsConfig) -> Self {
+        self.tls = Some(tls);
         self
     }
 
@@ -676,18 +686,19 @@ fn build_metric_provider(
             builder
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_http_client(automatic_otlp_http_client()?)
+                .with_http_client(automatic_otlp_http_client("METRICS")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL") {
             builder
                 .with_tonic()
+                .with_tls_config(super::otel_signal::automatic_otlp_grpc_tls("METRICS")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         } else {
             builder
                 .with_http()
-                .with_http_client(automatic_otlp_http_client()?)
+                .with_http_client(automatic_otlp_http_client("METRICS")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?
         }
@@ -701,11 +712,11 @@ fn build_metric_provider(
                     .with_temporality(temporality)
                     .with_timeout(config.timeout)
                     .with_endpoint(resolve_http_metric_endpoint(&config.endpoint).into_owned());
-                let client = reqwest::Client::builder()
-                    .timeout(config.timeout)
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+                let client = config
+                    .tls
+                    .clone()
+                    .unwrap_or_default()
+                    .http_client(&config.endpoint, Some(config.timeout))?;
                 builder = if config.header_file.is_empty() {
                     builder.with_http_client(client)
                 } else {
@@ -729,6 +740,22 @@ fn build_metric_provider(
                     .with_temporality(temporality)
                     .with_timeout(config.timeout)
                     .with_endpoint(config.endpoint.clone());
+                if config
+                    .endpoint
+                    .trim()
+                    .parse::<reqwest::Url>()
+                    .is_ok_and(|url| url.scheme() == "https")
+                {
+                    builder = builder.with_tls_config(
+                        config
+                            .tls
+                            .clone()
+                            .unwrap_or_default()
+                            .grpc_config(&config.endpoint)?,
+                    );
+                } else if let Some(tls) = &config.tls {
+                    tls.validate(&config.endpoint)?;
+                }
                 if !config.headers.is_empty() {
                     builder = builder.with_metadata(build_grpc_metadata(&config.headers)?);
                 }

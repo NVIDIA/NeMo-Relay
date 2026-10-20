@@ -810,6 +810,9 @@ fn build_otel_config(
     for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
         config = config.with_header_env(key, variable);
     }
+    if let Some(tls) = options.tls {
+        config = config.with_tls(tls.into());
+    }
     if let Some(allow_insecure) = options.allow_insecure {
         config = config.with_allow_insecure(allow_insecure);
     }
@@ -909,6 +912,9 @@ fn build_otel_log_config(
     for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
         config = config.with_header_env(key, variable);
     }
+    if let Some(tls) = options.tls {
+        config = config.with_tls(tls.into());
+    }
     if let Some(allow_insecure) = options.allow_insecure {
         config = config.with_allow_insecure(allow_insecure);
     }
@@ -962,6 +968,9 @@ fn build_otel_metric_config(
     }
     for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
         config = config.with_header_env(key, variable);
+    }
+    if let Some(tls) = options.tls {
+        config = config.with_tls(tls.into());
     }
     if let Some(allow_insecure) = options.allow_insecure {
         config = config.with_allow_insecure(allow_insecure);
@@ -5675,6 +5684,8 @@ pub struct OpenTelemetryConfig {
     pub transport: Option<String>,
     /// OTLP endpoint, such as `http://localhost:4318/v1/traces`.
     pub endpoint: String,
+    /// TLS certificate and private key file paths for this endpoint.
+    pub tls: Option<OpenTelemetryTlsConfig>,
     /// Extra exporter headers/metadata as string key/value pairs.
     pub headers: Option<Json>,
     /// Header names mapped to environment variables resolved during subscriber activation.
@@ -5707,6 +5718,28 @@ pub struct OpenTelemetryConfig {
     pub promote_metadata_prefixes: Option<Vec<String>>,
     /// Literal root-scope Event metadata prefixes copied to OTLP resource attributes.
     pub promote_resource_metadata_prefixes: Option<Vec<String>>,
+}
+
+/// Paths to PEM certificate and private key files for one OTLP endpoint.
+#[napi(object)]
+#[derive(Default)]
+pub struct OpenTelemetryTlsConfig {
+    /// CA bundle that replaces the system's trusted CAs.
+    pub certificate: Option<String>,
+    /// Client certificate chain. Also set `privateKey`.
+    pub client_certificate: Option<String>,
+    /// Client private key. Also set `clientCertificate`.
+    pub private_key: Option<String>,
+}
+
+impl From<OpenTelemetryTlsConfig> for nemo_relay::observability::OpenTelemetryTlsConfig {
+    fn from(value: OpenTelemetryTlsConfig) -> Self {
+        Self {
+            certificate: value.certificate,
+            client_certificate: value.client_certificate,
+            private_key: value.private_key,
+        }
+    }
 }
 
 /// Configuration for a subscriber that writes OTLP to a local file.
@@ -5886,6 +5919,8 @@ impl OpenTelemetrySubscriber {
 pub struct OpenTelemetryLogConfig {
     /// OTLP endpoint. Bare HTTP origins append `/v1/logs`.
     pub endpoint: String,
+    /// TLS certificate and private key file paths for this endpoint.
+    pub tls: Option<OpenTelemetryTlsConfig>,
     /// `"http_binary"` (default) or `"grpc"`.
     #[napi(ts_type = "\"http_binary\" | \"grpc\"")]
     pub transport: Option<String>,
@@ -5987,6 +6022,8 @@ impl OpenTelemetryLogSubscriber {
 pub struct OpenTelemetryMetricConfig {
     /// OTLP endpoint. Bare HTTP origins append `/v1/metrics`.
     pub endpoint: String,
+    /// TLS certificate and private key file paths for this endpoint.
+    pub tls: Option<OpenTelemetryTlsConfig>,
     /// `"http_binary"` (default) or `"grpc"`.
     #[napi(ts_type = "\"http_binary\" | \"grpc\"")]
     pub transport: Option<String>,

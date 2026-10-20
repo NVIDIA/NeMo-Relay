@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::OpenTelemetryTlsConfig;
 use super::header_file::{
     HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
     validate_header_files, validate_trace_transport,
@@ -47,6 +48,7 @@ use super::{
     push_top_level_json_attributes, relay_span_id, relay_trace_id, validate_attribute_mappings,
     validate_metadata_promotion_prefixes,
 };
+
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::runtime::scope_stack::w3c_span_context;
@@ -452,6 +454,7 @@ pub struct OpenTelemetryConfig {
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
+    tls: Option<Box<OpenTelemetryTlsConfig>>,
     plaintext: PlaintextPolicy,
     timeout: Duration,
 }
@@ -683,6 +686,7 @@ impl OpenTelemetryConfig {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             header_file: HashMap::new(),
+            tls: None,
             plaintext: PlaintextPolicy::LoopbackOnly,
             timeout: Duration::from_secs(3),
         }
@@ -717,6 +721,12 @@ impl OpenTelemetryConfig {
     /// Overrides the OTLP endpoint. If unset, exporter defaults and OTEL_* env vars apply.
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = endpoint.into();
+        self
+    }
+
+    /// Sets the certificate and private key file paths for this endpoint.
+    pub fn with_tls(mut self, tls: OpenTelemetryTlsConfig) -> Self {
+        self.tls = Some(Box::new(tls));
         self
     }
 
@@ -1434,29 +1444,31 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
             builder
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_http_client(automatic_otlp_http_client()?)
+                .with_http_client(automatic_otlp_http_client("TRACES")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
         } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
             builder
                 .with_tonic()
+                .with_tls_config(super::otel_signal::automatic_otlp_grpc_tls("TRACES")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
         } else {
             builder
                 .with_http()
-                .with_http_client(automatic_otlp_http_client()?)
+                .with_http_client(automatic_otlp_http_client("TRACES")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
         };
     }
     match settings.transport {
         OtlpTransport::HttpBinary => {
-            let client = reqwest::Client::builder()
-                .timeout(settings.timeout)
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+            let client = settings
+                .tls
+                .as_deref()
+                .cloned()
+                .unwrap_or_default()
+                .http_client(&settings.endpoint, Some(settings.timeout))?;
             let mut builder = OtlpSpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
@@ -1485,6 +1497,23 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
                 .with_protocol(Protocol::Grpc)
                 .with_timeout(settings.timeout);
             builder = builder.with_endpoint(settings.endpoint.clone());
+            if settings
+                .endpoint
+                .trim()
+                .parse::<reqwest::Url>()
+                .is_ok_and(|url| url.scheme() == "https")
+            {
+                builder = builder.with_tls_config(
+                    settings
+                        .tls
+                        .as_deref()
+                        .cloned()
+                        .unwrap_or_default()
+                        .grpc_config(&settings.endpoint)?,
+                );
+            } else if let Some(tls) = &settings.tls {
+                tls.validate(&settings.endpoint)?;
+            }
             if !settings.headers.is_empty() {
                 builder = builder.with_metadata(build_grpc_metadata(&settings.headers)?);
             }

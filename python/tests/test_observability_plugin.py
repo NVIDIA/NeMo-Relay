@@ -831,3 +831,36 @@ class TestObservabilityConfigHelpers:
         assert "python-second-agent" in second_payload
         assert "python-first-agent" not in second_payload
         assert "python-nested-agent" not in second_payload
+
+
+def test_otlp_tls_helpers_and_direct_configs_share_schema():
+    from nemo_relay import (
+        OpenTelemetryConfig,
+        OpenTelemetryLogConfig,
+        OpenTelemetryLogSubscriber,
+        OpenTelemetryMetricConfig,
+        OpenTelemetryMetricSubscriber,
+        OpenTelemetrySubscriber,
+        OpenTelemetryTlsConfig,
+    )
+
+    tls = OpenTelemetryTlsConfig(certificate="ca.pem", client_certificate="client.pem", private_key="key.pem")
+    expected = {"certificate": "ca.pem", "client_certificate": "client.pem", "private_key": "key.pem"}
+    trace = OpenTelemetryEndpointConfig(type="full", endpoint="https://collector.example", tls=tls)
+    signal = OpenTelemetrySignalEndpointConfig(endpoint="https://collector.example", tls=tls)
+    assert trace.to_dict()["tls"] == expected
+    assert signal.to_dict()["tls"] == expected
+    assert "tls" not in OpenTelemetrySignalEndpointConfig(endpoint="https://collector.example").to_dict()
+    for config, subscriber in [
+        (OpenTelemetryConfig("full", "http://127.0.0.1:4318"), OpenTelemetrySubscriber),
+        (OpenTelemetryLogConfig("http://127.0.0.1:4318"), OpenTelemetryLogSubscriber),
+        (OpenTelemetryMetricConfig("http://127.0.0.1:4318"), OpenTelemetryMetricSubscriber),
+    ]:
+        assert config.tls is None
+        config.tls = tls
+        assert config.tls.private_key == "key.pem"
+        with pytest.raises(Exception, match="TLS settings require an HTTPS endpoint"):
+            subscriber(config)
+        config.tls = OpenTelemetryTlsConfig(client_certificate="client.pem")
+        with pytest.raises(Exception, match="must be supplied together"):
+            subscriber(config)
