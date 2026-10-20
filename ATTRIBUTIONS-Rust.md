@@ -42472,7 +42472,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## rustls-webpki - 0.103.15
+## rustls-webpki - 0.103.16
 
 **Repository URL**: https://github.com/rustls/webpki
 **License Type(s)**: ISC
@@ -58853,7 +58853,7 @@ limitations under the License.
    limitations under the License.
 ```
 
-## webpki-root-certs - 1.0.9
+## webpki-root-certs - 1.0.10
 
 **Repository URL**: https://github.com/rustls/webpki-roots
 **License Type(s)**: CDLA-Permissive-2.0
