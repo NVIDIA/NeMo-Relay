@@ -4,15 +4,19 @@
 //! Producer classification preserves structured evidence without changing execution.
 
 use nemo_relay::diagnostics::{
-    Classification, CommonPluginFailureCode, DiagnosticClassifier, FailureClass, FailureCode,
-    PluginErrorClassifier, PluginFailureCode,
+    BuiltinDiagnosticCode, Classification, CommonPluginFailureCode, DiagnosticClassifier,
+    FailureClass, FailureCode, PluginErrorClassifier, PluginFailureCode,
 };
 use nemo_relay::plugin::{PluginError, load_plugin_config_files};
 
 fn assert_classification(actual: Classification, code: &str, class: Option<FailureClass>) {
-    assert_eq!(actual.code().canonical_name(), code);
-    assert_eq!(actual.failure_class(), class);
-    assert!(actual.code().allows_class(actual.failure_class()));
+    assert_eq!(actual.code(), code);
+    assert_eq!(actual.failure_class(), class.map(FailureClass::as_str));
+    assert!(
+        BuiltinDiagnosticCode::from_canonical_name(actual.code())
+            .unwrap()
+            .allows_class(class)
+    );
 }
 
 #[test]

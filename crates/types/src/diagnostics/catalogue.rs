@@ -3,7 +3,11 @@
 
 //! Fixed-size authoring catalogue; stable wire names never depend on Rust layout.
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
+
+use super::Classification;
 
 /// Supported general cause, independent of health, retries, and operation outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -46,6 +50,30 @@ pub enum FailureClass {
 }
 
 impl FailureClass {
+    /// Interpret an exact built-in cause name without allocating.
+    #[must_use]
+    pub fn from_canonical_name(name: &str) -> Option<Self> {
+        match name {
+            "invalid_input" => Some(Self::InvalidInput),
+            "invalid_state" => Some(Self::InvalidState),
+            "not_found" => Some(Self::NotFound),
+            "conflict" => Some(Self::Conflict),
+            "authentication" => Some(Self::Authentication),
+            "permission_denied" => Some(Self::PermissionDenied),
+            "unsupported" => Some(Self::Unsupported),
+            "incompatible" => Some(Self::Incompatible),
+            "timeout" => Some(Self::Timeout),
+            "unavailable" => Some(Self::Unavailable),
+            "resource_exhausted" => Some(Self::ResourceExhausted),
+            "io" => Some(Self::Io),
+            "execution_failed" => Some(Self::ExecutionFailed),
+            "policy_rejected" => Some(Self::PolicyRejected),
+            "internal" => Some(Self::Internal),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+
     /// Stable portable name of this cause.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -111,6 +139,32 @@ pub enum PluginExecution {
     WorkerProtocol,
 }
 
+impl PluginExecution {
+    /// Stable portable execution name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NativeAbi => "native_abi",
+            Self::WorkerProtocol => "worker_protocol",
+        }
+    }
+    /// Interpret an exact supported execution name without allocating.
+    #[must_use]
+    pub fn from_canonical_name(name: &str) -> Option<Self> {
+        match name {
+            "native_abi" => Some(Self::NativeAbi),
+            "worker_protocol" => Some(Self::WorkerProtocol),
+            _ => None,
+        }
+    }
+}
+
+impl From<PluginExecution> for Cow<'static, str> {
+    fn from(value: PluginExecution) -> Self {
+        Self::Borrowed(value.as_str())
+    }
+}
+
 /// Observed plugin lifecycle phase or policy-gate context, independent of
 /// classification.
 ///
@@ -130,6 +184,36 @@ pub enum PluginPhase {
     Runtime,
     /// Host policy evaluation that permits or blocks plugin realization.
     Policy,
+}
+
+impl PluginPhase {
+    /// Stable portable lifecycle or policy context name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Validation => "validation",
+            Self::Activation => "activation",
+            Self::Runtime => "runtime",
+            Self::Policy => "policy",
+        }
+    }
+    /// Interpret an exact supported phase name without allocating.
+    #[must_use]
+    pub fn from_canonical_name(name: &str) -> Option<Self> {
+        match name {
+            "validation" => Some(Self::Validation),
+            "activation" => Some(Self::Activation),
+            "runtime" => Some(Self::Runtime),
+            "policy" => Some(Self::Policy),
+            _ => None,
+        }
+    }
+}
+
+impl From<PluginPhase> for Cow<'static, str> {
+    fn from(value: PluginPhase) -> Self {
+        Self::Borrowed(value.as_str())
+    }
 }
 
 /// Plugin failures supported by phase-one activation recording.
@@ -526,62 +610,6 @@ impl BuiltinDiagnosticCode {
     }
 }
 
-/// Validated authoring metadata; no source error or classifier is retained.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Classification {
-    code: BuiltinDiagnosticCode,
-    failure_class: Option<FailureClass>,
-}
-
-impl Classification {
-    /// Validate the required cause and the catalogue entry's permitted classes.
-    pub fn new(
-        code: BuiltinDiagnosticCode,
-        failure_class: Option<FailureClass>,
-    ) -> Result<Self, ClassificationError> {
-        if !code.allows_class(failure_class) {
-            return Err(ClassificationError);
-        }
-        Ok(Self {
-            code,
-            failure_class,
-        })
-    }
-    /// Classify a failure using an explicitly supported cause.
-    pub fn failure(
-        code: FailureCode,
-        failure_class: FailureClass,
-    ) -> Result<Self, ClassificationError> {
-        Self::new(BuiltinDiagnosticCode::Failure(code), Some(failure_class))
-    }
-    /// Classify an observed success, without clearing previous failures.
-    #[must_use]
-    pub const fn success(code: SuccessCode) -> Self {
-        Self {
-            code: BuiltinDiagnosticCode::Success(code),
-            failure_class: None,
-        }
-    }
-    /// Classify an observed notice, without inventing a failure cause.
-    #[must_use]
-    pub const fn notice(code: NoticeCode) -> Self {
-        Self {
-            code: BuiltinDiagnosticCode::Notice(code),
-            failure_class: None,
-        }
-    }
-    /// Canonical built-in classification.
-    #[must_use]
-    pub const fn code(self) -> BuiltinDiagnosticCode {
-        self.code
-    }
-    /// Supported cause; absent for success and notice.
-    #[must_use]
-    pub const fn failure_class(self) -> Option<FailureClass> {
-        self.failure_class
-    }
-}
-
 /// A cause is missing, forbidden, or unsupported by the selected catalogue code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClassificationError;
@@ -592,7 +620,7 @@ impl std::fmt::Display for ClassificationError {
 }
 impl std::error::Error for ClassificationError {}
 
-/// Pure producer behavior: borrow original evidence and return fixed-size metadata.
+/// Pure producer behavior: borrow original evidence and return shared classification metadata.
 ///
 /// Owning producer crates implement local adapters. Classification must not record,
 /// log, retry, change health, or modify the source operation's outcome.

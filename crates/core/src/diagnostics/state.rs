@@ -199,6 +199,44 @@ pub(super) enum StoredFailureClass {
     Builtin(FailureClass),
     Extension(ExtensionClassHandle),
 }
+/// Validated compact plugin context retained independently of caller-owned names.
+#[derive(Clone, Copy, Default, Serialize)]
+pub(super) struct StoredPluginContext {
+    pub execution: Option<PluginExecution>,
+    pub phase: Option<PluginPhase>,
+}
+impl TryFrom<&PluginObservationContext> for StoredPluginContext {
+    type Error = DiagnosticError;
+
+    fn try_from(value: &PluginObservationContext) -> Result<Self, Self::Error> {
+        Ok(Self {
+            execution: value
+                .execution
+                .as_deref()
+                .map(|name| {
+                    PluginExecution::from_canonical_name(name)
+                        .ok_or(DiagnosticError::InvalidContext)
+                })
+                .transpose()?,
+            phase: value
+                .phase
+                .as_deref()
+                .map(|name| {
+                    PluginPhase::from_canonical_name(name).ok_or(DiagnosticError::InvalidContext)
+                })
+                .transpose()?,
+        })
+    }
+}
+impl From<StoredPluginContext> for PluginObservationContext {
+    fn from(value: StoredPluginContext) -> Self {
+        Self {
+            execution: value.execution.map(Into::into),
+            phase: value.phase.map(Into::into),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct StoredObservation {
     pub sequence: u64,
@@ -208,7 +246,7 @@ pub(super) struct StoredObservation {
     pub origin: CapturedOrigin,
     pub code: StoredCode,
     pub failure_class: Option<StoredFailureClass>,
-    pub context: PluginObservationContext,
+    pub context: StoredPluginContext,
     pub severity: DiagnosticSeverity,
     pub outcome: DiagnosticOutcome,
     pub detail: Option<DetailHandle>,

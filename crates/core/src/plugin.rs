@@ -522,7 +522,7 @@ impl PluginRegistrationContext {
                     1,
                 )
                 .with_plugin_context(PluginObservationContext {
-                    phase: Some(PluginPhase::Activation),
+                    phase: Some(PluginPhase::Activation.into()),
                     ..PluginObservationContext::default()
                 })
             });
@@ -544,7 +544,7 @@ impl PluginRegistrationContext {
                     1,
                 )
                 .with_plugin_context(PluginObservationContext {
-                    phase: Some(PluginPhase::Activation),
+                    phase: Some(PluginPhase::Activation.into()),
                     ..PluginObservationContext::default()
                 })
             });

@@ -3,6 +3,8 @@
 
 //! Portable diagnostics wire-contract coverage.
 
+use std::borrow::Cow;
+
 use chrono::{DateTime, Utc};
 use nemo_relay_types::diagnostics::*;
 use serde_json::{Value, json};
@@ -74,7 +76,7 @@ fn snapshot() -> DiagnosticSnapshot {
                 totals,
             },
             counters: vec![DiagnosticCounter {
-                code: classification.code().canonical_name().into(),
+                code: classification.code().into(),
                 occurrences: DiagnosticCount {
                     value: u64::MAX.into(),
                     saturated: true,
@@ -91,8 +93,8 @@ fn snapshot() -> DiagnosticSnapshot {
                 refresh_generation: u64::MAX.into(),
                 ownership,
             },
-            classification: classification.into(),
-            context: PluginObservationContextWire::default(),
+            classification,
+            context: PluginObservationContext::default(),
             severity: DiagnosticSeverity::Error,
             outcome: DiagnosticOutcome::Failure,
             detail: Some(DiagnosticDetail {
@@ -401,10 +403,10 @@ fn lifetime_refresh_origin_and_cursor_values_remain_lossless() {
 }
 
 #[test]
-fn future_wire_classifications_remain_opaque_without_reclassifying_them() {
+fn future_classifications_remain_opaque_without_reclassifying_them() {
     let mut expected = snapshot();
     expected.catalogue_version = DIAGNOSTIC_CATALOGUE_VERSION + 1;
-    expected.events[0].classification = ClassificationWire {
+    expected.events[0].classification = Classification {
         canonical_code: "vendor.extension.new_failure".into(),
         failure_class: Some("new_remote_cause".into()),
     };
@@ -452,9 +454,8 @@ fn count_saturation_distinguishes_exact_maximum_from_an_overflowing_increment() 
 fn authoring_catalogue_is_fixed_size_and_has_unique_round_trippable_names() {
     fn requires_copy<T: Copy>() {}
     requires_copy::<BuiltinDiagnosticCode>();
-    requires_copy::<Classification>();
-    assert!(!std::mem::needs_drop::<Classification>());
-    assert!(std::mem::size_of::<Classification>() <= 16);
+    assert!(!std::mem::needs_drop::<BuiltinDiagnosticCode>());
+    assert!(std::mem::size_of::<BuiltinDiagnosticCode>() <= 16);
     let mut names = std::collections::BTreeSet::new();
     for code in BuiltinDiagnosticCode::all() {
         assert!(
@@ -483,8 +484,8 @@ fn classification_constructors_enforce_entry_specific_class_contracts() {
                 assert!(Classification::new(*code, None).is_err());
                 for class in code.allowed_classes() {
                     let classification = Classification::new(*code, Some(*class)).unwrap();
-                    assert_eq!(classification.code(), *code);
-                    assert_eq!(classification.failure_class(), Some(*class));
+                    assert_eq!(classification.code(), code.canonical_name());
+                    assert_eq!(classification.failure_class(), Some(class.as_str()));
                 }
             }
             _ => {
@@ -551,7 +552,7 @@ fn classifier_trait_supports_concrete_and_borrowed_dynamic_producers_without_a_r
     let concrete = ProducerClassifier.classify(&error);
     let selected: &dyn DiagnosticClassifier<u32> = &ProducerClassifier;
     assert_eq!(selected.classify(&error), concrete);
-    assert_eq!(concrete.code().canonical_name(), "plugin.internal");
+    assert_eq!(concrete.code(), "plugin.internal");
 }
 
 #[test]
@@ -578,7 +579,10 @@ fn typed_plugin_context_round_trips_without_requiring_unknown_mechanism_inferenc
         ),
     ] {
         let mut expected = snapshot();
-        expected.events[0].context = PluginObservationContext { execution, phase }.into();
+        expected.events[0].context = PluginObservationContext {
+            execution: execution.map(Into::into),
+            phase: phase.map(Into::into),
+        };
         let wire = serde_json::to_value(&expected).unwrap();
         assert_eq!(
             wire["events"][0]["context"],
@@ -595,37 +599,17 @@ fn typed_plugin_context_round_trips_without_requiring_unknown_mechanism_inferenc
     let decoded: DiagnosticSnapshot = serde_json::from_value(wire).unwrap();
     assert_eq!(
         decoded.events[0].context,
-        PluginObservationContextWire::default()
+        PluginObservationContext::default()
     );
 }
 
 #[test]
 fn future_plugin_context_names_survive_complete_snapshot_round_trips() {
-    for (execution_name, phase_name, execution, phase) in [
-        (
-            "wasm_v2",
-            "activation",
-            PluginExecutionWire::Unrecognized("wasm_v2".into()),
-            PluginPhaseWire::Known(PluginPhase::Activation),
-        ),
-        (
-            "worker_protocol",
-            "quiescing",
-            PluginExecutionWire::Known(PluginExecution::WorkerProtocol),
-            PluginPhaseWire::Unrecognized("quiescing".into()),
-        ),
-        (
-            "wasm_v2",
-            "quiescing",
-            PluginExecutionWire::Unrecognized("wasm_v2".into()),
-            PluginPhaseWire::Unrecognized("quiescing".into()),
-        ),
-        (
-            "unrecognized",
-            "unrecognized",
-            PluginExecutionWire::Unrecognized("unrecognized".into()),
-            PluginPhaseWire::Unrecognized("unrecognized".into()),
-        ),
+    for (execution_name, phase_name) in [
+        ("wasm_v2", "activation"),
+        ("worker_protocol", "quiescing"),
+        ("wasm_v2", "quiescing"),
+        ("unrecognized", "unrecognized"),
     ] {
         let mut wire = serde_json::to_value(snapshot()).unwrap();
         wire["events"][0]["context"] = json!({
@@ -634,12 +618,18 @@ fn future_plugin_context_names_survive_complete_snapshot_round_trips() {
         });
         let decoded: DiagnosticSnapshot = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(
-            decoded.events[0].context,
-            PluginObservationContextWire {
-                execution: Some(execution),
-                phase: Some(phase),
-            },
+            decoded.events[0].context.execution.as_deref(),
+            Some(execution_name)
         );
+        assert_eq!(decoded.events[0].context.phase.as_deref(), Some(phase_name));
+        assert!(matches!(
+            &decoded.events[0].context.execution,
+            Some(Cow::Owned(_))
+        ));
+        assert!(matches!(
+            &decoded.events[0].context.phase,
+            Some(Cow::Owned(_))
+        ));
         assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
     }
 }
@@ -647,26 +637,24 @@ fn future_plugin_context_names_survive_complete_snapshot_round_trips() {
 #[test]
 fn missing_and_null_plugin_context_fields_remain_absent() {
     for (context, expected) in [
-        (json!({}), PluginObservationContextWire::default()),
+        (json!({}), PluginObservationContext::default()),
         (
             json!({ "execution": null, "phase": null }),
-            PluginObservationContextWire::default(),
+            PluginObservationContext::default(),
         ),
         (
             json!({ "execution": "native_abi" }),
             PluginObservationContext {
-                execution: Some(PluginExecution::NativeAbi),
+                execution: Some(PluginExecution::NativeAbi.into()),
                 phase: None,
-            }
-            .into(),
+            },
         ),
         (
             json!({ "phase": "activation" }),
             PluginObservationContext {
                 execution: None,
-                phase: Some(PluginPhase::Activation),
-            }
-            .into(),
+                phase: Some(PluginPhase::Activation.into()),
+            },
         ),
     ] {
         let mut wire = serde_json::to_value(snapshot()).unwrap();
@@ -677,8 +665,15 @@ fn missing_and_null_plugin_context_fields_remain_absent() {
 }
 
 #[test]
-fn plugin_context_wire_names_reject_non_string_values() {
-    for field in ["execution", "phase"] {
+fn shared_payload_names_reject_non_string_values() {
+    for (payload, field) in [
+        ("classification", "canonical_code"),
+        ("classification", "failure_class"),
+        ("context", "execution"),
+        ("context", "phase"),
+        ("correlation", "session_id"),
+        ("correlation", "request_id"),
+    ] {
         for value in [
             json!(true),
             json!(1),
@@ -690,73 +685,149 @@ fn plugin_context_wire_names_reject_non_string_values() {
             json!({ "activation": null }),
         ] {
             let mut wire = serde_json::to_value(snapshot()).unwrap();
-            wire["events"][0]["context"][field] = value.clone();
+            wire["events"][0][payload][field] = value.clone();
             assert!(
                 serde_json::from_value::<DiagnosticSnapshot>(wire).is_err(),
-                "non-string {field} unexpectedly decoded: {value}",
+                "non-string {payload}.{field} unexpectedly decoded: {value}",
             );
         }
     }
 }
 
+#[test]
+fn shared_payloads_borrow_producer_values_and_own_decoded_values() {
+    let classification = Classification::failure(
+        FailureCode::Logging(LoggingFailureCode::SinkWriteFailed),
+        FailureClass::Io,
+    )
+    .unwrap();
+    assert!(matches!(&classification.canonical_code, Cow::Borrowed(_)));
+    assert!(matches!(
+        &classification.failure_class,
+        Some(Cow::Borrowed(_))
+    ));
+    let decoded: Classification =
+        serde_json::from_value(serde_json::to_value(&classification).unwrap()).unwrap();
+    assert_eq!(decoded, classification);
+    assert!(matches!(&decoded.canonical_code, Cow::Owned(_)));
+    assert!(matches!(&decoded.failure_class, Some(Cow::Owned(_))));
+
+    let session = String::from("session-dynamic");
+    let request = String::from("request-dynamic");
+    let correlation = DiagnosticCorrelation {
+        session_id: Some(Cow::Borrowed(session.as_str())),
+        request_id: Some(Cow::Borrowed(request.as_str())),
+    };
+    let decoded: DiagnosticCorrelation<'static> =
+        serde_json::from_value(serde_json::to_value(&correlation).unwrap()).unwrap();
+    assert_eq!(decoded, correlation);
+    assert!(matches!(&decoded.session_id, Some(Cow::Owned(_))));
+    assert!(matches!(&decoded.request_id, Some(Cow::Owned(_))));
+}
+
+#[test]
+fn typed_context_helpers_use_canonical_borrowed_names() {
+    for execution in [PluginExecution::NativeAbi, PluginExecution::WorkerProtocol] {
+        let name: Cow<'static, str> = execution.into();
+        assert!(matches!(&name, Cow::Borrowed(_)));
+        assert_eq!(name.as_ref(), execution.as_str());
+        assert_eq!(serde_json::to_value(execution).unwrap(), json!(name));
+        assert_eq!(
+            PluginExecution::from_canonical_name(execution.as_str()),
+            Some(execution)
+        );
+    }
+    for phase in [
+        PluginPhase::Validation,
+        PluginPhase::Activation,
+        PluginPhase::Runtime,
+        PluginPhase::Policy,
+    ] {
+        let name: Cow<'static, str> = phase.into();
+        assert!(matches!(&name, Cow::Borrowed(_)));
+        assert_eq!(name.as_ref(), phase.as_str());
+        assert_eq!(serde_json::to_value(phase).unwrap(), json!(name));
+        assert_eq!(
+            PluginPhase::from_canonical_name(phase.as_str()),
+            Some(phase)
+        );
+    }
+}
+
+#[test]
+fn failure_class_names_match_serialization_and_lookup() {
+    for class in [
+        FailureClass::InvalidInput,
+        FailureClass::InvalidState,
+        FailureClass::NotFound,
+        FailureClass::Conflict,
+        FailureClass::Authentication,
+        FailureClass::PermissionDenied,
+        FailureClass::Unsupported,
+        FailureClass::Incompatible,
+        FailureClass::Timeout,
+        FailureClass::Unavailable,
+        FailureClass::ResourceExhausted,
+        FailureClass::Io,
+        FailureClass::ExecutionFailed,
+        FailureClass::PolicyRejected,
+        FailureClass::Internal,
+        FailureClass::Unknown,
+    ] {
+        assert_eq!(serde_json::to_value(class).unwrap(), json!(class.as_str()));
+        assert_eq!(
+            FailureClass::from_canonical_name(class.as_str()),
+            Some(class)
+        );
+    }
+}
+
+#[test]
+fn canonical_name_helpers_reject_unrecognized_names() {
+    assert!(PluginExecution::from_canonical_name("wasm_v2").is_none());
+    assert!(PluginPhase::from_canonical_name("quiescing").is_none());
+    assert!(FailureClass::from_canonical_name("new_remote_cause").is_none());
+    let long_name = "unrecognized".repeat(4096);
+    for name in [
+        "",
+        " native_abi",
+        "ACTIVATION",
+        "invalid_input ",
+        long_name.as_str(),
+    ] {
+        assert!(PluginExecution::from_canonical_name(name).is_none());
+        assert!(PluginPhase::from_canonical_name(name).is_none());
+        assert!(FailureClass::from_canonical_name(name).is_none());
+    }
+}
+
 #[cfg(feature = "schema")]
 #[test]
-fn plugin_context_wire_schema_admits_future_names_as_strings() {
-    fn is_string_only(root: &Value, schema: &Value) -> bool {
-        if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-            return is_string_only(
-                root,
-                root.pointer(reference.strip_prefix('#').unwrap()).unwrap(),
-            );
-        }
-        if schema["type"] == json!("string") {
-            return true;
-        }
-        if schema
-            .get("allOf")
-            .and_then(Value::as_array)
-            .is_some_and(|members| members.iter().any(|member| is_string_only(root, member)))
-        {
-            return true;
-        }
-        ["anyOf", "oneOf"].iter().any(|keyword| {
-            schema
-                .get(keyword)
-                .and_then(Value::as_array)
-                .is_some_and(|members| {
-                    !members.is_empty() && members.iter().all(|member| is_string_only(root, member))
-                })
-        })
-    }
-
+fn shared_payload_schema_admits_names_as_strings() {
     let schema = serde_json::to_value(schemars::schema_for!(DiagnosticSnapshot)).unwrap();
-    let event_context = &schema["definitions"]["DiagnosticEvent"]["properties"]["context"];
-    assert!(
-        serde_json::to_string(event_context)
-            .unwrap()
-            .contains("#/definitions/PluginObservationContextWire"),
-    );
-    let context = &schema["definitions"]["PluginObservationContextWire"]["properties"];
+    let event = &schema["definitions"]["DiagnosticEvent"]["properties"];
     for (field, name) in [
-        ("execution", "PluginExecutionWire"),
-        ("phase", "PluginPhaseWire"),
+        ("classification", "Classification"),
+        ("context", "PluginObservationContext"),
+        ("correlation", "DiagnosticCorrelation"),
     ] {
         assert!(
-            serde_json::to_string(&context[field])
+            serde_json::to_string(&event[field])
                 .unwrap()
-                .contains(&format!("#/definitions/{name}")),
+                .contains(&format!("#/definitions/{name}"))
         );
-        let alternatives = schema["definitions"][name]["anyOf"]
-            .as_array()
-            .expect("known and unrecognized wire values are alternatives");
-        assert!(alternatives.iter().any(|alternative| {
-            alternative["type"] == json!("string") && alternative.get("enum").is_none()
-        }));
-        for alternative in alternatives {
-            assert!(
-                is_string_only(&schema, alternative),
-                "wire context alternative admits non-string values: {alternative}",
-            );
+    }
+    let classification = &schema["definitions"]["Classification"]["properties"];
+    assert_eq!(classification["canonical_code"]["type"], json!("string"));
+    for (name, fields) in [
+        ("Classification", &["failure_class"][..]),
+        ("PluginObservationContext", &["execution", "phase"][..]),
+        ("DiagnosticCorrelation", &["session_id", "request_id"][..]),
+    ] {
+        for field in fields {
+            let property = &schema["definitions"][name]["properties"][field];
+            assert_eq!(property["type"], json!(["string", "null"]));
+            assert!(property.get("enum").is_none());
         }
     }
 }
@@ -766,11 +837,9 @@ fn lifetime_and_refresh_totals_are_fixed_copy_values_with_explicit_scopes() {
     fn requires_copy<T: Copy>() {}
     requires_copy::<DiagnosticTotals>();
     requires_copy::<DiagnosticLifetimeSummary>();
-    requires_copy::<PluginObservationContext>();
     requires_copy::<PluginExecution>();
     requires_copy::<PluginPhase>();
     assert!(!std::mem::needs_drop::<DiagnosticTotals>());
-    assert!(!std::mem::needs_drop::<PluginObservationContext>());
     let mut totals = DiagnosticTotals::default();
     totals.record(DiagnosticOutcome::Failure, 2);
     totals.record(DiagnosticOutcome::Failure, 3);

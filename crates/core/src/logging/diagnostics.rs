@@ -181,16 +181,16 @@ impl SinkDiagnostics {
     pub(super) fn runtime_error(&self, error: &spdlog::Error) {
         let _ = self.recorder.record_without_projection_lazy(|| {
             let classification = LoggingErrorClassifier.classify(error);
-            let message = match classification.code() {
-                BuiltinDiagnosticCode::Failure(FailureCode::Logging(
+            let message = match BuiltinDiagnosticCode::from_canonical_name(classification.code()) {
+                Some(BuiltinDiagnosticCode::Failure(FailureCode::Logging(
                     LoggingFailureCode::SinkRecordDropped,
-                )) => "Operational log record dropped because the sink queue is full",
-                BuiltinDiagnosticCode::Failure(FailureCode::Logging(
+                ))) => "Operational log record dropped because the sink queue is full",
+                Some(BuiltinDiagnosticCode::Failure(FailureCode::Logging(
                     LoggingFailureCode::SinkFlushDropped,
-                )) => "Operational log flush request dropped because the sink queue is full",
-                BuiltinDiagnosticCode::Failure(FailureCode::Logging(
+                ))) => "Operational log flush request dropped because the sink queue is full",
+                Some(BuiltinDiagnosticCode::Failure(FailureCode::Logging(
                     LoggingFailureCode::SinkFlushFailed,
-                )) => "Operational log sink flush failed",
+                ))) => "Operational log sink flush failed",
                 _ => "Operational log sink failed to deliver a record",
             };
             // Neither a dropped payload nor backend error text belongs in diagnostics.

@@ -71,7 +71,7 @@ struct PageEvent {
     ownership: PageOwnership,
     code: TextRef,
     failure_class: Option<TextRef>,
-    context: PluginObservationContext,
+    context: StoredPluginContext,
     severity: DiagnosticSeverity,
     outcome: DiagnosticOutcome,
     detail: Option<TextRef>,
@@ -562,7 +562,7 @@ struct ClassificationView<'a> {
 }
 impl Serialize for ClassificationView<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_struct("ClassificationWire", 2)?;
+        let mut out = s.serialize_struct("Classification", 2)?;
         out.serialize_field("canonical_code", self.page.string(self.event.code))?;
         out.serialize_field(
             "failure_class",

@@ -84,6 +84,33 @@ caller-owned value; those allocations are outside the service's memory budget.
 Reads add no occurrences and reset no counters. Later success leaves earlier
 failure counts intact.
 
+## Shared Payload Models
+
+Producers, projections, and decoded events use the same public `Classification`,
+`PluginObservationContext`, and `DiagnosticCorrelation` payloads. Typed catalogue
+constructors supply canonical names without allocating strings. The payloads use
+borrowed-or-owned strings: decoded snapshots own their values and preserve names
+that a reader does not yet recognize.
+
+`DiagnosticCorrelation<'a>` also lets producers borrow dynamic request/session
+IDs for the duration of recording. Decoded events use owned
+`DiagnosticCorrelation<'static>` values; the lifetime does not require received
+IDs to be static. Deserialization owns incoming strings rather than borrowing
+from the input buffer.
+
+The public payloads and `Observation` are `Clone`, rather than `Copy`. Core
+validates recording input before updating counters and encodes accepted names
+into its private fixed-size storage. A readable unfamiliar code, cause, or plugin
+context does not authorize recording it. Built-in classification must match the
+catalogue, and extensions require their admitted handles with ownership and
+generation checks. Known plugin context is validated independently of counter
+identity.
+
+`Observation` remains the recording input; `DiagnosticEvent` contains accepted
+evidence with runtime-assigned identity, sequence, and timestamps. Lazy detail
+formatting and retained detail also keep their separate input/result roles.
+The shared payload model introduces no additional history or string store.
+
 ## Accounting and Ownership
 
 A source UUID distinguishes a context incarnation from another execution with
@@ -202,26 +229,26 @@ scope: `core` also contains deferred native and worker code.
 | Native ABI and dynamic trust/policy | Existing execution/report behavior; no canonical mechanism-specific adapter | Phase five |
 | Worker launch, handshake, RPC, remote observations, and protocol transport | Existing execution/report behavior; no canonical worker integration | Phase five |
 
-The activation adapter currently emits `PluginPhase::Activation` with
-`PluginObservationContext.execution = None`. It does not automatically observe
-validation, runtime, or policy stages. `PluginExecution::{NativeAbi,
-WorkerProtocol}` and the other `PluginPhase` values are supported authoring/wire
-contracts for later producers. Their enum declarations and round-trip tests
-establish representation support; production coverage comes from recording at
-an integrated operation boundary.
+The activation adapter supplies the canonical `activation` phase through
+`PluginPhase::Activation` and leaves `PluginObservationContext.execution` unset.
+It does not automatically observe validation, runtime, or policy stages.
+`PluginExecution::{NativeAbi, WorkerProtocol}` and the other `PluginPhase`
+values are typed construction helpers for producers integrated later. Their
+round-trip tests establish representation support; production coverage comes
+from recording at an integrated operation boundary.
 
-`PluginObservationContext` remains the fixed-size producer and core-storage
-contract. Snapshot and projection events expose `PluginObservationContextWire`:
-known execution/phase strings decode as `Known`, and future strings decode as
-`Unrecognized` with their original names preserved on reserialization. Missing
-or null fields remain absent; non-string values are rejected. The wire schema
-permits future names within a supported snapshot envelope. Unsupported envelope
-versions still require negotiation.
+The shared `PluginObservationContext` exposes optional execution and phase
+names. Future strings retain their original names on snapshot decoding and
+reserialization. Missing or null fields remain absent, and non-string values
+are rejected. Core admits recognized context into a private compact
+representation before recording; unfamiliar decoded context can still be read
+and forwarded without becoming accepted local input or a counter key.
 
-Converting known producer context to its wire view adds no string allocation.
-Decoding owned snapshot values can allocate caller-owned strings; transport
-adapters must enforce their metadata and payload limits before materialization.
-Unknown wire names are not admitted as new typed producer values or counter keys.
+Known context construction and projection use borrowed canonical names without
+string allocation. Owned snapshot decoding allocates caller-owned values;
+transport adapters must enforce their metadata and payload limits before
+materialization. The schema permits future names within a supported snapshot
+envelope; unsupported envelope versions still require negotiation.
 
 The phase-one built-in catalogue contains logging failures/successes, six common
 plugin failures, and `ConfigurationInherited`. The inheritance notice has a live
