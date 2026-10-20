@@ -147,6 +147,14 @@ fn load_published_daemon_certificate(path: &Path) -> Result<Option<Vec<u8>>, Str
             ));
         }
     };
+    // Check the type first: on Linux a symlink's own mode is 0777, which would otherwise be
+    // reported as a permission problem instead of the real one.
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "{description} {} must be a regular file",
+            path.display()
+        ));
+    }
     // A user who can replace this file could make hooks trust a listener that squats the port.
     ensure_administrator_controlled(path, &metadata, description)?;
     if let Some(directory) = path.parent() {
