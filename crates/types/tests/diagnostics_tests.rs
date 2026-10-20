@@ -92,7 +92,7 @@ fn snapshot() -> DiagnosticSnapshot {
                 ownership,
             },
             classification: classification.into(),
-            context: PluginObservationContext::default(),
+            context: PluginObservationContextWire::default(),
             severity: DiagnosticSeverity::Error,
             outcome: DiagnosticOutcome::Failure,
             detail: Some(DiagnosticDetail {
@@ -556,20 +556,34 @@ fn classifier_trait_supports_concrete_and_borrowed_dynamic_producers_without_a_r
 
 #[test]
 fn typed_plugin_context_round_trips_without_requiring_unknown_mechanism_inference() {
-    for (execution, phase) in [
+    for (execution, phase, execution_name, phase_name) in [
         (
             Some(PluginExecution::NativeAbi),
             Some(PluginPhase::Validation),
+            Some("native_abi"),
+            "validation",
         ),
         (
             Some(PluginExecution::WorkerProtocol),
             Some(PluginPhase::Runtime),
+            Some("worker_protocol"),
+            "runtime",
         ),
-        (None, Some(PluginPhase::Activation)),
+        (None, Some(PluginPhase::Activation), None, "activation"),
+        (
+            Some(PluginExecution::NativeAbi),
+            Some(PluginPhase::Policy),
+            Some("native_abi"),
+            "policy",
+        ),
     ] {
         let mut expected = snapshot();
-        expected.events[0].context = PluginObservationContext { execution, phase };
+        expected.events[0].context = PluginObservationContext { execution, phase }.into();
         let wire = serde_json::to_value(&expected).unwrap();
+        assert_eq!(
+            wire["events"][0]["context"],
+            json!({ "execution": execution_name, "phase": phase_name }),
+        );
         assert_eq!(
             serde_json::from_value::<DiagnosticSnapshot>(wire).unwrap(),
             expected
@@ -581,8 +595,170 @@ fn typed_plugin_context_round_trips_without_requiring_unknown_mechanism_inferenc
     let decoded: DiagnosticSnapshot = serde_json::from_value(wire).unwrap();
     assert_eq!(
         decoded.events[0].context,
-        PluginObservationContext::default()
+        PluginObservationContextWire::default()
     );
+}
+
+#[test]
+fn future_plugin_context_names_survive_complete_snapshot_round_trips() {
+    for (execution_name, phase_name, execution, phase) in [
+        (
+            "wasm_v2",
+            "activation",
+            PluginExecutionWire::Unrecognized("wasm_v2".into()),
+            PluginPhaseWire::Known(PluginPhase::Activation),
+        ),
+        (
+            "worker_protocol",
+            "quiescing",
+            PluginExecutionWire::Known(PluginExecution::WorkerProtocol),
+            PluginPhaseWire::Unrecognized("quiescing".into()),
+        ),
+        (
+            "wasm_v2",
+            "quiescing",
+            PluginExecutionWire::Unrecognized("wasm_v2".into()),
+            PluginPhaseWire::Unrecognized("quiescing".into()),
+        ),
+        (
+            "unrecognized",
+            "unrecognized",
+            PluginExecutionWire::Unrecognized("unrecognized".into()),
+            PluginPhaseWire::Unrecognized("unrecognized".into()),
+        ),
+    ] {
+        let mut wire = serde_json::to_value(snapshot()).unwrap();
+        wire["events"][0]["context"] = json!({
+            "execution": execution_name,
+            "phase": phase_name,
+        });
+        let decoded: DiagnosticSnapshot = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            decoded.events[0].context,
+            PluginObservationContextWire {
+                execution: Some(execution),
+                phase: Some(phase),
+            },
+        );
+        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
+    }
+}
+
+#[test]
+fn missing_and_null_plugin_context_fields_remain_absent() {
+    for (context, expected) in [
+        (json!({}), PluginObservationContextWire::default()),
+        (
+            json!({ "execution": null, "phase": null }),
+            PluginObservationContextWire::default(),
+        ),
+        (
+            json!({ "execution": "native_abi" }),
+            PluginObservationContext {
+                execution: Some(PluginExecution::NativeAbi),
+                phase: None,
+            }
+            .into(),
+        ),
+        (
+            json!({ "phase": "activation" }),
+            PluginObservationContext {
+                execution: None,
+                phase: Some(PluginPhase::Activation),
+            }
+            .into(),
+        ),
+    ] {
+        let mut wire = serde_json::to_value(snapshot()).unwrap();
+        wire["events"][0]["context"] = context;
+        let decoded: DiagnosticSnapshot = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded.events[0].context, expected);
+    }
+}
+
+#[test]
+fn plugin_context_wire_names_reject_non_string_values() {
+    for field in ["execution", "phase"] {
+        for value in [
+            json!(true),
+            json!(1),
+            json!(1.5),
+            json!([]),
+            json!(["native_abi"]),
+            json!({}),
+            json!({ "native_abi": null }),
+            json!({ "activation": null }),
+        ] {
+            let mut wire = serde_json::to_value(snapshot()).unwrap();
+            wire["events"][0]["context"][field] = value.clone();
+            assert!(
+                serde_json::from_value::<DiagnosticSnapshot>(wire).is_err(),
+                "non-string {field} unexpectedly decoded: {value}",
+            );
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn plugin_context_wire_schema_admits_future_names_as_strings() {
+    fn is_string_only(root: &Value, schema: &Value) -> bool {
+        if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+            return is_string_only(
+                root,
+                root.pointer(reference.strip_prefix('#').unwrap()).unwrap(),
+            );
+        }
+        if schema["type"] == json!("string") {
+            return true;
+        }
+        if schema
+            .get("allOf")
+            .and_then(Value::as_array)
+            .is_some_and(|members| members.iter().any(|member| is_string_only(root, member)))
+        {
+            return true;
+        }
+        ["anyOf", "oneOf"].iter().any(|keyword| {
+            schema
+                .get(keyword)
+                .and_then(Value::as_array)
+                .is_some_and(|members| {
+                    !members.is_empty() && members.iter().all(|member| is_string_only(root, member))
+                })
+        })
+    }
+
+    let schema = serde_json::to_value(schemars::schema_for!(DiagnosticSnapshot)).unwrap();
+    let event_context = &schema["definitions"]["DiagnosticEvent"]["properties"]["context"];
+    assert!(
+        serde_json::to_string(event_context)
+            .unwrap()
+            .contains("#/definitions/PluginObservationContextWire"),
+    );
+    let context = &schema["definitions"]["PluginObservationContextWire"]["properties"];
+    for (field, name) in [
+        ("execution", "PluginExecutionWire"),
+        ("phase", "PluginPhaseWire"),
+    ] {
+        assert!(
+            serde_json::to_string(&context[field])
+                .unwrap()
+                .contains(&format!("#/definitions/{name}")),
+        );
+        let alternatives = schema["definitions"][name]["anyOf"]
+            .as_array()
+            .expect("known and unrecognized wire values are alternatives");
+        assert!(alternatives.iter().any(|alternative| {
+            alternative["type"] == json!("string") && alternative.get("enum").is_none()
+        }));
+        for alternative in alternatives {
+            assert!(
+                is_string_only(&schema, alternative),
+                "wire context alternative admits non-string values: {alternative}",
+            );
+        }
+    }
 }
 
 #[test]
@@ -590,7 +766,11 @@ fn lifetime_and_refresh_totals_are_fixed_copy_values_with_explicit_scopes() {
     fn requires_copy<T: Copy>() {}
     requires_copy::<DiagnosticTotals>();
     requires_copy::<DiagnosticLifetimeSummary>();
+    requires_copy::<PluginObservationContext>();
+    requires_copy::<PluginExecution>();
+    requires_copy::<PluginPhase>();
     assert!(!std::mem::needs_drop::<DiagnosticTotals>());
+    assert!(!std::mem::needs_drop::<PluginObservationContext>());
     let mut totals = DiagnosticTotals::default();
     totals.record(DiagnosticOutcome::Failure, 2);
     totals.record(DiagnosticOutcome::Failure, 3);

@@ -2369,6 +2369,11 @@ fn warmed_projection_delivery_reuses_its_payload_and_callback_storage() {
         })
         .unwrap();
     let plain = register(&service, "plain");
+    let context = PluginObservationContext {
+        execution: Some(PluginExecution::NativeAbi),
+        phase: Some(PluginPhase::Policy),
+    };
+    let expected_context = PluginObservationContextWire::from(context);
     let delivered = Arc::new(AtomicUsize::new(0));
     let callback = Arc::clone(&delivered);
     let _guard = service
@@ -2376,30 +2381,41 @@ fn warmed_projection_delivery_reuses_its_payload_and_callback_storage() {
             assert_eq!(event.code(), WRITE.canonical_name());
             let owner = &event.origin.ownership;
             if event.component.key == "attributed" {
+                assert_eq!(event.context, expected_context);
                 assert_eq!(owner.subscriber_instance_id, Some(Uuid::nil()));
                 assert_eq!(owner.plugin_instance_id, Some(Uuid::nil()));
                 assert_eq!(owner.configuration_id.as_deref(), Some("configuration"));
                 assert_eq!(owner.responsibility.as_deref(), Some("responsibility"));
             } else {
+                assert_eq!(event.context, PluginObservationContextWire::default());
                 assert!(owner.subscriber_instance_id.is_none());
                 assert!(owner.plugin_instance_id.is_none());
                 assert!(owner.configuration_id.is_none());
                 assert!(owner.responsibility.is_none());
             }
+            serde_json::to_writer(std::io::sink(), &event.context).unwrap();
             callback.fetch_add(1, Ordering::Relaxed);
         })
         .unwrap();
-    for component in [&attributed, &plain] {
+    let producers = [
+        (&attributed, context),
+        (&plain, PluginObservationContext::default()),
+    ];
+    for (component, context) in producers {
         component
-            .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "projected", 1))
+            .record_lazy(|| {
+                Observation::new(classification(FailureClass::Unknown), "projected", 1)
+                    .with_plugin_context(context)
+            })
             .unwrap();
     }
     let (_, allocations) = allocations_during(|| {
         for _ in 0..100 {
-            for component in [&attributed, &plain] {
+            for (component, context) in producers {
                 component
                     .record_lazy(|| {
                         Observation::new(classification(FailureClass::Unknown), "projected", 1)
+                            .with_plugin_context(context)
                     })
                     .unwrap();
             }
@@ -2508,7 +2524,7 @@ fn typed_plugin_context_survives_projection_and_shared_history_without_extra_cou
     let projected = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&projected);
     let _guard = service
-        .subscribe_projection(move |event| captured.lock().unwrap().push(event.context))
+        .subscribe_projection(move |event| captured.lock().unwrap().push(event.context.clone()))
         .unwrap();
     for (context, count) in contexts.into_iter().zip([2, 3]) {
         recorder
@@ -2528,10 +2544,11 @@ fn typed_plugin_context_survives_projection_and_shared_history_without_extra_cou
             })
             .unwrap();
     }
-    assert_eq!(projected.lock().unwrap().as_slice(), &contexts[..]);
+    let expected_contexts = contexts.map(PluginObservationContextWire::from);
+    assert_eq!(projected.lock().unwrap().as_slice(), &expected_contexts[..]);
     let page = snapshot(&service, DiagnosticQuery::default());
     assert_eq!(page.events.len(), 1);
-    assert_eq!(page.events[0].context, contexts[1]);
+    assert_eq!(page.events[0].context, expected_contexts[1]);
     assert_eq!(page.components.len(), 1);
     assert_eq!(page.components[0].counters.len(), 1);
     assert_eq!(page.components[0].counters[0].occurrences.value.get(), 5);

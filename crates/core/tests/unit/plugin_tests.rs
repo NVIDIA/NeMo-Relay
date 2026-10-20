@@ -3546,7 +3546,10 @@ fn typed_activation_failure_records_once_through_its_scoped_context() {
     assert_eq!(page.events.len(), 1);
     assert_eq!(page.events[0].component, identity);
     assert_eq!(page.events[0].code(), "plugin.registration_failed");
-    assert_eq!(page.events[0].context.phase, Some(PluginPhase::Activation));
+    assert_eq!(
+        page.events[0].context.phase,
+        Some(PluginPhase::Activation.into())
+    );
     assert!(page.events[0].context.execution.is_none());
     assert_eq!(
         page.events[0].classification.failure_class.as_deref(),
@@ -3603,7 +3606,10 @@ fn activation_unwind_is_recorded_before_scoped_rollback_and_closure() {
     assert_eq!(page.events.len(), 1);
     assert_eq!(page.events[0].component, identity);
     assert_eq!(page.events[0].code(), "plugin.internal");
-    assert_eq!(page.events[0].context.phase, Some(PluginPhase::Activation));
+    assert_eq!(
+        page.events[0].context.phase,
+        Some(PluginPhase::Activation.into())
+    );
     assert!(page.events[0].context.execution.is_none());
     assert_eq!(
         page.events[0].classification.failure_class.as_deref(),
