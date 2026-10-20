@@ -1548,6 +1548,7 @@ deepagents = [
     { name = "langgraph-sdk" },
     { name = "langsmith" },
     { name = "pyasn1" },
+    { name = "pydantic" },
 ]
 langchain = [
     { name = "langchain" },
@@ -1557,6 +1558,7 @@ langchain = [
     { name = "langgraph-checkpoint" },
     { name = "langgraph-sdk" },
     { name = "langsmith" },
+    { name = "pydantic" },
 ]
 langchain-nvidia = [
     { name = "aiohttp" },
@@ -1570,6 +1572,7 @@ langchain-nvidia = [
     { name = "langgraph-sdk" },
     { name = "langsmith" },
     { name = "multidict" },
+    { name = "pydantic" },
 ]
 langgraph = [
     { name = "langchain" },
@@ -1579,6 +1582,7 @@ langgraph = [
     { name = "langgraph-checkpoint" },
     { name = "langgraph-sdk" },
     { name = "langsmith" },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -1629,6 +1633,7 @@ requires-dist = [
     { name = "nemo-relay", extras = ["langgraph"], marker = "extra == 'deepagents'" },
     { name = "nemo-relay-cli-bin", marker = "extra == 'cli'", directory = "python/cli-bin" },
     { name = "pyasn1", marker = "extra == 'deepagents'", specifier = ">=0.6.4" },
+    { name = "pydantic", marker = "extra == 'langchain'", specifier = ">=2.11,<3" },
 ]
 provides-extras = ["cli", "deepagents", "langchain", "langchain-nvidia", "langgraph"]
 
