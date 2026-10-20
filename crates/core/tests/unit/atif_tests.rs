@@ -648,6 +648,10 @@ fn test_exporter_unwraps_langchain_tool_message_observation_content() {
             "__nv_dataclass__": "langgraph.types.Command",
             "data": {"update": {"messages": [tool_message("subagent answer")]}},
         }),
+        json!({
+            "__nv_dataclass__": "langgraph.types.Command",
+            "data": {"update": [tool_message("list update answer")]},
+        }),
     ];
 
     {
@@ -677,6 +681,11 @@ fn test_exporter_unwraps_langchain_tool_message_observation_content() {
         outputs[0]
     );
     assert_eq!(results[1].content, Some(json!("subagent answer")));
+    assert_eq!(
+        results[1].extra.as_ref().unwrap()["tool_result"],
+        outputs[1]
+    );
+    assert_eq!(results[2].content, Some(json!("list update answer")));
 }
 
 #[test]

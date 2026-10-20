@@ -589,23 +589,30 @@ fn observation_content_value(value: &Json) -> Option<Json> {
 }
 
 /// Returns the LangChain `ToolMessage` in a result recorded by the Python typed codec,
-/// either the message itself or the one inside a LangGraph `Command(update={"messages": ...})`,
-/// which is how Deep Agents returns a subagent's answer from the `task` tool.
+/// either the message itself or the one inside a LangGraph `Command(update=...)`, whose
+/// update is `{"messages": [...]}` or a list of messages. Deep Agents returns a subagent's
+/// answer from the `task` tool this way.
 fn tool_message(value: &Json) -> Option<&Json> {
-    if value.get("__nv_pydantic__").is_none() && value.get("__nv_dataclass__").is_none() {
-        return None;
-    }
     let data = value.get("data")?;
     let is_tool_message =
         |message: &&Json| message.get("type").and_then(Json::as_str) == Some("tool");
-    if is_tool_message(&data) {
-        return Some(data);
+    match value
+        .get("__nv_pydantic__")
+        .or_else(|| value.get("__nv_dataclass__"))?
+        .as_str()?
+    {
+        "langchain_core.messages.tool.ToolMessage" => Some(data).filter(is_tool_message),
+        "langgraph.types.Command" => {
+            let update = data.get("update")?;
+            update
+                .get("messages")
+                .unwrap_or(update)
+                .as_array()?
+                .iter()
+                .find(is_tool_message)
+        }
+        _ => None,
     }
-    data.get("update")?
-        .get("messages")?
-        .as_array()?
-        .iter()
-        .find(is_tool_message)
 }
 
 fn observation_extra(event: &Event, output: Option<&Json>, content: Option<&Json>) -> Json {
