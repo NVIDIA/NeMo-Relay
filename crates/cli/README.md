@@ -144,92 +144,57 @@ nemo-relay run --agent codex --dry-run
 
 ## Configuration
 
-User config lives at `~/.config/nemo-relay/config.toml` or
-`$XDG_CONFIG_HOME/nemo-relay/config.toml`. Runtime files layer from lowest to
-highest precedence as explicit-or-user, then system. An explicit `--config`
-replaces the ambient user file without suppressing system configuration.
-Repository-local `.nemo-relay/config.toml` files are ignored.
+User settings live at `~/.config/nemo-relay/config.toml` or
+`$XDG_CONFIG_HOME/nemo-relay/config.toml`. Relay loads the user file first and the
+system file second. System settings take priority. Pass `--config` to choose a
+file in place of the user file. Relay still loads the system file. Relay ignores
+repository-local `.nemo-relay/config.toml` files unless you select one explicitly.
 
-Set up agent entries in the top-level config with:
+### Set Up Agents
+
+Run the following command to choose agents and save their settings in your user
+`config.toml`:
 
 ```bash
 nemo-relay config
 ```
 
-Use the config editor to change gateway limits, provider settings, agent
-commands, and log settings. It supports both `[logging]` and `[daemon.logging]`.
-Run the following command to open the editor:
+### Edit Gateway Configuration
+
+Use the config editor to change request limits, provider settings, agent
+commands, and log output. Run the following command to open it:
 
 ```bash
 nemo-relay config edit
 ```
 
-Use `--global` for system configuration: `/etc/nemo-relay/config.toml` on Unix
-or `%ProgramData%\nemo-relay\config.toml` on Windows. Global saves are
-system-readable (`0644` on Unix) and reject authorization headers; use the
-corresponding environment variables or a user config for credentials.
+By default, the editor opens your user `config.toml`. To open a different file,
+pass `--config path/to/config.toml` before `config edit`. Both `config edit` and
+`config edit --user` use that file. Use `--global` to edit the system file at
+`/etc/nemo-relay/config.toml` on Unix or
+`%ProgramData%\nemo-relay\config.toml` on Windows.
 
-When the top-level CLI receives `--config path/to/config.toml`, the config
-editor uses that exact file as its user target, so the default editor and
-`config edit --user` both open it. Use `--global` to edit the system layer.
+On Unix, the editor saves system files with mode `0644`, which lets other users
+read them. The editor rejects authorization headers and static API keys in
+global files. Store those values in a user config or environment variables.
 
-Observability exporters are configured through the plugin config. Edit the user
-plugin config with:
+The **Provider upstreams** menu includes URLs, response timeouts, and
+credentials. For OpenAI and Anthropic, choose an API key, an authorization
+header, or an API key helper. Setting one source removes the provider's other
+sources from the selected file. The editor hides credentials and helper commands
+and arguments during entry and in **Preview**.
 
-```bash
-nemo-relay plugins edit
-```
+Use **Operational logging** for `[logging]` and **Daemon logging** for
+`[daemon.logging]`. Both support standard error (stderr) and file output. Log
+files can use inline tables or `[[logging.sinks]]` and `[[daemon.logging.sinks]]`
+entries. The editor keeps the format you use.
 
-When the top-level CLI receives `--plugin-config-path`, the editor uses that
-exact file. Otherwise, `--config path/to/config.toml` makes the editor use the
-sibling `path/to/plugins.toml`, matching runtime selection. The explicit file
-replaces the user layer, so `--user` keeps that inherited target. `--global`
-edits the system layer.
+Select **Preview** to review your changes. Select **Save** to check and save the
+file. These checks do not run API key helpers. If a check fails, the file stays
+unchanged and the editor stays open. Select **Cancel** to leave without saving.
 
-The top-level editor menu contains one entry per supported built-in, followed by
-the dynamic plugin references in the selected physical `plugins.toml`. Dynamic
-plugins with a manifest-declared JSON Schema provide structured field controls.
-Other dynamic plugins use a raw JSON object editor.
-
-At runtime, dynamic plugins that do not have an explicit host-policy override
-are classified as required and must carry a valid signature from a configured
-trusted public key. Installation and inspection remain available for unsigned
-plugins, but Relay refuses to activate them. Worker processes inherit only the
-small environment allowlist needed for process startup and TLS. Native plugins
-run in-process and must be treated as trusted host code after verification.
-
-The canonical plugin file is `plugins.toml`; user config lives at
-`~/.config/nemo-relay/plugins.toml` or
-`$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Use
-`nemo-relay plugins edit --global` to edit `/etc/nemo-relay/plugins.toml` on
-Unix or `%ProgramData%\nemo-relay\plugins.toml` on Windows. It is
-system-readable (`0644` on Unix), so do not store credentials there. The editor
-rejects schema-declared secret values in global plugin configuration.
-
-Runtime plugin files layer from lowest to highest precedence as
-explicit-or-user, then system. An explicit
-`--plugin-config-path`, or a `plugins.toml` beside `--config`, replaces the
-ambient XDG user file without suppressing system policy. Repository-local
-`.nemo-relay/plugins.toml` files are ignored. Missing
-files are skipped, and symlink aliases to one physical file are loaded once.
-
-Minimal ATIF example:
-
-```toml
-version = 1
-
-[[components]]
-kind = "observability"
-enabled = true
-
-[components.config.atif]
-enabled = true
-output_directory = "./atif"
-```
-
-## Documentation
-
-NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay
+Refer to [Edit Gateway Configuration](../../docs/nemo-relay-cli/basic-usage.mdx#edit-gateway-configuration)
+for menu details and helper setup.
 
 ### Per-Request Upstream Credentials
 
@@ -250,6 +215,70 @@ request before sending it upstream.
 With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and
 `NEMO_RELAY_OPENAI_AUTH_HEADER`. With an Anthropic helper, it warns about and
 ignores `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and
-`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use environment API keys.
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use
+environment API keys.
+
 Refer to [Generate API Keys Per Request](../../docs/nemo-relay-cli/basic-usage.mdx#generate-api-keys-per-request)
 for examples and credential routing rules.
+
+### Edit Plugin Configuration
+
+Use the plugin editor to change `plugins.toml`. These settings include
+observability exporters and other Relay components. Run the following command
+to open it:
+
+```bash
+nemo-relay plugins edit
+```
+
+The user plugin file lives at `~/.config/nemo-relay/plugins.toml` or
+`$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Pass `--plugin-config-path` to choose
+another file. If you pass `--config path/to/config.toml`, the editor uses
+`path/to/plugins.toml` unless you also set `--plugin-config-path`. The default
+editor and `--user` both open the selected file. Put path options before
+`plugins edit`.
+
+Use `--global` to edit `/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows. Other users can read this
+file. On Unix, the editor saves it with mode `0644`. Keep credentials out of
+global plugin files. The editor rejects values that the plugin schema marks
+as secret.
+
+The editor menu lists built-in plugins and the dynamic plugin references in
+the selected file. Dynamic plugins with a JSON Schema provide structured field
+controls. Other dynamic plugins use a JSON object editor.
+
+The following example enables ATIF output:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = "./atif"
+```
+
+### Plugin Files and Policy
+
+Relay loads the user or explicit plugin file first and the system file second.
+An explicit file replaces the user file. System policy still applies. Relay
+ignores repository-local `.nemo-relay/plugins.toml` files unless you select one
+explicitly. Relay skips missing files. It loads each file only once, even if
+multiple symlinks point to it.
+
+With the default host policy, Relay treats dynamic plugins as required and
+checks for a valid signature from a trusted public key. You can install and
+inspect unsigned plugins. The default policy blocks their activation. An
+explicit host policy can change these defaults.
+
+Worker processes receive only the environment variables allowed for startup
+and TLS. Native plugins run in the host process. Treat them as trusted host
+code after verification.
+
+## Documentation
+
+Refer to [NeMo Relay Documentation](https://docs.nvidia.com/nemo/relay).

@@ -56,11 +56,13 @@ pub(super) fn edit(
             3 => edit_agents(&theme, &mut document)?,
             4 => edit_logging(&theme, &mut document, "daemon.logging")?,
             5 => print_preview(&document),
-            6 => {
-                document.write(scope)?;
-                println!("  ✓ Saved {}", document.path().display());
-                return Ok(());
-            }
+            6 => match document.write(scope) {
+                Ok(()) => {
+                    println!("  ✓ Saved {}", document.path().display());
+                    return Ok(());
+                }
+                Err(error) => println!("  Could not save: {error}"),
+            },
             7 => return Err(CliError::Config(EDIT_CANCELLED_MESSAGE.into())),
             _ => unreachable!("select returns an in-range index"),
         }
@@ -138,6 +140,22 @@ fn edit_upstream(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result
                 "Response timeout (seconds, 0 disables): {}",
                 document.integer_summary("upstream", "response_timeout_secs")
             ),
+            format!(
+                "OpenAI API key: {}",
+                document.secret_summary("openai_api_key")
+            ),
+            format!(
+                "Anthropic API key: {}",
+                document.secret_summary("anthropic_api_key")
+            ),
+            format!(
+                "OpenAI API key helper: {}",
+                document.secret_summary("openai_api_key_helper")
+            ),
+            format!(
+                "Anthropic API key helper: {}",
+                document.secret_summary("anthropic_api_key_helper")
+            ),
             "Back".into(),
         ];
         match select(theme, "Provider upstreams", &choices)? {
@@ -153,7 +171,11 @@ fn edit_upstream(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result
                 "response_timeout_secs",
                 "Seconds (0 disables the response timeout)",
             )?,
-            6 => return Ok(()),
+            6 => edit_secret(theme, document, "openai_api_key")?,
+            7 => edit_secret(theme, document, "anthropic_api_key")?,
+            8 => edit_api_key_helper(theme, document, "openai")?,
+            9 => edit_api_key_helper(theme, document, "anthropic")?,
+            10 => return Ok(()),
             _ => unreachable!(),
         }
     }
@@ -318,17 +340,133 @@ fn edit_secret(
     let configured = document.has_key("upstream", key);
     match choose_action(theme, configured)? {
         0 => {
+            println!(
+                "  Setting this credential replaces the provider's other credential sources in this file."
+            );
+            let is_api_key = key.ends_with("_api_key");
             let value = Password::with_theme(theme)
-                .with_prompt("Authorization header value")
+                .with_prompt(if is_api_key {
+                    "API key (bare token)"
+                } else {
+                    "Authorization header value"
+                })
                 .allow_empty_password(false)
+                .validate_with(|input: &String| {
+                    if is_api_key {
+                        crate::upstream_auth::validate_api_key("API key", input.clone())
+                            .map(|_| ())
+                            .map_err(|error| error.to_string())
+                    } else {
+                        require_nonempty(input).map_err(str::to_owned)?;
+                        axum::http::HeaderValue::from_str(input.trim())
+                            .map(|_| ())
+                            .map_err(|_| "value must be a valid HTTP header value".to_owned())
+                    }
+                })
                 .interact()
                 .map_err(prompt_error)?;
-            document.set_auth_header(key, value)?;
+            if is_api_key {
+                document.set_api_key(key, value)?;
+            } else {
+                document.set_auth_header(key, value)?;
+            }
         }
         1 if configured => document.clear_key("upstream", key)?,
         _ => {}
     }
     Ok(())
+}
+
+fn edit_api_key_helper(
+    theme: &ColorfulTheme,
+    document: &mut ConfigDocument,
+    provider: &str,
+) -> Result<(), CliError> {
+    let key = format!("{provider}_api_key_helper");
+    let configured = document.has_key("upstream", &key);
+    match choose_action(theme, configured)? {
+        0 => {
+            println!(
+                "  Replace all helper fields. Command and arguments are hidden because they may contain secrets."
+            );
+            println!(
+                "  Setting this helper replaces the provider's other credential sources in this file."
+            );
+            let command = Password::with_theme(theme)
+                .with_prompt("Helper command")
+                .allow_empty_password(false)
+                .validate_with(|value: &String| require_nonempty(value))
+                .interact()
+                .map_err(prompt_error)?;
+            let args = Password::with_theme(theme)
+                .with_prompt("Arguments (JSON string array; empty means no arguments)")
+                .allow_empty_password(true)
+                .validate_with(|value: &String| parse_helper_args(value).map(|_| ()))
+                .interact()
+                .map_err(prompt_error)?;
+            let args = parse_helper_args(&args).map_err(|error| CliError::Config(error.into()))?;
+            let section = format!("upstream.{key}");
+            let timeout_ms = Input::<u64>::with_theme(theme)
+                .with_prompt("Timeout (milliseconds)")
+                .default(
+                    document
+                        .integer(&section, "timeout_ms")
+                        .filter(|value| *value > 0 && *value <= i64::MAX as u64)
+                        .unwrap_or(10_000),
+                )
+                .validate_with(|value: &u64| {
+                    if *value == 0 || *value > i64::MAX as u64 {
+                        Err("timeout must be positive and fit a TOML integer")
+                    } else {
+                        Ok(())
+                    }
+                })
+                .interact_text()
+                .map_err(prompt_error)?;
+            let schemes: &[&str] = if provider == "openai" {
+                &["Provider default", "bearer"]
+            } else {
+                &["Provider default", "bearer", "api_key"]
+            };
+            let current = document.string(&section, "auth_scheme");
+            let selected = Select::with_theme(theme)
+                .with_prompt("Authentication scheme")
+                .items(schemes)
+                .default(
+                    current
+                        .as_deref()
+                        .and_then(|current| schemes.iter().position(|scheme| *scheme == current))
+                        .unwrap_or(0),
+                )
+                .interact()
+                .map_err(prompt_error)?;
+            let auth_scheme = match selected {
+                0 => None,
+                1 => Some(crate::upstream_auth::AuthScheme::Bearer),
+                2 => Some(crate::upstream_auth::AuthScheme::ApiKey),
+                _ => unreachable!(),
+            };
+            document.set_api_key_helper(
+                provider,
+                crate::upstream_auth::ApiKeyHelper {
+                    command,
+                    args,
+                    timeout_ms,
+                    auth_scheme,
+                },
+            )?;
+        }
+        1 if configured => document.clear_key("upstream", &key)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn parse_helper_args(value: &str) -> Result<Vec<String>, &'static str> {
+    if value.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(value).map_err(|_| "arguments must be a JSON array of strings")
 }
 
 fn edit_enum(
