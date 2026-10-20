@@ -1434,14 +1434,20 @@ fn record_observation(
         EvidenceDisposition::Dropped
     } else {
         let retained_detail =
-            detail.and_then(|text| state.allocate_detail(text, inner.limits.max_detail_bytes));
+            detail.and_then(|text| state.allocate_detail(text, inner.limits.max_detail_bytes, &[]));
         if detail.is_some() && retained_detail.is_none() {
             state.loss.details_omitted.add(1);
         }
-        let retained_session = session
-            .and_then(|text| state.allocate_detail(text, inner.limits.max_correlation_bytes));
-        let retained_request = request
-            .and_then(|text| state.allocate_detail(text, inner.limits.max_correlation_bytes));
+        let retained_session = session.and_then(|text| {
+            state.allocate_detail(text, inner.limits.max_correlation_bytes, &[retained_detail])
+        });
+        let retained_request = request.and_then(|text| {
+            state.allocate_detail(
+                text,
+                inner.limits.max_correlation_bytes,
+                &[retained_detail, retained_session],
+            )
+        });
         let correlation_omitted = (session.is_some() && retained_session.is_none()) as u64
             + (request.is_some() && retained_request.is_none()) as u64;
         state.loss.correlations_omitted.add(correlation_omitted);
