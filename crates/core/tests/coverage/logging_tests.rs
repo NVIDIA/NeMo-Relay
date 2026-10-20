@@ -1604,6 +1604,77 @@ fn global_level_filter_drops_events_below_process_minimum() {
 }
 
 #[test]
+fn structured_emit_respects_facade_filter_independently_of_backend() {
+    let _lock = lock_logging_tests();
+    struct RestoreMaxLevel(log::LevelFilter);
+    impl Drop for RestoreMaxLevel {
+        fn drop(&mut self) {
+            log::set_max_level(self.0);
+        }
+    }
+    let _restore_max_level = RestoreMaxLevel(log::max_level());
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("facade-filter.log.jsonl");
+    let runtime = init_logging(&LoggingConfig {
+        level: LogLevel::Trace,
+        stderr_enabled: false,
+        flush_interval_millis: 0,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            level: LogLevel::Trace,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    })
+    .unwrap();
+    assert!(runtime.logger.should_log(Level::Trace));
+    // Keep the backend permissive while independently tightening the facade.
+    log::set_max_level(log::LevelFilter::Warn);
+    let fields = |event: &str| {
+        serde_json::Map::from_iter([("event".into(), Value::String(event.to_owned()))])
+    };
+    const TARGET: &str = "nemo_relay.facade_filter_test";
+    for (name, level) in [
+        ("error", log::Level::Error),
+        ("warn", log::Level::Warn),
+        ("info", log::Level::Info),
+        ("debug", log::Level::Debug),
+        ("trace", log::Level::Trace),
+    ] {
+        super::emit(level, TARGET, "direct", fields(&format!("emit_{name}")));
+        super::emit_str(name, TARGET, "binding", fields(&format!("emit_str_{name}"))).unwrap();
+    }
+    log::set_max_level(log::LevelFilter::Off);
+    super::emit(log::Level::Error, TARGET, "disabled", fields("emit_off"));
+    super::emit_str("error", TARGET, "disabled", fields("emit_str_off")).unwrap();
+    runtime.shutdown();
+
+    let mut events = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["target"] == TARGET)
+        .map(|record| {
+            (
+                record["event"].as_str().unwrap().to_owned(),
+                record["level"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    events.sort();
+    assert_eq!(
+        events,
+        [
+            ("emit_error".to_owned(), "error".to_owned()),
+            ("emit_str_error".to_owned(), "error".to_owned()),
+            ("emit_str_warn".to_owned(), "warn".to_owned()),
+            ("emit_warn".to_owned(), "warn".to_owned()),
+        ]
+    );
+}
+
+#[test]
 fn relative_sink_path_resolves_against_process_cwd() {
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();

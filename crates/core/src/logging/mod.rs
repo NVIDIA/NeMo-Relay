@@ -326,6 +326,10 @@ pub fn shutdown_default_logging() -> Result<()> {
 
 /// Emits a structured operational record through Relay's configured logger.
 pub fn emit(level: log::Level, target: &str, message: &str, fields: Map<String, Json>) {
+    if level > log::max_level() {
+        return;
+    }
+
     struct Fields(Map<String, Json>);
     impl log::kv::Source for Fields {
         fn visit<'kvs>(
