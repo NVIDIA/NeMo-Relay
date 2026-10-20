@@ -91,22 +91,22 @@ navigation:
     title: "Instrument Applications"
     slug: instrument-applications
     title-source: frontmatter
-  - section: "Relay Plugins"
+  - section: "Use Plugins"
     slug: configure-plugins
     contents:
       - page: "About"
         path: ./configure-plugins/about.mdx
         slug: about
-      - page: "Configure and Initialize Plugins"
-        path: ./configure-plugins/initialize-plugins.mdx
-        slug: initialize-plugins
-      - page: "Manage Discoverable Plugins"
-        path: ./configure-plugins/discoverable-plugins.mdx
-        slug: discoverable-plugins
-      - page: "Plugin Configuration Files"
+      - page: "Configure"
         path: ./configure-plugins/plugin-configuration-files.mdx
         slug: plugin-configuration-files
-      - section: "Built-In Plugins"
+      - page: "Manage"
+        path: ./configure-plugins/discoverable-plugins.mdx
+        slug: discoverable-plugins
+      - page: "Initialize"
+        path: ./configure-plugins/initialize-plugins.mdx
+        slug: initialize-plugins
+      - section: "Built-in Plugins"
         skip-slug: true
         collapsed: open-by-default
         contents:
@@ -114,7 +114,7 @@ navigation:
             title: "Observability"
             title-source: frontmatter
           - folder: ./configure-plugins/adaptive
-            title: "Adaptive"
+            title: "Adaptive Runtime"
             title-source: frontmatter
           - folder: ./configure-plugins/nemo-guardrails
             title: "NeMo Guardrails (Deprecated)"
@@ -128,7 +128,7 @@ navigation:
           - page: "Resource Metrics"
             path: ./configure-plugins/resource-metrics.mdx
             slug: resource-metrics
-      - section: "First-Party Plugins"
+      - section: "First Party Plugins"
         skip-slug: true
         collapsed: open-by-default
         contents:
