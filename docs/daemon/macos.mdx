@@ -165,15 +165,23 @@ If your installation uses `/Library/Logs/NeMoRelay`, change the log paths with
 these steps:
 
 1. Close harness sessions.
-2. Unload the system job with the `launchctl bootout` command in
-   [Verify, Restart, and Remove](#verify-restart-and-remove).
+2. Unload the system job:
+
+   ```bash
+   sudo launchctl bootout system /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
+   ```
+
 3. Create `/var/lib/nemo-relay/logs` with the `install` command above. It sets
    `_nemo-relay` as the owner and group, with `0700` permissions.
-4. Update `StandardOutPath` and `StandardErrorPath` in the installed plist to
+4. Optional: Copy any old logs you want to keep from `/Library/Logs/NeMoRelay`
+   to `/var/lib/nemo-relay/logs`. Set `_nemo-relay` as the owner and group of
+   each copied file, with `0600` permissions. Skip this step if the old logs
+   are gone.
+5. Update `StandardOutPath` and `StandardErrorPath` in the installed plist to
    match the example above.
-5. Run the `plutil -lint`, `launchctl bootstrap`, `launchctl print`, and `tail`
+6. Run the `plutil -lint`, `launchctl bootstrap`, `launchctl print`, and `tail`
    commands above to check the plist, start the job, and check its status and logs.
-6. Update any log rotation settings to use the new paths.
+7. Update any log rotation settings to use the new paths.
 
 Hooks run as each user and check the daemon's TLS certificate before they send
 anything. They cannot read the service account's files, so publish the
