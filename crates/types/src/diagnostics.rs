@@ -658,7 +658,7 @@ pub struct DiagnosticQuery {
     pub code: Option<String>,
     /// Select the authoritative catalogue parent domain.
     pub domain: Option<DiagnosticDomain>,
-    /// Select the plugin mechanism derived from catalogue entries.
+    /// Select the plugin catalogue family derived from code ownership.
     pub plugin_family: Option<PluginDiagnosticFamily>,
     /// Select event causes only; code counters do not retain cause breakdowns.
     pub failure_class: Option<String>,

@@ -513,6 +513,26 @@ fn nested_catalogue_selectors_derive_parent_ownership_without_another_record() {
     assert_eq!(logging.domain(), DiagnosticDomain::Logging);
     assert_eq!(logging.plugin_family(), None);
     assert_eq!(logging.canonical_name(), "logging.sink.write_failed");
+    for (success, name) in [
+        (SuccessCode::LoggingInitialized, "logging.initialized"),
+        (
+            SuccessCode::LoggingShutdownCompleted,
+            "logging.shutdown_completed",
+        ),
+        (SuccessCode::SinkInitialized, "logging.sink.initialized"),
+    ] {
+        let code = BuiltinDiagnosticCode::Success(success);
+        assert_eq!(code.canonical_name(), name);
+        assert_eq!(code.domain(), DiagnosticDomain::Logging);
+        assert_eq!(code.plugin_family(), None);
+    }
+    let inherited = BuiltinDiagnosticCode::Notice(NoticeCode::ConfigurationInherited);
+    assert_eq!(inherited.canonical_name(), "plugin.configuration_inherited");
+    assert_eq!(inherited.domain(), DiagnosticDomain::Plugin);
+    assert_eq!(
+        inherited.plugin_family(),
+        Some(PluginDiagnosticFamily::Common)
+    );
 }
 
 #[test]
