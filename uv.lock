@@ -1648,7 +1648,7 @@ dev = [
     { name = "soupsieve", specifier = ">=2.9.0" },
     { name = "ty", specifier = ">=0.0.1a7" },
     { name = "urllib3", specifier = ">=2.8.0" },
-    { name = "uv", specifier = "~=0.13.4" },
+    { name = "uv", specifier = ">=0.13.4" },
     { name = "virtualenv", specifier = ">=21.7.13" },
 ]
 test = [

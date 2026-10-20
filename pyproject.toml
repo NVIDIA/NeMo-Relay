@@ -60,7 +60,7 @@ dev = [
     "ty>=0.0.1a7",
     # Transitive dependency of optional integrations; keep it at a patched release.
     "urllib3>=2.8.0",
-    "uv~=0.13.4",
+    "uv>=0.13.4",
     # Transitive dependency of pre-commit; keep it at a patched release.
     "virtualenv>=21.7.13",
 ]
