@@ -632,6 +632,15 @@ fn tool_message<'a>(value: &'a Json, call_id: Option<&str>) -> Option<&'a Json> 
 fn observation_extra(event: &Event, output: Option<&Json>, content: Option<&Json>) -> Json {
     let mut extra = event_extra(event);
     if let Json::Object(extra_object) = &mut extra {
+        // LangChain returns a handled tool failure as a ToolMessage with status "error".
+        if output
+            .and_then(|output| tool_message(output, event.tool_call_id()))
+            .and_then(|message| message.get("status"))
+            .and_then(Json::as_str)
+            == Some("error")
+        {
+            extra_object.insert("is_error".to_string(), Json::Bool(true));
+        }
         // Keep the raw tool result unless the observation content already carries it unchanged.
         if let Some(tool_result) =
             output.filter(|output| !output.is_null() && content != Some(*output))

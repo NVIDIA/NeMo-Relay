@@ -638,19 +638,20 @@ fn test_exporter_tool_lifecycle() {
 #[test]
 fn test_exporter_unwraps_langchain_tool_message_observation_content() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
-    let tool_message = |content: &str| json!({"type": "tool", "content": content});
+    let tool_message =
+        |content: &str, status: &str| json!({"type": "tool", "content": content, "status": status});
     let outputs = [
         json!({
             "__nv_pydantic__": "langchain_core.messages.tool.ToolMessage",
-            "data": tool_message("tool answer"),
+            "data": tool_message("tool answer", "error"),
         }),
         json!({
             "__nv_dataclass__": "langgraph.types.Command",
-            "data": {"update": {"messages": [tool_message("subagent answer")]}},
+            "data": {"update": {"messages": [tool_message("subagent answer", "success")]}},
         }),
         json!({
             "__nv_dataclass__": "langgraph.types.Command",
-            "data": {"update": [tool_message("list update answer")]},
+            "data": {"update": [tool_message("list update answer", "success")]},
         }),
     ];
 
@@ -680,7 +681,9 @@ fn test_exporter_unwraps_langchain_tool_message_observation_content() {
         results[0].extra.as_ref().unwrap()["tool_result"],
         outputs[0]
     );
+    assert_eq!(results[0].extra.as_ref().unwrap()["is_error"], json!(true));
     assert_eq!(results[1].content, Some(json!("subagent answer")));
+    assert!(results[1].extra.as_ref().unwrap().get("is_error").is_none());
     assert_eq!(
         results[1].extra.as_ref().unwrap()["tool_result"],
         outputs[1]
@@ -691,10 +694,10 @@ fn test_exporter_unwraps_langchain_tool_message_observation_content() {
 #[test]
 fn test_exporter_matches_command_tool_message_by_call_id() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
-    let tool_message = |content: &str, call_id: &str| json!({"type": "tool", "content": content, "tool_call_id": call_id});
+    let tool_message = |content: &str, call_id: &str, status: &str| json!({"type": "tool", "content": content, "tool_call_id": call_id, "status": status});
     let messages = [
-        tool_message("answer b", "call_b"),
-        tool_message("answer a", "call_a"),
+        tool_message("answer b", "call_b", "error"),
+        tool_message("answer a", "call_a", "success"),
     ];
     let output = json!({
         "__nv_dataclass__": "langgraph.types.Command",
@@ -702,7 +705,7 @@ fn test_exporter_matches_command_tool_message_by_call_id() {
     });
     let other_call_output = json!({
         "__nv_dataclass__": "langgraph.types.Command",
-        "data": {"update": [tool_message("other answer", "call_other")]},
+        "data": {"update": [tool_message("other answer", "call_other", "error")]},
     });
 
     {
@@ -729,17 +732,22 @@ fn test_exporter_matches_command_tool_message_by_call_id() {
         .iter()
         .flat_map(|step| &step.observation.as_ref().unwrap().results)
         .map(|result| {
-            let event_name = result.extra.as_ref().unwrap()["event_name"].clone();
-            (event_name, result.content.clone())
+            let extra = result.extra.as_ref().unwrap();
+            let is_error = extra.get("is_error").cloned();
+            (
+                extra["event_name"].clone(),
+                result.content.clone(),
+                is_error,
+            )
         })
         .collect();
-    contents.sort_by_key(|(event_name, _)| event_name.to_string());
+    contents.sort_by_key(|(event_name, _, _)| event_name.to_string());
     assert_eq!(
         contents,
         [
-            (json!("call_a"), Some(json!("answer a"))),
-            (json!("call_b"), Some(json!("answer b"))),
-            (json!("call_c"), None),
+            (json!("call_a"), Some(json!("answer a")), None),
+            (json!("call_b"), Some(json!("answer b")), Some(json!(true))),
+            (json!("call_c"), None, None),
         ]
     );
 }
