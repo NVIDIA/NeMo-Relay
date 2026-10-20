@@ -420,6 +420,9 @@ pub struct PluginRegistrationContext {
     diagnostic_recorder: Option<ComponentRecorder>,
 }
 
+// This adapter observes component registration failures and activation unwinds.
+// It supplies Activation with no execution mechanism. Configuration resolution,
+// native/worker operations, and runtime/policy producers have separate boundaries.
 const PLUGIN_ACTIVATION_CODES: &[BuiltinDiagnosticCode] = &[
     BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
         CommonPluginFailureCode::ConfigurationInvalid,

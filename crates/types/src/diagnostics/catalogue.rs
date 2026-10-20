@@ -92,7 +92,11 @@ pub enum PluginDiagnosticFamily {
     Common,
 }
 
-/// Plugin execution mechanism, retained as context rather than counter identity.
+/// Producer-authored plugin execution mechanism, excluded from counter identity.
+///
+/// Phase-one core activation recording leaves execution unset. These values
+/// support later native/worker producer integrations; they do not describe
+/// currently implemented automatic collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -106,6 +110,10 @@ pub enum PluginExecution {
 
 /// Observed plugin lifecycle phase or policy-gate context, independent of
 /// classification.
+///
+/// The phase-one core adapter automatically supplies only [`Self::Activation`].
+/// Other values are authoring/wire contracts for producers integrated later;
+/// declaring a value does not mean its stage is currently observed by Relay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -376,8 +384,6 @@ impl SuccessCode {
 pub enum NoticeCode {
     /// Observation identified by `plugin.configuration_inherited`.
     ConfigurationInherited,
-    /// Observation identified by `plugin.component_reenabled`.
-    ComponentReenabled,
 }
 
 impl NoticeCode {
@@ -386,7 +392,6 @@ impl NoticeCode {
     pub const fn canonical_name(self) -> &'static str {
         match self {
             Self::ConfigurationInherited => "plugin.configuration_inherited",
-            Self::ComponentReenabled => "plugin.component_reenabled",
         }
     }
 }
@@ -489,7 +494,6 @@ impl BuiltinDiagnosticCode {
             Self::Success(SuccessCode::LoggingShutdownCompleted),
             Self::Success(SuccessCode::SinkInitialized),
             Self::Notice(NoticeCode::ConfigurationInherited),
-            Self::Notice(NoticeCode::ComponentReenabled),
         ]
     }
     /// Look up a built-in code without accepting prefixes or inspecting messages.
