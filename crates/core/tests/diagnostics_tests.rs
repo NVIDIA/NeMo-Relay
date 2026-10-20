@@ -1751,6 +1751,57 @@ fn publication_workspace_pressure_omits_delivery_without_losing_totals() {
 }
 
 #[test]
+fn extension_severity_defaults_follow_outcome_and_allow_explicit_override() {
+    let service = diagnostics(limits());
+    let component = register(&service, "producer");
+    for (name, outcome) in [
+        ("failed", DiagnosticOutcome::Failure),
+        ("succeeded", DiagnosticOutcome::Success),
+        ("observed", DiagnosticOutcome::Unknown),
+    ] {
+        let class = (outcome == DiagnosticOutcome::Failure).then_some(FailureClass::Unknown);
+        let extension = component
+            .register_extension(ExtensionRegistration {
+                namespace: "acme",
+                name,
+                description: "A producer observation",
+                allowed_classes: if class.is_some() {
+                    &[FailureClass::Unknown]
+                } else {
+                    &[]
+                },
+                outcome,
+            })
+            .unwrap()
+            .unwrap();
+        component
+            .record_without_projection_lazy(|| {
+                Observation::extension(extension, class, outcome, "default severity", 1)
+            })
+            .unwrap();
+        component
+            .record_without_projection_lazy(|| {
+                Observation::extension(extension, class, outcome, "explicit severity", 1)
+                    .with_severity(DiagnosticSeverity::Warning)
+            })
+            .unwrap();
+    }
+    let view = snapshot(&service, DiagnosticQuery::default());
+    let severities: Vec<_> = view.events.iter().map(|event| event.severity).collect();
+    assert_eq!(
+        severities,
+        [
+            DiagnosticSeverity::Error,
+            DiagnosticSeverity::Warning,
+            DiagnosticSeverity::Info,
+            DiagnosticSeverity::Warning,
+            DiagnosticSeverity::Info,
+            DiagnosticSeverity::Warning,
+        ]
+    );
+}
+
+#[test]
 fn custom_extension_classes_are_admitted_once_and_overflow_is_summary_only() {
     let service = diagnostics(DiagnosticLimits {
         max_extensions: 1,

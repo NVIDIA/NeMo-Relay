@@ -374,7 +374,11 @@ impl<'a> Observation<'a> {
             code: ObservationCode::Extension(handle, class),
             detail: detail.into(),
             count,
-            severity: DiagnosticSeverity::Info,
+            severity: if outcome == DiagnosticOutcome::Failure {
+                DiagnosticSeverity::Error
+            } else {
+                DiagnosticSeverity::Info
+            },
             outcome,
             correlation: DiagnosticCorrelationRef::default(),
             context: PluginObservationContext::default(),
