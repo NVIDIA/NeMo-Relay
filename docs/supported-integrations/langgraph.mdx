@@ -111,6 +111,17 @@ standalone LangGraph instrumentation. For custom ToolNode wrapper composition,
 construct `ToolNode` directly and pass `wrap_tool_call` and `awrap_tool_call`
 from this integration.
 
+Managed `ToolNode` calls use the JSON format described in
+[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results).
+Relay chooses the codec automatically. It keeps message fields, artifacts,
+graph state, and command destinations. It also handles lists of messages and
+commands.
+
+When `ToolNode` handles an error and returns a `ToolMessage` with
+`status="error"`, ATIF adds `extra.is_error: true`. Relay also sets the tool
+span status to `ERROR`. The message still returns to LangGraph. Graph
+interrupts still pause the workflow as usual.
+
 ## Served LangChain Agents
 
 When you export a LangChain agent for `langgraph dev` or `langgraph up`, add
