@@ -31,9 +31,11 @@ pub struct PluginErrorClassifier;
 impl DiagnosticClassifier<PluginError> for PluginErrorClassifier {
     fn classify(&self, error: &PluginError) -> Classification {
         let (code, class) = match error {
+            // Legacy producers flatten file-read and validation failures into this
+            // variant. Its message cannot establish a more specific cause.
             PluginError::InvalidConfig(_) => (
                 CommonPluginFailureCode::ConfigurationInvalid,
-                FailureClass::InvalidInput,
+                FailureClass::Unknown,
             ),
             PluginError::Conflict(_) => (
                 CommonPluginFailureCode::StateConflict,

@@ -161,6 +161,12 @@ interface returns `Classification` values without recording or changing source
 errors. The production adapters are `PluginErrorClassifier` and
 `LoggingErrorClassifier`.
 
+`PluginError::InvalidConfig` combines configuration file-read failures and
+validation failures without preserving their structured causes. Its classifier
+therefore emits `plugin.configuration_invalid` with the `unknown` failure class.
+It never infers a cause from error text. A producer with structured validation
+evidence can explicitly author that code with `invalid_input`.
+
 The phase-one built-in catalogue contains logging failures/successes, six common
 plugin failures, and the shared `ConfigurationInherited` and
 `ComponentReenabled` notices. Runtime/upstream, dynamic trust/policy,
