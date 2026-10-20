@@ -578,12 +578,12 @@ fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<J
     }
 }
 
-fn observation_content_value(value: &Json) -> Option<Json> {
+fn observation_content_value(value: &Json, call_id: Option<&str>) -> Option<Json> {
     match value {
         Json::String(_) => Some(value.clone()),
-        Json::Object(_) => tool_message(value)
+        Json::Object(_) => tool_message(value, call_id)
             .and_then(|message| message.get("content"))
-            .and_then(observation_content_value),
+            .and_then(|content| observation_content_value(content, None)),
         _ => canonicalize_atif_content_parts(value),
     }
 }
@@ -591,8 +591,9 @@ fn observation_content_value(value: &Json) -> Option<Json> {
 /// Returns the LangChain `ToolMessage` in a result recorded by the Python typed codec,
 /// either the message itself or the one inside a LangGraph `Command(update=...)`, whose
 /// update is `{"messages": [...]}` or a list of messages. Deep Agents returns a subagent's
-/// answer from the `task` tool this way.
-fn tool_message(value: &Json) -> Option<&Json> {
+/// answer from the `task` tool this way. An update with several tool messages is matched on
+/// `tool_call_id`.
+fn tool_message<'a>(value: &'a Json, call_id: Option<&str>) -> Option<&'a Json> {
     let data = value.get("data")?;
     let is_tool_message =
         |message: &&Json| message.get("type").and_then(Json::as_str) == Some("tool");
@@ -604,12 +605,20 @@ fn tool_message(value: &Json) -> Option<&Json> {
         "langchain_core.messages.tool.ToolMessage" => Some(data).filter(is_tool_message),
         "langgraph.types.Command" => {
             let update = data.get("update")?;
-            update
+            let messages: Vec<&Json> = update
                 .get("messages")
                 .unwrap_or(update)
                 .as_array()?
                 .iter()
-                .find(is_tool_message)
+                .filter(is_tool_message)
+                .collect();
+            match messages[..] {
+                [message] => Some(message),
+                _ => messages.into_iter().find(|message| {
+                    call_id.is_some()
+                        && message.get("tool_call_id").and_then(Json::as_str) == call_id
+                }),
+            }
         }
         _ => None,
     }
@@ -2851,7 +2860,8 @@ impl StepConversionState {
             if self.pending_obs_timestamp.is_none() {
                 self.pending_obs_timestamp = Some(event.timestamp().to_rfc3339());
             }
-            let content = output.and_then(observation_content_value);
+            let content =
+                output.and_then(|output| observation_content_value(output, event.tool_call_id()));
             self.pending_observations.push(AtifObservationResult {
                 source_call_id: source_call_id.clone(),
                 extra: Some(observation_extra(event, output, content.as_ref())),

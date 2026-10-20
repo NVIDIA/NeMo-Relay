@@ -689,6 +689,53 @@ fn test_exporter_unwraps_langchain_tool_message_observation_content() {
 }
 
 #[test]
+fn test_exporter_matches_command_tool_message_by_call_id() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_message = |content: &str, call_id: &str| json!({"type": "tool", "content": content, "tool_call_id": call_id});
+    let messages = [
+        tool_message("answer b", "call_b"),
+        tool_message("answer a", "call_a"),
+    ];
+    let output = json!({
+        "__nv_dataclass__": "langgraph.types.Command",
+        "data": {"update": messages},
+    });
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        for call_id in ["call_a", "call_b"] {
+            state.events.push(
+                event_builder(Uuid::now_v7(), EventType::End)
+                    .name(call_id)
+                    .scope_type(ScopeType::Tool)
+                    .output(output.clone())
+                    .tool_call_id(call_id)
+                    .build(),
+            );
+        }
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let mut contents: Vec<_> = trajectory
+        .steps
+        .iter()
+        .flat_map(|step| &step.observation.as_ref().unwrap().results)
+        .map(|result| {
+            let event_name = result.extra.as_ref().unwrap()["event_name"].clone();
+            (event_name, result.content.clone())
+        })
+        .collect();
+    contents.sort_by_key(|(event_name, _)| event_name.to_string());
+    assert_eq!(
+        contents,
+        [
+            (json!("call_a"), Some(json!("answer a"))),
+            (json!("call_b"), Some(json!("answer b"))),
+        ]
+    );
+}
+
+#[test]
 fn test_exporter_omits_null_tool_observation_content() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let tool_uuid = Uuid::now_v7();
