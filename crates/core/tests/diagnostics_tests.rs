@@ -465,6 +465,128 @@ fn detail_pressure_reclaims_blocks_and_impossible_detail_preserves_old_evidence(
 }
 
 #[test]
+fn impossible_correlation_preserves_history_with_pending_ascii_and_utf8_detail() {
+    for (pool_bytes, detail, session) in [
+        (12, "abcdefgh", "ijklmnop"),
+        // Four three-byte scalars occupy four blocks, not three.
+        (20, "€€€€", "abcdefgh"),
+        // The incoming correlation also needs its exact UTF-8 block geometry.
+        (20, "abcdefgh", "€€€€"),
+    ] {
+        let service = diagnostics(DiagnosticLimits {
+            detail_pool_bytes: pool_bytes,
+            detail_block_bytes: 4,
+            ..limits()
+        });
+        let component = register(&service, "producer");
+        component
+            .record_without_projection_lazy(|| {
+                Observation::new(classification(FailureClass::Unknown), "old!", 2)
+            })
+            .unwrap();
+        let receipt = component
+            .record_without_projection_lazy(|| {
+                Observation::new(classification(FailureClass::Unknown), detail, 3).with_correlation(
+                    DiagnosticCorrelationRef {
+                        session_id: Some(session),
+                        request_id: None,
+                    },
+                )
+            })
+            .unwrap();
+        assert!(matches!(
+            receipt,
+            RecordOutcome::Recorded(RecordReceipt {
+                evidence: EvidenceDisposition::Truncated,
+                ..
+            })
+        ));
+        let view = snapshot(&service, DiagnosticQuery::default());
+        assert_eq!(view.events.len(), 2);
+        assert_eq!(view.events[0].message(), Some("old!"));
+        assert_eq!(view.events[1].message(), Some(detail));
+        assert!(view.events[1].correlation.session_id.is_none());
+        assert_eq!(view.coverage.loss.events_evicted.value.get(), 0);
+        assert_eq!(view.coverage.loss.correlations_omitted.value.get(), 1);
+        assert_eq!(code_total(row(&view, "producer"), WRITE), 5);
+    }
+}
+
+#[test]
+fn impossible_request_preserves_history_and_pending_detail_and_session() {
+    let service = diagnostics(DiagnosticLimits {
+        detail_pool_bytes: 16,
+        detail_block_bytes: 4,
+        ..limits()
+    });
+    let component = register(&service, "producer");
+    component
+        .record_without_projection_lazy(|| {
+            Observation::new(classification(FailureClass::Unknown), "old!", 2)
+        })
+        .unwrap();
+    component
+        .record_without_projection_lazy(|| {
+            Observation::new(classification(FailureClass::Unknown), "abcd", 3).with_correlation(
+                DiagnosticCorrelationRef {
+                    session_id: Some("efghijkl"),
+                    request_id: Some("mnopqrst"),
+                },
+            )
+        })
+        .unwrap();
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.events.len(), 2);
+    assert_eq!(view.events[0].message(), Some("old!"));
+    assert_eq!(view.events[1].message(), Some("abcd"));
+    assert_eq!(
+        view.events[1].correlation.session_id.as_deref(),
+        Some("efghijkl")
+    );
+    assert!(view.events[1].correlation.request_id.is_none());
+    assert_eq!(view.coverage.loss.events_evicted.value.get(), 0);
+    assert_eq!(view.coverage.loss.correlations_omitted.value.get(), 1);
+    assert_eq!(code_total(row(&view, "producer"), WRITE), 5);
+    assert_eq!(service.memory_usage().detail_bytes, 16);
+}
+
+#[test]
+fn correlation_pressure_still_reclaims_history_when_pending_detail_leaves_capacity() {
+    let service = diagnostics(DiagnosticLimits {
+        detail_pool_bytes: 12,
+        detail_block_bytes: 4,
+        ..limits()
+    });
+    let component = register(&service, "producer");
+    component
+        .record_without_projection_lazy(|| {
+            Observation::new(classification(FailureClass::Unknown), "old!", 2)
+        })
+        .unwrap();
+    component
+        .record_without_projection_lazy(|| {
+            Observation::new(classification(FailureClass::Unknown), "abcd", 3).with_correlation(
+                DiagnosticCorrelationRef {
+                    session_id: Some("efghijkl"),
+                    request_id: None,
+                },
+            )
+        })
+        .unwrap();
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.events.len(), 1);
+    assert_eq!(view.events[0].message(), Some("abcd"));
+    assert_eq!(
+        view.events[0].correlation.session_id.as_deref(),
+        Some("efghijkl")
+    );
+    assert_eq!(view.coverage.loss.events_evicted.value.get(), 1);
+    assert_eq!(view.coverage.loss.correlations_omitted.value.get(), 0);
+    assert_eq!(code_total(row(&view, "producer"), WRITE), 5);
+    assert_eq!(service.memory_usage().detail_bytes, 12);
+}
+
+#[test]
 fn zero_history_still_counts_and_projects_without_fabricating_evictions() {
     let service = diagnostics(DiagnosticLimits {
         max_events: 0,

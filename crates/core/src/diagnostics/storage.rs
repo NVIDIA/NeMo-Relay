@@ -151,9 +151,15 @@ impl DetailPool {
         (self.blocks.len() - self.free_blocks) * self.block_bytes
     }
 
-    /// Whether the bounded prefix can ever fit this pool, regardless of current
-    /// occupancy. Impossible details must be omitted without evicting evidence.
-    pub(super) fn can_fit(&self, text: &str, max_bytes: usize) -> bool {
+    /// Whether the bounded prefix can fit after reclaiming retained history.
+    /// Pending observation handles are protected: they cannot be reclaimed by
+    /// eviction until their event has been inserted into history.
+    pub(super) fn can_fit(
+        &self,
+        text: &str,
+        max_bytes: usize,
+        protected: &[Option<DetailHandle>],
+    ) -> bool {
         let end = chunk_end(text, max_bytes);
         let mut remainder = &text[..end];
         if remainder.is_empty() {
@@ -162,10 +168,17 @@ impl DetailPool {
         if self.generation == u64::MAX {
             return false;
         }
+        let mut reclaimable = self.blocks.len();
+        for handle in protected.iter().flatten() {
+            let Some(blocks) = self.block_count(*handle) else {
+                return false;
+            };
+            reclaimable = reclaimable.saturating_sub(blocks);
+        }
         let mut required = 0usize;
         while !remainder.is_empty() {
             required += 1;
-            if required > self.blocks.len() {
+            if required > reclaimable {
                 return false;
             }
             remainder = &remainder[chunk_end(remainder, self.block_bytes)..];
@@ -233,30 +246,29 @@ impl DetailPool {
     }
 
     fn valid(&self, handle: DetailHandle) -> bool {
+        self.block_count(handle).is_some()
+    }
+
+    fn block_count(&self, handle: DetailHandle) -> Option<usize> {
         if handle.first == NO_BLOCK {
-            return handle.len == 0 && handle.generation == 0;
+            return (handle.len == 0 && handle.generation == 0).then_some(0);
         }
         let mut index = handle.first;
         let mut len = 0usize;
         let mut seen = 0usize;
         while index != NO_BLOCK {
-            let Some(block) = self.blocks.get(index) else {
-                return false;
-            };
+            let block = self.blocks.get(index)?;
             if block.len == 0 || block.generation != handle.generation {
-                return false;
+                return None;
             }
-            let Some(next_len) = len.checked_add(block.len) else {
-                return false;
-            };
-            len = next_len;
+            len = len.checked_add(block.len)?;
             seen += 1;
             if seen > self.blocks.len() {
-                return false;
+                return None;
             }
             index = block.next;
         }
-        len == handle.len
+        (len == handle.len).then_some(seen)
     }
 
     pub(super) fn byte_len(&self, handle: DetailHandle) -> Option<usize> {
