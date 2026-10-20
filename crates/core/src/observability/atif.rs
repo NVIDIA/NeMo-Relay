@@ -591,8 +591,8 @@ fn observation_content_value(value: &Json, call_id: Option<&str>) -> Option<Json
 /// Returns the LangChain `ToolMessage` in a result recorded by the Python typed codec,
 /// either the message itself or the one inside a LangGraph `Command(update=...)`, whose
 /// update is `{"messages": [...]}` or a list of messages. Deep Agents returns a subagent's
-/// answer from the `task` tool this way. An update with several tool messages is matched on
-/// `tool_call_id`.
+/// answer from the `task` tool this way. The message's `tool_call_id` must match the call
+/// id when both are known; a sole message without one is used as is.
 fn tool_message<'a>(value: &'a Json, call_id: Option<&str>) -> Option<&'a Json> {
     let data = value.get("data")?;
     let is_tool_message =
@@ -613,7 +613,12 @@ fn tool_message<'a>(value: &'a Json, call_id: Option<&str>) -> Option<&'a Json> 
                 .filter(is_tool_message)
                 .collect();
             match messages[..] {
-                [message] => Some(message),
+                [message] => Some(message).filter(|message| {
+                    match (call_id, message.get("tool_call_id").and_then(Json::as_str)) {
+                        (Some(call_id), Some(message_call_id)) => call_id == message_call_id,
+                        _ => true,
+                    }
+                }),
                 _ => messages.into_iter().find(|message| {
                     call_id.is_some()
                         && message.get("tool_call_id").and_then(Json::as_str) == call_id

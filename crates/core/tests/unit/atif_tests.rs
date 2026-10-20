@@ -700,10 +700,18 @@ fn test_exporter_matches_command_tool_message_by_call_id() {
         "__nv_dataclass__": "langgraph.types.Command",
         "data": {"update": messages},
     });
+    let other_call_output = json!({
+        "__nv_dataclass__": "langgraph.types.Command",
+        "data": {"update": [tool_message("other answer", "call_other")]},
+    });
 
     {
         let mut state = exporter.state.lock().unwrap();
-        for call_id in ["call_a", "call_b"] {
+        for (call_id, output) in [
+            ("call_a", &output),
+            ("call_b", &output),
+            ("call_c", &other_call_output),
+        ] {
             state.events.push(
                 event_builder(Uuid::now_v7(), EventType::End)
                     .name(call_id)
@@ -731,6 +739,7 @@ fn test_exporter_matches_command_tool_message_by_call_id() {
         [
             (json!("call_a"), Some(json!("answer a"))),
             (json!("call_b"), Some(json!("answer b"))),
+            (json!("call_c"), None),
         ]
     );
 }
