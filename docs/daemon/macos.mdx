@@ -181,7 +181,10 @@ these steps:
    match the example above.
 6. Run the `plutil -lint`, `launchctl bootstrap`, `launchctl print`, and `tail`
    commands above to check the plist, start the job, and check its status and logs.
-7. Update any log rotation settings to use the new paths.
+7. Update any log rotation settings to use the new paths. Configure the rotation
+   tool to create replacement log files with `_nemo-relay` as the owner and
+   group, with `0600` permissions. If root owns these files with `0600`
+   permissions, the daemon cannot open them at the next start.
 
 Hooks run as each user and check the daemon's TLS certificate before they send
 anything. They cannot read the service account's files, so publish the
