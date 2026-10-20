@@ -592,6 +592,7 @@ fn provider_route_names_round_trip_through_alignment_routes() {
 #[test]
 fn provider_routes_preserve_path_query_and_choose_upstream() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai/v1/".into(),
@@ -648,6 +649,7 @@ fn chatgpt_shaped_responses_path_is_a_responses_route() {
 #[test]
 fn openai_upstream_url_accepts_origin_or_v1_base() {
     let mut config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
@@ -689,6 +691,7 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
 #[test]
 fn anthropic_upstream_url_accepts_origin_or_v1_base() {
     let mut config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
@@ -968,7 +971,7 @@ async fn cross_protocol_target_uses_only_binding_owned_authentication() {
         headers: Map::from_iter([
             (
                 INTERNAL_DISPATCH_URL_HEADER.to_string(),
-                json!("http://anthropic-target.invalid/v1/messages"),
+                json!("https://anthropic-target.invalid/v1/messages"),
             ),
             (
                 INTERNAL_DISPATCH_ROUTE_HEADER.to_string(),
@@ -1000,7 +1003,7 @@ async fn cross_protocol_target_uses_only_binding_owned_authentication() {
     );
 
     let built = inject_provider_auth(
-        test_http_client().post("http://anthropic-target.invalid/v1/messages"),
+        test_http_client().post("https://anthropic-target.invalid/v1/messages"),
         effective.target_route,
         false,
         &auth_test_config(effective.target_route, None),
@@ -2005,7 +2008,7 @@ async fn injects_openai_bearer_when_inbound_has_no_auth() {
     )]);
     // Foreground gateway mode retains the convenience of supplying its own provider key.
     let http = test_http_client();
-    let builder = http.get("http://upstream/v1/responses");
+    let builder = http.get("https://upstream/v1/responses");
     let built = inject_provider_auth(
         builder,
         ProviderRoute::OpenAiResponses,
@@ -2024,7 +2027,7 @@ async fn injects_anthropic_x_api_key_for_anthropic_routes() {
         Some(std::ffi::OsStr::new("sk-ant-test")),
     )]);
     let http = test_http_client();
-    let builder = http.post("http://upstream/v1/messages");
+    let builder = http.post("https://upstream/v1/messages");
     let built = inject_provider_auth(
         builder,
         ProviderRoute::AnthropicMessages,
@@ -2066,7 +2069,7 @@ async fn configured_auth_headers_are_provider_specific_and_precede_environment_k
         ),
     ] {
         let built = inject_provider_auth(
-            test_http_client().post("http://upstream"),
+            test_http_client().post("https://upstream"),
             route,
             true,
             &auth_test_config(route, forwarding.configured_auth_header(route)),
@@ -2113,7 +2116,7 @@ async fn configured_openai_auth_replaces_chatgpt_jwt() {
     );
 
     let request = inject_provider_auth(
-        test_http_client().post("http://upstream"),
+        test_http_client().post("https://upstream"),
         ProviderRoute::OpenAiResponses,
         true,
         &auth_test_config(ProviderRoute::OpenAiResponses, configured_auth_header),
@@ -2136,7 +2139,7 @@ async fn skips_injection_when_inbound_already_has_authorization() {
         "authorization",
         HeaderValue::from_static("Bearer agent-supplied"),
     );
-    let builder = http.post("http://upstream/v1/responses").headers(inbound);
+    let builder = http.post("https://upstream/v1/responses").headers(inbound);
     let built = inject_provider_auth(
         builder,
         ProviderRoute::OpenAiResponses,
@@ -2152,7 +2155,7 @@ async fn skips_injection_when_inbound_already_has_authorization() {
 async fn skips_injection_when_env_var_unset() {
     let _env = crate::test_support::EnvScope::set(&[("OPENAI_API_KEY", None)]);
     let http = test_http_client();
-    let builder = http.post("http://upstream/v1/responses");
+    let builder = http.post("https://upstream/v1/responses");
     let built = inject_provider_auth(
         builder,
         ProviderRoute::OpenAiResponses,
@@ -2167,7 +2170,7 @@ async fn skips_injection_when_env_var_unset() {
 #[tokio::test]
 async fn managed_sidecar_never_injects_forwarded_provider_credentials() {
     let http = test_http_client();
-    let builder = http.post("http://upstream/v1/responses");
+    let builder = http.post("https://upstream/v1/responses");
     let built = inject_provider_auth(
         builder,
         ProviderRoute::OpenAiResponses,
@@ -2466,6 +2469,7 @@ fn chatgpt_backend_url_omits_v1_prefix() {
 #[tokio::test]
 async fn passthrough_rejects_unsupported_provider_path_directly() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
@@ -2492,6 +2496,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         http: test_http_client(),
         http_no_redirect: test_http_client_no_redirect(),
         http_helper: test_http_client_no_redirect(),
+        http_plaintext: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         active_websockets: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -2517,6 +2522,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
 #[tokio::test]
 async fn models_rejects_non_get_requests_directly() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
@@ -2543,6 +2549,7 @@ async fn models_rejects_non_get_requests_directly() {
         http: test_http_client(),
         http_no_redirect: test_http_client_no_redirect(),
         http_helper: test_http_client_no_redirect(),
+        http_plaintext: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         active_websockets: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -3141,6 +3148,7 @@ fn a_refused_named_upstream_is_rejected_rather_than_rerouted() {
 #[tokio::test]
 async fn models_refuses_an_unusable_named_upstream() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         // Nothing must reach this. If the refusal fell back to configured routing, the request
@@ -3171,6 +3179,7 @@ async fn models_refuses_an_unusable_named_upstream() {
         http: test_http_client(),
         http_no_redirect: test_http_client_no_redirect(),
         http_helper: test_http_client_no_redirect(),
+        http_plaintext: test_http_client_no_redirect(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         active_websockets: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -3481,6 +3490,7 @@ async fn helper_authentication_reaches_gateway_upstream_on_each_dispatch() {
             let response = forward_upstream_request(
                 &http,
                 &http,
+                &http,
                 UpstreamForwardRequest {
                     method: &Method::POST,
                     url: &url,
@@ -3728,7 +3738,7 @@ async fn unmanaged_routes_never_inject_configured_or_environment_credentials() {
     ] {
         for config in &configs {
             let request = inject_provider_auth(
-                test_http_client().post("http://upstream"),
+                test_http_client().post("https://upstream"),
                 route,
                 true,
                 config,
@@ -3864,6 +3874,64 @@ async fn custom_upstream_routes_apply_managed_or_passthrough_auth_policy() {
                     assert!(prepared.upstream_url.ends_with("?client_version=0.163.0"));
                 }
             }
+        }
+    }
+}
+
+#[tokio::test]
+async fn http_model_hosts_final_dispatch_blocks_rewrites_and_strips_custom_auth() {
+    let config = GatewayConfig {
+        openai_base_url: "http://model.test:8000/custom/v1".into(),
+        insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+            "model.test".into(),
+            "other.test".into(),
+        ])
+        .unwrap(),
+        ..Default::default()
+    };
+    let error = websocket_passthrough(
+        State(AppState::new(config.clone())),
+        Request::get("/v1/realtime")
+            .header("authorization", "Bearer caller-secret")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("WebSocket upstreams require HTTPS or loopback"),
+        "{error}"
+    );
+    let http = Client::new();
+    for (url, allowed) in [
+        ("http://model.test:8000/custom/v1/responses", true),
+        ("http://other.test:8000/responses", false),
+        ("http://model.test:9000/responses", false),
+        ("http://unlisted.test/responses", false),
+    ] {
+        let request = inject_provider_auth(
+            http.post(url)
+                .header("authorization", "Bearer middleware-secret")
+                .header("cookie", "session=secret")
+                .header("x-custom-token", "secret")
+                .header("content-encoding", "gzip")
+                .header("content-type", "application/json")
+                .body("opaque-compressed-body"),
+            ProviderRoute::OpenAiResponses,
+            true,
+            &config,
+        )
+        .await;
+        assert_eq!(request.is_ok(), allowed, "{url}");
+        if let Ok(request) = request {
+            assert_eq!(request.headers()["content-encoding"], "gzip");
+            assert_eq!(request.headers().len(), 2);
+            assert_eq!(
+                request.body().unwrap().as_bytes().unwrap(),
+                b"opaque-compressed-body"
+            );
         }
     }
 }

@@ -263,6 +263,18 @@ impl ConfigDocument {
         self.set_value(section, key, Value::from(new_value))
     }
 
+    fn set_http_model_hosts(&mut self, input: &str) -> Result<(), CliError> {
+        let hosts = input
+            .split(',')
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        crate::configuration::HttpModelHosts::parse(hosts.clone())?;
+        let array = hosts.into_iter().collect::<toml_edit::Array>();
+        self.set_value("upstream", "insecure_http_model_hosts", Value::Array(array))
+    }
+
     fn set_integer(&mut self, section: &str, key: &str, new_value: u64) -> Result<(), CliError> {
         let numeric = i64::try_from(new_value)
             .map_err(|_| CliError::Config(format!("{section}.{key} is too large")))?;

@@ -329,6 +329,11 @@ pub(crate) async fn websocket_passthrough(
     }
     let extensions = std::mem::take(request.extensions_mut());
     let prepared = prepare_gateway_request(&state.config, request, authorization, &path).await?;
+    if reqwest::Url::parse(&prepared.upstream_url)
+        .is_ok_and(|url| crate::configuration::remote_http(&url))
+    {
+        return Err(CliError::InvalidPayload("remote HTTP model opt-in supports HTTP requests and SSE only; WebSocket upstreams require HTTPS or loopback".into()));
+    }
     let headers = inject_provider_auth(
         state
             .http
@@ -492,6 +497,7 @@ async fn run_unmanaged_gateway(
     let response = forward_upstream_request(
         upstream_client(&state, prepared.client_named_upstream),
         &state.http_helper,
+        &state.http_plaintext,
         UpstreamForwardRequest {
             method: &prepared.method,
             url: &prepared.upstream_url,
@@ -724,6 +730,7 @@ fn build_buffered_func(
 ) -> LlmExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
     let helper_http = state.http_helper.clone();
+    let plaintext_http = state.http_plaintext.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -733,6 +740,7 @@ fn build_buffered_func(
     Arc::new(move |request| {
         let http = http.clone();
         let helper_http = helper_http.clone();
+        let plaintext_http = plaintext_http.clone();
         let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
@@ -746,6 +754,7 @@ fn build_buffered_func(
             let response = match forward_upstream_request(
                 &http,
                 &helper_http,
+                &plaintext_http,
                 UpstreamForwardRequest {
                     method: &method,
                     url: &url,
@@ -1006,6 +1015,7 @@ fn build_streaming_func(
 ) -> LlmStreamExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
     let helper_http = state.http_helper.clone();
+    let plaintext_http = state.http_plaintext.clone();
     let method = prepared.method.clone();
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
@@ -1015,6 +1025,7 @@ fn build_streaming_func(
     Arc::new(move |request| {
         let http = http.clone();
         let helper_http = helper_http.clone();
+        let plaintext_http = plaintext_http.clone();
         let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
@@ -1028,6 +1039,7 @@ fn build_streaming_func(
             let response = match forward_upstream_request(
                 &http,
                 &helper_http,
+                &plaintext_http,
                 UpstreamForwardRequest {
                     method: &method,
                     url: &url,
@@ -1371,6 +1383,7 @@ fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> Bytes {
 async fn forward_upstream_request(
     http: &reqwest::Client,
     helper_http: &reqwest::Client,
+    plaintext_http: &reqwest::Client,
     request: UpstreamForwardRequest<'_>,
 ) -> Result<reqwest::Response, CliError> {
     let UpstreamForwardRequest {
@@ -1403,7 +1416,11 @@ async fn forward_upstream_request(
         effective.credential_policy,
         TargetCredentialPolicy::SourceOrEnvironment
     ) && forwarding.authorization.allow_environment_provider_auth;
-    let http = if allow_configured_auth && effective.target_route.has_helper(&forwarding.config) {
+    let http = if reqwest::Url::parse(&effective.url)
+        .is_ok_and(|url| crate::configuration::remote_http(&url))
+    {
+        plaintext_http
+    } else if allow_configured_auth && effective.target_route.has_helper(&forwarding.config) {
         helper_http
     } else {
         http
@@ -1677,6 +1694,44 @@ async fn inject_provider_auth(
     config: &crate::configuration::GatewayConfig,
 ) -> Result<reqwest::Request, CliError> {
     let mut request = builder.build()?;
+    if crate::configuration::remote_http(request.url()) {
+        // Validate the actual destination after middleware rewrites. Trust never grants auth.
+        let configured = [&config.openai_base_url, &config.anthropic_base_url]
+            .iter()
+            .any(|base| {
+                reqwest::Url::parse(base).is_ok_and(|base| base.origin() == request.url().origin())
+            });
+        if !configured || !config.insecure_http_model_hosts.allows(request.url()) {
+            return Err(CliError::Config(
+                "remote HTTP model forwarding requires an explicitly trusted configured upstream"
+                    .into(),
+            ));
+        }
+        crate::upstream_auth::validate_config(config)?;
+        // A positive list excludes unknown/custom credential headers as well as cookies and
+        // proxy auth, including middleware additions. Never read environment keys or run helpers.
+        let safe = request
+            .headers()
+            .iter()
+            .filter(|(name, _)| {
+                matches!(
+                    name.as_str(),
+                    "accept"
+                        | "accept-encoding"
+                        | "content-type"
+                        | "content-length"
+                        | "content-encoding"
+                        | "content-language"
+                        | "anthropic-version"
+                        | "anthropic-beta"
+                        | "openai-beta"
+                )
+            })
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<HeaderMap>();
+        *request.headers_mut() = safe;
+        return Ok(request);
+    }
     crate::upstream_auth::apply(
         request.headers_mut(),
         route.is_anthropic(),
@@ -1698,6 +1753,7 @@ async fn passthrough_streaming(
     let response = forward_upstream_request(
         upstream_client(&state, prepared.client_named_upstream),
         &state.http_helper,
+        &state.http_plaintext,
         UpstreamForwardRequest {
             method: &prepared.method,
             url: &prepared.upstream_url,
@@ -2000,6 +2056,11 @@ pub(crate) async fn models(
         &state.config,
     )
     .await?;
+    let http = if crate::configuration::remote_http(upstream.url()) {
+        &state.http_plaintext
+    } else {
+        http
+    };
     let upstream_response = http.execute(upstream).await?;
     let status = upstream_response.status();
     let headers = response_headers(upstream_response.headers());

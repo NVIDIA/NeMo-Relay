@@ -49,20 +49,29 @@ fn default_timeout_ms() -> u64 {
 }
 
 pub(crate) fn validate_config(config: &GatewayConfig) -> Result<(), CliError> {
-    for (provider, key, header, helper) in [
+    for (provider, base_url, key, header, helper) in [
         (
             "openai",
+            &config.openai_base_url,
             &config.openai_api_key,
             &config.openai_auth_header,
             &config.openai_api_key_helper,
         ),
         (
             "anthropic",
+            &config.anthropic_base_url,
             &config.anthropic_api_key,
             &config.anthropic_auth_header,
             &config.anthropic_api_key_helper,
         ),
     ] {
+        if reqwest::Url::parse(base_url).is_ok_and(|url| crate::configuration::remote_http(&url))
+            && (key.is_some() || header.is_some() || helper.is_some())
+        {
+            return Err(CliError::Config(format!(
+                "upstream.{provider}: remote HTTP model upstreams cannot configure api_key, auth_header, or api_key_helper"
+            )));
+        }
         if usize::from(key.is_some())
             + usize::from(header.is_some())
             + usize::from(helper.is_some())

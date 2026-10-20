@@ -61,6 +61,8 @@ pub(crate) struct AppState {
     pub(crate) http: Client,
     /// Configured helper requests cannot reuse credentials through redirects or transport retries.
     pub(crate) http_helper: Client,
+    /// Credential-free HTTP must not inherit proxy credentials from the environment.
+    pub(crate) http_plaintext: Client,
     /// Client for caller-named destinations; does not follow redirects. See `upstream_client`.
     pub(crate) http_no_redirect: Client,
     pub(crate) sessions: SessionManager,
@@ -547,6 +549,9 @@ impl AppState {
         idle_read_timeout: Option<Duration>,
     ) -> Self {
         let http = gateway_http_client(idle_read_timeout, false, false);
+        let http_plaintext = credential_free_http_client(idle_read_timeout)
+            .build()
+            .expect("credential-free HTTP client configuration is valid");
         let http_helper = if config.openai_api_key_helper.is_some()
             || config.anthropic_api_key_helper.is_some()
         {
@@ -571,6 +576,7 @@ impl AppState {
             http,
             http_no_redirect,
             http_helper,
+            http_plaintext,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             active_websockets: Arc::new(AtomicUsize::new(0)),
@@ -730,6 +736,19 @@ impl AppState {
         headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
         headers.remove(HOOK_CLIENT_TOKEN_HEADER);
         Ok(identity)
+    }
+}
+
+// Shared builder lets local network tests resolve a synthetic hostname without replacing policy.
+fn credential_free_http_client(idle_read_timeout: Option<Duration>) -> reqwest::ClientBuilder {
+    let builder = Client::builder()
+        .no_proxy()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never());
+    match idle_read_timeout {
+        Some(timeout) => builder.read_timeout(timeout),
+        None => builder,
     }
 }
 

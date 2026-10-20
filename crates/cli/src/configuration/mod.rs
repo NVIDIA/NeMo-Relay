@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+mod http_model_hosts;
 mod logging;
 mod types;
 
+pub(crate) use http_model_hosts::{HttpModelHosts, remote_http};
 pub(crate) use types::*;
 
 use std::collections::{HashMap, HashSet};
@@ -71,6 +73,7 @@ struct FileGatewayConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileUpstreamConfig {
+    insecure_http_model_hosts: Option<Vec<String>>,
     response_timeout_secs: Option<u64>,
     openai_base_url: Option<String>,
     openai_auth_header: Option<String>,
@@ -133,6 +136,7 @@ pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayCo
         .collect();
     let mut resolved = load_config_from_paths(paths, Vec::new(), apply_env_config)?;
     apply_server_overrides(&mut resolved.gateway, args)?;
+    reject_managed_http_opt_in(&resolved.gateway)?;
     log::info!(
         target: "nemo_relay.configuration",
         event = "configuration_resolved",
@@ -179,6 +183,7 @@ fn resolve_managed_worker_config_from_paths(
     let plugin_config_path = selected_plugin_path;
     let resolved =
         load_config_from_paths(config_paths, plugin_paths, apply_managed_worker_env_config)?;
+    reject_managed_http_opt_in(&resolved.gateway)?;
     enforce_required_dynamic_plugin_startup(Some(&plugin_config_path), &resolved)?;
     log::info!(
         target: "nemo_relay.configuration",
@@ -356,6 +361,7 @@ fn persistent_bootstrap_fingerprint(
         "bootstrap_protocol": crate::bootstrap::BOOTSTRAP_PROTOCOL_VERSION,
         "relay_version": env!("CARGO_PKG_VERSION"),
         "openai_base_url": gateway.openai_base_url,
+        "insecure_http_model_hosts": gateway.insecure_http_model_hosts,
         "openai_auth_header": gateway.openai_auth_header,
         "openai_api_key": gateway.openai_api_key,
         "openai_api_key_helper": gateway.openai_api_key_helper,
@@ -1382,7 +1388,11 @@ fn apply_run_url_overrides(
         replace_upstream_base_url(
             &mut config.openai_base_url,
             &mut config.openai_auth_header,
-            validate_upstream_base_url("--openai-base-url", value.clone())?,
+            validate_upstream_base_url_with_hosts(
+                "--openai-base-url",
+                value.clone(),
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
     if let Some(value) = &command.anthropic_base_url {
@@ -1393,7 +1403,11 @@ fn apply_run_url_overrides(
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
             &mut config.anthropic_auth_header,
-            validate_upstream_base_url("--anthropic-base-url", value.clone())?,
+            validate_upstream_base_url_with_hosts(
+                "--anthropic-base-url",
+                value.clone(),
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
     if let Some(value) = &command.chatgpt_codex_base_url {
@@ -1435,7 +1449,11 @@ fn apply_server_overrides(
         replace_upstream_base_url(
             &mut config.openai_base_url,
             &mut config.openai_auth_header,
-            validate_upstream_base_url("--openai-base-url", value.clone())?,
+            validate_upstream_base_url_with_hosts(
+                "--openai-base-url",
+                value.clone(),
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
     if let Some(value) = &args.anthropic_base_url {
@@ -1446,7 +1464,11 @@ fn apply_server_overrides(
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
             &mut config.anthropic_auth_header,
-            validate_upstream_base_url("--anthropic-base-url", value.clone())?,
+            validate_upstream_base_url_with_hosts(
+                "--anthropic-base-url",
+                value.clone(),
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
     if let Some(value) = &args.chatgpt_codex_base_url {
@@ -1752,6 +1774,7 @@ fn apply_file_upstream_config(
     };
     let FileUpstreamConfig {
         response_timeout_secs,
+        insecure_http_model_hosts,
         openai_base_url,
         openai_auth_header,
         openai_api_key,
@@ -1762,6 +1785,9 @@ fn apply_file_upstream_config(
         anthropic_api_key_helper,
         chatgpt_codex_base_url,
     } = upstream;
+    if let Some(hosts) = insecure_http_model_hosts {
+        gateway.insecure_http_model_hosts = HttpModelHosts::parse(hosts)?;
+    }
     if let Some(value) = response_timeout_secs {
         gateway.response_timeout_secs = value;
     }
@@ -1770,7 +1796,11 @@ fn apply_file_upstream_config(
             gateway.openai_api_key = None;
             gateway.openai_api_key_helper = None;
         }
-        gateway.openai_base_url = validate_upstream_base_url("upstream.openai_base_url", value)?;
+        gateway.openai_base_url = validate_upstream_base_url_with_hosts(
+            "upstream.openai_base_url",
+            value,
+            &gateway.insecure_http_model_hosts,
+        )?;
         if openai_auth_header.is_none() {
             gateway.openai_auth_header = None;
         }
@@ -1784,8 +1814,11 @@ fn apply_file_upstream_config(
             gateway.anthropic_api_key = None;
             gateway.anthropic_api_key_helper = None;
         }
-        gateway.anthropic_base_url =
-            validate_upstream_base_url("upstream.anthropic_base_url", value)?;
+        gateway.anthropic_base_url = validate_upstream_base_url_with_hosts(
+            "upstream.anthropic_base_url",
+            value,
+            &gateway.insecure_http_model_hosts,
+        )?;
         if anthropic_auth_header.is_none() {
             gateway.anthropic_auth_header = None;
         }
@@ -2105,7 +2138,11 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         replace_upstream_base_url(
             &mut config.openai_base_url,
             &mut config.openai_auth_header,
-            validate_upstream_base_url("NEMO_RELAY_OPENAI_BASE_URL", value)?,
+            validate_upstream_base_url_with_hosts(
+                "NEMO_RELAY_OPENAI_BASE_URL",
+                value,
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
     apply_environment_auth_header(
@@ -2122,7 +2159,11 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
             &mut config.anthropic_auth_header,
-            validate_upstream_base_url("NEMO_RELAY_ANTHROPIC_BASE_URL", value)?,
+            validate_upstream_base_url_with_hosts(
+                "NEMO_RELAY_ANTHROPIC_BASE_URL",
+                value,
+                &config.insecure_http_model_hosts,
+            )?,
         );
     }
     apply_environment_auth_header(
@@ -2200,14 +2241,29 @@ fn validate_chatgpt_codex_base_url(name: &str, value: String) -> Result<String, 
 }
 
 // Preserve the trimmed spelling used to compare OpenAI and Anthropic credential destinations.
+#[cfg(test)]
 fn validate_upstream_base_url(name: &str, value: String) -> Result<String, CliError> {
-    parse_upstream_base_url(name, &value)?;
+    validate_upstream_base_url_with_hosts(name, value, &HttpModelHosts::default())
+}
+fn validate_upstream_base_url_with_hosts(
+    name: &str,
+    value: String,
+    hosts: &HttpModelHosts,
+) -> Result<String, CliError> {
+    parse_upstream_base_url_with_hosts(name, &value, hosts)?;
     Ok(value.trim().to_string())
 }
 
 // Provider credentials may only travel over TLS, except to a loopback proxy. Reject URL
 // components that would change the meaning of the request path appended by the gateway.
 fn parse_upstream_base_url(name: &str, value: &str) -> Result<reqwest::Url, CliError> {
+    parse_upstream_base_url_with_hosts(name, value, &HttpModelHosts::default())
+}
+fn parse_upstream_base_url_with_hosts(
+    name: &str,
+    value: &str,
+    hosts: &HttpModelHosts,
+) -> Result<reqwest::Url, CliError> {
     let value = value.trim();
     if value.is_empty() {
         return Err(CliError::Config(format!("{name} must not be empty")));
@@ -2222,7 +2278,9 @@ fn parse_upstream_base_url(name: &str, value: &str) -> Result<reqwest::Url, CliE
             .trim_matches(['[', ']'])
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback());
-    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+    if url.scheme() != "https"
+        && !(url.scheme() == "http" && (loopback || hosts.allows_base_url(value, &url)))
+    {
         return Err(CliError::Config(format!(
             "{name} must use https unless the host is loopback"
         )));
@@ -2509,3 +2567,14 @@ fn header_json(headers: &HeaderMap, name: &str) -> Option<Value> {
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/config_tests.rs"]
 mod tests;
+
+// The daemon data plane retains its independent HTTPS-only policy.
+fn reject_managed_http_opt_in(config: &GatewayConfig) -> Result<(), CliError> {
+    if [&config.openai_base_url, &config.anthropic_base_url]
+        .iter()
+        .any(|url| reqwest::Url::parse(url).is_ok_and(|url| remote_http(&url)))
+    {
+        return Err(CliError::Config("upstream.insecure_http_model_hosts is supported only by personal gateways, not daemon routing or managed workers".into()));
+    }
+    Ok(())
+}

@@ -678,6 +678,7 @@ manifest = "plugins/acme/relay-plugin.toml"
 
 fn config() -> GatewayConfig {
     GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "https://openai".into(),
@@ -3282,6 +3283,14 @@ fn persistent_fingerprint_tracks_upstream_settings() {
         .bootstrap_fingerprint
         .unwrap();
     assert_ne!(timeout_changed, chatgpt_base_changed);
+    let mut contents = std::fs::read_to_string(&config_path).unwrap();
+    contents.push_str("insecure_http_model_hosts = ['model.test']\n");
+    std::fs::write(&config_path, contents).unwrap();
+    let trust_changed = resolve_persistent_server_config(&GatewayOverrides::default())
+        .unwrap()
+        .bootstrap_fingerprint
+        .unwrap();
+    assert_ne!(chatgpt_base_changed, trust_changed);
 }
 
 #[test]
@@ -5540,4 +5549,156 @@ max_hook_payload_bytes = 4096
     assert!(resolve_daemon_config(&args).is_ok());
     args.config = Some(temp.path().join("missing.toml"));
     assert!(resolve_daemon_config(&args).is_err());
+}
+
+#[test]
+fn http_model_hosts_validate_exact_hosts_and_configuration_sources() {
+    let _env = crate::test_support::EnvScope::set(&[
+        ("NEMO_RELAY_OPENAI_BASE_URL", None),
+        ("NEMO_RELAY_ANTHROPIC_BASE_URL", None),
+        ("NEMO_RELAY_OPENAI_AUTH_HEADER", None),
+        ("NEMO_RELAY_ANTHROPIC_AUTH_HEADER", None),
+    ]);
+    for invalid in [
+        "",
+        "https://model.test",
+        "model.test:80",
+        "model.test/v1",
+        "*.test",
+        " model.test",
+        "model..test",
+        "010.0.0.1",
+        "10.1",
+        "0x7f000001",
+    ] {
+        assert!(
+            HttpModelHosts::parse(vec![invalid.into()]).is_err(),
+            "{invalid}"
+        );
+    }
+    let hosts = HttpModelHosts::parse(vec![
+        "MODEL.TEST.".into(),
+        "192.168.1.10".into(),
+        "2001:db8::1".into(),
+    ])
+    .unwrap();
+    for (url, allowed) in [
+        ("http://model.test:9000/custom/v1", true),
+        ("http://MODEL.TEST./v1", true),
+        ("http://192.168.1.10/v1", true),
+        ("http://[2001:db8::1]:90/v1", true),
+        ("http://sub.model.test", false),
+        ("http://model.test.attacker.test", false),
+        ("http://192.168.1.11", false),
+        ("http://0300.0250.1.012", false),
+        ("ftp://model.test", false),
+        ("http://user:password@model.test", false),
+        ("http://model.test?token=secret", false),
+        ("http://model.test#fragment", false),
+    ] {
+        assert_eq!(
+            validate_upstream_base_url_with_hosts("test", url.into(), &hosts).is_ok(),
+            allowed,
+            "{url}"
+        );
+    }
+    for anthropic in [false, true] {
+        let provider = if anthropic { "anthropic" } else { "openai" };
+        let url = "http://model.test:9000/custom/v1";
+        let parsed: FileConfig = toml::from_str(&format!(
+            "[upstream]\ninsecure_http_model_hosts = ['model.test']\n{provider}_base_url = '{url}'"
+        ))
+        .unwrap();
+        let mut config = GatewayConfig::default();
+        apply_file_upstream_config(&mut config, parsed.upstream).unwrap();
+        let overrides = GatewayOverrides {
+            openai_base_url: (!anthropic).then(|| url.into()),
+            anthropic_base_url: anthropic.then(|| url.into()),
+            ..Default::default()
+        };
+        apply_server_overrides(&mut config, &overrides).unwrap();
+        apply_run_url_overrides(
+            &mut config,
+            &RunOverrides {
+                agent: None,
+                config: None,
+                openai_base_url: overrides.openai_base_url.clone(),
+                anthropic_base_url: overrides.anthropic_base_url.clone(),
+                chatgpt_codex_base_url: None,
+                session_metadata: None,
+                plugin_config_path: None,
+                dry_run: true,
+                print: false,
+                command: vec![],
+            },
+        )
+        .unwrap();
+        let env_name = if anthropic {
+            "NEMO_RELAY_ANTHROPIC_BASE_URL"
+        } else {
+            "NEMO_RELAY_OPENAI_BASE_URL"
+        };
+        unsafe {
+            std::env::set_var(env_name, url);
+        }
+        apply_env_config(&mut config).unwrap();
+        unsafe {
+            std::env::remove_var(env_name);
+        }
+        assert!(reject_managed_http_opt_in(&config).is_err());
+        assert!(validate_chatgpt_codex_base_url("test", url.into()).is_err());
+        let mut lower: toml::Value =
+            toml::from_str("[upstream]\ninsecure_http_model_hosts = ['model.test']").unwrap();
+        merge_gateway_config_toml(
+            &mut lower,
+            toml::from_str("[upstream]\ninsecure_http_model_hosts = []").unwrap(),
+        );
+        assert_eq!(
+            lower["upstream"]["insecure_http_model_hosts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+    let config = GatewayConfig {
+        insecure_http_model_hosts: hosts,
+        ..Default::default()
+    };
+    reject_managed_http_opt_in(&config).unwrap();
+}
+
+#[test]
+fn http_model_hosts_conflict_with_explicit_authentication() {
+    for provider in ["openai", "anthropic"] {
+        for auth in [
+            format!("{provider}_api_key = 'secret'"),
+            format!("{provider}_auth_header = 'Bearer secret'"),
+            format!("[upstream.{provider}_api_key_helper]\ncommand = 'must-not-run'"),
+        ] {
+            let parsed: FileConfig = toml::from_str(&format!("[upstream]\ninsecure_http_model_hosts = ['model.test']\n{provider}_base_url = 'http://model.test/v1'\n{auth}")).unwrap();
+            let error = apply_file_upstream_config(&mut GatewayConfig::default(), parsed.upstream)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("remote HTTP model upstreams cannot configure"));
+            assert!(!error.contains("secret"));
+        }
+        let env_name = if provider == "openai" {
+            "NEMO_RELAY_OPENAI_AUTH_HEADER"
+        } else {
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER"
+        };
+        let _env =
+            crate::test_support::EnvScope::set(&[(env_name, Some("Bearer secret".as_ref()))]);
+        let mut config = GatewayConfig {
+            insecure_http_model_hosts: HttpModelHosts::parse(vec!["model.test".into()]).unwrap(),
+            ..Default::default()
+        };
+        if provider == "openai" {
+            config.openai_base_url = "http://model.test/v1".into();
+        } else {
+            config.anthropic_base_url = "http://model.test".into();
+        }
+        assert!(apply_env_config(&mut config).is_err());
+    }
 }
