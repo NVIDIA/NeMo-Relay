@@ -636,6 +636,50 @@ fn test_exporter_tool_lifecycle() {
 }
 
 #[test]
+fn test_exporter_unwraps_langchain_tool_message_observation_content() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_message = |content: &str| json!({"type": "tool", "content": content});
+    let outputs = [
+        json!({
+            "__nv_pydantic__": "langchain_core.messages.tool.ToolMessage",
+            "data": tool_message("tool answer"),
+        }),
+        json!({
+            "__nv_dataclass__": "langgraph.types.Command",
+            "data": {"update": {"messages": [tool_message("subagent answer")]}},
+        }),
+    ];
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        for output in &outputs {
+            state.events.push(
+                event_builder(Uuid::now_v7(), EventType::End)
+                    .name("tool")
+                    .scope_type(ScopeType::Tool)
+                    .output(output.clone())
+                    .tool_call_id("call_123")
+                    .build(),
+            );
+        }
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let results: Vec<_> = trajectory
+        .steps
+        .iter()
+        .flat_map(|step| &step.observation.as_ref().unwrap().results)
+        .collect();
+
+    assert_eq!(results[0].content, Some(json!("tool answer")));
+    assert_eq!(
+        results[0].extra.as_ref().unwrap()["tool_result"],
+        outputs[0]
+    );
+    assert_eq!(results[1].content, Some(json!("subagent answer")));
+}
+
+#[test]
 fn test_exporter_omits_null_tool_observation_content() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let tool_uuid = Uuid::now_v7();
