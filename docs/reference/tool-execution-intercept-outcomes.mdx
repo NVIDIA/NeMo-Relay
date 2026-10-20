@@ -124,9 +124,10 @@ If an intercept returns a cached result without calling the tool, it must
 return the full wrapper for that framework's codec.
 
 The LangChain and LangGraph tool codec can save and restore JSON values,
-messages, commands, and graph destinations across calls. Other Python objects,
-such as custom artifacts and state objects, stay in the original call's memory. A cache cannot restore
-those objects in another call.
+standard framework messages, commands, and graph destinations across calls.
+Custom message subclasses and other Python objects, such as artifacts and state
+objects, stay in the original call's memory. A cache cannot restore those
+objects in another call.
 
 ## Managed Lifecycle
 

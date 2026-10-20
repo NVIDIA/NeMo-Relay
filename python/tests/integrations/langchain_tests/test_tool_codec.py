@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, cast
+from typing import Any, Literal, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -80,6 +80,107 @@ def test_opaque_artifacts_remain_local_without_python_deserialization():
     assert restored.update["state"] is state
     with pytest.raises(ValueError, match="original invocation"):
         LangChainToolResultCodec("call-1").from_json(encoded)
+
+
+@pytest.mark.parametrize("command", [False, True])
+@pytest.mark.parametrize("custom_type", [False, True])
+@pytest.mark.parametrize("edited", [False, True])
+def test_custom_tool_message_class_and_fields_are_preserved(command, custom_type, edited):
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    class CustomToolMessage(ToolMessage):
+        source: str = "custom"
+
+    class CustomKindToolMessage(CustomToolMessage):
+        type: Literal["custom_tool"] = "custom_tool"
+
+    cls = CustomKindToolMessage if custom_type else CustomToolMessage
+    artifact = object()
+    message = cls(content="answer", tool_call_id="call-1", artifact=artifact)
+    result = Command(update={"messages": [message]}, goto="next") if command else message
+    codec = LangChainToolResultCodec("call-1")
+    encoded = json.loads(json.dumps(codec.to_json(result)))
+    assert encoded["content"] == "answer"
+    assert encoded["is_error"] is False
+    if edited:
+        encoded["content"] = "edited failure"
+        encoded["is_error"] = True
+    restored = codec.from_json(encoded)
+    if command:
+        assert isinstance(restored, Command)
+        assert restored.goto == "next"
+        restored_message = restored.update["messages"][0]
+    else:
+        restored_message = restored
+    assert isinstance(restored_message, CustomToolMessage)
+    assert type(restored_message) is cls
+    assert restored_message.source == "custom"
+    assert restored_message.artifact is artifact
+    assert restored_message.content == ("edited failure" if edited else "answer")
+    assert restored_message.status == ("error" if edited else "success")
+    if not edited:
+        assert restored_message is message
+    assert message.content == "answer"
+    assert message.status == "success"
+    with pytest.raises(ValueError, match="original invocation"):
+        LangChainToolResultCodec("call-1").from_json(encoded)
+
+
+@pytest.mark.parametrize(
+    ("message_name", "fields"),
+    [
+        ("AIMessage", {"content": "context"}),
+        ("AIMessageChunk", {"content": "context"}),
+        ("ChatMessage", {"content": "context", "role": "assistant"}),
+        ("ChatMessageChunk", {"content": "context", "role": "assistant"}),
+        ("FunctionMessage", {"content": "context", "name": "lookup"}),
+        ("FunctionMessageChunk", {"content": "context", "name": "lookup"}),
+        ("HumanMessage", {"content": "context"}),
+        ("HumanMessageChunk", {"content": "context"}),
+        ("RemoveMessage", {"id": "remove-1"}),
+        ("SystemMessage", {"content": "context"}),
+        ("SystemMessageChunk", {"content": "context"}),
+        ("ToolMessage", {"content": "context", "tool_call_id": "other"}),
+        ("ToolMessageChunk", {"content": "context", "tool_call_id": "other"}),
+    ],
+)
+def test_standard_message_classes_can_be_restored_by_a_fresh_codec(message_name, fields):
+    from langchain_core import messages
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    message = getattr(messages, message_name)(**fields)
+    matching = messages.ToolMessage(content="answer", tool_call_id="call-1")
+    result = Command(update={"messages": [message, matching]})
+    encoded = LangChainToolResultCodec("call-1").to_json(result)
+    restored = LangChainToolResultCodec("call-1").from_json(json.loads(json.dumps(encoded)))
+    assert isinstance(restored, Command)
+    assert type(restored.update["messages"][0]) is type(message)
+    assert restored.update["messages"][0] == message
+
+
+def test_custom_messages_in_graph_state_keep_their_class():
+    from langchain_core.messages import BaseMessage, ToolMessage
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    class CustomMessage(BaseMessage):
+        type: str = "custom"
+        source: str = "custom"
+
+    custom = CustomMessage(content="context")
+    message = ToolMessage(content="answer", tool_call_id="call-1")
+    codec = LangChainToolResultCodec("call-1")
+    result = Command(update={"messages": [custom, message]})
+    restored = codec.from_json(json.loads(json.dumps(codec.to_json(result))))
+    assert isinstance(restored, Command)
+    assert restored.update["messages"][0] is custom
+    assert restored.update["messages"][1] == message
 
 
 def test_tool_codec_rejects_unrecognized_payloads():

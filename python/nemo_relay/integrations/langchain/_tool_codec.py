@@ -9,17 +9,51 @@ from dataclasses import replace
 from typing import Any, cast
 from uuid import uuid4
 
-from langchain_core.messages import BaseMessage, ToolMessage, messages_from_dict
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    ChatMessage,
+    ChatMessageChunk,
+    FunctionMessage,
+    FunctionMessageChunk,
+    HumanMessage,
+    HumanMessageChunk,
+    RemoveMessage,
+    SystemMessage,
+    SystemMessageChunk,
+    ToolMessage,
+    ToolMessageChunk,
+    messages_from_dict,
+)
 from langgraph.types import Command, Send
 
 from nemo_relay import Json
 from nemo_relay._tool_result import TOOL_RESULT_SCHEMA
 from nemo_relay.typed import Codec
 
+# messages_from_dict restores these exact classes. Custom subclasses stay local.
+_PORTABLE_MESSAGE_TYPES = frozenset(
+    {
+        AIMessage,
+        AIMessageChunk,
+        ChatMessage,
+        ChatMessageChunk,
+        FunctionMessage,
+        FunctionMessageChunk,
+        HumanMessage,
+        HumanMessageChunk,
+        RemoveMessage,
+        SystemMessage,
+        SystemMessageChunk,
+        ToolMessage,
+        ToolMessageChunk,
+    }
+)
+
 
 def _encode(value: Any, opaque: dict[str, Any]) -> Json:
     """Encode known framework objects without importing types or using pickle."""
-    if isinstance(value, BaseMessage):
+    if type(value) in _PORTABLE_MESSAGE_TYPES:
         # model_dump() can coerce application-owned artifacts (for example,
         # dataclasses) to dictionaries. Retain their native values instead.
         fields = {name: getattr(value, name) for name in type(value).model_fields}
