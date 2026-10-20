@@ -128,7 +128,7 @@ Best-effort codec for arbitrary Python values.
 ##### `BestEffortAnyCodec`
 
 ```python
-def BestEffortAnyCodec(*, allowed_types: Iterable[type[object]] = ()) -> None
+def BestEffortAnyCodec(*, allowed_types: Iterable[type[object]] = (), tool_result: bool = False) -> None
 ```
 
 Create an instance.
@@ -139,7 +139,7 @@ Create an instance.
 def to_json(value: object) -> Json
 ```
 
-Serialize an arbitrary Python value to a JSON-serializable form.
+Convert a Python value to JSON.
 
 ##### `from_json`
 
@@ -147,7 +147,7 @@ Serialize an arbitrary Python value to a JSON-serializable form.
 def from_json(data: Json) -> object
 ```
 
-Reconstruct a Python value from its tagged JSON representation.
+Restore a Python value from JSON.
 
 ## Functions
 

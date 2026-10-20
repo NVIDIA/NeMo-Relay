@@ -75,6 +75,60 @@ does not emit Relay-private attributes.
 Relay returns the unsanitized `ToolExecutionResult` to the application. Event
 sanitizers affect observability only.
 
+## Normalized Tool Results
+
+Framework integrations can use one JSON format for tool results. This wrapper
+holds the display content, a failure flag, and the encoded result. Store it in
+`ToolExecutionResult.result`. The following example shows its fields:
+
+```json
+{
+  "schema": "nemo.relay.tool_result@1",
+  "content": "The tool's answer",
+  "is_error": false,
+  "result": {"framework_owned": "payload"}
+}
+```
+
+All four fields are required:
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | The format name and version. Use `nemo.relay.tool_result@1`. |
+| `content` | Display text, an array of content parts, or `null` when there is no display content. |
+| `is_error` | `true` if the tool returned a failure result. Otherwise, use `false`. |
+| `result` | The JSON value that the codec uses to restore the original tool result. |
+
+Relay reads the content and failure flag only when the wrapper has the expected
+schema and field types. Other JSON values pass through unchanged. The optional
+`ToolExecutionResult.annotation` field stays separate. Relay copies that field
+without reading its contents.
+
+Tool end events include the full wrapper. ATIF uses `content` for the
+observation when it can represent the text or image parts. It keeps the full
+wrapper in `extra.tool_result`. For failed results, ATIF also adds
+`extra.is_error: true`. Successful results omit this flag.
+
+When `is_error` is `true`, Relay sets `otel.status_code` to `ERROR` for the tool
+span. This applies to both managed and manual tool end helpers. The tool still
+returns its result. Relay does not raise an exception or emit an exception
+event for this handled failure.
+
+Tool response sanitizers receive the full wrapper. Event sanitizers can still
+change or remove fields before export.
+
+Execution intercepts can pass the wrapper through or edit its content and
+failure flag. For LangChain and LangGraph, the codec applies these edits to the
+matching `ToolMessage`. It keeps the message's other fields and the graph state.
+If an intercept returns a cached result without calling the tool, it must
+return the full wrapper for that framework's codec.
+
+The LangChain and LangGraph tool codec can save and restore JSON values,
+standard framework messages, commands, and graph destinations across calls.
+Custom message subclasses and other Python objects, such as artifacts and state
+objects, stay in the original call's memory. A cache cannot restore those
+objects in another call.
+
 ## Managed Lifecycle
 
 On successful managed execution, Relay emits the tool end event before any

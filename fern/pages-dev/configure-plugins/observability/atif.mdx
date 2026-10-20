@@ -352,6 +352,12 @@ When a successful tool result carries an opaque annotation, the corresponding
 ATIF observation result stores it at `extra.tool_result_annotation`. ATIF
 preserves the JSON value without interpreting application-defined keys.
 
+For integrations that use
+[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results),
+ATIF reads observation text and image parts from `content`. A failed tool result
+adds `extra.is_error: true`. Successful results omit this flag. The full JSON
+wrapper stays in `extra.tool_result`.
+
 ## Plugin Configuration
 
 Use plugin configuration when the application should let NeMo Relay own the ATIF
