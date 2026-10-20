@@ -1121,6 +1121,9 @@ async fn build_llm_end_payload(
 /// omits the payload and response annotation and does not run remaining sanitizers.
 /// When model pricing is configured, Relay estimates missing cost on a supplied
 /// or decoded response annotation that contains matching model and usage data.
+/// To report a failed call, pass `otel.status_code: "ERROR"` in `metadata`, with
+/// an optional `otel.status_description` and `error.type`. Otherwise, the end
+/// event defaults to `OK`.
 pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = params.handle.captured_scope_stack().clone();
@@ -1203,7 +1206,16 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
                 let Ok(state) = context.read() else {
                     return event;
                 };
-                let end_metadata = metadata_with_otel_status(metadata, "OK", None);
+                let end_metadata = if metadata
+                    .as_ref()
+                    .and_then(|value| value.get("otel.status_code"))
+                    .and_then(Json::as_str)
+                    == Some("ERROR")
+                {
+                    metadata
+                } else {
+                    metadata_with_otel_status(metadata, "OK", None)
+                };
                 state.build_llm_end_event(
                     EndLlmHandleParams::builder()
                         .handle(&handle)
