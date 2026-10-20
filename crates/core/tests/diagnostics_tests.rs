@@ -2151,6 +2151,67 @@ fn impossible_startup_profiles_fail_before_backend_allocation() {
 }
 
 #[test]
+fn impossible_query_capacities_are_invalid_limits() {
+    for (case, profile) in [
+        (
+            "component rows overflow",
+            DiagnosticLimits {
+                max_query_components: usize::MAX,
+                ..limits()
+            },
+        ),
+        (
+            "event rows overflow",
+            DiagnosticLimits {
+                max_query_events: usize::MAX,
+                ..limits()
+            },
+        ),
+        (
+            "text capacity overflows page size",
+            DiagnosticLimits {
+                query_text_bytes: usize::MAX,
+                ..limits()
+            },
+        ),
+        (
+            "output capacity overflows page size",
+            DiagnosticLimits {
+                max_snapshot_bytes: usize::MAX,
+                ..limits()
+            },
+        ),
+        (
+            "query slots overflow",
+            DiagnosticLimits {
+                max_queries: usize::MAX,
+                ..limits()
+            },
+        ),
+        (
+            "query pages overflow",
+            DiagnosticLimits {
+                max_queries: usize::MAX / limits().max_snapshot_bytes + 1,
+                ..limits()
+            },
+        ),
+    ] {
+        assert_eq!(
+            Diagnostics::from_settings(
+                source(),
+                DiagnosticsSettings {
+                    enabled: true,
+                    limits: profile,
+                },
+            )
+            .unwrap_err(),
+            DiagnosticError::InvalidLimits,
+            "{case}",
+        );
+    }
+}
+
+#[test]
 fn default_profile_reports_bounded_compiled_backing_capacity() {
     let profile = DiagnosticLimits::default();
     let service = diagnostics(profile.clone());
