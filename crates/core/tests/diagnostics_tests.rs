@@ -4,6 +4,7 @@
 //! Behavioral contracts for the runtime-controlled bounded diagnostic foundation.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::sync::{
@@ -487,8 +488,8 @@ fn impossible_correlation_preserves_history_with_pending_ascii_and_utf8_detail()
         let receipt = component
             .record_without_projection_lazy(|| {
                 Observation::new(classification(FailureClass::Unknown), detail, 3).with_correlation(
-                    DiagnosticCorrelationRef {
-                        session_id: Some(session),
+                    DiagnosticCorrelation {
+                        session_id: Some(session.into()),
                         request_id: None,
                     },
                 )
@@ -528,9 +529,9 @@ fn impossible_request_preserves_history_and_pending_detail_and_session() {
     component
         .record_without_projection_lazy(|| {
             Observation::new(classification(FailureClass::Unknown), "abcd", 3).with_correlation(
-                DiagnosticCorrelationRef {
-                    session_id: Some("efghijkl"),
-                    request_id: Some("mnopqrst"),
+                DiagnosticCorrelation {
+                    session_id: Some("efghijkl".into()),
+                    request_id: Some("mnopqrst".into()),
                 },
             )
         })
@@ -566,8 +567,8 @@ fn correlation_pressure_still_reclaims_history_when_pending_detail_leaves_capaci
     component
         .record_without_projection_lazy(|| {
             Observation::new(classification(FailureClass::Unknown), "abcd", 3).with_correlation(
-                DiagnosticCorrelationRef {
-                    session_id: Some("efghijkl"),
+                DiagnosticCorrelation {
+                    session_id: Some("efghijkl".into()),
                     request_id: None,
                 },
             )
@@ -625,9 +626,9 @@ fn utf8_detail_and_correlation_are_bounded_without_creating_keys() {
         component
             .record_without_projection_lazy(|| {
                 Observation::new(classification(FailureClass::Unknown), "é🙂abcdef", 1)
-                    .with_correlation(DiagnosticCorrelationRef {
-                        session_id: Some("session"),
-                        request_id: Some("🙂request"),
+                    .with_correlation(DiagnosticCorrelation {
+                        session_id: Some("session".into()),
+                        request_id: Some("🙂request".into()),
                     })
             })
             .unwrap();
@@ -663,9 +664,9 @@ fn shortened_correlation_reports_truncated_without_detail_loss() {
         let outcome = component
             .record_without_projection_lazy(|| {
                 Observation::new(classification(FailureClass::Unknown), "ok", 1).with_correlation(
-                    DiagnosticCorrelationRef {
-                        session_id,
-                        request_id,
+                    DiagnosticCorrelation {
+                        session_id: session_id.map(Into::into),
+                        request_id: request_id.map(Into::into),
                     },
                 )
             })
@@ -1579,6 +1580,219 @@ fn invalid_observations_do_not_update_reserved_summaries() {
 }
 
 #[test]
+fn decoded_payloads_are_validated_before_recording_changes_accounting() {
+    let service = diagnostics(limits());
+    let component = register(&service, "producer");
+    let delivered = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::clone(&delivered);
+    let _guard = service
+        .subscribe_projection(move |_| {
+            captured.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let baseline = snapshot(&service, DiagnosticQuery::default());
+
+    for (code, class, expected) in [
+        (
+            "plugin.future_failure",
+            Some("unknown"),
+            DiagnosticError::InvalidCode,
+        ),
+        (
+            "logging.sink.write_failed",
+            Some("future_class"),
+            DiagnosticError::InvalidClassification,
+        ),
+        (
+            "logging.sink.write_failed",
+            Some("authentication"),
+            DiagnosticError::InvalidClassification,
+        ),
+        (
+            "logging.sink.write_failed",
+            None,
+            DiagnosticError::InvalidClassification,
+        ),
+        (
+            "logging.sink.initialized",
+            Some("unknown"),
+            DiagnosticError::InvalidClassification,
+        ),
+    ] {
+        let classification: Classification = serde_json::from_value(serde_json::json!({
+            "canonical_code": code,
+            "failure_class": class,
+        }))
+        .unwrap();
+        assert_eq!(
+            component
+                .record_lazy(|| Observation::new(classification, "invalid", 3))
+                .unwrap_err(),
+            expected,
+        );
+    }
+    for (execution, phase) in [("wasm_v2", "activation"), ("native_abi", "quiescing")] {
+        let context: PluginObservationContext = serde_json::from_value(serde_json::json!({
+            "execution": execution,
+            "phase": phase,
+        }))
+        .unwrap();
+        assert_eq!(
+            component
+                .record_lazy(|| {
+                    Observation::new(classification(FailureClass::Unknown), "invalid", 3)
+                        .with_plugin_context(context)
+                })
+                .unwrap_err(),
+            DiagnosticError::InvalidContext,
+        );
+    }
+
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.sequence, baseline.sequence);
+    assert_eq!(view.lifetime.totals, baseline.lifetime.totals);
+    assert_eq!(
+        view.lifetime.last_failure_at,
+        baseline.lifetime.last_failure_at
+    );
+    assert_eq!(view.components[0].counters, baseline.components[0].counters);
+    assert_eq!(
+        view.components[0].lifetime.totals,
+        DiagnosticTotals::default()
+    );
+    assert!(view.events.is_empty());
+    assert_eq!(view.coverage.loss.observations_rejected.value.get(), 7);
+    assert_eq!(delivered.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn oversized_unrecognized_payload_names_are_rejected_without_allocating() {
+    let service = diagnostics(limits());
+    let component = register(&service, "producer");
+    let baseline = snapshot(&service, DiagnosticQuery::default());
+    let reserved = service.memory_usage().reserved_bytes;
+    let oversized = "x".repeat(65_536);
+    // Caller-owned values are prepared before measuring admission. Rejection
+    // must not format these names into newly allocated diagnostic errors.
+    let inputs = [
+        (
+            Observation::new(
+                Classification {
+                    canonical_code: Cow::Owned(oversized.clone()),
+                    failure_class: Some("unknown".into()),
+                },
+                "unknown code",
+                1,
+            ),
+            DiagnosticError::InvalidCode,
+        ),
+        (
+            Observation::new(
+                Classification {
+                    canonical_code: WRITE.canonical_name().into(),
+                    failure_class: Some(Cow::Owned(oversized.clone())),
+                },
+                "unknown class",
+                1,
+            ),
+            DiagnosticError::InvalidClassification,
+        ),
+        (
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "unknown execution",
+                1,
+            )
+            .with_plugin_context(PluginObservationContext {
+                execution: Some(Cow::Owned(oversized.clone())),
+                phase: Some(PluginPhase::Activation.into()),
+            }),
+            DiagnosticError::InvalidContext,
+        ),
+        (
+            Observation::new(classification(FailureClass::Unknown), "unknown phase", 1)
+                .with_plugin_context(PluginObservationContext {
+                    execution: Some(PluginExecution::NativeAbi.into()),
+                    phase: Some(Cow::Owned(oversized)),
+                }),
+            DiagnosticError::InvalidContext,
+        ),
+    ];
+    let mut inputs = inputs.into_iter();
+    let (_, allocations) = allocations_during(|| {
+        for (observation, expected) in &mut inputs {
+            assert_eq!(component.record_lazy(|| observation).unwrap_err(), expected);
+        }
+    });
+    assert_eq!(allocations, 0);
+    assert_eq!(service.memory_usage().reserved_bytes, reserved);
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.sequence, baseline.sequence);
+    assert_eq!(view.lifetime.totals, baseline.lifetime.totals);
+    assert_eq!(
+        view.lifetime.last_failure_at,
+        baseline.lifetime.last_failure_at
+    );
+    assert_eq!(view.components[0].counters, baseline.components[0].counters);
+    assert_eq!(view.coverage.loss.observations_rejected.value.get(), 4);
+    assert!(view.events.is_empty());
+}
+
+#[test]
+fn decoded_extension_names_cannot_bypass_registered_handles() {
+    let service = diagnostics(limits());
+    let component = register(&service, "producer");
+    let handle = component
+        .register_extension(ExtensionRegistration {
+            namespace: "acme",
+            name: "request_failed",
+            description: "A producer-owned failure",
+            allowed_classes: &[FailureClass::Unknown],
+            outcome: DiagnosticOutcome::Failure,
+        })
+        .unwrap()
+        .unwrap();
+    let baseline = snapshot(&service, DiagnosticQuery::default());
+    let classification: Classification = serde_json::from_value(serde_json::json!({
+        "canonical_code": "acme.request_failed",
+        "failure_class": "unknown",
+    }))
+    .unwrap();
+    assert_eq!(
+        component
+            .record_lazy(|| Observation::new(classification, "unadmitted input", 3))
+            .unwrap_err(),
+        DiagnosticError::InvalidCode,
+    );
+    let rejected = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(rejected.sequence, baseline.sequence);
+    assert_eq!(rejected.lifetime.totals, baseline.lifetime.totals);
+    assert_eq!(
+        rejected.lifetime.last_failure_at,
+        baseline.lifetime.last_failure_at
+    );
+    assert_eq!(
+        rejected.components[0].counters,
+        baseline.components[0].counters
+    );
+    assert!(rejected.events.is_empty());
+    component
+        .record_lazy(|| {
+            Observation::extension(
+                handle,
+                Some(FailureClass::Unknown),
+                DiagnosticOutcome::Failure,
+                "admitted",
+                3,
+            )
+        })
+        .unwrap();
+    let accepted = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(accepted.events[0].code(), "acme.request_failed");
+    assert_eq!(accepted.lifetime.totals.occurrences_total.value.get(), 3);
+}
+
+#[test]
 fn query_leases_enforce_concurrency_and_return_their_permits() {
     let service = diagnostics(DiagnosticLimits {
         max_queries: 2,
@@ -2370,10 +2584,10 @@ fn warmed_projection_delivery_reuses_its_payload_and_callback_storage() {
         .unwrap();
     let plain = register(&service, "plain");
     let context = PluginObservationContext {
-        execution: Some(PluginExecution::NativeAbi),
-        phase: Some(PluginPhase::Policy),
+        execution: Some(PluginExecution::NativeAbi.into()),
+        phase: Some(PluginPhase::Policy.into()),
     };
-    let expected_context = PluginObservationContextWire::from(context);
+    let expected_context = context.clone();
     let delivered = Arc::new(AtomicUsize::new(0));
     let callback = Arc::clone(&delivered);
     let _guard = service
@@ -2387,7 +2601,7 @@ fn warmed_projection_delivery_reuses_its_payload_and_callback_storage() {
                 assert_eq!(owner.configuration_id.as_deref(), Some("configuration"));
                 assert_eq!(owner.responsibility.as_deref(), Some("responsibility"));
             } else {
-                assert_eq!(event.context, PluginObservationContextWire::default());
+                assert_eq!(event.context, PluginObservationContext::default());
                 assert!(owner.subscriber_instance_id.is_none());
                 assert!(owner.plugin_instance_id.is_none());
                 assert!(owner.configuration_id.is_none());
@@ -2401,21 +2615,21 @@ fn warmed_projection_delivery_reuses_its_payload_and_callback_storage() {
         (&attributed, context),
         (&plain, PluginObservationContext::default()),
     ];
-    for (component, context) in producers {
+    for (component, context) in &producers {
         component
             .record_lazy(|| {
                 Observation::new(classification(FailureClass::Unknown), "projected", 1)
-                    .with_plugin_context(context)
+                    .with_plugin_context(context.clone())
             })
             .unwrap();
     }
     let (_, allocations) = allocations_during(|| {
         for _ in 0..100 {
-            for (component, context) in producers {
+            for (component, context) in &producers {
                 component
                     .record_lazy(|| {
                         Observation::new(classification(FailureClass::Unknown), "projected", 1)
-                            .with_plugin_context(context)
+                            .with_plugin_context(context.clone())
                     })
                     .unwrap();
             }
@@ -2424,6 +2638,84 @@ fn warmed_projection_delivery_reuses_its_payload_and_callback_storage() {
     assert_eq!(allocations, 0);
     assert_eq!(delivered.load(Ordering::Relaxed), 202);
     assert_eq!(service.memory_usage().projection_workspaces, 0);
+}
+
+#[test]
+fn owned_shared_payloads_record_and_project_without_new_allocations() {
+    let service = diagnostics(limits());
+    let component = register(&service, "producer");
+    let session = format!("session-{}", 42);
+    let request = format!("request-{}", 42);
+    let delivered = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::clone(&delivered);
+    let _guard = service
+        .subscribe_projection(move |event| {
+            assert_eq!(event.classification.code(), "logging.sink.write_failed");
+            assert_eq!(event.classification.failure_class(), Some("unknown"));
+            assert_eq!(event.context.execution.as_deref(), Some("native_abi"));
+            assert_eq!(event.context.phase.as_deref(), Some("policy"));
+            assert!(matches!(event.context.execution, Some(Cow::Borrowed(_))));
+            assert!(matches!(event.context.phase, Some(Cow::Borrowed(_))));
+            assert_eq!(event.correlation.session_id.as_deref(), Some("session-42"));
+            assert_eq!(event.correlation.request_id.as_deref(), Some("request-42"));
+            serde_json::to_writer(std::io::sink(), &event.classification).unwrap();
+            serde_json::to_writer(std::io::sink(), &event.context).unwrap();
+            serde_json::to_writer(std::io::sink(), &event.correlation).unwrap();
+            captured.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    component
+        .record_lazy(|| {
+            Observation::new(classification(FailureClass::Unknown), "warm", 1)
+                .with_plugin_context(PluginObservationContext {
+                    execution: Some(PluginExecution::NativeAbi.into()),
+                    phase: Some(PluginPhase::Policy.into()),
+                })
+                .with_correlation(DiagnosticCorrelation {
+                    session_id: Some(session.as_str().into()),
+                    request_id: Some(request.as_str().into()),
+                })
+        })
+        .unwrap();
+
+    // Build caller-owned inputs before measuring core recording and delivery.
+    let observations: Vec<_> = (0..100)
+        .map(|_| {
+            Observation::new(
+                Classification {
+                    canonical_code: Cow::Owned("logging.sink.write_failed".to_owned()),
+                    failure_class: Some(Cow::Owned("unknown".to_owned())),
+                },
+                "owned",
+                1,
+            )
+            .with_plugin_context(PluginObservationContext {
+                execution: Some(Cow::Owned("native_abi".to_owned())),
+                phase: Some(Cow::Owned("policy".to_owned())),
+            })
+            .with_correlation(DiagnosticCorrelation {
+                session_id: Some(session.as_str().into()),
+                request_id: Some(request.as_str().into()),
+            })
+        })
+        .collect();
+    let mut observations = observations.into_iter();
+    let reserved = service.memory_usage().reserved_bytes;
+    let (_, allocations) = allocations_during(|| {
+        for observation in &mut observations {
+            component.record_lazy(|| observation).unwrap();
+        }
+    });
+    assert_eq!(allocations, 0);
+    assert_eq!(delivered.load(Ordering::Relaxed), 101);
+    assert_eq!(service.memory_usage().reserved_bytes, reserved);
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.lifetime.totals.occurrences_total.value.get(), 101);
+    assert_eq!(view.events[0].context.phase.as_deref(), Some("policy"));
+    assert_eq!(
+        view.events[0].correlation.request_id.as_deref(),
+        Some("request-42")
+    );
 }
 
 #[test]
@@ -2513,12 +2805,12 @@ fn typed_plugin_context_survives_projection_and_shared_history_without_extra_cou
         .unwrap();
     let contexts = [
         PluginObservationContext {
-            execution: Some(PluginExecution::NativeAbi),
-            phase: Some(PluginPhase::Activation),
+            execution: Some(PluginExecution::NativeAbi.into()),
+            phase: Some(PluginPhase::Activation.into()),
         },
         PluginObservationContext {
-            execution: Some(PluginExecution::WorkerProtocol),
-            phase: Some(PluginPhase::Runtime),
+            execution: Some(PluginExecution::WorkerProtocol.into()),
+            phase: Some(PluginPhase::Runtime.into()),
         },
     ];
     let projected = Arc::new(Mutex::new(Vec::new()));
@@ -2526,7 +2818,7 @@ fn typed_plugin_context_survives_projection_and_shared_history_without_extra_cou
     let _guard = service
         .subscribe_projection(move |event| captured.lock().unwrap().push(event.context.clone()))
         .unwrap();
-    for (context, count) in contexts.into_iter().zip([2, 3]) {
+    for (context, count) in contexts.iter().zip([2, 3]) {
         recorder
             .record_lazy(|| {
                 Observation::new(
@@ -2540,11 +2832,11 @@ fn typed_plugin_context_survives_projection_and_shared_history_without_extra_cou
                     "operation failed",
                     count,
                 )
-                .with_plugin_context(context)
+                .with_plugin_context(context.clone())
             })
             .unwrap();
     }
-    let expected_contexts = contexts.map(PluginObservationContextWire::from);
+    let expected_contexts = contexts;
     assert_eq!(projected.lock().unwrap().as_slice(), &expected_contexts[..]);
     let page = snapshot(&service, DiagnosticQuery::default());
     assert_eq!(page.events.len(), 1);

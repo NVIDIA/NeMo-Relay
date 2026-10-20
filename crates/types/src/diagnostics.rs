@@ -14,6 +14,7 @@
 //! catalogue names remain opaque in supported envelopes; unsupported schema
 //! versions require adapter negotiation.
 
+use std::borrow::Cow;
 use std::fmt;
 
 use chrono::{DateTime, Utc};
@@ -218,13 +219,13 @@ pub enum DiagnosticOutcome {
 /// Optional safe correlation identifiers, excluded from aggregation keys.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct DiagnosticCorrelation {
+pub struct DiagnosticCorrelation<'a> {
     /// Trajectory session associated with the observation, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+    pub session_id: Option<Cow<'a, str>>,
     /// Request associated with the observation, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
+    pub request_id: Option<Cow<'a, str>>,
 }
 
 /// Bounded attribution for a component refresh or an originating observation.
@@ -333,25 +334,67 @@ pub struct DiagnosticOrigin {
     pub ownership: ComponentOwnership,
 }
 
-/// Cause metadata resolved from registered built-in or extension descriptors.
+/// Shared classification payload for producers, projections, and decoded evidence.
 ///
-/// Unknown future names remain opaque strings in a supported schema. Core and
-/// transport adapters enforce their explicit byte limits before materialization.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Typed constructors validate built-in code/cause pairs and borrow their stable
+/// names. Decoded future names remain opaque. Core validates recording input and
+/// resolves admitted identifiers before changing counters or retaining evidence.
+/// Transport adapters must bound received names before materializing owned data.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct ClassificationWire {
-    /// Bounded stable built-in name or registered namespaced extension name.
-    pub canonical_code: String,
-    /// Bounded cause name; absent for successful observations and notices.
-    pub failure_class: Option<String>,
+pub struct Classification {
+    /// Stable built-in name or registered namespaced extension name.
+    pub canonical_code: Cow<'static, str>,
+    /// Cause name; absent for successful observations and notices.
+    pub failure_class: Option<Cow<'static, str>>,
 }
 
-impl From<Classification> for ClassificationWire {
-    fn from(value: Classification) -> Self {
-        Self {
-            canonical_code: value.code().canonical_name().into(),
-            failure_class: value.failure_class().map(|class| class.as_str().into()),
+impl Classification {
+    /// Validate the required cause and the catalogue entry's permitted classes.
+    pub fn new(
+        code: BuiltinDiagnosticCode,
+        failure_class: Option<FailureClass>,
+    ) -> Result<Self, ClassificationError> {
+        if !code.allows_class(failure_class) {
+            return Err(ClassificationError);
         }
+        Ok(Self {
+            canonical_code: Cow::Borrowed(code.canonical_name()),
+            failure_class: failure_class.map(|class| Cow::Borrowed(class.as_str())),
+        })
+    }
+    /// Classify a failure using an explicitly supported cause.
+    pub fn failure(
+        code: FailureCode,
+        failure_class: FailureClass,
+    ) -> Result<Self, ClassificationError> {
+        Self::new(BuiltinDiagnosticCode::Failure(code), Some(failure_class))
+    }
+    /// Classify an observed success, without clearing previous failures.
+    #[must_use]
+    pub const fn success(code: SuccessCode) -> Self {
+        Self {
+            canonical_code: Cow::Borrowed(code.canonical_name()),
+            failure_class: None,
+        }
+    }
+    /// Classify an observed notice, without inventing a failure cause.
+    #[must_use]
+    pub const fn notice(code: NoticeCode) -> Self {
+        Self {
+            canonical_code: Cow::Borrowed(code.canonical_name()),
+            failure_class: None,
+        }
+    }
+    /// Borrow the canonical name, including an opaque future name.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.canonical_code
+    }
+    /// Borrow the observed cause name without interpreting unfamiliar values.
+    #[must_use]
+    pub fn failure_class(&self) -> Option<&str> {
+        self.failure_class.as_deref()
     }
 }
 
@@ -365,107 +408,21 @@ pub struct DiagnosticDetail {
     pub truncated: bool,
 }
 
-/// Fixed-size facts about an observed plugin operation, never counter dimensions.
+/// Shared plugin-operation facts for producers, projections, and decoded evidence.
 ///
-/// The producer supplies these only from known execution and lifecycle evidence.
-/// An absent value remains unknown; mechanism is never inferred from a code name.
-/// Phase-one core activation failures/unwinds supply `phase = Activation` and
-/// leave `execution` unset. Other context combinations are supported authoring
-/// and wire contracts; their automatic producer integrations are deferred.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct PluginObservationContext {
-    /// Observed native ABI or dynamic-worker execution mechanism, when known.
-    pub execution: Option<PluginExecution>,
-    /// Observed validation, activation, or runtime phase, or policy-gate context.
-    pub phase: Option<PluginPhase>,
-}
-
-/// Lossless execution name in a diagnostic response, separate from typed authoring.
-///
-/// Known values keep their canonical spelling. Future names remain opaque strings
-/// rather than rejecting an otherwise supported snapshot. Decoding accepts only
-/// strings. Transport adapters must bound incoming names before materializing this
-/// caller-owned wire value.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-#[serde(untagged, from = "String")]
-pub enum PluginExecutionWire {
-    /// An execution mechanism understood by this reader.
-    Known(PluginExecution),
-    /// The original execution name, preserved without interpretation.
-    Unrecognized(String),
-}
-
-impl From<PluginExecution> for PluginExecutionWire {
-    fn from(value: PluginExecution) -> Self {
-        Self::Known(value)
-    }
-}
-
-impl From<String> for PluginExecutionWire {
-    fn from(name: String) -> Self {
-        match PluginExecution::deserialize(de::value::StrDeserializer::<de::value::Error>::new(
-            &name,
-        )) {
-            Ok(value) => Self::Known(value),
-            Err(_) => Self::Unrecognized(name),
-        }
-    }
-}
-
-/// Lossless lifecycle or policy phase name in a diagnostic response.
-///
-/// As with [`PluginExecutionWire`], unknown names are retained only in the wire
-/// value. Core producer observations continue to use fixed-size [`PluginPhase`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-#[serde(untagged, from = "String")]
-pub enum PluginPhaseWire {
-    /// A lifecycle phase or policy context understood by this reader.
-    Known(PluginPhase),
-    /// The original phase name, preserved without interpretation.
-    Unrecognized(String),
-}
-
-impl From<PluginPhase> for PluginPhaseWire {
-    fn from(value: PluginPhase) -> Self {
-        Self::Known(value)
-    }
-}
-
-impl From<String> for PluginPhaseWire {
-    fn from(name: String) -> Self {
-        match PluginPhase::deserialize(de::value::StrDeserializer::<de::value::Error>::new(&name)) {
-            Ok(value) => Self::Known(value),
-            Err(_) => Self::Unrecognized(name),
-        }
-    }
-}
-
-/// Plugin-operation context in a response, preserving future wire names.
-///
-/// A missing value is distinct from a present name unrecognized by this reader.
-/// These owned response fields do not replace the fixed-size
-/// [`PluginObservationContext`] used for producer recording and core retention.
+/// Known producer values borrow canonical static names; decoded values own their
+/// strings, including future names. Core validates and encodes recording input
+/// into private fixed-size storage. Missing values remain distinct from names
+/// unrecognized by a reader, and context never establishes counter dimensions.
+/// Phase-one activation recording supplies only `phase = "activation"` and leaves
+/// execution unset. Other producer integrations remain deferred.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct PluginObservationContextWire {
-    /// Known or opaque original execution name; absent when not observed.
-    pub execution: Option<PluginExecutionWire>,
-    /// Known or opaque original phase name; absent when not observed.
-    pub phase: Option<PluginPhaseWire>,
-}
-
-impl From<PluginObservationContext> for PluginObservationContextWire {
-    fn from(value: PluginObservationContext) -> Self {
-        Self {
-            execution: value.execution.map(PluginExecutionWire::from),
-            phase: value.phase.map(PluginPhaseWire::from),
-        }
-    }
+pub struct PluginObservationContext {
+    /// Observed execution name, when known; never inferred from a code.
+    pub execution: Option<Cow<'static, str>>,
+    /// Observed lifecycle phase or policy-gate context, when known.
+    pub phase: Option<Cow<'static, str>>,
 }
 
 /// One recent observation with its actual class and original configuration attribution.
@@ -481,10 +438,10 @@ pub struct DiagnosticEvent {
     /// Original configuration attribution, preserved through component refresh.
     pub origin: DiagnosticOrigin,
     /// Canonical event classification; never reconstructed from a latest message.
-    pub classification: ClassificationWire,
+    pub classification: Classification,
     /// Bounded plugin-operation wire facts, excluded from aggregation keys.
     #[serde(default)]
-    pub context: PluginObservationContextWire,
+    pub context: PluginObservationContext,
     /// Evidence severity, independent of its observed operation outcome.
     pub severity: DiagnosticSeverity,
     /// Explicit observed operation outcome.
@@ -494,7 +451,7 @@ pub struct DiagnosticEvent {
     /// Input occurrence delta represented by this recording call.
     pub count: DiagnosticNumber,
     /// Safe correlation, excluded from aggregation identity.
-    pub correlation: DiagnosticCorrelation,
+    pub correlation: DiagnosticCorrelation<'static>,
 }
 
 impl DiagnosticEvent {

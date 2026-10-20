@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::diagnostics::{
-    Classification, CommonPluginFailureCode, ComponentRegistration, DiagnosticLimits,
-    DiagnosticOutcome, DiagnosticQuery, DiagnosticSeverity, Diagnostics, DiagnosticsSettings,
-    FailureClass, FailureCode, NoticeCode, Observation, PluginFailureCode,
+    BuiltinDiagnosticCode, Classification, CommonPluginFailureCode, ComponentRegistration,
+    DiagnosticLimits, DiagnosticOutcome, DiagnosticQuery, DiagnosticSeverity, Diagnostics,
+    DiagnosticsSettings, FailureClass, FailureCode, NoticeCode, Observation, PluginFailureCode,
 };
 use crate::logging::{
     FileLogRotationConfig, FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
@@ -221,7 +221,8 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
         FailureClass::NotFound,
     )
     .unwrap();
-    let codes = [filtered.code(), failure.code(), after_shutdown.code()];
+    let codes = [filtered.code(), failure.code(), after_shutdown.code()]
+        .map(|name| BuiltinDiagnosticCode::from_canonical_name(name).unwrap());
     let producer = diagnostics
         .register_component(ComponentRegistration::new("test.exporter", &codes))
         .unwrap();
@@ -324,7 +325,8 @@ fn replacing_logging_diagnostics_projects_only_into_the_current_runtime() {
         FailureClass::NotFound,
     )
     .unwrap();
-    let codes = [current.code(), still_current.code()];
+    let codes = [current.code(), still_current.code()]
+        .map(|name| BuiltinDiagnosticCode::from_canonical_name(name).unwrap());
     let producer = diagnostics
         .register_component(ComponentRegistration::new("test.producer", &codes))
         .unwrap();

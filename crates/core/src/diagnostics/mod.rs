@@ -55,6 +55,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -289,14 +290,6 @@ impl<'a> From<&'a str> for DiagnosticDetailRef<'a> {
     }
 }
 
-/// Correlation is borrowed and capped, and never establishes an aggregate key.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DiagnosticCorrelationRef<'a> {
-    /// Safe optional session identifier, capped independently of message detail.
-    pub session_id: Option<&'a str>,
-    /// Safe optional request identifier, excluded from aggregate identity.
-    pub request_id: Option<&'a str>,
-}
 /// An admitted custom cause descriptor belonging to one registered extension.
 /// Its immutable metadata is bounded and does not create another counter series.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,7 +298,7 @@ pub struct ExtensionClassHandle {
     index: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum ObservationCode {
     Builtin(Classification),
     Extension(ExtensionHandle, Option<FailureClass>),
@@ -314,7 +307,7 @@ enum ObservationCode {
 }
 
 /// One observation. Its count is an input delta, never a cumulative report total.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Observation<'a> {
     code: ObservationCode,
     /// Optional producer-approved explanation; bounding does not perform redaction.
@@ -326,8 +319,8 @@ pub struct Observation<'a> {
     /// Explicit observed operation outcome for summaries and windows.
     pub outcome: DiagnosticOutcome,
     /// Borrowed safe correlation, never an aggregate key.
-    pub correlation: DiagnosticCorrelationRef<'a>,
-    /// Fixed-size plugin execution and phase facts, excluded from aggregate keys.
+    pub correlation: DiagnosticCorrelation<'a>,
+    /// Plugin execution and phase names, validated before fixed-size core retention.
     pub context: PluginObservationContext,
 }
 impl<'a> Observation<'a> {
@@ -340,22 +333,23 @@ impl<'a> Observation<'a> {
         detail: impl Into<DiagnosticDetailRef<'a>>,
         count: u64,
     ) -> Self {
-        let (severity, outcome) = match classification.code() {
-            BuiltinDiagnosticCode::Failure(_) => {
-                (DiagnosticSeverity::Error, DiagnosticOutcome::Failure)
-            }
-            BuiltinDiagnosticCode::Success(_) => {
-                (DiagnosticSeverity::Info, DiagnosticOutcome::Success)
-            }
-            _ => (DiagnosticSeverity::Info, DiagnosticOutcome::Unknown),
-        };
+        let (severity, outcome) =
+            match BuiltinDiagnosticCode::from_canonical_name(classification.code()) {
+                Some(BuiltinDiagnosticCode::Failure(_)) => {
+                    (DiagnosticSeverity::Error, DiagnosticOutcome::Failure)
+                }
+                Some(BuiltinDiagnosticCode::Success(_)) => {
+                    (DiagnosticSeverity::Info, DiagnosticOutcome::Success)
+                }
+                _ => (DiagnosticSeverity::Info, DiagnosticOutcome::Unknown),
+            };
         Self {
             code: ObservationCode::Builtin(classification),
             detail: detail.into(),
             count,
             severity,
             outcome,
-            correlation: DiagnosticCorrelationRef::default(),
+            correlation: DiagnosticCorrelation::default(),
             context: PluginObservationContext::default(),
         }
     }
@@ -380,7 +374,7 @@ impl<'a> Observation<'a> {
                 DiagnosticSeverity::Info
             },
             outcome,
-            correlation: DiagnosticCorrelationRef::default(),
+            correlation: DiagnosticCorrelation::default(),
             context: PluginObservationContext::default(),
         }
     }
@@ -398,7 +392,7 @@ impl<'a> Observation<'a> {
             count,
             severity: DiagnosticSeverity::Error,
             outcome: DiagnosticOutcome::Failure,
-            correlation: DiagnosticCorrelationRef::default(),
+            correlation: DiagnosticCorrelation::default(),
             context: PluginObservationContext::default(),
         }
     }
@@ -411,7 +405,7 @@ impl<'a> Observation<'a> {
             count,
             severity: DiagnosticSeverity::Warning,
             outcome,
-            correlation: DiagnosticCorrelationRef::default(),
+            correlation: DiagnosticCorrelation::default(),
             context: PluginObservationContext::default(),
         }
     }
@@ -431,7 +425,7 @@ impl<'a> Observation<'a> {
         self
     }
     /// Attach safe borrowed correlation to be capped outside aggregate keys.
-    pub fn with_correlation(mut self, correlation: DiagnosticCorrelationRef<'a>) -> Self {
+    pub fn with_correlation(mut self, correlation: DiagnosticCorrelation<'a>) -> Self {
         self.correlation = correlation;
         self
     }
@@ -489,6 +483,9 @@ pub enum DiagnosticError {
     /// The code or extension does not permit the supplied cause.
     #[error("invalid diagnostic classification")]
     InvalidClassification,
+    /// Plugin context contains a name unsupported by this recording runtime.
+    #[error("invalid or unsupported diagnostic plugin context")]
+    InvalidContext,
     /// Recording requires a positive input occurrence delta.
     #[error("an observation requires a positive occurrence count")]
     InvalidCount,
@@ -1276,14 +1273,28 @@ fn record_observation(
         }
     };
     let origin = requested_origin.unwrap_or_else(|| component.origin());
-    let (code, class) = match observation.code {
-        ObservationCode::Builtin(classification) => (
-            Some(StoredCode::Builtin(classification.code())),
-            classification
+    let context = StoredPluginContext::try_from(&observation.context)?;
+    let (code, class) = match &observation.code {
+        ObservationCode::Builtin(classification) => {
+            let code = BuiltinDiagnosticCode::from_canonical_name(classification.code())
+                .ok_or(DiagnosticError::InvalidCode)?;
+            let class = classification
                 .failure_class()
-                .map(StoredFailureClass::Builtin),
-        ),
+                .map(|name| {
+                    FailureClass::from_canonical_name(name)
+                        .ok_or(DiagnosticError::InvalidClassification)
+                })
+                .transpose()?;
+            if !code.allows_class(class) {
+                return Err(DiagnosticError::InvalidClassification);
+            }
+            (
+                Some(StoredCode::Builtin(code)),
+                class.map(StoredFailureClass::Builtin),
+            )
+        }
         ObservationCode::Extension(extension, class) => {
+            let (extension, class) = (*extension, *class);
             if extension.context_id != inner.context_id || extension.component != handle {
                 return Err(DiagnosticError::InvalidCode);
             }
@@ -1311,6 +1322,7 @@ fn record_observation(
             )
         }
         ObservationCode::OpaqueExtension(extension, class) => {
+            let (extension, class) = (*extension, *class);
             if extension.context_id != inner.context_id
                 || extension.component != handle
                 || class.extension != extension
@@ -1390,19 +1402,23 @@ fn record_observation(
     let session = observation
         .correlation
         .session_id
+        .as_deref()
         .map(|value| bounded_str(value, inner.limits.max_correlation_bytes));
     let request = observation
         .correlation
         .request_id
+        .as_deref()
         .map(|value| bounded_str(value, inner.limits.max_correlation_bytes));
     let session_truncated = observation
         .correlation
         .session_id
+        .as_deref()
         .zip(session)
         .is_some_and(|(a, b)| a.len() != b.len());
     let request_truncated = observation
         .correlation
         .request_id
+        .as_deref()
         .zip(request)
         .is_some_and(|(a, b)| a.len() != b.len());
     if session_truncated {
@@ -1421,6 +1437,7 @@ fn record_observation(
             sequence,
             observed_at,
             observation,
+            context,
             detail,
             truncated,
             session,
@@ -1459,7 +1476,7 @@ fn record_observation(
             origin,
             code,
             failure_class: class,
-            context: observation.context,
+            context,
             severity: observation.severity,
             outcome: observation.outcome,
             detail: retained_detail,
@@ -1536,13 +1553,13 @@ impl PublicationWorkspace {
                     refresh_generation: 0.into(),
                     ownership: ComponentOwnership::default(),
                 },
-                classification: ClassificationWire {
-                    canonical_code: reserved_string(ID_BYTES)?,
+                classification: Classification {
+                    canonical_code: Cow::Owned(reserved_string(ID_BYTES)?),
                     failure_class: None,
                 },
                 severity: DiagnosticSeverity::Info,
                 outcome: DiagnosticOutcome::Unknown,
-                context: PluginObservationContextWire::default(),
+                context: PluginObservationContext::default(),
                 detail: None,
                 count: 0.into(),
                 correlation: DiagnosticCorrelation::default(),
@@ -1559,7 +1576,10 @@ impl PublicationWorkspace {
     }
     fn reserved_bytes(&self) -> usize {
         self.event.component.key.capacity()
-            + self.event.classification.canonical_code.capacity()
+            + match &self.event.classification.canonical_code {
+                Cow::Owned(value) => value.capacity(),
+                Cow::Borrowed(_) => 0,
+            }
             + self.detail.capacity()
             + self.class.capacity()
             + self.session.capacity()
@@ -1582,6 +1602,7 @@ impl PublicationWorkspace {
         sequence: u64,
         observed_at: ObservationTime,
         observation: &Observation<'_>,
+        context: StoredPluginContext,
         detail: Option<&str>,
         truncated: bool,
         session: Option<&str>,
@@ -1609,18 +1630,20 @@ impl PublicationWorkspace {
             self.event.origin.ownership.responsibility =
                 Some(std::mem::take(&mut self.origin_responsibility));
         }
-        self.event.classification.canonical_code.clear();
+        self.event.classification.canonical_code.to_mut().clear();
         self.event
             .classification
             .canonical_code
+            .to_mut()
             .push_str(state.code_name(code).expect("admitted code"));
         if let Some(class) = class {
             self.class.clear();
             self.class
                 .push_str(state.class_name(class).expect("admitted class"));
-            self.event.classification.failure_class = Some(std::mem::take(&mut self.class));
+            self.event.classification.failure_class =
+                Some(Cow::Owned(std::mem::take(&mut self.class)));
         }
-        self.event.context = observation.context.into();
+        self.event.context = context.into();
         self.event.severity = observation.severity;
         self.event.outcome = observation.outcome;
         self.event.count = observation.count.into();
@@ -1635,12 +1658,12 @@ impl PublicationWorkspace {
         if let Some(value) = session {
             self.session.clear();
             self.session.push_str(value);
-            self.event.correlation.session_id = Some(std::mem::take(&mut self.session));
+            self.event.correlation.session_id = Some(Cow::Owned(std::mem::take(&mut self.session)));
         }
         if let Some(value) = request {
             self.request.clear();
             self.request.push_str(value);
-            self.event.correlation.request_id = Some(std::mem::take(&mut self.request));
+            self.event.correlation.request_id = Some(Cow::Owned(std::mem::take(&mut self.request)));
         }
         self.ready = true;
     }
@@ -1658,15 +1681,15 @@ impl PublicationWorkspace {
             self.detail.clear();
         }
         if let Some(value) = self.event.classification.failure_class.take() {
-            self.class = value;
+            self.class = value.into_owned();
             self.class.clear();
         }
         if let Some(value) = self.event.correlation.session_id.take() {
-            self.session = value;
+            self.session = value.into_owned();
             self.session.clear();
         }
         if let Some(value) = self.event.correlation.request_id.take() {
-            self.request = value;
+            self.request = value.into_owned();
             self.request.clear();
         }
         for callback in &mut self.callbacks {
