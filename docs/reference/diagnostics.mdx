@@ -167,11 +167,43 @@ therefore emits `plugin.configuration_invalid` with the `unknown` failure class.
 It never infers a cause from error text. A producer with structured validation
 evidence can explicitly author that code with `invalid_input`.
 
+### Plugin Producer Boundaries
+
+Phase one owns the shared diagnostics foundation and generic host configuration
+and component activation boundaries in `core`. The phase-five plugin workstream
+owns mechanism-specific producer integrations in the native loader, worker
+client/SDK, and `worker-proto` transport. Crate location alone does not determine
+scope: `core` also contains deferred native and worker code.
+
+| Surface | Current production coverage | Workstream |
+| --- | --- | --- |
+| Logging adapter and sinks | Typed recording and optional log projection | Phase one |
+| Common component activation | Registration failures and activation unwinds, recorded once at the owning operation | Phase one |
+| Shared host configuration | Existing configuration diagnostics/reports; canonical inheritance recording remains a phase-one integration gap | Phase one |
+| Native ABI and dynamic trust/policy | Existing execution/report behavior; no canonical mechanism-specific adapter | Phase five |
+| Worker launch, handshake, RPC, remote observations, and protocol transport | Existing execution/report behavior; no canonical worker integration | Phase five |
+
+The activation adapter currently emits `PluginPhase::Activation` with
+`PluginObservationContext.execution = None`. It does not automatically observe
+validation, runtime, or policy stages. `PluginExecution::{NativeAbi,
+WorkerProtocol}` and the other `PluginPhase` values are supported authoring/wire
+contracts for later producers. Their enum declarations and round-trip tests
+establish representation support; production coverage comes from recording at
+an integrated operation boundary.
+
 The phase-one built-in catalogue contains logging failures/successes, six common
-plugin failures, and the shared `ConfigurationInherited` and
-`ComponentReenabled` notices. Runtime/upstream, dynamic trust/policy,
-native-status, binding, and worker classifiers and their unused code families
-follow their actual producer
+plugin failures, and `ConfigurationInherited`. The inheritance notice has a live
+legacy configuration producer, but is not yet recorded into the canonical store.
+Its phase-one integration must record once at configuration resolution using
+an explicitly selected diagnostic context, while keeping existing warning/report
+behavior. Shared validation and discovery helpers must remain usable without
+initializing process diagnostics.
+
+`ComponentReenabled` is deferred from the canonical catalogue until a production
+producer is integrated. Its existing test-only helper and legacy report strings
+remain unchanged; there is no production emitter today.
+Runtime/upstream, binding, native-status, dynamic trust/policy, and worker
+classifiers and their unused code families arrive with their owning producer
 integrations. OTel failures, export successes, and context-expiration
 observations arrive with phase-two integration.
 

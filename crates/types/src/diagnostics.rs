@@ -369,6 +369,9 @@ pub struct DiagnosticDetail {
 ///
 /// The producer supplies these only from known execution and lifecycle evidence.
 /// An absent value remains unknown; mechanism is never inferred from a code name.
+/// Phase-one core activation failures/unwinds supply `phase = Activation` and
+/// leave `execution` unset. Other context combinations are supported authoring
+/// and wire contracts; their automatic producer integrations are deferred.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PluginObservationContext {
