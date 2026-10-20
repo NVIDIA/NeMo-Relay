@@ -11,7 +11,7 @@ coding-agent host integration.
 ## Read Current Instructions
 
 - [Installation](https://docs.nvidia.com/nemo/relay/getting-started/installation)
-- [Prerequisites](https://docs.nvidia.com/nemo/relay/getting-started/prerequisites)
+- [Support matrix](https://docs.nvidia.com/nemo/relay/reference/support-matrix)
 - [Latest stable release](https://github.com/NVIDIA/NeMo-Relay/releases/latest)
 - [CLI usage](https://docs.nvidia.com/nemo/relay/dev/nemo-relay-cli/basic-usage)
 - [Persistent host installation](https://docs.nvidia.com/nemo/relay/dev/nemo-relay-cli/plugin-installation)

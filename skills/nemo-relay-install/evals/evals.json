@@ -195,5 +195,18 @@
       "Hand local export and the first run to get-started with the established target",
       "Preserves unrelated files and settings, respects existing authorization, and does not expose credentials or complete captured payloads"
     ]
+  },
+  {
+    "id": "nemo-relay-install-015",
+    "question": "The prerequisites link is unavailable and the public docs display an older release than the live package registry. Preview the current stable CLI installation.",
+    "expected_skill": "nemo-relay-install",
+    "expected_script": null,
+    "ground_truth": "Resolve the latest published stable release by cross-checking live official release and registry metadata, then obtain compatible installation and platform requirements from release-matched official source rather than an old prerequisite table.",
+    "expected_behavior": [
+      "Do not treat a cached latest-release redirect or default documentation version as authoritative by itself",
+      "Check actual selected-platform release assets and package availability",
+      "Use the matching release tag when rendered documentation is inaccessible or incomplete",
+      "State any still-unverified requirements rather than inventing a minimum version"
+    ]
   }
 ]

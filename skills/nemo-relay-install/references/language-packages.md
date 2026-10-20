@@ -9,8 +9,8 @@ Use this path when the user's application owns the calls and needs a Relay
 binding. Establish that intent before inferring an install type from a manifest.
 
 Read the current [installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation)
-and [prerequisites](https://docs.nvidia.com/nemo/relay/getting-started/prerequisites)
-for the selected language. Resolve the latest published stable package and
+for the selected language, together with the selected release's package metadata
+and linked support requirements. Resolve the latest published stable package and
 derive its runtime requirements from current package metadata and release
 documentation. Do not retain a package-version or language-minimum table here.
 

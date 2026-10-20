@@ -39,6 +39,11 @@ its prerequisites, sample files, run instructions, verification, and limitations
 Use documentation compatible with the installed stable release. The current
 published guide is the normal source; use an explicitly requested pending PR
 or other supplied revision as such, without treating it as published support.
+Resolve the documentation version instead of assuming an unversioned URL is
+current. When rendered documentation is inaccessible or omits the selected
+path, use the official source at the matching release tag, or the development
+checkout for an explicitly requested development preview. A failed HTTP request
+alone does not prove that a guide was removed; check its index and source.
 
 Keep commands and referenced sample files from the same guide revision.
 If working from source, resolve its referenced files in that checkout.

@@ -259,14 +259,14 @@
     "question": "Help me try Switchyard routing inside Relay.",
     "expected_skill": "nemo-relay-get-started",
     "expected_script": null,
-    "ground_truth": "Read the current Switchyard guide and follow its compatible bundle, routing, request, and verification instructions.",
+    "ground_truth": "Resolve the current compatible Switchyard guide through plugin documentation or maintained source, then follow its actual installation, configuration, and proof rather than an obsolete quick-start route.",
     "expected_behavior": [
-      "Resolve CLI and plugin compatibility from current sources without skill-maintained pins",
-      "Use referenced samples from the guide's revision",
-      "Follow its platform, integrity, provider, policy, and gateway requirements",
-      "Check the response and routing proof it specifies instead of imposing a generic agent/tool contract",
-      "Do not extrapolate performance or routing quality from one trial",
-      "Preserves unrelated files and settings, respects existing authorization, and does not expose credentials or complete captured payloads"
+      "Discover whether Switchyard is documented as a first-party plugin rather than assuming an old quick-start URL exists",
+      "Derive manager, install scope, configuration discovery, and prerequisites from current matching documentation",
+      "Do not invent manual bundle or project-local manifest steps when the guide uses managed installation",
+      "Distinguish an unmerged source guide from published support and stop at a genuine documentation gap",
+      "Use the guide's actual response and routing checks without imposing an unrelated tool/agent contract",
+      "Preserve unrelated settings and credentials"
     ]
   },
   {
@@ -296,6 +296,19 @@
       "Use its referenced sample, run location, cleanup, and actual proof",
       "If documentation is unavailable, state the gap instead of inventing requirements",
       "Preserves unrelated files and settings, respects existing authorization, and does not expose credentials or complete captured payloads"
+    ]
+  },
+  {
+    "id": "nemo-relay-get-started-022",
+    "question": "The release-matched Python guide prints the expected results, then fails: subscribers.flush() cannot block a running asyncio event loop. Does that count as success, or should I reinstall?",
+    "expected_skill": "nemo-relay-get-started",
+    "expected_script": null,
+    "ground_truth": "Retain the failed verbatim result, inspect the installed release's public subscriber API and diagnostic, and verify the smallest supported asynchronous cleanup correction without reinstalling or claiming the original guide passed.",
+    "expected_behavior": [
+      "Do not count expected business results alone as a completed quick start",
+      "Use the release's public API evidence to diagnose cleanup rather than reinstall unrelated packages",
+      "Explain and verify a minimal correction only within the existing trial scope",
+      "Report the original failure separately from a corrected successful run"
     ]
   }
 ]

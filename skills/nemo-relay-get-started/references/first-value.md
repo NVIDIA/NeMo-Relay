@@ -46,3 +46,10 @@ When a check fails, diagnose the smallest failed boundary using the guide and
 current diagnostic documentation. A successful model reply or a doctor check
 alone does not establish event capture. Report what succeeded, what failed,
 and the remaining uncertainty.
+
+If a guide example conflicts with the installed release's documented public
+API or a reproducible runtime diagnostic, check that release's API before
+adapting it. Make only the smallest verified correction within the trial's
+scope, explain the departure from the guide, and retain the initial failure in
+the result. A corrected run must not be reported as a successful verbatim run
+of the original guide.

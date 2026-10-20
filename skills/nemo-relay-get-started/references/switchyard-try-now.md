@@ -5,23 +5,28 @@ SPDX-License-Identifier: Apache-2.0
 
 # Switchyard Trial Routing
 
-Read the current [Switchyard quick start](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/switchyard)
-and its referenced files. Confirm that the guide supports the installed Relay
-release and selected plugin bundle.
+Find the current Switchyard guide through the
+[plugin overview](https://docs.nvidia.com/nemo/relay/dev/configure-plugins/about)
+and [Relay Plugins source](https://github.com/NVIDIA/NeMo-Relay-Plugins/tree/main/plugins/switchyard-plugin).
+Read the matching guide and its referenced files. Switchyard may live under
+plugin configuration rather than the quick-start index; do not assume an old
+quick-start URL remains valid. Confirm compatibility with the selected Relay
+release and distinguish published support from a pending documentation change.
 
-Use `nemo-relay-install` only for missing CLI or bundle dependencies.
-Resolve their stable releases and compatibility independently; do not keep
-release pins, archive names, or platform-minimum tables in this reference.
+Use `nemo-relay-install` only for missing dependencies. Derive the supported
+packaging, manager, install scope, and integrity checks from that guide. Do not
+assume manual bundle extraction, a project-local manifest, or an explicit CLI
+configuration path is appropriate for a managed first-party plugin.
 
-Follow the guide for integrity checks, manifest/library layout, provider and
-routing configuration, attestation requirements, gateway lifecycle, request,
-and verification. Preserve provider credentials and do not weaken policy
-outside the selected plugin's documented requirements.
+Follow the guide for provider and routing configuration, trust requirements,
+gateway lifecycle, request, and verification. Preserve the selected install
+scope and effective configuration discovery, credentials, and unrelated policy.
+Use an isolated trial and avoid colliding with an existing service.
 
-Use an isolated trial and avoid colliding with an existing service. Derive
-the actual response and routing evidence from the guide; do not substitute a
-generic tool/agent proof or claim that a successful provider response alone
-shows that routing occurred.
+Derive response and routing evidence from the guide; do not substitute a
+universal tool/agent proof or claim that a successful provider response alone
+shows routing occurred. If no matching guide is available, report that gap
+rather than reconstructing an older recipe.
 
 Apply [Guide-Based First-Value Checks](first-value.md). Report what the selected
 trial demonstrates without extrapolating routing quality or performance.

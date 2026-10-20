@@ -39,9 +39,11 @@ Relay" or "try Relay" request alone does not authorize choosing the CLI.
 ## Resolve Current Stable Requirements
 
 Read the current [installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation)
-and [prerequisites](https://docs.nvidia.com/nemo/relay/getting-started/prerequisites)
-for the selected target. Confirm the latest published stable release using
-[official releases](https://github.com/NVIDIA/NeMo-Relay/releases/latest) and
+for the selected target. Resolve prerequisites from the selected release's
+installation sections, support matrix, and package metadata rather than a
+remembered standalone prerequisites page. Confirm the latest published stable
+release using [release metadata](https://api.github.com/repos/NVIDIA/NeMo-Relay/releases/latest),
+[official releases](https://github.com/NVIDIA/NeMo-Relay/releases/latest), and
 the relevant package registry. Check the target's actual platform assets and
 package availability, not just a repository version or a pending PR.
 
@@ -58,6 +60,12 @@ package availability, not just a repository version or a pending PR.
   Follow that supported relationship rather than installing a second runtime.
 - Resolve independently released bundles separately and check compatibility.
   Their release number need not match Relay's.
+
+Resolve the documentation version explicitly: an unversioned page may display
+an older stable guide. When rendered documentation is inaccessible or lacks the
+selected path, use the official repository at the matching release tag; use
+its development branch only for an explicitly requested development workflow.
+A cached release redirect alone does not establish the latest version.
 
 If current sources cannot be checked, state what is unverified. Do not infer
 the newest release or requirements from this skill, an old checkout, a generated
