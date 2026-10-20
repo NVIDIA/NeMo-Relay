@@ -35,6 +35,46 @@ func makeRequest() map[string]interface{} {
 // LLM lifecycle
 // ============================================================================
 
+func TestLlmCallEndStatusMetadata(t *testing.T) {
+	var mu sync.Mutex
+	metadataByName := map[string]json.RawMessage{}
+	if err := RegisterSubscriber("go_manual_llm_status", func(event Event) {
+		if event.Category() == "llm" && event.ScopeCategory() == "end" {
+			mu.Lock()
+			metadataByName[event.Name()] = append(json.RawMessage(nil), event.Metadata()...)
+			mu.Unlock()
+		}
+	}); err != nil {
+		t.Fatalf(llmRegisterFailed, err)
+	}
+	defer DeregisterSubscriber("go_manual_llm_status")
+
+	for _, tc := range []struct{ name, metadata, want string }{
+		{"manual_ok", `{"request_id":"request-123"}`, "OK"},
+		{"manual_error", `{"request_id":"request-123","otel.status_code":"ERROR","otel.status_description":"provider timed out","error.type":"TimeoutError"}`, "ERROR"},
+	} {
+		handle, err := LlmCall(tc.name, makeRequest())
+		if err != nil {
+			t.Fatalf(llmCallFailed, err)
+		}
+		if err := LlmCallEnd(handle, json.RawMessage(`null`), WithLLMMetadata(json.RawMessage(tc.metadata))); err != nil {
+			t.Fatalf("LlmCallEnd failed: %v", err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf(llmFlushSubscribersFailed, err)
+		}
+		mu.Lock()
+		metadata := metadataByName[tc.name]
+		mu.Unlock()
+		assertJSONFieldString(t, metadata, "otel.status_code", tc.want)
+		assertJSONFieldString(t, metadata, "request_id", "request-123")
+		if tc.want == "ERROR" {
+			assertJSONFieldString(t, metadata, "otel.status_description", "provider timed out")
+			assertJSONFieldString(t, metadata, "error.type", "TimeoutError")
+		}
+	}
+}
+
 func TestLlmCallAndEnd(t *testing.T) {
 	request := makeRequest()
 	handle, err := LlmCall("my_llm", request)

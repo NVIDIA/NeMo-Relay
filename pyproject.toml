@@ -88,6 +88,7 @@ langchain = [
     "langgraph-checkpoint>=4.1.1",
     "langgraph-sdk>=0.4.4",
     "langsmith>=0.9.4",
+    "pydantic>=2.11,<3",
 ]
 
 langgraph = [
@@ -105,7 +106,7 @@ deepagents = [
 langchain-nvidia = [
     "nemo-relay[langchain]",
     "langchain-nvidia-ai-endpoints>=1.4.2,<2.0.0",
-    "aiohttp>=3.14.3",
+    "aiohttp>=3.14.4",
     "idna>=3.19",
     "multidict>=6.9.1",
 ]

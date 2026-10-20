@@ -38,6 +38,38 @@ responses need normalized LLM end-event annotations for subscribers or
 exporters. Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) for
 those cases.
 
+## Reporting a Manual Call Failure
+
+When the framework owns execution, use `llm.call()` and `llm.call_end()` to
+observe the call. Set `otel.status_code` to `"ERROR"` in the end-call metadata
+when the provider fails. Relay preserves that status and the optional
+`otel.status_description` and `error.type` fields. Without an explicit `"ERROR"`,
+manual LLM completion defaults to `OK`.
+The same metadata contract applies to Rust `llm_call_end`, Node.js `llmCallEnd`,
+and Go `LlmCallEnd`.
+
+```python
+handle = nemo_relay.llm.call("provider", request)
+try:
+    response = call_provider(request)
+except Exception as error:
+    nemo_relay.llm.call_end(
+        handle,
+        None,
+        metadata={
+            "otel.status_code": "ERROR",
+            "otel.status_description": str(error),
+            "error.type": type(error).__name__,
+        },
+    )
+    raise
+else:
+    nemo_relay.llm.call_end(handle, response)
+```
+
+Managed execution derives the status from the provider callback's result or
+exception; callers do not need to supply these fields.
+
 ## Concrete LLM Example
 
 The examples below wrap one provider call and attach it to the active parent scope.

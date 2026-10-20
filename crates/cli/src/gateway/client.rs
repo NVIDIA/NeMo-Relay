@@ -209,12 +209,25 @@ fn post_authenticated(
             ))
         })?;
 
-    let key = cached_bootstrap_challenge_key().map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
-            "failed to load the Relay bootstrap challenge key: {error}"
-        ))
-    })?;
-    let tls_identity = cached_tls_identity().map_err(|error| {
+    // A daemon proves its identity only through the pinned TLS certificate, so daemon delivery
+    // needs no per-user challenge key. Skipping it keeps hook-only users free of bootstrap state.
+    let key = if daemon {
+        None
+    } else {
+        Some(cached_bootstrap_challenge_key().map_err(|error| {
+            VerifiedHttpError::before_payload(format!(
+                "failed to load the Relay bootstrap challenge key: {error}"
+            ))
+        })?)
+    };
+    // A daemon may run under another account and serve a certificate its administrator
+    // published; a gateway always runs as this user and serves this user's identity.
+    let client_config = if daemon {
+        crate::gateway::tls::daemon_client_config()
+    } else {
+        cached_tls_identity().and_then(|identity| identity.client_config())
+    }
+    .map_err(|error| {
         VerifiedHttpError::before_payload(format!(
             "failed to load pinned Relay TLS identity: {error}"
         ))
@@ -241,7 +254,7 @@ fn post_authenticated(
             "failed to read the Relay TLS tunnel response: {error}"
         ))
     })?;
-    let proof_valid =
+    let proof_valid = key.as_deref().is_some_and(|key| {
         http_header(&tunnel_headers, "x-nemo-relay-bootstrap-proof").is_some_and(|proof| {
             http_header(&tunnel_headers, "x-nemo-relay-instance-id").is_some_and(|instance| {
                 key.verify(
@@ -250,7 +263,8 @@ fn post_authenticated(
                     proof,
                 )
             })
-        });
+        })
+    });
     if http_status(&tunnel_headers) != Some(101) {
         return Err(VerifiedHttpError::before_readiness(
             "gateway did not establish an authenticated Relay TLS tunnel",
@@ -275,9 +289,6 @@ fn post_authenticated(
                 ))
             })?;
     }
-    let client_config = tls_identity
-        .client_config()
-        .map_err(VerifiedHttpError::before_payload)?;
     let server_name = rustls::pki_types::ServerName::try_from("localhost").map_err(|error| {
         VerifiedHttpError::before_payload(format!("invalid Relay TLS server name: {error}"))
     })?;
@@ -287,7 +298,8 @@ fn post_authenticated(
         })?;
     let mut stream = rustls::StreamOwned::new(connection, stream);
 
-    if !daemon {
+    // Only gateway delivery loads the challenge key, so this block never runs for a daemon.
+    if let Some(key) = key.as_deref() {
         let challenge = format!(
             "GET /healthz HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nConnection: keep-alive\r\n\r\n"
         );
@@ -305,7 +317,7 @@ fn post_authenticated(
         let (health, _) = classify_health_response(
             &health_headers,
             &health_body,
-            Some((bootstrap_fingerprint, nonce.as_str(), key.as_ref(), address)),
+            Some((bootstrap_fingerprint, nonce.as_str(), key, address)),
         );
         match health {
             RelayHealth::Compatible => {}
@@ -339,7 +351,7 @@ fn post_authenticated(
         request.push_str(value);
         request.push_str("\r\n");
     }
-    if !daemon {
+    if let Some(key) = key.as_deref() {
         request.push_str(BOOTSTRAP_CLIENT_TOKEN_HEADER);
         request.push_str(": ");
         request.push_str(&key.client_token());

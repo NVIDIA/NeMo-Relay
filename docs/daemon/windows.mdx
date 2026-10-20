@@ -168,6 +168,39 @@ Get-Service NeMoRelayDaemon
 Inspect `NeMoRelayService.out.log` and `NeMoRelayService.err.log` under the log
 directory. Startup failures can also appear in the Windows Application event log.
 
+### Publish the Hook Certificate
+
+Hooks run as each user and check the daemon's TLS certificate before they send
+anything. A daemon run as `SYSTEM`, by the system task or by WinSW, keeps its
+identity in a directory users cannot read. Publish its certificate, never the
+key, in `C:\ProgramData\nemo-relay`, created with the read-only user ACL from
+[System Configuration](/daemon/configuration). Export it as `SYSTEM` with the
+service's `XDG_CONFIG_HOME`, for example with a one-time task:
+
+```powershell
+$Task = 'NeMoRelay-Publish-Hook-Certificate'
+$Publish = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument '/d /c set "XDG_CONFIG_HOME=C:\ProgramData\NVIDIA\NeMoRelayDaemon\config" && "C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay.exe" daemon tls-certificate > "C:\ProgramData\nemo-relay\hook-tls-certificate.pem"'
+Register-ScheduledTask -TaskName $Task -Action $Publish -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest)
+$Before = (Get-ScheduledTaskInfo -TaskName $Task).LastRunTime
+Start-ScheduledTask -TaskName $Task
+# Start-ScheduledTask only queues the run: wait until this run has started and finished.
+$Deadline = (Get-Date).AddMinutes(2)
+do {
+  Start-Sleep -Seconds 1
+  $Info = Get-ScheduledTaskInfo -TaskName $Task
+  $Pending = $Info.LastRunTime -eq $Before -or (Get-ScheduledTask -TaskName $Task).State -eq 'Running'
+} while ($Pending -and (Get-Date) -lt $Deadline)
+if ($Pending) { Stop-ScheduledTask -TaskName $Task }
+Unregister-ScheduledTask -TaskName $Task -Confirm:$false
+if ($Pending) { throw 'Publishing the hook certificate did not finish within 2 minutes' }
+if ($Info.LastTaskResult -ne 0) { throw "Publishing the hook certificate failed with task result $($Info.LastTaskResult)" }
+Get-Content 'C:\ProgramData\nemo-relay\hook-tls-certificate.pem'
+```
+
+The certificate stays the same across restarts and upgrades. Publish it again
+only if the service identity under the daemon's `config\nemo-relay\bootstrap`
+directory is removed.
+
 ## Verify and Maintain
 
 For tasks, inspect the matching task and its log:
