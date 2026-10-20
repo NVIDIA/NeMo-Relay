@@ -653,42 +653,79 @@ fn test_exporter_unwraps_langchain_tool_message_observation_content() {
             "__nv_dataclass__": "langgraph.types.Command",
             "data": {"update": [tool_message("list update answer", "success")]},
         }),
+        json!({
+            "__nv_dataclass__": "langgraph.types.Command",
+            "data": {"update": {"messages": [tool_message("subagent failure", "error")]}},
+        }),
     ];
+    let call_ids = ["call_0", "call_1", "call_2", "call_3"];
 
-    {
-        let mut state = exporter.state.lock().unwrap();
-        for output in &outputs {
-            state.events.push(
-                event_builder(Uuid::now_v7(), EventType::End)
-                    .name("tool")
-                    .scope_type(ScopeType::Tool)
-                    .output(output.clone())
-                    .tool_call_id("call_123")
-                    .build(),
-            );
-        }
+    let llm_uuid = Uuid::now_v7();
+    let mut events = vec![
+        event_builder(llm_uuid, EventType::End)
+            .name("gpt-test-model")
+            .scope_type(ScopeType::Llm)
+            .output(json!({
+                "id": "resp_1",
+                "output": call_ids
+                    .iter()
+                    .map(|call_id| json!({
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": "tool",
+                        "arguments": "{}"
+                    }))
+                    .collect::<Vec<_>>()
+            }))
+            .build(),
+    ];
+    for (output, call_id) in outputs.iter().zip(call_ids) {
+        events.push(
+            event_builder(Uuid::now_v7(), EventType::End)
+                .name("tool")
+                .scope_type(ScopeType::Tool)
+                .parent_uuid(llm_uuid)
+                .output(output.clone())
+                .tool_call_id(call_id)
+                .build(),
+        );
     }
+    set_sequential_event_timestamps(
+        &mut events.iter_mut().collect::<Vec<_>>(),
+        base_timestamp(),
+        chrono::Duration::milliseconds(1),
+    );
+    exporter.state.lock().unwrap().events.extend(events);
 
     let trajectory = exporter.export().unwrap();
     let results: Vec<_> = trajectory
         .steps
         .iter()
-        .flat_map(|step| &step.observation.as_ref().unwrap().results)
+        .filter_map(|step| step.observation.as_ref())
+        .flat_map(|observation| &observation.results)
         .collect();
 
-    assert_eq!(results[0].content, Some(json!("tool answer")));
-    assert_eq!(
-        results[0].extra.as_ref().unwrap()["tool_result"],
-        outputs[0]
-    );
-    assert_eq!(results[0].extra.as_ref().unwrap()["is_error"], json!(true));
-    assert_eq!(results[1].content, Some(json!("subagent answer")));
-    assert!(results[1].extra.as_ref().unwrap().get("is_error").is_none());
-    assert_eq!(
-        results[1].extra.as_ref().unwrap()["tool_result"],
-        outputs[1]
-    );
-    assert_eq!(results[2].content, Some(json!("list update answer")));
+    let expected = [
+        ("call_0", "tool answer", true),
+        ("call_1", "subagent answer", false),
+        ("call_2", "list update answer", false),
+        ("call_3", "subagent failure", true),
+    ];
+    assert_eq!(results.len(), expected.len());
+    for (result, (call_id, content, is_error)) in results.iter().zip(expected) {
+        assert_eq!(result.source_call_id.as_deref(), Some(call_id));
+        assert_eq!(result.content, Some(json!(content)));
+        assert_eq!(
+            result.extra.as_ref().unwrap().get("is_error"),
+            is_error.then_some(&json!(true))
+        );
+    }
+    for index in [0, 1] {
+        assert_eq!(
+            results[index].extra.as_ref().unwrap()["tool_result"],
+            outputs[index]
+        );
+    }
 }
 
 #[test]
