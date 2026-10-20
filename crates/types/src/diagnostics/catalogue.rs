@@ -104,7 +104,8 @@ pub enum PluginExecution {
     WorkerProtocol,
 }
 
-/// Observed plugin lifecycle phase, independent of classification.
+/// Observed plugin lifecycle phase or policy-gate context, independent of
+/// classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -116,7 +117,7 @@ pub enum PluginPhase {
     Activation,
     /// Runtime lifecycle phase.
     Runtime,
-    /// Policy lifecycle phase.
+    /// Host policy evaluation that permits or blocks plugin realization.
     Policy,
 }
 

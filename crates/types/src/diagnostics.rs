@@ -374,7 +374,7 @@ pub struct DiagnosticDetail {
 pub struct PluginObservationContext {
     /// Observed native ABI or dynamic-worker execution mechanism, when known.
     pub execution: Option<PluginExecution>,
-    /// Observed validation, activation, runtime, or policy lifecycle phase.
+    /// Observed validation, activation, or runtime phase, or policy-gate context.
     pub phase: Option<PluginPhase>,
 }
 
