@@ -1542,7 +1542,7 @@ impl PublicationWorkspace {
                 },
                 severity: DiagnosticSeverity::Info,
                 outcome: DiagnosticOutcome::Unknown,
-                context: PluginObservationContext::default(),
+                context: PluginObservationContextWire::default(),
                 detail: None,
                 count: 0.into(),
                 correlation: DiagnosticCorrelation::default(),
@@ -1620,7 +1620,7 @@ impl PublicationWorkspace {
                 .push_str(state.class_name(class).expect("admitted class"));
             self.event.classification.failure_class = Some(std::mem::take(&mut self.class));
         }
-        self.event.context = observation.context;
+        self.event.context = observation.context.into();
         self.event.severity = observation.severity;
         self.event.outcome = observation.outcome;
         self.event.count = observation.count.into();

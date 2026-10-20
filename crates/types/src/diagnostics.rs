@@ -381,6 +381,93 @@ pub struct PluginObservationContext {
     pub phase: Option<PluginPhase>,
 }
 
+/// Lossless execution name in a diagnostic response, separate from typed authoring.
+///
+/// Known values keep their canonical spelling. Future names remain opaque strings
+/// rather than rejecting an otherwise supported snapshot. Decoding accepts only
+/// strings. Transport adapters must bound incoming names before materializing this
+/// caller-owned wire value.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+#[serde(untagged, from = "String")]
+pub enum PluginExecutionWire {
+    /// An execution mechanism understood by this reader.
+    Known(PluginExecution),
+    /// The original execution name, preserved without interpretation.
+    Unrecognized(String),
+}
+
+impl From<PluginExecution> for PluginExecutionWire {
+    fn from(value: PluginExecution) -> Self {
+        Self::Known(value)
+    }
+}
+
+impl From<String> for PluginExecutionWire {
+    fn from(name: String) -> Self {
+        match PluginExecution::deserialize(de::value::StrDeserializer::<de::value::Error>::new(
+            &name,
+        )) {
+            Ok(value) => Self::Known(value),
+            Err(_) => Self::Unrecognized(name),
+        }
+    }
+}
+
+/// Lossless lifecycle or policy phase name in a diagnostic response.
+///
+/// As with [`PluginExecutionWire`], unknown names are retained only in the wire
+/// value. Core producer observations continue to use fixed-size [`PluginPhase`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+#[serde(untagged, from = "String")]
+pub enum PluginPhaseWire {
+    /// A lifecycle phase or policy context understood by this reader.
+    Known(PluginPhase),
+    /// The original phase name, preserved without interpretation.
+    Unrecognized(String),
+}
+
+impl From<PluginPhase> for PluginPhaseWire {
+    fn from(value: PluginPhase) -> Self {
+        Self::Known(value)
+    }
+}
+
+impl From<String> for PluginPhaseWire {
+    fn from(name: String) -> Self {
+        match PluginPhase::deserialize(de::value::StrDeserializer::<de::value::Error>::new(&name)) {
+            Ok(value) => Self::Known(value),
+            Err(_) => Self::Unrecognized(name),
+        }
+    }
+}
+
+/// Plugin-operation context in a response, preserving future wire names.
+///
+/// A missing value is distinct from a present name unrecognized by this reader.
+/// These owned response fields do not replace the fixed-size
+/// [`PluginObservationContext`] used for producer recording and core retention.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PluginObservationContextWire {
+    /// Known or opaque original execution name; absent when not observed.
+    pub execution: Option<PluginExecutionWire>,
+    /// Known or opaque original phase name; absent when not observed.
+    pub phase: Option<PluginPhaseWire>,
+}
+
+impl From<PluginObservationContext> for PluginObservationContextWire {
+    fn from(value: PluginObservationContext) -> Self {
+        Self {
+            execution: value.execution.map(PluginExecutionWire::from),
+            phase: value.phase.map(PluginPhaseWire::from),
+        }
+    }
+}
+
 /// One recent observation with its actual class and original configuration attribution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -395,9 +482,9 @@ pub struct DiagnosticEvent {
     pub origin: DiagnosticOrigin,
     /// Canonical event classification; never reconstructed from a latest message.
     pub classification: ClassificationWire,
-    /// Bounded typed plugin-operation facts, excluded from aggregation keys.
+    /// Bounded plugin-operation wire facts, excluded from aggregation keys.
     #[serde(default)]
-    pub context: PluginObservationContext,
+    pub context: PluginObservationContextWire,
     /// Evidence severity, independent of its observed operation outcome.
     pub severity: DiagnosticSeverity,
     /// Explicit observed operation outcome.

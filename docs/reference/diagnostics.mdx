@@ -210,6 +210,19 @@ contracts for later producers. Their enum declarations and round-trip tests
 establish representation support; production coverage comes from recording at
 an integrated operation boundary.
 
+`PluginObservationContext` remains the fixed-size producer and core-storage
+contract. Snapshot and projection events expose `PluginObservationContextWire`:
+known execution/phase strings decode as `Known`, and future strings decode as
+`Unrecognized` with their original names preserved on reserialization. Missing
+or null fields remain absent; non-string values are rejected. The wire schema
+permits future names within a supported snapshot envelope. Unsupported envelope
+versions still require negotiation.
+
+Converting known producer context to its wire view adds no string allocation.
+Decoding owned snapshot values can allocate caller-owned strings; transport
+adapters must enforce their metadata and payload limits before materialization.
+Unknown wire names are not admitted as new typed producer values or counter keys.
+
 The phase-one built-in catalogue contains logging failures/successes, six common
 plugin failures, and `ConfigurationInherited`. The inheritance notice has a live
 legacy configuration producer, but is not yet recorded into the canonical store.
