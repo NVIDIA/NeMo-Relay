@@ -1,0 +1,46 @@
+---
+title: "Struct Passthrough Plugin"
+sidebar-title: "PassthroughPlugin"
+description: "A no-op provider plugin that passes requests through unchanged."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct PassthroughPlugin;
+```
+
+A no-op provider plugin that passes requests through unchanged.
+
+Returns the `rewritten_request` as-is (cloned) and generates a [`TranslationReport`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-translationreport) where every intent is marked [`TranslationStatus::Ignored`] with [`ReasonCode::NotRelevant`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-reasoncode).
+
+## Usage
+
+- Default plugin when no provider-specific plugin is configured
+- Baseline for A/B testing (compare against optimized plugins)
+- Backends with no explicit cache control APIs
+
+## Trait Implementations
+
+### `impl ProviderPlugin for PassthroughPlugin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../plugin/trait-providerplugin\">ProviderPlugin</a> for <a href=\"struct-passthroughplugin\">PassthroughPlugin</a>"}} /></pre>
+
+#### `plugin_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">plugin_id</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `plugin_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">plugin_name</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `translate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">translate</a>(&amp;self, input: &amp;<a href=\"../plugin/struct-plugininput\">PluginInput</a>&lt;'_&gt;) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"../plugin/struct-pluginoutput\">PluginOutput</a>&gt;"}} /></pre>
+
+#### `capabilities`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">capabilities</a>(&amp;self) -&gt; <a href=\"../capability/struct-backendcapabilities\">BackendCapabilities</a>"}} /></pre>

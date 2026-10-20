@@ -1,0 +1,19 @@
+---
+title: "Module builder"
+sidebar-title: "builder"
+description: "Prediction trie builder with incremental accumulator merge."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Prediction trie builder with incremental accumulator merge.
+
+Ports the core algorithm from NAT's `trie_builder.py`: extract LLM call contexts from run records, compute 4-signal sensitivity scores with min-max normalization, update streaming accumulators at every trie node along the path, and build the final [`PredictionTrieNode`](/reference/api/rust-library-reference/nemo-relay-adaptive/trie/data_models/struct-predictiontrienode) tree.
+
+## Structs
+
+- [PredictionTrieBuilder](/reference/api/rust-library-reference/nemo-relay-adaptive/trie/builder/struct-predictiontriebuilder): Builds a [`PredictionTrieNode`](/reference/api/rust-library-reference/nemo-relay-adaptive/trie/data_models/struct-predictiontrienode) tree from [`RunRecord`](/reference/api/rust-library-reference/nemo-relay-adaptive/types/records/struct-runrecord)s via incremental accumulator merge.
+- [SensitivityConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/trie/builder/struct-sensitivityconfig): Configuration for auto-sensitivity scoring.

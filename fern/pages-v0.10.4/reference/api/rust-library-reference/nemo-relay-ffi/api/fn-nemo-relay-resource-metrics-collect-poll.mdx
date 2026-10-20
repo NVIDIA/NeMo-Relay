@@ -1,0 +1,20 @@
+---
+title: "Function nemo_relay_resource_metrics_collect_poll"
+sidebar-title: "nemo_relay_resource_metrics_collect_poll"
+description: "Check a collection without blocking. `out_done` is false while pending."
+position: 149
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_resource_metrics_collect_poll(\n    collection: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"../types/struct-ffiresourcemetricscollection\">FfiResourceMetricsCollection</a>,\n    out_done: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    out_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Check a collection without blocking. `out_done` is false while pending.
+
+Once done, this function returns the collection status and, on success, a canonical JSON string owned by the caller. Free the string with `nemo_relay_string_free`. A completed result can be retrieved only once.
+
+## Safety
+
+The collection must be live. Both output pointers must be writable. Do not free the handle while another thread is polling it.

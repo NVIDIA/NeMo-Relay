@@ -1,0 +1,25 @@
+---
+title: "Module profile"
+sidebar-title: "profile"
+description: "Behavioral profile types for the Adaptive Cache Governor (ACG) system."
+position: 12
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Behavioral profile types for the Adaptive Cache Governor (ACG) system.
+
+## Structs
+
+- [BehavioralProfile](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/profile/struct-behavioralprofile): Aggregated behavioral profile derived from observed runs.
+- [BlockStabilityScore](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/profile/struct-blockstabilityscore): Stability analysis result for one prompt block.
+- [DistributionSummary](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/profile/struct-distributionsummary): Percentile summary for a duration-like metric.
+- [ParallelismPattern](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/profile/struct-parallelismpattern): Summary of observed parallelism behavior across runs.
+- [ToolUsagePhase](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/profile/struct-toolusagephase): One phase of tool usage observed in an agent workflow.
+
+## Enums
+
+- [SessionArchetype](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/profile/enum-sessionarchetype): Coarse behavioral archetype inferred from observed runs.
+- [StabilityClass](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/profile/enum-stabilityclass): Stability bucket assigned to a prompt block.
