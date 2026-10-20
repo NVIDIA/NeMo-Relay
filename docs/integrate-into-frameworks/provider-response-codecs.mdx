@@ -387,9 +387,9 @@ Built-in codecs normalize provider field names as follows:
 
 Gemini `generateContent` thinking tokens (`thoughtsTokenCount`) are stored in `api_specific.thoughts_tokens` rather than `completion_tokens`, because Google bills them as output tokens but reports them separately. The cost estimate folds them into the effective output-token count so that the pricing table reflects the real billing cost.
 
-Gemini tool-use prompt tokens, reported as `toolUsePromptTokenCount`, are stored in `api_specific.tool_use_prompt_tokens` and counted in a computed `total_tokens`. The cost estimate bills them at the input-token rate, except in responses grounded with Google Search or Google Maps.
+Gemini tool-use prompt tokens, reported as `toolUsePromptTokenCount`, are stored in `api_specific.tool_use_prompt_tokens` and counted in a computed `total_tokens`. Tool-use prompt tokens are billed at the input rate for URL context, code execution, and File Search. They're excluded for Google Search and Google Maps grounding. For any other response, the cost estimate is left unset.
 
-Relay applies both rules to any response annotation that reports `thoughts_tokens` or `tool_use_prompt_tokens` through the `gemini_generate_content` `api_specific` variant.
+Relay applies both rules to any response annotation that reports `thoughts_tokens` or `tool_use_prompt_tokens` through the `gemini_generate_content` `api_specific` variant, using `grounding_metadata`, `urlContextMetadata`, and Gemini code execution parts to identify tool usage.
 
 Built-in codecs preserve only modeled provider-specific usage details under
 `api_specific`; other usage fields are dropped. For example, OpenAI Responses

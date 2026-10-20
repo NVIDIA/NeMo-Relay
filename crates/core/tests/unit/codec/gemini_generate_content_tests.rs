@@ -4963,7 +4963,8 @@ fn test_decode_response_bills_tool_use_prompt_tokens_at_the_input_rate() {
     let response = json!({
         "candidates": [{
             "content": {"role": "model", "parts": [{"text": "Hi"}]},
-            "finishReason": "STOP"
+            "finishReason": "STOP",
+            "urlContextMetadata": {"urlMetadata": [{"retrievedUrl": "https://example.test"}]}
         }],
         "modelVersion": "gemini-test",
         "usageMetadata": {
@@ -5024,6 +5025,86 @@ fn test_decode_response_leaves_search_grounded_tool_use_prompt_tokens_unbilled()
 }
 
 #[test]
+fn test_decode_response_bills_tool_use_prompt_tokens_by_tool_evidence() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let text = json!({"text": "Hi"});
+    let code = json!({"executableCode": {"language": "PYTHON", "code": "print(1)"}});
+    let code_result = json!({"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "1"}});
+    let url_context = json!({"urlMetadata": [{"retrievedUrl": "https://example.test"}]});
+    let file_search_chunk = json!({"retrievedContext": {"fileSearchStore": "fileSearchStores/1"}});
+    let vertex_search_chunk = json!({"retrievedContext": {"uri": "gs://bucket/doc"}});
+
+    for (parts, candidate_fields, expected_total) in [
+        (json!([code, code_result]), json!({}), Some(0.00005)),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"groundingChunks": [file_search_chunk]}}),
+            Some(0.00005),
+        ),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"imageSearchQueries": ["Rome skyline"]}}),
+            Some(0.00002),
+        ),
+        (
+            json!([text]),
+            json!({
+                "groundingMetadata": {"webSearchQueries": ["weather in Rome"]},
+                "urlContextMetadata": url_context
+            }),
+            None,
+        ),
+        (
+            json!([code, code_result]),
+            json!({"groundingMetadata": {"webSearchQueries": ["weather in Rome"]}}),
+            None,
+        ),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"groundingChunks": [vertex_search_chunk]}}),
+            None,
+        ),
+        (json!([text]), json!({}), None),
+    ] {
+        let mut candidate = json!({
+            "content": {"role": "model", "parts": parts},
+            "finishReason": "STOP"
+        });
+        candidate
+            .as_object_mut()
+            .unwrap()
+            .extend(candidate_fields.as_object().unwrap().clone());
+        let response = json!({
+            "candidates": [candidate],
+            "modelVersion": "gemini-test",
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "toolUsePromptTokenCount": 30,
+                "totalTokenCount": 45
+            }
+        });
+
+        let usage = GeminiGenerateContentCodec
+            .decode_response(&response)
+            .unwrap()
+            .usage
+            .unwrap();
+
+        let total = usage.cost.map(|cost| cost.total.unwrap());
+        match (total, expected_total) {
+            (Some(total), Some(expected)) => {
+                assert!((total - expected).abs() < 1e-12, "{response}: {total}");
+            }
+            (total, expected) => assert_eq!(total, expected, "{response}"),
+        }
+    }
+}
+
+#[test]
 fn test_decode_response_omits_cost_when_billed_input_tokens_overflow() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     let _reset_guard = ResetPricingResolverGuard;
@@ -5032,7 +5113,8 @@ fn test_decode_response_omits_cost_when_billed_input_tokens_overflow() {
     let response = json!({
         "candidates": [{
             "content": {"role": "model", "parts": [{"text": "Hi"}]},
-            "finishReason": "STOP"
+            "finishReason": "STOP",
+            "urlContextMetadata": {"urlMetadata": [{"retrievedUrl": "https://example.test"}]}
         }],
         "modelVersion": "gemini-test",
         "usageMetadata": {

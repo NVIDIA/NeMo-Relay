@@ -34,7 +34,7 @@ use super::response::{
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
 
-const GEMINI_PROVIDER: &str = "gemini";
+pub(crate) const GEMINI_PROVIDER: &str = "gemini";
 
 // ---------------------------------------------------------------------------
 // Public codec struct
@@ -1374,7 +1374,11 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
         let (usage, separate) = map_usage(
             raw.usage_metadata,
             model.as_deref(),
-            ToolUsePromptBilling::from_grounding_metadata(grounding_metadata.as_ref()),
+            ToolUsePromptBilling::from_tool_evidence(
+                grounding_metadata.as_ref(),
+                &extra,
+                message.as_ref(),
+            ),
         );
         let has_candidate_data = !extra.is_empty()
             || safety_ratings.is_some()

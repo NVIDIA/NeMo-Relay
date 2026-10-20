@@ -35,6 +35,13 @@ impl Drop for ClearPluginConfigurationGuard {
     }
 }
 
+fn url_context_extra() -> serde_json::Map<String, Json> {
+    serde_json::from_value(json!({
+        "urlContextMetadata": {"urlMetadata": [{"retrievedUrl": "https://example.test"}]}
+    }))
+    .unwrap()
+}
+
 /// Helper: build a fully-populated AnnotatedLlmResponse.
 fn full_response() -> AnnotatedLlmResponse {
     AnnotatedLlmResponse {
@@ -1515,7 +1522,7 @@ fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_as_input() {
         safety_ratings: None,
         grounding_metadata: None,
         citation_metadata: None,
-        extra: serde_json::Map::new(),
+        extra: url_context_extra(),
     });
     attach_estimated_cost_for_provider(&mut response, Some("configured"));
 
@@ -1527,7 +1534,7 @@ fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_as_input() {
 }
 
 #[test]
-fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_by_grounding_source() {
+fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_by_tool_evidence() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     let _reset_guard = ResetPricingResolverGuard;
     let catalog = pricing_catalog(json!([flat_pricing_entry(
@@ -1537,21 +1544,66 @@ fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_by_grounding_s
         2.0
     )]));
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+    let web_search = json!({"webSearchQueries": ["weather in Rome"]});
+    let code_execution = MessageContent::Parts(vec![ContentPart::ProviderNative {
+        provider: "gemini".into(),
+        kind: "executableCode".into(),
+        value: json!({"executableCode": {"language": "PYTHON", "code": "print(1)"}}),
+    }]);
+    let text = MessageContent::Text("Hello, world!".into());
 
-    for (grounding_metadata, expected_total) in [
-        (json!({"webSearchQueries": ["weather in Rome"]}), 0.00005),
+    for (grounding_metadata, extra, message, expected_total) in [
         (
-            json!({"groundingChunks": [{"maps": {"uri": "https://maps.example", "placeId": "places/1"}}]}),
-            0.00005,
+            Some(web_search.clone()),
+            serde_json::Map::new(),
+            text.clone(),
+            Some(0.00005),
         ),
-        (json!({"googleMapsWidgetContextToken": "token"}), 0.00005),
         (
-            json!({"groundingChunks": [{"web": {"uri": "https://example.test", "title": "Rome"}}]}),
-            0.00008,
+            Some(
+                json!({"groundingChunks": [{"maps": {"uri": "https://maps.example", "placeId": "places/1"}}]}),
+            ),
+            serde_json::Map::new(),
+            text.clone(),
+            Some(0.00005),
+        ),
+        (
+            Some(json!({"googleMapsWidgetContextToken": "token"})),
+            serde_json::Map::new(),
+            text.clone(),
+            Some(0.00005),
+        ),
+        (None, url_context_extra(), text.clone(), Some(0.00008)),
+        (
+            None,
+            serde_json::Map::new(),
+            code_execution.clone(),
+            Some(0.00008),
+        ),
+        (
+            Some(web_search.clone()),
+            url_context_extra(),
+            text.clone(),
+            None,
+        ),
+        (
+            Some(web_search),
+            serde_json::Map::new(),
+            code_execution,
+            None,
+        ),
+        (
+            Some(
+                json!({"groundingChunks": [{"web": {"uri": "https://example.test", "title": "Rome"}}]}),
+            ),
+            serde_json::Map::new(),
+            text,
+            None,
         ),
     ] {
         let mut response = full_response();
         response.model = Some("configured-model".into());
+        response.message = Some(message);
         let usage = response.usage.as_mut().unwrap();
         usage.cache_read_tokens = None;
         usage.cache_write_tokens = None;
@@ -1559,17 +1611,20 @@ fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_by_grounding_s
             thoughts_tokens: None,
             tool_use_prompt_tokens: Some(30),
             safety_ratings: None,
-            grounding_metadata: Some(grounding_metadata.clone()),
+            grounding_metadata,
             citation_metadata: None,
-            extra: serde_json::Map::new(),
+            extra,
         });
+        let case = format!("{:?} {:?}", response.api_specific, response.message);
         attach_estimated_cost_for_provider(&mut response, Some("configured"));
 
-        let total = response.usage.unwrap().cost.unwrap().total.unwrap();
-        assert!(
-            (total - expected_total).abs() < 1e-12,
-            "{grounding_metadata}: {total}"
-        );
+        let total = response.usage.unwrap().cost.map(|cost| cost.total.unwrap());
+        match (total, expected_total) {
+            (Some(total), Some(expected)) => {
+                assert!((total - expected).abs() < 1e-12, "{case}: {total}");
+            }
+            (total, expected) => assert_eq!(total, expected, "{case}"),
+        }
     }
 }
 
@@ -1594,7 +1649,7 @@ fn test_attach_estimated_cost_selects_rate_tier_from_reported_prompt_tokens() {
         safety_ratings: None,
         grounding_metadata: None,
         citation_metadata: None,
-        extra: serde_json::Map::new(),
+        extra: url_context_extra(),
     });
     attach_estimated_cost_for_provider(&mut response, Some("threshold-ai"));
 
@@ -1627,7 +1682,7 @@ fn test_attach_estimated_cost_omits_cost_when_billed_input_tokens_overflow() {
         safety_ratings: None,
         grounding_metadata: None,
         citation_metadata: None,
-        extra: serde_json::Map::new(),
+        extra: url_context_extra(),
     });
     attach_estimated_cost_for_provider(&mut response, Some("configured"));
 
