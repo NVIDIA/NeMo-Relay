@@ -3334,7 +3334,7 @@ impl AtifDispatcher {
                         exporter = "atif",
                         storage_index = *index,
                         trajectory_id = agent_uuid.to_string().as_str();
-                        "ATIF remote storage upload failed: {message}"
+                        "ATIF remote storage upload failed"
                     ),
                 }
                 self.record_runtime_failure(
