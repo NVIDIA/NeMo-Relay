@@ -50,13 +50,12 @@ class QuickstartVersionTests(unittest.TestCase):
             (root / "docs/getting-started/installation.mdx").write_text(
                 "uv add nemo-relay==0.10.0 # unrelated tool version 0.10.0\n"
             )
-            openclaw = folder / "openclaw.mdx"
-            openclaw.write_text(
-                "The path was verified with Relay `0.10.0`.\n"
-                "openclaw plugins install npm:nemo-relay-openclaw@0.10.0 --pin\n"
-            )
-            switchyard = folder / "switchyard.mdx"
-            switchyard.write_text("Switchyard host Relay 0.9.2\n")
+            python = folder / "python.mdx"
+            python.write_text("The path was verified with Relay `0.10.0`.\nuv add nemo-relay==0.10.0\n")
+            plugins = root / "docs/configure-plugins"
+            plugins.mkdir(parents=True)
+            switchyard = plugins / "switchyard.mdx"
+            switchyard.write_text("NEMO_RELAY_VERSION=0.9.2\n")
             integrations = root / "docs/supported-integrations"
             integrations.mkdir(parents=True)
             (integrations / "openclaw-plugin.mdx").write_text("npm install nemo-relay-openclaw@0.10.0\n")
@@ -72,9 +71,9 @@ class QuickstartVersionTests(unittest.TestCase):
             VERSIONS.check(root)
             self.assertIn("nemo-relay==0.11.0", (root / "docs/getting-started/installation.mdx").read_text())
             self.assertIn("unrelated tool version 0.10.0", (root / "docs/getting-started/installation.mdx").read_text())
-            self.assertIn("verified with Relay `0.10.0`", openclaw.read_text())
-            self.assertIn("nemo-relay-openclaw@0.11.0", openclaw.read_text())
-            self.assertIn("Relay 0.9.2", switchyard.read_text())
+            self.assertIn("verified with Relay `0.10.0`", python.read_text())
+            self.assertIn("nemo-relay==0.11.0", python.read_text())
+            self.assertIn("NEMO_RELAY_VERSION=0.9.2", switchyard.read_text())
             self.assertIn("nemo-relay-openclaw@0.11.0", (integrations / "openclaw-plugin.mdx").read_text())
             self.assertIn('version = "0.11.0"', (native / "build-and-package.mdx").read_text())
             self.assertIn('relay = ">=0.10.0,<1.0"', (native / "build-and-package.mdx").read_text())

@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-GUIDES = ("hermes", "claude-code", "codex", "pi", "openclaw")
+GUIDES = ("hermes", "claude-code", "codex", "pi")
 
 
 def events_for(guide: str) -> list[dict]:
@@ -43,7 +43,7 @@ def events_for(guide: str) -> list[dict]:
 
 class QuickstartJqTests(unittest.TestCase):
     def test_failed_agent_rerun_cannot_reuse_previous_artifacts(self):
-        for guide in ("hermes", "claude-code", "codex", "pi"):
+        for guide in GUIDES:
             source = (ROOT / "docs/getting-started/quick-start" / f"{guide}.mdx").read_text(encoding="utf-8")
             commands = re.finditer(
                 r"\{/\* quickstart-block[ \t]+([^\n]+?)[ \t]*\*/\}\n```bash\n(.*?)\n```",
@@ -66,24 +66,6 @@ class QuickstartJqTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((folder / "relay-check.txt").exists())
                 self.assertFalse((folder / "logs/events.jsonl").exists())
-
-    def test_switchyard_requires_the_configured_target(self):
-        source = (ROOT / "docs/getting-started/quick-start/switchyard.mdx").read_text(encoding="utf-8")
-        expression = re.findall(r"jq -se '([^']*)'", source)[0]
-        valid = {
-            "atof_version": "0.1",
-            "kind": "mark",
-            "name": "switchyard.routing.decision",
-            "data": {"selected_model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"},
-        }
-        wrong_target = {**valid, "data": {"selected_model": "unrelated-model"}}
-        cases = (([valid], 0), ([wrong_target], 1), ([], 1), ([{**valid, "name": "unrelated-mark"}], 1))
-        for binary in self.binaries:
-            for fixture, expected in cases:
-                with self.subTest(jq=binary, fixture=fixture):
-                    content = "".join(json.dumps(event) + "\n" for event in fixture)
-                    result = self.run_jq(binary, "-se", expression, content)
-                    self.assertEqual(result.returncode, expected, result.stderr)
 
     @classmethod
     def setUpClass(cls):

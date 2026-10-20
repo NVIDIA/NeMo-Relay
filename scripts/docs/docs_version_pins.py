@@ -1,11 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Keep copyable Relay install pins on the workspace version.
-
-Switchyard is excluded because its external native bundle is tested and pinned
-independently from Relay's normal release-version update.
-"""
+"""Keep copyable Relay install pins in installation and quickstart docs on the workspace version."""
 
 from __future__ import annotations
 
@@ -57,7 +53,7 @@ def pages(root: Path) -> list[Path]:
     quickstarts = root / "docs/getting-started/quick-start"
     return [
         root / "docs/getting-started/installation.mdx",
-        *(path for path in sorted(quickstarts.glob("*.mdx")) if path.stem not in {"index", "switchyard"}),
+        *(path for path in sorted(quickstarts.glob("*.mdx")) if path.stem != "index"),
         root / "docs/supported-integrations/openclaw-plugin.mdx",
         root / "docs/build-plugins/native/build-and-package.mdx",
         root / "docs/build-plugins/workers/rust.mdx",
