@@ -82,13 +82,16 @@ pub enum DiagnosticDomain {
     Logging,
 }
 
-/// Mechanism within the plugin catalogue.
+/// Semantic family of related plugin diagnostic codes.
+///
+/// Family is derived from a code's catalogue ownership. Execution mechanism is
+/// separately supplied by producers through [`PluginExecution`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum PluginDiagnosticFamily {
-    /// Mechanism-independent plugin evidence.
+    /// Shared plugin-operation codes applicable across execution mechanisms.
     Common,
 }
 
@@ -288,7 +291,7 @@ pub enum PluginFailureCode {
 }
 
 impl PluginFailureCode {
-    /// Plugin mechanism selected by this code.
+    /// Plugin catalogue family selected by this code.
     #[must_use]
     pub const fn family(self) -> PluginDiagnosticFamily {
         match self {
@@ -420,22 +423,39 @@ impl BuiltinDiagnosticCode {
             Self::Notice(code) => code.canonical_name(),
         }
     }
-    /// Parent domain; no independent parent value can conflict with the code.
+    /// Parent domain derived from the individual catalogue entry.
+    ///
+    /// Outcome does not determine ownership. Match each success/notice explicitly
+    /// so adding another entry requires choosing its owning domain.
     #[must_use]
     pub const fn domain(self) -> DiagnosticDomain {
         match self {
             Self::Failure(code) => code.domain(),
-            Self::Success(_) => DiagnosticDomain::Logging,
-            Self::Notice(_) => DiagnosticDomain::Plugin,
+            Self::Success(
+                SuccessCode::LoggingInitialized
+                | SuccessCode::LoggingShutdownCompleted
+                | SuccessCode::SinkInitialized,
+            ) => DiagnosticDomain::Logging,
+            Self::Notice(NoticeCode::ConfigurationInherited) => DiagnosticDomain::Plugin,
         }
     }
-    /// Plugin mechanism when the code itself describes one.
+    /// Plugin catalogue family, independent of the execution mechanism.
+    ///
+    /// Each success/notice explicitly selects a family or None; future plugin
+    /// successes must choose their family when their producer is integrated.
     #[must_use]
     pub const fn plugin_family(self) -> Option<PluginDiagnosticFamily> {
         match self {
             Self::Failure(FailureCode::Plugin(code)) => Some(code.family()),
-            Self::Notice(_) => Some(PluginDiagnosticFamily::Common),
-            _ => None,
+            Self::Notice(NoticeCode::ConfigurationInherited) => {
+                Some(PluginDiagnosticFamily::Common)
+            }
+            Self::Failure(FailureCode::Logging(_))
+            | Self::Success(
+                SuccessCode::LoggingInitialized
+                | SuccessCode::LoggingShutdownCompleted
+                | SuccessCode::SinkInitialized,
+            ) => None,
         }
     }
     /// Permitted causes; success and notice codes accept no failure class.

@@ -167,6 +167,25 @@ therefore emits `plugin.configuration_invalid` with the `unknown` failure class.
 It never infers a cause from error text. A producer with structured validation
 evidence can explicitly author that code with `invalid_input`.
 
+### Catalogue Families and Extension Points
+
+`DiagnosticDomain` identifies the owning subsystem. `PluginDiagnosticFamily`
+groups related plugin codes within that domain; `Common` covers shared plugin
+operations across execution mechanisms. `PluginExecution` separately describes
+the observed execution mechanism when a producer can establish it.
+
+Domain and family come from the individual catalogue entry. Success, failure,
+and notice describe the observation kind and do not determine its owner. Today,
+the three success codes belong to Logging, and the inheritance notice belongs
+to Plugin/Common. The selector methods match those entries explicitly so adding
+a new success or notice requires an intentional domain and family mapping.
+
+When integrating a producer that needs a new code, update its canonical name,
+domain, optional plugin family, catalogue listing, and selector tests together.
+A future plugin success must select Plugin ownership and its applicable family;
+it does not inherit Logging ownership from its observation kind. Add those codes
+with their production recording sites in the owning integration phase.
+
 ### Plugin Producer Boundaries
 
 Phase one owns the shared diagnostics foundation and generic host configuration
