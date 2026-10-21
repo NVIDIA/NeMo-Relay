@@ -302,40 +302,38 @@ impl Drop for SnapshotLease {
     }
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename = "ComponentIdentity")]
 struct IdentityView<'a> {
-    page: &'a PageWorkspace,
-    identity: &'a PageIdentity,
+    key: &'a str,
+    instance_id: Uuid,
+    generation: DiagnosticNumber,
 }
-impl Serialize for IdentityView<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_struct("ComponentIdentity", 3)?;
-        out.serialize_field("key", self.page.string(self.identity.key))?;
-        out.serialize_field("instance_id", &self.identity.instance_id)?;
-        out.serialize_field("generation", &self.identity.generation)?;
-        out.end()
+impl<'a> IdentityView<'a> {
+    fn new(page: &'a PageWorkspace, identity: &PageIdentity) -> Self {
+        Self {
+            key: page.string(identity.key),
+            instance_id: identity.instance_id,
+            generation: identity.generation,
+        }
     }
 }
+#[derive(serde::Serialize)]
+#[serde(rename = "ComponentOwnership")]
 struct OwnershipView<'a> {
-    page: &'a PageWorkspace,
-    ownership: &'a PageOwnership,
+    subscriber_instance_id: Option<Uuid>,
+    plugin_instance_id: Option<Uuid>,
+    configuration_id: Option<&'a str>,
+    responsibility: Option<&'a str>,
 }
-impl Serialize for OwnershipView<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_struct("ComponentOwnership", 4)?;
-        out.serialize_field(
-            "subscriber_instance_id",
-            &self.ownership.subscriber_instance_id,
-        )?;
-        out.serialize_field("plugin_instance_id", &self.ownership.plugin_instance_id)?;
-        out.serialize_field(
-            "configuration_id",
-            &self.ownership.configuration_id.map(|v| self.page.string(v)),
-        )?;
-        out.serialize_field(
-            "responsibility",
-            &self.ownership.responsibility.map(|v| self.page.string(v)),
-        )?;
-        out.end()
+impl<'a> OwnershipView<'a> {
+    fn new(page: &'a PageWorkspace, ownership: &PageOwnership) -> Self {
+        Self {
+            subscriber_instance_id: ownership.subscriber_instance_id,
+            plugin_instance_id: ownership.plugin_instance_id,
+            configuration_id: ownership.configuration_id.map(|value| page.string(value)),
+            responsibility: ownership.responsibility.map(|value| page.string(value)),
+        }
     }
 }
 struct CountersView<'a> {
@@ -351,25 +349,25 @@ impl Serialize for CountersView<'_> {
             if self.exceeded.is_some_and(Cell::get) {
                 break;
             }
-            out.serialize_element(&CounterView {
-                page: self.page,
-                counter,
-            })?;
+            out.serialize_element(&CounterView::new(self.page, counter))?;
         }
         out.end()
     }
 }
+#[derive(serde::Serialize)]
+#[serde(rename = "DiagnosticCounter")]
 struct CounterView<'a> {
-    page: &'a PageWorkspace,
-    counter: &'a PageCounter,
+    code: &'a str,
+    occurrences: DiagnosticCount,
+    last_observed_at: ObservationTime,
 }
-impl Serialize for CounterView<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_struct("DiagnosticCounter", 3)?;
-        out.serialize_field("code", self.page.string(self.counter.code))?;
-        out.serialize_field("occurrences", &self.counter.occurrences)?;
-        out.serialize_field("last_observed_at", &self.counter.last_observed_at)?;
-        out.end()
+impl<'a> CounterView<'a> {
+    fn new(page: &'a PageWorkspace, counter: &PageCounter) -> Self {
+        Self {
+            code: page.string(counter.code),
+            occurrences: counter.occurrences,
+            last_observed_at: counter.last_observed_at,
+        }
     }
 }
 struct WindowsView<'a> {
@@ -446,23 +444,11 @@ impl Serialize for ComponentView<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let row = self.component;
         let mut out = s.serialize_struct("ComponentSnapshot", 7)?;
-        out.serialize_field(
-            "identity",
-            &IdentityView {
-                page: self.page,
-                identity: &row.identity,
-            },
-        )?;
+        out.serialize_field("identity", &IdentityView::new(self.page, &row.identity))?;
         out.serialize_field("registered_at", &row.registered_at)?;
         out.serialize_field("closed_at", &row.closed_at)?;
         out.serialize_field("lifetime", &row.lifetime)?;
-        out.serialize_field(
-            "since_refresh",
-            &RefreshView {
-                page: self.page,
-                component: row,
-            },
-        )?;
+        out.serialize_field("since_refresh", &RefreshView::new(self.page, row))?;
         out.serialize_field(
             "counters",
             &CountersView {
@@ -484,26 +470,24 @@ impl Serialize for ComponentView<'_> {
         out.end()
     }
 }
+#[derive(serde::Serialize)]
+#[serde(rename = "DiagnosticRefreshSummary")]
 struct RefreshView<'a> {
-    page: &'a PageWorkspace,
-    component: &'a PageComponent,
+    generation: DiagnosticNumber,
+    started_at: ObservationTime,
+    elapsed_millis: DiagnosticNumber,
+    ownership: OwnershipView<'a>,
+    totals: DiagnosticTotals,
 }
-impl Serialize for RefreshView<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let row = self.component;
-        let mut out = s.serialize_struct("DiagnosticRefreshSummary", 5)?;
-        out.serialize_field("generation", &row.refresh_generation)?;
-        out.serialize_field("started_at", &row.refresh_started_at)?;
-        out.serialize_field("elapsed_millis", &row.refresh_elapsed_millis)?;
-        out.serialize_field(
-            "ownership",
-            &OwnershipView {
-                page: self.page,
-                ownership: &row.ownership,
-            },
-        )?;
-        out.serialize_field("totals", &row.refresh_totals)?;
-        out.end()
+impl<'a> RefreshView<'a> {
+    fn new(page: &'a PageWorkspace, component: &PageComponent) -> Self {
+        Self {
+            generation: component.refresh_generation,
+            started_at: component.refresh_started_at,
+            elapsed_millis: component.refresh_elapsed_millis,
+            ownership: OwnershipView::new(page, &component.ownership),
+            totals: component.refresh_totals,
+        }
     }
 }
 struct EventsView<'a> {
@@ -536,27 +520,9 @@ impl Serialize for EventView<'_> {
         let mut out = s.serialize_struct("DiagnosticEvent", 11)?;
         out.serialize_field("sequence", &e.sequence)?;
         out.serialize_field("observed_at", &e.observed_at)?;
-        out.serialize_field(
-            "component",
-            &IdentityView {
-                page: self.page,
-                identity: &e.component,
-            },
-        )?;
-        out.serialize_field(
-            "origin",
-            &OriginView {
-                page: self.page,
-                event: e,
-            },
-        )?;
-        out.serialize_field(
-            "classification",
-            &ClassificationView {
-                page: self.page,
-                event: e,
-            },
-        )?;
+        out.serialize_field("component", &IdentityView::new(self.page, &e.component))?;
+        out.serialize_field("origin", &OriginView::new(self.page, e))?;
+        out.serialize_field("classification", &ClassificationView::new(self.page, e))?;
         out.serialize_field("context", &e.context)?;
         out.serialize_field("severity", &e.severity)?;
         out.serialize_field("outcome", &e.outcome)?;
@@ -568,77 +534,58 @@ impl Serialize for EventView<'_> {
             }),
         )?;
         out.serialize_field("count", &e.count)?;
-        out.serialize_field(
-            "correlation",
-            &CorrelationView {
-                page: self.page,
-                event: e,
-            },
-        )?;
+        out.serialize_field("correlation", &CorrelationView::new(self.page, e))?;
         out.end()
     }
 }
+#[derive(serde::Serialize)]
+#[serde(rename = "DiagnosticOrigin")]
 struct OriginView<'a> {
-    page: &'a PageWorkspace,
-    event: &'a PageEvent,
+    refresh_generation: DiagnosticNumber,
+    ownership: OwnershipView<'a>,
 }
-impl Serialize for OriginView<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_struct("DiagnosticOrigin", 2)?;
-        out.serialize_field("refresh_generation", &self.event.origin_generation)?;
-        out.serialize_field(
-            "ownership",
-            &OwnershipView {
-                page: self.page,
-                ownership: &self.event.ownership,
-            },
-        )?;
-        out.end()
+impl<'a> OriginView<'a> {
+    fn new(page: &'a PageWorkspace, event: &PageEvent) -> Self {
+        Self {
+            refresh_generation: event.origin_generation,
+            ownership: OwnershipView::new(page, &event.ownership),
+        }
     }
 }
+#[derive(serde::Serialize)]
+#[serde(rename = "Classification")]
 struct ClassificationView<'a> {
-    page: &'a PageWorkspace,
-    event: &'a PageEvent,
+    canonical_code: &'a str,
+    failure_class: Option<&'a str>,
 }
-impl Serialize for ClassificationView<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_struct("Classification", 2)?;
-        out.serialize_field("canonical_code", self.page.string(self.event.code))?;
-        out.serialize_field(
-            "failure_class",
-            &self.event.failure_class.map(|v| self.page.string(v)),
-        )?;
-        out.end()
+impl<'a> ClassificationView<'a> {
+    fn new(page: &'a PageWorkspace, event: &PageEvent) -> Self {
+        Self {
+            canonical_code: page.string(event.code),
+            failure_class: event.failure_class.map(|value| page.string(value)),
+        }
     }
 }
+#[derive(serde::Serialize)]
+#[serde(rename = "DiagnosticDetail")]
 struct DetailView<'a> {
     message: &'a str,
     truncated: bool,
 }
-impl Serialize for DetailView<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_struct("DiagnosticDetail", 2)?;
-        out.serialize_field("message", self.message)?;
-        out.serialize_field("truncated", &self.truncated)?;
-        out.end()
-    }
-}
+#[derive(serde::Serialize)]
+#[serde(rename = "DiagnosticCorrelation")]
 struct CorrelationView<'a> {
-    page: &'a PageWorkspace,
-    event: &'a PageEvent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<&'a str>,
 }
-impl Serialize for CorrelationView<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let len = usize::from(self.event.session_id.is_some())
-            + usize::from(self.event.request_id.is_some());
-        let mut out = s.serialize_struct("DiagnosticCorrelation", len)?;
-        if let Some(id) = self.event.session_id {
-            out.serialize_field("session_id", self.page.string(id))?;
+impl<'a> CorrelationView<'a> {
+    fn new(page: &'a PageWorkspace, event: &PageEvent) -> Self {
+        Self {
+            session_id: event.session_id.map(|value| page.string(value)),
+            request_id: event.request_id.map(|value| page.string(value)),
         }
-        if let Some(id) = self.event.request_id {
-            out.serialize_field("request_id", self.page.string(id))?;
-        }
-        out.end()
     }
 }
 
