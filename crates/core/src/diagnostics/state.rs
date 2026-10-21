@@ -186,7 +186,6 @@ pub(super) struct CounterSlot {
 }
 #[derive(Clone, Copy)]
 pub(super) struct WindowSlot {
-    pub component: ComponentHandle,
     pub interval: Option<u64>,
     pub successes: DiagnosticCount,
     pub failures: DiagnosticCount,
@@ -568,13 +567,8 @@ impl State {
             debug_assert_eq!(counter.component, handle);
             next = counter.next;
         }
-        for bucket in &mut self.windows {
-            if bucket
-                .as_ref()
-                .is_some_and(|value| value.component == handle)
-            {
-                *bucket = None;
-            }
+        if let Some(window) = component.window {
+            self.windows[window.start..window.start + window.len].fill(None);
         }
         for slot in &mut self.extensions {
             if slot.as_ref().is_some_and(|value| value.component == handle)

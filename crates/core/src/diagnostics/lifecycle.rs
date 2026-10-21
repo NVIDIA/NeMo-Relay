@@ -183,7 +183,6 @@ pub(super) fn register_component(
     if let Some(window) = window {
         for index in window.start..window.start + window.len {
             state.windows[index] = Some(WindowSlot {
-                component: handle,
                 interval: None,
                 successes: DiagnosticCount::default(),
                 failures: DiagnosticCount::default(),
