@@ -58,3 +58,29 @@ fn composes_anthropic_paths_without_openai_normalization() {
         "https://api.anthropic.com/v1/messages"
     );
 }
+
+#[test]
+fn model_catalog_provider_uses_protocol_headers_not_key_shapes() {
+    use axum::http::{HeaderMap, HeaderValue};
+
+    let mut headers = HeaderMap::new();
+    headers.insert("x-api-key", HeaderValue::from_static("sk-ant-looking-key"));
+    for path in ["/models", "/v1/models"] {
+        assert_eq!(
+            PublicRoute::from_request(path, &headers),
+            Some(PublicRoute::Provider(ProviderRoute::OpenAi))
+        );
+        for protocol_header in ["anthropic-version", "anthropic-beta"] {
+            let mut anthropic = headers.clone();
+            anthropic.insert(protocol_header, HeaderValue::from_static("test"));
+            assert_eq!(
+                PublicRoute::from_request(path, &anthropic),
+                Some(PublicRoute::Provider(ProviderRoute::Anthropic))
+            );
+            assert_eq!(
+                PublicRoute::from_request("/v1/responses", &anthropic),
+                Some(PublicRoute::Provider(ProviderRoute::OpenAi))
+            );
+        }
+    }
+}
