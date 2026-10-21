@@ -890,3 +890,29 @@ fn origin_generation_query_is_lossless_without_a_historical_summary_selector() {
         query
     );
 }
+
+#[cfg(feature = "schema")]
+#[test]
+fn snapshot_schema_version_matches_decoder_and_numeric_wire_notation() {
+    let schema = serde_json::to_value(schemars::schema_for!(DiagnosticSnapshot)).unwrap();
+    let version = &schema["properties"]["schema_version"];
+    assert_eq!(version["type"], json!("integer"));
+    assert_eq!(version["enum"], json!([DIAGNOSTIC_SCHEMA_VERSION]));
+    for candidate in [
+        json!(0),
+        json!(1),
+        json!(2),
+        json!(u32::MAX),
+        json!("1"),
+        json!(null),
+    ] {
+        let mut wire = serde_json::to_value(snapshot()).unwrap();
+        wire["schema_version"] = candidate.clone();
+        let schema_accepts = version["enum"].as_array().unwrap().contains(&candidate);
+        assert_eq!(
+            serde_json::from_value::<DiagnosticSnapshot>(wire).is_ok(),
+            schema_accepts,
+            "schema and decoder disagree for {candidate}",
+        );
+    }
+}

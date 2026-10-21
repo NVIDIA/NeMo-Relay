@@ -727,6 +727,7 @@ pub struct DiagnosticQuery {
 pub struct DiagnosticSnapshot {
     /// Supported envelope version, independent of the catalogue version.
     #[serde(deserialize_with = "deserialize_schema_version")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "schema_version_schema"))]
     pub schema_version: u32,
     /// Stable catalogue revision; unknown names stay opaque in this envelope.
     pub catalogue_version: u32,
@@ -755,4 +756,14 @@ fn deserialize_schema_version<'de, D: Deserializer<'de>>(deserializer: D) -> Res
         return Err(de::Error::custom("unsupported diagnostic snapshot schema"));
     }
     Ok(version)
+}
+
+#[cfg(feature = "schema")]
+fn schema_version_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    let mut schema: schemars::schema::SchemaObject =
+        <u32 as schemars::JsonSchema>::json_schema(generator).into();
+    schema.enum_values = Some(vec![serde_json::json!(DIAGNOSTIC_SCHEMA_VERSION)]);
+    schema.into()
 }
