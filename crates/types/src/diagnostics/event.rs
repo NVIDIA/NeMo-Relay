@@ -1,0 +1,187 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Classification, optional context, and diagnostic evidence.
+
+use super::{
+    BuiltinDiagnosticCode, ClassificationError, ComponentIdentity, DiagnosticNumber,
+    DiagnosticOrigin, FailureClass, FailureCode, NoticeCode, ObservationTime, SuccessCode,
+};
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+
+/// Severity of evidence, independent of an operation's outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticSeverity {
+    /// Detailed instrumentation useful for tracing execution.
+    Trace,
+    /// Developer-oriented evidence.
+    Debug,
+    /// Informational observation.
+    Info,
+    /// An unexpected observation.
+    Warning,
+    /// A failed operation.
+    Error,
+}
+
+/// Observed operation outcome; severity does not imply this value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticOutcome {
+    /// No operation outcome was observed.
+    #[default]
+    Unknown,
+    /// The observed operation succeeded.
+    Success,
+    /// The observed operation failed.
+    Failure,
+}
+
+/// Optional safe correlation identifiers, excluded from aggregation keys.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DiagnosticCorrelation<'a> {
+    /// Trajectory session associated with the observation, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Cow<'a, str>>,
+    /// Request associated with the observation, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Cow<'a, str>>,
+}
+
+/// Shared classification payload for producers, projections, and decoded evidence.
+///
+/// Typed constructors validate built-in code/cause pairs and borrow their stable
+/// names. Decoded future names remain opaque. Core validates recording input and
+/// resolves admitted identifiers before changing counters or retaining evidence.
+/// Transport adapters must bound received names before materializing owned data.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Classification {
+    /// Stable built-in name or registered namespaced extension name.
+    pub canonical_code: Cow<'static, str>,
+    /// Cause name; absent for successful observations and notices.
+    pub failure_class: Option<Cow<'static, str>>,
+}
+
+impl Classification {
+    /// Validate the required cause and the catalogue entry's permitted classes.
+    pub fn new(
+        code: BuiltinDiagnosticCode,
+        failure_class: Option<FailureClass>,
+    ) -> Result<Self, ClassificationError> {
+        if !code.allows_class(failure_class) {
+            return Err(ClassificationError);
+        }
+        Ok(Self {
+            canonical_code: Cow::Borrowed(code.canonical_name()),
+            failure_class: failure_class.map(|class| Cow::Borrowed(class.as_str())),
+        })
+    }
+    /// Classify a failure using an explicitly supported cause.
+    pub fn failure(
+        code: FailureCode,
+        failure_class: FailureClass,
+    ) -> Result<Self, ClassificationError> {
+        Self::new(BuiltinDiagnosticCode::Failure(code), Some(failure_class))
+    }
+    /// Classify an observed success, without clearing previous failures.
+    #[must_use]
+    pub const fn success(code: SuccessCode) -> Self {
+        Self {
+            canonical_code: Cow::Borrowed(code.canonical_name()),
+            failure_class: None,
+        }
+    }
+    /// Classify an observed notice, without inventing a failure cause.
+    #[must_use]
+    pub const fn notice(code: NoticeCode) -> Self {
+        Self {
+            canonical_code: Cow::Borrowed(code.canonical_name()),
+            failure_class: None,
+        }
+    }
+    /// Borrow the canonical name, including an opaque future name.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.canonical_code
+    }
+    /// Borrow the observed cause name without interpreting unfamiliar values.
+    #[must_use]
+    pub fn failure_class(&self) -> Option<&str> {
+        self.failure_class.as_deref()
+    }
+}
+
+/// Safe optional recent evidence, independent of the accepted numeric summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DiagnosticDetail {
+    /// Producer-approved text, copied only within admitted byte capacity.
+    pub message: String,
+    /// Whether the original text exceeded its retained byte allowance.
+    pub truncated: bool,
+}
+
+/// Shared plugin-operation facts for producers, projections, and decoded evidence.
+///
+/// Known producer values borrow canonical static names; decoded values own their
+/// strings, including future names. Core validates and encodes recording input
+/// into private fixed-size storage. Missing values remain distinct from names
+/// unrecognized by a reader, and context never establishes counter dimensions.
+/// Phase-one activation recording supplies only `phase = "activation"` and leaves
+/// execution unset. Other producer integrations remain deferred.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PluginObservationContext {
+    /// Observed execution name, when known; never inferred from a code.
+    pub execution: Option<Cow<'static, str>>,
+    /// Observed lifecycle phase or policy-gate context, when known.
+    pub phase: Option<Cow<'static, str>>,
+}
+
+/// One recent observation with its actual class and original configuration attribution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DiagnosticEvent {
+    /// Unique source-local update sequence; it is not an occurrence counter.
+    pub sequence: DiagnosticNumber,
+    /// Source observation time, preserved through projections.
+    pub observed_at: ObservationTime,
+    /// Registration that owned the original observation.
+    pub component: ComponentIdentity,
+    /// Original configuration attribution, preserved through component refresh.
+    pub origin: DiagnosticOrigin,
+    /// Canonical event classification; never reconstructed from a latest message.
+    pub classification: Classification,
+    /// Bounded plugin-operation wire facts, excluded from aggregation keys.
+    #[serde(default)]
+    pub context: PluginObservationContext,
+    /// Evidence severity, independent of its observed operation outcome.
+    pub severity: DiagnosticSeverity,
+    /// Explicit observed operation outcome.
+    pub outcome: DiagnosticOutcome,
+    /// Bounded optional evidence; absence does not imply a missing counter.
+    pub detail: Option<DiagnosticDetail>,
+    /// Input occurrence delta represented by this recording call.
+    pub count: DiagnosticNumber,
+    /// Safe correlation, excluded from aggregation identity.
+    pub correlation: DiagnosticCorrelation<'static>,
+}
+
+impl DiagnosticEvent {
+    /// Borrow the canonical code without allocating a second representation.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.classification.canonical_code
+    }
+    /// Borrow retained detail, when available.
+    #[must_use]
+    pub fn message(&self) -> Option<&str> {
+        self.detail.as_ref().map(|detail| detail.message.as_str())
+    }
+}
