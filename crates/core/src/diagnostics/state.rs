@@ -219,18 +219,13 @@ impl TryFrom<&PluginObservationContext> for StoredPluginContext {
         Ok(Self {
             execution: value
                 .execution
-                .as_deref()
-                .map(|name| {
-                    PluginExecution::from_canonical_name(name)
-                        .ok_or(DiagnosticError::InvalidContext)
-                })
+                .as_ref()
+                .map(|name| name.known().ok_or(DiagnosticError::InvalidContext))
                 .transpose()?,
             phase: value
                 .phase
-                .as_deref()
-                .map(|name| {
-                    PluginPhase::from_canonical_name(name).ok_or(DiagnosticError::InvalidContext)
-                })
+                .as_ref()
+                .map(|name| name.known().ok_or(DiagnosticError::InvalidContext))
                 .transpose()?,
         })
     }

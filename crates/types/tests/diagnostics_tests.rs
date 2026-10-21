@@ -618,10 +618,21 @@ fn future_plugin_context_names_survive_complete_snapshot_round_trips() {
         });
         let decoded: DiagnosticSnapshot = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(
-            decoded.events[0].context.execution.as_deref(),
+            decoded.events[0]
+                .context
+                .execution
+                .as_ref()
+                .map(PluginExecutionName::as_str),
             Some(execution_name)
         );
-        assert_eq!(decoded.events[0].context.phase.as_deref(), Some(phase_name));
+        assert_eq!(
+            decoded.events[0]
+                .context
+                .phase
+                .as_ref()
+                .map(PluginPhaseName::as_str),
+            Some(phase_name)
+        );
         assert!(matches!(
             decoded.events[0]
                 .context

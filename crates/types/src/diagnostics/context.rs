@@ -38,12 +38,6 @@ impl From<PluginExecution> for PluginExecutionName {
         Self(Cow::Borrowed(value.as_str()))
     }
 }
-impl std::ops::Deref for PluginExecutionName {
-    type Target = str;
-    fn deref(&self) -> &str {
-        self.as_str()
-    }
-}
 
 /// A plugin lifecycle phase name, preserving values unknown to this reader.
 /// Typed conversion accepts only the corresponding catalogue enum.
@@ -74,12 +68,6 @@ impl PluginPhaseName {
 impl From<PluginPhase> for PluginPhaseName {
     fn from(value: PluginPhase) -> Self {
         Self(Cow::Borrowed(value.as_str()))
-    }
-}
-impl std::ops::Deref for PluginPhaseName {
-    type Target = str;
-    fn deref(&self) -> &str {
-        self.as_str()
     }
 }
 
