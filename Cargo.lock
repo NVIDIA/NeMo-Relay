@@ -2038,6 +2038,7 @@ name = "nemo-relay-node"
 version = "0.11.0"
 dependencies = [
  "chrono",
+ "log",
  "napi",
  "napi-build",
  "napi-derive",
