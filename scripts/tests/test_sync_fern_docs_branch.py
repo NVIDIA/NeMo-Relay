@@ -71,6 +71,26 @@ class DocsRetentionTests(unittest.TestCase):
         self.publish("0.10.0", "0.10.1-rc.1")
         self.assert_layout(["v0.10.1"], None)
 
+    def test_repository_redirects_survive_release_retention_and_dev_sync(self) -> None:
+        """Keep legacy redirects usable after their original snapshots expire."""
+        config = SYNC.read_yaml(Path(__file__).resolve().parents[2] / "fern" / "docs.yml")
+        SYNC.write_yaml(self.source / "fern" / "docs.yml", config)
+        SYNC.sync_dev(self.source, self.target)
+        self.publish("0.5.0", "0.6.0", "0.7.3", "0.8.0", "0.9.0", "0.10.0", "0.11.0", "0.12.0")
+        for sync_dev in (False, True):
+            if sync_dev:
+                SYNC.sync_dev(self.source, self.target)
+            self.assert_layout(["v0.12.0", "v0.11.0", "v0.10.0", "v0.9.0", "v0.8.0"], "v0.12.0")
+            docs = SYNC.read_yaml(self.target / "fern" / "docs.yml")
+            self.assertEqual(docs["redirects"], config["redirects"])
+            slugs = {entry["slug"] for entry in docs["products"][0]["versions"]}
+            for redirect in docs["redirects"]:
+                destination = redirect["destination"].removeprefix("/nemo/relay/")
+                version = destination.split("/", 1)[0]
+                if SYNC.SNAPSHOT_RE.fullmatch(version) or version in {"dev", "latest"}:
+                    with self.subTest(sync_dev=sync_dev, source=redirect["source"]):
+                        self.assertIn(version, slugs, redirect["destination"])
+
     def test_dev_sync_prunes_existing_layout_and_orphaned_snapshots(self) -> None:
         # Assemble the legacy layout, which retained every patch and minor.
         fern = self.target / "fern"
