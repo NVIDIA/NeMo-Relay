@@ -4,6 +4,7 @@
 //! Leased query materialization. Copied pages and serialized output use reserved
 //! workspaces; owned DTO decoding is an explicit caller-owned operation.
 
+use std::cell::Cell;
 use std::collections::TryReserveError;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
@@ -34,7 +35,6 @@ struct PageOwnership {
 }
 struct PageComponent {
     source_position: usize,
-    text_start: usize,
     identity: PageIdentity,
     ownership: PageOwnership,
     registered_at: DateTime<Utc>,
@@ -63,7 +63,6 @@ struct PageWindow {
 }
 struct PageEvent {
     source_position: usize,
-    text_start: usize,
     sequence: DiagnosticNumber,
     observed_at: DateTime<Utc>,
     component: PageIdentity,
@@ -326,6 +325,7 @@ impl Serialize for OwnershipView<'_> {
     }
 }
 struct CountersView<'a> {
+    exceeded: Option<&'a Cell<bool>>,
     page: &'a PageWorkspace,
     start: usize,
     len: usize,
@@ -334,6 +334,9 @@ impl Serialize for CountersView<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut out = s.serialize_seq(Some(self.len))?;
         for counter in &self.page.counters[self.start..self.start + self.len] {
+            if self.exceeded.is_some_and(Cell::get) {
+                break;
+            }
             out.serialize_element(&CounterView {
                 page: self.page,
                 counter,
@@ -356,6 +359,7 @@ impl Serialize for CounterView<'_> {
     }
 }
 struct WindowsView<'a> {
+    exceeded: Option<&'a Cell<bool>>,
     page: &'a PageWorkspace,
     start: usize,
     len: usize,
@@ -364,7 +368,11 @@ impl Serialize for WindowsView<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut out = s.serialize_seq(Some(self.len))?;
         for window in &self.page.windows[self.start..self.start + self.len] {
+            if self.exceeded.is_some_and(Cell::get) {
+                break;
+            }
             out.serialize_element(&WindowView {
+                exceeded: self.exceeded,
                 page: self.page,
                 window,
             })?;
@@ -373,6 +381,7 @@ impl Serialize for WindowsView<'_> {
     }
 }
 struct WindowView<'a> {
+    exceeded: Option<&'a Cell<bool>>,
     page: &'a PageWorkspace,
     window: &'a PageWindow,
 }
@@ -383,21 +392,30 @@ impl Serialize for WindowView<'_> {
         out.serialize_field("bucket_capacity", &self.window.bucket_capacity)?;
         out.serialize_field(
             "buckets",
-            &self.page.buckets
-                [self.window.bucket_start..self.window.bucket_start + self.window.bucket_len],
+            &SizingRows {
+                rows: &self.page.buckets
+                    [self.window.bucket_start..self.window.bucket_start + self.window.bucket_len],
+                exceeded: self.exceeded,
+            },
         )?;
         out.serialize_field("coverage", &self.window.coverage)?;
         out.end()
     }
 }
 struct ComponentsView<'a> {
+    exceeded: Option<&'a Cell<bool>>,
     page: &'a PageWorkspace,
+    rows: &'a [PageComponent],
 }
 impl Serialize for ComponentsView<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_seq(Some(self.page.components.len()))?;
-        for component in &self.page.components {
+        let mut out = s.serialize_seq(Some(self.rows.len()))?;
+        for component in self.rows {
+            if self.exceeded.is_some_and(Cell::get) {
+                break;
+            }
             out.serialize_element(&ComponentView {
+                exceeded: self.exceeded,
                 page: self.page,
                 component,
             })?;
@@ -406,6 +424,7 @@ impl Serialize for ComponentsView<'_> {
     }
 }
 struct ComponentView<'a> {
+    exceeded: Option<&'a Cell<bool>>,
     page: &'a PageWorkspace,
     component: &'a PageComponent,
 }
@@ -433,6 +452,7 @@ impl Serialize for ComponentView<'_> {
         out.serialize_field(
             "counters",
             &CountersView {
+                exceeded: self.exceeded,
                 page: self.page,
                 start: row.counter_start,
                 len: row.counter_len,
@@ -441,6 +461,7 @@ impl Serialize for ComponentView<'_> {
         out.serialize_field(
             "windows",
             &WindowsView {
+                exceeded: self.exceeded,
                 page: self.page,
                 start: row.window_start,
                 len: row.window_len,
@@ -472,12 +493,17 @@ impl Serialize for RefreshView<'_> {
     }
 }
 struct EventsView<'a> {
+    exceeded: Option<&'a Cell<bool>>,
     page: &'a PageWorkspace,
+    rows: &'a [PageEvent],
 }
 impl Serialize for EventsView<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_seq(Some(self.page.events.len()))?;
-        for event in &self.page.events {
+        let mut out = s.serialize_seq(Some(self.rows.len()))?;
+        for event in self.rows {
+            if self.exceeded.is_some_and(Cell::get) {
+                break;
+            }
             out.serialize_element(&EventView {
                 page: self.page,
                 event,
@@ -602,6 +628,7 @@ impl Serialize for CorrelationView<'_> {
     }
 }
 
+#[derive(Clone)]
 struct Capture {
     captured_at: ObservationTime,
     sequence: u64,
@@ -634,7 +661,41 @@ impl Capture {
 struct SnapshotView<'a> {
     page: &'a PageWorkspace,
     source: &'a SourceIdentity,
-    capture: &'a Capture,
+    capture: Capture,
+    exceeded: Option<&'a Cell<bool>>,
+    component_count: usize,
+    event_count: usize,
+}
+impl<'a> SnapshotView<'a> {
+    fn prefix(
+        page: &'a PageWorkspace,
+        source: &'a SourceIdentity,
+        capture: &Capture,
+        rows: usize,
+        exceeded: Option<&'a Cell<bool>>,
+    ) -> Self {
+        let component_count = rows.min(page.components.len());
+        let event_count = rows
+            .saturating_sub(page.components.len())
+            .min(page.events.len());
+        let mut capture = capture.clone();
+        if let Some(component) = page.components.get(component_count) {
+            capture.next_component = component.source_position;
+            capture.truncated = true;
+        }
+        if let Some(event) = page.events.get(event_count) {
+            capture.next_event = event.source_position;
+            capture.truncated = true;
+        }
+        Self {
+            page,
+            source,
+            capture,
+            exceeded,
+            component_count,
+            event_count,
+        }
+    }
 }
 impl Serialize for SnapshotView<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -645,13 +706,28 @@ impl Serialize for SnapshotView<'_> {
         out.serialize_field("captured_at", &self.capture.captured_at)?;
         out.serialize_field("sequence", &DiagnosticNumber::new(self.capture.sequence))?;
         out.serialize_field("lifetime", &self.capture.lifetime)?;
-        out.serialize_field("components", &ComponentsView { page: self.page })?;
-        out.serialize_field("events", &EventsView { page: self.page })?;
+        out.serialize_field(
+            "components",
+            &ComponentsView {
+                exceeded: self.exceeded,
+                page: self.page,
+                rows: &self.page.components[..self.component_count],
+            },
+        )?;
+        out.serialize_field(
+            "events",
+            &EventsView {
+                exceeded: self.exceeded,
+                page: self.page,
+                rows: &self.page.events[..self.event_count],
+            },
+        )?;
         out.serialize_field(
             "coverage",
             &CoverageView {
-                page: self.page,
-                capture: self.capture,
+                events: &self.page.events[..self.event_count],
+                component_count: self.component_count,
+                capture: &self.capture,
             },
         )?;
         out.serialize_field("continuation", &self.capture.continuation(self.source))?;
@@ -659,7 +735,8 @@ impl Serialize for SnapshotView<'_> {
     }
 }
 struct CoverageView<'a> {
-    page: &'a PageWorkspace,
+    events: &'a [PageEvent],
+    component_count: usize,
     capture: &'a Capture,
 }
 impl Serialize for CoverageView<'_> {
@@ -673,10 +750,10 @@ impl Serialize for CoverageView<'_> {
         out.serialize_field(
             "retention",
             &DiagnosticRetention {
-                oldest_event_sequence: self.page.events.first().map(|e| e.sequence),
-                latest_event_sequence: self.page.events.last().map(|e| e.sequence),
-                events_retained: (self.page.events.len() as u64).into(),
-                components_retained: (self.page.components.len() as u64).into(),
+                oldest_event_sequence: self.events.first().map(|e| e.sequence),
+                latest_event_sequence: self.events.last().map(|e| e.sequence),
+                events_retained: (self.events.len() as u64).into(),
+                components_retained: (self.component_count as u64).into(),
                 query_truncated: self.capture.truncated,
             },
         )?;
@@ -794,7 +871,7 @@ pub(super) fn capture(
         }
         event_position += 1;
     }
-    let mut capture = Capture {
+    let capture = Capture {
         captured_at,
         sequence: state.sequence,
         availability: if state.loss.sequence_saturated {
@@ -819,51 +896,22 @@ pub(super) fn capture(
         .map_or(inner.limits.max_snapshot_bytes, |n| {
             (n as usize).min(inner.limits.max_snapshot_bytes)
         });
-    loop {
-        let mut counter = CountingWriter(0);
-        serde_json::to_writer(
-            &mut counter,
-            &SnapshotView {
-                page,
-                source: &inner.source,
-                capture: &capture,
-            },
-        )
-        .map_err(|_| DiagnosticError::SnapshotCapacity)?;
-        if counter.0 <= max_bytes {
-            break;
-        }
-        capture.truncated = true;
-        if let Some(event) = page.events.pop() {
-            capture.next_event = event.source_position;
-            page.text_len = event.text_start;
-        } else if let Some(component) = page.components.pop() {
-            capture.next_component = component.source_position;
-            page.counters.truncate(component.counter_start);
-            let bucket_start = page
-                .windows
-                .get(component.window_start)
-                .map_or(page.buckets.len(), |w| w.bucket_start);
-            page.windows.truncate(component.window_start);
-            page.buckets.truncate(bucket_start);
-            page.text_len = component.text_start;
-        } else {
-            return Err(DiagnosticError::SnapshotCapacity);
-        }
-        if page.events.is_empty() && page.components.is_empty() {
-            return Err(DiagnosticError::SnapshotCapacity);
-        }
-    }
+    // Prefixes retain component rows first, then event rows, matching the
+    // established pagination order. Each sizing attempt stops at the byte cap.
+    let rows = fitting_prefix(page.components.len() + page.events.len(), |rows| {
+        let exceeded = Cell::new(false);
+        let view = SnapshotView::prefix(page, &inner.source, &capture, rows, Some(&exceeded));
+        let mut counter = CountingWriter::new(max_bytes, &exceeded);
+        serde_json::to_writer(&mut counter, &view)
+            .map_err(|_| DiagnosticError::SnapshotCapacity)?;
+        Ok(!exceeded.get())
+    })?;
     let mut output = std::mem::take(&mut page.output);
     let (serialized, output_len) = {
         let mut writer = CappedWriter::new(&mut output[..max_bytes]);
         let serialized = serde_json::to_writer(
             &mut writer,
-            &SnapshotView {
-                page,
-                source: &inner.source,
-                capture: &capture,
-            },
+            &SnapshotView::prefix(page, &inner.source, &capture, rows, None),
         );
         (serialized, writer.len())
     };
@@ -1081,7 +1129,6 @@ fn copy_component(
         );
         page.components.push(PageComponent {
             source_position: position,
-            text_start: checkpoint.0,
             identity,
             ownership,
             registered_at: component.registered_at,
@@ -1235,7 +1282,6 @@ fn copy_event(
         let ownership = copy_ownership(page, &event.origin.ownership)?;
         page.events.push(PageEvent {
             source_position: position,
-            text_start,
             sequence: event.sequence.into(),
             observed_at: event.observed_at,
             component,
@@ -1260,20 +1306,146 @@ fn copy_event(
     result
 }
 
-struct CountingWriter(usize);
-impl std::io::Write for CountingWriter {
+/// Find a nonempty fitting prefix in logarithmically many sizing attempts.
+/// An actually empty page is valid if its envelope fits.
+fn fitting_prefix(
+    total: usize,
+    mut fits: impl FnMut(usize) -> Result<bool, DiagnosticError>,
+) -> Result<usize, DiagnosticError> {
+    if fits(total)? {
+        return Ok(total);
+    }
+    let (mut low, mut high) = (0, total);
+    while high.saturating_sub(low) > 1 {
+        let middle = low + (high - low) / 2;
+        if fits(middle)? {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    if low == 0 {
+        Err(DiagnosticError::SnapshotCapacity)
+    } else {
+        Ok(low)
+    }
+}
+
+/// Counting stops at the cap without constructing an allocating Serde error.
+/// Views observe the flag between rows; only the current bounded scalar/row and
+/// fixed envelope fields finish serialization after the cap is reached.
+struct CountingWriter<'a> {
+    written: usize,
+    limit: usize,
+    exceeded: &'a Cell<bool>,
+}
+impl<'a> CountingWriter<'a> {
+    fn new(limit: usize, exceeded: &'a Cell<bool>) -> Self {
+        Self {
+            written: 0,
+            limit,
+            exceeded,
+        }
+    }
+}
+impl std::io::Write for CountingWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0 = self.0.saturating_add(bytes.len());
+        if !self.exceeded.get() {
+            if bytes.len() > self.limit - self.written {
+                self.exceeded.set(true);
+                self.written = self.limit;
+            } else {
+                self.written += bytes.len();
+            }
+        }
         Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
+struct SizingRows<'a, T> {
+    rows: &'a [T],
+    exceeded: Option<&'a Cell<bool>>,
+}
+impl<T: Serialize> Serialize for SizingRows<'_, T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut sequence = serializer.serialize_seq(Some(self.rows.len()))?;
+        for row in self.rows {
+            if self.exceeded.is_some_and(Cell::get) {
+                break;
+            }
+            sequence.serialize_element(row)?;
+        }
+        sequence.end()
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_prefix_search_has_bounded_attempts_and_preserves_empty_pages() {
+        for fitting in [0, 1, 2, 63, 128, 255, 256] {
+            let mut attempts = 0;
+            let result = fitting_prefix(256, |rows| {
+                attempts += 1;
+                Ok(rows <= fitting)
+            });
+            if fitting == 0 {
+                assert_eq!(result.unwrap_err(), DiagnosticError::SnapshotCapacity);
+            } else {
+                assert_eq!(result.unwrap(), fitting);
+            }
+            assert!(attempts <= 10, "unbounded sizing work: {attempts}");
+        }
+        assert_eq!(fitting_prefix(0, |_| Ok(true)).unwrap(), 0);
+        assert_eq!(
+            fitting_prefix(0, |_| Ok(false)).unwrap_err(),
+            DiagnosticError::SnapshotCapacity
+        );
+    }
+
+    #[test]
+    fn response_counting_stops_serialization_at_the_byte_budget() {
+        let exceeded = Cell::new(false);
+        let text = "x".repeat(1000);
+        let rows = [text.as_str(); 256];
+        let mut counter = CountingWriter::new(4096, &exceeded);
+        serde_json::to_writer(
+            &mut counter,
+            &SizingRows {
+                rows: &rows,
+                exceeded: Some(&exceeded),
+            },
+        )
+        .unwrap();
+        assert!(exceeded.get());
+        assert_eq!(counter.written, 4096);
+        // Check row visits directly, independently of timing.
+        struct Visited<'a>(&'a Cell<usize>);
+        impl Serialize for Visited<'_> {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                self.0.set(self.0.get() + 1);
+                serializer.serialize_str("1234567890")
+            }
+        }
+        let visited = Cell::new(0);
+        let rows = (0..256).map(|_| Visited(&visited)).collect::<Vec<_>>();
+        let exceeded = Cell::new(false);
+        let mut counter = CountingWriter::new(40, &exceeded);
+        serde_json::to_writer(
+            &mut counter,
+            &SizingRows {
+                rows: &rows,
+                exceeded: Some(&exceeded),
+            },
+        )
+        .unwrap();
+        assert!(exceeded.get());
+        assert!(visited.get() <= 4);
+    }
 
     #[test]
     fn closed_windows_preserve_observations_at_the_closing_boundary() {

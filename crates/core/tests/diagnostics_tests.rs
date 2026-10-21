@@ -3412,3 +3412,61 @@ fn extension_causes_remain_queryable_above_the_identity_limit() {
         Some(name.as_str())
     );
 }
+
+#[test]
+fn warmed_small_response_budgets_paginate_full_history_without_allocating() {
+    let service = diagnostics(DiagnosticLimits {
+        max_detail_bytes: 1024,
+        detail_pool_bytes: 262_144,
+        query_text_bytes: 524_288,
+        ..limits()
+    });
+    let component = register(&service, "producer");
+    let text = "x".repeat(1000);
+    for _ in 0..256 {
+        component
+            .record_without_projection_lazy(|| {
+                Observation::new(classification(FailureClass::Unknown), text.as_str(), 1)
+            })
+            .unwrap();
+    }
+    let mut query = DiagnosticQuery {
+        max_components: Some(0),
+        max_response_bytes: Some(4096),
+        ..Default::default()
+    };
+    drop(service.snapshot(query.clone()).unwrap());
+    let mut sequences = BTreeSet::new();
+    for _ in 0..256 {
+        let (lease, allocations) = allocations_during(|| service.snapshot(query.clone()).unwrap());
+        assert_eq!(allocations, 0);
+        assert!(lease.as_bytes().len() <= 4096);
+        let view = lease.to_snapshot().unwrap();
+        assert!(!view.events.is_empty());
+        assert_eq!(
+            view.coverage.retention.events_retained.get(),
+            view.events.len() as u64
+        );
+        assert_eq!(
+            view.coverage.retention.oldest_event_sequence,
+            view.events.first().map(|e| e.sequence)
+        );
+        assert_eq!(
+            view.coverage.retention.latest_event_sequence,
+            view.events.last().map(|e| e.sequence)
+        );
+        for event in &view.events {
+            assert!(sequences.insert(event.sequence));
+        }
+        query.continuation = view.continuation;
+        if query.continuation.is_none() {
+            break;
+        }
+    }
+    assert!(query.continuation.is_none());
+    assert_eq!(sequences.len(), 256);
+    assert_eq!(service.memory_usage().events, 256);
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.lifetime.totals.recorded_events_total.value.get(), 256);
+    assert_eq!(view.coverage.loss.events_evicted.value.get(), 0);
+}
