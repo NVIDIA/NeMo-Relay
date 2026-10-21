@@ -1851,7 +1851,9 @@ fn oversized_unrecognized_payload_names_are_rejected_without_allocating() {
                 1,
             )
             .with_plugin_context(PluginObservationContext {
-                execution: Some(Cow::Owned(oversized.clone())),
+                execution: Some(PluginExecutionName::from_opaque_name(Cow::Owned(
+                    oversized.clone(),
+                ))),
                 phase: Some(PluginPhase::Activation.into()),
             }),
             DiagnosticError::InvalidContext,
@@ -1860,7 +1862,7 @@ fn oversized_unrecognized_payload_names_are_rejected_without_allocating() {
             Observation::new(classification(FailureClass::Unknown), "unknown phase", 1)
                 .with_plugin_context(PluginObservationContext {
                     execution: Some(PluginExecution::NativeAbi.into()),
-                    phase: Some(Cow::Owned(oversized)),
+                    phase: Some(PluginPhaseName::from_opaque_name(Cow::Owned(oversized))),
                 }),
             DiagnosticError::InvalidContext,
         ),
@@ -2960,8 +2962,18 @@ fn owned_shared_payloads_record_and_project_without_new_allocations() {
             assert_eq!(event.classification.failure_class(), Some("unknown"));
             assert_eq!(event.context.execution.as_deref(), Some("native_abi"));
             assert_eq!(event.context.phase.as_deref(), Some("policy"));
-            assert!(matches!(event.context.execution, Some(Cow::Borrowed(_))));
-            assert!(matches!(event.context.phase, Some(Cow::Borrowed(_))));
+            assert!(matches!(
+                event
+                    .context
+                    .execution
+                    .clone()
+                    .map(PluginExecutionName::into_name),
+                Some(Cow::Borrowed(_))
+            ));
+            assert!(matches!(
+                event.context.phase.clone().map(PluginPhaseName::into_name),
+                Some(Cow::Borrowed(_))
+            ));
             assert_eq!(event.correlation.session_id.as_deref(), Some("session-42"));
             assert_eq!(event.correlation.request_id.as_deref(), Some("request-42"));
             serde_json::to_writer(std::io::sink(), &event.classification).unwrap();
@@ -2996,8 +3008,12 @@ fn owned_shared_payloads_record_and_project_without_new_allocations() {
                 1,
             )
             .with_plugin_context(PluginObservationContext {
-                execution: Some(Cow::Owned("native_abi".to_owned())),
-                phase: Some(Cow::Owned("policy".to_owned())),
+                execution: Some(PluginExecutionName::from_opaque_name(Cow::Owned(
+                    "native_abi".to_owned(),
+                ))),
+                phase: Some(PluginPhaseName::from_opaque_name(Cow::Owned(
+                    "policy".to_owned(),
+                ))),
             })
             .with_correlation(DiagnosticCorrelation {
                 session_id: Some(session.as_str().into()),

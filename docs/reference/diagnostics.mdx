@@ -118,7 +118,10 @@ into its private fixed-size storage. A readable unfamiliar code, cause, or plugi
 context does not authorize recording it. Built-in classification must match the
 catalogue, and extensions require their admitted handles with ownership and
 generation checks. Known plugin context is validated independently of counter
-identity.
+identity. Construct context names with the corresponding `PluginExecution` or
+`PluginPhase` enum. Their distinct wrappers reject swapped enum values in Rust;
+`from_opaque_name()` and decoding preserve future strings. Unknown names remain
+readable but are rejected by core recording until supported.
 
 `Observation` remains the recording input; `DiagnosticEvent` contains accepted
 evidence with runtime-assigned identity, sequence, and timestamps. Lazy detail
@@ -324,7 +327,8 @@ values are typed construction helpers for producers integrated later. Their
 round-trip tests establish representation support; production coverage comes
 from recording at an integrated operation boundary.
 
-The shared `PluginObservationContext` exposes optional execution and phase
+`PluginObservationContext` uses distinct `PluginExecutionName` and
+`PluginPhaseName` wrappers for optional execution and phase
 names. Future strings retain their original names on snapshot decoding and
 reserialization. Missing or null fields remain absent, and non-string values
 are rejected. Core admits recognized context into a private compact

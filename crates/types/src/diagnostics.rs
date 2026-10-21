@@ -40,8 +40,10 @@ pub use accounting::{
 mod event;
 pub use event::{
     Classification, DiagnosticCorrelation, DiagnosticDetail, DiagnosticEvent, DiagnosticOutcome,
-    DiagnosticSeverity, PluginObservationContext,
+    DiagnosticSeverity,
 };
+mod context;
+pub use context::{PluginExecutionName, PluginObservationContext, PluginPhaseName};
 mod coverage;
 pub use coverage::{
     DiagnosticAvailability, DiagnosticCapability, DiagnosticCoverage, DiagnosticLoss,
