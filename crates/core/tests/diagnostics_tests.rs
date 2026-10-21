@@ -4377,3 +4377,46 @@ fn extension_class_sets_cover_all_builtin_causes_and_reject_duplicates() {
         assert_eq!(event.classification.failure_class(), Some(class.as_str()));
     }
 }
+
+#[test]
+fn leased_json_matches_public_models_for_optional_borrowed_fields() {
+    let service = diagnostics(limits());
+    for (index, configuration) in [None, Some(""), Some("configuration")]
+        .into_iter()
+        .enumerate()
+    {
+        let component = service
+            .register_component(ComponentRegistration {
+                ownership: ComponentOwnership {
+                    configuration_id: configuration.map(str::to_owned),
+                    responsibility: configuration.map(str::to_owned),
+                    ..Default::default()
+                },
+                ..ComponentRegistration::new(&format!("producer.{index}"), &CODES)
+            })
+            .unwrap();
+        for classification in [
+            classification(FailureClass::Unknown),
+            Classification::success(SuccessCode::SinkInitialized),
+            Classification::notice(NoticeCode::ConfigurationInherited),
+        ] {
+            component
+                .record_without_projection_lazy(|| {
+                    Observation::new(
+                        classification,
+                        configuration.map_or(DiagnosticDetailRef::None, DiagnosticDetailRef::Text),
+                        NonZeroU64::MIN,
+                    )
+                    .with_correlation(DiagnosticCorrelation {
+                        session_id: configuration.map(Into::into),
+                        request_id: configuration.map(Into::into),
+                    })
+                })
+                .unwrap();
+        }
+    }
+    let lease = service.snapshot(&DiagnosticQuery::default()).unwrap();
+    let actual: serde_json::Value = serde_json::from_slice(lease.as_bytes()).unwrap();
+    let expected = serde_json::to_value(lease.to_snapshot().unwrap()).unwrap();
+    assert_eq!(actual, expected);
+}
