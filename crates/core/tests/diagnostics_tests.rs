@@ -3866,3 +3866,99 @@ fn default_query_profile_is_smaller_than_store_sized_workspaces() {
         previous.limits().max_window_buckets
     );
 }
+
+#[test]
+fn component_counter_index_survives_refresh_and_reclaimed_lower_slots() {
+    let service = diagnostics(DiagnosticLimits {
+        max_components: 3,
+        max_counters: 3,
+        ..limits()
+    });
+    let (donor_owner, _donor) = service
+        .register_owned_component(ComponentRegistration::new("donor", &[WRITE]))
+        .unwrap();
+    let (owner, target) = service
+        .register_owned_component(ComponentRegistration::new("target", &[WRITE]))
+        .unwrap();
+    let last = service
+        .register_component(ComponentRegistration::new("last", &[WRITE]))
+        .unwrap();
+    record(&target, 2);
+    record(&last, 5);
+    donor_owner.close().unwrap();
+    let extension = target
+        .register_extension(ExtensionRegistration {
+            namespace: "acme",
+            name: "failure",
+            description: "custom failure",
+            allowed_classes: &[FailureClass::Unknown],
+            outcome: DiagnosticOutcome::Failure,
+        })
+        .unwrap()
+        .unwrap();
+    target
+        .record_without_projection_lazy(|| {
+            Observation::extension(
+                extension,
+                Some(FailureClass::Unknown),
+                DiagnosticOutcome::Failure,
+                "custom",
+                3,
+            )
+        })
+        .unwrap();
+    owner
+        .refresh(ComponentOwnership {
+            configuration_id: Some("refreshed".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let view = snapshot(&service, DiagnosticQuery::default());
+    let target_row = row(&view, "target");
+    assert_eq!(
+        target_row
+            .counters
+            .iter()
+            .map(|counter| counter.code.as_str())
+            .collect::<Vec<_>>(),
+        ["acme.failure", WRITE.canonical_name()]
+    );
+    assert_eq!(
+        target_row
+            .counters
+            .iter()
+            .map(|counter| counter.occurrences.value.get())
+            .collect::<Vec<_>>(),
+        [3, 2]
+    );
+    owner.close().unwrap();
+    let replacement = service
+        .register_component(ComponentRegistration::new("target", &[WRITE]))
+        .unwrap();
+    assert_eq!(
+        target
+            .record_without_projection_lazy(|| Observation::new(
+                classification(FailureClass::Unknown),
+                "stale",
+                1
+            ))
+            .unwrap_err(),
+        DiagnosticError::ComponentClosed
+    );
+    assert_eq!(
+        replacement
+            .record_without_projection_lazy(|| Observation::extension(
+                extension,
+                Some(FailureClass::Unknown),
+                DiagnosticOutcome::Failure,
+                "stale extension",
+                1
+            ))
+            .unwrap_err(),
+        DiagnosticError::InvalidCode
+    );
+    record(&replacement, 1);
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(code_total(row(&view, "target"), WRITE), 1);
+    assert_eq!(code_total(row(&view, "last"), WRITE), 5);
+}

@@ -1401,12 +1401,9 @@ fn record_observation(
     let counter_index = if let Some(code) = code {
         Some(
             state
-                .counters
-                .iter()
-                .position(|v| {
-                    v.as_ref()
-                        .is_some_and(|v| v.component == handle && v.code == code)
-                })
+                .component_counters(handle)
+                .find(|(_, counter)| counter.code == code)
+                .map(|(index, _)| index.slot())
                 .ok_or(DiagnosticError::InvalidCode)?,
         )
     } else {

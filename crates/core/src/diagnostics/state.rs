@@ -3,6 +3,8 @@
 
 //! Fixed-capacity local state. No wire DTO graph is retained in this store.
 
+use std::num::NonZeroUsize;
+
 use super::storage::{BoundedHistory, DetailHandle, DetailPool};
 use super::*;
 
@@ -141,6 +143,7 @@ pub(super) struct ComponentSlot {
     pub lifetime: LifetimeState,
     pub refresh: RefreshState,
     pub window: Option<WindowReservation>,
+    pub counter_head: Option<CounterIndex>,
 }
 impl ComponentSlot {
     pub fn origin(&self) -> CapturedOrigin {
@@ -157,9 +160,26 @@ pub(super) struct WindowReservation {
     pub len: usize,
     pub resolution_millis: u64,
 }
+/// Compact optional index into the preallocated counter pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CounterIndex(NonZeroUsize);
+impl CounterIndex {
+    pub fn new(slot: usize) -> Self {
+        Self(
+            slot.checked_add(1)
+                .and_then(NonZeroUsize::new)
+                .expect("admitted counter index"),
+        )
+    }
+    pub fn slot(self) -> usize {
+        self.0.get() - 1
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct CounterSlot {
     pub component: ComponentHandle,
+    pub next: Option<CounterIndex>,
     pub code: StoredCode,
     pub occurrences: DiagnosticCount,
     pub last_observed_at: Option<ObservationTime>,
@@ -354,6 +374,95 @@ impl State {
             .as_ref()
             .filter(|v| v.handle == handle)
     }
+    /// Populate already admitted slots once, preserving the existing pool order.
+    pub fn reserve_builtin_counters(
+        &mut self,
+        handle: ComponentHandle,
+        builtin_codes: &[BuiltinDiagnosticCode],
+    ) -> Option<CounterIndex> {
+        let mut counter_head = None;
+        let mut counter_tail: Option<CounterIndex> = None;
+        let mut codes = builtin_codes.iter();
+        for index in 0..self.counters.len() {
+            if self.counters[index].is_some() {
+                continue;
+            }
+            let Some(code) = codes.next() else {
+                break;
+            };
+            let current = CounterIndex::new(index);
+            self.counters[index] = Some(CounterSlot {
+                component: handle,
+                next: None,
+                code: StoredCode::Builtin(*code),
+                occurrences: DiagnosticCount::default(),
+                last_observed_at: None,
+            });
+            if let Some(previous) = counter_tail {
+                self.counters[previous.slot()]
+                    .as_mut()
+                    .expect("reserved counter")
+                    .next = Some(current);
+            } else {
+                counter_head = Some(current);
+            }
+            counter_tail = Some(current);
+        }
+        debug_assert_eq!(codes.len(), 0, "all builtin counters were admitted");
+        counter_head
+    }
+    /// Visit only the owning registration's reservations, retaining pool order.
+    pub fn component_counters(
+        &self,
+        handle: ComponentHandle,
+    ) -> impl Iterator<Item = (CounterIndex, &CounterSlot)> {
+        let mut next = self
+            .component(handle)
+            .and_then(|component| component.counter_head);
+        std::iter::from_fn(move || {
+            let index = next.take()?;
+            let counter = self.counters.get(index.slot())?.as_ref()?;
+            if counter.component != handle {
+                return None;
+            }
+            next = counter.next;
+            Some((index, counter))
+        })
+        .take(self.counters.len())
+    }
+    /// Insert a newly admitted extension counter into its component's ordered chain.
+    pub fn link_counter(&mut self, handle: ComponentHandle, index: CounterIndex) {
+        let mut previous: Option<CounterIndex> = None;
+        let mut next = self
+            .component(handle)
+            .expect("admitted component")
+            .counter_head;
+        while let Some(current) = next {
+            if current.slot() > index.slot() {
+                break;
+            }
+            previous = next;
+            next = self.counters[current.slot()]
+                .as_ref()
+                .expect("reserved counter")
+                .next;
+        }
+        self.counters[index.slot()]
+            .as_mut()
+            .expect("admitted counter")
+            .next = next;
+        if let Some(previous) = previous {
+            self.counters[previous.slot()]
+                .as_mut()
+                .expect("reserved counter")
+                .next = Some(index);
+        } else {
+            self.components[handle.slot]
+                .as_mut()
+                .expect("admitted component")
+                .counter_head = Some(index);
+        }
+    }
     pub fn code_name(&self, code: StoredCode) -> Option<&str> {
         match code {
             StoredCode::Builtin(code) => Some(code.canonical_name()),
@@ -444,13 +553,13 @@ impl State {
         self.metadata_used = self
             .metadata_used
             .saturating_sub(component.key.len() + component.refresh.ownership.bytes());
-        for counter in &mut self.counters {
-            if counter
-                .as_ref()
-                .is_some_and(|value| value.component == handle)
-            {
-                *counter = None;
-            }
+        let mut next = component.counter_head;
+        while let Some(index) = next {
+            let counter = self.counters[index.slot()]
+                .take()
+                .expect("reserved counter");
+            debug_assert_eq!(counter.component, handle);
+            next = counter.next;
         }
         for bucket in &mut self.windows {
             if bucket
@@ -516,5 +625,100 @@ impl State {
             DiagnosticOutcome::Failure => slot.failures.add(count),
             _ => slot.unspecified.add(count),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn component_counter_reservations_visit_only_the_owning_chain() {
+        let diagnostics = Diagnostics::from_settings(
+            Diagnostics::default().source().clone(),
+            DiagnosticsSettings {
+                enabled: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let codes = BuiltinDiagnosticCode::all();
+        let recorders: Vec<_> = (0..64)
+            .map(|index| {
+                diagnostics
+                    .register_component(ComponentRegistration::new(
+                        &format!("component.{index}"),
+                        codes,
+                    ))
+                    .unwrap()
+            })
+            .collect();
+        let state = lock(&diagnostics.inner.backend.as_ref().unwrap().state);
+        for recorder in &recorders {
+            let handle = recorder.lease.as_ref().unwrap().handle;
+            let counters: Vec<_> = state.component_counters(handle).collect();
+            assert_eq!(counters.len(), codes.len());
+            assert!(
+                counters
+                    .iter()
+                    .all(|(_, counter)| counter.component == handle)
+            );
+            assert!(
+                counters
+                    .windows(2)
+                    .all(|pair| pair[0].0.slot() < pair[1].0.slot())
+            );
+        }
+        let last = recorders.last().unwrap().lease.as_ref().unwrap().handle;
+        assert!(state.component_counters(last).next().unwrap().0.slot() > 1000);
+    }
+
+    #[test]
+    #[ignore = "informational private layout and reserved-backing inspection"]
+    fn diagnostic_storage_layout_profile() {
+        eprintln!(
+            "event={} origin={} ownership={} stored_cause={} optional_cause={} detail_handle={} optional_detail_handle={} counter_slot={} optional_counter_slot={} window_slot={} optional_window_slot={}",
+            size_of::<StoredObservation>(),
+            size_of::<CapturedOrigin>(),
+            size_of::<Ownership>(),
+            size_of::<StoredFailureClass>(),
+            size_of::<Option<StoredFailureClass>>(),
+            size_of::<DetailHandle>(),
+            size_of::<Option<DetailHandle>>(),
+            size_of::<CounterSlot>(),
+            size_of::<Option<CounterSlot>>(),
+            size_of::<WindowSlot>(),
+            size_of::<Option<WindowSlot>>(),
+        );
+        for (name, offset) in [
+            ("origin", std::mem::offset_of!(StoredObservation, origin)),
+            (
+                "cause",
+                std::mem::offset_of!(StoredObservation, failure_class),
+            ),
+            ("detail", std::mem::offset_of!(StoredObservation, detail)),
+            (
+                "session",
+                std::mem::offset_of!(StoredObservation, session_id),
+            ),
+            (
+                "request",
+                std::mem::offset_of!(StoredObservation, request_id),
+            ),
+        ] {
+            eprintln!("event field {name} offset={offset}");
+        }
+        let diagnostics = Diagnostics::from_settings(
+            Diagnostics::default().source().clone(),
+            DiagnosticsSettings {
+                enabled: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        eprintln!(
+            "default reserved backing={}",
+            diagnostics.memory_usage().reserved_bytes
+        );
     }
 }
