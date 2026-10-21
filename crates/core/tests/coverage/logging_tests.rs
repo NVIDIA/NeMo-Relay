@@ -175,7 +175,7 @@ fn diagnostics_retain_required_sink_initialization_failure_before_logging_exists
     assert!(LoggingRuntime::configure_with_diagnostics(config, &diagnostics).is_err());
 
     let snapshot = diagnostics
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -270,7 +270,7 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
     );
     assert!(!output.contains("plugin.configuration_inherited"));
     let snapshot = diagnostics
-        .snapshot(DiagnosticQuery {
+        .snapshot(&DiagnosticQuery {
             component_key: Some("test.exporter".into()),
             ..Default::default()
         })
@@ -289,7 +289,7 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
     assert_eq!(std::fs::read_to_string(path).unwrap(), output);
     let final_snapshot = producer
         .reader()
-        .snapshot(DiagnosticQuery {
+        .snapshot(&DiagnosticQuery {
             component_key: Some("test.exporter".into()),
             ..Default::default()
         })
@@ -414,7 +414,7 @@ fn exhausted_diagnostic_budgets_do_not_prevent_operational_logging_startup() {
                     == "logging_despite_budget")
         );
         let snapshot = diagnostics
-            .snapshot(DiagnosticQuery::default())
+            .snapshot(&DiagnosticQuery::default())
             .unwrap()
             .to_snapshot()
             .unwrap();

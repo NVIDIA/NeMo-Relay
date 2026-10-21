@@ -75,7 +75,7 @@ component.record_lazy(|| Observation::new(
     1,
 ))?;
 
-let page = diagnostics.snapshot(DiagnosticQuery::default())?;
+let page = diagnostics.snapshot(&DiagnosticQuery::default())?;
 let encoded: &[u8] = page.as_bytes();
 assert!(!encoded.is_empty());
 let snapshot = page.to_snapshot()?;
@@ -87,6 +87,9 @@ drop(page); // Return the leased query workspace.
 `SnapshotLease::as_bytes()` borrows the canonical JSON page. The lease occupies a
 reserved query workspace until dropped. `to_snapshot()` decodes a separate
 caller-owned value; those allocations are outside the service's memory budget.
+The query is borrowed during capture; the returned lease owns its copied page
+and does not borrow the query. Reuse one `DiagnosticQuery` for polling and update
+its continuation between pages without cloning selector strings.
 Reads add no occurrences and reset no counters. Later success leaves earlier
 failure counts intact.
 

@@ -41,7 +41,7 @@
 //!     "Producer-approved safe detail",
 //!     1, // occurrence delta, never a cumulative total
 //! ))?;
-//! let page = diagnostics.snapshot(DiagnosticQuery::default())?;
+//! let page = diagnostics.snapshot(&DiagnosticQuery::default())?;
 //! let bounded_json: &[u8] = page.as_bytes();
 //! # assert!(!bounded_json.is_empty());
 //! # Ok(())
@@ -864,8 +864,9 @@ impl Diagnostics {
     /// Capture a bounded page through this context's reader.
     ///
     /// The lease holds a query permit until dropped. Reads never reset counters
-    /// or pin history; configured disablement is returned explicitly.
-    pub fn snapshot(&self, query: DiagnosticQuery) -> Result<SnapshotLease, DiagnosticError> {
+    /// or pin history; configured disablement is returned explicitly. The query
+    /// is borrowed only during capture and can be reused after this call.
+    pub fn snapshot(&self, query: &DiagnosticQuery) -> Result<SnapshotLease, DiagnosticError> {
         self.reader().snapshot(query)
     }
     /// Reserve a component vocabulary and return its producer lease.
@@ -1060,7 +1061,7 @@ impl DiagnosticsReader {
     /// polling neither increments counters nor resets refresh summaries. Disabled collection
     /// returns [`DiagnosticError::Disabled`]. An enabled context with no query
     /// pool returns [`DiagnosticError::QueryDisabled`].
-    pub fn snapshot(&self, query: DiagnosticQuery) -> Result<SnapshotLease, DiagnosticError> {
+    pub fn snapshot(&self, query: &DiagnosticQuery) -> Result<SnapshotLease, DiagnosticError> {
         read::capture(&self.inner, query)
     }
     /// Report configured availability without materializing a snapshot.

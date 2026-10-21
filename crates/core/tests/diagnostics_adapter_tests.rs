@@ -85,7 +85,7 @@ fn disabled_diagnostics_preserve_operational_file_output() {
         DiagnosticAvailability::Disabled
     );
     assert_eq!(
-        service.snapshot(DiagnosticQuery::default()).unwrap_err(),
+        service.snapshot(&DiagnosticQuery::default()).unwrap_err(),
         DiagnosticError::Disabled
     );
     assert_eq!(service.memory_usage().reserved_bytes, 0);
@@ -129,7 +129,7 @@ fn typed_plugin_error_records_once_without_projections_or_legacy_replay() {
     assert!(matches!(outcome, RecordOutcome::Recorded(_)));
     assert!(matches!(original, PluginError::RegistrationFailed(_)));
     let page = service
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -234,7 +234,7 @@ fn typed_projection_reuses_logging_without_replaying_history_or_pinning_reader()
         .unwrap();
     assert_eq!(std::fs::read_to_string(path).unwrap(), output);
     let page = service
-        .snapshot(DiagnosticQuery {
+        .snapshot(&DiagnosticQuery {
             component_key: Some("test.producer".into()),
             ..Default::default()
         })
@@ -269,7 +269,7 @@ fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs()
     log::error!(target: "nemo_relay.test", event = "operational_after_projection_limit"; "The ordinary logger still works");
     runtime.shutdown();
     let page = service
-        .snapshot(DiagnosticQuery {
+        .snapshot(&DiagnosticQuery {
             component_key: Some("test.producer".into()),
             ..Default::default()
         })

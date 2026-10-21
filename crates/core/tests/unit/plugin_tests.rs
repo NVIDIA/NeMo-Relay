@@ -1959,7 +1959,7 @@ fn legacy_runtime_diagnostic_before_activation_does_not_initialize_canonical_col
     )
     .expect("legacy reporting must not implicitly consume the process default");
     let page = service
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -3120,7 +3120,7 @@ fn configuration_inheritance_records_once_per_ambient_source_in_selected_context
     assert_eq!(resolved.config_paths.len(), 3);
     assert_eq!(resolved.diagnostics.len(), 2);
     let view = service
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -3151,7 +3151,7 @@ fn configuration_inheritance_records_once_per_ambient_source_in_selected_context
     assert_eq!(projected.load(Ordering::Relaxed), 0);
     let _report_copy = resolved.diagnostics.clone();
     let reread = service
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -3198,7 +3198,7 @@ fn configuration_inheritance_recording_is_best_effort_and_preserves_legacy_resul
         assert_eq!(service.memory_usage().events, 0);
     }
     let view = blocked
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -3245,7 +3245,7 @@ fn configuration_inheritance_and_activation_use_the_same_selected_context() {
         .unwrap_err();
     assert!(matches!(error, PluginError::RegistrationFailed(_)));
     let view = service
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -3756,7 +3756,7 @@ fn typed_activation_failure_records_once_through_its_scoped_context() {
     expect_registration_failed(Err(error), "private operation detail");
     drop(context);
     let page = service
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -3816,7 +3816,7 @@ fn activation_unwind_is_recorded_before_scoped_rollback_and_closure() {
     }));
     assert!(unwind.is_err());
     let page = service
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -3887,7 +3887,7 @@ fn plugin_attribution_uses_selected_context_limit_through_public_initialization(
         _ => panic!("expected the original registration failure"),
     }
     let snapshot = service
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -3927,7 +3927,7 @@ fn plugin_attribution_truncation_preserves_utf8_boundaries() {
     );
     context.record_activation_failure(&PluginError::RegistrationFailed("original".into()));
     let snapshot = service
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
