@@ -1383,7 +1383,12 @@ fn record_observation(
                 .and_then(Option::as_ref)
                 .filter(|v| v.generation == extension.generation && v.component == handle)
                 .ok_or(DiagnosticError::InvalidCode)?;
-            let cause = StoredFailureClass::Extension(class);
+            let cause = StoredFailureClass::Extension {
+                slot: extension.slot,
+                generation: extension.generation,
+                index: u8::try_from(class.index)
+                    .map_err(|_| DiagnosticError::InvalidClassification)?,
+            };
             if descriptor.outcome != DiagnosticOutcome::Failure || state.class_name(cause).is_none()
             {
                 return Err(DiagnosticError::InvalidClassification);
