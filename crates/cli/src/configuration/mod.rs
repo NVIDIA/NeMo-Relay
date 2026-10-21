@@ -1604,19 +1604,33 @@ fn load_config_from_paths(
     plugin_config_paths: Vec<PathBuf>,
     apply_environment: fn(&mut GatewayConfig) -> Result<(), CliError>,
 ) -> Result<ResolvedConfig, CliError> {
-    let merged = read_shared_documents(config_paths)?;
-    finish_shared_config(merged, plugin_config_paths, apply_environment)
+    let document = read_shared_documents_for_startup(config_paths, true)?;
+    finish_shared_config(document, plugin_config_paths, apply_environment)
 }
 
+#[cfg(test)]
 fn read_shared_documents(config_paths: Vec<(PathBuf, bool)>) -> Result<toml::Value, CliError> {
-    read_shared_documents_for_startup(config_paths, true)
+    read_shared_documents_for_startup(config_paths, true).map(|document| document.merged)
+}
+
+#[derive(Debug)]
+struct LegacyConfigSource {
+    path: PathBuf,
+    sections: Vec<&'static str>,
+}
+
+#[derive(Debug)]
+struct PreparedSharedDocument {
+    merged: toml::Value,
+    legacy_sources: Vec<LegacyConfigSource>,
 }
 
 fn read_shared_documents_for_startup(
     config_paths: Vec<(PathBuf, bool)>,
     validate_runtime: bool,
-) -> Result<toml::Value, CliError> {
+) -> Result<PreparedSharedDocument, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
+    let mut legacy_sources = Vec::new();
     for (path, required) in config_paths {
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
@@ -1642,25 +1656,60 @@ fn read_shared_documents_for_startup(
                 path.display()
             )));
         }
+        if !validate_runtime {
+            let mut sections = legacy_observability;
+            if parsed.get("plugins").is_some() {
+                sections.push("plugins");
+            }
+            if !sections.is_empty() {
+                legacy_sources.push(LegacyConfigSource { path, sections });
+            }
+        }
         merge_gateway_config_toml(&mut merged, parsed);
     }
-    Ok(merged)
+    Ok(PreparedSharedDocument {
+        merged,
+        legacy_sources,
+    })
 }
 
 fn finish_shared_config(
-    merged: toml::Value,
+    shared: PreparedSharedDocument,
     plugin_config_paths: Vec<PathBuf>,
     apply_environment: fn(&mut GatewayConfig) -> Result<(), CliError>,
 ) -> Result<ResolvedConfig, CliError> {
-    if merged.get("plugins").is_some() || !legacy_observability_sections(&merged).is_empty() {
-        return Err(CliError::Config("legacy observability/plugin sections in config.toml are unsupported; configure them in plugins.toml".into()));
+    let mut sections = legacy_observability_sections(&shared.merged);
+    if shared.merged.get("plugins").is_some() && !sections.contains(&"plugins") {
+        sections.push("plugins");
+    }
+    if !sections.is_empty() {
+        let sources = shared
+            .legacy_sources
+            .iter()
+            .map(|source| {
+                format!(
+                    "{} ({})",
+                    source.path.display(),
+                    source.sections.join(", ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let context = if sources.is_empty() {
+            sections.join(", ")
+        } else {
+            sources
+        };
+        return Err(CliError::Config(format!(
+            "legacy observability/plugin sections in config.toml ({context}) are unsupported; configure them in plugins.toml with `nemo-relay plugins edit`"
+        )));
     }
     let plugin_toml = load_plugin_toml_config_from_paths(plugin_config_paths)?;
     let mut resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         ..ResolvedConfig::default()
     };
-    apply_file_config(&mut resolved, merged)?;
+    apply_file_config(&mut resolved, shared.merged)?;
     apply_plugin_toml_config(&mut resolved, plugin_toml);
     apply_environment(&mut resolved.gateway)?;
     Ok(resolved)

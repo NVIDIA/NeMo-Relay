@@ -30,7 +30,7 @@ impl RuntimeDiagnosticsConfig {
 /// Owns the parsed startup inputs until runtime resolution completes. No plugin
 /// loading, logging, credential creation, or process-default lookup happens here.
 pub(crate) struct PreparedConfig {
-    document: std::sync::Mutex<Option<toml::Value>>,
+    document: std::sync::Mutex<Option<PreparedSharedDocument>>,
     pub diagnostics: RuntimeDiagnosticsConfig,
 }
 impl std::fmt::Debug for PreparedConfig {
@@ -49,7 +49,7 @@ impl PreparedConfig {
             })
             .collect();
         let document = read_shared_documents_for_startup(paths, false)?;
-        let diagnostics = match document.get("diagnostics") {
+        let diagnostics = match document.merged.get("diagnostics") {
             Some(value) => value
                 .clone()
                 .try_into()
@@ -61,7 +61,7 @@ impl PreparedConfig {
             diagnostics,
         })
     }
-    pub(super) fn take_document(&self) -> Option<toml::Value> {
+    pub(super) fn take_document(&self) -> Option<PreparedSharedDocument> {
         self.document
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -72,7 +72,7 @@ impl PreparedConfig {
         let document = document
             .as_ref()
             .ok_or_else(|| CliError::Config("startup configuration already consumed".into()))?;
-        resolve_logging_from_document(document, &["logging"])
+        resolve_logging_from_document(&document.merged, &["logging"])
     }
 }
 

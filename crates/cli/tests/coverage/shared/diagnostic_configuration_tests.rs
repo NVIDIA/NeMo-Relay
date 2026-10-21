@@ -19,7 +19,10 @@ fn preparation_preserves_existing_merge_order_and_reuses_parsed_inputs() {
     assert_eq!(diagnostics.limits.max_events, 9);
     diagnostics.validate().unwrap();
     let prepared = PreparedConfig {
-        document: std::sync::Mutex::new(Some(document)),
+        document: std::sync::Mutex::new(Some(PreparedSharedDocument {
+            merged: document,
+            legacy_sources: vec![],
+        })),
         diagnostics,
     };
     std::fs::write(user, "this is now malformed").unwrap();
