@@ -179,19 +179,7 @@ pub(super) fn register_component(
         len: v.bucket_count,
         resolution_millis: v.resolution_millis,
     });
-    for (target, code) in state
-        .counters
-        .iter_mut()
-        .filter(|v| v.is_none())
-        .zip(registration.builtin_codes)
-    {
-        *target = Some(CounterSlot {
-            component: handle,
-            code: StoredCode::Builtin(*code),
-            occurrences: DiagnosticCount::default(),
-            last_observed_at: None,
-        });
-    }
+    let counter_head = state.reserve_builtin_counters(handle, registration.builtin_codes);
     if let Some(window) = window {
         for index in window.start..window.start + window.len {
             state.windows[index] = Some(WindowSlot {
@@ -220,6 +208,7 @@ pub(super) fn register_component(
             totals: DiagnosticTotals::default(),
         },
         window,
+        counter_head,
     });
     state.metadata_used += metadata;
     Ok((
@@ -360,10 +349,12 @@ pub(super) fn register_extension(
     });
     state.counters[counter] = Some(CounterSlot {
         component: handle,
+        next: None,
         code: StoredCode::Extension { slot, generation },
         occurrences: DiagnosticCount::default(),
         last_observed_at: None,
     });
+    state.link_counter(handle, CounterIndex::new(counter));
     state.metadata_used += metadata;
     Ok(ExtensionHandle {
         context_id: inner.context_id,

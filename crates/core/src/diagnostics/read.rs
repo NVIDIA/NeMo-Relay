@@ -1101,12 +1101,7 @@ fn copy_component(
         let identity = copy_identity(page, component)?;
         let ownership = copy_ownership(page, &component.refresh.ownership)?;
         let counter_start = page.counters.len();
-        for counter in state
-            .counters
-            .iter()
-            .flatten()
-            .filter(|c| c.component == component.handle)
-        {
+        for (_, counter) in state.component_counters(component.handle) {
             let Some(observed) = counter.last_observed_at else {
                 continue;
             };
