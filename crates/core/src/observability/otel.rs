@@ -34,7 +34,7 @@ use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
     automatic_otlp_http_client, automatic_protocol_is_grpc, automatic_protocol_is_unset,
-    automatic_signal_endpoint, classify_metric_mark, resolve_header_env,
+    automatic_signal_endpoint, classify_metric_mark, drain_startup_queue, resolve_header_env,
     retry_batch_processor_channel_full, should_relog_runtime_diagnostic, telemetry_resource,
     validate_telemetry_sdk_resource_attributes,
 };
@@ -1567,7 +1567,9 @@ fn provider_with_exporter<E: SpanExporter + 'static>(
         batch_config.build(),
         config.channel_full_retry_budget(),
     );
-    Ok(builder.with_span_processor(processor).build())
+    let provider = builder.with_span_processor(processor).build();
+    drain_startup_queue(|| provider.force_flush())?;
+    Ok(provider)
 }
 
 fn configured_resource_attributes(config: &TraceConfig) -> Vec<KeyValue> {
