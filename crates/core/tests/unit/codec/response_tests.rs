@@ -1550,6 +1550,11 @@ fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_by_tool_eviden
         kind: "executableCode".into(),
         value: json!({"executableCode": {"language": "PYTHON", "code": "print(1)"}}),
     }]);
+    let adk_code_execution = MessageContent::Parts(vec![ContentPart::ProviderNative {
+        provider: "google_adk".into(),
+        kind: "executable_code".into(),
+        value: json!({"executable_code": {"language": "PYTHON", "code": "print(1)"}}),
+    }]);
     let text = MessageContent::Text("Hello, world!".into());
 
     for (grounding_metadata, extra, message, expected_total) in [
@@ -1579,6 +1584,18 @@ fn test_attach_estimated_cost_bills_gemini_tool_use_prompt_tokens_by_tool_eviden
             serde_json::Map::new(),
             code_execution.clone(),
             Some(0.00008),
+        ),
+        (
+            None,
+            serde_json::Map::new(),
+            adk_code_execution.clone(),
+            Some(0.00008),
+        ),
+        (
+            Some(web_search.clone()),
+            serde_json::Map::new(),
+            adk_code_execution,
+            None,
         ),
         (
             Some(web_search.clone()),

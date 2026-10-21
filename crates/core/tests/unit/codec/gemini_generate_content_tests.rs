@@ -5036,6 +5036,7 @@ fn test_decode_response_bills_tool_use_prompt_tokens_by_tool_evidence() {
     let url_context = json!({"urlMetadata": [{"retrievedUrl": "https://example.test"}]});
     let file_search_chunk = json!({"retrievedContext": {"fileSearchStore": "fileSearchStores/1"}});
     let vertex_search_chunk = json!({"retrievedContext": {"uri": "gs://bucket/doc"}});
+    let unnamed_store_chunk = json!({"retrievedContext": {"fileSearchStore": ""}});
 
     for (parts, candidate_fields, expected_total) in [
         (json!([code, code_result]), json!({}), Some(0.00005)),
@@ -5065,6 +5066,16 @@ fn test_decode_response_bills_tool_use_prompt_tokens_by_tool_evidence() {
         (
             json!([text]),
             json!({"groundingMetadata": {"groundingChunks": [vertex_search_chunk]}}),
+            None,
+        ),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"groundingChunks": [unnamed_store_chunk]}}),
+            None,
+        ),
+        (
+            json!([text]),
+            json!({"urlContextMetadata": {"urlMetadata": []}}),
             None,
         ),
         (json!([text]), json!({}), None),
@@ -5102,6 +5113,37 @@ fn test_decode_response_bills_tool_use_prompt_tokens_by_tool_evidence() {
             (total, expected) => assert_eq!(total, expected, "{response}"),
         }
     }
+}
+
+#[test]
+fn test_decode_response_prices_zero_tool_use_prompt_tokens_without_tool_evidence() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP"
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "toolUsePromptTokenCount": 0,
+            "totalTokenCount": 15
+        }
+    });
+
+    let cost = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap()
+        .cost
+        .unwrap();
+
+    assert!((cost.total.unwrap() - 0.00002).abs() < 1e-12, "{cost:?}");
 }
 
 #[test]

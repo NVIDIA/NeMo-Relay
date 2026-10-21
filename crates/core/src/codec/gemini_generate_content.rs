@@ -34,7 +34,7 @@ use super::response::{
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
 
-pub(crate) const GEMINI_PROVIDER: &str = "gemini";
+const GEMINI_PROVIDER: &str = "gemini";
 
 // ---------------------------------------------------------------------------
 // Public codec struct

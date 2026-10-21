@@ -17,7 +17,6 @@ use std::sync::{Arc, LazyLock, RwLock};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::gemini_generate_content::GEMINI_PROVIDER;
 use super::request::{ContentPart, MessageContent};
 use super::response::{AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, Usage};
 use crate::json::Json;
@@ -827,9 +826,14 @@ fn has_code_execution(message: Option<&MessageContent>) -> bool {
     parts.iter().any(|part| {
         matches!(
             part,
-            ContentPart::ProviderNative { provider, kind, .. }
-                if provider == GEMINI_PROVIDER
-                    && matches!(kind.as_str(), "executableCode" | "codeExecutionResult")
+            ContentPart::ProviderNative { kind, .. }
+                if matches!(
+                    kind.as_str(),
+                    "executableCode"
+                        | "codeExecutionResult"
+                        | "executable_code"
+                        | "code_execution_result"
+                )
         )
     })
 }
