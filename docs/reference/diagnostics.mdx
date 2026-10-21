@@ -366,7 +366,10 @@ observations arrive with the separately scheduled OTel integration.
 CLI composition and HTTP hosting follow in phase 2; daemon workers and broker
 collection in phase 3; public language-binding APIs in phase 4; dynamic-plugin
 transport in phase 5; and API conformance in phase 6. Detailed memory attribution
-and resource-metrics integration follow in phase 7.
+and resource-metrics integration follow in phase 7. That phase will also evaluate
+read-only typed views over leased, copied query workspaces to avoid a JSON
+round-trip for Rust readers. Phase 1 retains canonical JSON access and explicit
+owned snapshot conversion; consuming a page never pins retained history.
 CPU collection and generic measurement types/schema are also deferred; existing
 lifetime/timing fields remain available. Restart persistence remains later work.
 This API starts no diagnostics listener or background collection service.
