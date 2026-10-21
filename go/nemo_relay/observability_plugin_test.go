@@ -784,3 +784,42 @@ func TestObservabilityTraceResourcePromotion(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenTelemetryTLSConfigAcrossPluginAndDirectSurfaces(t *testing.T) {
+	tls := &OpenTelemetryTLSConfig{Certificate: "ca.pem", ClientCertificate: "client.pem", PrivateKey: "key.pem"}
+	encoded, err := json.Marshal(ObservabilityOpenTelemetryEndpointConfig{Type: OpenTelemetryTypeFull, Endpoint: "https://collector.example", TLS: tls})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["tls"].(map[string]any)["private_key"] != "key.pem" {
+		t.Fatalf("TLS schema lost: %s", encoded)
+	}
+	for _, create := range []func() error{
+		func() error {
+			config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, "http://127.0.0.1:4318")
+			config.TLS = tls
+			_, err := NewOpenTelemetrySubscriber(config)
+			return err
+		},
+		func() error {
+			config := NewOpenTelemetryLogConfig("http://127.0.0.1:4318")
+			config.TLS = tls
+			_, err := NewOpenTelemetryLogSubscriber(config)
+			return err
+		},
+		func() error {
+			config := NewOpenTelemetryMetricConfig("http://127.0.0.1:4318")
+			config.TLS = tls
+			_, err := NewOpenTelemetryMetricSubscriber(config)
+			return err
+		},
+	} {
+		if err := create(); err == nil || !strings.Contains(err.Error(), "TLS settings require an HTTPS endpoint") {
+			t.Fatalf("expected TLS validation error, got %v", err)
+		}
+	}
+}

@@ -50,6 +50,8 @@ mod otel_genai;
 pub mod otel_logs;
 pub mod otel_metrics;
 mod otel_signal;
+mod otel_tls;
+pub use otel_tls::OpenTelemetryTlsConfig;
 pub mod plugin_component;
 mod private_file;
 

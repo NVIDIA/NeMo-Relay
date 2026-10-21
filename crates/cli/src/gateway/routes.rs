@@ -20,6 +20,7 @@ pub(super) enum ProviderRoute {
     OpenAiModels,
     AnthropicMessages,
     AnthropicCountTokens,
+    AnthropicModels,
 }
 
 #[derive(Clone)]
@@ -54,7 +55,10 @@ impl ProviderForwarding {
 
 impl ProviderRoute {
     pub(super) fn is_anthropic(self) -> bool {
-        matches!(self, Self::AnthropicMessages | Self::AnthropicCountTokens)
+        matches!(
+            self,
+            Self::AnthropicMessages | Self::AnthropicCountTokens | Self::AnthropicModels
+        )
     }
 
     pub(super) fn has_helper(self, config: &crate::configuration::GatewayConfig) -> bool {
@@ -65,14 +69,16 @@ impl ProviderRoute {
         crate::upstream_auth::has_replacement(config, self.is_anthropic())
     }
 
-    /// Only managed provider routes may spend Relay-owned credentials.
+    /// Managed provider routes and model discovery may spend Relay-owned credentials.
     pub(super) const fn allows_relay_auth(self) -> bool {
         matches!(
             self,
             Self::OpenAiResponses
                 | Self::OpenAiChatCompletions
+                | Self::OpenAiModels
                 | Self::AnthropicMessages
                 | Self::AnthropicCountTokens
+                | Self::AnthropicModels
         )
     }
 
@@ -108,6 +114,14 @@ impl ProviderRoute {
         }
     }
 
+    pub(super) fn from_request(path: &str, headers: &HeaderMap) -> Option<Self> {
+        if super::is_anthropic_models_request(path, headers) {
+            Some(Self::AnthropicModels)
+        } else {
+            Self::from_path(path)
+        }
+    }
+
     pub(super) fn from_dispatch_override(value: &str) -> Option<Self> {
         match value {
             "openai_chat"
@@ -139,6 +153,7 @@ impl ProviderRoute {
             Self::OpenAiChatCompletions => Some(ProviderSurface::OpenAIChat),
             Self::AnthropicMessages => Some(ProviderSurface::AnthropicMessages),
             Self::AnthropicCountTokens
+            | Self::AnthropicModels
             | Self::OpenAiResponsesCompact
             | Self::OpenAiRealtime
             | Self::OpenAiRealtimeCalls
@@ -178,7 +193,7 @@ impl ProviderRoute {
             | Self::OpenAiMemoriesSummarize
             | Self::OpenAiStandaloneSearch
             | Self::OpenAiModels => config.openai_base_url.as_str(),
-            Self::AnthropicMessages | Self::AnthropicCountTokens => {
+            Self::AnthropicMessages | Self::AnthropicCountTokens | Self::AnthropicModels => {
                 config.anthropic_base_url.as_str()
             }
         };
@@ -238,6 +253,7 @@ impl ProviderRoute {
             Self::OpenAiModels => GatewayRouteKind::OpenAiModels,
             Self::AnthropicMessages => GatewayRouteKind::AnthropicMessages,
             Self::AnthropicCountTokens => GatewayRouteKind::AnthropicCountTokens,
+            Self::AnthropicModels => GatewayRouteKind::AnthropicModels,
         }
     }
 }
@@ -260,9 +276,9 @@ fn configured_auth_header<'a>(
         | ProviderRoute::OpenAiMemoriesSummarize
         | ProviderRoute::OpenAiStandaloneSearch
         | ProviderRoute::OpenAiModels => openai_auth_header,
-        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
-            anthropic_auth_header
-        }
+        ProviderRoute::AnthropicMessages
+        | ProviderRoute::AnthropicCountTokens
+        | ProviderRoute::AnthropicModels => anthropic_auth_header,
     }
 }
 
@@ -419,22 +435,33 @@ pub(super) fn gateway_upstream_url_override_with_openai_key_state(
     )
 }
 
-// Lets alignment adapters strip agent-native credentials only when the gateway can replace them
-// with standard provider API keys. Whitespace-only env vars are treated as missing because
-// forwarding an empty bearer value only replaces one authentication failure with another.
+// Managed routes and model discovery replace agent-native auth when Relay holds a key.
+// Other unmanaged routes cannot spend Relay credentials and strip ChatGPT auth before using
+// a custom OpenAI base, even without a replacement key.
 pub(super) fn strip_replaceable_agent_auth_headers(
     headers: &HeaderMap,
     route: ProviderRoute,
+    path: &str,
     allow_environment_provider_auth: bool,
-    configured_auth_header: Option<&str>,
+    config: &crate::configuration::GatewayConfig,
 ) -> HeaderMap {
+    if !route.allows_relay_auth()
+        && config.openai_base_url.trim_end_matches('/') != "https://api.openai.com/v1"
+        && !path.starts_with("/backend-api/codex/realtime/calls")
+    {
+        return alignment::codex::strip_chatgpt_auth(headers);
+    }
     strip_replaceable_agent_auth_headers_with_openai_key_state(
         headers,
         route,
         has_openai_replacement_auth(
             route,
             allow_environment_provider_auth,
-            configured_auth_header,
+            if route.has_replacement(config) {
+                Some("configured")
+            } else {
+                None
+            },
         ),
     )
 }

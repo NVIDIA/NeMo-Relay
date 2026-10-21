@@ -1168,6 +1168,16 @@ class LlmStream:
         """Cancel the producer and release native stream resources."""
         ...
 
+class OpenTelemetryTlsConfig:
+    """Paths to PEM certificate and private key files for one OTLP endpoint."""
+
+    certificate: str | None
+    client_certificate: str | None
+    private_key: str | None
+    def __init__(
+        self, certificate: str | None = None, client_certificate: str | None = None, private_key: str | None = None
+    ) -> None: ...
+
 class OpenTelemetryConfig:
     """Mutable configuration for ``OpenTelemetrySubscriber``.
 
@@ -1182,6 +1192,7 @@ class OpenTelemetryConfig:
     transport: str
     type: Literal["full", "gen_ai", "openinference"]
     endpoint: str
+    tls: OpenTelemetryTlsConfig | None
     service_name: str
     service_namespace: Optional[str]
     service_version: Optional[str]
@@ -1343,6 +1354,7 @@ class OpenTelemetryLogConfig:
 
     transport: Literal["http_binary", "grpc"]
     endpoint: str
+    tls: OpenTelemetryTlsConfig | None
     service_name: str
     service_namespace: str | None
     service_version: str | None
@@ -1394,6 +1406,7 @@ class OpenTelemetryMetricConfig:
 
     transport: Literal["http_binary", "grpc"]
     endpoint: str
+    tls: OpenTelemetryTlsConfig | None
     service_name: str
     service_namespace: str | None
     service_version: str | None

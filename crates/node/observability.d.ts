@@ -68,9 +68,19 @@ export interface AtifConfig {
   storage?: S3StorageConfig | HttpStorageConfig | Array<S3StorageConfig | HttpStorageConfig>;
 }
 
+export interface OpenTelemetryTlsConfig {
+  /** PEM CA bundle that replaces the system's trusted CAs. */
+  certificate?: string;
+  /** PEM client certificate chain. Also set `private_key`. */
+  client_certificate?: string;
+  /** PEM private key. Also set `client_certificate`. */
+  private_key?: string;
+}
+
 export interface OpenTelemetryEndpointConfig {
   type: 'full' | 'gen_ai' | 'openinference';
   endpoint: string;
+  tls?: OpenTelemetryTlsConfig;
   mark_projection?: 'inherit' | 'event' | 'tool';
   mark_exclude_names?: string[];
   attribute_mappings?: Array<{ key: string; alias: string }>;
@@ -94,6 +104,7 @@ export interface OpenTelemetryEndpointConfig {
 
 export interface OpenTelemetrySignalEndpointConfig {
   endpoint: string;
+  tls?: OpenTelemetryTlsConfig;
   transport?: 'http_binary' | 'grpc';
   headers?: Record<string, string>;
   header_env?: Record<string, string>;

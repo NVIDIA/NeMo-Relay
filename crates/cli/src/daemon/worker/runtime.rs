@@ -665,7 +665,7 @@ fn drain_timeout_ms(request: &WorkerDrainRequest) -> u64 {
 }
 
 async fn proxy(State(state): State<Arc<WorkerState>>, request: Request<Body>) -> Response<Body> {
-    let Some(route) = PublicRoute::from_path(request.uri().path()) else {
+    let Some(route) = PublicRoute::from_request(request.uri().path(), request.headers()) else {
         return crate::operational::unmatched_route(
             "worker",
             request.method(),
