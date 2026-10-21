@@ -1,16 +1,18 @@
 ---
-title: "Configure and Initialize Plugins"
-description: "Configure, validate, activate, diagnose, and close a NeMo Relay plugin host."
-position: 2
+title: "Initialize"
+description: "Use the language SDKs to validate, activate, diagnose, and close a NeMo Relay plugin host."
+position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this page when your application manages plugin configuration and lifetime.
-It explains the shared plugin-host API in Rust, Python, Node.js, Go, and C.
-Use [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+Use this guide when your application initializes plugins through a language
+SDK. It covers validation, activation, reports, and shutdown through the shared
+plugin-host API in Rust, Python, Node.js, Go, and C.
+Use [Configure](/configure-plugins/plugin-configuration-files)
 for the full `plugins.toml` format and merge rules. Use a component guide for
-component-specific settings.
+component-specific settings. Use [Manage](/configure-plugins/discoverable-plugins)
+for discoverable-plugin installation and lifecycle commands in the CLI.
 
 ## Choose a Configuration Path
 
@@ -65,9 +67,9 @@ records, such as `[[plugins.dynamic]]`, come from `plugins.toml`. Use the
 optional path when an embedded host needs a specific dynamic-plugin file.
 
 For details such as list order, component matching, disabled components, and
-how omitted values behave, see [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+how omitted values behave, see [Configure](/configure-plugins/plugin-configuration-files).
 
-## Per-Language Plugin Configuration
+## Initialize Through a Language SDK
 
 The following examples validate before activation. They use an empty document
 to show the host lifecycle. Replace it with component settings from the guide
@@ -268,11 +270,41 @@ Pass the file path to `validate` and `initialize` when the host must use that
 selected file instead of a discovered user file. This is useful for a service that receives configuration from its
 deployment system.
 
+### Embedded Python Host Initialization
+
+Python hosts pass an optional explicit `plugins.toml` directly to the unified
+host initializer:
+
+```python
+import asyncio
+
+from nemo_relay import plugin
+
+
+async def main() -> None:
+    async with plugin.activate(
+        {}, "path/to/plugins.toml"
+    ) as activation:
+        # Run your host application while dynamic plugins are active.
+        print(activation.report)
+        ...
+
+
+asyncio.run(main())
+```
+
+Core resolves manifest references relative to the declaring file, applies
+lifecycle state and trust policy, validates all selected plugins before loading
+code, and owns every resulting runtime through the returned activation handle.
+Use `plugin.activate(...)` when the host lifetime fits one `async with` block.
+Use `await plugin.initialize(...)` when the caller needs to retain and close the
+activation manually.
+
 ### Validate One Component in Isolation
 
 Use exact validation when the supplied document is complete and file discovery
 would hide a mistake. This is useful for unit tests and component-specific
 configuration helpers. Exact validation does not test manifest-backed plugins.
 
-For a complete configuration document, see [Plugin Configuration Files](/configure-plugins/plugin-configuration-files). For manifest-backed plugins,
-see [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins).
+For a complete configuration document, see [Configure](/configure-plugins/plugin-configuration-files). For manifest-backed plugins,
+see [Manage](/configure-plugins/discoverable-plugins).
