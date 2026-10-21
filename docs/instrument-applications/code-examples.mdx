@@ -312,7 +312,8 @@ not yet reported. Cleanup errors take priority over finalizer errors. If `next()
 already reported the stream error, close does not report it again. It can
 still report a cleanup or finalizer error. Handle errors from both reading
 and closing. Keep the read error if cleanup also fails, and report the
-cleanup error separately.
+cleanup error separately. If a stream error has not yet been reported,
+`close()` reports that error and logs any accompanying producer cleanup failure.
 
 ### Cancel the Producer
 
