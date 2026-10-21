@@ -181,7 +181,7 @@ pub(super) struct ExtensionSlot {
     pub component: ComponentHandle,
     pub name: Text<ID_BYTES>,
     pub description: Text<DESCRIPTION_BYTES>,
-    pub allowed_classes: u32,
+    pub allowed_classes: enumset::EnumSet<FailureClass>,
     pub opaque_classes: [Option<Text<32>>; 4],
     pub outcome: DiagnosticOutcome,
 }
@@ -717,7 +717,7 @@ mod tests {
             },
             name: text("acme.failure").unwrap(),
             description: text("custom").unwrap(),
-            allowed_classes: 0,
+            allowed_classes: enumset::EnumSet::new(),
             opaque_classes: [Some(text("original").unwrap()), None, None, None],
             outcome: DiagnosticOutcome::Failure,
         });

@@ -17,6 +17,7 @@ default = []
 schema = ["dep:schemars"]
 
 [dependencies]
+enumset = { version = "1", default-features = false }
 bitflags = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "now"] }
 schemars = { version = "0.8", features = ["chrono", "uuid1"], optional = true }
