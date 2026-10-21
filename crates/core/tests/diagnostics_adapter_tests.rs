@@ -225,6 +225,7 @@ fn typed_projection_reuses_logging_without_replaying_history_or_pinning_reader()
         .collect();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["message"], "One projected observation");
+    assert_eq!(records[0]["target"], "nemo_relay.diagnostics");
     assert_eq!(
         records[0]["fields"]["diagnostic"]["classification"]["canonical_code"],
         "plugin.internal"
@@ -317,3 +318,68 @@ fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs()
     );
     assert!(!output.contains("plugin.internal"));
 }
+
+#[test]
+fn warmed_projection_avoids_owned_field_conversions_without_sinks() {
+    let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
+    let service = enabled();
+    let producer = service
+        .register_component(ComponentRegistration::new("test.producer", &[PLUGIN_ERROR]))
+        .unwrap();
+    let runtime = LoggingRuntime::configure_with_diagnostics(
+        LoggingConfig {
+            level: LogLevel::Error,
+            stderr_enabled: false,
+            flush_interval_millis: 0,
+            ..Default::default()
+        },
+        &service,
+    )
+    .unwrap();
+    producer
+        .record_lazy(|| internal("Projected observation"))
+        .unwrap();
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    for _ in 0..100 {
+        producer
+            .record_lazy(|| internal("Projected observation"))
+            .unwrap();
+    }
+    let calls = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    // The native backend formats the message once. Borrowed fields require no
+    // intermediate vector or owned ValueBag conversion on this synchronous path.
+    assert_eq!(calls, 100);
+    runtime.shutdown();
+}
+
+thread_local! {
+    static ALLOCATIONS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+struct CountingAllocator;
+fn count_allocation() {
+    let _ = ALLOCATIONS.try_with(|count| {
+        if let Some(value) = count.get() {
+            count.set(Some(value + 1));
+        }
+    });
+}
+// SAFETY: all requests are forwarded unchanged to System; counting does not allocate.
+unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        count_allocation();
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+        count_allocation();
+        unsafe { std::alloc::System.alloc_zeroed(layout) }
+    }
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(pointer, layout) }
+    }
+    unsafe fn realloc(&self, pointer: *mut u8, layout: std::alloc::Layout, size: usize) -> *mut u8 {
+        count_allocation();
+        unsafe { std::alloc::System.realloc(pointer, layout, size) }
+    }
+}
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
