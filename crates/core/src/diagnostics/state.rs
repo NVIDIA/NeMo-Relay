@@ -217,7 +217,11 @@ impl ExtensionSlot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StoredFailureClass {
     Builtin(FailureClass),
-    Extension(ExtensionClassHandle),
+    Extension {
+        slot: usize,
+        generation: u64,
+        index: u8,
+    },
 }
 /// Validated compact plugin context retained independently of caller-owned names.
 #[derive(Clone, Copy, Default, Serialize)]
@@ -477,16 +481,19 @@ impl State {
     pub fn class_name(&self, class: StoredFailureClass) -> Option<&str> {
         match class {
             StoredFailureClass::Builtin(class) => Some(class.as_str()),
-            StoredFailureClass::Extension(handle) => self
+            // Public ownership/context checks have already run. The unique
+            // descriptor generation still protects retained references on reuse.
+            StoredFailureClass::Extension {
+                slot,
+                generation,
+                index,
+            } => self
                 .extensions
-                .get(handle.extension.slot)?
+                .get(slot)?
                 .as_ref()
-                .filter(|value| {
-                    value.generation == handle.extension.generation
-                        && value.component == handle.extension.component
-                })?
+                .filter(|value| value.generation == generation)?
                 .opaque_classes
-                .get(handle.index)?
+                .get(usize::from(index))?
                 .as_ref()
                 .map(Text::as_str),
         }
@@ -671,6 +678,46 @@ mod tests {
         }
         let last = recorders.last().unwrap().lease.as_ref().unwrap().handle;
         assert!(state.component_counters(last).next().unwrap().0.slot() > 1000);
+    }
+
+    #[test]
+    fn stored_extension_causes_are_compact_and_generation_checked() {
+        assert!(size_of::<StoredFailureClass>() < size_of::<ExtensionClassHandle>());
+        let mut state = State::new(&DiagnosticLimits::default()).unwrap();
+        state.extensions[0] = Some(ExtensionSlot {
+            generation: 1,
+            component: ComponentHandle {
+                slot: 0,
+                generation: 1,
+            },
+            name: Text::new("acme.failure").unwrap(),
+            description: Text::new("custom").unwrap(),
+            allowed_classes: 0,
+            opaque_classes: [Some(Text::new("original").unwrap()), None, None, None],
+            outcome: DiagnosticOutcome::Failure,
+        });
+        let original = StoredFailureClass::Extension {
+            slot: 0,
+            generation: 1,
+            index: 0,
+        };
+        assert_eq!(state.class_name(original), Some("original"));
+        let descriptor = state.extensions[0].as_mut().unwrap();
+        descriptor.generation = 2;
+        descriptor.component = ComponentHandle {
+            slot: 1,
+            generation: 2,
+        };
+        descriptor.opaque_classes[0] = Some(Text::new("replacement").unwrap());
+        assert_eq!(state.class_name(original), None);
+        assert_eq!(
+            state.class_name(StoredFailureClass::Extension {
+                slot: 0,
+                generation: 2,
+                index: 0
+            }),
+            Some("replacement")
+        );
     }
 
     #[test]
