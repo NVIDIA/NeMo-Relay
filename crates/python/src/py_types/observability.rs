@@ -18,6 +18,45 @@ use super::{
 // AtifExporter
 // ---------------------------------------------------------------------------
 
+/// Paths to PEM certificate and private key files for one OTLP endpoint.
+#[pyclass(name = "OpenTelemetryTlsConfig", from_py_object)]
+#[derive(Clone, Default)]
+pub struct PyOpenTelemetryTlsConfig {
+    #[pyo3(get, set)]
+    pub(crate) certificate: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) client_certificate: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) private_key: Option<String>,
+}
+
+#[pymethods]
+impl PyOpenTelemetryTlsConfig {
+    #[new]
+    #[pyo3(signature = (certificate=None, client_certificate=None, private_key=None))]
+    fn new(
+        certificate: Option<String>,
+        client_certificate: Option<String>,
+        private_key: Option<String>,
+    ) -> Self {
+        Self {
+            certificate,
+            client_certificate,
+            private_key,
+        }
+    }
+}
+
+impl PyOpenTelemetryTlsConfig {
+    fn to_rust(&self) -> nemo_relay::observability::OpenTelemetryTlsConfig {
+        nemo_relay::observability::OpenTelemetryTlsConfig {
+            certificate: self.certificate.clone(),
+            client_certificate: self.client_certificate.clone(),
+            private_key: self.private_key.clone(),
+        }
+    }
+}
+
 /// One bounded runtime diagnostic from an OpenTelemetry subscriber.
 #[pyclass(name = "OpenTelemetryRuntimeDiagnostic", frozen, skip_from_py_object)]
 #[derive(Clone)]
@@ -484,6 +523,8 @@ pub struct PyOpenTelemetryConfig {
     #[pyo3(get, set)]
     pub(crate) endpoint: String,
     #[pyo3(get, set)]
+    pub(crate) tls: Option<PyOpenTelemetryTlsConfig>,
+    #[pyo3(get, set)]
     pub(crate) service_name: String,
     #[pyo3(get, set)]
     pub(crate) service_namespace: Option<String>,
@@ -737,6 +778,9 @@ impl PyOpenTelemetryConfig {
         for (key, variable) in &self.header_env {
             config = config.with_header_env(key.clone(), variable.clone());
         }
+        if let Some(tls) = &self.tls {
+            config = config.with_tls(tls.to_rust());
+        }
         config = config.with_allow_insecure(self.allow_insecure);
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
@@ -773,6 +817,7 @@ impl PyOpenTelemetryConfig {
             otel_type,
             transport: "http_binary".to_string(),
             endpoint,
+            tls: None,
             service_name: "unknown_service".to_string(),
             service_namespace: None,
             service_version: None,
@@ -1018,6 +1063,8 @@ pub struct PyOpenTelemetryLogConfig {
     #[pyo3(get, set)]
     pub(crate) endpoint: String,
     #[pyo3(get, set)]
+    pub(crate) tls: Option<PyOpenTelemetryTlsConfig>,
+    #[pyo3(get, set)]
     pub(crate) service_name: String,
     #[pyo3(get, set)]
     pub(crate) service_namespace: Option<String>,
@@ -1075,6 +1122,9 @@ impl PyOpenTelemetryLogConfig {
         for (key, variable) in &self.header_env {
             config = config.with_header_env(key.clone(), variable.clone());
         }
+        if let Some(tls) = &self.tls {
+            config = config.with_tls(tls.to_rust());
+        }
         config = config.with_allow_insecure(self.allow_insecure);
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
@@ -1090,6 +1140,7 @@ impl PyOpenTelemetryLogConfig {
         Self {
             transport: "http_binary".into(),
             endpoint,
+            tls: None,
             service_name: "unknown_service".into(),
             service_namespace: None,
             service_version: None,
@@ -1247,6 +1298,8 @@ pub struct PyOpenTelemetryMetricConfig {
     #[pyo3(get, set)]
     pub(crate) endpoint: String,
     #[pyo3(get, set)]
+    pub(crate) tls: Option<PyOpenTelemetryTlsConfig>,
+    #[pyo3(get, set)]
     pub(crate) service_name: String,
     #[pyo3(get, set)]
     pub(crate) service_namespace: Option<String>,
@@ -1299,6 +1352,9 @@ impl PyOpenTelemetryMetricConfig {
         for (key, variable) in &self.header_env {
             config = config.with_header_env(key.clone(), variable.clone());
         }
+        if let Some(tls) = &self.tls {
+            config = config.with_tls(tls.to_rust());
+        }
         config = config.with_allow_insecure(self.allow_insecure);
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
@@ -1314,6 +1370,7 @@ impl PyOpenTelemetryMetricConfig {
         Self {
             transport: "http_binary".into(),
             endpoint,
+            tls: None,
             service_name: "unknown_service".into(),
             service_namespace: None,
             service_version: None,
