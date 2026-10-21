@@ -3094,8 +3094,18 @@ fn owned_shared_payloads_record_and_project_without_new_allocations() {
         .subscribe_projection(move |event| {
             assert_eq!(event.classification.code(), "logging.sink.write_failed");
             assert_eq!(event.classification.failure_class(), Some("unknown"));
-            assert_eq!(event.context.execution.as_deref(), Some("native_abi"));
-            assert_eq!(event.context.phase.as_deref(), Some("policy"));
+            assert_eq!(
+                event
+                    .context
+                    .execution
+                    .as_ref()
+                    .map(PluginExecutionName::as_str),
+                Some("native_abi")
+            );
+            assert_eq!(
+                event.context.phase.as_ref().map(PluginPhaseName::as_str),
+                Some("policy")
+            );
             assert!(matches!(
                 event
                     .context
@@ -3171,7 +3181,14 @@ fn owned_shared_payloads_record_and_project_without_new_allocations() {
     assert_eq!(service.memory_usage().reserved_bytes, reserved);
     let view = snapshot(&service, DiagnosticQuery::default());
     assert_eq!(view.lifetime.totals.occurrences_total.value.get(), 101);
-    assert_eq!(view.events[0].context.phase.as_deref(), Some("policy"));
+    assert_eq!(
+        view.events[0]
+            .context
+            .phase
+            .as_ref()
+            .map(PluginPhaseName::as_str),
+        Some("policy")
+    );
     assert_eq!(
         view.events[0].correlation.request_id.as_deref(),
         Some("request-42")
