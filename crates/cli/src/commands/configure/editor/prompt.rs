@@ -180,12 +180,17 @@ fn edit_upstream(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result
                 println!(
                     "HTTP exposes model content without encryption. Credentials and custom headers will not be forwarded. Personal gateways only."
                 );
-                let hosts = Input::<String>::with_theme(theme)
-                    .with_prompt("Bare hosts, comma separated (empty denies all)")
-                    .allow_empty(true)
-                    .interact_text()
-                    .map_err(prompt_error)?;
-                document.set_http_model_hosts(&hosts)?;
+                println!(
+                    "Use Add/Edit/Remove to update hosts; Reset or Clear writes an empty deny list."
+                );
+                if let Some(hosts) = crate::plugins::edit_string_list(
+                    theme,
+                    "upstream.insecure_http_model_hosts",
+                    &document.http_model_hosts()?,
+                    "config.toml",
+                )? {
+                    document.set_http_model_hosts(hosts)?;
+                }
             }
             11 => return Ok(()),
             _ => unreachable!(),

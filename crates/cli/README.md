@@ -228,9 +228,10 @@ Personal gateways can explicitly trust remote HTTP inference hosts through
 `config.toml`. This is for unauthenticated upstreams only: configured provider
 credentials conflict, and credential/custom headers are removed before forwarding.
 HTTP exposes model content without encryption. HTTPS remains the default; daemon
-workers and remote HTTP WebSockets do not support this exception. See the
-[provider routing documentation](../../docs/nemo-relay-cli/basic-usage.mdx#credential-free-http-model-upstreams)
-for the matching rules, forwarded headers, and limitations.
+workers and remote HTTP WebSockets do not support this exception. Entries are exact
+DNS hostnames or canonical IP addresses, without schemes, ports, paths, or wildcards.
+DNS matching ignores case and a trailing dot; any port or path on the listed host
+is permitted. An explicit empty list revokes remote HTTP trust.
 
 ### Edit Plugin Configuration
 
