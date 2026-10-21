@@ -827,7 +827,10 @@ These settings apply when Relay has no replacement credential.
 With the default `openai_base_url`, Relay sends ChatGPT requests to the native
 ChatGPT Codex backend. With a custom `openai_base_url`, Relay uses that URL.
 ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` always use the
-ChatGPT backend and keep the caller's credential.
+ChatGPT backend and keep the caller's credential. With the default
+`openai_base_url` and a recognized ChatGPT credential, `POST /realtime/calls`
+and `POST /v1/realtime/calls` also use the ChatGPT backend. These voice calls
+never receive Relay's provider credentials, even when configured.
 
 Set `[upstream] chatgpt_codex_base_url` to send ChatGPT requests, including
 voice call creation, to an approved endpoint instead of the default
@@ -842,7 +845,7 @@ ignore `NEMO_RELAY_CHATGPT_CODEX_BASE_URL`, consistent with the other managed
 provider endpoint settings. Personal gateways also accept that environment
 variable and `--chatgpt-codex-base-url`; CLI flags take precedence.
 
-Live and Realtime connections use `openai_base_url`. Relay never adds its own
+Live and Realtime sideband connections use `openai_base_url`. Relay never adds its own
 provider credentials to these requests. By default, the upstream is
 `api.openai.com`, which matches Codex's WebRTC sideband destination. Relay keeps
 the caller's provider credential by default. With a custom `openai_base_url`,

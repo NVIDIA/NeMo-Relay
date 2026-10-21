@@ -661,7 +661,12 @@ recognizes a ChatGPT token. Relay keeps other caller credentials.
 ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
 They keep the caller's ChatGPT credential and use the ChatGPT backend
 (`chatgpt_codex_base_url` when set) even when a replacement credential is
-configured. Sideband attachment routes use `openai_base_url`. Relay never adds
+configured. With the default `openai_base_url` and a recognized ChatGPT
+credential, `POST /realtime/calls` and `POST /v1/realtime/calls` also use the
+ChatGPT backend. These voice calls never receive Relay's provider credentials,
+even when configured.
+
+Sideband attachment routes use `openai_base_url`. Relay never adds
 its own provider credentials to these requests. It keeps the caller's provider
 credential by default. With a custom `openai_base_url`, Relay removes recognized
 ChatGPT tokens and `chatgpt-account-id`. Refer to
