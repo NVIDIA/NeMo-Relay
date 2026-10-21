@@ -692,6 +692,18 @@ struct Projections {
 ///
 /// Dropping unsubscribes future publication. A callback copied before removal
 /// may still finish; adapters can add stronger shutdown ordering when needed.
+///
+/// Retain the guard for the subscription's intended lifetime:
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// use nemo_relay::diagnostics::{DiagnosticError, Diagnostics};
+/// fn subscribe(diagnostics: &Diagnostics) -> Result<(), DiagnosticError> {
+///     diagnostics.subscribe_projection(|_| {})?; // Immediately unsubscribes.
+///     Ok(())
+/// }
+/// ```
+#[must_use = "retain this guard to keep the diagnostic projection subscribed"]
 pub struct ProjectionGuard {
     inner: Weak<Inner>,
     id: Option<u64>,
