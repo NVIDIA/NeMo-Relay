@@ -623,11 +623,19 @@ fn future_plugin_context_names_survive_complete_snapshot_round_trips() {
         );
         assert_eq!(decoded.events[0].context.phase.as_deref(), Some(phase_name));
         assert!(matches!(
-            &decoded.events[0].context.execution,
+            decoded.events[0]
+                .context
+                .execution
+                .clone()
+                .map(PluginExecutionName::into_name),
             Some(Cow::Owned(_))
         ));
         assert!(matches!(
-            &decoded.events[0].context.phase,
+            decoded.events[0]
+                .context
+                .phase
+                .clone()
+                .map(PluginPhaseName::into_name),
             Some(Cow::Owned(_))
         ));
         assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
@@ -940,4 +948,20 @@ fn canonical_enum_conversions_keep_const_names_and_reject_noncanonical_input() {
         assert_eq!(PluginExecution::from_canonical_name(invalid), None);
         assert_eq!(PluginPhase::from_canonical_name(invalid), None);
     }
+}
+
+#[test]
+fn distinct_context_names_keep_known_values_borrowed_and_future_names_opaque() {
+    let execution = PluginExecutionName::from(PluginExecution::NativeAbi);
+    let phase = PluginPhaseName::from(PluginPhase::Activation);
+    assert_eq!(execution.known(), Some(PluginExecution::NativeAbi));
+    assert_eq!(phase.known(), Some(PluginPhase::Activation));
+    assert!(matches!(execution.into_name(), Cow::Borrowed("native_abi")));
+    assert!(matches!(phase.into_name(), Cow::Borrowed("activation")));
+    let execution: PluginExecutionName = serde_json::from_value(json!("future_vm")).unwrap();
+    let phase: PluginPhaseName = serde_json::from_value(json!("future_stage")).unwrap();
+    assert_eq!(execution.known(), None);
+    assert_eq!(phase.known(), None);
+    assert_eq!(serde_json::to_value(execution).unwrap(), json!("future_vm"));
+    assert_eq!(serde_json::to_value(phase).unwrap(), json!("future_stage"));
 }

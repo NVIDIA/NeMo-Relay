@@ -5,7 +5,8 @@
 
 use super::{
     BuiltinDiagnosticCode, ClassificationError, ComponentIdentity, DiagnosticNumber,
-    DiagnosticOrigin, FailureClass, FailureCode, NoticeCode, ObservationTime, SuccessCode,
+    DiagnosticOrigin, FailureClass, FailureCode, NoticeCode, ObservationTime,
+    PluginObservationContext, SuccessCode,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -149,23 +150,6 @@ pub struct DiagnosticDetail {
     pub message: String,
     /// Whether the original text exceeded its retained byte allowance.
     pub truncated: bool,
-}
-
-/// Shared plugin-operation facts for producers, projections, and decoded evidence.
-///
-/// Known producer values borrow canonical static names; decoded values own their
-/// strings, including future names. Core validates and encodes recording input
-/// into private fixed-size storage. Missing values remain distinct from names
-/// unrecognized by a reader, and context never establishes counter dimensions.
-/// Phase-one activation recording supplies only `phase = "activation"` and leaves
-/// execution unset. Other producer integrations remain deferred.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct PluginObservationContext {
-    /// Observed execution name, when known; never inferred from a code.
-    pub execution: Option<Cow<'static, str>>,
-    /// Observed lifecycle phase or policy-gate context, when known.
-    pub phase: Option<Cow<'static, str>>,
 }
 
 /// One recent observation with its actual class and original configuration attribution.
