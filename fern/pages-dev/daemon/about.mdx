@@ -28,6 +28,13 @@ mode uses different lifecycle commands and administrator-owned configuration.
 
 ## Choose a Deployment
 
+Prefer a daemon on the host where users run their coding harnesses. The daemon
+helps sessions recover from worker failures and serves multiple users on one
+host. Avoid Kubernetes unless shared host networking causes port conflicts or
+one daemon cannot serve enough users at the same time. Refer to
+[Kubernetes Deployment Guidance](/daemon/kubernetes) to decide whether you need
+it and plan the setup. NeMo Relay does not provide a reference Helm chart.
+
 | Deployment | Daemon runs as | Available when | Guide |
 | --- | --- | --- | --- |
 | Windows user task | Signed-in user | User is logged in | [Windows](/daemon/windows) |

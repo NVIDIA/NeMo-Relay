@@ -1,0 +1,143 @@
+---
+title: "Kubernetes Deployment Guidance"
+description: "Decide whether you need a Kubernetes daemon and plan its setup."
+position: 11
+---
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Prefer running the managed daemon on the host where users run their coding
+harnesses. The daemon helps sessions recover from worker failures and serves
+multiple users on one host. Kubernetes adds network and service management work.
+Avoid it unless you need it to address port conflicts or limits on user capacity.
+
+This page explains when to use Kubernetes and how to plan the setup. NeMo Relay
+does not provide a reference Helm chart. If you need Kubernetes, your
+organization must maintain its deployment manifests or Helm chart.
+
+## Decide Whether Kubernetes Is Necessary
+
+Consider a separate daemon deployment only when a local daemon cannot solve one
+of these problems:
+
+- **Port sharing:** Pods using shared host networking cannot each bind the same
+  daemon address and port on a node. First consider one shared host daemon or
+  separate ports with matching managed bundles. Pods with their own network
+  namespaces can each use the same port. They don't need a separate daemon
+  deployment just to avoid port conflicts.
+- **Concurrent users:** One shared daemon can serve only a limited number of
+  users at the same time. If it cannot serve enough users, measure the workload.
+  Then plan separate daemon deployments for groups of clients. Moving the same
+  daemon into a pod does not increase its capacity on its own.
+
+There is no published user limit that applies to every deployment. Capacity
+depends on the number of active requests, stream length, and response size. CPU,
+memory, and network bandwidth also affect capacity. Follow
+[Measure Daemon Transport](/daemon/reference#measure-daemon-transport) to plan
+capacity. Then test with the workload you expect from your clients.
+
+## Keep Workers and Plugins With the Clients
+
+The daemon pod runs the route broker, which assigns workers to clients. Each
+coding harness runs its Model Context Protocol (MCP) process and worker on the
+**client computer**. If the harness runs in a pod, these processes run in that
+client pod. The worker runs plugins and sends model requests to
+the provider. The daemon also needs provider access for pass-through requests.
+Refer to [Architecture and Startup](/daemon/architecture).
+
+Install `config.toml` and `plugins.toml` on every client. Keep these files under
+administrator control. Follow
+[Configuration and Managed Clients](/daemon/configuration). Workers do not
+download these files from the daemon. A ConfigMap mounted only in the daemon pod
+does not configure clients. Configure the daemon's provider routing separately
+so pass-through reaches the intended providers.
+
+For native plugins such as Switchyard, install the approved plugin manifest,
+native library, and dependencies on each client that runs a worker. Match the
+library to that client's operating system, architecture, and Relay version.
+Follow [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
+for installation and trust requirements. A pod that runs only the daemon does
+not load plugins and does not need their libraries.
+
+Provide plugin API keys through the method that the plugin supports. Place them
+in the client worker's environment or credential store. A Kubernetes Secret
+available only in the daemon pod does not reach client workers. Do not put
+secrets in `plugins.toml` files that all users can read. Each user on each client
+needs a route credential. Keep it separate from plugin and model-provider keys.
+
+## Plan Network Access and TLS
+
+Use a stable private HTTPS origin for the daemon, such as
+`https://relay.example.com:8443`. Generate the managed client bundle for that
+origin. Follow the address and certificate requirements in
+[Remote Linux: Deploy the Daemon](/daemon/remote-server) and the worker address
+and port setup in [Remote Linux: Deploy Clients](/daemon/remote-clients).
+
+The deployment must allow all of these connections:
+
+- Clients to the daemon: HTTPS model and hook requests, plus secure WebSocket
+  (WSS) control sessions from MCP and workers. Keep these sessions open.
+- Daemon to each assigned client worker: new HTTPS connections for readiness
+  checks and routed requests. This is not a reverse tunnel. An ingress that
+  accepts client traffic alone does not provide this return path.
+- Client workers and the daemon to configured model providers over HTTPS.
+- Client workers to any plugin services and telemetry collectors they use.
+
+Allow these connections in Kubernetes NetworkPolicies, host firewalls, VPN
+routes, and service routing. Set each worker's advertised address and port so
+the daemon pod can reach it. A client loopback address cannot serve a remote
+daemon. If workers share a host network namespace, assign a different port to
+each user on that host. Limit daemon and worker access to approved networks.
+
+Upstream URLs outside loopback must use HTTPS. This includes private Kubernetes
+Service addresses. Configure the daemon and every client to trust the upstream
+certificate authority (CA). Clients must also trust the daemon's HTTPS
+certificate. Relay sends worker Transport Layer Security (TLS) trust details
+over the authenticated daemon connection. Do not disable certificate checks to
+work around a private CA.
+
+Configure the ingress or reverse proxy to meet these requirements:
+
+- Allow WebSocket upgrades under `/_nemo-relay/control/`.
+- Keep long-lived sessions open and allow traffic in both directions.
+- Preserve ping and pong frames, which check whether the connection is alive.
+- Disable response buffering, compression, and other changes to response data.
+- Disable cache coalescing, which combines requests for the same resource.
+- Preserve streaming and response trailers.
+
+Follow [Reverse Proxy Requirements](/daemon/reference#configure-a-trusted-reverse-proxy)
+for keepalive timing. Advertise the external HTTPS origin and preserve request
+paths. If the proxy handles TLS, limit access to the daemon's backend listener.
+
+## Plan Capacity, State, and Restarts
+
+Start with one active daemon per endpoint. The daemon keeps worker assignments
+and route credential bindings in memory. Independent replicas do not share this
+state. Do not assume that one load-balanced Service makes replicas work as one
+daemon. To serve more users, assign groups of clients to separate daemon origins.
+Use matching managed bundles and test each deployment's capacity.
+
+Use `XDG_CONFIG_HOME` to set where the daemon stores its identity state. Keep this
+state when you replace the pod. Set file ownership and permissions for the
+daemon account. If you replace the signing identity, clients can reject the
+daemon even if its HTTPS certificate stays the same. Do not let active daemons
+share a writable identity directory. Refer to
+[Keep Identity State](/daemon/operations#keep-identity-state).
+
+Before a planned upgrade or pod replacement, ask users to close affected
+harnesses and wait for workers to exit. Workers can take up to two minutes to
+drain. Set the pod's termination grace period long enough for accepted requests
+to finish. Stopping the daemon can interrupt active streams. Follow
+[Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back).
+
+A daemon restart clears route credential bindings. By default, requests bypass
+worker plugins until MCP registers again and a worker is ready. Use
+`--require-worker` to reject requests while worker processing is unavailable.
+
+Before adding users, complete
+[Verify Worker-Backed Operation](/daemon/operations#verify-worker-backed-operation)
+through the actual Service and ingress. Confirm a worker becomes ready, a model
+stream completes, and an approved plugin produces its expected result. Test pod
+replacement and control-session recovery. `/healthz` alone does not prove that
+the daemon can reach workers or that plugins are active.
