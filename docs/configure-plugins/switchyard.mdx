@@ -1,0 +1,317 @@
+---
+title: "NeMo Switchyard"
+sidebar-title: "NeMo Switchyard"
+slug: configure-plugins/switchyard
+description: "Install and configure the NeMo Switchyard plugin for a user account or system-wide deployment."
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+## About
+
+Route one OpenAI-compatible request through Switchyard inside NeMo Relay, then
+confirm the response and routing event in a local Agent Trajectory Observability Format (ATOF) file.
+
+The [NeMo Relay Plugins repository](https://github.com/NVIDIA/NeMo-Relay-Plugins)
+builds and releases plugins that extend Relay, including the plugin for
+[NeMo Switchyard](https://github.com/NVIDIA-NeMo/Switchyard), which routes LLM
+requests across models and providers.
+
+## Prerequisites
+
+Before you start, make sure you have:
+
+- A [supported NeMo Relay CLI platform](/getting-started/installation#supported-platforms)
+- The [GitHub CLI](https://cli.github.com/), signed in with `gh auth login` or configured with `GH_TOKEN` or `GITHUB_TOKEN`
+- Access to the public [NeMo Relay Plugins releases](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases)
+- Inference access: an [NVIDIA API key](https://build.nvidia.com/settings/api-keys) for this example, or credentials for your own endpoint
+
+<Warning>
+This guide pins Switchyard plugin `0.3.2` and NeMo Relay `0.11.0` separately.
+Relay selects the bundle for your operating system, CPU, and CLI libc target.
+The plugin is a native library loaded into the Relay process; install it only
+from a source you trust.
+</Warning>
+
+On Unix, the verification step also uses `jq`; PowerShell uses its built-in JSON parser.
+Use a fresh project directory and reserve local port `4040` for this test.
+
+<Note icon="circle-info">
+Relay does not require the model used below. The routing example selects a
+public [build.nvidia.com model](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground).
+For another provider, update the target model, the plugin and gateway endpoint URLs, and the
+credential environment variable together.
+</Note>
+
+<Steps toc={true}>
+
+## Install
+
+### Install Relay
+
+Install the documented Relay release with the current installer script. The
+script comes from `main`; `NEMO_RELAY_VERSION` selects the CLI release.
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.11.0 sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+</Tab>
+<Tab title="Windows PowerShell">
+```powershell
+$env:NEMO_RELAY_VERSION = '0.11.0'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+</Tab>
+</Tabs>
+
+### Install the Switchyard Plugin
+
+Install the published bundle for your user account. Keep it disabled until you
+have configured routing and trust:
+
+```bash
+nemo-relay plugins install --user github:NVIDIA/NeMo-Relay-Plugins@switchyard-plugin-0.3.2 --no-enable
+nemo-relay plugins list --user
+```
+
+Relay downloads and verifies the platform bundle, registers `nvidia.switchyard`,
+and retains it across runs. The list includes its scope, enabled state,
+validation and policy status, and release source. Before configuration, the
+plugin is disabled and may report configuration or policy errors.
+
+For a system-wide deployment, use `--global` instead of `--user` for installation,
+listing, and uninstallation, and configure the system `plugins.toml` below.
+Run global management commands with an account that can write that directory
+and authenticate to GitHub. Install in one scope to avoid duplicate plugin IDs.
+
+## Configure
+
+Edit the `plugins.toml` in the scope you selected:
+
+| Scope | Configuration file |
+| --- | --- |
+| User | `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`, or `~/.config/nemo-relay/plugins.toml` when `XDG_CONFIG_HOME` is unset |
+| Global on Unix | `/etc/nemo-relay/plugins.toml` |
+| Global on Windows | `%ProgramData%\nemo-relay\plugins.toml` |
+
+Keep the installer's top-level settings and `[[plugins.dynamic]]` entry, including
+its managed `manifest` path. Replace any generated empty
+`[plugins.dynamic.config]` table with the settings below. Add the following configuration to that entry and merge
+the observability and trust settings into the same file. Do not create a second
+`[[plugins.dynamic]]` entry for Switchyard or overwrite other plugin settings.
+The `[plugins.dynamic.config]` tables belong to the installer's Switchyard entry;
+place them after its `manifest` line and before any other `[[plugins.dynamic]]` entry.
+
+<Code src="_code/switchyard/plugins.toml" language="toml" title="plugins.toml settings" />
+
+The request uses the route ID `switchyard/quickstart`. The plugin configuration
+maps that route to the target model
+`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` through the NVIDIA client. This
+single-target passthrough route demonstrates model resolution; it does not
+choose dynamically between multiple candidate models.
+
+<Warning>
+The installer checksums and `integrity_only` policy check artifact integrity, not independent
+publisher authenticity: the archive and checksum come from the same source.
+Only load a bundle whose publisher you trust. The example uses a server-owned
+API key: the native plugin does not
+support forwarding each caller's credential to the provider. Protect
+`logs/events.jsonl`; Relay events can contain request or response data even
+with full payload export disabled.
+</Warning>
+
+## Run
+
+Create a working directory for the response and local event log:
+
+```bash
+mkdir relay-switchyard
+cd relay-switchyard
+```
+
+In a gateway terminal in this directory, set your API key, enable the configured
+plugin, and validate it. Start Relay without `--config` or `--plugin-config-path`
+so it discovers the user and system plugin files. An explicit configuration
+path replaces user plugin discovery; see
+[Configure](/configure-plugins/plugin-configuration-files#gateway-explicit-config).
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+export NVIDIA_API_KEY="your-api-key"
+export NEMO_RELAY_OPENAI_BASE_URL="https://integrate.api.nvidia.com/v1"
+```
+
+Enable and validate the plugin, then start Relay:
+
+```bash
+rm -f -- response.json logs/events.jsonl &&
+nemo-relay plugins enable nvidia.switchyard &&
+nemo-relay plugins validate nvidia.switchyard &&
+nemo-relay --bind 127.0.0.1:4040
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+$env:NVIDIA_API_KEY = 'your-api-key'
+$env:NEMO_RELAY_OPENAI_BASE_URL = 'https://integrate.api.nvidia.com/v1'
+```
+
+Enable and validate the plugin, then start Relay:
+
+```powershell
+$env:Path = (Join-Path $env:LOCALAPPDATA 'nemo-relay\bin') + [IO.Path]::PathSeparator + $env:Path
+foreach ($path in @('response.json', 'logs/events.jsonl')) {
+  if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+}
+nemo-relay plugins enable nvidia.switchyard
+if ($LASTEXITCODE -ne 0) { throw 'Failed to enable the Switchyard plugin' }
+nemo-relay plugins validate nvidia.switchyard
+if ($LASTEXITCODE -ne 0) { throw 'Failed to validate the Switchyard plugin' }
+nemo-relay --bind 127.0.0.1:4040
+```
+</Tab>
+</Tabs>
+
+Leave Relay running and wait until it reports that it is listening on
+`127.0.0.1:4040`. In a second terminal, from the same directory, send one request
+to the route ID `switchyard/quickstart` and save the response:
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+curl -fsS --max-time 120 --output response.json http://127.0.0.1:4040/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"switchyard/quickstart","messages":[{"role":"user","content":"Reply with RELAY_QUICKSTART_RESPONSE_OK."}],"stream":false}'
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+$body = @{
+  model = 'switchyard/quickstart'
+  messages = @(@{ role = 'user'; content = 'Reply with RELAY_QUICKSTART_RESPONSE_OK.' })
+  stream = $false
+} | ConvertTo-Json -Depth 5
+$response = Invoke-RestMethod http://127.0.0.1:4040/v1/chat/completions -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 120
+$response | ConvertTo-Json -Depth 50 | Set-Content response.json -Encoding utf8
+```
+</Tab>
+</Tabs>
+
+## Verify
+
+The verification command prints `RELAY_QUICKSTART_RESPONSE_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+
+<details>
+<summary>Run the verification checks</summary>
+
+After the request finishes, stop Relay with Ctrl+C in its terminal to flush
+the event file. Then check the assistant response and confirm that Relay recorded a mark
+named `switchyard.routing.decision` with the configured target in
+`data.selected_model`:
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+jq -e '.choices[0].message | .role == "assistant" and
+  (.content | contains("RELAY_QUICKSTART_RESPONSE_OK"))' response.json > /dev/null &&
+jq -se 'length > 0 and
+  all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
+  any(.[]; .kind == "mark" and .name == "switchyard.routing.decision" and
+    .data.selected_model == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")' \
+  logs/events.jsonl > /dev/null &&
+printf 'RELAY_QUICKSTART_RESPONSE_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+$message = (Get-Content response.json -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop).choices[0].message
+if ($message.role -ne 'assistant' -or $message.content -notlike '*RELAY_QUICKSTART_RESPONSE_OK*') {
+  throw 'Expected assistant response is missing'
+}
+$events = @(Get-Content logs/events.jsonl -ErrorAction Stop | ForEach-Object { ConvertFrom-Json -InputObject $_ -ErrorAction Stop })
+if (-not $events.Count -or @($events | Where-Object {
+  $_.atof_version -ne '0.1' -or $_.kind -notin @('scope', 'mark')
+}).Count) { throw 'Expected nonempty ATOF 0.1 records' }
+if (-not @($events | Where-Object {
+    $_.kind -eq 'mark' -and $_.name -eq 'switchyard.routing.decision' -and
+  $_.data.selected_model -eq 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
+}).Count) { throw 'No Switchyard decision for the configured target was recorded' }
+Write-Output 'RELAY_QUICKSTART_RESPONSE_OK'
+Write-Output 'RELAY_QUICKSTART_EVENTS_OK'
+```
+</Tab>
+</Tabs>
+
+The verification command prints the following output when its checks pass:
+
+```text
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+</details>
+
+<Note icon="circle-info">
+This is a live provider test; it does not assert identical model wording,
+timestamps, token counts, or event UUIDs.
+</Note>
+
+### Inspect the Routing Decision
+
+The caller requested `switchyard/quickstart`, and the verification above requires
+Switchyard's decision to name the configured target model. Inspect the decision
+to see what served the request:
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+jq 'select(.kind == "mark" and .name == "switchyard.routing.decision") |
+  {selected_model: .data.selected_model, served_model: .data.served_model,
+   algorithm: .data.algorithm, fallback_used: .data.fallback_used}' logs/events.jsonl
+```
+</Tab>
+<Tab title="Windows PowerShell">
+```powershell
+Get-Content logs/events.jsonl |
+  ForEach-Object { ConvertFrom-Json -InputObject $_ } |
+  Where-Object { $_.kind -eq 'mark' -and $_.name -eq 'switchyard.routing.decision' } |
+  ForEach-Object { $_.data } |
+  Select-Object selected_model, served_model, algorithm, fallback_used |
+  ConvertTo-Json -Depth 10
+```
+</Tab>
+</Tabs>
+
+`selected_model` is Switchyard's chosen target. `served_model` is the model
+reported by the provider, when available; `fallback_used` compares those model
+identities. `algorithm` identifies the routing method. Use these values to
+explain the routing result rather than relying only on an OK marker.
+
+</Steps>
+
+## Uninstall
+
+After stopping Relay, remove the managed plugin using its ID:
+
+```bash
+nemo-relay plugins uninstall --user nvidia.switchyard
+nemo-relay plugins list --user
+```
+
+For a system-wide installation, use `--global` in both commands. Uninstall removes
+registration and the managed bundle. Review any remaining observability and
+trust settings in `plugins.toml` before reusing the configuration.
+
+## For More Details
+
+For more details, refer to:
+
+- [Switchyard Plugin Setup](https://github.com/NVIDIA/NeMo-Relay-Plugins/tree/switchyard-plugin-0.3.2/plugins/switchyard-plugin)
+- [NeMo Relay discoverable plugins](/configure-plugins/discoverable-plugins)

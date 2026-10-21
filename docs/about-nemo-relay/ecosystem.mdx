@@ -17,6 +17,7 @@ observability around tool and LLM calls.
 Use this page to understand where NeMo Relay fits:
 
 - Inside the NVIDIA NeMo software stack
+- Through first-party plugins published by NVIDIA
 - Inside agent frameworks, harnesses, and provider adapters
 - Across the Rust, Python, Node.js, Go, and C FFI bindings in this
   repository
@@ -43,6 +44,23 @@ In practical terms, NeMo Relay answers a different question than higher-level
 agent products. A framework asks, "What should the agent do next?" NeMo Relay
 asks, "When the agent does work, which scope owns it, which middleware applies,
 what events are emitted, and which subscribers can consume the result?"
+
+## First Party Plugins
+
+First-party plugins are extensions published and maintained by NVIDIA in the
+[NeMo Relay Plugins repository](https://github.com/NVIDIA/NeMo-Relay-Plugins).
+They are released separately from Relay and installed through the Relay CLI for
+a user account or a system-wide deployment. Built-in plugins ship with Relay;
+first-party plugins use the discoverable-plugin installation and lifecycle
+commands.
+
+The available first-party plugin is:
+
+- [NeMo Switchyard](/configure-plugins/switchyard) routes model requests across
+  models and providers using configured targets and routing policies.
+
+Use [Manage](/configure-plugins/discoverable-plugins) for installation and lifecycle
+commands, or follow the Switchyard guide for a complete setup.
 
 ## How NeMo Relay Relates to Other Tooling
 

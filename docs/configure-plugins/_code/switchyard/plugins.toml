@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Add these tables to the installed Switchyard entry; retain its manifest path.
+[plugins.dynamic.config]
+priority = 0
+
+[plugins.dynamic.config.switchyard_config]
+schema_version = 1
+
+[plugins.dynamic.config.switchyard_config.llm_clients.nvidia]
+format = "openai_chat"
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key_env = "NVIDIA_API_KEY"
+
+[plugins.dynamic.config.switchyard_config.targets.default]
+id = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+llm_client = "nvidia"
+
+[plugins.dynamic.config.switchyard_config.routes.default]
+id = "switchyard/quickstart"
+type = "passthrough"
+target = "default"
+
+[plugins.policy.overrides."nvidia.switchyard"]
+attestation = "integrity_only"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "overwrite"
