@@ -755,37 +755,34 @@ fn validate_gemini_content_roles(role: &str, responses: &[&Json], calls: &[&Json
 }
 
 fn gemini_function_response_messages(parts: &[Json], responses: &[&Json]) -> Result<Vec<Message>> {
-    if parts.iter().any(|part| {
-        part.get("functionResponse").is_none()
-            && part.get("thought").and_then(Json::as_bool) != Some(true)
-    }) {
-        return Err(FlowError::InvalidArgument(
-            "Gemini contents item must not mix functionResponse with visible/native parts".into(),
-        ));
+    let mut messages = Vec::with_capacity(responses.len() + 1);
+    if let Some(content) = gemini_parts_to_message_content(parts, "request")? {
+        messages.push(Message::User {
+            content,
+            name: None,
+        });
     }
     let mut seen_ids = HashSet::new();
-    responses
-        .iter()
-        .map(|part| {
-            let response = part
-                .get("functionResponse")
-                .and_then(Json::as_object)
-                .unwrap();
-            let name = response
-                .get("name")
-                .and_then(Json::as_str)
-                .unwrap()
-                .to_string();
-            let id = parse_optional_id(response, "functionResponse")?.unwrap_or(name);
-            ensure_unique_gemini_function_id(&mut seen_ids, &id, "functionResponse")?;
-            Ok(Message::Tool {
-                content: gemini_function_response_to_message_content(
-                    part.get("functionResponse").unwrap(),
-                )?,
-                tool_call_id: id,
-            })
-        })
-        .collect()
+    for part in responses {
+        let response = part
+            .get("functionResponse")
+            .and_then(Json::as_object)
+            .unwrap();
+        let name = response
+            .get("name")
+            .and_then(Json::as_str)
+            .unwrap()
+            .to_string();
+        let id = parse_optional_id(response, "functionResponse")?.unwrap_or(name);
+        ensure_unique_gemini_function_id(&mut seen_ids, &id, "functionResponse")?;
+        messages.push(Message::Tool {
+            content: gemini_function_response_to_message_content(
+                part.get("functionResponse").unwrap(),
+            )?,
+            tool_call_id: id,
+        });
+    }
+    Ok(messages)
 }
 
 fn gemini_function_call_messages(
@@ -2096,7 +2093,10 @@ fn patch_changed_gemini_content(
         }
     };
 
-    let patched = if ann_role == "tool" {
+    let has_responses = orig_parts
+        .iter()
+        .any(|part| part.get("functionResponse").is_some());
+    let patched = if has_responses {
         patch_gemini_tool_response_content(orig_parts, ann_msgs, call_id_to_name)?
     } else {
         patch_gemini_visible_content(orig_parts, msg_obj, gemini_role)?
@@ -2163,7 +2163,33 @@ fn patch_gemini_tool_response_content(
     ann_msgs: &[&Json],
     call_id_to_name: &HashMap<String, String>,
 ) -> Result<Option<Json>> {
-    let (mut updates, update_order) = gemini_function_response_updates(ann_msgs)?;
+    let (visible_msgs, tool_msgs): (Vec<&Json>, Vec<&Json>) = ann_msgs
+        .iter()
+        .copied()
+        .partition(|message| message.get("role").and_then(Json::as_str) != Some("tool"));
+    let parts = match visible_msgs.as_slice() {
+        [] => orig_parts
+            .iter()
+            .filter(|part| !is_gemini_visible_part(part))
+            .cloned()
+            .collect(),
+        [message] if message.get("role").and_then(Json::as_str) == Some("user") => {
+            patched_gemini_visible_parts(orig_parts, message)?
+        }
+        [message] => {
+            return Err(FlowError::InvalidArgument(format!(
+                "Gemini encoder: a functionResponse turn carries a {} message beside its responses; only a user message can share the turn",
+                message["role"]
+            )));
+        }
+        _ => {
+            return Err(FlowError::InvalidArgument(
+                "Gemini encoder: a functionResponse turn carries more than one visible message"
+                    .into(),
+            ));
+        }
+    };
+    let (mut updates, update_order) = gemini_function_response_updates(&tool_msgs)?;
     let mut new_parts = Vec::new();
     for call_id in update_order {
         let Some(payload) = updates.remove(call_id) else {
@@ -2189,23 +2215,41 @@ fn patch_gemini_tool_response_content(
         new_parts.push(Json::Object(part));
     }
 
-    // Keep non-response parts in their original slots while response slots
-    // follow the edited call order. Removed responses consume no new value.
     let mut responses = new_parts.into_iter();
-    let mut new_parts = Vec::new();
-    for part in orig_parts {
+    let mut new_parts = Vec::with_capacity(parts.len());
+    for part in parts {
         if part.get("functionResponse").is_some() {
-            if let Some(response) = responses.next() {
-                new_parts.push(response);
-            }
+            new_parts.extend(responses.next());
         } else {
-            new_parts.push(part.clone());
+            new_parts.push(part);
         }
     }
     new_parts.extend(responses);
 
     Ok(Some(
         serde_json::json!({"role": "user", "parts": new_parts}),
+    ))
+}
+
+fn is_gemini_visible_part(part: &Json) -> bool {
+    part.get("functionResponse").is_none()
+        && part.get("functionCall").is_none()
+        && part.get("thought").and_then(Json::as_bool) != Some(true)
+}
+
+fn patched_gemini_visible_parts(orig_parts: &[Json], message: &Json) -> Result<Vec<Json>> {
+    let content = message.get("content").unwrap_or(&Json::Null);
+    let baseline = serde_json::to_value(gemini_parts_to_message_content(orig_parts, "request")?)
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    if baseline == *content {
+        return Ok(orig_parts.to_vec());
+    }
+    let (new_content_parts, content_is_parts_form) = gemini_content_parts_from_normalized(content)?;
+    Ok(merge_gemini_visible_parts(
+        orig_parts,
+        new_content_parts,
+        Vec::new(),
+        content_is_parts_form,
     ))
 }
 
@@ -2300,6 +2344,24 @@ fn merge_gemini_original_parts(
     rebuilt_fn_calls: Vec<Json>,
     content_is_parts_form: bool,
 ) -> Vec<Json> {
+    let mut parts = merge_gemini_visible_parts(
+        orig_parts,
+        new_content_parts,
+        rebuilt_fn_calls,
+        content_is_parts_form,
+    );
+    if parts.is_empty() {
+        parts.push(serde_json::json!({"text": ""}));
+    }
+    parts
+}
+
+fn merge_gemini_visible_parts(
+    orig_parts: &[Json],
+    new_content_parts: Vec<Json>,
+    rebuilt_fn_calls: Vec<Json>,
+    content_is_parts_form: bool,
+) -> Vec<Json> {
     let mut parts = Vec::new();
     let mut new_content_parts = new_content_parts.into_iter();
     let mut rebuilt_fn_calls = rebuilt_fn_calls.into_iter();
@@ -2315,18 +2377,12 @@ fn merge_gemini_original_parts(
         );
     }
 
-    let remaining_content_parts: Vec<Json> = new_content_parts.collect();
-    if !content_emitted && !remaining_content_parts.is_empty() {
-        for part in remaining_content_parts.into_iter().rev() {
-            parts.insert(0, part);
-        }
+    if content_emitted {
+        parts.extend(new_content_parts);
     } else {
-        parts.extend(remaining_content_parts);
+        parts.splice(0..0, new_content_parts);
     }
     parts.extend(rebuilt_fn_calls);
-    if parts.is_empty() {
-        parts.push(serde_json::json!({"text": ""}));
-    }
     parts
 }
 

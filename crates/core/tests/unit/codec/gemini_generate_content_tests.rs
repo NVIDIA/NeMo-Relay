@@ -688,14 +688,36 @@ fn test_gemini_changed_content_patching_preserves_native_parts_and_updates_tool_
         {"text": "keep"},
         {"functionResponse": {"id": "call-1", "name": "weather", "response": {"old": true}}}
     ]});
+    let user = json!({"role": "user", "content": "kept"});
     let tool = json!({"role": "tool", "tool_call_id": "call-1", "content": "{\"new\":true}"});
+    assert!(
+        patch_changed_gemini_content(
+            &original_tool,
+            &[&assistant, &tool],
+            &std::collections::HashMap::new()
+        )
+        .is_err(),
+        "an assistant message cannot share a functionResponse turn"
+    );
+    assert_eq!(
+        patch_changed_gemini_content(
+            &original_tool,
+            &[&user, &tool],
+            &std::collections::HashMap::new()
+        )
+        .unwrap(),
+        Some(json!({"role": "user", "parts": [
+            {"text": "kept"},
+            {"functionResponse": {"id": "call-1", "name": "weather", "response": {"new": true}}}
+        ]}))
+    );
     assert_eq!(
         patch_changed_gemini_content(&original_tool, &[&tool], &std::collections::HashMap::new())
             .unwrap(),
         Some(json!({"role": "user", "parts": [
-            {"text": "keep"},
             {"functionResponse": {"id": "call-1", "name": "weather", "response": {"new": true}}}
-        ]}))
+        ]})),
+        "a run without the user message drops the visible parts it stood for"
     );
 }
 
@@ -780,6 +802,21 @@ fn test_gemini_function_part_validators_and_tool_call_encoder_cover_invalid_shap
 }
 
 #[test]
+fn test_gemini_function_response_messages_put_visible_parts_in_a_user_message() {
+    let response_part =
+        json!({"functionResponse": {"id": "call-1", "name": "weather", "response": {}}});
+    let messages = gemini_function_response_messages(
+        &[json!({"text": "mixed"}), response_part.clone()],
+        &[&response_part],
+    )
+    .unwrap();
+    assert!(
+        matches!(&messages[0], Message::User { content: MessageContent::Text(text), .. } if text == "mixed")
+    );
+    assert!(matches!(&messages[1], Message::Tool { tool_call_id, .. } if tool_call_id == "call-1"));
+}
+
+#[test]
 fn test_gemini_function_message_converters_cover_role_mixing_and_plain_messages() {
     let response_part =
         json!({"functionResponse": {"id": "call-1", "name": "weather", "response": {"ok": true}}});
@@ -792,13 +829,6 @@ fn test_gemini_function_message_converters_cover_role_mixing_and_plain_messages(
         gemini_function_response_messages(std::slice::from_ref(&response_part), &[&response_part])
             .unwrap();
     assert!(matches!(&messages[0], Message::Tool { tool_call_id, .. } if tool_call_id == "call-1"));
-    assert!(
-        gemini_function_response_messages(
-            &[json!({"text": "mixed"}), response_part.clone()],
-            &[&response_part]
-        )
-        .is_err()
-    );
     let messages =
         gemini_function_call_messages(Some(MessageContent::Text("before".into())), &[&call_part])
             .unwrap();
@@ -978,7 +1008,6 @@ fn test_gemini_tool_response_patching_handles_new_and_duplicate_call_ids() {
         )
         .unwrap(),
         Some(json!({"role": "user", "parts": [
-            {"text": "keep"},
             {"functionResponse": {"id": "new-id", "name": "new_fn", "response": {"ok": true}}}
         ]}))
     );
@@ -4247,7 +4276,7 @@ fn test_decode_multiple_function_responses_in_one_turn() {
 }
 
 #[test]
-fn test_decode_function_response_with_native_sibling_errors() {
+fn test_decode_function_response_with_native_sibling_yields_a_user_message_first() {
     let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{
@@ -4259,10 +4288,131 @@ fn test_decode_function_response_with_native_sibling_errors() {
         }]
     }));
 
+    let messages = codec.decode(&request).unwrap().messages;
+
+    assert_eq!(messages.len(), 2);
     assert!(
-        codec.decode(&request).is_err(),
-        "native sibling content beside functionResponse would be hidden by Message::Tool decode"
+        matches!(&messages[0], Message::User { content: MessageContent::Parts(parts), .. } if parts.len() == 1),
+        "the sibling part must be visible as a user message, not hidden by the tool decode"
     );
+    assert!(matches!(&messages[1], Message::Tool { tool_call_id, .. } if tool_call_id == "c1"));
+}
+
+#[test]
+fn test_encode_keeps_a_visible_message_moved_after_its_function_response() {
+    let codec = GeminiGenerateContentCodec;
+    let original = make_request(json!({
+        "contents": [
+            {"role": "user", "parts": [{"text": "weather?"}]},
+            {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"location": "Paris"}}}]},
+            {"role": "user", "parts": [
+                {"text": "Note: be brief."},
+                {"functionResponse": {"name": "get_weather", "response": {"forecast": "sunny"}}}
+            ]}
+        ]
+    }));
+
+    let mut annotated = codec.decode(&original).unwrap();
+    assert_eq!(annotated.messages.len(), 4);
+    annotated.messages.swap(2, 3);
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(
+        encoded.content["contents"][2]["parts"],
+        json!([
+            {"text": "Note: be brief."},
+            {"functionResponse": {"id": "get_weather", "name": "get_weather", "response": {"forecast": "sunny"}}}
+        ])
+    );
+    assert_eq!(encoded.content["contents"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn test_encode_tool_output_edit_keeps_unchanged_visible_parts_in_their_slots() {
+    let codec = GeminiGenerateContentCodec;
+    let image = json!({"inlineData": {"mimeType": "image/png", "data": "aGk="}});
+    let response =
+        json!({"functionResponse": {"name": "get_weather", "response": {"forecast": "sunny"}}});
+    for parts in [
+        vec![image.clone(), response.clone(), json!({"text": "two"})],
+        vec![
+            json!({"text": "one"}),
+            response.clone(),
+            json!({"text": "two"}),
+        ],
+    ] {
+        let original = make_request(json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "weather?"}]},
+                {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"location": "Paris"}}}]},
+                {"role": "user", "parts": parts}
+            ]
+        }));
+
+        let mut annotated = codec.decode(&original).unwrap();
+        if let Message::Tool { content, .. } = &mut annotated.messages[3] {
+            *content = MessageContent::Text("{\"forecast\":\"rain\"}".into());
+        } else {
+            panic!("expected the function response as a tool message");
+        }
+
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        let mut expected = parts.clone();
+        expected[1] = json!({"functionResponse": {"id": "get_weather", "name": "get_weather", "response": {"forecast": "rain"}}});
+        assert_eq!(
+            encoded.content["contents"][2]["parts"],
+            Json::Array(expected)
+        );
+    }
+}
+
+#[test]
+fn test_encode_edits_text_beside_a_function_response_in_place() {
+    let codec = GeminiGenerateContentCodec;
+    for text_first in [true, false] {
+        let note = json!({"text": "Note: be brief."});
+        let response =
+            json!({"functionResponse": {"name": "get_weather", "response": {"forecast": "sunny"}}});
+        let parts = if text_first {
+            vec![note.clone(), response.clone()]
+        } else {
+            vec![response.clone(), note.clone()]
+        };
+        let original = make_request(json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "weather?"}]},
+                {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"location": "Paris"}}}]},
+                {"role": "user", "parts": parts}
+            ]
+        }));
+
+        let mut annotated = codec.decode(&original).unwrap();
+        assert_eq!(annotated.messages.len(), 4);
+        if let Message::User { content, .. } = &mut annotated.messages[2] {
+            *content = MessageContent::Text("Note: be terse.".into());
+        } else {
+            panic!("expected the visible text as a user message");
+        }
+        if let Message::Tool { content, .. } = &mut annotated.messages[3] {
+            *content = MessageContent::Text("{\"forecast\":\"rain\"}".into());
+        } else {
+            panic!("expected the function response as a tool message");
+        }
+
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        let edited = json!({"text": "Note: be terse."});
+        let rained = json!({"functionResponse": {"id": "get_weather", "name": "get_weather", "response": {"forecast": "rain"}}});
+        let expected = if text_first {
+            vec![edited, rained]
+        } else {
+            vec![rained, edited]
+        };
+        assert_eq!(
+            encoded.content["contents"][2]["parts"],
+            Json::Array(expected),
+            "text_first={text_first}"
+        );
+    }
 }
 
 #[test]
@@ -6394,9 +6544,8 @@ fn test_decode_function_call_on_user_role_errors() {
     );
 }
 
-// functionResponse mixed with visible text parts must error.
 #[test]
-fn test_decode_function_response_mixed_with_text_errors() {
+fn test_decode_function_response_mixed_with_text_yields_user_then_tool() {
     let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{
@@ -6407,10 +6556,12 @@ fn test_decode_function_response_mixed_with_text_errors() {
             ]
         }]
     }));
+    let messages = codec.decode(&req).unwrap().messages;
+    assert_eq!(messages.len(), 2);
     assert!(
-        codec.decode(&req).is_err(),
-        "functionResponse mixed with visible text parts must error"
+        matches!(&messages[0], Message::User { content: MessageContent::Text(text), .. } if text == "visible text")
     );
+    assert!(matches!(&messages[1], Message::Tool { tool_call_id, .. } if tool_call_id == "fn"));
 }
 
 // Response decode: non-string text value must error.
