@@ -20,7 +20,6 @@ use serde_json::{Map, Value as Json};
 use spdlog::sink::Sink;
 use spdlog::{Logger, ThreadPool};
 
-pub use self::diagnostics::LoggingErrorClassifier;
 use self::diagnostics::{LoggingDiagnostics, LoggingProjection};
 use crate::diagnostics::Diagnostics;
 use crate::error::{FlowError, Result};

@@ -222,7 +222,7 @@ impl SinkDiagnostics {
 /// Generic backend failures stay Unknown: their Display strings cannot establish
 /// a more specific cause. This producer-local adapter retains no source error.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct LoggingErrorClassifier;
+pub(crate) struct LoggingErrorClassifier;
 
 impl DiagnosticClassifier<spdlog::Error> for LoggingErrorClassifier {
     fn classify(&self, error: &spdlog::Error) -> Classification {

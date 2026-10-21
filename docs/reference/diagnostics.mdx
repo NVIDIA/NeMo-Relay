@@ -278,8 +278,9 @@ This phase provides Rust contracts, bounded recording/state/queries, logging,
 configuration-inheritance notices, and selected plugin activation observations.
 The shared `DiagnosticClassifier<E>`
 interface returns `Classification` values without recording or changing source
-errors. The production adapters are `PluginErrorClassifier` and
-`LoggingErrorClassifier`.
+errors. The production adapters are `PluginErrorClassifier` and the crate-private
+`LoggingErrorClassifier`. The logging adapter classifies backend errors internally;
+applications use the public classifier contract to implement their own adapters.
 
 `PluginError::InvalidConfig` combines configuration file-read failures and
 validation failures without preserving their structured causes. Its classifier
