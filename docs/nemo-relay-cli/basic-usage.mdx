@@ -434,7 +434,7 @@ follows:
 | `/responses`, `/v1/responses` | `openai_base_url` |
 | `/chat/completions`, `/v1/chat/completions` | `openai_base_url` |
 | `/responses/compact`, `/v1/responses/compact` | `openai_base_url` |
-| `/realtime/calls`, `/v1/realtime/calls` | `openai_base_url` |
+| `/realtime/calls`, `/v1/realtime/calls` | `openai_base_url`; with the default base, recognized ChatGPT credentials use the ChatGPT backend |
 | `/live`, `/v1/live`, `/live/sessions`, `/v1/live/sessions` | `openai_base_url` |
 | `/realtime`, `/v1/realtime` | `openai_base_url` |
 | `/live/CALL_ID`, `/v1/live/CALL_ID` | `openai_base_url` |
@@ -550,7 +550,7 @@ arguments. Add `--json` to read these checks under
 
 Unmanaged routes forward only the provider credentials that the client sends.
 These routes include compaction, images, realtime, live sessions, search,
-memory summarization, and model discovery. Relay never adds its configured
+and memory summarization. Relay never adds its configured
 provider credentials or API keys from environment variables to these requests.
 This rule also covers WebSocket upgrades, authenticated clients, and daemon
 requests.
