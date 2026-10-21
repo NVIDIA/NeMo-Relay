@@ -6,7 +6,13 @@
 use std::num::NonZeroUsize;
 
 use super::storage::{BoundedHistory, DetailHandle, DetailPool};
-use super::*;
+use super::{
+    BuiltinDiagnosticCode, ComponentOwnership, DiagnosticCount, DiagnosticError, DiagnosticLimits,
+    DiagnosticLoss, DiagnosticOutcome, DiagnosticSeverity, DiagnosticTotals, FailureClass,
+    ObservationTime, PluginExecution, PluginObservationContext, PluginPhase,
+};
+use serde::Serialize;
+use uuid::Uuid;
 
 pub(super) const ID_BYTES: usize = 128;
 pub(super) const DESCRIPTION_BYTES: usize = 256;
@@ -667,6 +673,9 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostics::{
+        ComponentRegistration, Diagnostics, DiagnosticsSettings, ExtensionClassHandle, lock,
+    };
 
     #[test]
     fn component_counter_reservations_visit_only_the_owning_chain() {
