@@ -18,7 +18,7 @@ LLM lifecycle helpers for non-streaming and streaming calls.
 ### `call`
 
 ```python
-def call(name: str, request: LLMRequest, *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, timestamp: datetime | None = None) -> LLMHandle
+def call(name: str, request: LLMRequest, *, handle: ScopeHandle | None = None, attributes: LLMAttributes | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, timestamp: datetime | None = None, codec: LlmCodec | None = None) -> LLMHandle
 ```
 
 Start a manual LLM span and return its `LLMHandle`.

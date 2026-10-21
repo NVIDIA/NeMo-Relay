@@ -59,8 +59,14 @@ provider.
 
 When a managed LLM call has a response codec, NeMo Relay decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) for response-only behavior and custom response codec examples.
 
-For manual Rust calls, set the request codec with
-`LlmCallParams::builder().codec(...)`. Set the response codec with
+Manual lifecycle calls can also use a request codec. In Python, pass `codec`
+to `llm.call()`. In Node.js, pass both `codecDecode` and `codecEncode` to
+`llmCall()`, after the optional timestamp. The decode callback receives the
+request. The encode callback receives an object with `annotated` and `original`
+fields. In Rust, use `LlmCallParams::builder().codec(...)`.
+
+Manual calls record work that the application runs itself. They do not run
+request or execution intercepts. Set the response codec for manual Rust calls with
 `LlmCallEndParams::builder().response_codec(...)`.
 
 The request codec helps sanitizers redact private data. Relay also uses it to
