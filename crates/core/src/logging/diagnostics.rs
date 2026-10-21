@@ -4,6 +4,7 @@
 //! Diagnostic recording stays independent of operational log delivery.
 
 use std::io;
+use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 
 use spdlog::Logger;
@@ -194,7 +195,7 @@ impl SinkDiagnostics {
                 _ => "Operational log sink failed to deliver a record",
             };
             // Neither a dropped payload nor backend error text belongs in diagnostics.
-            Observation::new(classification, message, 1)
+            Observation::new(classification, message, NonZeroU64::MIN)
         });
     }
 
@@ -265,7 +266,7 @@ fn record(
     let _ = recorder.record_without_projection_lazy(|| {
         let classification = Classification::new(code, class)
             .expect("logging observations use permitted catalogue classes");
-        Observation::new(classification, message, 1).with_severity(severity)
+        Observation::new(classification, message, NonZeroU64::MIN).with_severity(severity)
     });
 }
 

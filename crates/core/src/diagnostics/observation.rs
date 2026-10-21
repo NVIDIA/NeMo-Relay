@@ -9,6 +9,7 @@ use super::{
     PluginObservationContext,
 };
 use std::fmt;
+use std::num::NonZeroU64;
 use uuid::Uuid;
 
 /// Fixed-duration component outcome windows; no code/class Cartesian product.
@@ -117,14 +118,22 @@ pub(super) enum ObservationCode {
     Overflow,
 }
 
-/// One observation. Its count is an input delta, never a cumulative report total.
+/// One observation. Its count is a positive input delta, never a cumulative total.
+///
+/// ```compile_fail
+/// use nemo_relay::diagnostics::{Classification, Observation, SuccessCode};
+/// // Constructors require NonZeroU64, so a zero integer is not a valid input.
+/// let observation = Observation::new(
+///     Classification::success(SuccessCode::SinkInitialized), "initialized", 0,
+/// );
+/// ```
 #[derive(Debug, Clone)]
 pub struct Observation<'a> {
     pub(super) code: ObservationCode,
     /// Optional producer-approved explanation; bounding does not perform redaction.
     pub detail: DiagnosticDetailRef<'a>,
     /// Positive input occurrence delta, never a cumulative report total.
-    pub count: u64,
+    pub count: NonZeroU64,
     /// Operational evidence severity, independent of deployment health.
     pub severity: DiagnosticSeverity,
     /// Explicit observed operation outcome for summaries and windows.
@@ -137,12 +146,12 @@ pub struct Observation<'a> {
 impl<'a> Observation<'a> {
     /// Author built-in evidence with severity/outcome defaults from its code.
     ///
-    /// Recording validates the count and declared code reservation. Constructing
+    /// The type guarantees a positive count; recording validates the reservation. Constructing
     /// this value does not retain its borrowed detail or source error.
     pub fn new(
         classification: Classification,
         detail: impl Into<DiagnosticDetailRef<'a>>,
-        count: u64,
+        count: NonZeroU64,
     ) -> Self {
         let (severity, outcome) =
             match BuiltinDiagnosticCode::from_canonical_name(classification.code()) {
@@ -173,7 +182,7 @@ impl<'a> Observation<'a> {
         class: Option<FailureClass>,
         outcome: DiagnosticOutcome,
         detail: impl Into<DiagnosticDetailRef<'a>>,
-        count: u64,
+        count: NonZeroU64,
     ) -> Self {
         Self {
             code: ObservationCode::Extension(handle, class),
@@ -195,7 +204,7 @@ impl<'a> Observation<'a> {
         handle: ExtensionHandle,
         class: ExtensionClassHandle,
         detail: impl Into<DiagnosticDetailRef<'a>>,
-        count: u64,
+        count: NonZeroU64,
     ) -> Self {
         Self {
             code: ObservationCode::OpaqueExtension(handle, class),
@@ -209,7 +218,7 @@ impl<'a> Observation<'a> {
     }
     /// Explicit summary-only admission when extension vocabulary could not fit.
     /// This is not a way to reinterpret an invalid or undeclared code.
-    pub fn classification_overflow(outcome: DiagnosticOutcome, count: u64) -> Self {
+    pub fn classification_overflow(outcome: DiagnosticOutcome, count: NonZeroU64) -> Self {
         Self {
             code: ObservationCode::Overflow,
             detail: DiagnosticDetailRef::None,

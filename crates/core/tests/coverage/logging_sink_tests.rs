@@ -13,6 +13,7 @@ use crate::logging::{
 };
 use spdlog::sink::{AsyncPoolSink, GetSinkProp, OverflowPolicy, Sink, SinkProp, SinkPropAccess};
 use spdlog::{Error, ErrorHandler, Level, LevelFilter, Logger, Record, ThreadPool};
+use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,7 +63,7 @@ fn record_test_failure(recorder: &crate::diagnostics::ComponentRecorder, message
                 )
                 .unwrap(),
                 message,
-                1,
+                NonZeroU64::MIN,
             )
         })
         .unwrap();

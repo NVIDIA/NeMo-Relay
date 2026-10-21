@@ -7,6 +7,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::BTreeSet;
+use std::num::NonZeroU64;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -134,7 +135,11 @@ fn classification(class: FailureClass) -> Classification {
 fn record(recorder: &ComponentRecorder, count: u64) -> RecordReceipt {
     match recorder
         .record_without_projection_lazy(|| {
-            Observation::new(classification(FailureClass::Unknown), "failure", count)
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "failure",
+                NonZeroU64::new(count).unwrap(),
+            )
         })
         .unwrap()
     {
@@ -530,7 +535,11 @@ fn detail_pressure_reclaims_blocks_and_impossible_detail_preserves_old_evidence(
     for _ in 0..3 {
         component
             .record_without_projection_lazy(|| {
-                Observation::new(classification(FailureClass::Unknown), "abcdefgh", 1)
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    "abcdefgh",
+                    NonZeroU64::MIN,
+                )
             })
             .unwrap();
     }
@@ -560,7 +569,7 @@ fn detail_pressure_reclaims_blocks_and_impossible_detail_preserves_old_evidence(
             Observation::new(
                 classification(FailureClass::Unknown),
                 "detail cannot fit",
-                2,
+                NonZeroU64::new(2).unwrap(),
             )
         })
         .unwrap();
@@ -608,17 +617,24 @@ fn impossible_correlation_preserves_history_with_pending_ascii_and_utf8_detail()
         let component = register(&service, "producer");
         component
             .record_without_projection_lazy(|| {
-                Observation::new(classification(FailureClass::Unknown), "old!", 2)
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    "old!",
+                    NonZeroU64::new(2).unwrap(),
+                )
             })
             .unwrap();
         let receipt = component
             .record_without_projection_lazy(|| {
-                Observation::new(classification(FailureClass::Unknown), detail, 3).with_correlation(
-                    DiagnosticCorrelation {
-                        session_id: Some(session.into()),
-                        request_id: None,
-                    },
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    detail,
+                    NonZeroU64::new(3).unwrap(),
                 )
+                .with_correlation(DiagnosticCorrelation {
+                    session_id: Some(session.into()),
+                    request_id: None,
+                })
             })
             .unwrap();
         assert!(matches!(
@@ -649,17 +665,24 @@ fn impossible_request_preserves_history_and_pending_detail_and_session() {
     let component = register(&service, "producer");
     component
         .record_without_projection_lazy(|| {
-            Observation::new(classification(FailureClass::Unknown), "old!", 2)
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "old!",
+                NonZeroU64::new(2).unwrap(),
+            )
         })
         .unwrap();
     component
         .record_without_projection_lazy(|| {
-            Observation::new(classification(FailureClass::Unknown), "abcd", 3).with_correlation(
-                DiagnosticCorrelation {
-                    session_id: Some("efghijkl".into()),
-                    request_id: Some("mnopqrst".into()),
-                },
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "abcd",
+                NonZeroU64::new(3).unwrap(),
             )
+            .with_correlation(DiagnosticCorrelation {
+                session_id: Some("efghijkl".into()),
+                request_id: Some("mnopqrst".into()),
+            })
         })
         .unwrap();
     let view = snapshot(&service, DiagnosticQuery::default());
@@ -687,17 +710,24 @@ fn correlation_pressure_still_reclaims_history_when_pending_detail_leaves_capaci
     let component = register(&service, "producer");
     component
         .record_without_projection_lazy(|| {
-            Observation::new(classification(FailureClass::Unknown), "old!", 2)
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "old!",
+                NonZeroU64::new(2).unwrap(),
+            )
         })
         .unwrap();
     component
         .record_without_projection_lazy(|| {
-            Observation::new(classification(FailureClass::Unknown), "abcd", 3).with_correlation(
-                DiagnosticCorrelation {
-                    session_id: Some("efghijkl".into()),
-                    request_id: None,
-                },
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "abcd",
+                NonZeroU64::new(3).unwrap(),
             )
+            .with_correlation(DiagnosticCorrelation {
+                session_id: Some("efghijkl".into()),
+                request_id: None,
+            })
         })
         .unwrap();
     let view = snapshot(&service, DiagnosticQuery::default());
@@ -729,7 +759,13 @@ fn zero_history_still_counts_and_projects_without_fabricating_evictions() {
         })
         .unwrap();
     component
-        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "failure", 2))
+        .record_lazy(|| {
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "failure",
+                NonZeroU64::new(2).unwrap(),
+            )
+        })
         .unwrap();
     let view = snapshot(&service, DiagnosticQuery::default());
     assert!(view.events.is_empty());
@@ -760,11 +796,15 @@ fn utf8_detail_and_correlation_are_bounded_without_creating_keys() {
     for _ in 0..3 {
         component
             .record_without_projection_lazy(|| {
-                Observation::new(classification(FailureClass::Unknown), "é🙂abcdef", 1)
-                    .with_correlation(DiagnosticCorrelation {
-                        session_id: Some("session".into()),
-                        request_id: Some("🙂request".into()),
-                    })
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    "é🙂abcdef",
+                    NonZeroU64::MIN,
+                )
+                .with_correlation(DiagnosticCorrelation {
+                    session_id: Some("session".into()),
+                    request_id: Some("🙂request".into()),
+                })
             })
             .unwrap();
     }
@@ -798,12 +838,11 @@ fn shortened_correlation_reports_truncated_without_detail_loss() {
     ] {
         let outcome = component
             .record_without_projection_lazy(|| {
-                Observation::new(classification(FailureClass::Unknown), "ok", 1).with_correlation(
-                    DiagnosticCorrelation {
+                Observation::new(classification(FailureClass::Unknown), "ok", NonZeroU64::MIN)
+                    .with_correlation(DiagnosticCorrelation {
                         session_id: session_id.map(Into::into),
                         request_id: request_id.map(Into::into),
-                    },
-                )
+                    })
             })
             .unwrap();
         let RecordOutcome::Recorded(receipt) = outcome else {
@@ -882,7 +921,7 @@ fn closed_metadata_reclamation_expires_dependent_events_and_stale_handles() {
             .record_without_projection_lazy(|| Observation::new(
                 classification(FailureClass::Unknown),
                 "stale",
-                1
+                NonZeroU64::MIN
             ))
             .unwrap_err(),
         DiagnosticError::ComponentClosed
@@ -1214,7 +1253,13 @@ fn captured_origin_survives_many_refreshes_without_growing_backing_storage() {
     assert_eq!(service.memory_usage().counters, CODES.len());
     assert_eq!(service.memory_usage().window_buckets, 3);
     operation
-        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "late", 3))
+        .record_lazy(|| {
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "late",
+                NonZeroU64::new(3).unwrap(),
+            )
+        })
         .unwrap();
     record(&component, 1);
     let view = snapshot(&service, DiagnosticQuery::default());
@@ -1526,7 +1571,11 @@ fn outcomes_windows_and_failure_classes_have_independent_scopes() {
     let after_first = snapshot(&service, DiagnosticQuery::default()).events[0].sequence;
     component
         .record_without_projection_lazy(|| {
-            Observation::new(classification(FailureClass::Timeout), "timeout", 3)
+            Observation::new(
+                classification(FailureClass::Timeout),
+                "timeout",
+                NonZeroU64::new(3).unwrap(),
+            )
         })
         .unwrap();
     component
@@ -1534,7 +1583,7 @@ fn outcomes_windows_and_failure_classes_have_independent_scopes() {
             Observation::new(
                 Classification::success(SuccessCode::SinkInitialized),
                 "success",
-                4,
+                NonZeroU64::new(4).unwrap(),
             )
         })
         .unwrap();
@@ -1543,7 +1592,7 @@ fn outcomes_windows_and_failure_classes_have_independent_scopes() {
             Observation::new(
                 Classification::notice(NoticeCode::ConfigurationInherited),
                 "notice",
-                1,
+                NonZeroU64::MIN,
             )
             .with_severity(DiagnosticSeverity::Error)
         })
@@ -1639,7 +1688,7 @@ fn counter_saturation_is_a_lower_bound_and_success_does_not_clear_failure() {
             Observation::new(
                 Classification::success(SuccessCode::SinkInitialized),
                 "success",
-                1,
+                NonZeroU64::MIN,
             )
         })
         .unwrap();
@@ -1697,16 +1746,10 @@ fn invalid_observations_do_not_update_reserved_summaries() {
         .unwrap();
     assert_eq!(
         component
-            .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "zero", 0))
-            .unwrap_err(),
-        DiagnosticError::InvalidCount
-    );
-    assert_eq!(
-        component
             .record_lazy(|| Observation::new(
                 Classification::success(SuccessCode::SinkInitialized),
                 "undeclared",
-                1
+                NonZeroU64::MIN
             ))
             .unwrap_err(),
         DiagnosticError::InvalidCode
@@ -1722,7 +1765,7 @@ fn invalid_observations_do_not_update_reserved_summaries() {
             .get(),
         0
     );
-    assert_eq!(view.coverage.loss.observations_rejected.value.get(), 2);
+    assert_eq!(view.coverage.loss.observations_rejected.value.get(), 1);
     assert_eq!(view.lifetime.totals, DiagnosticTotals::default());
 }
 
@@ -1773,7 +1816,11 @@ fn decoded_payloads_are_validated_before_recording_changes_accounting() {
         .unwrap();
         assert_eq!(
             component
-                .record_lazy(|| Observation::new(classification, "invalid", 3))
+                .record_lazy(|| Observation::new(
+                    classification,
+                    "invalid",
+                    NonZeroU64::new(3).unwrap()
+                ))
                 .unwrap_err(),
             expected,
         );
@@ -1787,8 +1834,12 @@ fn decoded_payloads_are_validated_before_recording_changes_accounting() {
         assert_eq!(
             component
                 .record_lazy(|| {
-                    Observation::new(classification(FailureClass::Unknown), "invalid", 3)
-                        .with_plugin_context(context)
+                    Observation::new(
+                        classification(FailureClass::Unknown),
+                        "invalid",
+                        NonZeroU64::new(3).unwrap(),
+                    )
+                    .with_plugin_context(context)
                 })
                 .unwrap_err(),
             DiagnosticError::InvalidContext,
@@ -1829,7 +1880,7 @@ fn oversized_unrecognized_payload_names_are_rejected_without_allocating() {
                     Some("unknown".into()),
                 ),
                 "unknown code",
-                1,
+                NonZeroU64::MIN,
             ),
             DiagnosticError::InvalidCode,
         ),
@@ -1840,7 +1891,7 @@ fn oversized_unrecognized_payload_names_are_rejected_without_allocating() {
                     Some(Cow::Owned(oversized.clone())),
                 ),
                 "unknown class",
-                1,
+                NonZeroU64::MIN,
             ),
             DiagnosticError::InvalidClassification,
         ),
@@ -1848,7 +1899,7 @@ fn oversized_unrecognized_payload_names_are_rejected_without_allocating() {
             Observation::new(
                 classification(FailureClass::Unknown),
                 "unknown execution",
-                1,
+                NonZeroU64::MIN,
             )
             .with_plugin_context(PluginObservationContext {
                 execution: Some(PluginExecutionName::from_opaque_name(Cow::Owned(
@@ -1859,11 +1910,15 @@ fn oversized_unrecognized_payload_names_are_rejected_without_allocating() {
             DiagnosticError::InvalidContext,
         ),
         (
-            Observation::new(classification(FailureClass::Unknown), "unknown phase", 1)
-                .with_plugin_context(PluginObservationContext {
-                    execution: Some(PluginExecution::NativeAbi.into()),
-                    phase: Some(PluginPhaseName::from_opaque_name(Cow::Owned(oversized))),
-                }),
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "unknown phase",
+                NonZeroU64::MIN,
+            )
+            .with_plugin_context(PluginObservationContext {
+                execution: Some(PluginExecution::NativeAbi.into()),
+                phase: Some(PluginPhaseName::from_opaque_name(Cow::Owned(oversized))),
+            }),
             DiagnosticError::InvalidContext,
         ),
     ];
@@ -1909,7 +1964,11 @@ fn decoded_extension_names_cannot_bypass_registered_handles() {
     .unwrap();
     assert_eq!(
         component
-            .record_lazy(|| Observation::new(classification, "unadmitted input", 3))
+            .record_lazy(|| Observation::new(
+                classification,
+                "unadmitted input",
+                NonZeroU64::new(3).unwrap()
+            ))
             .unwrap_err(),
         DiagnosticError::InvalidCode,
     );
@@ -1932,7 +1991,7 @@ fn decoded_extension_names_cannot_bypass_registered_handles() {
                 Some(FailureClass::Unknown),
                 DiagnosticOutcome::Failure,
                 "admitted",
-                3,
+                NonZeroU64::new(3).unwrap(),
             )
         })
         .unwrap();
@@ -2077,7 +2136,11 @@ fn encoded_byte_pagination_keeps_history_and_makes_forward_progress() {
     for _ in 0..6 {
         component
             .record_without_projection_lazy(|| {
-                Observation::new(classification(FailureClass::Unknown), detail.as_str(), 1)
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    detail.as_str(),
+                    NonZeroU64::MIN,
+                )
             })
             .unwrap();
     }
@@ -2140,12 +2203,24 @@ fn projection_detachment_and_sink_feedback_do_not_change_retention_or_double_emi
         "sink feedback bypasses every projection"
     );
     component
-        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "projected", 1))
+        .record_lazy(|| {
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "projected",
+                NonZeroU64::MIN,
+            )
+        })
         .unwrap();
     assert_eq!(calls.load(Ordering::Relaxed), 1);
     drop(guard);
     component
-        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "detached", 1))
+        .record_lazy(|| {
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "detached",
+                NonZeroU64::MIN,
+            )
+        })
         .unwrap();
     assert_eq!(calls.load(Ordering::Relaxed), 1);
     let view = snapshot(&service, DiagnosticQuery::default());
@@ -2184,13 +2259,23 @@ fn projections_can_query_and_record_reentrantly_without_recursion() {
             record(&nested, 1);
             nested
                 .record_lazy(|| {
-                    Observation::new(classification(FailureClass::Unknown), "recursive", 1)
+                    Observation::new(
+                        classification(FailureClass::Unknown),
+                        "recursive",
+                        NonZeroU64::MIN,
+                    )
                 })
                 .unwrap();
         })
         .unwrap();
     component
-        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "initial", 1))
+        .record_lazy(|| {
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "initial",
+                NonZeroU64::MIN,
+            )
+        })
         .unwrap();
     assert_eq!(calls.load(Ordering::Relaxed), 1);
     let view = snapshot(&service, DiagnosticQuery::default());
@@ -2217,7 +2302,13 @@ fn projection_panics_and_delivery_errors_are_visible_after_acceptance() {
         })
         .unwrap();
     component
-        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "accepted", 1))
+        .record_lazy(|| {
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "accepted",
+                NonZeroU64::MIN,
+            )
+        })
         .unwrap();
     let view = snapshot(&service, DiagnosticQuery::default());
     assert_eq!(delivered.load(Ordering::Relaxed), 1);
@@ -2256,14 +2347,26 @@ fn publication_workspace_pressure_omits_delivery_without_losing_totals() {
     let writer = component.clone();
     let background = thread::spawn(move || {
         writer
-            .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "first", 1))
+            .record_lazy(|| {
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    "first",
+                    NonZeroU64::MIN,
+                )
+            })
             .unwrap()
     });
     started_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .unwrap();
     component
-        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "second", 1))
+        .record_lazy(|| {
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "second",
+                NonZeroU64::MIN,
+            )
+        })
         .unwrap();
     release_tx.send(()).unwrap();
     background.join().unwrap();
@@ -2311,13 +2414,25 @@ fn extension_severity_defaults_follow_outcome_and_allow_explicit_override() {
             .unwrap();
         component
             .record_without_projection_lazy(|| {
-                Observation::extension(extension, class, outcome, "default severity", 1)
+                Observation::extension(
+                    extension,
+                    class,
+                    outcome,
+                    "default severity",
+                    NonZeroU64::MIN,
+                )
             })
             .unwrap();
         component
             .record_without_projection_lazy(|| {
-                Observation::extension(extension, class, outcome, "explicit severity", 1)
-                    .with_severity(DiagnosticSeverity::Warning)
+                Observation::extension(
+                    extension,
+                    class,
+                    outcome,
+                    "explicit severity",
+                    NonZeroU64::MIN,
+                )
+                .with_severity(DiagnosticSeverity::Warning)
             })
             .unwrap();
     }
@@ -2385,7 +2500,12 @@ fn custom_extension_classes_are_admitted_once_and_overflow_is_summary_only() {
     );
     component
         .record_without_projection_lazy(|| {
-            Observation::extension_with_class(extension, class, "custom", 2)
+            Observation::extension_with_class(
+                extension,
+                class,
+                "custom",
+                NonZeroU64::new(2).unwrap(),
+            )
         })
         .unwrap();
     assert_eq!(
@@ -2402,7 +2522,10 @@ fn custom_extension_classes_are_admitted_once_and_overflow_is_summary_only() {
     );
     let overflow = component
         .record_without_projection_lazy(|| {
-            Observation::classification_overflow(DiagnosticOutcome::Failure, 3)
+            Observation::classification_overflow(
+                DiagnosticOutcome::Failure,
+                NonZeroU64::new(3).unwrap(),
+            )
         })
         .unwrap();
     assert!(matches!(
@@ -2472,7 +2595,7 @@ fn extension_handles_cannot_cross_registration_or_reserved_namespace_boundaries(
                 Some(FailureClass::Unknown),
                 DiagnosticOutcome::Failure,
                 "wrong owner",
-                1
+                NonZeroU64::MIN
             ))
             .unwrap_err(),
         DiagnosticError::InvalidCode
@@ -2750,7 +2873,7 @@ fn memory_usage_distinguishes_history_capacity_from_occupied_slots() {
                 Observation::new(
                     classification(FailureClass::Unknown),
                     DiagnosticDetailRef::None,
-                    1,
+                    NonZeroU64::MIN,
                 )
             })
             .unwrap();
@@ -2802,12 +2925,15 @@ fn memory_usage_reports_retained_text_and_utf8_block_slack() {
     let request = String::from("z");
     component
         .record_without_projection_lazy(|| {
-            Observation::new(classification(FailureClass::Unknown), "€€€", 1).with_correlation(
-                DiagnosticCorrelation {
-                    session_id: Some(session.as_str().into()),
-                    request_id: Some(request.as_str().into()),
-                },
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "€€€",
+                NonZeroU64::MIN,
             )
+            .with_correlation(DiagnosticCorrelation {
+                session_id: Some(session.as_str().into()),
+                request_id: Some(request.as_str().into()),
+            })
         })
         .unwrap();
     let reader = service.reader();
@@ -2831,7 +2957,7 @@ fn memory_usage_reports_retained_text_and_utf8_block_slack() {
 
     component
         .record_without_projection_lazy(|| {
-            Observation::new(classification(FailureClass::Unknown), "q", 1)
+            Observation::new(classification(FailureClass::Unknown), "q", NonZeroU64::MIN)
         })
         .unwrap();
     let replaced = service.memory_usage();
@@ -2926,8 +3052,12 @@ fn warmed_projection_delivery_reuses_its_payload_and_callback_storage() {
     for (component, context) in &producers {
         component
             .record_lazy(|| {
-                Observation::new(classification(FailureClass::Unknown), "projected", 1)
-                    .with_plugin_context(context.clone())
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    "projected",
+                    NonZeroU64::MIN,
+                )
+                .with_plugin_context(context.clone())
             })
             .unwrap();
     }
@@ -2936,8 +3066,12 @@ fn warmed_projection_delivery_reuses_its_payload_and_callback_storage() {
             for (component, context) in &producers {
                 component
                     .record_lazy(|| {
-                        Observation::new(classification(FailureClass::Unknown), "projected", 1)
-                            .with_plugin_context(context.clone())
+                        Observation::new(
+                            classification(FailureClass::Unknown),
+                            "projected",
+                            NonZeroU64::MIN,
+                        )
+                        .with_plugin_context(context.clone())
                     })
                     .unwrap();
             }
@@ -2984,15 +3118,19 @@ fn owned_shared_payloads_record_and_project_without_new_allocations() {
         .unwrap();
     component
         .record_lazy(|| {
-            Observation::new(classification(FailureClass::Unknown), "warm", 1)
-                .with_plugin_context(PluginObservationContext {
-                    execution: Some(PluginExecution::NativeAbi.into()),
-                    phase: Some(PluginPhase::Policy.into()),
-                })
-                .with_correlation(DiagnosticCorrelation {
-                    session_id: Some(session.as_str().into()),
-                    request_id: Some(request.as_str().into()),
-                })
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "warm",
+                NonZeroU64::MIN,
+            )
+            .with_plugin_context(PluginObservationContext {
+                execution: Some(PluginExecution::NativeAbi.into()),
+                phase: Some(PluginPhase::Policy.into()),
+            })
+            .with_correlation(DiagnosticCorrelation {
+                session_id: Some(session.as_str().into()),
+                request_id: Some(request.as_str().into()),
+            })
         })
         .unwrap();
 
@@ -3005,7 +3143,7 @@ fn owned_shared_payloads_record_and_project_without_new_allocations() {
                     Some(Cow::Owned("unknown".to_owned())),
                 ),
                 "owned",
-                1,
+                NonZeroU64::MIN,
             )
             .with_plugin_context(PluginObservationContext {
                 execution: Some(PluginExecutionName::from_opaque_name(Cow::Owned(
@@ -3075,7 +3213,7 @@ fn extension_and_class_handles_cannot_resolve_in_an_independent_context() {
             Some(FailureClass::Unknown),
             DiagnosticOutcome::Failure,
             "wrong source",
-            1,
+            NonZeroU64::MIN,
         )
     });
     assert!(matches!(
@@ -3083,14 +3221,24 @@ fn extension_and_class_handles_cannot_resolve_in_an_independent_context() {
         Err(DiagnosticError::InvalidCode | DiagnosticError::InvalidClassification)
     ));
     let foreign_extension_and_class = right_component.record_without_projection_lazy(|| {
-        Observation::extension_with_class(left_extension, left_class, "wrong source pair", 1)
+        Observation::extension_with_class(
+            left_extension,
+            left_class,
+            "wrong source pair",
+            NonZeroU64::MIN,
+        )
     });
     assert!(matches!(
         foreign_extension_and_class,
         Err(DiagnosticError::InvalidCode | DiagnosticError::InvalidClassification)
     ));
     let foreign_class = right_component.record_without_projection_lazy(|| {
-        Observation::extension_with_class(right_extension, left_class, "wrong source class", 1)
+        Observation::extension_with_class(
+            right_extension,
+            left_class,
+            "wrong source class",
+            NonZeroU64::MIN,
+        )
     });
     assert!(matches!(
         foreign_class,
@@ -3152,7 +3300,7 @@ fn typed_plugin_context_survives_projection_and_shared_history_without_extra_cou
                     )
                     .unwrap(),
                     "operation failed",
-                    count,
+                    NonZeroU64::new(count).unwrap(),
                 )
                 .with_plugin_context(context.clone())
             })
@@ -3236,7 +3384,11 @@ fn diagnostic_recording_profile() {
             for _ in 0..100 {
                 recorder
                     .record_without_projection_lazy(|| {
-                        Observation::new(classification(FailureClass::Unknown), DETAIL, 1)
+                        Observation::new(
+                            classification(FailureClass::Unknown),
+                            DETAIL,
+                            NonZeroU64::MIN,
+                        )
                     })
                     .unwrap();
             }
@@ -3261,7 +3413,7 @@ fn diagnostic_recording_profile() {
                                     Observation::new(
                                         classification(FailureClass::Unknown),
                                         DETAIL,
-                                        1,
+                                        NonZeroU64::MIN,
                                     )
                                 })
                                 .unwrap();
@@ -3363,7 +3515,11 @@ fn builtin_query_selectors_are_independent_of_small_identity_limits() {
         for class in classes {
             component
                 .record_without_projection_lazy(|| {
-                    Observation::new(Classification::new(*code, class).unwrap(), "observed", 1)
+                    Observation::new(
+                        Classification::new(*code, class).unwrap(),
+                        "observed",
+                        NonZeroU64::MIN,
+                    )
                 })
                 .unwrap();
             let query = DiagnosticQuery {
@@ -3436,7 +3592,7 @@ fn extension_causes_remain_queryable_above_the_identity_limit() {
         .unwrap();
     component
         .record_without_projection_lazy(|| {
-            Observation::extension_with_class(code, class, "custom", 1)
+            Observation::extension_with_class(code, class, "custom", NonZeroU64::MIN)
         })
         .unwrap();
     let view = snapshot(
@@ -3467,7 +3623,11 @@ fn warmed_small_response_budgets_paginate_full_history_without_allocating() {
     for _ in 0..256 {
         component
             .record_without_projection_lazy(|| {
-                Observation::new(classification(FailureClass::Unknown), text.as_str(), 1)
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    text.as_str(),
+                    NonZeroU64::MIN,
+                )
             })
             .unwrap();
     }
@@ -3590,7 +3750,7 @@ fn large_interleaved_history_reclamation_preserves_order_counts_and_storage() {
             .record_without_projection_lazy(|| Observation::new(
                 classification(FailureClass::Unknown),
                 "stale",
-                1,
+                NonZeroU64::MIN,
             ))
             .unwrap_err(),
         DiagnosticError::ComponentClosed
@@ -3633,12 +3793,22 @@ fn rejected_record_returns_the_publication_permit_before_next_delivery() {
         .unwrap();
     assert!(
         component
-            .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "rejected", 0,))
+            .record_lazy(|| Observation::new(
+                Classification::success(SuccessCode::LoggingInitialized),
+                "undeclared code",
+                NonZeroU64::MIN,
+            ))
             .is_err()
     );
     assert_eq!(service.memory_usage().projection_workspaces, 0);
     component
-        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "accepted", 1))
+        .record_lazy(|| {
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "accepted",
+                NonZeroU64::MIN,
+            )
+        })
         .unwrap();
     assert_eq!(delivered.load(Ordering::Relaxed), 1);
     let snapshot = snapshot(&service, DiagnosticQuery::default());
@@ -3783,7 +3953,7 @@ fn oversized_component_rows_report_query_capacity_without_losing_evidence() {
                 Observation::new(
                     Classification::success(SuccessCode::SinkInitialized),
                     "success",
-                    1,
+                    NonZeroU64::MIN,
                 )
             })
             .unwrap();
@@ -3833,7 +4003,13 @@ fn recording_and_projection_work_without_query_backing() {
         })
         .unwrap();
     component
-        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "failure", 2))
+        .record_lazy(|| {
+            Observation::new(
+                classification(FailureClass::Unknown),
+                "failure",
+                NonZeroU64::new(2).unwrap(),
+            )
+        })
         .unwrap();
     assert_eq!(delivered.load(Ordering::Relaxed), 2);
     assert_eq!(
@@ -3916,7 +4092,7 @@ fn component_counter_index_survives_refresh_and_reclaimed_lower_slots() {
                 Some(FailureClass::Unknown),
                 DiagnosticOutcome::Failure,
                 "custom",
-                3,
+                NonZeroU64::new(3).unwrap(),
             )
         })
         .unwrap();
@@ -3953,7 +4129,7 @@ fn component_counter_index_survives_refresh_and_reclaimed_lower_slots() {
             .record_without_projection_lazy(|| Observation::new(
                 classification(FailureClass::Unknown),
                 "stale",
-                1
+                NonZeroU64::MIN
             ))
             .unwrap_err(),
         DiagnosticError::ComponentClosed
@@ -3965,7 +4141,7 @@ fn component_counter_index_survives_refresh_and_reclaimed_lower_slots() {
                 Some(FailureClass::Unknown),
                 DiagnosticOutcome::Failure,
                 "stale extension",
-                1
+                NonZeroU64::MIN
             ))
             .unwrap_err(),
         DiagnosticError::InvalidCode
@@ -4009,7 +4185,7 @@ fn window_reservation_reuse_preserves_neighbors_and_rejects_stale_owner() {
             .record_without_projection_lazy(|| Observation::new(
                 classification(FailureClass::Unknown),
                 "stale",
-                1
+                NonZeroU64::MIN
             ))
             .unwrap_err(),
         DiagnosticError::ComponentClosed
@@ -4041,11 +4217,15 @@ fn packed_event_fields_share_blocks_without_recording_allocations() {
         for _ in 0..256 {
             component
                 .record_without_projection_lazy(|| {
-                    Observation::new(classification(FailureClass::Unknown), "message🙂", 1)
-                        .with_correlation(DiagnosticCorrelation {
-                            session_id: Some("session€".into()),
-                            request_id: Some("request".into()),
-                        })
+                    Observation::new(
+                        classification(FailureClass::Unknown),
+                        "message🙂",
+                        NonZeroU64::MIN,
+                    )
+                    .with_correlation(DiagnosticCorrelation {
+                        session_id: Some("session€".into()),
+                        request_id: Some("request".into()),
+                    })
                 })
                 .unwrap();
         }
@@ -4083,12 +4263,11 @@ fn packed_text_preserves_empty_fields_without_pool_capacity() {
     let component = register(&service, "producer");
     component
         .record_without_projection_lazy(|| {
-            Observation::new(classification(FailureClass::Unknown), "", 1).with_correlation(
-                DiagnosticCorrelation {
+            Observation::new(classification(FailureClass::Unknown), "", NonZeroU64::MIN)
+                .with_correlation(DiagnosticCorrelation {
                     session_id: Some("".into()),
                     request_id: None,
-                },
-            )
+                })
         })
         .unwrap();
     let view = snapshot(&service, DiagnosticQuery::default());

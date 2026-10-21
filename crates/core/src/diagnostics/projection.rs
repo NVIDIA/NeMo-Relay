@@ -209,7 +209,7 @@ impl PublicationWorkspace {
         self.event.context = context.into();
         self.event.severity = observation.severity;
         self.event.outcome = observation.outcome;
-        self.event.count = observation.count.into();
+        self.event.count = observation.count.get().into();
         if let Some(detail) = detail {
             self.detail.clear();
             self.detail.push_str(detail);

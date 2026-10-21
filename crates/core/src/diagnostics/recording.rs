@@ -81,9 +81,6 @@ pub(super) fn record_observation(
     projection_requested: bool,
     publication: Option<&mut PublicationWorkspace>,
 ) -> Result<RecordReceipt, DiagnosticError> {
-    if observation.count == 0 {
-        return Err(DiagnosticError::InvalidCount);
-    }
     let component = match state
         .component(handle)
         .filter(|v| v.closed_at.is_none())
@@ -192,28 +189,37 @@ pub(super) fn record_observation(
     let sequence = state.next_sequence()?;
     let observed_at = Utc::now();
     let tick = inner.tick();
-    state
-        .lifetime
-        .record(observation.outcome, observation.count, observed_at, tick);
+    state.lifetime.record(
+        observation.outcome,
+        observation.count.get(),
+        observed_at,
+        tick,
+    );
     let current = state.components[handle.slot]
         .as_mut()
         .expect("validated component");
-    current
-        .lifetime
-        .record(observation.outcome, observation.count, observed_at, tick);
+    current.lifetime.record(
+        observation.outcome,
+        observation.count.get(),
+        observed_at,
+        tick,
+    );
     current
         .refresh
         .totals
-        .record(observation.outcome, observation.count);
-    state.record_window(handle, tick, observation.outcome, observation.count);
+        .record(observation.outcome, observation.count.get());
+    state.record_window(handle, tick, observation.outcome, observation.count.get());
     let code_total = counter_index.map(|index| {
         let counter = state.counters[index].as_mut().expect("declared counter");
-        counter.occurrences.add(observation.count);
+        counter.occurrences.add(observation.count.get());
         counter.last_observed_at = Some(observed_at);
         counter.occurrences
     });
     let Some(code) = code else {
-        state.loss.classifications_overflowed.add(observation.count);
+        state
+            .loss
+            .classifications_overflowed
+            .add(observation.count.get());
         state.loss.events_omitted.add(1);
         return Ok(RecordReceipt {
             sequence,
@@ -285,7 +291,7 @@ pub(super) fn record_observation(
         let event = StoredObservation {
             sequence,
             observed_at,
-            count: observation.count,
+            count: observation.count.get(),
             component: handle,
             origin,
             code,
