@@ -477,7 +477,9 @@ impl PluginRegistrationContext {
             let (PluginRegistrationNamespace::Plain(name)
             | PluginRegistrationNamespace::PluginComponent(name)) = namespace;
             // This is descriptive metadata. Keep even the temporary adapter copy bounded.
-            let mut end = name.len().min(128);
+            let mut end = name
+                .len()
+                .min(diagnostics.limits().max_identity_bytes.min(128));
             while !name.is_char_boundary(end) {
                 end -= 1;
             }
