@@ -49,7 +49,7 @@ pub(crate) enum CacheReason {
     CachedError,
     /// The request is not explicitly deterministic.
     NondeterministicTemperature,
-    /// A stored stream response cannot be replayed faithfully.
+    /// A stored response or tool result cannot be replayed faithfully.
     ReplayLossy,
     /// The configured sampling rate chose a live call.
     Sampled,

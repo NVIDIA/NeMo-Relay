@@ -82,6 +82,131 @@ def test_opaque_artifacts_remain_local_without_python_deserialization():
         LangChainToolResultCodec("call-1").from_json(encoded)
 
 
+@pytest.mark.parametrize("integration", ["langchain", "langgraph"])
+@pytest.mark.parametrize("result_kind", ["message", "command", "dict_command", "list"])
+@pytest.mark.parametrize("opaque", [False, True])
+@pytest.mark.parametrize("status", ["success", "error"])
+def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
+    integration, result_kind, opaque, status, subscribed_events
+):
+    from langchain.agents.middleware import ToolCallRequest
+    from langchain_core.messages import ToolMessage
+    from langgraph.graph.message import add_messages
+    from langgraph.types import Command, Send
+
+    from nemo_relay.adaptive import (
+        AdaptiveConfig,
+        AdaptiveRuntime,
+        ResponseCacheConfig,
+        ToolCacheConfig,
+        ToolOverride,
+    )
+    from nemo_relay.integrations.langchain import NemoRelayMiddleware
+    from nemo_relay.integrations.langgraph.tool_node import awrap_tool_call
+
+    artifact = object() if opaque else {"answer": 42}
+    calls = 0
+    unrelated = ToolMessage(content="other", tool_call_id="other", id="message-other")
+
+    async def handler(request):
+        nonlocal calls
+        calls += 1
+        call_id = request.tool_call["id"]
+        message = ToolMessage(
+            content="answer", tool_call_id=call_id, id=f"message-{call_id}", artifact=artifact, status=status
+        )
+        if result_kind == "message":
+            return message
+        if result_kind == "dict_command":
+            message = message.model_dump(mode="python")
+        command = Command(
+            update={"messages": [unrelated, message], "state": (1, 2)},
+            goto=Send("next", {"messages": [message]}),
+        )
+        return [unrelated, command] if result_kind == "list" else command
+
+    async def run():
+        runtime = AdaptiveRuntime(
+            AdaptiveConfig(
+                response_cache=ResponseCacheConfig(
+                    namespace="framework-tool-replay",
+                    tools=ToolCacheConfig(
+                        enabled=True, cache_errors=True, overrides={"lookup": ToolOverride(cacheable=True)}
+                    ),
+                )
+            ).to_dict()
+        )
+        await runtime.register()
+        try:
+            with nemo_relay.scope.scope("cache-replay", nemo_relay.ScopeType.Agent):
+                history = []
+                for call_id in ["call-1", "call-2", "call-3"]:
+                    request = ToolCallRequest(
+                        tool_call={"name": "lookup", "args": {"query": "same"}, "id": call_id},
+                        tool=MagicMock(),
+                        state={},
+                        runtime=MagicMock(),
+                    )
+                    result = await (
+                        NemoRelayMiddleware().awrap_tool_call(request, handler)
+                        if integration == "langchain"
+                        else awrap_tool_call(request, handler)
+                    )
+                    if result_kind == "list":
+                        assert isinstance(result, list)
+                        assert result[0] == unrelated
+                        result = result[1]
+                    if result_kind != "message":
+                        assert isinstance(result, Command)
+                        assert isinstance(result.update, dict)
+                        assert isinstance(result.goto, Send)
+                        assert result.update["messages"][0] == unrelated
+                        assert result.update["state"] == (1, 2)
+                        sent = result.goto.arg["messages"][0]
+                        assert (sent["tool_call_id"] if isinstance(sent, dict) else sent.tool_call_id) == call_id
+                        result = result.update["messages"][1]
+                        if isinstance(result, dict):
+                            result = ToolMessage.model_validate(result)
+                    assert isinstance(result, ToolMessage)
+                    assert result.content == "answer"
+                    assert result.status == status
+                    assert result.tool_call_id == call_id
+                    assert result.id == (f"message-{call_id}" if opaque or call_id == "call-1" else None)
+                    if opaque:
+                        assert result.artifact is artifact
+                    else:
+                        assert result.artifact == artifact
+                    history = add_messages(history, [result])
+                assert len(history) == 3
+        finally:
+            await runtime.shutdown()
+            await nemo_relay.subscribers.flush_async()
+
+    asyncio.run(run())
+    assert calls == (3 if opaque else 1)
+    hits = [
+        event for event in subscribed_events if event.name == "response_cache" and event.data.get("status") == "hit"
+    ]
+    assert len(hits) == (0 if opaque else 2)
+
+
+def test_replayed_graph_destination_binds_messages_without_display_content():
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command, Send
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    message = ToolMessage(content="answer", tool_call_id="call-1", id="message-1")
+    command = Command(update={"state": 42}, goto=Send("next", {"messages": [message]}))
+    encoded = LangChainToolResultCodec("call-1").to_json(command)
+    restored = LangChainToolResultCodec("call-2").from_json(encoded)
+    assert isinstance(restored, Command)
+    assert isinstance(restored.goto, Send)
+    assert restored.update == {"state": 42}
+    assert restored.goto.arg["messages"][0].tool_call_id == "call-2"
+    assert restored.goto.arg["messages"][0].id is None
+
+
 @pytest.mark.parametrize("command", [False, True])
 @pytest.mark.parametrize("custom_type", [False, True])
 @pytest.mark.parametrize("edited", [False, True])
