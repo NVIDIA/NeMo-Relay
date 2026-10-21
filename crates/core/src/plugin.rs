@@ -13,6 +13,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -521,7 +522,7 @@ impl PluginRegistrationContext {
                 DiagnosticObservation::new(
                     PluginErrorClassifier.classify(error),
                     DiagnosticDetailRef::Text("Plugin component activation failed"),
-                    1,
+                    NonZeroU64::MIN,
                 )
                 .with_plugin_context(PluginObservationContext {
                     phase: Some(PluginPhase::Activation.into()),
@@ -543,7 +544,7 @@ impl PluginRegistrationContext {
                     )
                     .expect("catalogue permits internal plugin failure"),
                     "Plugin component activation unwound",
-                    1,
+                    NonZeroU64::MIN,
                 )
                 .with_plugin_context(PluginObservationContext {
                     phase: Some(PluginPhase::Activation.into()),
@@ -2186,7 +2187,7 @@ fn inherited_plugin_config_diagnostics(
                     DiagnosticObservation::new(
                         Classification::notice(NoticeCode::ConfigurationInherited),
                         "Inherited plugin configuration from a discovered file",
-                        1,
+                        NonZeroU64::MIN,
                     )
                     .with_severity(DiagnosticSeverity::Warning)
                 });

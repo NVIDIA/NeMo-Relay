@@ -19,6 +19,7 @@ use opentelemetry_sdk::trace::{
 use serde_json::Value;
 use spdlog::Level;
 use std::ffi::{OsStr, OsString};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
@@ -245,12 +246,12 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
     .unwrap();
     producer
         .record_lazy(|| {
-            Observation::new(filtered, "Filtered from log output", 1)
+            Observation::new(filtered, "Filtered from log output", NonZeroU64::MIN)
                 .with_severity(DiagnosticSeverity::Debug)
         })
         .unwrap();
     producer
-        .record_lazy(|| Observation::new(failure, "Exporter delivery failed", 1))
+        .record_lazy(|| Observation::new(failure, "Exporter delivery failed", NonZeroU64::MIN))
         .unwrap();
     runtime.shutdown();
     let output = std::fs::read_to_string(&path).unwrap();
@@ -284,7 +285,13 @@ fn typed_diagnostics_project_once_with_identity_and_outlive_filtered_detached_lo
             .any(|event| event.code() == "plugin.configuration_inherited")
     );
     producer
-        .record_lazy(|| Observation::new(after_shutdown, "Recorded after logging shutdown", 1))
+        .record_lazy(|| {
+            Observation::new(
+                after_shutdown,
+                "Recorded after logging shutdown",
+                NonZeroU64::MIN,
+            )
+        })
         .unwrap();
     assert_eq!(std::fs::read_to_string(path).unwrap(), output);
     let final_snapshot = producer
@@ -352,11 +359,17 @@ fn replacing_logging_diagnostics_projects_only_into_the_current_runtime() {
     let first = configure(first_path.clone());
     let second = configure(second_path.clone());
     producer
-        .record_lazy(|| Observation::new(current, "Current runtime only", 1))
+        .record_lazy(|| Observation::new(current, "Current runtime only", NonZeroU64::MIN))
         .unwrap();
     first.shutdown();
     producer
-        .record_lazy(|| Observation::new(still_current, "New runtime remains attached", 1))
+        .record_lazy(|| {
+            Observation::new(
+                still_current,
+                "New runtime remains attached",
+                NonZeroU64::MIN,
+            )
+        })
         .unwrap();
     second.shutdown();
     let first = std::fs::read_to_string(first_path).unwrap();

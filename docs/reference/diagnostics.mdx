@@ -34,11 +34,14 @@ process default. Standalone validation and discovery do not consume that default
 ## Recording and Reading
 
 Register the component's expected codes before recording. Each observation
-supplies an occurrence delta, rather than a previously accumulated total.
+supplies a positive `NonZeroU64` occurrence delta, rather than a previously
+accumulated total. Zero cannot be authored through the recording constructors;
+wire snapshots retain their lossless numeric-string representation.
 This example records typed evidence for a sink without configuring logging.
 Supply the deployed Relay version in the source identity.
 
 ```rust
+use std::num::NonZeroU64;
 use nemo_relay::diagnostics::{
     BuiltinDiagnosticCode, Classification, ComponentRegistration, DiagnosticQuery,
     Diagnostics, DiagnosticsSettings, FailureClass, FailureCode, LoggingFailureCode,
@@ -67,12 +70,12 @@ component.record_lazy(|| Observation::new(
     Classification::failure(failure_code, FailureClass::Io)
         .expect("supported sink failure class"),
     "The sink write failed",
-    2,
+    NonZeroU64::new(2).expect("positive diagnostic occurrence count"),
 ))?;
 component.record_lazy(|| Observation::new(
     Classification::success(success_code),
     "The sink initialized",
-    1,
+    NonZeroU64::MIN,
 ))?;
 
 let page = diagnostics.snapshot(&DiagnosticQuery::default())?;

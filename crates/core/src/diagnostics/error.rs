@@ -27,9 +27,6 @@ pub enum DiagnosticError {
     /// Plugin context contains a name unsupported by this recording runtime.
     #[error("invalid or unsupported diagnostic plugin context")]
     InvalidContext,
-    /// Recording requires a positive input occurrence delta.
-    #[error("an observation requires a positive occurrence count")]
-    InvalidCount,
     /// Admission cannot fit another component without displacing active state.
     #[error("diagnostic component capacity exhausted")]
     ComponentCapacity,

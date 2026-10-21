@@ -3,6 +3,7 @@
 
 //! Focused public-boundary coverage for diagnostic adapters and startup disablement.
 
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -59,7 +60,7 @@ fn internal(message: &str) -> Observation<'_> {
         )
         .unwrap(),
         message,
-        1,
+        NonZeroU64::MIN,
     )
 }
 
@@ -123,7 +124,11 @@ fn typed_plugin_error_records_once_without_projections_or_legacy_replay() {
     let detail = || DiagnosticDetailRef::Text("Plugin registration failed");
     let outcome = recorder
         .record_without_projection_lazy(|| {
-            Observation::new(PluginErrorClassifier.classify(&original), detail(), 3)
+            Observation::new(
+                PluginErrorClassifier.classify(&original),
+                detail(),
+                NonZeroU64::new(3).unwrap(),
+            )
         })
         .unwrap();
     assert!(matches!(outcome, RecordOutcome::Recorded(_)));
@@ -183,7 +188,11 @@ fn disabled_plugin_recording_skips_classifier_and_detail_factory() {
     let detail = || -> DiagnosticDetailRef<'_> { panic!("disabled detail factory ran") };
     let outcome = recorder
         .record_without_projection_lazy(|| {
-            Observation::new(DisabledClassifier.classify(&error), detail(), 1)
+            Observation::new(
+                DisabledClassifier.classify(&error),
+                detail(),
+                NonZeroU64::MIN,
+            )
         })
         .unwrap();
     assert_eq!(outcome, RecordOutcome::Disabled);

@@ -39,7 +39,7 @@
 //!     Classification::failure(FailureCode::Logging(LoggingFailureCode::SinkWriteFailed), FailureClass::Io)
 //!         .expect("supported catalogue pair"),
 //!     "Producer-approved safe detail",
-//!     1, // occurrence delta, never a cumulative total
+//!     std::num::NonZeroU64::MIN, // occurrence delta, never a cumulative total
 //! ))?;
 //! let page = diagnostics.snapshot(&DiagnosticQuery::default())?;
 //! let bounded_json: &[u8] = page.as_bytes();

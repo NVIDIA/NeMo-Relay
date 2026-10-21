@@ -1411,6 +1411,7 @@ mod tests {
         Classification, ComponentRegistration, Diagnostics, DiagnosticsSettings, Observation,
         SuccessCode, WindowSettings,
     };
+    use std::num::NonZeroU64;
 
     #[test]
     fn zero_queries_omit_pool_backing_and_ignore_unused_page_capacities() {
@@ -1548,7 +1549,7 @@ mod tests {
                     Observation::new(
                         Classification::success(SuccessCode::SinkInitialized),
                         "success",
-                        7,
+                        NonZeroU64::new(7).expect("positive diagnostic occurrence count"),
                     )
                 })
                 .unwrap();
