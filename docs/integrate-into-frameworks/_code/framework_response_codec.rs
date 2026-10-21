@@ -21,11 +21,12 @@ struct FrameworkResponse {
 struct FrameworkResponseCodec;
 
 impl LlmResponseCodec for FrameworkResponseCodec {
+    /// Decode a framework response into Relay's standard response fields.
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         let raw: FrameworkResponse = serde_json::from_value(response.clone())
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         let total_tokens = match (raw.input_tokens, raw.output_tokens) {
-            (Some(input), Some(output)) => Some(input + output),
+            (Some(input), Some(output)) => input.checked_add(output),
             _ => None,
         };
 

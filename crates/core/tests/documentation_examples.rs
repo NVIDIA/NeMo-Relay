@@ -39,4 +39,27 @@ mod framework_response_codec {
         assert_eq!(usage.completion_tokens, None);
         assert_eq!(usage.total_tokens, None);
     }
+
+    #[test]
+    fn keeps_overflowing_total_unknown() {
+        let response = FrameworkResponseCodec
+            .decode_response(&serde_json::json!({
+                "input_tokens": u64::MAX,
+                "output_tokens": 1,
+            }))
+            .unwrap();
+
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, Some(u64::MAX));
+        assert_eq!(usage.completion_tokens, Some(1));
+        assert_eq!(usage.total_tokens, None);
+    }
+
+    #[test]
+    fn rejects_malformed_token_counts() {
+        let result =
+            FrameworkResponseCodec.decode_response(&serde_json::json!({"input_tokens": "invalid"}));
+
+        assert!(matches!(result, Err(FlowError::Internal(_))));
+    }
 }
