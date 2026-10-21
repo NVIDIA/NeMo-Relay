@@ -3575,3 +3575,45 @@ fn large_interleaved_history_reclamation_preserves_order_counts_and_storage() {
         ((CAPACITY / 2 + 1) * 64, reserved)
     );
 }
+
+#[test]
+fn rejected_record_returns_the_publication_permit_before_next_delivery() {
+    let service = diagnostics(DiagnosticLimits {
+        max_projection_workspaces: 1,
+        ..limits()
+    });
+    let component = register(&service, "producer");
+    let delivered = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&delivered);
+    let _subscription = service
+        .subscribe_projection(move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    assert!(
+        component
+            .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "rejected", 0,))
+            .is_err()
+    );
+    assert_eq!(service.memory_usage().projection_workspaces, 0);
+    component
+        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "accepted", 1))
+        .unwrap();
+    assert_eq!(delivered.load(Ordering::Relaxed), 1);
+    let snapshot = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(
+        snapshot.lifetime.totals.recorded_events_total.value.get(),
+        1
+    );
+    assert_eq!(snapshot.coverage.loss.observations_rejected.value.get(), 1);
+    assert_eq!(
+        snapshot
+            .coverage
+            .loss
+            .projection_deliveries_omitted
+            .value
+            .get(),
+        0
+    );
+    assert_eq!(service.memory_usage().projection_workspaces, 0);
+}
