@@ -99,7 +99,12 @@ Producers, projections, and decoded events use the same public `Classification`,
 `PluginObservationContext`, and `DiagnosticCorrelation` payloads. Typed catalogue
 constructors supply canonical names without allocating strings. The payloads use
 borrowed-or-owned strings: decoded snapshots own their values and preserve names
-that a reader does not yet recognize.
+that a reader does not yet recognize. `Classification` has private fields and
+read-only `code()` and `failure_class()` accessors. Typed constructors validate
+built-in pairs; `from_opaque_names()` explicitly preserves opaque wire or admitted
+extension names. Opaque construction and Serde decoding do not authorize recording:
+core validates the catalogue, ownership, and generation at admission. `into_names()`
+transfers the strings without cloning when an adapter needs to reuse owned buffers.
 
 `DiagnosticCorrelation<'a>` also lets producers borrow dynamic request/session
 IDs for the duration of recording. Decoded events use owned
