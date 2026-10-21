@@ -284,6 +284,11 @@ pub(super) fn record_observation(
         let event = StoredObservation {
             sequence,
             observed_at,
+            remote: observation.remote.map(|mut remote| {
+                remote.received_at = observed_at;
+                remote.accepted_elapsed_millis = tick.into();
+                remote
+            }),
             count: observation.count.get(),
             component: handle,
             origin,

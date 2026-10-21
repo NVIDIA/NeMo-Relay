@@ -206,7 +206,24 @@ pub fn load_native_plugins<I>(specs: I) -> crate::plugin::Result<NativePluginAct
 where
     I: IntoIterator<Item = NativePluginLoadSpec>,
 {
-    load_native_plugins_with_trust(specs, &HashMap::new(), &mut Vec::new(), Vec::new())
+    load_native_plugins_with_diagnostics(specs, crate::diagnostics::Diagnostics::process_default())
+}
+
+/// Load native plugins with the runtime owner's diagnostics service.
+pub fn load_native_plugins_with_diagnostics<I>(
+    specs: I,
+    diagnostics: &crate::diagnostics::Diagnostics,
+) -> crate::plugin::Result<NativePluginActivation>
+where
+    I: IntoIterator<Item = NativePluginLoadSpec>,
+{
+    load_native_plugins_with_trust(
+        specs,
+        &HashMap::new(),
+        &mut Vec::new(),
+        Vec::new(),
+        diagnostics,
+    )
 }
 
 pub(super) fn load_native_plugins_with_trust<I>(
@@ -214,6 +231,7 @@ pub(super) fn load_native_plugins_with_trust<I>(
     trust: &HashMap<String, DynamicPluginLoadTrust>,
     skipped: &mut Vec<super::DynamicPluginValidationReport>,
     artifacts: Vec<PreparedNativePlugin>,
+    diagnostics: &crate::diagnostics::Diagnostics,
 ) -> crate::plugin::Result<NativePluginActivation>
 where
     I: IntoIterator<Item = NativePluginLoadSpec>,
@@ -243,8 +261,25 @@ where
                 None => None,
             },
         };
-        let instance = load_one_native_plugin(&spec, artifact)?;
+        let observer = super::diagnostics::PluginDiagnostics::new(
+            diagnostics,
+            &spec.plugin_id,
+            crate::diagnostics::PluginExecution::NativeAbi,
+            uuid::Uuid::now_v7(),
+        );
+        let instance =
+            load_one_native_plugin(&spec, artifact, observer.clone()).inspect_err(|_| {
+                observer.failure(
+                    crate::diagnostics::PluginOperationFailureCode::NativeLoad,
+                    crate::diagnostics::FailureClass::Unknown,
+                    crate::diagnostics::PluginPhase::Activation,
+                );
+            })?;
         let plugin_kind = instance.plugin_kind.clone();
+        observer.success(
+            crate::diagnostics::SuccessCode::PluginNativeLoaded,
+            crate::diagnostics::PluginPhase::Activation,
+        );
         let registration_id = register_plugin_tracked(Arc::new(NativePluginAdapter {
             plugin_kind: plugin_kind.clone(),
             allows_multiple_components: instance.allows_multiple_components,
@@ -293,6 +328,11 @@ impl Plugin for NativePluginAdapter {
         };
         let mut out = ptr::null_mut();
         let status = unsafe { validate(plugin.user_data, config_json, &mut out) };
+        self.instance.diagnostics.native_status(
+            crate::diagnostics::PluginOperationFailureCode::NativeValidation,
+            status,
+            crate::diagnostics::PluginPhase::Validation,
+        );
         unsafe { native_string_free(config_json) };
         if status != NemoRelayStatus::Ok {
             if !out.is_null() {
@@ -307,6 +347,10 @@ impl Plugin for NativePluginAdapter {
             )];
         }
         if out.is_null() {
+            self.instance.diagnostics.success(
+                crate::diagnostics::SuccessCode::PluginNativeValidated,
+                crate::diagnostics::PluginPhase::Validation,
+            );
             return vec![];
         }
         let diagnostics = read_native_string(out)
@@ -320,6 +364,21 @@ impl Plugin for NativePluginAdapter {
                 )]
             });
         unsafe { native_string_free(out) };
+        if diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+        {
+            self.instance.diagnostics.failure(
+                crate::diagnostics::PluginOperationFailureCode::NativeValidation,
+                crate::diagnostics::FailureClass::Unknown,
+                crate::diagnostics::PluginPhase::Validation,
+            );
+        } else {
+            self.instance.diagnostics.success(
+                crate::diagnostics::SuccessCode::PluginNativeValidated,
+                crate::diagnostics::PluginPhase::Validation,
+            );
+        }
         diagnostics
     }
 
@@ -356,7 +415,16 @@ impl Plugin for NativePluginAdapter {
                 )
             };
             unsafe { native_string_free(config_json) };
+            self.instance.diagnostics.native_status(
+                crate::diagnostics::PluginOperationFailureCode::NativeRegistration,
+                status,
+                crate::diagnostics::PluginPhase::Activation,
+            );
             if status == NemoRelayStatus::Ok {
+                self.instance.diagnostics.success(
+                    crate::diagnostics::SuccessCode::PluginNativeRegistered,
+                    crate::diagnostics::PluginPhase::Activation,
+                );
                 Ok(())
             } else {
                 let message = native_last_error_message()
@@ -378,6 +446,7 @@ fn native_error_diagnostic(plugin_kind: &str, code: &str, message: &str) -> Conf
 }
 
 struct NativePluginInstance {
+    diagnostics: super::diagnostics::PluginDiagnostics,
     plugin_kind: String,
     relay_compat: String,
     allows_multiple_components: bool,
@@ -428,6 +497,7 @@ fn drop_native_plugin_descriptor(plugin: &mut NemoRelayNativePluginV1) {
 fn load_one_native_plugin(
     spec: &NativePluginLoadSpec,
     artifact: Option<PreparedNativePlugin>,
+    diagnostics: super::diagnostics::PluginDiagnostics,
 ) -> crate::plugin::Result<Arc<NativePluginInstance>> {
     let snapshot_required = artifact.is_some();
     let (manifest, manifest_ref, artifact_bytes) = match artifact {
@@ -537,6 +607,7 @@ fn load_one_native_plugin(
         )));
     }
     Ok(Arc::new(NativePluginInstance {
+        diagnostics,
         plugin_kind,
         relay_compat,
         allows_multiple_components: plugin.allows_multiple_components,
@@ -2008,11 +2079,28 @@ fn report_native_http_error(
     }
 }
 
+fn observe_native_callback_failure(user_data: Option<&NativeCallbackUserData>) {
+    if let Some(instance) = user_data.and_then(|data| data._instance.as_ref()) {
+        instance.diagnostics.failure(
+            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            crate::diagnostics::FailureClass::Unknown,
+            crate::diagnostics::PluginPhase::Runtime,
+        );
+    }
+}
+
 fn flow_error_from_plugin_status(
     status: NemoRelayStatus,
     fallback: &str,
     user_data: &NativeCallbackUserData,
 ) -> FlowError {
+    if let Some(instance) = &user_data._instance {
+        instance.diagnostics.native_status(
+            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            status,
+            crate::diagnostics::PluginPhase::Runtime,
+        );
+    }
     report_native_http_error(flow_error_from_status(status, fallback), Some(user_data))
 }
 
@@ -2666,6 +2754,7 @@ unsafe extern "C" fn native_async_completion_reject(
         abort.abort();
     }
     abort_completion_continuations(completion);
+    observe_native_callback_failure(completion._callback_user_data.as_deref());
     let _ = sender.send(Err(report_native_http_error(
         super::http_error::from_message(message),
         completion._callback_user_data.as_deref(),
@@ -2976,6 +3065,7 @@ unsafe extern "C" fn native_async_stream_reject(
         stream._callback_user_data.as_deref(),
     ))) {
         Ok(()) => {
+            observe_native_callback_failure(stream._callback_user_data.as_deref());
             sender_guard.take();
             stream.settled.store(true, Ordering::Release);
             let mut downstream_aborts = stream
@@ -5491,6 +5581,13 @@ fn wrap_conditional_middleware_guardrail_callback(
             native_string_free(kinds_json);
             native_string_free(registration_name_string);
         }
+        if let Some(instance) = &user_data._instance {
+            instance.diagnostics.native_status(
+                crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+                status,
+                crate::diagnostics::PluginPhase::Runtime,
+            );
+        }
         if status != NemoRelayStatus::Ok {
             if !out.is_null() {
                 unsafe { native_string_free(out) };
@@ -5535,6 +5632,13 @@ fn wrap_event_subscriber(
         let event_json = serde_json::to_value(event).unwrap_or(Json::Null);
         if let Some(event_string) = native_string_from_json(&event_json) {
             let status = unsafe { cb(user_data.ptr, event_string) };
+            if let Some(instance) = &user_data._instance {
+                instance.diagnostics.native_status(
+                    crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+                    status,
+                    crate::diagnostics::PluginPhase::Runtime,
+                );
+            }
             if status != NemoRelayStatus::Ok {
                 set_native_last_error(format!("native subscriber callback returned {status:?}"));
             }
@@ -5553,8 +5657,17 @@ fn wrap_event_sanitize_fn(
     Arc::new(move |event, fields| {
         let user_data = user_data.clone();
         Box::pin(async move {
-            call_event_sanitize_callback(cb, user_data.ptr, &event, &fields)
-                .map_err(|error| report_native_http_error(error, Some(&user_data)))
+            call_event_sanitize_callback(
+                cb,
+                user_data.ptr,
+                &event,
+                &fields,
+                user_data
+                    ._instance
+                    .as_ref()
+                    .map(|instance| &instance.diagnostics),
+            )
+            .map_err(|error| report_native_http_error(error, Some(&user_data)))
         })
     })
 }
@@ -5564,6 +5677,7 @@ fn call_event_sanitize_callback(
     user_data: *mut c_void,
     event: &Event,
     fields: &EventSanitizeFields,
+    diagnostics: Option<&super::diagnostics::PluginDiagnostics>,
 ) -> FlowResult<EventSanitizeFields> {
     clear_native_last_error();
     let event_json = serde_json::to_value(event)
@@ -5587,6 +5701,13 @@ fn call_event_sanitize_callback(
     unsafe {
         native_string_free(event);
         native_string_free(fields);
+    }
+    if let Some(diagnostics) = diagnostics {
+        diagnostics.native_status(
+            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            status,
+            crate::diagnostics::PluginPhase::Runtime,
+        );
     }
     if status != NemoRelayStatus::Ok {
         if !out.is_null() {
@@ -5612,8 +5733,17 @@ fn wrap_tool_json_fn(
     Arc::new(move |name, payload| {
         let user_data = user_data.clone();
         Box::pin(async move {
-            call_tool_json_callback(cb, user_data.ptr, &name, &payload)
-                .map_err(|error| report_native_http_error(error, Some(&user_data)))
+            call_tool_json_callback(
+                cb,
+                user_data.ptr,
+                &name,
+                &payload,
+                user_data
+                    ._instance
+                    .as_ref()
+                    .map(|instance| &instance.diagnostics),
+            )
+            .map_err(|error| report_native_http_error(error, Some(&user_data)))
         })
     })
 }
@@ -5628,8 +5758,17 @@ fn wrap_tool_intercept_fn(
     Arc::new(move |name, payload| {
         let user_data = user_data.clone();
         Box::pin(async move {
-            call_tool_json_callback(cb, user_data.ptr, &name, &payload)
-                .map_err(|error| report_native_http_error(error, Some(&user_data)))
+            call_tool_json_callback(
+                cb,
+                user_data.ptr,
+                &name,
+                &payload,
+                user_data
+                    ._instance
+                    .as_ref()
+                    .map(|instance| &instance.diagnostics),
+            )
+            .map_err(|error| report_native_http_error(error, Some(&user_data)))
         })
     })
 }
@@ -5639,6 +5778,7 @@ fn call_tool_json_callback(
     user_data: *mut c_void,
     name: &str,
     payload: &Json,
+    diagnostics: Option<&super::diagnostics::PluginDiagnostics>,
 ) -> FlowResult<Json> {
     clear_native_last_error();
     let name = native_string_from_str(name)
@@ -5650,6 +5790,13 @@ fn call_tool_json_callback(
     unsafe {
         native_string_free(name);
         native_string_free(payload);
+    }
+    if let Some(diagnostics) = diagnostics {
+        diagnostics.native_status(
+            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            status,
+            crate::diagnostics::PluginPhase::Runtime,
+        );
     }
     if status != NemoRelayStatus::Ok {
         if !out.is_null() {
@@ -5855,8 +6002,17 @@ fn wrap_llm_sanitize_request_fn(
     Arc::new(move |request, context| {
         let user_data = user_data.clone();
         Box::pin(async move {
-            call_llm_sanitize_request_callback(cb, user_data.ptr, &request, context)
-                .map_err(|error| report_native_http_error(error, Some(&user_data)))
+            call_llm_sanitize_request_callback(
+                cb,
+                user_data.ptr,
+                &request,
+                context,
+                user_data
+                    ._instance
+                    .as_ref()
+                    .map(|instance| &instance.diagnostics),
+            )
+            .map_err(|error| report_native_http_error(error, Some(&user_data)))
         })
     })
 }
@@ -5871,8 +6027,17 @@ fn wrap_llm_sanitize_response_fn(
     Arc::new(move |payload, context| {
         let user_data = user_data.clone();
         Box::pin(async move {
-            call_llm_sanitize_response_callback(cb, user_data.ptr, &payload, context)
-                .map_err(|error| report_native_http_error(error, Some(&user_data)))
+            call_llm_sanitize_response_callback(
+                cb,
+                user_data.ptr,
+                &payload,
+                context,
+                user_data
+                    ._instance
+                    .as_ref()
+                    .map(|instance| &instance.diagnostics),
+            )
+            .map_err(|error| report_native_http_error(error, Some(&user_data)))
         })
     })
 }
@@ -5882,6 +6047,7 @@ fn call_llm_sanitize_request_callback(
     user_data: *mut c_void,
     request: &LlmRequest,
     context: LlmSanitizeRequestContext,
+    diagnostics: Option<&super::diagnostics::PluginDiagnostics>,
 ) -> FlowResult<Option<LlmRequest>> {
     clear_native_last_error();
     let codec = context.resolve_codec().map(NativeHostLlmRequestCodec);
@@ -5917,6 +6083,13 @@ fn call_llm_sanitize_request_callback(
     };
     let mut out = ptr::null_mut();
     let status = unsafe { cb(user_data, request_string, context, &mut out) };
+    if let Some(diagnostics) = diagnostics {
+        diagnostics.native_status(
+            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            status,
+            crate::diagnostics::PluginPhase::Runtime,
+        );
+    }
     if status != NemoRelayStatus::Ok {
         unsafe { free_native_sanitizer_strings(request_string, context_id, out) };
         return Err(flow_error_from_status(
@@ -5942,6 +6115,7 @@ fn call_llm_sanitize_response_callback(
     user_data: *mut c_void,
     payload: &Json,
     context: LlmSanitizeResponseContext,
+    diagnostics: Option<&super::diagnostics::PluginDiagnostics>,
 ) -> FlowResult<Option<Json>> {
     clear_native_last_error();
     let codec = context.resolve_codec().map(NativeHostLlmResponseCodec);
@@ -5966,6 +6140,13 @@ fn call_llm_sanitize_response_callback(
     };
     let mut out = ptr::null_mut();
     let status = unsafe { cb(user_data, payload_string, context, &mut out) };
+    if let Some(diagnostics) = diagnostics {
+        diagnostics.native_status(
+            crate::diagnostics::PluginOperationFailureCode::NativeCallback,
+            status,
+            crate::diagnostics::PluginPhase::Runtime,
+        );
+    }
     if status != NemoRelayStatus::Ok {
         unsafe { free_native_sanitizer_strings(payload_string, context_id, out) };
         return Err(flow_error_from_status(
@@ -6383,6 +6564,7 @@ impl Stream for NativeRelayLlmStream {
         match status {
             NemoRelayStatus::Ok => {
                 if out.is_null() {
+                    observe_native_callback_failure(self._callback_user_data.as_deref());
                     let error = super::http_error::from_message(
                         native_last_error_message()
                             .unwrap_or_else(|| "native LLM stream returned null chunk".into()),
@@ -6395,6 +6577,7 @@ impl Stream for NativeRelayLlmStream {
                 let result =
                     take_json_from_native_string(out, "native LLM stream returned null chunk");
                 if result.is_err() {
+                    observe_native_callback_failure(self._callback_user_data.as_deref());
                     self.finish();
                 }
                 Poll::Ready(Some(result))
@@ -6410,10 +6593,14 @@ impl Stream for NativeRelayLlmStream {
                 if !out.is_null() {
                     unsafe { native_string_free(out) };
                 }
-                let error = report_native_http_error(
-                    flow_error_from_status(status, "native LLM stream poll failed"),
-                    self._callback_user_data.as_deref(),
-                );
+                let error = match self._callback_user_data.as_deref() {
+                    Some(user_data) => flow_error_from_plugin_status(
+                        status,
+                        "native LLM stream poll failed",
+                        user_data,
+                    ),
+                    None => flow_error_from_status(status, "native LLM stream poll failed"),
+                };
                 self.finish();
                 Poll::Ready(Some(Err(error)))
             }

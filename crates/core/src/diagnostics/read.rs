@@ -73,6 +73,7 @@ struct PageEvent {
     source_position: usize,
     sequence: DiagnosticNumber,
     observed_at: DateTime<Utc>,
+    remote: Option<nemo_relay_types::diagnostics::RemoteDiagnosticOrigin>,
     component: PageIdentity,
     origin_generation: DiagnosticNumber,
     ownership: PageOwnership,
@@ -517,9 +518,13 @@ struct EventView<'a> {
 impl Serialize for EventView<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let e = self.event;
-        let mut out = s.serialize_struct("DiagnosticEvent", 11)?;
+        let mut out =
+            s.serialize_struct("DiagnosticEvent", 11 + usize::from(e.remote.is_some()))?;
         out.serialize_field("sequence", &e.sequence)?;
         out.serialize_field("observed_at", &e.observed_at)?;
+        if let Some(remote) = &e.remote {
+            out.serialize_field("remote", remote)?;
+        }
         out.serialize_field("component", &IdentityView::new(self.page, &e.component))?;
         out.serialize_field("origin", &OriginView::new(self.page, e))?;
         out.serialize_field("classification", &ClassificationView::new(self.page, e))?;
@@ -1254,6 +1259,7 @@ fn copy_event(
             source_position: position,
             sequence: event.sequence.into(),
             observed_at: event.observed_at,
+            remote: event.remote,
             component,
             origin_generation: event.origin.generation.into(),
             ownership,

@@ -24,8 +24,8 @@ mod catalogue;
 pub use catalogue::{
     BuiltinDiagnosticCode, ClassificationError, CliFailureCode, CommonPluginFailureCode,
     DiagnosticClassifier, DiagnosticDomain, FailureClass, FailureCode, LoggingFailureCode,
-    NoticeCode, PluginDiagnosticFamily, PluginExecution, PluginFailureCode, PluginPhase,
-    SuccessCode,
+    NoticeCode, PluginDiagnosticFamily, PluginExecution, PluginFailureCode,
+    PluginOperationFailureCode, PluginPhase, SuccessCode,
 };
 mod number;
 pub use number::DiagnosticNumber;
@@ -41,7 +41,7 @@ pub use accounting::{
 mod event;
 pub use event::{
     Classification, DiagnosticCorrelation, DiagnosticDetail, DiagnosticEvent, DiagnosticOutcome,
-    DiagnosticOutputSummary, DiagnosticSeverity,
+    DiagnosticOutputSummary, DiagnosticSeverity, RemoteDiagnosticOrigin,
 };
 mod context;
 pub use context::{PluginExecutionName, PluginObservationContext, PluginPhaseName};

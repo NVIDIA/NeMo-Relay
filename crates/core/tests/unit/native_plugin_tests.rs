@@ -438,6 +438,7 @@ fn native_runtime_control_rejects_missing_arguments_and_invalid_registration_kin
 #[test]
 fn native_context_gate_registration_validates_inputs_and_rolls_back_the_gate() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostics: Default::default(),
         plugin_kind: "test.native".into(),
         relay_compat: "^0.8".into(),
         allows_multiple_components: false,
@@ -1001,6 +1002,7 @@ fn native_test_adapter(
         plugin_kind: "test.native.adapter".into(),
         allows_multiple_components: false,
         instance: Arc::new(NativePluginInstance {
+            diagnostics: Default::default(),
             plugin_kind: "test.native.adapter".into(),
             relay_compat: "^0.8".into(),
             allows_multiple_components: false,
@@ -5745,6 +5747,7 @@ fn native_registration_entrypoints_reject_null_contexts() {
 #[test]
 fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostics: Default::default(),
         plugin_kind: "test.native".into(),
         relay_compat: "^0.8".into(),
         allows_multiple_components: false,
@@ -6198,6 +6201,7 @@ fn assert_async_registration_entrypoints_validate_contracts(
 #[cfg(unix)]
 fn assert_context_registrations_reject_legacy_relay_contracts() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostics: Default::default(),
         plugin_kind: "test.native.legacy".into(),
         relay_compat: "^0.5".into(),
         allows_multiple_components: false,
@@ -6229,6 +6233,7 @@ fn assert_context_registrations_reject_legacy_relay_contracts() {
     assert_last_error_contains("excludes Relay 0.5");
 
     let context_instance = Arc::new(NativePluginInstance {
+        diagnostics: Default::default(),
         plugin_kind: "test.native.context-legacy".into(),
         relay_compat: "^0.8".into(),
         allows_multiple_components: false,
@@ -6688,6 +6693,7 @@ fn concurrent_native_stream_callbacks_close_scopes_on_isolated_stacks() {
 #[tokio::test]
 async fn native_async_wrappers_validate_callback_result_shapes() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostics: Default::default(),
         plugin_kind: "test.native.async".into(),
         relay_compat: "^0.8".into(),
         allows_multiple_components: false,
@@ -7535,11 +7541,18 @@ unsafe extern "C" fn llm_response_alias(
 #[test]
 fn native_callback_helpers_cover_success_error_and_invalid_output() {
     assert_eq!(
-        call_tool_json_callback(tool_json_echo, ptr::null_mut(), "tool", &json!({"a": 1})).unwrap(),
+        call_tool_json_callback(
+            tool_json_echo,
+            ptr::null_mut(),
+            "tool",
+            &json!({"a": 1}),
+            None
+        )
+        .unwrap(),
         json!({"a": 1})
     );
     assert!(
-        call_tool_json_callback(tool_json_error, ptr::null_mut(), "tool", &Json::Null)
+        call_tool_json_callback(tool_json_error, ptr::null_mut(), "tool", &Json::Null, None)
             .unwrap_err()
             .to_string()
             .contains("tool callback rejected input")
@@ -7555,6 +7568,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             ptr::null_mut(),
             &request,
             LlmSanitizeRequestContext::default(),
+            None,
         )
         .unwrap(),
         Some(request.clone())
@@ -7570,6 +7584,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             ptr::null_mut(),
             &request,
             LlmSanitizeRequestContext::default(),
+            None,
         )
         .unwrap(),
         Some(request.clone())
@@ -7582,6 +7597,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             ptr::null_mut(),
             &response,
             LlmSanitizeResponseContext::default(),
+            None,
         )
         .unwrap(),
         Some(response.clone())
@@ -7593,6 +7609,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             ptr::null_mut(),
             &request,
             LlmSanitizeRequestContext::default(),
+            None,
         )
         .unwrap_err()
         .to_string()
@@ -7604,6 +7621,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             ptr::null_mut(),
             &request,
             LlmSanitizeRequestContext::default(),
+            None,
         )
         .unwrap(),
         None
@@ -7614,6 +7632,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             ptr::null_mut(),
             &response,
             LlmSanitizeResponseContext::default(),
+            None,
         )
         .unwrap_err()
         .to_string()
@@ -7625,6 +7644,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
             ptr::null_mut(),
             &response,
             LlmSanitizeResponseContext::default(),
+            None,
         )
         .unwrap(),
         None
@@ -7635,6 +7655,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
 #[tokio::test]
 async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostics: Default::default(),
         plugin_kind: "test.native.callback-errors".into(),
         relay_compat: "^0.8".into(),
         allows_multiple_components: false,
@@ -7768,6 +7789,7 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
 #[tokio::test]
 async fn native_tool_execution_context_preserves_fields_and_callback_boundaries() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostics: Default::default(),
         plugin_kind: "test.native.tool-execution-context".into(),
         relay_compat: ">=0.9,<1.0".into(),
         allows_multiple_components: false,
@@ -7853,6 +7875,7 @@ fn native_sanitizer_context_resolves_directional_codecs() {
         ptr::null_mut(),
         &request,
         LlmSanitizeRequestContext::for_request_codec(Some(codec.clone())),
+        None,
     )
     .unwrap()
     .expect("native request sanitizer returns a request");
@@ -7872,6 +7895,7 @@ fn native_sanitizer_context_resolves_directional_codecs() {
         ptr::null_mut(),
         &response,
         LlmSanitizeResponseContext::for_response_codec(Some(codec)),
+        None,
     )
     .unwrap()
     .expect("native response sanitizer returns a response");
@@ -8342,6 +8366,7 @@ fn native_llm_sanitizer_input_allocation_failures_release_codec_ids() {
         ptr::null_mut(),
         &request,
         LlmSanitizeRequestContext::with_identity(identity.clone()),
+        None,
     )
     .unwrap_err();
     assert!(
@@ -8357,6 +8382,7 @@ fn native_llm_sanitizer_input_allocation_failures_release_codec_ids() {
         ptr::null_mut(),
         &json!({"model": "test"}),
         LlmSanitizeResponseContext::with_identity(identity),
+        None,
     )
     .unwrap_err();
     assert!(
@@ -8791,6 +8817,7 @@ unsafe extern "C" fn echo_native_llm_intercept(
 #[tokio::test]
 async fn native_llm_intercept_preserves_annotations_and_releases_invalid_output_strings() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostics: Default::default(),
         plugin_kind: "test.native.intercept".into(),
         relay_compat: "^0.10".into(),
         allows_multiple_components: false,
@@ -8942,6 +8969,7 @@ symbol = "never_call"
         &trust,
         &mut Vec::new(),
         Vec::new(),
+        &crate::diagnostics::Diagnostics::default(),
     ) {
         Ok(_) => panic!("replacement artifact must be rejected before loading native code"),
         Err(error) => error,
@@ -8961,6 +8989,7 @@ symbol = "never_call"
         &trust,
         &mut skipped,
         Vec::new(),
+        &crate::diagnostics::Diagnostics::default(),
     )
     .unwrap();
     assert!(activation.is_empty());

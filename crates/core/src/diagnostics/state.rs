@@ -258,6 +258,7 @@ pub(super) struct RetainedText {
 pub(super) struct StoredObservation {
     pub sequence: u64,
     pub observed_at: ObservationTime,
+    pub remote: Option<nemo_relay_types::diagnostics::RemoteDiagnosticOrigin>,
     pub count: u64,
     pub component: ComponentHandle,
     pub origin: CapturedOrigin,
@@ -530,6 +531,18 @@ impl State {
         let Some(index) = candidate else {
             return false;
         };
+        self.reclaim_component(index, true)
+    }
+    #[cfg(feature = "worker-grpc")]
+    pub(super) fn discard_unobserved_component(&mut self, handle: ComponentHandle) -> bool {
+        if self.component(handle).is_none_or(|component| {
+            component.lifetime.totals.recorded_events_total.value.get() != 0
+        }) {
+            return false;
+        }
+        self.reclaim_component(handle.slot, false)
+    }
+    fn reclaim_component(&mut self, index: usize, count_eviction: bool) -> bool {
         let component = *self.components[index].as_ref().expect("selected component");
         let handle = component.handle;
         // Charge evidence loss while the original registration is still present.
@@ -566,7 +579,9 @@ impl State {
                 self.metadata_used = self.metadata_used.saturating_sub(old.metadata_bytes());
             }
         }
-        self.loss.components_evicted.add(1);
+        if count_eviction {
+            self.loss.components_evicted.add(1);
+        }
         let _ = self.next_sequence();
         true
     }

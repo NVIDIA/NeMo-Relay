@@ -83,6 +83,7 @@ fn disconnected_runtime() -> PluginRuntime {
         auth_token: "token".into(),
         host_endpoint: "http://127.0.0.1:1".into(),
         host_channel: Arc::new(OnceCell::new()),
+        diagnostics: Arc::new(OnceCell::new()),
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     }
 }

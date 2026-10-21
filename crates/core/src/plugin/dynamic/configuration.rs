@@ -357,6 +357,7 @@ fn resolve_plugin_host_config_inner(
             selected,
             &declared.config,
             &evaluated_policy,
+            diagnostic_context,
         );
         let valid = report.failure.is_none();
         let effective_selected = report.selected;
@@ -572,7 +573,15 @@ fn validate_declaration(
     config: &Map<String, Json>,
     evaluated_policy: &EvaluatedDynamicPluginHostPolicy,
 ) -> DynamicPluginValidationReport {
-    validate_declaration_with_artifact(manifest, manifest_ref, selected, config, evaluated_policy).0
+    validate_declaration_with_artifact(
+        manifest,
+        manifest_ref,
+        selected,
+        config,
+        evaluated_policy,
+        None,
+    )
+    .0
 }
 
 fn validate_declaration_with_artifact(
@@ -581,6 +590,7 @@ fn validate_declaration_with_artifact(
     selected: bool,
     config: &Map<String, Json>,
     evaluated_policy: &EvaluatedDynamicPluginHostPolicy,
+    diagnostic_context: Option<&Diagnostics>,
 ) -> (DynamicPluginValidationReport, Option<Vec<u8>>) {
     let plugin_id = manifest.plugin.id.trim().to_owned();
     let (trust, artifact_bytes) = super::trust::evaluate_dynamic_plugin_trust_with_artifact(
@@ -594,6 +604,35 @@ fn validate_declaration_with_artifact(
         &Json::Object(config.clone()),
     )
     .err();
+    if let Some(context) = diagnostic_context {
+        use crate::diagnostics::{
+            DiagnosticClassifier, FailureClass, PluginOperationFailureCode as Operation,
+            PluginPhase,
+        };
+        let observer = super::diagnostics::PluginDiagnostics::new(
+            context,
+            &plugin_id,
+            super::diagnostics::execution(manifest.plugin.kind),
+            uuid::Uuid::now_v7(),
+        );
+        if let Some(failure) = evaluated_policy.failure() {
+            let classified = super::diagnostics::PolicyFailureClassifier.classify(failure);
+            observer.classified_failure(classified, PluginPhase::Policy);
+        }
+        if let Some(failure) = trust.failure.as_ref() {
+            let classified = super::diagnostics::TrustFailureClassifier.classify(failure);
+            observer.classified_failure(classified, PluginPhase::Validation);
+        }
+        if schema_failure.is_some() {
+            // The schema helper includes reading and validation errors; retain
+            // Unknown until its source exposes a typed cause.
+            observer.failure(
+                Operation::SchemaValidation,
+                FailureClass::Unknown,
+                PluginPhase::Validation,
+            );
+        }
+    }
     let mut status = DynamicPluginValidationStatus {
         manifest: DynamicPluginCheckState::Valid,
         compatibility: DynamicPluginCheckState::Valid,

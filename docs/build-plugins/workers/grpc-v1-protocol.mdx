@@ -9,7 +9,72 @@ SPDX-License-Identifier: Apache-2.0 */}
 `grpc-v1` is the stable worker protocol implemented by the Rust and Python SDKs. The
 current source of truth is
 [`crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto`](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto).
-Generated protobuf types are wire material, not the recommended authoring API.
+Use SDK facades for lifecycle management. The diagnostic facade accepts generated
+closed observation and code-definition messages directly.
+
+## Diagnostic Delivery
+
+The additive `RelayDiagnostics` service shares the authenticated host endpoint:
+`GetDiagnosticCapabilities`, `OpenDiagnosticSession`, `SubmitDiagnostic`, and
+`ReadDiagnosticPage`. Its decode/admission limits are independent of existing
+`RelayHostRuntime`, ordinary logging, and execution payload limits. Old hosts
+return `UNIMPLEMENTED`. SDKs expose inert unsupported/disabled facades and skip
+lazy factories. Diagnostic admission does not determine whether a plugin executes.
+
+The initial SDK profile requires protocol/schema/provenance 1, at least 16 KiB
+request allowance and 32 pending slots. Recording uses activation credentials;
+canonical reads are separately denied (`can_read_context = false`). Query filters
+do not confer authority. The read RPC reserves an explicit capability boundary.
+
+Open is idempotent while the activation's session is live. The host assigns its
+UUID and ownership. Registration returns component and code handles (code handles
+are one-based registration positions). Common plugin failure codes are accepted;
+host-owned lifecycle codes cannot be authored remotely. Extensions support
+failure, success, or unspecified outcomes under a host-assigned session namespace.
+Unknown authoring codes/classes are rejected. Detail/correlation limits come from
+the core context.
+
+`SubmitDiagnostic` orders registration, record, component close, and session close
+on one sequence beginning at one. Positive deltas of two and three contribute
+five occurrences. The host commits one digest/receipt atomically with recording.
+An identical last retry returns its receipt without recounting. Conflicts, gaps,
+and older sequences fail. Malformed requests consume no sequence; structurally
+valid admission rejections consume a sequence with a terminal `Rejected` receipt.
+`Recorded` acknowledges in-memory counts, with retained/truncated/dropped evidence.
+`Registered`, `Closed`, and `Disabled` add no occurrences.
+
+SDKs freeze bytes and send one request at a time, retrying the identical request
+up to three times with a two-second deadline per attempt. Uncertain acceptance
+fences delivery; pending observations are never replayed into a new session.
+This release admits one session per activation. Closed sessions retain their
+last receipt until activation cleanup; a new session requires a new activation.
+
+| Resource | Diagnostic limit |
+| --- | --- |
+| Sessions | 32 per host process; one per activation |
+| Components | 8 registrations per session, including closed registrations |
+| Extensions / codes | 16 extensions per session; 32 codes per component |
+| Registration metadata | 16 KiB per session, also subject to core capacity |
+| Protobuf frame | 16 KiB; SDK reserves 256 bytes for credentials and ordering |
+| Extension name / description | 32 / 256 UTF-8 bytes |
+| SDK queue | 32 frozen frames plus one in-flight request |
+| Host decode admission | 16 concurrent diagnostic requests, no wait queue |
+| Response ceiling | 128 KiB; two-second response-body deadline |
+| Replay storage | One digest and bounded receipt per session |
+
+The service semaphore applies before protobuf decoding. These budgets are
+additional to existing HTTP/2 connection buffers, channel state, allocator
+overhead, and core pools; they are not a whole-process RSS ceiling. Slow response
+delivery retains its permit until the body is polled to its deadline or dropped.
+
+`delivery_stats` reports local dropped, rejected, and uncertain totals separately
+from host occurrences. `flush` waits for earlier queued work; uncertainty is an
+error and counters expose known losses. `close` bounds drain and releases queued
+work within the shutdown allowance. Activation teardown fences submissions and
+closes registrations without closing the runtime context. Restricted evidence is
+state-only; it never enters `Log`, `EmitMark`, legacy reports, or exporters.
+
+## Execution Protocol Compatibility
 
 Relay 0.8 retains the `grpc-v1` identifier and `nemo.relay.worker.v1` package, but it
 changes the tool-result boundary to structural protobuf messages. Rebuild workers,

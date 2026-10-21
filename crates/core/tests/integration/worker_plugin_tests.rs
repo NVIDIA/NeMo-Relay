@@ -122,6 +122,85 @@ fn worker_activation_with_no_specs_is_empty() {
 }
 
 #[tokio::test]
+async fn worker_sdk_records_into_selected_host_context_and_survives_plugin_cleanup() {
+    use nemo_relay::diagnostics::*;
+    use nemo_relay::plugin::dynamic::load_worker_plugins_with_diagnostics;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let diagnostics = Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let projected = Arc::new(AtomicUsize::new(0));
+    let calls = projected.clone();
+    let _projection = diagnostics
+        .subscribe_projection(move |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let activation = load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("emit_internal_diagnostics".into(), json!(true))]),
+        }],
+        &diagnostics,
+    )
+    .unwrap();
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let remote = snapshot
+        .components
+        .iter()
+        .find(|component| component.identity.key == "fixture.internal")
+        .unwrap();
+    assert_eq!(remote.lifetime.totals.occurrences_total.value.get(), 5);
+    assert_eq!(remote.lifetime.totals.recorded_events_total.value.get(), 2);
+    assert_eq!(
+        snapshot
+            .events
+            .iter()
+            .filter(|event| event.remote.is_some())
+            .count(),
+        2
+    );
+    activation.clear();
+    assert_eq!(projected.load(Ordering::Relaxed), 0);
+    let after = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let remote = after
+        .components
+        .iter()
+        .find(|component| component.identity.key == "fixture.internal")
+        .unwrap();
+    assert!(remote.closed_at.is_some());
+    assert_eq!(remote.lifetime.totals.occurrences_total.value.get(), 5);
+    assert!(
+        diagnostics
+            .register_component(ComponentRegistration::new("after_cleanup", &[]))
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn worker_registration_discovers_static_observability() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();

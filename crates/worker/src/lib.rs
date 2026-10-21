@@ -18,6 +18,9 @@
 //! Rust-owned resources, but an accepted acknowledgment does not prove that
 //! arbitrary blocking work started by the callback has stopped.
 
+/// Negotiated, bounded plugin diagnostic submission and delivery controls.
+pub mod diagnostics;
+
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
@@ -947,6 +950,7 @@ impl Default for PluginContext {
 /// Cloneable handle for calling the Relay host runtime from worker callbacks.
 #[derive(Clone)]
 pub struct PluginRuntime {
+    diagnostics: Arc<OnceCell<diagnostics::WorkerDiagnostics>>,
     activation_id: String,
     auth_token: String,
     host_endpoint: String,
@@ -955,6 +959,25 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
+    /// Negotiate once per activation. Disabled/unsupported facades skip lazy
+    /// diagnostic factories and leave execution and operational logging intact.
+    pub async fn diagnostics(&self) -> &diagnostics::WorkerDiagnostics {
+        self.diagnostics
+            .get_or_init(|| async {
+                let channel = self
+                    .host_channel
+                    .get_or_try_init(|| connect_host_endpoint(&self.host_endpoint))
+                    .await
+                    .cloned();
+                diagnostics::WorkerDiagnostics::connect(
+                    channel,
+                    self.activation_id.clone(),
+                    self.auth_token.clone(),
+                )
+                .await
+            })
+            .await
+    }
     /// Emits one operational log record through the Relay host's configured sinks.
     ///
     /// The host authenticates the activation and applies its own log-level filter.
@@ -1863,6 +1886,7 @@ async fn serve_plugin_arc_with_endpoint_file(
     endpoint_file: Option<PathBuf>,
 ) -> Result<()> {
     let runtime = PluginRuntime {
+        diagnostics: Arc::new(OnceCell::new()),
         activation_id: config.activation_id,
         auth_token: config.auth_token,
         host_endpoint: config.host_endpoint,
@@ -2408,6 +2432,9 @@ impl PluginWorker for WorkerService {
     ) -> std::result::Result<Response<WorkerAck>, Status> {
         let request = request.into_inner();
         self.authorize(&request.activation_id, &request.auth_token)?;
+        if let Some(diagnostics) = self.runtime.diagnostics.get() {
+            let _ = diagnostics.close(std::time::Duration::from_secs(2)).await;
+        }
         Ok(Response::new(WorkerAck {
             accepted: false,
             message: "shutdown is not implemented by the Rust worker SDK yet".into(),

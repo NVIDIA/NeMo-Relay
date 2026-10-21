@@ -87,6 +87,7 @@ fn snapshot() -> DiagnosticSnapshot {
         }],
         events: vec![DiagnosticEvent {
             sequence: DiagnosticNumber::new(u64::MAX),
+            remote: None,
             observed_at: observed_at(),
             component,
             origin: DiagnosticOrigin {
@@ -140,6 +141,34 @@ fn all_u64_diagnostic_values_round_trip_as_decimal_strings() {
             value
         );
     }
+}
+
+#[test]
+fn remote_provenance_is_optional_and_preserves_lossless_sequences() {
+    let mut view = snapshot();
+    let local = serde_json::to_value(&view).unwrap();
+    assert!(local["events"][0].get("remote").is_none());
+    assert_eq!(
+        serde_json::from_value::<DiagnosticSnapshot>(local).unwrap(),
+        view
+    );
+    view.events[0].remote = Some(RemoteDiagnosticOrigin {
+        source_instance_id: Uuid::now_v7(),
+        activation_instance_id: Uuid::now_v7(),
+        submission_sequence: u64::MAX.into(),
+        observed_at: None,
+        received_at: observed_at(),
+        accepted_elapsed_millis: u64::MAX.into(),
+    });
+    let wire = serde_json::to_value(&view).unwrap();
+    assert_eq!(
+        wire["events"][0]["remote"]["submission_sequence"],
+        u64::MAX.to_string()
+    );
+    assert_eq!(
+        serde_json::from_value::<DiagnosticSnapshot>(wire).unwrap(),
+        view
+    );
 }
 
 #[test]

@@ -13,6 +13,42 @@ implements `WorkerPlugin`, registers all
 create the authenticated `grpc-v1` server from the
 activation environment Relay provides.
 
+## Internal Diagnostic Observations
+
+Use `runtime.diagnostics().await` to negotiate the host's selected diagnostic
+context. Registration is separate from execution registration. Keep a component
+handle for distinct internal operations; callback completion is already host-owned.
+
+```rust
+use nemo_relay_worker::diagnostics::{
+    builtin_code, DiagnosticObservation, DiagnosticObservationOutcome,
+    DiagnosticObservationSeverity,
+};
+use nemo_relay_types::diagnostics::{BuiltinDiagnosticCode, CommonPluginFailureCode,
+    FailureCode, PluginFailureCode};
+
+let diagnostics = runtime.diagnostics().await;
+let component = diagnostics.component("example.internal", vec![builtin_code(
+    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
+        CommonPluginFailureCode::Internal,
+    ))),
+)]).await?;
+component.try_record_lazy(|| DiagnosticObservation {
+    code: 1,
+    count: 1,
+    outcome: DiagnosticObservationOutcome::Failure as i32,
+    severity: DiagnosticObservationSeverity::Error as i32,
+    failure_class: Some("internal".into()),
+    detail: Some("The internal operation failed".into()),
+    ..Default::default()
+})?;
+```
+
+Handle diagnostic delivery errors separately from callback results. Disabled/full
+facades skip the factory. `delivery_stats()` exposes losses; `flush(Duration)`
+waits for prior queue work. The SDK bounds diagnostic drain on shutdown. See
+[delivery contracts](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery).
+
 ## Configure the Snapshot Location
 
 Relay copies the worker runtime closure into an isolated activation snapshot before

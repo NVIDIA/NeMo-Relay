@@ -14,6 +14,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use crate::diagnostics::{
+    FailureClass as DiagnosticFailureClass, PluginOperationFailureCode as DiagnosticOperation,
+    PluginPhase as DiagnosticPhase,
+};
 use chrono::{DateTime, Utc};
 use futures_util::FutureExt;
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
@@ -199,7 +203,19 @@ pub fn load_worker_plugins<I>(specs: I) -> crate::plugin::Result<WorkerPluginAct
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
-    load_worker_plugins_inner(specs, false, &HashMap::new(), &mut Vec::new())
+    load_worker_plugins_with_diagnostics(specs, crate::diagnostics::Diagnostics::process_default())
+}
+
+/// Load plugin workers using the runtime owner's selected diagnostic context.
+/// Diagnostic admission never controls whether an execution activation succeeds.
+pub fn load_worker_plugins_with_diagnostics<I>(
+    specs: I,
+    diagnostics: &crate::diagnostics::Diagnostics,
+) -> crate::plugin::Result<WorkerPluginActivation>
+where
+    I: IntoIterator<Item = WorkerPluginLoadSpec>,
+{
+    load_worker_plugins_inner(specs, false, &HashMap::new(), &mut Vec::new(), diagnostics)
 }
 
 /// Prepare workers without calling Register until their host component activates.
@@ -207,11 +223,12 @@ pub(super) fn prepare_worker_plugins_with_trust<I>(
     specs: I,
     trust: &HashMap<String, DynamicPluginLoadTrust>,
     skipped: &mut Vec<super::DynamicPluginValidationReport>,
+    diagnostics: &crate::diagnostics::Diagnostics,
 ) -> crate::plugin::Result<WorkerPluginActivation>
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
-    load_worker_plugins_inner(specs, true, trust, skipped)
+    load_worker_plugins_inner(specs, true, trust, skipped, diagnostics)
 }
 
 fn load_worker_plugins_inner<I>(
@@ -219,6 +236,7 @@ fn load_worker_plugins_inner<I>(
     defer_registration: bool,
     trust: &HashMap<String, DynamicPluginLoadTrust>,
     skipped: &mut Vec<super::DynamicPluginValidationReport>,
+    diagnostics: &crate::diagnostics::Diagnostics,
 ) -> crate::plugin::Result<WorkerPluginActivation>
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
@@ -235,7 +253,7 @@ where
             },
             None => None,
         };
-        let instance = load_one_worker_plugin(&spec, defer_registration, manifest)?;
+        let instance = load_one_worker_plugin(&spec, defer_registration, manifest, diagnostics)?;
         let plugin_kind = instance.plugin_kind.clone();
         let registration_id = register_plugin_tracked(Arc::new(WorkerPluginAdapter {
             plugin_kind: plugin_kind.clone(),
@@ -352,7 +370,15 @@ impl WorkerPluginInstance {
         };
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             block_on_runtime(self.runtime.runtime(), async move {
-                worker_rpc(client.shutdown(worker_rpc_request(request))).await
+                worker_rpc(client.shutdown(worker_rpc_request(request)))
+                    .await
+                    .inspect_err(|error| {
+                        self.host_state.observer.rpc_failure(
+                            DiagnosticOperation::WorkerShutdown,
+                            error,
+                            DiagnosticPhase::Shutdown,
+                        );
+                    })
             })
         })) {
             Ok(Ok(_)) => {}
@@ -373,6 +399,9 @@ impl WorkerPluginInstance {
             ),
         }
 
+        if let Some(diagnostics) = &self.host_state.diagnostics {
+            diagnostics.revoke();
+        }
         match self.shutdown.lock() {
             Ok(mut shutdown) => {
                 if let Some(sender) = shutdown.take()
@@ -396,7 +425,20 @@ impl WorkerPluginInstance {
             ),
         }
 
+        let exit_errors = outcome.errors.len();
         self.stop_process_checked(&mut outcome);
+        if outcome.errors.len() > exit_errors {
+            self.host_state.observer.failure(
+                DiagnosticOperation::WorkerExit,
+                DiagnosticFailureClass::Unknown,
+                DiagnosticPhase::Shutdown,
+            );
+        } else {
+            self.host_state.observer.success(
+                crate::diagnostics::SuccessCode::PluginWorkerProcessCleaned,
+                DiagnosticPhase::Shutdown,
+            );
+        }
         if outcome.safe_to_unload
             && let Err(error) = std::fs::remove_dir_all(&self.activation_dir)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -505,7 +547,18 @@ fn load_one_worker_plugin(
     spec: &WorkerPluginLoadSpec,
     defer_registration: bool,
     verified_manifest: Option<DynamicPluginManifest>,
+    diagnostics: &crate::diagnostics::Diagnostics,
 ) -> crate::plugin::Result<Arc<WorkerPluginInstance>> {
+    use crate::diagnostics::{
+        FailureClass, PluginExecution, PluginOperationFailureCode as Operation, PluginPhase,
+    };
+    let activation_uuid = Uuid::now_v7();
+    let observer = super::diagnostics::PluginDiagnostics::new(
+        diagnostics,
+        &spec.plugin_id,
+        PluginExecution::WorkerProtocol,
+        activation_uuid,
+    );
     log::info!(
         target: "nemo_relay.worker",
         event = "worker_starting",
@@ -514,7 +567,13 @@ fn load_one_worker_plugin(
     );
     let (manifest, manifest_ref) = match verified_manifest {
         Some(manifest) => (manifest, spec.manifest_ref.clone()),
-        None => DynamicPluginManifest::load_from_path(&spec.manifest_ref)?,
+        None => DynamicPluginManifest::load_from_path(&spec.manifest_ref).inspect_err(|_| {
+            observer.failure(
+                Operation::WorkerValidation,
+                FailureClass::Unknown,
+                PluginPhase::Validation,
+            );
+        })?,
     };
     if manifest.plugin.id.trim() != spec.plugin_id {
         return Err(PluginError::InvalidConfig(format!(
@@ -546,7 +605,6 @@ fn load_one_worker_plugin(
         .as_deref()
         .ok_or_else(|| PluginError::InvalidConfig("load.entrypoint is required".into()))?;
 
-    let activation_uuid = Uuid::now_v7();
     let activation_id = activation_uuid.to_string();
     let auth_token = Uuid::now_v7().to_string();
     let activation_dir = std::env::temp_dir().join(format!("nmrw-{}", activation_uuid.simple()));
@@ -567,10 +625,13 @@ fn load_one_worker_plugin(
         worker_connect,
         worker_endpoint_file,
     } = WorkerEndpoints::new(&activation_dir)?;
-    let host_state = Arc::new(WorkerHostRuntimeState::new(
-        activation_id.clone(),
-        auth_token.clone(),
-    ));
+    let mut host_state = WorkerHostRuntimeState::new(activation_id.clone(), auth_token.clone());
+    host_state.diagnostics = Some(Arc::new(diagnostic_transport::WorkerDiagnostics::new(
+        diagnostics.clone(),
+        activation_uuid,
+    )));
+    host_state.observer = observer.clone();
+    let host_state = Arc::new(host_state);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     runtime_handle.runtime().spawn(serve_host_runtime(
         host_server,
@@ -579,18 +640,31 @@ fn load_one_worker_plugin(
     ));
 
     let manifest_path = PathBuf::from(&manifest_ref);
-    let mut child = ChildGuard::new(spawn_worker_process(WorkerProcessLaunch {
-        runtime,
-        manifest_path: &manifest_path,
-        environment_ref: spec.environment_ref.as_deref(),
-        plugin_id: &spec.plugin_id,
-        entrypoint,
-        activation_id: &activation_id,
-        auth_token: &auth_token,
-        host_endpoint: &host_advertise,
-        worker_endpoint: &worker_advertise,
-        worker_endpoint_file: worker_endpoint_file.as_deref(),
-    })?);
+    let mut child = ChildGuard::new(
+        spawn_worker_process(WorkerProcessLaunch {
+            runtime,
+            manifest_path: &manifest_path,
+            environment_ref: spec.environment_ref.as_deref(),
+            plugin_id: &spec.plugin_id,
+            entrypoint,
+            activation_id: &activation_id,
+            auth_token: &auth_token,
+            host_endpoint: &host_advertise,
+            worker_endpoint: &worker_advertise,
+            worker_endpoint_file: worker_endpoint_file.as_deref(),
+        })
+        .inspect_err(|_| {
+            observer.failure(
+                Operation::WorkerLaunch,
+                FailureClass::Unknown,
+                PluginPhase::Activation,
+            )
+        })?,
+    );
+    observer.success(
+        crate::diagnostics::SuccessCode::PluginWorkerStarted,
+        PluginPhase::Activation,
+    );
     log::info!(
         target: "nemo_relay.worker",
         event = "worker_started",
@@ -605,7 +679,14 @@ fn load_one_worker_plugin(
     let mut client = block_on_runtime(
         runtime_handle.runtime(),
         connect_worker_with_retry(&worker_connect, &spec.plugin_id),
-    )?;
+    )
+    .inspect_err(|_| {
+        observer.failure(
+            Operation::WorkerTransport,
+            FailureClass::Unknown,
+            PluginPhase::Activation,
+        )
+    })?;
 
     let health = block_on_runtime(
         runtime_handle.runtime(),
@@ -614,9 +695,17 @@ fn load_one_worker_plugin(
             auth_token: auth_token.clone(),
         }))),
     )
-    .map_err(|err| PluginError::RegistrationFailed(format!("worker health check failed: {err}")))?;
+    .map_err(|err| {
+        observer.rpc_failure(Operation::WorkerHandshake, &err, PluginPhase::Activation);
+        PluginError::RegistrationFailed(format!("worker health check failed: {err}"))
+    })?;
     let health = health.into_inner();
     if !health.ok {
+        observer.failure(
+            Operation::WorkerHandshake,
+            FailureClass::Unknown,
+            PluginPhase::Activation,
+        );
         let message = format!("worker plugin health check failed: {}", health.message);
         return Err(PluginError::RegistrationFailed(message));
     }
@@ -632,9 +721,22 @@ fn load_one_worker_plugin(
             host_endpoint: host_advertise.clone(),
         }))),
     )
-    .map_err(|err| PluginError::RegistrationFailed(format!("worker handshake failed: {err}")))?;
+    .map_err(|err| {
+        observer.rpc_failure(Operation::WorkerHandshake, &err, PluginPhase::Activation);
+        PluginError::RegistrationFailed(format!("worker handshake failed: {err}"))
+    })?;
     let handshake = handshake.into_inner();
-    validate_worker_handshake(&spec.plugin_id, &handshake)?;
+    validate_worker_handshake(&spec.plugin_id, &handshake).inspect_err(|_| {
+        observer.failure(
+            Operation::WorkerHandshake,
+            FailureClass::Incompatible,
+            PluginPhase::Activation,
+        );
+    })?;
+    observer.success(
+        crate::diagnostics::SuccessCode::PluginWorkerHandshakeCompleted,
+        PluginPhase::Activation,
+    );
     let callback_timeouts = load.callback_timeouts.clone().unwrap_or_default();
     host_state.set_gate_callback(WorkerGateCallback {
         callback_timeouts: callback_timeouts.clone(),
@@ -655,10 +757,16 @@ fn load_one_worker_plugin(
         }))),
     )
     .map_err(|err| {
+        observer.rpc_failure(Operation::WorkerValidation, &err, PluginPhase::Validation);
         PluginError::RegistrationFailed(format!("worker validation RPC failed: {err}"))
     })?;
     let validate = validate.into_inner();
     if let Some(error) = validate.error {
+        observer.failure(
+            Operation::WorkerValidation,
+            FailureClass::Unknown,
+            PluginPhase::Validation,
+        );
         return Err(worker_error_to_plugin(error, "worker validation failed"));
     }
     let validation_diagnostics = match validate.diagnostics {
@@ -666,6 +774,18 @@ fn load_one_worker_plugin(
             .map_err(PluginError::Serialization)?,
         None => Vec::new(),
     };
+    if diagnostics_have_errors(&validation_diagnostics) {
+        observer.failure(
+            Operation::WorkerValidation,
+            FailureClass::Unknown,
+            PluginPhase::Validation,
+        );
+    } else {
+        observer.success(
+            crate::diagnostics::SuccessCode::PluginWorkerValidated,
+            PluginPhase::Validation,
+        );
+    }
 
     let instance = Arc::new(WorkerPluginInstance {
         callback_timeouts,
@@ -765,6 +885,15 @@ async fn serve_host_runtime(
     state: Arc<WorkerHostRuntimeState>,
     shutdown: oneshot::Receiver<()>,
 ) {
+    let diagnostics = diagnostic_limits::BoundedService(
+        nemo_relay_worker_proto::v1::relay_diagnostics_server::RelayDiagnosticsServer::new(
+            diagnostic_transport::Service {
+                state: state.clone(),
+            },
+        )
+        .max_decoding_message_size(diagnostic_transport::REQUEST_BYTES)
+        .max_encoding_message_size(diagnostic_transport::RESPONSE_BYTES),
+    );
     let service = RelayHostRuntimeServer::new(WorkerHostRuntimeService { state });
     let result = match endpoint {
         #[cfg(unix)]
@@ -782,6 +911,7 @@ async fn serve_host_runtime(
                 }
             };
             Server::builder()
+                .add_service(diagnostics)
                 .add_service(service)
                 .serve_with_incoming_shutdown(UnixListenerStream::new(listener), async {
                     let _ = shutdown.await;
@@ -803,6 +933,7 @@ async fn serve_host_runtime(
                 }
             };
             Server::builder()
+                .add_service(diagnostics)
                 .add_service(service)
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                     let _ = shutdown.await;
@@ -1116,7 +1247,21 @@ impl WorkerPluginInstance {
     // Cache its plan once per worker so multiple components do not repeat setup.
     async fn prepare_registrations(&self) -> crate::plugin::Result<()> {
         self.registrations
-            .get_or_try_init(|| self.request_registration_plan())
+            .get_or_try_init(|| async {
+                let result = self.request_registration_plan().await;
+                match &result {
+                    Ok(_) => self.host_state.observer.success(
+                        crate::diagnostics::SuccessCode::PluginWorkerRegistered,
+                        DiagnosticPhase::Activation,
+                    ),
+                    Err(_) => self.host_state.observer.failure(
+                        DiagnosticOperation::WorkerRegistration,
+                        DiagnosticFailureClass::Unknown,
+                        DiagnosticPhase::Activation,
+                    ),
+                }
+                result
+            })
             .await?;
         Ok(())
     }
@@ -1705,15 +1850,32 @@ impl WorkerInvocationGuard {
 
     fn cancel(&mut self, reason: impl Into<String>) {
         if let Some((mut client, request)) = self.cancellation(reason) {
+            let observer = self.host_state.observer.clone();
             self.runtime.spawn(async move {
-                let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request))).await;
+                let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request)))
+                    .await
+                    .inspect_err(|error| {
+                        observer.rpc_failure(
+                            DiagnosticOperation::WorkerCancellation,
+                            error,
+                            DiagnosticPhase::Runtime,
+                        );
+                    });
             });
         }
     }
 
     async fn cancel_and_wait(&mut self, reason: impl Into<String>) {
         if let Some((mut client, request)) = self.cancellation(reason) {
-            let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request))).await;
+            let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request)))
+                .await
+                .inspect_err(|error| {
+                    self.host_state.observer.rpc_failure(
+                        DiagnosticOperation::WorkerCancellation,
+                        error,
+                        DiagnosticPhase::Runtime,
+                    );
+                });
         }
     }
 
@@ -2160,6 +2322,7 @@ impl WorkerPluginCallback {
         let (next_ready_tx, next_ready_rx) = oneshot::channel();
         let (completion_tx, completion_rx) = watch::channel(false);
         let plugin_id = self.plugin_kind.clone();
+        let observer = self.host_state.observer.clone();
         self.runtime.spawn(async move {
             let _completion = WorkerStreamCompletionSignal(completion_tx);
             let _codec_capabilities = codec_capabilities;
@@ -2187,11 +2350,19 @@ impl WorkerPluginCallback {
                             break;
                         };
                         let result = match item {
-                            Ok(chunk) => json_from_stream_chunk(chunk)
-                                .map_err(|error| super::http_error::reported_by(error, &plugin_id, "worker")),
-                            Err(err) => Err(FlowError::Internal(format!(
-                                "worker stream transport failed: {err}"
-                            ))),
+                            Ok(chunk) => {
+                                if let Some(stream_chunk_item::Item::Error(error)) = &chunk.item
+                                    && error.code != "worker.cancelled"
+                                {
+                                    observer.failure(DiagnosticOperation::WorkerCallback, DiagnosticFailureClass::Unknown, DiagnosticPhase::Runtime);
+                                }
+                                json_from_stream_chunk(chunk)
+                                    .map_err(|error| super::http_error::reported_by(error, &plugin_id, "worker"))
+                            }
+                            Err(err) => {
+                                observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
+                                Err(FlowError::Internal(format!("worker stream transport failed: {err}")))
+                            }
                         };
                         let terminal = result.is_err();
                         if tx.send(result).await.is_err() {
@@ -2204,6 +2375,7 @@ impl WorkerPluginCallback {
                     }
                 }
                 Err(err) => {
+                    observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
                     let reason = if err.code() == tonic::Code::DeadlineExceeded {
                         "worker stream invocation timed out"
                     } else {
@@ -2408,8 +2580,18 @@ impl WorkerPluginCallback {
         }
         guard.finish();
         result
-            .map(|response| report_worker_response(response.into_inner(), &self.plugin_kind))
+            .map(|response| {
+                let response = response.into_inner();
+                let failed = match &response.result {
+                    Some(invoke_response_result::Result::Error(error)) => error.code != "worker.cancelled",
+                    Some(invoke_response_result::Result::Json(result)) => result.error.as_ref().is_some_and(|error| error.code != "worker.cancelled"),
+                    _ => false,
+                };
+                if failed { self.host_state.observer.failure(DiagnosticOperation::WorkerCallback, DiagnosticFailureClass::Unknown, DiagnosticPhase::Runtime); }
+                report_worker_response(response, &self.plugin_kind)
+            })
             .map_err(|err| {
+                self.host_state.observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
                 if err.code() == tonic::Code::DeadlineExceeded {
                     FlowError::Internal(format!(
                         "worker invocation timed out (surface={surface_name}, callback={callback_name}): {err}"
@@ -2567,7 +2749,14 @@ where
     }
 }
 
+#[path = "worker_diagnostic_transport.rs"]
+mod diagnostic_limits;
+#[path = "worker_diagnostics.rs"]
+mod diagnostic_transport;
+
 struct WorkerHostRuntimeState {
+    observer: super::diagnostics::PluginDiagnostics,
+    diagnostics: Option<Arc<diagnostic_transport::WorkerDiagnostics>>,
     activation_id: String,
     auth_token: String,
     scope_stacks: Mutex<HashMap<String, StoredScopeStack>>,
@@ -2669,6 +2858,8 @@ impl Drop for ScopeStackCleanupGuard<'_> {
 impl WorkerHostRuntimeState {
     fn new(activation_id: String, auth_token: String) -> Self {
         Self {
+            diagnostics: None,
+            observer: super::diagnostics::PluginDiagnostics::default(),
             activation_id,
             auth_token,
             scope_stacks: Mutex::new(HashMap::new()),

@@ -108,6 +108,16 @@ pub struct ComponentOwner {
     pub(super) handle: Option<ComponentHandle>,
 }
 impl ComponentOwner {
+    // Roll back an unpublished transport registration. No observer may have
+    // recorded through this owner; retained/public registrations use close().
+    #[cfg(feature = "worker-grpc")]
+    pub(crate) fn discard_unpublished(&self) {
+        if let (Some(inner), Some(handle)) = (self.inner.upgrade(), self.handle)
+            && let Some(backend) = &inner.backend
+        {
+            lock(&backend.state).discard_unobserved_component(handle);
+        }
+    }
     /// Close this registration without erasing retained evidence.
     ///
     /// Returns false for already closed/unavailable or disabled handles. Later
