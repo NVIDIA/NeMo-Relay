@@ -1460,6 +1460,70 @@ fn test_attach_estimated_cost_preserves_existing_or_incomplete_responses() {
 }
 
 #[test]
+fn test_attach_estimated_cost_bills_gemini_thinking_tokens_as_output() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let catalog = pricing_catalog(json!([flat_pricing_entry(
+        "configured",
+        "configured-model",
+        1.0,
+        2.0
+    )]));
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+
+    let mut response = full_response();
+    response.model = Some("configured-model".into());
+    let usage = response.usage.as_mut().unwrap();
+    usage.cache_read_tokens = None;
+    usage.cache_write_tokens = None;
+    response.api_specific = Some(ApiSpecificResponse::GeminiGenerateContent {
+        thoughts_tokens: Some(30),
+        safety_ratings: None,
+        grounding_metadata: None,
+        citation_metadata: None,
+        extra: serde_json::Map::new(),
+    });
+    attach_estimated_cost_for_provider(&mut response, Some("configured"));
+
+    let usage = response.usage.as_ref().unwrap();
+    assert_eq!(usage.completion_tokens, Some(20));
+    let total = usage.cost.as_ref().unwrap().total.unwrap();
+    assert!((total - 0.00011).abs() < 1e-12, "{total}");
+}
+
+#[test]
+fn test_attach_estimated_cost_omits_cost_when_billed_output_tokens_overflow() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let catalog = pricing_catalog(json!([flat_pricing_entry(
+        "configured",
+        "configured-model",
+        1.0,
+        2.0
+    )]));
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+
+    let mut response = full_response();
+    response.model = Some("configured-model".into());
+    let usage = response.usage.as_mut().unwrap();
+    usage.completion_tokens = Some(u64::MAX);
+    usage.cache_read_tokens = None;
+    usage.cache_write_tokens = None;
+    response.api_specific = Some(ApiSpecificResponse::GeminiGenerateContent {
+        thoughts_tokens: Some(1),
+        safety_ratings: None,
+        grounding_metadata: None,
+        citation_metadata: None,
+        extra: serde_json::Map::new(),
+    });
+    attach_estimated_cost_for_provider(&mut response, Some("configured"));
+
+    let usage = response.usage.as_ref().unwrap();
+    assert_eq!(usage.completion_tokens, Some(u64::MAX));
+    assert_eq!(usage.cost, None);
+}
+
+#[test]
 fn test_missing_token_pricing_returns_none_without_fabricating_zero_cost() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     reset_active_pricing_resolver().unwrap();

@@ -293,6 +293,7 @@ extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v2(cons
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v3(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v4(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v5(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_with_tls(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_create_file_sink(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
@@ -302,6 +303,7 @@ extern int32_t nemo_relay_otel_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_subscriber_free(void*);
 extern int32_t nemo_relay_otel_log_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, uint64_t, void**);
 extern int32_t nemo_relay_otel_log_subscriber_create_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, uint64_t, void**);
+extern int32_t nemo_relay_otel_log_subscriber_create_with_tls(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, uint64_t, const char*, void**);
 extern int32_t nemo_relay_otel_log_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_log_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_log_subscriber_force_flush(const void*);
@@ -310,6 +312,7 @@ extern int32_t nemo_relay_otel_log_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_log_subscriber_free(void*);
 extern int32_t nemo_relay_otel_metric_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, void**);
 extern int32_t nemo_relay_otel_metric_subscriber_create_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, void**);
+extern int32_t nemo_relay_otel_metric_subscriber_create_with_tls(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, const char*, void**);
 extern int32_t nemo_relay_otel_metric_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_metric_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_metric_subscriber_force_flush(const void*);
@@ -2557,6 +2560,8 @@ const (
 // Create it with [NewOpenTelemetryConfig], then mutate fields as needed before
 // passing it to [NewOpenTelemetrySubscriber].
 type OpenTelemetryConfig struct {
+	// TLS sets the certificate and private key file paths for this endpoint.
+	TLS       *OpenTelemetryTLSConfig
 	Type      OpenTelemetryType
 	Transport OpenTelemetryTransport
 	Endpoint  string
@@ -2762,8 +2767,14 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	cPromoteResourceMetadataPrefixesJSON := C.CString(string(promoteResourceMetadataPrefixesJSON))
 	defer C.free(unsafe.Pointer(cPromoteResourceMetadataPrefixesJSON))
 
+	tlsJSON, err := jsonMarshal(config.TLS)
+	if err != nil {
+		return nil, err
+	}
+	cTLSJSON := C.CString(string(tlsJSON))
+	defer C.free(unsafe.Pointer(cTLSJSON))
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create_with_projection_options_v5(
+	status := C.nemo_relay_otel_subscriber_create_with_projection_options_with_tls(
 		cType,
 		cTransport,
 		cEndpoint,
@@ -2781,6 +2792,7 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 		cPromoteMetadataPrefixesJSON,
 		cPromoteResourceMetadataPrefixesJSON,
 		C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
+		cTLSJSON,
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {
@@ -3000,6 +3012,8 @@ func (s *OpenTelemetrySubscriber) Close() {
 
 // OpenTelemetryLogConfig configures an independent OTLP log subscriber.
 type OpenTelemetryLogConfig struct {
+	// TLS sets the certificate and private key file paths for this endpoint.
+	TLS       *OpenTelemetryTLSConfig
 	Transport OpenTelemetryTransport
 	Endpoint  string
 	Headers   map[string]string
@@ -3053,6 +3067,8 @@ const (
 
 // OpenTelemetryMetricConfig configures an independent OTLP metric subscriber.
 type OpenTelemetryMetricConfig struct {
+	// TLS sets the certificate and private key file paths for this endpoint.
+	TLS       *OpenTelemetryTLSConfig
 	Transport OpenTelemetryTransport
 	Endpoint  string
 	Headers   map[string]string
@@ -3233,8 +3249,14 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 	defer common.free()
 	cSeverity := C.CString(string(config.MinimumSeverity))
 	defer C.free(unsafe.Pointer(cSeverity))
+	tlsJSON, err := jsonMarshal(config.TLS)
+	if err != nil {
+		return nil, err
+	}
+	cTLSJSON := C.CString(string(tlsJSON))
+	defer C.free(unsafe.Pointer(cTLSJSON))
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_log_subscriber_create_v2(
+	status := C.nemo_relay_otel_log_subscriber_create_with_tls(
 		common.transport,
 		common.endpoint,
 		common.headers,
@@ -3250,6 +3272,7 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 		C.uint64_t(config.MaxExportBatchSize),
 		C.uint64_t(config.ScheduledDelay/time.Millisecond),
 		C.uint64_t(config.CompletedSpanContextTTL/time.Millisecond),
+		cTLSJSON,
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {
@@ -3365,8 +3388,14 @@ func NewOpenTelemetryMetricSubscriber(config OpenTelemetryMetricConfig) (*OpenTe
 	defer common.free()
 	cTemporality := C.CString(string(config.Temporality))
 	defer C.free(unsafe.Pointer(cTemporality))
+	tlsJSON, err := jsonMarshal(config.TLS)
+	if err != nil {
+		return nil, err
+	}
+	cTLSJSON := C.CString(string(tlsJSON))
+	defer C.free(unsafe.Pointer(cTLSJSON))
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_metric_subscriber_create_v2(
+	status := C.nemo_relay_otel_metric_subscriber_create_with_tls(
 		common.transport,
 		common.endpoint,
 		common.headers,
@@ -3381,6 +3410,7 @@ func NewOpenTelemetryMetricSubscriber(config OpenTelemetryMetricConfig) (*OpenTe
 		cTemporality,
 		C.uint64_t(config.MaxInstruments),
 		C.uint64_t(config.CardinalityLimit),
+		cTLSJSON,
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {

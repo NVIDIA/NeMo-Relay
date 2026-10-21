@@ -145,6 +145,9 @@ from nemo_relay._native import (
     OpenTelemetrySubscriber as OpenTelemetrySubscriber,
 )
 from nemo_relay._native import (
+    OpenTelemetryTlsConfig as OpenTelemetryTlsConfig,
+)
+from nemo_relay._native import (
     PendingMarkSpec as PendingMarkSpec,
 )
 from nemo_relay._native import (

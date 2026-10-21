@@ -1,12 +1,14 @@
 ---
-title: "Configure Discoverable Plugins"
-description: "Install, validate, trust, and configure manifest-backed NeMo Relay plugins."
+title: "Manage"
+description: "Use CLI commands to install, inspect, validate, enable, disable, and remove discoverable NeMo Relay plugins."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
-Use this guide to add a manifest-backed plugin that another author has
-packaged. Discoverable plugins are separate from built-in `[[components]]`:
+Use this guide to install and manage discoverable plugins with the
+`nemo-relay plugins` CLI commands. For settings in `plugins.toml` and the
+interactive editor, see [Configure](/configure-plugins/plugin-configuration-files).
+For activation through a language SDK, see [Initialize](/configure-plugins/initialize-plugins). Discoverable plugins are separate from built-in `[[components]]`:
 their `relay-plugin.toml` manifest describes a native shared library or a
 `grpc-v1` worker, while `plugins.toml` records where Relay can find it and
 stores its component configuration.
