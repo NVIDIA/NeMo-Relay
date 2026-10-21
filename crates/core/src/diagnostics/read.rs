@@ -1199,7 +1199,8 @@ fn copy_detail(
     state: &state::State,
     handle: storage::DetailHandle,
 ) -> Option<TextRef> {
-    let len = state.detail.byte_len(handle)?;
+    let detail = state.detail.view(handle)?;
+    let len = detail.len();
     let end = page.text_len.checked_add(len)?;
     if end > page.text.len() {
         return None;
@@ -1209,7 +1210,7 @@ fn copy_detail(
         len,
     };
     let mut writer = CappedWriter::new(&mut page.text[page.text_len..end]);
-    state.detail.copy_into(handle, &mut writer).ok()?;
+    detail.copy_into(&mut writer).ok()?;
     page.text_len = end;
     Some(reference)
 }

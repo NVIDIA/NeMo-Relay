@@ -575,6 +575,7 @@ impl State {
     pub fn retain_event_text(&mut self, fields: [Option<&str>; 3]) -> RetainedText {
         let mut selected = [""; 3];
         let mut ranges = [None; 3];
+        let mut plan = None;
         let mut len = 0u16;
         for (index, field) in fields.into_iter().enumerate() {
             let Some(field) = field else { continue };
@@ -585,7 +586,8 @@ impl State {
                 continue;
             };
             selected[index] = field;
-            if self.detail.can_fit_parts(&selected) {
+            if let Some(candidate) = self.detail.plan_parts(selected) {
+                plan = Some(candidate);
                 ranges[index] = Some(TextRange {
                     start: len,
                     len: field_len,
@@ -598,8 +600,9 @@ impl State {
         if ranges.iter().all(Option::is_none) {
             return RetainedText::default();
         }
+        let plan = plan.expect("admitted fields have a storage plan");
         let payload = loop {
-            if let Some(handle) = self.detail.allocate_parts(&selected) {
+            if let Some(handle) = self.detail.allocate_plan(&plan) {
                 break handle;
             }
             if !self.evict_oldest() {
