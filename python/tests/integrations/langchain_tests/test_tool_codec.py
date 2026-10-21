@@ -156,6 +156,7 @@ def test_opaque_artifacts_remain_local_without_python_deserialization():
 def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
     integration, result_kind, opaque, status, subscribed_events
 ):
+    """Replay portable results with fresh call IDs and execute opaque results on every call."""
     from langchain.agents.middleware import ToolCallRequest
     from langchain_core.messages import ToolMessage
     from langgraph.graph.message import add_messages
@@ -176,6 +177,7 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
     unrelated = ToolMessage(content="other", tool_call_id="other", id="message-other")
 
     async def handler(request):
+        """Count live invocations and return the selected message or graph command shape."""
         nonlocal calls
         calls += 1
         call_id = request.tool_call["id"]
@@ -195,6 +197,7 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
         return [unrelated, command] if result_kind == "list" else command
 
     async def run():
+        """Exercise repeated calls through the integration and verify results and graph history."""
         runtime = AdaptiveRuntime(
             AdaptiveConfig(
                 response_cache=ResponseCacheConfig(
@@ -260,6 +263,7 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
 
 
 def test_replayed_graph_destination_binds_messages_without_display_content():
+    """Rebind destination messages even when the command has no display projection."""
     from langchain_core.messages import ToolMessage
     from langgraph.types import Command, Send
 
@@ -394,6 +398,7 @@ def test_tool_codec_rejects_unrecognized_payloads():
 
 @pytest.mark.parametrize("update_kind", ["dict", "list", "dict_messages", "role_messages"])
 def test_command_projection_matches_call_id_and_applies_edits(update_kind):
+    """Apply content and failure edits only to the message matching the active tool call."""
     from langchain_core.messages import ToolMessage
     from langgraph.types import Command
 

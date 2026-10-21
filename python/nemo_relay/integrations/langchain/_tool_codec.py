@@ -158,6 +158,7 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
         self._opaque: dict[str, Any] = {}
 
     def _candidates(self, value: ToolResultValue) -> list[ToolMessage]:
+        """Collect tool messages from results and command updates, including dictionary messages."""
         if isinstance(value, list):
             return [message for item in value for message in self._candidates(item)]
         if isinstance(value, ToolMessage):
@@ -175,6 +176,7 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
         return candidates
 
     def _message(self, value: ToolResultValue, tool_call_id: str | None) -> ToolMessage | None:
+        """Select the message for the requested call, or the sole unambiguous candidate."""
         candidates = self._candidates(value)
         if tool_call_id is not None:
             return next((message for message in candidates if message.tool_call_id == tool_call_id), None)
@@ -188,6 +190,7 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
             raise TypeError("Expected a ToolMessage, Command, or a list of those values")
 
     def to_json(self, value: ToolResultValue) -> dict[str, Json]:
+        """Encode the result with display content, failure status, and cache replay metadata."""
         self._validate(value)
         message = self._message(value, self._tool_call_id)
         content = message.content if message is not None else None
@@ -208,6 +211,7 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
         }
 
     def from_json(self, data: Json) -> ToolResultValue:
+        """Restore a result, apply projection edits, and rebind messages to the current call."""
         if not isinstance(data, dict) or data.get("schema") != TOOL_RESULT_SCHEMA:
             raise ValueError("Expected a versioned Relay tool result")
         content, is_error = data.get("content"), data.get("is_error")
@@ -254,6 +258,7 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
         return result
 
     def _replace_message(self, result: ToolResultValue, message: ToolMessage, updated: ToolMessage) -> ToolResultValue:
+        """Replace the matching tool message while preserving unrelated command updates."""
         if isinstance(result, list):
             return [self._replace_message(item, message, updated) for item in result]
         if isinstance(result, ToolMessage):

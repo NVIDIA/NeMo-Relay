@@ -101,15 +101,22 @@ sum_codec = SumCodec()
 
 @dataclasses.dataclass
 class NestedResult:
+    """Hold JSON or nested typed values to test dataclass replay fidelity."""
+
     value: object
 
 
 class DictReducingValue:
+    """Model an opaque value whose pickle reconstructs as a builtin dictionary."""
+
     def __reduce__(self) -> tuple[object, tuple[dict[str, int]]]:
+        """Produce a safe pickle whose reconstructed type differs from the original class."""
         return dict, ({"answer": 42},)
 
 
 class SearchModel(BaseModel):
+    """Provide a Pydantic result for replay tests with and without an allowlist."""
+
     answer: str
 
 
@@ -234,7 +241,10 @@ class TestTypedHelpers:
 
 class TestTypedToolExecute:
     async def test_best_effort_tool_result_envelope_reaches_events(self, subscribed_events) -> None:
+        """Expose the normalized result in scope events while preserving opaque annotations."""
+
         def execute(_args: Json) -> ToolExecutionResult[object]:
+            """Return a displayable result with a separate annotation for the event assertion."""
             return ToolExecutionResult("answer", {"source": "test"})
 
         outcome = await typed.tool_execute(
@@ -313,6 +323,7 @@ class TestTypedToolExecute:
         calls = 0
 
         def execute(_args: Json) -> ToolExecutionResult[object]:
+            """Count tool executions and return the value and annotation used to verify replay."""
             nonlocal calls
             calls += 1
             return ToolExecutionResult(value, {"source": "test"})
