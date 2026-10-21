@@ -314,8 +314,10 @@ class BestEffortAnyCodec(Codec[object]):
         Plain JSON values stay untagged.
 
         With ``tool_result=True``, the codec places the encoded value in the
-        wrapper's ``result`` field. It marks the wrapper as replayable because
-        decoding does not need objects from the original call.
+        wrapper's ``result`` field. Replay is enabled for JSON values, allowed
+        dataclass and Pydantic types, and supported builtin pickle values.
+        Unsupported pickle values, string fallbacks, and unlisted types are
+        marked non-replayable so the cache runs the tool again.
         """
         encoded = self._encode_value(value)
         if not self._tool_result or projected_tool_result(encoded) is not None:
@@ -333,8 +335,19 @@ class BestEffortAnyCodec(Codec[object]):
             "content": content,
             "is_error": False,
             "result": encoded,
-            "cache": {"replayable": True},
+            "cache": {"replayable": self._is_replayable_value(encoded)},
         }
+
+    def _is_replayable_value(self, encoded: Json) -> bool:
+        """Check whether decoding supports this value in a later codec instance."""
+        if not isinstance(encoded, dict) or "data" not in encoded:
+            return True
+        for tag in ("__nv_pydantic__", "__nv_dataclass__"):
+            if tag in encoded:
+                return self._resolve_tagged_type(encoded, tag) is not None
+        if "__nv_pickle__" in encoded:
+            return self._reconstruct_pickle(encoded) is not _NO_RECONSTRUCTION
+        return "__nv_fallback_str__" not in encoded
 
     def _encode_value(self, value: object) -> Json:
         """Encode the value before adding any tool-result wrapper."""

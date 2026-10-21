@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Never, SupportsIndex, cast
 
 import pytest
+from pydantic import BaseModel
 
 from nemo_relay import (
     Json,
@@ -96,6 +97,10 @@ class SumCodec(Codec[int]):
 
 prefix_codec = PrefixCodec()
 sum_codec = SumCodec()
+
+
+class SearchModel(BaseModel):
+    answer: str
 
 
 class BrokenValidatedModel:
@@ -249,9 +254,23 @@ class TestTypedToolExecute:
         assert event.category_profile is not None
         assert event.category_profile["tool_result_annotation"] == {"source": "test"}
 
-    @pytest.mark.parametrize("value", ["answer", {"answer": 42}, SearchResult(items=["answer"], total=1)])
-    async def test_best_effort_tool_result_replays_with_a_fresh_codec(self, value) -> None:
-        """Portable typed results remain cacheable across codec instances."""
+    @pytest.mark.parametrize(
+        ("value", "allowed_types", "replayable"),
+        [
+            pytest.param("answer", (), True, id="string"),
+            pytest.param({"answer": 42}, (), True, id="json"),
+            pytest.param(SearchResult(items=["answer"], total=1), (SearchResult,), True, id="allowed-dataclass"),
+            pytest.param(SearchModel(answer="answer"), (SearchModel,), True, id="allowed-pydantic"),
+            pytest.param(frozenset({1, 2}), (), True, id="builtin-pickle"),
+            pytest.param(SearchResult(items=["answer"], total=1), (), False, id="unlisted-dataclass"),
+            pytest.param(SearchModel(answer="answer"), (), False, id="unlisted-pydantic"),
+            pytest.param(FaultyDumpValue(), (), False, id="unsupported-pickle"),
+            pytest.param({FaultyDumpValue()}, (), False, id="nested-unsupported-pickle"),
+            pytest.param(UnpickleableValue(), (), False, id="string-fallback"),
+        ],
+    )
+    async def test_best_effort_tool_result_replays_with_a_fresh_codec(self, value, allowed_types, replayable) -> None:
+        """Replay portable results and rerun tools whose encoded values cannot be restored."""
         from nemo_relay.adaptive import (
             AdaptiveConfig,
             AdaptiveRuntime,
@@ -260,6 +279,10 @@ class TestTypedToolExecute:
             ToolOverride,
         )
 
+        codec = BestEffortAnyCodec(tool_result=True, allowed_types=allowed_types)
+        encoded = cast(JsonObject, codec.to_json(value))
+        assert encoded["cache"] == {"replayable": replayable}
+        expected = value if replayable else codec.from_json(encoded)
         calls = 0
 
         def execute(_args: Json) -> ToolExecutionResult[object]:
@@ -283,12 +306,13 @@ class TestTypedToolExecute:
                     {},
                     execute,
                     JsonPassthrough(),
-                    BestEffortAnyCodec(tool_result=True, allowed_types=[SearchResult]),
+                    BestEffortAnyCodec(tool_result=True, allowed_types=allowed_types),
                     tool_call_id=call_id,
                 )
-                assert outcome.result == value
+                assert outcome.result == expected
+                assert type(outcome.result) is type(expected)
                 assert outcome.annotation == {"source": "test"}
-            assert calls == 1
+            assert calls == (1 if replayable else 2)
         finally:
             runtime.deregister()
 
