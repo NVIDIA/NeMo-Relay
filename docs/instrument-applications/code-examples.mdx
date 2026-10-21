@@ -330,7 +330,8 @@ Set time limits on provider operations and make cleanup finish promptly.
 Stream completion and subscriber delivery are separate steps. Reading the
 last chunk or closing the stream does not wait for queued response sanitizers
 and subscribers. Close the stream first. Then flush subscribers before
-reading captured events, checking exporter output, or shutting down.
+reading captured events. Before checking exporter output or shutting down,
+also complete the exporter's flush, export, or shutdown operation.
 Refer to [Waiting for Delivery](/about-nemo-relay/concepts/subscribers#waiting-for-delivery)
 for the flush API and exporter requirements for each binding.
 
