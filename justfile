@@ -1044,6 +1044,16 @@ check-quickstarts:
     "$python_executable" scripts/docs/docs_version_pins.py check
     "$python_executable" scripts/check-quickstarts.py check
 
+# Execute credential-free Quick Starts against explicit release, build, or local assets.
+[positional-arguments]
+test-quickstarts *args:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
+    python_executable="$(project_python_executable)"
+    "$python_executable" scripts/run-quickstarts.py "$@"
+
 # validate the documentation site, links, navigation, and generated references
 docs: docs-examples
     #!/usr/bin/env bash

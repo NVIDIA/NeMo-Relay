@@ -1,0 +1,169 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Execute Quick Starts
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact Relay version, such as 0.11.0-rc.2'
+        required: false
+        type: string
+      source_ref:
+        description: 'Build Relay from this Git ref or SHA instead of release assets (for example origin/main)'
+        required: false
+        type: string
+      hermes_ref:
+        description: 'Immutable Hermes commit for its disposable installation'
+        default: '4d04303818b61bf3aa09278af48356315515965b'
+        required: true
+        type: string
+      asset_location:
+        description: 'Optional GitHub release URL or HTTPS directory with SHA256SUMS; defaults to this version in NVIDIA/NeMo-Relay'
+        required: false
+        type: string
+      run_id:
+        description: 'Optional completed NVIDIA/NeMo-Relay build run ID, instead of a release or asset location'
+        required: false
+        type: string
+      cases:
+        description: 'all, local, or comma-separated Quick Start IDs'
+        default: all
+        required: true
+        type: string
+
+jobs:
+  execute:
+    name: Execute (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            runner: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
+        with:
+          version: ${{ steps.ci-config.outputs.uv_version }}
+          enable-cache: true
+          cache-dependency-glob: ${{ github.workspace }}/uv.lock
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.ci-config.outputs.node_version }}
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-relay-quickstarts-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: . -> target/quickstarts
+          cache-all-crates: true
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install just
+        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        with:
+          tool: just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Provision coding-agent hosts
+        env:
+          QUICKSTART_CASES: ${{ inputs.cases }}
+        run: |
+          if [[ "$QUICKSTART_CASES" == all || ",$QUICKSTART_CASES," == *,codex,* ]]; then
+            npm install --global @openai/codex@0.159.3
+          fi
+          if [[ "$QUICKSTART_CASES" == all || ",$QUICKSTART_CASES," == *,claude-code,* ]]; then
+            npm install --global @anthropic-ai/claude-code@2.1.285
+          fi
+
+      - name: Execute selected Quick Starts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUICKSTART_VERSION: ${{ inputs.version }}
+          QUICKSTART_SOURCE_REF: ${{ inputs.source_ref }}
+          QUICKSTART_HERMES_REF: ${{ inputs.hermes_ref }}
+          QUICKSTART_ASSET_LOCATION: ${{ inputs.asset_location }}
+          QUICKSTART_RUN_ID: ${{ inputs.run_id }}
+          QUICKSTART_CASES: ${{ inputs.cases }}
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/quickstarts
+        run: |
+          just test-quickstarts \
+            --version "$QUICKSTART_VERSION" \
+            --source-ref "$QUICKSTART_SOURCE_REF" \
+            --hermes-ref "$QUICKSTART_HERMES_REF" \
+            --asset-location "$QUICKSTART_ASSET_LOCATION" \
+            --run-id "$QUICKSTART_RUN_ID" \
+            --cases "$QUICKSTART_CASES" \
+            --output artifacts/quickstarts
+
+      - name: Publish result summary
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          path = Path('artifacts/quickstarts/results.json')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              if not path.exists():
+                  summary.write('Quick Start setup failed before execution; see the job logs.\n')
+              else:
+                  report = json.loads(path.read_text())
+                  summary.write(f"Quick Starts: **{report['status']}**\n\n")
+                  if 'error' in report:
+                      summary.write(report['error'] + '\n\n')
+                  for result in report['results']:
+                      summary.write(f"- {result['case']}: {result['status']}\n")
+                  summary.write('\nCases without unattended adapters: ' + ', '.join(report.get('not_supported', [])) + '\n')
+          PY
+
+      - name: Upload execution evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quickstarts-${{ matrix.platform }}
+          if-no-files-found: warn
+          path: |
+            artifacts/quickstarts/results.json
+            artifacts/quickstarts/resolved-assets.json
+            artifacts/quickstarts/build.json
+            artifacts/quickstarts/*/result.json
+            artifacts/quickstarts/*/dependencies.json
+            artifacts/quickstarts/*/*.log
+            artifacts/quickstarts/*/provider.jsonl
+            artifacts/quickstarts/*.log
+            artifacts/quickstarts/*/workspace/*/logs/events.jsonl
+            artifacts/quickstarts/*/workspace/*/relay-check.txt
+            artifacts/quickstarts/*/workspace/*/uv.lock
+            artifacts/quickstarts/*/workspace/*/package-lock.json
+            artifacts/quickstarts/*/workspace/*/Cargo.lock

@@ -50,6 +50,7 @@ dev = [
     "certifi>=2026.10.19",
     "ipython~=8.20",
     "jsonschema>=4.26,<5",
+    "packaging>=25,<27",
     "maturin[zig]>=1.0,<2.0; sys_platform == 'linux'",
     "maturin>=1.0,<2.0; sys_platform != 'linux'",
     "pip-licenses>=5,<6",
