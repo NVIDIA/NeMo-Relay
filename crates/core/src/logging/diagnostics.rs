@@ -405,7 +405,7 @@ impl Drop for LoggingProjection {
 mod tests {
     use super::*;
     use spdlog::sink::{GetSinkProp, Sink, SinkProp};
-    use std::sync::{Condvar, Mutex, mpsc};
+    use std::sync::{Barrier, Condvar, Mutex, mpsc};
     use std::time::Duration;
 
     struct BlockingSink {
@@ -488,11 +488,18 @@ mod tests {
             let second = entries.recv_timeout(Duration::from_secs(5));
             let exclusive_blocked = active.try_write().is_err();
             let (done, finished) = mpsc::channel();
+            let teardown_started = Arc::new(Barrier::new(2));
+            let teardown_started_thread = Arc::clone(&teardown_started);
             scope.spawn(move || {
+                teardown_started_thread.wait();
                 drop(projection);
                 done.send(()).unwrap();
             });
-            let shutdown_waiting = finished.try_recv().is_err();
+            teardown_started.wait();
+            let shutdown_waiting = matches!(
+                finished.recv_timeout(Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            );
             // Always release blocked deliveries before assertions or scope joining.
             *sink.released.lock().unwrap() = true;
             sink.release.notify_all();
