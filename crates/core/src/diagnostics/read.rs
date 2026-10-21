@@ -1115,7 +1115,16 @@ fn copy_window(
     let resolution = reservation.resolution_millis;
     let mut last = end / resolution;
     if component.closed_tick.is_some() && end > 0 && end.is_multiple_of(resolution) {
-        last = last.saturating_sub(1);
+        // Millisecond ticks can put an accepted observation and closure at the
+        // same boundary. Keep that occupied bucket even though coverage ends
+        // at its start; only discard an unobserved terminal bucket.
+        let terminal = state
+            .windows
+            .get(reservation.start + (last % reservation.len as u64) as usize)
+            .and_then(Option::as_ref);
+        if terminal.is_none_or(|slot| slot.interval != Some(last)) {
+            last = last.saturating_sub(1);
+        }
     }
     let first = last.saturating_sub(reservation.len.saturating_sub(1) as u64);
     let bucket_start = page.buckets.len();
@@ -1162,7 +1171,8 @@ fn copy_window(
             partial_start: false,
             partial_end: component.closed_tick.is_none()
                 || end == 0
-                || !end.is_multiple_of(resolution),
+                || !end.is_multiple_of(resolution)
+                || last.saturating_mul(resolution) == end,
             incomplete,
         },
     })
@@ -1248,5 +1258,91 @@ impl std::io::Write for CountingWriter {
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_windows_preserve_observations_at_the_closing_boundary() {
+        for (resolution, observed, closed, last_start, partial_end) in [
+            (1, 2, 2, 2, true),
+            (1, 1, 2, 1, false),
+            (2, 2, 3, 2, true),
+            (1, 0, 0, 0, true),
+        ] {
+            let diagnostics = Diagnostics::from_settings(
+                SourceIdentity {
+                    instance_id: Uuid::nil(),
+                    process_id: None,
+                    process_role: "test".into(),
+                    relay_version: "test".into(),
+                },
+                DiagnosticsSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let code = BuiltinDiagnosticCode::Success(SuccessCode::SinkInitialized);
+            let recorder = diagnostics
+                .register_component(ComponentRegistration {
+                    window: Some(WindowSettings {
+                        resolution_millis: resolution,
+                        bucket_count: 4,
+                    }),
+                    ..ComponentRegistration::new("sink", &[code])
+                })
+                .unwrap();
+            recorder
+                .record_without_projection_lazy(|| {
+                    Observation::new(
+                        Classification::success(SuccessCode::SinkInitialized),
+                        "success",
+                        7,
+                    )
+                })
+                .unwrap();
+            {
+                // Inject exact monotonic offsets into private state so this
+                // regression never depends on scheduler or sleep precision.
+                let backend = diagnostics.inner.backend.as_ref().unwrap();
+                let mut state = lock(&backend.state);
+                let handle = recorder.lease.as_ref().unwrap().handle;
+                let component = state.components[handle.slot].as_mut().unwrap();
+                component.registered_tick = 0;
+                component.closed_tick = Some(closed);
+                component.closed_at = Some(Utc::now());
+                for slot in state.windows.iter_mut().flatten() {
+                    slot.interval = None;
+                }
+                state.record_window(handle, observed, DiagnosticOutcome::Success, 7);
+            }
+            let snapshot = diagnostics
+                .snapshot(DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            let component = &snapshot.components[0];
+            let window = &component.windows[0];
+            assert_eq!(component.lifetime.totals.successes_total.value.get(), 7);
+            assert_eq!(snapshot.events[0].count.get(), 7);
+            assert_eq!(
+                window
+                    .buckets
+                    .iter()
+                    .map(|b| b.successes.value.get())
+                    .sum::<u64>(),
+                7
+            );
+            assert_eq!(
+                window.buckets.last().unwrap().start_elapsed_millis.get(),
+                last_start
+            );
+            assert_eq!(window.coverage.end_elapsed_millis.get(), closed);
+            assert_eq!(window.coverage.partial_end, partial_end);
+        }
     }
 }
