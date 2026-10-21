@@ -4699,3 +4699,196 @@ async fn daemon_plain_listener_preserves_peer_identity_and_drains_http2_connecti
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn custom_upstream_models_follow_managed_auth_policy() {
+    async fn echo(request: Request<Body>) -> axum::Json<serde_json::Value> {
+        axum::Json(serde_json::json!({
+            "path": request.uri().to_string(),
+            "authorization": request.headers().get("authorization").map(|v| v.to_str().unwrap()),
+            "account": request.headers().get("chatgpt-account-id").map(|v| v.to_str().unwrap()),
+        }))
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    let provider = axum::Router::new().fallback(echo);
+    let task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    for environment in [None, Some("environment-provider-key")] {
+        let _env = crate::test_support::EnvScope::set(&[(
+            "OPENAI_API_KEY",
+            environment.map(std::ffi::OsStr::new),
+        )]);
+        for configured in [None, Some("Bearer configured-provider-key")] {
+            let config = GatewayConfig {
+                openai_base_url: base.clone(),
+                openai_auth_header: configured.map(str::to_owned),
+                ..GatewayConfig::default()
+            };
+            let mut foreground = crate::server::AppState::new(config.clone());
+            foreground.require_provider_client_token = false;
+            let foreground = axum::Router::new()
+                .route("/models", axum::routing::get(crate::gateway::models))
+                .route("/v1/models", axum::routing::get(crate::gateway::models))
+                .with_state(foreground);
+            for (app, allowed) in [
+                (router(test_daemon_state(true, "", config.clone())), true),
+                (foreground, true),
+                (crate::server::router(config), false),
+            ] {
+                for path in ["/models", "/v1/models"] {
+                    let response = app
+                        .clone()
+                        .oneshot(
+                            Request::get(format!("{path}?client_version=0.163.0"))
+                                .header("x-nemo-relay-worker-token", "data-secret")
+                                .header("authorization", "Bearer at-fake-chatgpt-token")
+                                .header("chatgpt-account-id", "test-account")
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let body = response.into_body().collect().await.unwrap().to_bytes();
+                    let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(observed["path"], "/v1/models?client_version=0.163.0");
+                    let replacement = configured
+                        .or(environment.map(|_| "Bearer environment-provider-key"))
+                        .filter(|_| allowed);
+                    assert_eq!(
+                        observed["authorization"],
+                        serde_json::json!(replacement.unwrap_or("Bearer at-fake-chatgpt-token"))
+                    );
+                    assert_eq!(
+                        observed["account"],
+                        if replacement.is_some() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::json!("test-account")
+                        }
+                    );
+                }
+            }
+        }
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn model_catalogs_use_the_selected_provider_credentials_and_destination() {
+    async fn upstream(name: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().fallback(move |request: Request<Body>| async move {
+            axum::Json(serde_json::json!({
+                "provider": name,
+                "uri": request.uri().to_string(),
+                "authorization": request.headers().get("authorization").map(|v| v.to_str().unwrap()),
+                "key": request.headers().get("x-api-key").map(|v| v.to_str().unwrap()),
+                "version": request.headers().get("anthropic-version").map(|v| v.to_str().unwrap()),
+            }))
+        });
+        (
+            base,
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }),
+        )
+    }
+    let (openai, openai_task) = upstream("openai").await;
+    let (anthropic, anthropic_task) = upstream("anthropic").await;
+    for source in [
+        "configured",
+        "environment",
+        "caller",
+        "missing",
+        "other-provider-only",
+    ] {
+        let _env = EnvScope::set(&[
+            (
+                "OPENAI_API_KEY",
+                (source == "environment").then(|| std::ffi::OsStr::new("environment-openai")),
+            ),
+            (
+                "ANTHROPIC_API_KEY",
+                (source == "environment").then(|| std::ffi::OsStr::new("environment-anthropic")),
+            ),
+        ]);
+        let config = GatewayConfig {
+            openai_base_url: format!("{openai}/v1"),
+            anthropic_base_url: anthropic.clone(),
+            openai_auth_header: matches!(source, "configured" | "other-provider-only")
+                .then(|| "Bearer configured-openai".into()),
+            anthropic_auth_header: (source == "configured")
+                .then(|| "Bearer configured-anthropic".into()),
+            ..GatewayConfig::default()
+        };
+        let mut foreground = crate::server::AppState::new(config.clone());
+        foreground.require_provider_client_token = false;
+        let foreground = Router::new()
+            .route("/models", axum::routing::get(crate::gateway::models))
+            .route("/v1/models", axum::routing::get(crate::gateway::models))
+            .with_state(foreground);
+        for (app, allowed) in [
+            (foreground, true),
+            (router(test_daemon_state(true, "", config.clone())), true),
+            (crate::server::router(config), false),
+        ] {
+            for provider in ["openai", "anthropic"] {
+                for path in ["/models", "/v1/models"] {
+                    let mut request =
+                        Request::get(format!("{path}?limit=1&after_id=cursor%2Ftest"))
+                            .header("x-nemo-relay-worker-token", "data-secret");
+                    if provider == "anthropic" {
+                        request = request.header("anthropic-version", "2023-06-01");
+                    }
+                    if source == "caller" {
+                        request = if provider == "anthropic" {
+                            request.header("x-api-key", "caller-anthropic")
+                        } else {
+                            request.header("authorization", "Bearer caller-openai")
+                        };
+                    }
+                    let response = app
+                        .clone()
+                        .oneshot(request.body(Body::empty()).unwrap())
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let body = response.into_body().collect().await.unwrap().to_bytes();
+                    let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(observed["provider"], provider, "{source}: {path}");
+                    assert_eq!(observed["uri"], "/v1/models?limit=1&after_id=cursor%2Ftest");
+                    let auth = match (source, allowed, provider) {
+                        ("configured", true, _) => Some(format!("Bearer configured-{provider}")),
+                        ("other-provider-only", true, "openai") => {
+                            Some("Bearer configured-openai".into())
+                        }
+                        ("environment", true, "openai") => Some("Bearer environment-openai".into()),
+                        ("caller", _, "openai") => Some("Bearer caller-openai".into()),
+                        _ => None,
+                    };
+                    let key = match (source, allowed, provider) {
+                        ("environment", true, "anthropic") => Some("environment-anthropic"),
+                        ("caller", _, "anthropic") => Some("caller-anthropic"),
+                        _ => None,
+                    };
+                    assert_eq!(
+                        observed["authorization"],
+                        serde_json::json!(auth),
+                        "{source}: {provider}"
+                    );
+                    assert_eq!(
+                        observed["key"],
+                        serde_json::json!(key),
+                        "{source}: {provider}"
+                    );
+                    assert_eq!(
+                        observed["version"],
+                        serde_json::json!((provider == "anthropic").then_some("2023-06-01"))
+                    );
+                }
+            }
+        }
+    }
+    openai_task.abort();
+    anthropic_task.abort();
+}

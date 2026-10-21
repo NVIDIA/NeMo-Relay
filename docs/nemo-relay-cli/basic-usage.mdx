@@ -486,8 +486,9 @@ credential. The replacement must come from `openai_auth_header`, `NEMO_RELAY_OPE
 `OPENAI_API_KEY`. The value must not be empty. Relay then sends the request to
 `openai_base_url`.
 
-Without a replacement, Relay keeps the ChatGPT credential. It uses the ChatGPT
-backend only if `openai_base_url` is `https://api.openai.com/v1`, the default value.
+Without a replacement, managed routes keep the ChatGPT credential. Relay uses
+the ChatGPT backend only with the default `openai_base_url`,
+`https://api.openai.com/v1`.
 If you set a different `openai_base_url`, Relay uses that URL. ChatGPT voice calls
 use a separate rule, described below.
 
@@ -496,17 +497,35 @@ different backend, set `chatgpt_codex_base_url` under `[upstream]`. Relay sends 
 caller's ChatGPT credential to this URL. Use a backend you trust with that
 credential.
 
-Unmanaged OpenAI routes keep the caller's ChatGPT credential. These routes
-include compaction, model discovery, and voice calls. They follow the upstream
-settings described above. Relay never adds its own provider credentials to
-these requests.
+`GET /models` and `GET /v1/models` return a model list. To request Anthropic
+models, include an `anthropic-version` header. An `anthropic-beta` header also
+selects Anthropic. Relay uses OpenAI when neither header is present. The API
+key's format does not select a provider.
+
+Model lists use the same auth rules as the provider's managed routes. These
+requests do not create LLM events. Relay keeps provider API keys sent by the
+caller.
+
+OpenAI requests use `openai_base_url`. For auth, Relay tries `openai_auth_header`
+before `OPENAI_API_KEY`. Anthropic requests use `anthropic_base_url`. For auth,
+Relay tries `anthropic_auth_header` before `ANTHROPIC_API_KEY`. The caller must
+have Relay access to use Relay's credentials.
+
+If Relay has no replacement, OpenAI model requests keep the caller's credential.
+This also applies to a custom `openai_base_url`.
+
+Other unmanaged OpenAI routes include compaction and voice calls. Relay never
+adds its own provider credentials to these requests. With a custom
+`openai_base_url`, Relay removes `Authorization` and `chatgpt-account-id` if it
+recognizes a ChatGPT token. Relay keeps other caller credentials.
 
 ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
 They keep the caller's ChatGPT credential and use the ChatGPT backend
 (`chatgpt_codex_base_url` when set) even when a replacement credential is
 configured. Sideband attachment routes use `openai_base_url` and preserve
 the caller's provider credential, even when an administrator credential is
-configured. Refer to
+configured. With a custom `openai_base_url`, Relay removes recognized ChatGPT
+tokens and `chatgpt-account-id` from sideband requests. Refer to
 [Known Issues in 0.10.0](/about-nemo-relay/release-notes#known-issues-in-0100)
 before routing a ChatGPT voice sideband through Relay with a replacement key.
 
