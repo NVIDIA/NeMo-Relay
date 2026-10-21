@@ -244,9 +244,53 @@ class TestTypedToolExecute:
             "content": "answer",
             "is_error": False,
             "result": "answer",
+            "cache": {"replayable": True},
         }
         assert event.category_profile is not None
         assert event.category_profile["tool_result_annotation"] == {"source": "test"}
+
+    @pytest.mark.parametrize("value", ["answer", {"answer": 42}, SearchResult(items=["answer"], total=1)])
+    async def test_best_effort_tool_result_replays_with_a_fresh_codec(self, value) -> None:
+        """Portable typed results remain cacheable across codec instances."""
+        from nemo_relay.adaptive import (
+            AdaptiveConfig,
+            AdaptiveRuntime,
+            ResponseCacheConfig,
+            ToolCacheConfig,
+            ToolOverride,
+        )
+
+        calls = 0
+
+        def execute(_args: Json) -> ToolExecutionResult[object]:
+            nonlocal calls
+            calls += 1
+            return ToolExecutionResult(value, {"source": "test"})
+
+        runtime = AdaptiveRuntime(
+            AdaptiveConfig(
+                response_cache=ResponseCacheConfig(
+                    namespace="typed-tool-replay",
+                    tools=ToolCacheConfig(enabled=True, overrides={"lookup": ToolOverride(cacheable=True)}),
+                )
+            ).to_dict()
+        )
+        await runtime.register()
+        try:
+            for call_id in ["call-1", "call-2"]:
+                outcome = await typed.tool_execute(
+                    "lookup",
+                    {},
+                    execute,
+                    JsonPassthrough(),
+                    BestEffortAnyCodec(tool_result=True, allowed_types=[SearchResult]),
+                    tool_call_id=call_id,
+                )
+                assert outcome.result == value
+                assert outcome.annotation == {"source": "test"}
+            assert calls == 1
+        finally:
+            runtime.deregister()
 
     async def test_dataclass_roundtrip(self) -> None:
         async def search(args: SearchArgs) -> ToolExecutionResult[SearchResult]:

@@ -314,7 +314,8 @@ class BestEffortAnyCodec(Codec[object]):
         Plain JSON values stay untagged.
 
         With ``tool_result=True``, the codec places the encoded value in the
-        wrapper's ``result`` field.
+        wrapper's ``result`` field. It marks the wrapper as replayable because
+        decoding does not need objects from the original call.
         """
         encoded = self._encode_value(value)
         if not self._tool_result or projected_tool_result(encoded) is not None:
@@ -327,7 +328,13 @@ class BestEffortAnyCodec(Codec[object]):
             for part in encoded
         ):
             content = [{"type": "text", "text": part} if isinstance(part, str) else part for part in encoded]
-        return {"schema": TOOL_RESULT_SCHEMA, "content": content, "is_error": False, "result": encoded}
+        return {
+            "schema": TOOL_RESULT_SCHEMA,
+            "content": content,
+            "is_error": False,
+            "result": encoded,
+            "cache": {"replayable": True},
+        }
 
     def _encode_value(self, value: object) -> Json:
         """Encode the value before adding any tool-result wrapper."""

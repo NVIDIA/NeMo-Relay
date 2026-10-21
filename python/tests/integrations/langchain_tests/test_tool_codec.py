@@ -56,6 +56,18 @@ def test_tool_codec_round_trip_and_projection(command, status):
         assert isinstance(restored.update["state"], tuple)
 
 
+def test_tool_codec_rejects_invalid_cached_tool_call_id():
+    """Reject malformed invocation metadata from a persisted tool result."""
+    from langchain_core.messages import ToolMessage
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    encoded = LangChainToolResultCodec("call-1").to_json(ToolMessage(content="answer", tool_call_id="call-1"))
+    encoded["cache"] = {"replayable": True, "tool_call_id": 5}
+    with pytest.raises(ValueError, match="cached tool call ID"):
+        LangChainToolResultCodec("call-2").from_json(encoded)
+
+
 def test_opaque_artifacts_remain_local_without_python_deserialization():
     from dataclasses import dataclass
 
