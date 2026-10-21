@@ -1,0 +1,495 @@
+---
+title: "NeMo Relay Google ADK Integration"
+sidebar-title: "Google ADK Integration Guide"
+description: "Add NeMo Relay observability, security middleware, and optimization to Google Agent Development Kit applications."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the `nemo_relay.integrations.google_adk` package to add NeMo Relay to
+[Google Agent Development Kit (ADK)](https://google.github.io/adk-docs/)
+applications.
+
+The integration is one ADK plugin. It records each invocation and agent run as
+a NeMo Relay scope, emits marks for agent transfer, tool confirmation,
+escalation, and long-running tools, and wraps the model and tool objects ADK
+calls so that every model call runs through `nemo_relay.llm.execute` or
+`nemo_relay.llm.stream_execute` and every tool call runs through
+`nemo_relay.tools.execute`. The wrap happens in place the first time ADK is
+about to use a model or a tool: the object keeps its identity, its class name,
+and its `isinstance` relations, so ADK's own checks on it hold.
+
+## Setup
+
+Install the Google ADK integration extra in your application environment.
+
+<Tabs>
+<Tab title="uv">
+```bash
+uv add "nemo-relay[google-adk]"
+```
+</Tab>
+
+<Tab title="pip">
+```bash
+pip install "nemo-relay[google-adk]"
+```
+</Tab>
+
+</Tabs>
+
+## Usage Example
+
+Add `NemoRelayPlugin` to the ADK `App` plugins. Create one `NemoRelayPlugin`
+per `Runner`. ADK closes a plugin together with its `Runner` and does not tell
+the plugin which `Runner` closed, so a plugin shared by several Runners records
+the other Runners' in-flight invocations as cancelled when the first one
+closes; the plugin logs a warning when it sees this. Concurrent invocations on
+one `Runner` are fine when each runs in its own task or thread with its own
+scope stack, as a request handler normally does.
+
+A `Workflow` and the nodes in its graph are the one case the plugin cannot
+reach, because ADK runs them outside its agent hooks. Pass the workflow to
+`wrap_node` before it runs. It swaps the workflow and every node in its graph for
+subclasses that record each run as a scope and otherwise behave identically, as
+the plugin does for models and tools. The agents inside a workflow reach the
+plugin either way, and so does a node an `LlmAgent` is given as a tool.
+
+```python
+import asyncio
+
+import nemo_relay
+from google.adk.agents import LlmAgent
+from google.adk.apps import App
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
+from nemo_relay.integrations.google_adk import NemoRelayPlugin
+
+
+def get_weather(location: str) -> dict[str, str]:
+    """Get the current weather for a location."""
+    return {"location": location, "forecast": "sunny and 72 degrees"}
+
+
+root_agent = LlmAgent(
+    name="weather_agent",
+    model="gemini-2.5-flash",
+    instruction="Use tools when they are relevant. Keep the final answer brief.",
+    tools=[get_weather],
+)
+
+app = App(name="weather_app", root_agent=root_agent, plugins=[NemoRelayPlugin()])
+session_service = InMemorySessionService()
+runner = Runner(app=app, session_service=session_service)
+
+
+async def main() -> None:
+    session = await session_service.create_session(app_name="weather_app", user_id="user-1")
+    message = types.UserContent("What is the weather in San Francisco?")
+    with nemo_relay.scope.scope("adk-request", nemo_relay.ScopeType.Agent):
+        async for event in runner.run_async(
+            user_id="user-1", session_id=session.id, new_message=message
+        ):
+            if event.is_final_response() and event.content and event.content.parts:
+                print(f"Final response: {event.content.parts[0].text}")
+    await runner.close()
+
+
+asyncio.run(main())
+```
+
+A workflow passed to `wrap_node` is recorded the same way, with ADK's own node
+classes, its `node` decorator, and bare callables in `edges`:
+
+```python
+from google.adk.tools import FunctionTool
+from google.adk.workflow import Workflow
+from nemo_relay.integrations.google_adk import NemoRelayPlugin, wrap_node
+
+
+def pick_city(node_input: str) -> dict[str, str]:
+    return {"location": node_input}
+
+
+workflow = wrap_node(Workflow(name="weather_pipeline", edges=[("START", pick_city, FunctionTool(get_weather))]))
+app = App(name="weather_app", root_agent=workflow, plugins=[NemoRelayPlugin()])
+```
+
+### Use with the ADK CLI and Dev UI
+
+`adk web`, `adk run`, and `adk api_server` create the `Runner` themselves and
+load your agent from the agents directory. The loader looks for an `app` object
+in the module before it falls back to `root_agent`, so export an `App` that
+carries the plugin from `agent.py`:
+
+```python
+from google.adk.agents import LlmAgent
+from google.adk.apps import App
+from nemo_relay.integrations.google_adk import NemoRelayPlugin
+
+
+def get_weather(location: str) -> dict[str, str]:
+    """Get the current weather for a location."""
+    return {"location": location, "forecast": "sunny and 72 degrees"}
+
+
+root_agent = LlmAgent(name="weather_agent", model="gemini-2.5-flash", tools=[get_weather])
+app = App(name="weather_agent", root_agent=root_agent, plugins=[NemoRelayPlugin()])
+```
+
+A run started this way has no surrounding request scope, so the invocation
+scope is the root of each trace. Register Relay subscribers or exporters in the
+same module so they exist when the agent loads. An agent defined only in
+`root_agent.yaml` has no module to export an `App` from and cannot be
+instrumented this way.
+
+## Verify the Integration
+
+The integration works correctly when:
+
+- The ADK run completes and prints a final response.
+- The `adk-request` scope contains one `adk-invocation:weather_app` Agent scope,
+  which contains a `weather_agent` Agent scope.
+- LLM scopes named by the provider the model class reaches, `gemini` here,
+  with the model recorded as `model_name`, appear under the agent scope with
+  the normalized request and response recorded.
+- A `get_weather` tool scope appears under the agent scope and carries the ADK
+  function-call id as its tool-call id.
+- Every scope start has a matching scope end, including after errors.
+
+## Observability
+
+The integration captures:
+
+- Invocation scopes keyed by ADK invocation id, with the session, user, app
+  name, and user message as scope input and the run's last final response as
+  scope output. Inline binary data in the message is recorded as its mime type
+  and byte count. `RunConfig.custom_metadata` is recorded as
+  `adk_custom_metadata` scope metadata.
+- Agent scopes for every `BaseAgent` run, including `SequentialAgent`,
+  `ParallelAgent`, and `LoopAgent` children, each closing with the agent's
+  final response as its output. Sibling agents in a `ParallelAgent` keep their
+  own model and tool calls even though ADK runs them concurrently.
+- Agent transfer as an `adk.agent_transfer` mark. The transferring agent's scope
+  closes when the transfer happens and the target agent runs as a sibling under
+  the invocation scope.
+- One LLM scope per model call, named by the provider resolved from the ADK
+  model string, such as `gemini` for Gemini models, `vertex_ai` for a Vertex AI
+  resource name, or `openai` for an `openai/` LiteLLM model, with that string as
+  `model_name` and the model class
+  as `adk_model_type` metadata. The request and response are normalized by a
+  codec over ADK's own `LlmRequest` and `LlmResponse` shapes. The response
+  annotation carries the thinking and tool-use prompt token counts and Gemini's
+  candidate fields in the `gemini_generate_content` `api_specific` variant,
+  including the URL context metadata that ADK's `LlmResponse` omits, and cost
+  estimates bill them as the built-in Gemini codec does. With
+  server-sent-event streaming the call runs the streaming pipeline, carries the
+  `streaming` attribute, and records each chunk as an `llm.chunk` mark under the
+  scope, with the model's final response as the scope's response, or the
+  partials merged into one response, streamed function-call arguments
+  included, when the stream stops before it.
+- One tool scope per tool call, with the ADK tool class recorded as
+  `adk_tool_type` metadata and `adk_long_running` for a long-running tool,
+  and the result in the
+  [normalized tool result](/reference/tool-execution-intercept-outcomes#normalized-tool-results)
+  format. Tools provided by a `BaseToolset`, ADK-internal tools such as
+  `transfer_to_agent`, tools under `RunConfig.tool_thread_pool_config`, and the
+  tool of a workflow tool node are recorded the same way.
+- Code executors other than the built-in one run each code block through the
+  managed tool pipeline as a `code_execution` tool call, with the code and
+  input files as the arguments, file bytes as base64, the code execution
+  result as the result, and
+  the executor class as `adk_code_executor` metadata. A run that ends with
+  stderr is a failed result, as it is to ADK. An intercept can rewrite the
+  code, and the content and failure flag of the result.
+- Tools the model provider runs itself, such as Google Search, Vertex AI
+  Search, Google Maps grounding, and the built-in code executor, as manual
+  tool calls recorded from what the response reports: the queries or the code
+  as input, the grounding chunks or the execution result as the result, with a
+  failed or timed-out execution recorded as a failed result, marked
+  `adk_server_side`, at the time of the response and with no duration. Each
+  code execution pairs with the result that carries its id, and that id is the
+  tool-call id. When the request sets `include_server_side_tool_invocations`,
+  the Gemini API reports each server-side tool call as a `tool_call` part
+  answered by a `tool_response` part with the same id. Each pair is recorded
+  with that id as the tool-call id, the call as input, and the response as the
+  result, named after the tool the request declares for its type, such as
+  `google_search` for web and image search or `url_context`, and otherwise
+  after the type itself, such as `file_search`. Grounding for a tool those
+  parts report is not recorded again. A result is projected before its tool
+  scope opens, so every scope that starts also ends. Tool sanitize guardrails
+  apply to their events.
+- Nested runs started by an `AgentTool` as an invocation scope under the agent
+  scope that made the tool call.
+- Workflow runs and their nodes, when the workflow is passed to `wrap_node`. A
+  workflow is an Agent scope that closes with the error of a failed node. Its
+  function, join, and tool nodes are Function scopes that record the node input
+  and output, with a set recorded as its members sorted by their JSON and a
+  value that has no JSON form as its type name.
+  Agents used as nodes keep their agent scopes, the call made by a
+  tool node is recorded as a tool scope under the node, and a node an
+  `LlmAgent` is given as a tool is recorded under the agent beside its tool
+  scope.
+- Marks for `adk.tool_confirmation_requested`, `adk.tool_confirmation_resumed`,
+  `adk.escalate`, and `adk.long_running_tools`, the
+  `adk.tool_arguments_rejected` and `adk.llm_request_rejected` marks for a value
+  of ADK's that has no JSON projection, and the `adk.tool_result_rejected` and
+  `adk.llm_response_rejected` marks for a result ADK cannot take from the
+  pipeline.
+
+The invocation and agent scopes close in every success and error path. An agent
+that ends the invocation early, for example through a `before_agent_callback`
+that answers directly, never receives `after_agent_callback`; its scope closes
+when the invocation scope closes. A model or tool call that another plugin or an
+agent callback answers in its before hook is never made by ADK and records no
+scope. ADK does not call `after_run_callback` when an invocation is cancelled
+on an error other than its own early close, so such an invocation's scope closes
+as cancelled when the same `Runner` starts its next invocation in that context,
+or when the `Runner` closes.
+
+Refer to [Observability](/configure-plugins/observability/about) for details on
+exporting NeMo Relay observability data to third-party systems.
+
+## Security and Optimization
+
+Each model call ADK makes runs through `nemo_relay.llm.execute`, or
+`nemo_relay.llm.stream_execute` with server-sent-event streaming, and each tool
+call runs through `nemo_relay.tools.execute`, so the complete middleware
+pipeline applies: conditional guardrails, request intercepts, execution
+intercepts, sanitize guardrails, and the response codec. The wrapper sits where
+ADK itself calls the model or the tool, after ADK's own plugin and agent
+callbacks and after its confirmation gate, so those keep their order and
+behavior.
+
+The request the pipeline produces is written onto ADK's `LlmRequest`, including
+the messages, system instruction, generation parameters, tool choice, and tool
+declarations, so ADK sends what the pipeline produced and ADK's later
+processing sees it. Function tools have editable descriptions and parameter
+schemas, and a native Gemini tool such as Google Search travels as a
+provider-native value that keeps its kind. Tool count, order, and function
+names must remain unchanged. ADK's other request fields and the `config` fields
+the normalized request does not model, such as `top_k`, `safety_settings`, or
+`cache_config`, are editable through `api_specific`. ADK's `LlmRequest` has no
+fields beyond those, so an `extra` edit fails the call, as does a
+provider-native component tagged for another provider. Tool arguments reach
+the pipeline as the JSON ADK sends the model, with bytes as base64, set members
+sorted by their JSON, and a value with no JSON form, or an iterator, as its
+stand-in without consuming it. A pydantic model that holds an iterator keeps
+its other fields. An argument whose own serializer rejects its data, such as a
+pydantic model holding bytes that are not UTF-8 under the default bytes
+setting, fails the call. Tool arguments the
+pipeline rewrites are written into the argument dictionary ADK holds, so ADK's
+after hooks see what the tool received. Each part of the arguments an
+intercept leaves unchanged in its place reaches the tool as ADK passed it,
+such as a pydantic model, bytes, or an object with no JSON form. A part the
+intercept changed reaches the tool as the intercept's JSON, the form ADK
+receives arguments from the model in, with the parts inside it the intercept
+left unchanged kept as ADK passed them. An edit to a dictionary whose keys
+share a JSON name fails the call.
+
+A content that carries text or other parts beside its function responses is a
+user message followed by one tool message per response, and an edit to either
+is written back into that content. Messages an intercept leaves unchanged keep
+their ADK contents as they are. An edited message is written over its original
+content, so each part keeps its position and its other fields, and a call keeps
+fields such as Gemini's `thought_signature` when its call id identifies it in
+the original request, including a call moved into another turn. Within one
+turn, calls that share an id take the original parts with that id in order, as
+the core Gemini codec matches them. The request's
+dump writes each genai object as genai does when it sends it, so bytes a tool
+returned into a function response are base64, writes set members sorted by
+their JSON, records a value with no JSON form, such as an object a tool
+returned into a function response, as its type name, and records an iterator,
+such as a generator, as `<unserializable iterator>` without consuming it, so
+ADK still sends its items. Responses are dumped the same way.
+When an intercept edits the request, each part of it the edit leaves unchanged
+stays the object ADK holds, matched by field, key, or order in a list, at every
+depth, and only the changed parts are rebuilt from the intercept's JSON.
+
+ADK receives its own response objects back unless the pipeline changed them.
+A response an execution intercept changed is rebuilt as an `LlmResponse` from
+the intercept's dump, keeping each part of the model's response the edit left
+unchanged as ADK's own: the latest response of the call for a whole response,
+and for a stream the earliest chunk not yet handed back. A response an
+intercept answered without the model is rebuilt from its dump alone.
+
+Tool results travel in the normalized tool result format, read and written in
+ADK's own conventions, as the LangChain codec reads and writes a `ToolMessage`.
+`content` is a text result, the text a result object holds under `result`, the
+`error` text of a failed object, the content blocks of an MCP tool's result, or
+the output of a code execution, which is stderr for a failed run and stdout
+otherwise. `is_error` is true for an object with a truthy `error`, which is
+what ADK's own telemetry reads, for an MCP result with `isError`, and for a
+failed code execution. A function response carries its response object. A
+result without text of its own, such as `None`, a dictionary of fields, a list,
+or a pydantic model, has its JSON as text for content, the JSON ADK sends the
+model, with keys and set members sorted and bytes as base64, as LangChain's
+`ToolMessage` holds the JSON of a tool's object output.
+
+An intercept's edits are written back the same way. A text result, or an
+object with text of its own, carries the content of a failure as its `error`,
+as ADK's own failures do, and drops the `error` on recovery, keeping the
+content under `result` when there is one. An MCP result takes the content
+blocks and the flag, and a code execution takes its stdout or stderr and
+outcome. A failure needs error text. Content written to a result without text
+of its own is its new JSON text, failed or not, parsed back into the result
+with each part the edit left unchanged kept as the tool's own object. That JSON
+holds a truthy `error`, or an MCP `isError`, exactly when the failure flag is
+set, so failing such a result writes JSON text such as `{"error": "blocked"}`.
+Null content, text that is not JSON, or JSON that disagrees with the failure
+flag fails the call. The content and failure flag are compared with what Relay
+sent, so an edit to the `result` record with the content left as sent stands.
+The `result` field records the whole result. Dictionaries with text keys,
+lists, tuples, sets, bytes, and
+dataclasses are recorded part by part, set members sorted by their JSON and
+bytes as base64, and any other object, such as a pydantic model, a genai type,
+or a date, as the JSON pydantic dumps to rebuild it, tagged with its class. An
+object that has no JSON form, or holds a part with none, such as a client or a
+session handle, is recorded as `unserializable` with its class, the JSON
+pydantic dumps around it with each such part as its type name, and a `ref`
+that numbers it among the objects with no JSON form the call's results hold,
+the same object keeping one `ref`. An object whose own
+serializer rejects its data, such as a pydantic model holding bytes that are
+not UTF-8 under the default bytes setting, fails the call. An iterator, or an
+object holding one, is recorded as `unserializable` without consuming it. A
+result the pipeline passes through unchanged reaches ADK as the object the tool
+returned, and so does each part an intercept's edit leaves unchanged, matched
+by key, field, or order in a list against the latest result of the call. The
+rest is rebuilt from its JSON, a dataclass from its recorded fields and any
+other object by pydantic validation into its class,
+which must be a genai type, an ADK code execution type, or a class the call's
+results hold. An `unserializable` object has nothing to rebuild from, so its
+unchanged record reaches ADK as the tool's object wherever an intercept places
+it, including a record from an earlier run of the call, and an intercept that
+changes one, or answers with one the call's results do not hold, fails the
+call. The tool's objects are kept for the one ADK call that returned them and
+dropped when that call ends.
+When an intercept runs the tool more than once, equal results go back as the
+latest. An intercept that answers without calling the tool returns the full
+wrapper.
+
+Execution intercepts that call `next` again make another call through the
+wrapped model or tool, as they do under any managed callback. A retry or a
+fallback goes to the model with the request the intercept passed, and ADK
+receives the pipeline's final answer as the response of its one call. The
+request object ADK holds carries the request of the first call and of any later
+call made while no other is in flight; a request a hedge asks for while another
+call is in flight goes out on a copy. A stream intercept that yields its own
+chunks, drops chunks, or asks for another stream delivers exactly what it yields:
+each chunk the chain yields reaches ADK as its own partial, and the model's
+final response reaches ADK as the chain yields it.
+
+A blocked call raises a `RuntimeError` whose message starts with
+`guardrail rejected`, which ADK propagates through its model or tool error
+callbacks and out of the run after recording the agent's error, as a rejection
+does in the other NeMo Relay integrations. Any other pipeline failure, such as
+a guardrail or intercept that raises, stops the call the same way. A model or
+tool error that no intercept recovers reaches ADK's own `on_model_error` and
+`on_tool_error` callbacks unchanged. Tool arguments or a model request that
+have no JSON projection, such as a pydantic model whose own serializer rejects
+its data or an `output_schema` with no JSON Schema, fail the call before its
+managed scope opens. A tool result or model response the pipeline returns that
+ADK cannot take, such as an edit the rules above reject, fails the call after
+its managed scope has closed with what the pipeline returned. Each failure
+raises its original error, and an `adk.tool_arguments_rejected`,
+`adk.llm_request_rejected`, `adk.tool_result_rejected`, or
+`adk.llm_response_rejected` mark at error severity, under the same parent as
+the call, records the tool and its call id, or the provider and model, with the
+error's type and message, so the failure stays visible when an ADK error
+callback answers it.
+
+An agent's `output_schema` reaches the request as `config.response_schema`.
+Intercepts see a pydantic model class or a generic such as `list[Model]` as its
+JSON Schema, a `genai.types.Schema` as its camelCase dump, and a dict as is. An
+execution intercept that edits the schema sends the edited dict to the model,
+which the Gemini SDK accepts in place of the original; an unchanged schema
+keeps ADK's own object. The annotated request carries it under
+`api_specific`, as it carries `response_mime_type`, and an edit there reaches the
+model the same way. Of `config.http_options`, which can hold live HTTP
+clients, retry settings, and transport options, intercepts see the extra
+request body under `api_specific` as `config.http_options.extra_body`, and an
+edit there reaches ADK's request with the other HTTP options left as they
+are. Any other `http_options` field in an edit fails the call, and request
+headers travel as the request's headers.
+
+The request headers intercepts see are `config.http_options.headers` of
+ADK's request, and the headers the pipeline produces, including Dynamo
+session lineage and trace context, replace them on the request ADK sends,
+which the Gemini SDK sends as HTTP headers and ADK's LiteLLM model as
+`extra_headers`. ADK's Anthropic model takes no per-request headers, so it
+receives none. A retry or hedge made by an execution intercept carries the
+headers of its own call only.
+
+Gemini omits function-call ids, and ADK assigns its own after the response is
+recorded. When one response or one history message holds several id-less calls
+to the same function, the normalized request and response give them positional
+ids such as `get_weather#0` and `get_weather#1` so calls pair with their
+responses. Those ids exist only in the normalized view. The raw payload an
+execution intercept sees is ADK's own dump, and ADK's objects never carry them.
+
+A tool call that pauses for a human's confirmation, through ADK's confirmation
+gate or the tool's own `request_confirmation`, is answered by ADK with a
+placeholder before the tool runs, so it records an
+`adk.tool_confirmation_requested` mark and no tool call. When the human
+answers, the plugin records an `adk.tool_confirmation_resumed` mark carrying the
+answer; a confirmed call runs the tool as a new call with its own scope, and a
+rejected call is answered by ADK without running the tool.
+
+A `Workflow` that is not passed to `wrap_node` shows the plugin only the event
+each node ends with, so its nodes are recorded as `adk.node_completed` marks
+carrying the node path and output, or `adk.node_failed` marks carrying the
+error, under the current agent scope. The same holds for a node an orchestrator
+builds at run time and runs through `Context.run_node`, unless that node is
+passed to `wrap_node` first. The agents inside a workflow keep their agent
+scopes either way, and a wrapped node emits no mark.
+
+### Models That Rely on the Default
+
+ADK resolves a model string once per agent and keeps the instance, so the
+wrapped model persists for the agent's lifetime. The class default an agent
+falls back to when neither it nor an ancestor sets a model is resolved to a new
+instance on every call. ADK runs each invocation on a copy of the agent tree,
+so the plugin sets the instance it resolved as the model of that copy and
+wraps it. The agent you built keeps its empty `model`, and the next run
+resolves the default again.
+
+## Limitations
+
+- Live runs through `Runner.run_live`, and compositional function calling
+  through `RunConfig.support_cfc`, reach the model over its live connection,
+  which the integration leaves unwrapped. Their invocation and agent scopes are
+  recorded, but their model turns record no LLM scope and no LLM middleware
+  applies to them.
+- ADK's response cache treats model requests as nondeterministic unless the
+  temperature sits at the top of the request or in its normalized parameters.
+  ADK carries it under `config`, so the response cache bypasses ADK calls and
+  records a `bypass` mark for each one.
+- The PII redaction plugin redacts an ADK request through the codec's
+  normalized messages, but it cannot project a redaction back onto ADK's
+  response shape, so while redaction is active the response payload and its
+  annotation are left off the LLM end event.
+- The `llm.chunk` marks of an ADK stream carry the generic chunk summary,
+  because the chunk summarizer reads the Gemini REST shape rather than ADK's
+  response dump.
+- `type(model)` and `type(tool)` are subclasses of the original classes. Code
+  that assigns class attributes through `type(self)`, such as a class-level
+  counter, writes to the subclass.
+- With server-sent-event streaming, Relay pulls the model's generator ahead of
+  ADK's consumption into a bounded buffer, and when ADK stops consuming early
+  the generator is cancelled at its pending await rather than closed at its
+  `yield`. The responses ADK sees are unchanged, and the generator's cleanup
+  runs before the call closes, but a model that reacts to `GeneratorExit` or
+  counts chunks as side effects behaves differently.
+- ADK exposes no node hook to plugins, so a `Workflow` records scopes for its
+  nodes only when it is passed to `wrap_node`, and a node an orchestrator
+  builds at run time only when that node is. Other nodes are recorded as marks
+  from the event they end with, without input or duration. ADK's
+  `parallel_worker` option runs a node's items inside an ADK-internal worker
+  the wrap does not reach, so those item runs are recorded as marks.
+- Tools the model provider runs itself are recorded from the response after the
+  fact, so no intercept or conditional-execution guardrail can act on them.
+  Without `include_server_side_tool_invocations`, `url_context` reports
+  nothing on the response ADK hands plugins, so it leaves no scope.

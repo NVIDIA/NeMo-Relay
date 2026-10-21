@@ -43,3 +43,15 @@ def integration_deepagents_fixture(integration_langgraph: types.ModuleType) -> t
         return deepagents
     except Exception:
         pytest.skip(reason="deepagents must be installed to run Deep Agents based tests")
+
+
+@pytest.fixture(name="integration_google_adk", scope="session")
+def integration_google_adk_fixture() -> types.ModuleType:
+    """
+    Return the `google.adk` module, and skip the requesting test when Google ADK is not installed.
+    """
+    return pytest.importorskip(
+        "google.adk",
+        reason="google-adk must be installed to run Google ADK based tests",
+        exc_type=ModuleNotFoundError,
+    )

@@ -112,6 +112,11 @@ langchain-nvidia = [
     "multidict>=6.9.1",
 ]
 
+google-adk = [
+    "google-adk>=2.12.0,<3.0.0",
+    "typing-extensions>=4.10.0",
+]
+
 [tool.maturin]
 manifest-path = "crates/python/Cargo.toml"
 python-source = "python"
@@ -153,9 +158,9 @@ omit = [
 [tool.ty.analysis]
 # nemo_relay._native is a compiled Rust extension (built by maturin) that only
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
-# LangChain, LangGraph, and Deep Agents are optional integration dependencies
-# which aren't installed by default.
-allowed-unresolved-imports = ["deepagents.**", "grpc", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "pytest"]
+# LangChain, LangGraph, Deep Agents, and Google ADK are optional integration
+# dependencies which aren't installed by default.
+allowed-unresolved-imports = ["deepagents.**", "google.**", "grpc", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "pytest"]
 
 [[tool.ty.overrides]]
 include = ["python/tests/**"]

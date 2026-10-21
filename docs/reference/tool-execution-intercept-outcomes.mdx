@@ -120,6 +120,13 @@ change or remove fields before export.
 Execution intercepts can pass the wrapper through or edit its content and
 failure flag. For LangChain and LangGraph, the codec applies these edits to the
 matching `ToolMessage`. It keeps the message's other fields and the graph state.
+For Google ADK, the codec applies them in ADK's own conventions: a text result,
+or an object with text of its own, fails through an `error` entry and recovers
+by dropping it, an MCP result takes content blocks and `isError`, and a code
+execution takes its stdout or stderr and outcome. Any other result, such as a
+dictionary of fields, a list, or a pydantic model, has its JSON text as
+content. Content written to it is its new JSON text, which holds a truthy
+`error`, or an MCP `isError`, exactly when the result fails.
 If an intercept returns a cached result without calling the tool, it must
 return the full wrapper for that framework's codec.
 
