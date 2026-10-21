@@ -19,6 +19,10 @@ use nemo_relay::logging::{
 use nemo_relay::plugin::PluginError;
 use serde_json::Value;
 
+#[path = "support/diagnostic_allocations.rs"]
+mod diagnostic_allocations;
+use diagnostic_allocations::{allocation_stats_during, allocations_during};
+
 static LOGGING: Mutex<()> = Mutex::new(());
 const PLUGIN_ERROR: BuiltinDiagnosticCode = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(
     PluginFailureCode::Common(CommonPluginFailureCode::Internal),
@@ -339,47 +343,102 @@ fn warmed_projection_avoids_owned_field_conversions_without_sinks() {
     producer
         .record_lazy(|| internal("Projected observation"))
         .unwrap();
-    ALLOCATIONS.with(|count| count.set(Some(0)));
-    for _ in 0..100 {
-        producer
-            .record_lazy(|| internal("Projected observation"))
-            .unwrap();
-    }
-    let calls = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let (_, calls) = allocations_during(|| {
+        for _ in 0..100 {
+            producer
+                .record_lazy(|| internal("Projected observation"))
+                .unwrap();
+        }
+    });
     // The native backend formats the message once. Borrowed fields require no
     // intermediate vector or owned ValueBag conversion on this synchronous path.
     assert_eq!(calls, 100);
     runtime.shutdown();
 }
 
-thread_local! {
-    static ALLOCATIONS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
-}
-struct CountingAllocator;
-fn count_allocation() {
-    let _ = ALLOCATIONS.try_with(|count| {
-        if let Some(value) = count.get() {
-            count.set(Some(value + 1));
+/// Complete producer-to-backend path, including queued ownership when enabled.
+/// File worker formatting/I/O allocations run on other threads and are excluded
+/// from these producer-thread traffic measurements; draining/output are verified.
+#[test]
+#[ignore = "informational complete logging adapter allocation/throughput profile"]
+fn diagnostic_logging_projection_profile() {
+    let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
+    eprintln!(
+        "logging profile: debug_assertions={}, producer-thread request traffic only",
+        cfg!(debug_assertions)
+    );
+    for asynchronous in [false, true] {
+        let service = enabled();
+        let producer = service
+            .register_component(ComponentRegistration::new(
+                "profile.producer",
+                &[PLUGIN_ERROR],
+            ))
+            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("profile.jsonl");
+        let runtime = LoggingRuntime::configure_with_diagnostics(
+            LoggingConfig {
+                level: LogLevel::Error,
+                stderr_enabled: false,
+                flush_interval_millis: 0,
+                sinks: if asynchronous {
+                    vec![LogSinkConfig::File(FileLogSinkConfig {
+                        path: path.clone(),
+                        queue_capacity: 256,
+                        ..Default::default()
+                    })]
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            },
+            &service,
+        )
+        .unwrap();
+        producer.record_lazy(|| internal("warm-up")).unwrap();
+        let reserved = service.memory_usage().reserved_bytes;
+        let begin = std::time::Instant::now();
+        let (_, stats) = allocation_stats_during(|| {
+            for _ in 0..100 {
+                producer
+                    .record_lazy(|| internal("projected observation"))
+                    .unwrap();
+            }
+        });
+        eprintln!(
+            "logging async={asynchronous}: events=100 elapsed={:?} traffic={stats:?}",
+            begin.elapsed()
+        );
+        assert_eq!(service.memory_usage().reserved_bytes, reserved);
+        if !asynchronous {
+            assert_eq!(stats.allocation_calls, 100);
+            assert_eq!(stats.free_calls, 100);
+            assert_eq!(stats.allocated_bytes, stats.freed_bytes);
+            assert_eq!(stats.realloc_calls, 0);
+        } else {
+            assert!(
+                stats.allocation_calls > 100,
+                "async queues must own their records"
+            );
         }
-    });
+        runtime.shutdown();
+        if asynchronous {
+            let output = std::fs::read_to_string(&path).unwrap();
+            let rows: Vec<Value> = output
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(rows.len(), 101);
+            assert!(
+                rows.iter()
+                    .all(|row| row["target"] == "nemo_relay.diagnostics")
+            );
+            assert_eq!(rows[100]["message"], "projected observation");
+            assert_eq!(
+                rows[100]["fields"]["diagnostic"]["classification"]["canonical_code"],
+                "plugin.internal"
+            );
+        }
+    }
 }
-// SAFETY: all requests are forwarded unchanged to System; counting does not allocate.
-unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        count_allocation();
-        unsafe { std::alloc::System.alloc(layout) }
-    }
-    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
-        count_allocation();
-        unsafe { std::alloc::System.alloc_zeroed(layout) }
-    }
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: std::alloc::Layout) {
-        unsafe { std::alloc::System.dealloc(pointer, layout) }
-    }
-    unsafe fn realloc(&self, pointer: *mut u8, layout: std::alloc::Layout, size: usize) -> *mut u8 {
-        count_allocation();
-        unsafe { std::alloc::System.realloc(pointer, layout, size) }
-    }
-}
-#[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;

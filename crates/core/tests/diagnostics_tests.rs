@@ -3,9 +3,7 @@
 
 //! Behavioral contracts for the runtime-controlled bounded diagnostic foundation.
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::borrow::Cow;
-use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
 use std::sync::{
@@ -18,58 +16,9 @@ use std::thread;
 use nemo_relay::diagnostics::*;
 use uuid::Uuid;
 
-thread_local! {
-    // Other parallel tests and their runtime threads are deliberately excluded.
-    static TRACKED_ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
-}
-
-struct CountingAllocator;
-
-fn note_allocation() {
-    let _ = TRACKED_ALLOCATIONS.try_with(|count| {
-        if let Some(value) = count.get() {
-            count.set(Some(value.saturating_add(1)));
-        }
-    });
-}
-
-// SAFETY: allocation/deallocation requests are forwarded unchanged to System.
-// The optional thread-local counter does not allocate or expose allocator memory.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        note_allocation();
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        note_allocation();
-        unsafe { System.alloc_zeroed(layout) }
-    }
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(pointer, layout) }
-    }
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        note_allocation();
-        unsafe { System.realloc(pointer, layout, size) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-fn allocations_during<T>(body: impl FnOnce() -> T) -> (T, usize) {
-    struct Reset;
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            TRACKED_ALLOCATIONS.with(|count| count.set(None));
-        }
-    }
-    TRACKED_ALLOCATIONS.with(|count| assert!(count.replace(Some(0)).is_none()));
-    let reset = Reset;
-    let value = body();
-    let count = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
-    drop(reset);
-    (value, count)
-}
+#[path = "support/diagnostic_allocations.rs"]
+mod diagnostic_allocations;
+use diagnostic_allocations::{AllocationStats, allocation_stats_during, allocations_during};
 
 const WRITE_FAILURE: FailureCode = FailureCode::Logging(LoggingFailureCode::SinkWriteFailed);
 const WRITE: BuiltinDiagnosticCode = BuiltinDiagnosticCode::Failure(WRITE_FAILURE);
@@ -3392,6 +3341,8 @@ fn diagnostic_recording_profile() {
         disabled_elapsed.as_nanos() as f64 / (WRITERS * OPERATIONS) as f64,
     );
 
+    profile_bounded_workloads();
+
     for contended in [false, true] {
         let service = diagnostics(DiagnosticLimits::default());
         let recorders = (0..WRITERS)
@@ -4436,4 +4387,211 @@ fn leased_json_matches_public_models_for_optional_borrowed_fields() {
     let actual: serde_json::Value = serde_json::from_slice(lease.as_bytes()).unwrap();
     let expected = serde_json::to_value(lease.to_snapshot().unwrap()).unwrap();
     assert_eq!(actual, expected);
+}
+
+fn measured_profile<T>(
+    name: &str,
+    operations: usize,
+    body: impl FnOnce() -> T,
+) -> (T, AllocationStats) {
+    let begin = std::time::Instant::now();
+    let (value, stats) = allocation_stats_during(body);
+    eprintln!(
+        "{name}: operations={operations} elapsed={:?} traffic={stats:?}",
+        begin.elapsed()
+    );
+    (value, stats)
+}
+
+/// Exercise capacity pressure through public APIs; timings remain informational.
+fn profile_bounded_workloads() {
+    let service = profile_full_counter_pool();
+    profile_small_response_pages(&service);
+    drop(service);
+    profile_interleaved_reclamation();
+    profile_block_geometries();
+}
+
+fn profile_full_counter_pool() -> Diagnostics {
+    const COMPONENTS: usize = 64;
+    const OPERATIONS: usize = 4096;
+    let codes = BuiltinDiagnosticCode::all();
+    let service = diagnostics(DiagnosticLimits {
+        max_components: COMPONENTS,
+        max_counters: COMPONENTS * codes.len(),
+        detail_pool_bytes: 256 * 256,
+        detail_block_bytes: 256,
+        ..limits()
+    });
+    let producers: Vec<_> = (0..COMPONENTS)
+        .map(|index| {
+            service
+                .register_component(ComponentRegistration::new(
+                    &format!("profile.{index}"),
+                    codes,
+                ))
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(service.memory_usage().counters, COMPONENTS * codes.len());
+    let reserved = service.memory_usage().reserved_bytes;
+    let write = |producer: &ComponentRecorder| {
+        producer
+            .record_without_projection_lazy(|| {
+                Observation::new(
+                    classification(FailureClass::Unknown),
+                    "message🙂",
+                    NonZeroU64::MIN,
+                )
+                .with_correlation(DiagnosticCorrelation {
+                    session_id: Some("session€".into()),
+                    request_id: Some("request".into()),
+                })
+            })
+            .unwrap()
+    };
+    write(&producers[0]);
+    let (_, stats) = measured_profile(
+        "full counter pool + packed message/session/request",
+        OPERATIONS,
+        || {
+            for index in 0..OPERATIONS {
+                write(&producers[index % COMPONENTS]);
+            }
+        },
+    );
+    assert_eq!(stats, AllocationStats::default());
+    let usage = service.memory_usage();
+    assert_eq!(usage.events, 256);
+    assert_eq!(usage.detail_bytes, 256 * 256);
+    assert_eq!(usage.reserved_bytes, reserved);
+
+    service
+}
+
+fn profile_small_response_pages(service: &Diagnostics) {
+    let mut query = DiagnosticQuery {
+        max_components: Some(0),
+        max_response_bytes: Some(4096),
+        ..Default::default()
+    };
+    drop(service.snapshot(&query).unwrap());
+    let mut events = 0;
+    let mut pages = 0;
+    let mut total_traffic = AllocationStats::default();
+    loop {
+        let (page, stats) = allocation_stats_during(|| service.snapshot(&query).unwrap());
+        assert_eq!(stats, AllocationStats::default());
+        assert!(page.as_bytes().len() <= 4096);
+        // Explicit caller-owned decoding is measured separately from bounded capture.
+        let (view, traffic) = allocation_stats_during(|| page.to_snapshot().unwrap());
+        total_traffic.allocation_calls += traffic.allocation_calls;
+        total_traffic.allocated_bytes += traffic.allocated_bytes;
+        total_traffic.free_calls += traffic.free_calls;
+        total_traffic.freed_bytes += traffic.freed_bytes;
+        total_traffic.realloc_calls += traffic.realloc_calls;
+        total_traffic.realloc_old_bytes += traffic.realloc_old_bytes;
+        assert!(!view.events.is_empty());
+        events += view.events.len();
+        pages += 1;
+        query.continuation = view.continuation;
+        if query.continuation.is_none() {
+            break;
+        }
+        assert!(pages <= 256);
+    }
+    assert_eq!(events, 256);
+    assert!(pages > 1);
+    eprintln!(
+        "small responses: pages={pages} events={events}, capture traffic=zero; decode-only traffic={total_traffic:?} (owned result drops outside scope)"
+    );
+}
+
+fn profile_interleaved_reclamation() {
+    const HISTORY: usize = 1024;
+    let service = diagnostics(DiagnosticLimits {
+        max_components: 2,
+        max_counters: 2,
+        max_events: HISTORY,
+        detail_pool_bytes: HISTORY * 64,
+        ..limits()
+    });
+    let (owner, first) = service
+        .register_owned_component(ComponentRegistration::new("first", &[WRITE]))
+        .unwrap();
+    let second = service
+        .register_component(ComponentRegistration::new("second", &[WRITE]))
+        .unwrap();
+    for _ in 0..HISTORY / 2 {
+        record(&first, 1);
+        record(&second, 1);
+    }
+    owner.close().unwrap();
+    let reserved = service.memory_usage().reserved_bytes;
+    let (_, traffic) = measured_profile("interleaved component reclamation", HISTORY / 2, || {
+        service
+            .register_component(ComponentRegistration::new("replacement", &[WRITE]))
+            .unwrap()
+    });
+    // Registration owns a new public identity/recorder; report that traffic rather
+    // than asserting it shares the allocation-free recording contract.
+    eprintln!("registration/reclamation traffic={traffic:?}");
+    assert_eq!(service.memory_usage().events, HISTORY / 2);
+    assert_eq!(service.memory_usage().detail_bytes, HISTORY / 2 * 64);
+    assert_eq!(service.memory_usage().reserved_bytes, reserved);
+    let page = snapshot(
+        &service,
+        DiagnosticQuery {
+            max_events: Some(0),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        page.coverage.loss.events_evicted.value.get(),
+        (HISTORY / 2) as u64
+    );
+    assert_eq!(
+        page.lifetime.totals.recorded_events_total.value.get(),
+        HISTORY as u64
+    );
+}
+
+fn profile_block_geometries() {
+    // Contrast supported block geometries under repeated whole-payload reclamation.
+    let payload = "🙂".repeat(1024);
+    for block in [4, 256] {
+        let service = diagnostics(DiagnosticLimits {
+            detail_block_bytes: block,
+            detail_pool_bytes: 4096,
+            max_detail_bytes: 4096,
+            ..limits()
+        });
+        let producer = register(&service, "geometry");
+        let write = || {
+            producer
+                .record_without_projection_lazy(|| {
+                    Observation::new(
+                        classification(FailureClass::Unknown),
+                        payload.as_str(),
+                        NonZeroU64::MIN,
+                    )
+                })
+                .unwrap()
+        };
+        write();
+        let (_, traffic) = measured_profile(
+            &format!("4096-byte UTF-8 payload / {block}-byte blocks"),
+            1000,
+            || {
+                for _ in 0..1000 {
+                    write();
+                }
+            },
+        );
+        assert_eq!(traffic, AllocationStats::default());
+        assert_eq!(service.memory_usage().events, 1);
+        let view = snapshot(&service, DiagnosticQuery::default());
+        assert_eq!(view.events[0].message(), Some(payload.as_str()));
+        assert_eq!(view.coverage.loss.events_evicted.value.get(), 1000);
+    }
 }
