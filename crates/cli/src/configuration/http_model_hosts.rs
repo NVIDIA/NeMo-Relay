@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Explicit host trust for credential-free personal-gateway HTTP upstreams.
+//! Explicit host trust for credential-free HTTP model upstreams.
 
 use crate::error::CliError;
 use serde::Serialize;

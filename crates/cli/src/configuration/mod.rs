@@ -136,7 +136,6 @@ pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayCo
         .collect();
     let mut resolved = load_config_from_paths(paths, Vec::new(), apply_env_config)?;
     apply_server_overrides(&mut resolved.gateway, args)?;
-    reject_managed_http_opt_in(&resolved.gateway)?;
     log::info!(
         target: "nemo_relay.configuration",
         event = "configuration_resolved",
@@ -183,7 +182,6 @@ fn resolve_managed_worker_config_from_paths(
     let plugin_config_path = selected_plugin_path;
     let resolved =
         load_config_from_paths(config_paths, plugin_paths, apply_managed_worker_env_config)?;
-    reject_managed_http_opt_in(&resolved.gateway)?;
     enforce_required_dynamic_plugin_startup(Some(&plugin_config_path), &resolved)?;
     log::info!(
         target: "nemo_relay.configuration",
@@ -2567,14 +2565,3 @@ fn header_json(headers: &HeaderMap, name: &str) -> Option<Value> {
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/config_tests.rs"]
 mod tests;
-
-// The daemon data plane retains its independent HTTPS-only policy.
-fn reject_managed_http_opt_in(config: &GatewayConfig) -> Result<(), CliError> {
-    if [&config.openai_base_url, &config.anthropic_base_url]
-        .iter()
-        .any(|url| reqwest::Url::parse(url).is_ok_and(|url| remote_http(&url)))
-    {
-        return Err(CliError::Config("upstream.insecure_http_model_hosts is supported only by personal gateways, not daemon routing or managed workers".into()));
-    }
-    Ok(())
-}

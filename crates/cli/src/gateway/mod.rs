@@ -1683,30 +1683,6 @@ fn json_header_value(value: &Value) -> Option<HeaderValue> {
     HeaderValue::from_str(&rendered).ok()
 }
 
-/// Retain only content/protocol headers on credential-free HTTP model requests.
-/// Unknown/custom credential headers, cookies, and middleware-added auth are excluded.
-fn retain_http_model_forward_headers(headers: &mut HeaderMap) {
-    let safe = headers
-        .iter()
-        .filter(|(name, _)| {
-            matches!(
-                name.as_str(),
-                "accept"
-                    | "accept-encoding"
-                    | "content-type"
-                    | "content-length"
-                    | "content-encoding"
-                    | "content-language"
-                    | "anthropic-version"
-                    | "anthropic-beta"
-                    | "openai-beta"
-            )
-        })
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect::<HeaderMap>();
-    *headers = safe;
-}
-
 // If the inbound request has no provider auth header (Authorization / x-api-key / api-key), read
 // the provider's standard API key env var and attach it to the outbound request. Alignment may
 // have already normalized agent-native auth material; this function remains provider-generic and
@@ -1718,26 +1694,10 @@ async fn inject_provider_auth(
     config: &crate::configuration::GatewayConfig,
 ) -> Result<reqwest::Request, CliError> {
     let mut request = builder.build()?;
-    if crate::configuration::remote_http(request.url()) {
-        // Validate the actual destination after middleware rewrites. Trust never grants auth.
-        let configured = [&config.openai_base_url, &config.anthropic_base_url]
-            .iter()
-            .any(|base| {
-                reqwest::Url::parse(base).is_ok_and(|base| base.origin() == request.url().origin())
-            });
-        if !configured || !config.insecure_http_model_hosts.allows(request.url()) {
-            return Err(CliError::Config(
-                "remote HTTP model forwarding requires an explicitly trusted configured upstream"
-                    .into(),
-            ));
-        }
-        crate::upstream_auth::validate_config(config)?;
-        // Never read environment keys or run helpers on credential-free HTTP requests.
-        retain_http_model_forward_headers(request.headers_mut());
-        return Ok(request);
-    }
-    crate::upstream_auth::apply(
+    let destination = request.url().clone();
+    crate::upstream_auth::apply_for_destination(
         request.headers_mut(),
+        destination.as_str(),
         route.is_anthropic(),
         allow_configured_auth && route.allows_relay_auth(),
         config,

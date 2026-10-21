@@ -5645,7 +5645,6 @@ fn http_model_hosts_validate_exact_hosts_and_configuration_sources() {
         unsafe {
             std::env::remove_var(env_name);
         }
-        assert!(reject_managed_http_opt_in(&config).is_err());
         assert!(validate_chatgpt_codex_base_url("test", url.into()).is_err());
         let mut lower: toml::Value =
             toml::from_str("[upstream]\ninsecure_http_model_hosts = ['model.test']").unwrap();
@@ -5661,11 +5660,6 @@ fn http_model_hosts_validate_exact_hosts_and_configuration_sources() {
             0
         );
     }
-    let config = GatewayConfig {
-        insecure_http_model_hosts: hosts,
-        ..Default::default()
-    };
-    reject_managed_http_opt_in(&config).unwrap();
 }
 
 #[test]
@@ -5701,4 +5695,86 @@ fn http_model_hosts_conflict_with_explicit_authentication() {
         }
         assert!(apply_env_config(&mut config).is_err());
     }
+}
+
+#[tokio::test]
+async fn http_model_hosts_managed_layers_preserve_omission_and_enforce_system_denial() {
+    let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let user_home = temp.path().join("user");
+    let user = user_home.join("nemo-relay");
+    let system = temp.path().join("system");
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::create_dir_all(&system).unwrap();
+    let system_config = system.join("config.toml");
+    let system_plugins = system.join(PLUGINS_TOML);
+    let _environment = crate::test_support::EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(user_home.as_os_str())),
+        (
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            Some(system.as_os_str()),
+        ),
+        ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
+        ("NEMO_RELAY_OPENAI_BASE_URL", None),
+        ("NEMO_RELAY_ANTHROPIC_BASE_URL", None),
+        ("NEMO_RELAY_OPENAI_AUTH_HEADER", None),
+        ("NEMO_RELAY_ANTHROPIC_AUTH_HEADER", None),
+    ]);
+    let previous_system = set_test_system_config_dir(Some(system.clone()));
+    for provider in ["openai", "anthropic"] {
+        std::fs::write(user.join("config.toml"), format!(
+            "[upstream]\n{provider}_base_url = 'http://model.test:8080/v1'\ninsecure_http_model_hosts = ['model.test']\n"
+        )).unwrap();
+        std::fs::write(&system_config, "[upstream]\nresponse_timeout_secs = 15\n").unwrap();
+        let resolve_worker = || {
+            resolve_managed_worker_config_from_paths(system_config.clone(), system_plugins.clone())
+        };
+        let config = resolve_worker().unwrap().resolved.gateway;
+        assert!(
+            config
+                .insecure_http_model_hosts
+                .allows(&reqwest::Url::parse("http://model.test:8080").unwrap())
+        );
+        assert!(resolve_daemon_config(&GatewayOverrides::default()).is_ok());
+
+        std::fs::write(
+            &system_config,
+            "[upstream]\ninsecure_http_model_hosts = []\n",
+        )
+        .unwrap();
+        assert!(
+            resolve_worker().is_err(),
+            "system denial must reject the inherited HTTP URL"
+        );
+        assert!(resolve_daemon_config(&GatewayOverrides::default()).is_err());
+
+        std::fs::write(&system_config, format!(
+            "[upstream]\n{provider}_base_url = 'https://model.test/v1'\ninsecure_http_model_hosts = []\n"
+        )).unwrap();
+        let config = resolve_worker().unwrap().resolved.gateway;
+        assert!(
+            !config
+                .insecure_http_model_hosts
+                .allows(&reqwest::Url::parse("http://model.test:8080").unwrap())
+        );
+        assert!(resolve_daemon_config(&GatewayOverrides::default()).is_ok());
+
+        for credential in [
+            format!("{provider}_api_key = 'secret'"),
+            format!("{provider}_auth_header = 'Bearer secret'"),
+            format!("[{provider}_api_key_helper]\ncommand = 'must-not-run'"),
+        ] {
+            let credential = credential.replace(
+                &format!("[{provider}_api_key_helper]"),
+                &format!("[upstream.{provider}_api_key_helper]"),
+            );
+            std::fs::write(&system_config, format!("[upstream]\n{credential}\n")).unwrap();
+            assert!(
+                resolve_worker().is_err(),
+                "managed HTTP must reject {credential}"
+            );
+            assert!(resolve_daemon_config(&GatewayOverrides::default()).is_err());
+        }
+    }
+    set_test_system_config_dir(previous_system);
 }

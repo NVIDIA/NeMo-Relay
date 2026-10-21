@@ -412,7 +412,7 @@ include user information, query strings, or fragments.
 
 ### Credential-Free HTTP Model Upstreams
 
-For a personal gateway connected to an unauthenticated HTTP inference gateway,
+For a personal gateway or managed worker connected to an unauthenticated HTTP inference gateway,
 explicitly list the trusted hosts in `config.toml`:
 
 ```toml
@@ -463,8 +463,12 @@ API keys, and custom headers are removed, including headers added by middleware.
 The HTTP client does not use environment proxies, follow redirects, or retry
 automatically. Existing HTTPS and loopback behavior is unchanged.
 
-This opt-in supports HTTP requests and SSE streaming in personal gateways.
-Remote HTTP WebSockets, ChatGPT credential backends, managed daemon upstreams,
+This opt-in supports HTTP requests and SSE streaming in personal gateways,
+managed workers, and daemon pass-through routing. Managed workers load user
+configuration followed by system configuration, so administrators can deny remote
+HTTP model hosts with an explicit empty system list. Credential fields in request
+trailers are filtered by the same header allowlist.
+Remote HTTP WebSockets, ChatGPT credential backends,
 caller-selected destinations, MCP endpoints, and observability exporters retain
 their existing transport policies. The host list has no environment-variable or
 CLI override; configure it explicitly in the file. You can also edit it through

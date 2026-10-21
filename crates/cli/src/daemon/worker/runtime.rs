@@ -32,8 +32,8 @@ use super::super::common::identity::{MachineIdentity, TokenDigest};
 use super::super::common::logging::LogRateLimiter;
 use super::super::common::routes::{ProviderRoute, PublicRoute};
 use super::super::common::transport::{
-    PooledClient, RelayBody, box_body, hold_body, pooled_client, prepare_forward_request,
-    prepare_forward_response,
+    PooledClient, RelayBody, hold_body, pooled_client, prepare_forward_response,
+    prepare_provider_request,
 };
 use super::control::{self, Registration};
 use crate::configuration::GatewayConfig;
@@ -792,8 +792,14 @@ async fn forward_to_provider(
     ) {
         *request.headers_mut() = aligned;
     }
-    if allow_environment_provider_auth
-        && let Err(error) = inject_provider_auth(request.headers_mut(), route, &state.config).await
+    if let Err(error) = crate::upstream_auth::apply_for_destination(
+        request.headers_mut(),
+        &destination,
+        matches!(route, ProviderRoute::Anthropic),
+        allow_environment_provider_auth,
+        &state.config,
+    )
+    .await
     {
         return error.into_response();
     }
@@ -835,10 +841,11 @@ async fn forward_to_provider(
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
         HeaderName::from_static(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER),
     ];
-    let request = match prepare_forward_request(request, destination, &strip) {
-        Ok(request) => request.map(box_body),
-        Err(error) => return message(StatusCode::BAD_REQUEST, &error.to_string()),
-    };
+    let request =
+        match prepare_provider_request(request, destination, &strip, &state.config, client_named) {
+            Ok(request) => request,
+            Err(error) => return message(StatusCode::BAD_REQUEST, &error.to_string()),
+        };
     let request =
         match super::super::common::transport::request_provider(&upstream, client_named, request) {
             Ok(request) => request,
@@ -908,20 +915,6 @@ fn log_worker_upstream_request_failed(
         suppressed_since_last_emit = suppressed_since_last_emit;
         "Worker provider request failed"
     );
-}
-
-async fn inject_provider_auth(
-    headers: &mut HeaderMap,
-    route: ProviderRoute,
-    config: &GatewayConfig,
-) -> Result<(), CliError> {
-    crate::upstream_auth::apply(
-        headers,
-        matches!(route, ProviderRoute::Anthropic),
-        true,
-        config,
-    )
-    .await
 }
 
 fn begin_drain(state: &WorkerState, request: &WorkerDrainRequest) {

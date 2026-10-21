@@ -148,6 +148,87 @@ pub(crate) fn has_replacement(config: &GatewayConfig, anthropic: bool) -> bool {
     }
 }
 
+/// Enforce credential-free forwarding against the final HTTP model destination.
+/// Returns false for HTTPS/loopback so their existing authentication policy still applies.
+pub(crate) fn prepare_http_model_request(
+    headers: &mut HeaderMap,
+    destination: &reqwest::Url,
+    config: &GatewayConfig,
+) -> Result<bool, CliError> {
+    if !crate::configuration::remote_http(destination) {
+        return Ok(false);
+    }
+    if headers.contains_key(http::header::UPGRADE) {
+        return Err(CliError::Config(
+            "remote HTTP model upstreams do not support HTTP Upgrade".into(),
+        ));
+    }
+    let configured = [&config.openai_base_url, &config.anthropic_base_url]
+        .iter()
+        .any(|base| {
+            reqwest::Url::parse(base).is_ok_and(|base| base.origin() == destination.origin())
+        });
+    if !configured
+        || !config.insecure_http_model_hosts.allows(destination)
+        || !destination.username().is_empty()
+        || destination.password().is_some()
+        || destination.fragment().is_some()
+    {
+        return Err(CliError::UpstreamTransport(
+            crate::daemon::common::transport::TransportError::UntrustedHttpModelDestination,
+        ));
+    }
+    validate_config(config)?;
+    // Preserve Connection nominations before the positive allowlist removes Connection itself.
+    crate::daemon::common::transport::strip_hop_by_hop_headers(headers)
+        .map_err(CliError::UpstreamTransport)?;
+    retain_http_model_forward_headers(headers);
+    Ok(true)
+}
+
+/// Retain only content/protocol headers on credential-free HTTP model requests.
+/// Unknown/custom credential headers, cookies, and middleware-added auth are excluded.
+pub(crate) fn retain_http_model_forward_headers(headers: &mut HeaderMap) {
+    let safe = headers
+        .iter()
+        .filter(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "accept"
+                    | "accept-encoding"
+                    | "content-type"
+                    | "content-length"
+                    | "content-encoding"
+                    | "content-language"
+                    | "anthropic-version"
+                    | "anthropic-beta"
+                    | "openai-beta"
+            )
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect::<HeaderMap>();
+    *headers = safe;
+}
+
+/// Apply credentials only after checking the selected destination's transport policy.
+pub(crate) async fn apply_for_destination(
+    headers: &mut HeaderMap,
+    destination: &str,
+    anthropic: bool,
+    allow_configured_auth: bool,
+    config: &GatewayConfig,
+) -> Result<(), CliError> {
+    let destination = reqwest::Url::parse(destination).map_err(|_| {
+        CliError::UpstreamTransport(
+            crate::daemon::common::transport::TransportError::InvalidDestination,
+        )
+    })?;
+    if prepare_http_model_request(headers, &destination, config)? {
+        return Ok(());
+    }
+    apply(headers, anthropic, allow_configured_auth, config).await
+}
+
 /// Resolve immediately before dispatch. No result is stored or shared across requests.
 pub(crate) async fn apply(
     headers: &mut HeaderMap,

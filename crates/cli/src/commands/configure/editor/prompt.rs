@@ -178,7 +178,7 @@ fn edit_upstream(theme: &ColorfulTheme, document: &mut ConfigDocument) -> Result
             9 => edit_api_key_helper(theme, document, "anthropic")?,
             10 => {
                 println!(
-                    "HTTP exposes model content without encryption. Credentials and custom headers will not be forwarded. Personal gateways only."
+                    "HTTP exposes model content without encryption. Credentials and custom headers will not be forwarded."
                 );
                 println!(
                     "Use Add/Edit/Remove to update hosts; Reset or Clear writes an empty deny list."

@@ -68,7 +68,7 @@ use crate::daemon::common::state::{
 };
 use crate::daemon::common::transport::{
     PooledClient, RelayBody, box_body, hold_body, pooled_client, prepare_forward_request,
-    prepare_forward_response,
+    prepare_forward_response, prepare_provider_request, request_provider,
 };
 use crate::daemon::common::worker_tls::WorkerClientPool;
 use crate::error::CliError;
@@ -1909,8 +1909,14 @@ async fn forward_to_provider(
     request
         .headers_mut()
         .remove(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER);
-    if allow_environment_provider_auth
-        && let Err(error) = inject_provider_auth(request.headers_mut(), route, &state.config).await
+    if let Err(error) = crate::upstream_auth::apply_for_destination(
+        request.headers_mut(),
+        &destination,
+        matches!(route, ProviderRoute::Anthropic),
+        allow_environment_provider_auth,
+        &state.config,
+    )
+    .await
     {
         return error.into_response();
     }
@@ -1937,30 +1943,36 @@ async fn forward_to_provider(
         };
     let outcome = if client_named {
         match crate::daemon::common::transport::named_upstream_client() {
-            Ok(client) => forward(&client, request, &destination, None, None, &state.config).await,
+            Ok(client) => {
+                forward(
+                    &client,
+                    request,
+                    &destination,
+                    None,
+                    None,
+                    &state.config,
+                    client_named,
+                )
+                .await
+            }
             Err(error) => return control_error(StatusCode::BAD_GATEWAY, error),
         }
     } else {
-        forward(&upstream, request, &destination, None, None, &state.config).await
+        forward(
+            &upstream,
+            request,
+            &destination,
+            None,
+            None,
+            &state.config,
+            client_named,
+        )
+        .await
     };
     if let Some(failure) = outcome.failure {
         log_upstream_request_failed(route, failure);
     }
     outcome.response
-}
-
-async fn inject_provider_auth(
-    headers: &mut HeaderMap,
-    route: ProviderRoute,
-    config: &GatewayConfig,
-) -> Result<(), CliError> {
-    crate::upstream_auth::apply(
-        headers,
-        matches!(route, ProviderRoute::Anthropic),
-        true,
-        config,
-    )
-    .await
 }
 
 async fn forward_to_worker(
@@ -2005,6 +2017,7 @@ async fn forward_to_worker(
         Some((HeaderName::from_static(WORKER_TOKEN_HEADER), authentication)),
         Some(worker),
         &state.config,
+        false,
     )
     .await;
     let route_failure = take_worker_route_failure(&mut outcome.response);
@@ -2151,6 +2164,7 @@ async fn forward<C>(
     authentication: Option<(HeaderName, String)>,
     hold: Option<WorkerRequest>,
     config: &GatewayConfig,
+    client_named: bool,
 ) -> ForwardOutcome
 where
     C: Connect + Clone + Send + Sync + 'static,
@@ -2176,7 +2190,16 @@ where
         },
         None => None,
     };
-    forward_prepared(client, request, destination, authentication, hold, config).await
+    forward_prepared(
+        client,
+        request,
+        destination,
+        authentication,
+        hold,
+        config,
+        client_named,
+    )
+    .await
 }
 
 async fn forward_prepared<C>(
@@ -2186,6 +2209,7 @@ async fn forward_prepared<C>(
     authentication: Option<(HeaderName, HeaderValue)>,
     hold: Option<WorkerRequest>,
     config: &GatewayConfig,
+    client_named: bool,
 ) -> ForwardOutcome
 where
     C: Connect + Clone + Send + Sync + 'static,
@@ -2194,8 +2218,16 @@ where
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
     ];
-    let mut request = match prepare_forward_request(request, destination, &strip) {
-        Ok(request) => request.map(box_body),
+    let provider_request = authentication.is_none();
+    let prepared = if provider_request {
+        prepare_provider_request(request, destination, &strip, config, client_named)
+    } else {
+        prepare_forward_request(request, destination, &strip)
+            .map(|request| request.map(box_body))
+            .map_err(CliError::UpstreamTransport)
+    };
+    let mut request = match prepared {
+        Ok(request) => request,
         Err(error) => {
             return ForwardOutcome::response(control_error(StatusCode::BAD_REQUEST, error));
         }
@@ -2203,7 +2235,17 @@ where
     if let Some((name, value)) = authentication {
         request.headers_mut().insert(name, value);
     }
-    let response = match config.wait_for_response(client.request(request)).await {
+    let response = if provider_request {
+        match request_provider(client, client_named, request) {
+            Ok(response) => response,
+            Err(error) => {
+                return ForwardOutcome::response(control_error(StatusCode::BAD_GATEWAY, error));
+            }
+        }
+    } else {
+        client.request(request)
+    };
+    let response = match config.wait_for_response(response).await {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
             let response = control_error(StatusCode::BAD_GATEWAY, &error);
