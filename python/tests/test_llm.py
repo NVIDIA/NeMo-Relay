@@ -67,6 +67,53 @@ def _llm_event(events: list[Event], name: str, scope_category: str) -> ScopeEven
 
 
 class TestLLM:
+    @pytest.mark.parametrize("custom_codec", [False, True])
+    @pytest.mark.parametrize("sanitize", [False, True])
+    def test_manual_request_codec(self, subscribed_events: list[Event], custom_codec: bool, sanitize: bool) -> None:
+        class CustomCodec:
+            def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+                return OpenAIChatCodec().decode(request)
+
+            def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+                return OpenAIChatCodec().encode(annotated, original)
+
+        request = LLMRequest(
+            {"Authorization": "Bearer secret"},
+            {"model": "test-model", "messages": [{"role": "user", "content": "private"}]},
+        )
+
+        def sanitizer(request: LLMRequest, context: LlmSanitizeRequestContext) -> LLMRequest:
+            assert context.codec.kind == ("opaque" if custom_codec else "builtin")
+            codec = context.resolve_codec()
+            assert codec is not None
+            annotated = codec.decode(request)
+            annotated.messages = [{"role": "user", "content": "redacted"}]
+            return codec.encode(annotated, request)
+
+        def intercept(_name, _request, _annotated):
+            pytest.fail("Manual calls must not run request intercepts")
+
+        intercepts.register_llm_request("manual_codec_intercept", 1, False, intercept)
+        if sanitize:
+            guardrails.register_llm_sanitize_request("manual_codec_sanitizer", 1, sanitizer)
+        try:
+            handle = llm.call("manual_codec", request, codec=CustomCodec() if custom_codec else OpenAIChatCodec())
+            llm.call_end(handle, {})
+            subscribers.flush()
+        finally:
+            intercepts.deregister_llm_request("manual_codec_intercept")
+            if sanitize:
+                guardrails.deregister_llm_sanitize_request("manual_codec_sanitizer")
+
+        start = _llm_event(subscribed_events, "manual_codec", "start")
+        expected = "redacted" if sanitize else "private"
+        assert start.data["content"]["messages"][0]["content"] == expected
+        assert start.data["headers"] == {}
+        assert start.annotated_request is not None
+        assert start.annotated_request.messages[0]["content"] == expected
+        assert request.content["messages"][0]["content"] == "private"
+        assert request.headers == {"Authorization": "Bearer secret"}
+
     @pytest.mark.parametrize("failed", [False, True])
     def test_manual_call_end_status(self, subscribed_events: list[Event], failed: bool) -> None:
         metadata: dict[str, Json] = {"request_id": "request-123"}

@@ -295,6 +295,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             Some(&py_dict(py, json!({"llm_meta": true}))),
             Some("demo-model".to_string()),
             None,
+            None,
         )
         .unwrap();
         llm_call_end(

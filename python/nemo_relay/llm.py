@@ -79,6 +79,7 @@ def call(
     metadata: Json | None = None,
     model_name: str | None = None,
     timestamp: datetime | None = None,
+    codec: LlmCodec | None = None,
 ) -> LLMHandle:
     """Start a manual LLM span and return its ``LLMHandle``.
 
@@ -95,6 +96,8 @@ def call(
         timestamp: Optional timezone-aware ``datetime`` recorded as the handle
             start time and on the emitted start event. When omitted, the current
             runtime time is used.
+        codec: Optional request codec used to sanitize and annotate the request
+            copy saved in telemetry. The caller's request stays unchanged.
 
     Returns:
         LLMHandle: Handle used to finish the manual span with ``call_end()``.
@@ -136,6 +139,7 @@ def call(
         metadata=metadata,
         model_name=model_name,
         timestamp=timestamp,
+        codec=codec,
     )
 
 
