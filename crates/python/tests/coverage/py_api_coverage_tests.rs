@@ -176,6 +176,7 @@ fn safe_future_into_py_skips_completion_on_closed_loop() {
     });
 }
 
+/// Verify Python scope bindings and manual tool and LLM lifecycles.
 #[test]
 fn py_api_helpers_and_scope_lifecycle_round_trip() {
     let _python = crate::test_support::init_python_test();

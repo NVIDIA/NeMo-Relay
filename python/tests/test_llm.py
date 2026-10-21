@@ -70,11 +70,17 @@ class TestLLM:
     @pytest.mark.parametrize("custom_codec", [False, True])
     @pytest.mark.parametrize("sanitize", [False, True])
     def test_manual_request_codec(self, subscribed_events: list[Event], custom_codec: bool, sanitize: bool) -> None:
+        """Check manual codecs annotate telemetry and preserve caller requests."""
+
         class CustomCodec:
+            """Route custom codec calls through the OpenAI Chat codec."""
+
             def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+                """Decode the provider request into Relay's shared request format."""
                 return OpenAIChatCodec().decode(request)
 
             def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+                """Merge shared request changes into the provider request."""
                 return OpenAIChatCodec().encode(annotated, original)
 
         request = LLMRequest(
@@ -83,6 +89,7 @@ class TestLLM:
         )
 
         def sanitizer(request: LLMRequest, context: LlmSanitizeRequestContext) -> LLMRequest:
+            """Redact request text through the codec supplied by the call."""
             assert context.codec.kind == ("opaque" if custom_codec else "builtin")
             codec = context.resolve_codec()
             assert codec is not None
@@ -91,6 +98,7 @@ class TestLLM:
             return codec.encode(annotated, request)
 
         def intercept(_name, _request, _annotated):
+            """Fail if a manual call enters request middleware."""
             pytest.fail("Manual calls must not run request intercepts")
 
         intercepts.register_llm_request("manual_codec_intercept", 1, False, intercept)
