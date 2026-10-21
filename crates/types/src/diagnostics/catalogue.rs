@@ -221,6 +221,7 @@ impl From<PluginPhase> for Cow<'static, str> {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum CommonPluginFailureCode {
     /// Observation identified by `plugin.configuration_invalid`.
     /// Generic configuration errors may include file-read failures, so their
@@ -281,6 +282,7 @@ impl CommonPluginFailureCode {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum LoggingFailureCode {
     /// Observation identified by `logging.initialize_failed`.
     InitializeFailed,
@@ -442,6 +444,7 @@ impl FailureCode {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum SuccessCode {
     /// Observation identified by `logging.initialized`.
     LoggingInitialized,
@@ -468,6 +471,7 @@ impl SuccessCode {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum NoticeCode {
     /// Observation identified by `plugin.configuration_inherited`.
     ConfigurationInherited,
@@ -627,4 +631,38 @@ impl std::error::Error for ClassificationError {}
 pub trait DiagnosticClassifier<E: ?Sized> {
     /// Interpret supported structured evidence without retaining or altering it.
     fn classify(&self, error: &E) -> Classification;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use strum::IntoEnumIterator;
+
+    #[test]
+    fn catalogue_contains_every_leaf_enum_variant_exactly_once() {
+        // EnumIter derives directly from each leaf definition, independently
+        // of all(). Adding a leaf variant without registering it must fail.
+        let expected: BTreeSet<_> = CommonPluginFailureCode::iter()
+            .map(|code| {
+                BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(code)))
+            })
+            .chain(
+                LoggingFailureCode::iter()
+                    .map(|code| BuiltinDiagnosticCode::Failure(FailureCode::Logging(code))),
+            )
+            .chain(SuccessCode::iter().map(BuiltinDiagnosticCode::Success))
+            .chain(NoticeCode::iter().map(BuiltinDiagnosticCode::Notice))
+            .collect();
+        let actual: BTreeSet<_> = BuiltinDiagnosticCode::all().iter().copied().collect();
+        assert_eq!(
+            actual.len(),
+            BuiltinDiagnosticCode::all().len(),
+            "duplicate catalogue entry"
+        );
+        assert_eq!(
+            actual, expected,
+            "catalogue must contain every leaf variant"
+        );
+    }
 }
