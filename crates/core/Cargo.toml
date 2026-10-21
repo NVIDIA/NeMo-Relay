@@ -54,6 +54,7 @@ worker-grpc = [
 ]
 
 [dependencies]
+arrayvec = { version = "0.7", default-features = false }
 nemo-relay-types.workspace = true
 nemo-relay-plugin.workspace = true
 nemo-relay-worker-proto = { workspace = true, optional = true }

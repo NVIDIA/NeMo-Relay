@@ -17,29 +17,11 @@ use uuid::Uuid;
 pub(super) const ID_BYTES: usize = 128;
 pub(super) const DESCRIPTION_BYTES: usize = 256;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Text<const N: usize> {
-    bytes: [u8; N],
-    len: usize,
-}
-impl<const N: usize> Text<N> {
-    pub fn new(value: &str) -> Result<Self, DiagnosticError> {
-        if value.len() > N {
-            return Err(DiagnosticError::MetadataCapacity);
-        }
-        let mut text = Self {
-            bytes: [0; N],
-            len: value.len(),
-        };
-        text.bytes[..value.len()].copy_from_slice(value.as_bytes());
-        Ok(text)
-    }
-    pub fn as_str(&self) -> &str {
-        std::str::from_utf8(&self.bytes[..self.len]).expect("text is copied from UTF-8")
-    }
-    pub fn len(&self) -> usize {
-        self.len
-    }
+/// Library-managed fixed-capacity UTF-8; no allocation on construction or copy.
+pub(super) type Text<const N: usize> = arrayvec::ArrayString<N>;
+
+pub(super) fn text<const N: usize>(value: &str) -> Result<Text<N>, DiagnosticError> {
+    Text::from(value).map_err(|_| DiagnosticError::MetadataCapacity)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,12 +47,8 @@ impl Ownership {
         Ok(Self {
             subscriber_instance_id: value.subscriber_instance_id,
             plugin_instance_id: value.plugin_instance_id,
-            configuration_id: value
-                .configuration_id
-                .as_deref()
-                .map(Text::new)
-                .transpose()?,
-            responsibility: value.responsibility.as_deref().map(Text::new).transpose()?,
+            configuration_id: value.configuration_id.as_deref().map(text).transpose()?,
+            responsibility: value.responsibility.as_deref().map(text).transpose()?,
         })
     }
     pub fn bytes(&self) -> usize {
@@ -678,6 +656,15 @@ mod tests {
     };
 
     #[test]
+    fn inline_text_checks_utf8_byte_capacity_without_allocating_backing() {
+        assert_eq!(text::<8>("🙂🙂").unwrap().as_str(), "🙂🙂");
+        assert_eq!(text::<8>("🙂🙂x"), Err(DiagnosticError::MetadataCapacity));
+        assert_eq!(text::<8>("€€").unwrap().len(), 6);
+        assert_eq!(text::<0>("").unwrap().as_str(), "");
+        assert_eq!(text::<0>("x"), Err(DiagnosticError::MetadataCapacity));
+    }
+
+    #[test]
     fn component_counter_reservations_visit_only_the_owning_chain() {
         let diagnostics = Diagnostics::from_settings(
             Diagnostics::default().source().clone(),
@@ -728,10 +715,10 @@ mod tests {
                 slot: 0,
                 generation: 1,
             },
-            name: Text::new("acme.failure").unwrap(),
-            description: Text::new("custom").unwrap(),
+            name: text("acme.failure").unwrap(),
+            description: text("custom").unwrap(),
             allowed_classes: 0,
-            opaque_classes: [Some(Text::new("original").unwrap()), None, None, None],
+            opaque_classes: [Some(text("original").unwrap()), None, None, None],
             outcome: DiagnosticOutcome::Failure,
         });
         let original = StoredFailureClass::Extension {
@@ -746,7 +733,7 @@ mod tests {
             slot: 1,
             generation: 2,
         };
-        descriptor.opaque_classes[0] = Some(Text::new("replacement").unwrap());
+        descriptor.opaque_classes[0] = Some(text("replacement").unwrap());
         assert_eq!(state.class_name(original), None);
         assert_eq!(
             state.class_name(StoredFailureClass::Extension {

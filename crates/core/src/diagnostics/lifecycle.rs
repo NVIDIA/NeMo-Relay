@@ -8,8 +8,8 @@ use super::{
     ComponentRegistration, ComponentSlot, CounterIndex, CounterSlot, DESCRIPTION_BYTES,
     DiagnosticCount, DiagnosticError, DiagnosticLimits, DiagnosticOutcome, DiagnosticTotals,
     ExtensionClassHandle, ExtensionHandle, ExtensionRegistration, ExtensionSlot, FailureClass,
-    ID_BYTES, Inner, LifetimeState, Ownership, RefreshState, State, StoredCode, Text,
-    WindowReservation, WindowSlot, lock,
+    ID_BYTES, Inner, LifetimeState, Ownership, RefreshState, State, StoredCode, WindowReservation,
+    WindowSlot, lock, text,
 };
 use chrono::Utc;
 use uuid::Uuid;
@@ -139,7 +139,7 @@ pub(super) fn register_component(
             return Err(DiagnosticError::InvalidCode);
         }
     }
-    let key = Text::new(registration.key)?;
+    let key = text(registration.key)?;
     let attribution =
         ownership(&registration.ownership, &inner.limits).map_err(|e| note_admission(state, e))?;
     let metadata = key
@@ -349,8 +349,8 @@ pub(super) fn register_extension(
     state.extensions[slot] = Some(ExtensionSlot {
         generation,
         component: handle,
-        name: Text::new(name)?,
-        description: Text::new(registration.description)?,
+        name: text(name)?,
+        description: text(registration.description)?,
         allowed_classes: classes,
         opaque_classes: [None; 4],
         outcome: registration.outcome,
@@ -512,7 +512,7 @@ pub(super) fn register_extension_class(
         }
         return Err(note_admission(state, DiagnosticError::MetadataCapacity));
     }
-    let text = Text::new(name)?;
+    let text = text(name)?;
     state.next_sequence()?;
     state.extensions[extension.slot]
         .as_mut()
