@@ -4699,3 +4699,77 @@ async fn daemon_plain_listener_preserves_peer_identity_and_drains_http2_connecti
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn custom_upstream_models_follow_managed_auth_policy() {
+    async fn echo(request: Request<Body>) -> axum::Json<serde_json::Value> {
+        axum::Json(serde_json::json!({
+            "path": request.uri().to_string(),
+            "authorization": request.headers().get("authorization").map(|v| v.to_str().unwrap()),
+            "account": request.headers().get("chatgpt-account-id").map(|v| v.to_str().unwrap()),
+        }))
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    let provider = axum::Router::new().fallback(echo);
+    let task = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    for environment in [None, Some("environment-provider-key")] {
+        let _env = crate::test_support::EnvScope::set(&[(
+            "OPENAI_API_KEY",
+            environment.map(std::ffi::OsStr::new),
+        )]);
+        for configured in [None, Some("Bearer configured-provider-key")] {
+            let config = GatewayConfig {
+                openai_base_url: base.clone(),
+                openai_auth_header: configured.map(str::to_owned),
+                ..GatewayConfig::default()
+            };
+            let mut foreground = crate::server::AppState::new(config.clone());
+            foreground.require_provider_client_token = false;
+            let foreground = axum::Router::new()
+                .route("/models", axum::routing::get(crate::gateway::models))
+                .route("/v1/models", axum::routing::get(crate::gateway::models))
+                .with_state(foreground);
+            for (app, allowed) in [
+                (router(test_daemon_state(true, "", config.clone())), true),
+                (foreground, true),
+                (crate::server::router(config), false),
+            ] {
+                for path in ["/models", "/v1/models"] {
+                    let response = app
+                        .clone()
+                        .oneshot(
+                            Request::get(format!("{path}?client_version=0.163.0"))
+                                .header("x-nemo-relay-worker-token", "data-secret")
+                                .header("authorization", "Bearer at-fake-chatgpt-token")
+                                .header("chatgpt-account-id", "test-account")
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let body = response.into_body().collect().await.unwrap().to_bytes();
+                    let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(observed["path"], "/v1/models?client_version=0.163.0");
+                    let replacement = configured
+                        .or(environment.map(|_| "Bearer environment-provider-key"))
+                        .filter(|_| allowed);
+                    assert_eq!(
+                        observed["authorization"],
+                        serde_json::json!(replacement.unwrap_or("Bearer at-fake-chatgpt-token"))
+                    );
+                    assert_eq!(
+                        observed["account"],
+                        if replacement.is_some() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::json!("test-account")
+                        }
+                    );
+                }
+            }
+        }
+    }
+    task.abort();
+}

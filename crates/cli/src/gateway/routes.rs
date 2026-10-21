@@ -54,12 +54,13 @@ impl ProviderForwarding {
 }
 
 impl ProviderRoute {
-    /// Only managed provider routes may spend Relay-owned credentials.
+    /// Managed provider routes and model discovery may spend Relay-owned credentials.
     pub(super) const fn allows_relay_auth(self) -> bool {
         matches!(
             self,
             Self::OpenAiResponses
                 | Self::OpenAiChatCompletions
+                | Self::OpenAiModels
                 | Self::AnthropicMessages
                 | Self::AnthropicCountTokens
         )
@@ -402,22 +403,29 @@ pub(super) fn gateway_upstream_url_override_with_openai_key_state(
     )
 }
 
-// Lets alignment adapters strip agent-native credentials only when the gateway can replace them
-// with standard provider API keys. Whitespace-only env vars are treated as missing because
-// forwarding an empty bearer value only replaces one authentication failure with another.
+// Managed routes and model discovery replace agent-native auth when Relay holds a key.
+// Other unmanaged routes cannot spend Relay credentials and strip ChatGPT auth before using
+// a custom OpenAI base, even without a replacement key.
 pub(super) fn strip_replaceable_agent_auth_headers(
     headers: &HeaderMap,
     route: ProviderRoute,
+    path: &str,
     allow_environment_provider_auth: bool,
-    configured_auth_header: Option<&str>,
+    config: &crate::configuration::GatewayConfig,
 ) -> HeaderMap {
+    if !route.allows_relay_auth()
+        && config.openai_base_url.trim_end_matches('/') != "https://api.openai.com/v1"
+        && !path.starts_with("/backend-api/codex/realtime/calls")
+    {
+        return alignment::codex::strip_chatgpt_auth(headers);
+    }
     strip_replaceable_agent_auth_headers_with_openai_key_state(
         headers,
         route,
         has_openai_replacement_auth(
             route,
             allow_environment_provider_auth,
-            configured_auth_header,
+            route.configured_auth_header(config),
         ),
     )
 }

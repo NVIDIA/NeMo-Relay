@@ -163,12 +163,13 @@ pub(crate) fn daemon_provider_forward_headers_with_access(
     Some(strip_replaceable_agent_auth_headers(
         headers,
         provider,
+        path,
         allow_provider_auth && provider.allows_relay_auth(),
-        provider.configured_auth_header(config),
+        config,
     ))
 }
 
-/// Unmanaged provider routes forward only caller-supplied credentials, including in daemon mode.
+/// Model discovery and managed routes may use Relay credentials, including in daemon mode.
 pub(crate) fn provider_route_allows_relay_auth(path: &str) -> bool {
     let path = path.split_once('?').map_or(path, |(path, _)| path);
     ProviderRoute::from_path(path).is_some_and(ProviderRoute::allows_relay_auth)
@@ -1882,8 +1883,9 @@ pub(crate) async fn models(
     let sanitized = strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,
+        &provider_path,
         allow_environment_provider_auth,
-        configured_auth_header,
+        &state.config,
     );
     let mut upstream = if named_by_client {
         state.http_no_redirect.get(upstream_url)

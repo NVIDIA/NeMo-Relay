@@ -702,9 +702,16 @@ credential. If the daemon has `openai_auth_header` or `OPENAI_API_KEY`, Relay
 uses that credential for managed routes. It sends those requests to the
 administrator's OpenAI-compatible upstream.
 
-Unmanaged routes keep the caller's ChatGPT credential. They follow the configured
-OpenAI and ChatGPT backend settings. These routes include compaction, model
-discovery, and voice calls. Relay never adds its own provider credentials to unmanaged requests.
+`GET /models` and `GET /v1/models` follow the same rules as managed OpenAI routes.
+Relay can use its OpenAI credentials only if the caller has Relay access.
+Without a replacement, Relay keeps the caller's credential. These requests do
+not create LLM events.
+
+Other unmanaged routes include compaction and voice calls. Relay never adds its
+own provider credentials to these requests. With a custom `openai_base_url`,
+Relay removes `Authorization` and `chatgpt-account-id` if it recognizes a ChatGPT
+token. ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` keep the
+caller's ChatGPT credential.
 Review these routes if you use administrator credentials to select the upstream.
 Refer to [Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
 

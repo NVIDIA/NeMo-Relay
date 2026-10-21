@@ -128,8 +128,9 @@ pub(super) async fn prepare_gateway_request(
     parts.headers = super::routes::strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,
+        provider_path,
         authorization.allow_environment_provider_auth,
-        provider.configured_auth_header(config),
+        config,
     );
     authorization.source_credential = authorization
         .source_credential

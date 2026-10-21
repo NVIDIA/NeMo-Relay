@@ -786,11 +786,21 @@ On managed OpenAI routes, Relay can replace the caller's ChatGPT OAuth credentia
 It uses `openai_auth_header` or `OPENAI_API_KEY` when the client has Relay access.
 It then sends the request to the configured OpenAI-compatible upstream.
 
-Unmanaged OpenAI routes keep the caller's ChatGPT credential. These routes
-include model discovery, compaction, and voice call creation. Relay never adds
-its own provider credentials to unmanaged requests.
+`GET /models` and `GET /v1/models` follow the same rules as managed OpenAI routes.
+Relay uses the same credentials and upstream settings. These requests do not
+create LLM events.
 
-Requests without a replacement credential follow the configured upstream settings.
+The caller must have Relay access to use Relay's OpenAI credentials. Without a
+replacement, Relay keeps the caller's credential. This also applies to a custom
+`openai_base_url`.
+
+Other unmanaged OpenAI routes include compaction and voice calls. Relay never
+adds its own provider credentials to these requests. With a custom
+`openai_base_url`, Relay removes `Authorization` and `chatgpt-account-id` if it
+recognizes a ChatGPT token. Relay keeps other caller credentials.
+
+Managed OpenAI routes and model discovery follow the same upstream settings
+when no replacement credential is available.
 With the default `openai_base_url`, Relay sends ChatGPT requests to the native
 ChatGPT Codex backend. With a custom `openai_base_url`, Relay uses that URL.
 ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` always use the
@@ -812,6 +822,8 @@ variable and `--chatgpt-codex-base-url`; CLI flags take precedence.
 Live and Realtime connections use the configured OpenAI upstream and keep the
 caller's provider credential. By default, that upstream is `api.openai.com`, which matches Codex's WebRTC sideband destination.
 Relay does not replace a ChatGPT sideband credential with an administrator key.
+With a custom `openai_base_url`, Relay removes recognized ChatGPT tokens and
+`chatgpt-account-id` from sideband requests.
 
 The daemon also accepts Codex's ChatGPT-shaped
 `POST /backend-api/codex/responses` path and canonicalizes it to the ordinary
