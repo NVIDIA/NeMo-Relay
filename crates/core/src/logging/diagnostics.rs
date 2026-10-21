@@ -5,7 +5,7 @@
 
 use std::io;
 use std::num::NonZeroU64;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use spdlog::Logger;
 
@@ -355,12 +355,12 @@ pub(super) fn attach_projection(
     // Only the runtime owns periodic flushing and final sink drain.
     projection_logger.set_flush_period(None);
     let logger = Arc::downgrade(logger);
-    let active = Arc::new(Mutex::new(true));
+    let active = Arc::new(RwLock::new(true));
     let callback_active = Arc::clone(&active);
     let subscription = diagnostics
         .subscribe_fallible_projection(move |event| {
             let active = callback_active
-                .lock()
+                .read()
                 .unwrap_or_else(|error| error.into_inner());
             if !*active {
                 return Ok(());
@@ -382,7 +382,7 @@ pub(super) fn attach_projection(
 
 pub(super) struct LoggingProjection {
     subscription: Option<ProjectionGuard>,
-    active: Arc<Mutex<bool>>,
+    active: Arc<RwLock<bool>>,
 }
 
 impl Drop for LoggingProjection {
@@ -392,7 +392,116 @@ impl Drop for LoggingProjection {
         // the owning runtime drains the existing asynchronous sink pools.
         *self
             .active
-            .lock()
+            .write()
             .unwrap_or_else(|error| error.into_inner()) = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spdlog::sink::{GetSinkProp, Sink, SinkProp};
+    use std::sync::{Condvar, Mutex, mpsc};
+    use std::time::Duration;
+
+    struct BlockingSink {
+        prop: SinkProp,
+        entered: mpsc::Sender<()>,
+        released: Mutex<bool>,
+        release: Condvar,
+    }
+    impl GetSinkProp for BlockingSink {
+        fn prop(&self) -> &SinkProp {
+            &self.prop
+        }
+    }
+    impl Sink for BlockingSink {
+        fn log(&self, _record: &spdlog::Record<'_>) -> spdlog::Result<()> {
+            self.entered.send(()).unwrap();
+            let released = self.released.lock().unwrap();
+            drop(
+                self.release
+                    .wait_while(released, |released| !*released)
+                    .unwrap(),
+            );
+            Ok(())
+        }
+        fn flush(&self) -> spdlog::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn projections_overlap_and_shutdown_waits_for_inflight_delivery() {
+        let _logging = super::super::lock_test_logging();
+        let diagnostics = Diagnostics::from_settings(
+            Diagnostics::default().source().clone(),
+            crate::diagnostics::DiagnosticsSettings {
+                enabled: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let code = BuiltinDiagnosticCode::Success(SuccessCode::SinkInitialized);
+        let producer = diagnostics
+            .register_component(ComponentRegistration::new("test.projection", &[code]))
+            .unwrap();
+        let (entered, entries) = mpsc::channel();
+        let sink = Arc::new(BlockingSink {
+            prop: SinkProp::default(),
+            entered,
+            released: Mutex::new(false),
+            release: Condvar::new(),
+        });
+        let logger = Logger::builder().sink(sink.clone()).build_arc().unwrap();
+        super::super::set_active_relay_logger(&logger);
+        let projection = attach_projection(&diagnostics, &logger).unwrap();
+        let active = projection.active.clone();
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                let producer = &producer;
+                scope.spawn(move || {
+                    producer
+                        .record_lazy(|| {
+                            Observation::new(
+                                Classification::success(SuccessCode::SinkInitialized),
+                                "delivery",
+                                NonZeroU64::MIN,
+                            )
+                        })
+                        .unwrap()
+                });
+            }
+            let first = entries.recv_timeout(Duration::from_secs(5));
+            let second = entries.recv_timeout(Duration::from_secs(5));
+            let exclusive_blocked = active.try_write().is_err();
+            let (done, finished) = mpsc::channel();
+            scope.spawn(move || {
+                drop(projection);
+                done.send(()).unwrap();
+            });
+            let shutdown_waiting = finished.try_recv().is_err();
+            // Always release blocked deliveries before assertions or scope joining.
+            *sink.released.lock().unwrap() = true;
+            sink.release.notify_all();
+            finished.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(
+                first.is_ok() && second.is_ok(),
+                "both deliveries must enter before either leaves"
+            );
+            assert!(exclusive_blocked && shutdown_waiting);
+        });
+        assert!(!*active.read().unwrap());
+        producer
+            .record_lazy(|| {
+                Observation::new(
+                    Classification::success(SuccessCode::SinkInitialized),
+                    "after detach",
+                    NonZeroU64::MIN,
+                )
+            })
+            .unwrap();
+        assert!(entries.try_recv().is_err());
+        super::super::clear_active_relay_logger(&logger);
     }
 }
