@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -229,6 +229,15 @@ pub(super) fn retry_batch_processor_channel_full(
 
         thread::sleep(RETRY_DELAY.min(timeout - elapsed));
     }
+}
+
+/// Clears SDK's startup resource message from a new provider's batch channel so first span or record is accepted.
+pub(super) fn drain_startup_queue(force_flush: impl FnOnce() -> OTelSdkResult) -> Result<()> {
+    force_flush().map_err(|error| {
+        OpenTelemetryError::ExporterBuild(format!(
+            "OpenTelemetry batch processor did not drain its startup message: {error}"
+        ))
+    })
 }
 
 fn truncate_runtime_diagnostic_message(message: String) -> String {
@@ -568,23 +577,31 @@ pub(super) fn automatic_protocol_is_grpc(signal_variable: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Build the shared HTTP client used by automatically configured exporters.
-///
-/// Its redirect policy is Relay-owned transport safety. Deliberately leave
-/// its timeout unset so the OTLP builder remains authoritative for the
-/// `OTEL_EXPORTER_OTLP*_TIMEOUT` environment variables.
-pub(super) fn automatic_otlp_http_client() -> Result<reqwest::Client> {
-    static CLIENT: OnceLock<std::result::Result<reqwest::Client, String>> = OnceLock::new();
+/// Build an automatic HTTP client with TLS settings for one signal.
+/// The client blocks redirects.
+pub(super) fn automatic_otlp_http_client(signal: &str) -> Result<reqwest::Client> {
+    let endpoint = automatic_signal_endpoint(&format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"))
+        .map_err(OpenTelemetryError::ExporterBuild)?
+        .unwrap_or_else(|| "http://localhost:4318".into());
+    super::OpenTelemetryTlsConfig::from_environment(signal)?.http_client(&endpoint, None)
+}
 
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|error| error.to_string())
-        })
-        .clone()
-        .map_err(OpenTelemetryError::ExporterBuild)
+pub(super) fn automatic_otlp_grpc_tls(
+    signal: &str,
+) -> Result<Option<tonic::transport::ClientTlsConfig>> {
+    let endpoint = automatic_signal_endpoint(&format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT"))
+        .map_err(OpenTelemetryError::ExporterBuild)?
+        .unwrap_or_else(|| "http://localhost:4317".into());
+    let tls = super::OpenTelemetryTlsConfig::from_environment(signal)?;
+    tls.validate(&endpoint)?;
+    if endpoint
+        .parse::<reqwest::Url>()
+        .is_ok_and(|url| url.scheme() == "https")
+    {
+        tls.grpc_config(&endpoint).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 pub(super) fn resolve_http_signal_endpoint<'a>(endpoint: &'a str, signal: &str) -> Cow<'a, str> {

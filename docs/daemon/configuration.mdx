@@ -81,7 +81,7 @@ the response-header wait on daemon and worker hops. Set it to `0` to disable
 that limit. Connection, startup, and health checks retain their separate deadlines.
 
 Create `plugins.toml` with the approved configuration from
-[Configure Plugins](/configure-plugins/about). A minimal file with no plugins is:
+[Use Plugins](/configure-plugins/about). A minimal file with no plugins is:
 
 ```toml
 version = 1
@@ -797,11 +797,32 @@ It uses `openai_auth_header`, `openai_api_key`,
 `[upstream.openai_api_key_helper]`, or `OPENAI_API_KEY` when the client has Relay access.
 It then sends the request to the configured OpenAI-compatible upstream.
 
-Unmanaged OpenAI routes keep the caller's ChatGPT credential. These routes
-include model discovery, compaction, and voice call creation. Relay never adds
-its own provider credentials to unmanaged requests.
+`GET /models` and `GET /v1/models` return a model list. To request Anthropic
+models, include an `anthropic-version` header. An `anthropic-beta` header also
+selects Anthropic. Relay uses OpenAI when neither header is present. The API
+key's format does not select a provider.
 
-Requests without a replacement credential follow the configured upstream settings.
+Model lists use the same auth rules as the provider's managed routes. These
+requests do not create LLM events. Relay keeps provider API keys sent by the
+caller.
+
+OpenAI requests use `openai_base_url`. For auth, Relay tries `openai_auth_header`,
+`openai_api_key`, `[upstream.openai_api_key_helper]`, then `OPENAI_API_KEY`.
+Anthropic requests use `anthropic_base_url` with the corresponding
+`anthropic_auth_header`, `anthropic_api_key`,
+`[upstream.anthropic_api_key_helper]`, or `ANTHROPIC_API_KEY`. The caller must
+have Relay access to use Relay's credentials.
+
+If Relay has no replacement, OpenAI model requests keep the caller's credential.
+This also applies to a custom `openai_base_url`.
+
+Other unmanaged OpenAI routes include compaction and voice calls. Relay never
+adds its own provider credentials to these requests. With a custom
+`openai_base_url`, Relay removes `Authorization` and `chatgpt-account-id` if it
+recognizes a ChatGPT token. Relay keeps other caller credentials.
+
+Managed OpenAI routes and OpenAI model discovery use the same upstream settings.
+These settings apply when Relay has no replacement credential.
 With the default `openai_base_url`, Relay sends ChatGPT requests to the native
 ChatGPT Codex backend. With a custom `openai_base_url`, Relay uses that URL.
 ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` always use the
@@ -823,6 +844,8 @@ variable and `--chatgpt-codex-base-url`; CLI flags take precedence.
 Live and Realtime connections use the configured OpenAI upstream and keep the
 caller's provider credential. By default, that upstream is `api.openai.com`, which matches Codex's WebRTC sideband destination.
 Relay does not replace a ChatGPT sideband credential with an administrator key.
+With a custom `openai_base_url`, Relay removes recognized ChatGPT tokens and
+`chatgpt-account-id` from sideband requests.
 
 The daemon also accepts Codex's ChatGPT-shaped
 `POST /backend-api/codex/responses` path and canonicalizes it to the ordinary

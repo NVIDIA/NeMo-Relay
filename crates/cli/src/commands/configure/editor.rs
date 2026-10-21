@@ -6,7 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use nemo_relay::logging::MAX_FILE_SINK_QUEUE_ENTRIES;
-use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value, value};
+use toml_edit::{
+    Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value, value,
+};
 
 use super::ConfigEditCommand;
 use crate::error::CliError;
@@ -93,13 +95,18 @@ impl ConfigDocument {
 
     fn write(&self, scope: TargetScope) -> Result<(), CliError> {
         let contents = self.document.to_string();
+        // Reject credentials in system-readable files before validating their contents.
+        if scope == TargetScope::Global && self.has_auth_headers() {
+            return Err(CliError::Config(
+                "global config cannot include upstream authorization headers or API keys; configure credentials in a user config".into(),
+            ));
+        }
+        let parsed = toml::from_str::<toml::Value>(&contents).map_err(|_| {
+            CliError::Config("configuration must be valid TOML before saving".into())
+        })?;
+        crate::configuration::validate_config_document(parsed)?;
         match scope {
             TargetScope::Global => {
-                if self.has_auth_headers() {
-                    return Err(CliError::Config(
-                        "global config cannot include upstream authorization headers or API keys; configure credentials in a user config".into(),
-                    ));
-                }
                 crate::filesystem::atomic_write_system_readable(&self.path, contents.as_bytes())
             }
             TargetScope::User => {
@@ -301,7 +308,61 @@ impl ConfigDocument {
         axum::http::HeaderValue::from_str(value).map_err(|_| {
             CliError::Config(format!("upstream.{key} must be a valid HTTP header value"))
         })?;
-        self.set_string("upstream", key, value.into())
+        self.set_credential(key, Value::from(value))
+    }
+
+    fn set_api_key(&mut self, key: &str, new_value: String) -> Result<(), CliError> {
+        let token = crate::upstream_auth::validate_api_key(&format!("upstream.{key}"), new_value)?;
+        self.set_credential(key, Value::from(token))
+    }
+
+    fn set_api_key_helper(
+        &mut self,
+        provider: &str,
+        helper: crate::upstream_auth::ApiKeyHelper,
+    ) -> Result<(), CliError> {
+        let mut config = crate::configuration::GatewayConfig::default();
+        match provider {
+            "openai" => config.openai_api_key_helper = Some(helper.clone()),
+            "anthropic" => config.anthropic_api_key_helper = Some(helper.clone()),
+            _ => return Err(CliError::Config("unknown credential provider".into())),
+        }
+        crate::upstream_auth::validate_config(&config)?;
+        let mut table = InlineTable::new();
+        table.insert("command", Value::from(helper.command));
+        table.insert(
+            "args",
+            Value::Array(helper.args.into_iter().collect::<Array>()),
+        );
+        let timeout = i64::try_from(helper.timeout_ms)
+            .map_err(|_| CliError::Config("helper timeout_ms is too large".into()))?;
+        table.insert("timeout_ms", Value::from(timeout));
+        if let Some(scheme) = helper.auth_scheme {
+            table.insert(
+                "auth_scheme",
+                Value::from(match scheme {
+                    crate::upstream_auth::AuthScheme::Bearer => "bearer",
+                    crate::upstream_auth::AuthScheme::ApiKey => "api_key",
+                }),
+            );
+        }
+        self.set_credential(
+            &format!("{provider}_api_key_helper"),
+            Value::InlineTable(table),
+        )
+    }
+
+    fn set_credential(&mut self, key: &str, new_value: Value) -> Result<(), CliError> {
+        let provider = key.split('_').next().unwrap_or_default();
+        let upstream = self.section_mut("upstream")?;
+        for suffix in ["auth_header", "api_key", "api_key_helper"] {
+            let other = format!("{provider}_{suffix}");
+            if other != key {
+                upstream.remove(&other);
+            }
+        }
+        upstream.insert(key, Item::Value(new_value));
+        Ok(())
     }
 
     fn clear_key(&mut self, section: &str, key: &str) -> Result<(), CliError> {
@@ -327,79 +388,102 @@ impl ConfigDocument {
         Ok(())
     }
 
-    fn sinks(&self) -> Option<&ArrayOfTables> {
-        self.section(self.logging_section)?
-            .get("sinks")?
-            .as_array_of_tables()
+    fn sinks(&self) -> Option<&Item> {
+        self.section(self.logging_section)?.get("sinks")
     }
 
-    fn sinks_mut(&mut self) -> Result<&mut ArrayOfTables, CliError> {
+    fn sinks_mut(&mut self) -> Result<&mut Item, CliError> {
         let section = self.logging_section;
         let logging = self.section_mut(section)?;
         if logging.get("sinks").is_none() {
             logging.insert("sinks", Item::ArrayOfTables(ArrayOfTables::new()));
         }
-        logging
-            .get_mut("sinks")
-            .and_then(Item::as_array_of_tables_mut)
-            .ok_or_else(|| {
-                CliError::Config(format!(
-                    "{section}.sinks must be an array of tables before it can be edited"
-                ))
-            })
+        let sinks = logging.get_mut("sinks").expect("sinks initialized above");
+        if sinks.is_array_of_tables()
+            || sinks
+                .as_array()
+                .is_some_and(|array| array.iter().all(Value::is_inline_table))
+        {
+            Ok(sinks)
+        } else {
+            Err(CliError::Config(format!(
+                "{section}.sinks must be an array of tables before it can be edited"
+            )))
+        }
     }
 
     fn sink_count(&self) -> usize {
-        self.sinks().map_or(0, ArrayOfTables::len)
+        match self.sinks() {
+            Some(Item::ArrayOfTables(sinks)) => sinks.len(),
+            Some(Item::Value(Value::Array(sinks))) => sinks.len(),
+            _ => 0,
+        }
     }
 
     fn sink_labels(&self) -> Vec<String> {
-        self.sinks()
-            .map(|sinks| {
-                sinks
-                    .iter()
-                    .enumerate()
-                    .map(|(index, sink)| {
-                        let path = sink
-                            .get("path")
-                            .and_then(Item::as_value)
-                            .and_then(Value::as_str)
-                            .unwrap_or("invalid path");
-                        format!("sink {} ({path})", index + 1)
-                    })
-                    .collect()
+        (0..self.sink_count())
+            .map(|index| {
+                let path = self
+                    .sink_string(index, "path")
+                    .unwrap_or_else(|| "invalid path".into());
+                format!("sink {} ({path})", index + 1)
             })
-            .unwrap_or_default()
+            .collect()
     }
 
-    fn sink(&self, index: usize) -> Option<&Table> {
-        self.sinks()?.get(index)
+    fn sink(&self, index: usize) -> Option<&dyn TableLike> {
+        match self.sinks()? {
+            Item::ArrayOfTables(sinks) => sinks.get(index).map(|sink| sink as &dyn TableLike),
+            Item::Value(Value::Array(sinks)) => sinks
+                .get(index)?
+                .as_inline_table()
+                .map(|sink| sink as &dyn TableLike),
+            _ => None,
+        }
     }
 
-    fn sink_mut(&mut self, index: usize) -> Result<&mut Table, CliError> {
-        self.sinks_mut()?
-            .get_mut(index)
-            .ok_or_else(|| CliError::Config(format!("logging sink {} does not exist", index + 1)))
+    fn sink_mut(&mut self, index: usize) -> Result<&mut dyn TableLike, CliError> {
+        let sink: Option<&mut dyn TableLike> = match self.sinks_mut()? {
+            Item::ArrayOfTables(sinks) => {
+                sinks.get_mut(index).map(|sink| sink as &mut dyn TableLike)
+            }
+            Item::Value(Value::Array(sinks)) => sinks
+                .get_mut(index)
+                .and_then(Value::as_inline_table_mut)
+                .map(|sink| sink as &mut dyn TableLike),
+            _ => unreachable!("sinks_mut checks the array shape"),
+        };
+        sink.ok_or_else(|| CliError::Config(format!("logging sink {} does not exist", index + 1)))
     }
 
     fn add_sink(&mut self, path: String) -> Result<(), CliError> {
         let mut sink = Table::new();
         sink["path"] = value(path);
-        self.sinks_mut()?.push(sink);
+        match self.sinks_mut()? {
+            Item::ArrayOfTables(sinks) => sinks.push(sink),
+            Item::Value(Value::Array(sinks)) => sinks.push(sink.into_inline_table()),
+            _ => unreachable!("sinks_mut checks the array shape"),
+        }
         Ok(())
     }
 
     fn remove_sink(&mut self, index: usize) -> Result<(), CliError> {
-        let empty = {
-            let sinks = self.sinks_mut()?;
-            if index >= sinks.len() {
-                return Err(CliError::Config(format!(
-                    "logging sink {} does not exist",
-                    index + 1
-                )));
+        if index >= self.sink_count() {
+            return Err(CliError::Config(format!(
+                "logging sink {} does not exist",
+                index + 1
+            )));
+        }
+        let empty = match self.sinks_mut()? {
+            Item::ArrayOfTables(sinks) => {
+                sinks.remove(index);
+                sinks.is_empty()
             }
-            sinks.remove(index);
-            sinks.is_empty()
+            Item::Value(Value::Array(sinks)) => {
+                sinks.remove(index);
+                sinks.is_empty()
+            }
+            _ => unreachable!("sinks_mut checks the array shape"),
         };
         if empty {
             self.clear_key(self.logging_section, "sinks")?;
@@ -469,7 +553,7 @@ impl ConfigDocument {
         key: &str,
         new_value: String,
     ) -> Result<(), CliError> {
-        self.sink_mut(index)?[key] = value(new_value);
+        self.sink_mut(index)?.insert(key, value(new_value));
         Ok(())
     }
 
@@ -501,7 +585,8 @@ impl ConfigDocument {
         }
         let capacity = i64::try_from(capacity)
             .map_err(|_| CliError::Config("logging sink queue_capacity is too large".into()))?;
-        self.sink_mut(index)?["queue_capacity"] = value(capacity);
+        self.sink_mut(index)?
+            .insert("queue_capacity", value(capacity));
         Ok(())
     }
 
@@ -521,8 +606,8 @@ impl ConfigDocument {
         nemo_relay::logging::FileLogRotationConfig::new(max_size as u64, retained)
             .map_err(|error| CliError::Config(error.to_string()))?;
         let sink = self.sink_mut(index)?;
-        sink["max_file_size_bytes"] = value(max_size);
-        sink["retained_files"] = value(retained_i64);
+        sink.insert("max_file_size_bytes", value(max_size));
+        sink.insert("retained_files", value(retained_i64));
         Ok(())
     }
 

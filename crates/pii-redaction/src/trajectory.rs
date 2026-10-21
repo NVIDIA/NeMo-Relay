@@ -929,12 +929,14 @@ fn sanitize_api_specific_response(
         },
         ApiSpecificResponse::GeminiGenerateContent {
             thoughts_tokens,
+            tool_use_prompt_tokens,
             safety_ratings,
             grounding_metadata,
             citation_metadata,
             extra: _,
         } => ApiSpecificResponse::GeminiGenerateContent {
             thoughts_tokens,
+            tool_use_prompt_tokens,
             safety_ratings: opaque_option(safety_ratings),
             grounding_metadata: opaque_option(grounding_metadata),
             citation_metadata: opaque_option(citation_metadata),

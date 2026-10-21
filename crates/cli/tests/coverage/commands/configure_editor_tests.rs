@@ -270,6 +270,8 @@ fn global_document_rejects_authorization_headers() {
         "[upstream]\nopenai_auth_header = \"Bearer secret\"\n",
         "upstream = { anthropic_auth_header = \"Bearer secret\" }\n",
         "upstream.openai_auth_header = \"Bearer secret\"\n",
+        "[upstream]\nopenai_api_key = \"secret\"\n",
+        "upstream = { anthropic_api_key = \"secret\" }\n",
     ]
     .into_iter()
     .enumerate()
@@ -282,6 +284,253 @@ fn global_document_rejects_authorization_headers() {
         let error = document.write(TargetScope::Global).unwrap_err().to_string();
         assert!(error.contains("global config cannot include upstream authorization headers"));
         assert_eq!(std::fs::read_to_string(path).unwrap(), "original");
+    }
+}
+
+#[test]
+fn credentials_switch_sources_and_round_trip_without_running_helpers() {
+    use crate::upstream_auth::{ApiKeyHelper, AuthScheme};
+
+    let root = tempfile::tempdir().unwrap();
+    let mut document = document(
+        "# keep\n[agents.codex]\ncommand = 'codex'\n[upstream]\nanthropic_auth_header = \"Bearer other\"\n",
+    );
+    document.path = root.path().join("config.toml");
+    for provider in ["openai", "anthropic"] {
+        let key = format!("{provider}_api_key");
+        let header = format!("{provider}_auth_header");
+        let helper = format!("{provider}_api_key_helper");
+        document.set_api_key(&key, "static-secret".into()).unwrap();
+        assert!(!document.has_key("upstream", &header));
+        assert!(!document.preview().contains("static-secret"));
+        document.write(TargetScope::User).unwrap();
+        document
+            .set_api_key_helper(
+                provider,
+                ApiKeyHelper {
+                    command: "never-execute-this-secret-command".into(),
+                    args: vec!["argument with spaces".into(), "secret-argument\"\\".into()],
+                    timeout_ms: 2345,
+                    auth_scheme: Some(AuthScheme::Bearer),
+                },
+            )
+            .unwrap();
+        assert!(!document.has_key("upstream", &key));
+        assert!(!document.has_key("upstream", &header));
+        let preview = document.preview();
+        for secret in [
+            "static-secret",
+            "never-execute-this-secret-command",
+            "secret-argument",
+        ] {
+            assert!(!preview.contains(secret));
+        }
+        document.write(TargetScope::User).unwrap();
+        let saved: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&document.path).unwrap()).unwrap();
+        let parsed: ApiKeyHelper = saved["upstream"][&helper].clone().try_into().unwrap();
+        assert_eq!(parsed.command, "never-execute-this-secret-command");
+        assert_eq!(parsed.args, ["argument with spaces", "secret-argument\"\\"]);
+        assert_eq!(parsed.timeout_ms, 2345);
+        assert!(matches!(parsed.auth_scheme, Some(AuthScheme::Bearer)));
+
+        document
+            .set_auth_header(&header, "Bearer replacement".into())
+            .unwrap();
+        assert!(!document.has_key("upstream", &helper));
+        document
+            .set_api_key(&key, "replacement-key".into())
+            .unwrap();
+        assert!(!document.has_key("upstream", &header));
+        document.clear_key("upstream", &key).unwrap();
+        assert!(!document.has_key("upstream", &key));
+    }
+    assert!(document.document.to_string().contains("# keep"));
+}
+
+#[test]
+fn helper_replacement_supports_nested_inline_and_dotted_tables_and_default_schemes() {
+    use crate::upstream_auth::{ApiKeyHelper, AuthScheme};
+
+    for contents in [
+        "[upstream.openai_api_key_helper]\ncommand = \"old-secret\"\nargs = [\"old-argument\"]\n",
+        "upstream = { openai_api_key_helper = { command = \"old-secret\", args = [\"old-argument\"] } }\n",
+        "upstream.openai_api_key_helper.command = \"old-secret\"\nupstream.openai_api_key_helper.args = [\"old-argument\"]\n",
+    ] {
+        let mut document = document(contents);
+        assert!(!document.preview().contains("old-secret"));
+        assert!(!document.preview().contains("old-argument"));
+        for provider in ["openai", "anthropic"] {
+            let key = format!("{provider}_api_key_helper");
+            document
+                .set_api_key_helper(
+                    provider,
+                    ApiKeyHelper {
+                        command: "new-secret".into(),
+                        args: Vec::new(),
+                        timeout_ms: 10_000,
+                        auth_scheme: None,
+                    },
+                )
+                .unwrap();
+            assert!(!document.preview().contains("new-secret"));
+            let parsed: toml::Value = toml::from_str(&document.document.to_string()).unwrap();
+            assert!(parsed["upstream"][&key].get("auth_scheme").is_none());
+            crate::configuration::validate_config_document(parsed).unwrap();
+            document.clear_key("upstream", &key).unwrap();
+            assert!(!document.has_key("upstream", &key));
+        }
+    }
+
+    let mut document = document("");
+    document
+        .set_api_key_helper(
+            "anthropic",
+            ApiKeyHelper {
+                command: "helper".into(),
+                args: Vec::new(),
+                timeout_ms: 1,
+                auth_scheme: Some(AuthScheme::ApiKey),
+            },
+        )
+        .unwrap();
+    crate::configuration::validate_config_document(
+        toml::from_str(&document.document.to_string()).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn invalid_credential_replacements_preserve_the_previous_source() {
+    use crate::upstream_auth::{ApiKeyHelper, AuthScheme};
+
+    let mut document = document("[upstream]\nopenai_auth_header = \"Bearer keep\"\n");
+    let original = document.document.to_string();
+    for token in ["", "two tokens", "token\nwith-newline"] {
+        assert!(
+            document
+                .set_api_key("openai_api_key", token.into())
+                .is_err()
+        );
+        assert_eq!(document.document.to_string(), original);
+    }
+    for (command, timeout_ms, auth_scheme) in [
+        (" ", 1000, None),
+        ("helper", 0, None),
+        ("helper", u64::MAX, None),
+        ("helper", 1000, Some(AuthScheme::ApiKey)),
+    ] {
+        assert!(
+            document
+                .set_api_key_helper(
+                    "openai",
+                    ApiKeyHelper {
+                        command: command.into(),
+                        args: Vec::new(),
+                        timeout_ms,
+                        auth_scheme,
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(document.document.to_string(), original);
+    }
+}
+
+#[test]
+fn inline_sink_arrays_support_edit_add_remove_and_preserve_toml_form() {
+    let root = tempfile::tempdir().unwrap();
+    for (index, (section, contents)) in [
+        ("logging", "# keep\n[logging]\nsinks = [{ path = 'original.log', level = 'info' }] # sinks\n"),
+        ("logging", "# keep\nlogging = { sinks = [{ path = 'original.log', level = 'info' }] } # sinks\n"),
+        ("logging", "# keep\nlogging.sinks = [{ path = 'original.log', level = 'info' }] # sinks\n"),
+        ("daemon.logging", "# keep\n[daemon.logging]\nsinks = [{ path = 'original.log', level = 'info' }] # sinks\n"),
+        ("daemon.logging", "# keep\ndaemon = { logging = { sinks = [{ path = 'original.log', level = 'info' }] } } # sinks\n"),
+        ("daemon.logging", "# keep\ndaemon.logging.sinks = [{ path = 'original.log', level = 'info' }] # sinks\n"),
+    ].into_iter().enumerate() {
+        let mut document = document(contents);
+        document.path = root.path().join(format!("config-{index}.toml"));
+        document.logging_section = section;
+        assert_eq!(document.sink_count(), 1);
+        assert_eq!(document.sink_labels(), ["sink 1 (original.log)"]);
+        document.set_sink_string(0, "path", "changed.log".into()).unwrap();
+        document.set_sink_enum(0, "format", "jsonl", LOG_FORMATS).unwrap();
+        document.set_sink_queue_capacity(0, 128).unwrap();
+        document.set_sink_rotation(0, 1024 * 1024, 2).unwrap();
+        document.clear_sink_key(0, "level").unwrap();
+        document.add_sink("additional.log".into()).unwrap();
+        document.write(TargetScope::User).unwrap();
+        let reloaded = ConfigDocument::read(document.path.clone()).unwrap();
+        let rendered = reloaded.document.to_string();
+        assert!(rendered.contains("# keep"));
+        assert!(rendered.contains("# sinks"));
+        assert!(!rendered.contains("[["));
+        let parsed: toml::Value = toml::from_str(&rendered).unwrap();
+        let logging = if section == "logging" { &parsed["logging"] } else { &parsed["daemon"]["logging"] };
+        let mut runtime_document = toml::map::Map::new();
+        runtime_document.insert("logging".into(), logging.clone());
+        let runtime = nemo_relay::logging::LoggingConfig::from_toml_document(&toml::to_string(&runtime_document).unwrap()).unwrap();
+        assert_eq!(runtime.sinks.len(), 2);
+        let nemo_relay::logging::LogSinkConfig::File(sink) = &runtime.sinks[0];
+        assert_eq!(sink.path, PathBuf::from("changed.log"));
+        assert_eq!(sink.queue_capacity, 128);
+        assert!(sink.rotation.is_some());
+        document.clear_sink_rotation(0).unwrap();
+        document.remove_sink(0).unwrap();
+        assert_eq!(document.sink_labels(), ["sink 1 (additional.log)"]);
+        document.remove_sink(0).unwrap();
+        assert_eq!(document.sink_count(), 0);
+        assert!(document.document.get(section.split('.').next().unwrap()).is_none());
+    }
+}
+
+#[test]
+fn invalid_configuration_cannot_overwrite_or_create_a_file() {
+    let root = tempfile::tempdir().unwrap();
+    for contents in [
+        "[upstream]\nopenai_base_url = 'not-a-url'\n",
+        "[upstream]\nanthropic_base_url = 'http://remote.example.test'\n",
+        "[upstream]\nchatgpt_codex_base_url = 'https://example.test/?query=1'\n",
+        "[upstream]\nopenai_api_key = 'two tokens'\n",
+        "[upstream]\nopenai_api_key = 'key'\nopenai_auth_header = 'Bearer header'\n",
+        "[upstream]\nanthropic_api_key = 'key'\nanthropic_api_key_helper = { command = 'helper' }\n",
+        "[upstream.openai_api_key_helper]\ncommand = ''\n",
+        "[upstream.openai_api_key_helper]\ncommand = 'helper'\ntimeout_ms = 0\n",
+        "[upstream.openai_api_key_helper]\ncommand = 'helper'\nauth_scheme = 'api_key'\n",
+        "[gateway]\nmax_hook_payload_bytes = 0\n",
+        "[logging]\nlevel = 'invalid'\n",
+        "[logging]\nsinks = [{ path = 'relay.log', queue_capacity = 0 }]\n",
+        "[daemon.logging]\nstderr_enabled = 'invalid'\n",
+        "[[daemon.logging.sinks]]\npath = 'daemon.log'\nretained_files = 1\n",
+    ] {
+        let mut document = document(contents);
+        document.path = root.path().join("existing.toml");
+        std::fs::write(&document.path, "# original\n").unwrap();
+        assert!(document.write(TargetScope::User).is_err(), "{contents}");
+        assert_eq!(
+            std::fs::read_to_string(&document.path).unwrap(),
+            "# original\n"
+        );
+        document.path = root.path().join("missing/config.toml");
+        assert!(document.write(TargetScope::User).is_err(), "{contents}");
+        assert!(!document.path.parent().unwrap().exists());
+    }
+}
+
+#[test]
+fn save_validation_does_not_display_malformed_credential_values() {
+    let root = tempfile::tempdir().unwrap();
+    for contents in [
+        "[upstream.openai_api_key_helper]\ncommand = 'secret-command'\nargs = 'secret-argument'\n",
+        "[upstream.anthropic_api_key_helper]\ncommand = 'secret-command'\nauth_scheme = 'secret-scheme'\n",
+        "[upstream]\nopenai_api_key = ['secret-token']\n",
+    ] {
+        let mut document = document(contents);
+        document.path = root.path().join("config.toml");
+        let error = document.write(TargetScope::User).unwrap_err().to_string();
+        assert!(error.contains("invalid configuration shape"));
+        assert!(!error.contains("secret-"));
+        assert!(!document.path.exists());
     }
 }
 

@@ -1691,6 +1691,32 @@ pub(crate) fn validate_shared_config_shape(value: toml::Value) -> Result<(), Cli
     Ok(())
 }
 
+/// Validate one editor target with runtime rules, without loading other files or credentials.
+pub(crate) fn validate_config_document(value: toml::Value) -> Result<(), CliError> {
+    if value.get("plugins").is_some() || !legacy_observability_sections(&value).is_empty() {
+        return Err(CliError::Config(
+            "configure plugins and observability in plugins.toml with `nemo-relay plugins edit`"
+                .into(),
+        ));
+    }
+    if let Some(logging) = value.get("daemon").and_then(|daemon| daemon.get("logging")) {
+        let logging = logging.clone().try_into().map_err(|error| {
+            CliError::Config(format!(
+                "invalid daemon logging configuration shape: {error}"
+            ))
+        })?;
+        logging::apply_file_logging_config(&mut LoggingConfig::default(), Some(logging))?;
+    }
+    // Deserialization diagnostics can include secret field values. Report shape errors without
+    // their payload, then use the runtime's semantic checks for actionable validation errors.
+    validate_shared_config_shape(value.clone()).map_err(|_| {
+        CliError::Config(
+            "invalid configuration shape; check field names and types in gateway, upstream, agents, and logging".into(),
+        )
+    })?;
+    apply_file_config(&mut ResolvedConfig::default(), value)
+}
+
 fn parse_file_config(value: toml::Value) -> Result<FileConfig, CliError> {
     value
         .try_into()

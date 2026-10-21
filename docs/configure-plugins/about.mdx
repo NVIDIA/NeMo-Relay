@@ -1,29 +1,26 @@
 ---
-title: "Configure Plugins"
+title: "Use Plugins"
 sidebar-title: "About"
-description: "Configure built-in and discoverable NeMo Relay plugins with plugins.toml."
+description: "Configure plugin settings, manage installed plugins, and initialize plugins through the language SDKs."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use this section to configure plugin behavior that Relay loads for a process.
-The runtime discovers and layers `plugins.toml` for direct Rust, Python, and
-Node.js integrations as well as for the `nemo-relay` CLI gateway.
-
-Choose the path that matches your goal:
+Use this section to configure and run built-in and separately installed NeMo
+Relay plugins. Choose a guide based on how you use plugins:
 
 | Goal | Start here |
 | --- | --- |
-| Configure a plugin host in an application | [Configure and Initialize Plugins](/configure-plugins/initialize-plugins) |
-| Configure a built-in Relay component | Choose the component guide below. Use `plugins.toml` or the binding API. |
-| Add a plugin someone else packaged | [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins) |
+| Set plugin options in files or with `nemo-relay plugins edit` | [Configure](/configure-plugins/plugin-configuration-files) |
+| Install, inspect, enable, disable, or remove a discoverable plugin with the CLI | [Manage](/configure-plugins/discoverable-plugins) |
+| Validate, activate, and close a plugin host through a language SDK | [Initialize](/configure-plugins/initialize-plugins) |
 | Create a reusable plugin | [Build Plugins](/build-plugins/about) |
 
 ## Built-in Plugins
 
-Relay ships these first-party components. Configure them as `[[components]]`
+Relay includes these built-in components. Configure them as `[[components]]`
 entries in `plugins.toml`.
 
 - [Observability](/configure-plugins/observability/about) exports ATOF, ATIF,
@@ -41,19 +38,14 @@ entries in `plugins.toml`.
   polling marks and on-demand snapshots for CPU, memory, processes, disk,
   network, and GPUs.
 
-## Guides
+## First Party Plugins
 
-Follow the guides below to configure plugins.
+First-party plugins are published separately by NVIDIA. Install and manage them
+with the Relay CLI for a user account or a system-wide deployment.
 
-- [Configure and Initialize Plugins](/configure-plugins/initialize-plugins)
-  explains the shared host API, configuration sources, reports, diagnostics,
-  and teardown across supported bindings.
-- [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
-  explains runtime `plugins.toml` discovery, precedence, merging, and CLI
-  editing.
-- [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
-  explains manifest-backed native and worker plugin installation, validation,
-  trust policy, and activation.
+- [NeMo Switchyard](/configure-plugins/switchyard) routes model requests across
+  models and providers. The guide covers installation, configuration, a routed
+  request, and removal.
 
 Use [Build Plugins](/build-plugins/about) only when you are authoring the
 plugin itself. It covers generic plugin components, manifests, native ABI

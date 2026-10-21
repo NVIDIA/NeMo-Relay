@@ -104,13 +104,19 @@ trajectories, and any configured `headers`, `header_env`, or `header_file`
 values unencrypted. Prefer HTTPS, or a collector reached over loopback.
 </Warning>
 
-Remote observability destinations require HTTPS or WSS whenever they receive
-configured headers, and OpenTelemetry trace endpoints always do. Plain `http://`
-and `ws://` are otherwise allowed only for `localhost` and loopback IP
-addresses. A containerized agent that reaches its collector over a private
-network by name, such as `host.docker.internal` or a Kubernetes Service, can
-opt in by listing those hosts at the top level of the observability component
-config:
+OpenTelemetry trace endpoints require HTTPS unless the destination is
+`localhost`, a loopback IP address, or a host in `insecure_http_hosts`. This rule
+applies even when no headers are configured. Log and metric endpoints, ATOF
+stream sinks, and ATIF HTTP storage
+require HTTPS or WSS when they send configured headers. The header settings are
+`headers`, `header_env`, and `header_file`. Without configured headers, these
+other destinations can use plain HTTP or WebSocket without a host allowlist.
+Their telemetry still travels unencrypted.
+
+By default, these transport checks allow plain HTTP or WebSocket for
+`localhost` and loopback IP addresses. To allow another host, list it at the top
+level of the observability component config. For example, a containerized agent
+can reach a collector by its private network name:
 
 ```toml
 [components.config]
@@ -134,7 +140,7 @@ sinks over HTTP or WebSocket, and ATIF HTTP storage.
   [configuration layers](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
   The highest-precedence layer that sets it wins, so the system configuration
   can replace the hosts a user `plugins.toml` lists, or set
-  `insecure_http_hosts = []` to allow none.
+  `insecure_http_hosts = []` to allow no additional hosts.
 
 Programmatic plugin configs set the same top-level `insecure_http_hosts`
 field. Exporters constructed directly through the Manual API, outside the
@@ -195,7 +201,7 @@ above, changing or removing an inherited endpoint requires editing the layer
 that declares it.
 
 For complete layering rules, refer to
-[Plugin Configuration Files](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
+[Configure](/configure-plugins/plugin-configuration-files#precedence-and-merge-behavior).
 
 For exporter-specific fields and behavior, refer to:
 

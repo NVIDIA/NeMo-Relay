@@ -32,6 +32,7 @@ fn first_class_tools_accept_every_supported_name_field() {
     for (tool, args, name) in [
         ("Skill", json!({"skill": "review"}), "review"),
         ("skill_view", json!({"skill_name": "testing"}), "testing"),
+        ("load_skill", json!({"skill_name": "review"}), "review"),
         (
             "skill-view",
             json!({"name": "mlops/axolotl"}),

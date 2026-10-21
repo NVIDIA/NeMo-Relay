@@ -440,3 +440,12 @@ describe('opentelemetry file sinks', () => {
     }
   });
 });
+
+it('preserves the endpoint-owned TLS schema in plugin helpers', () => {
+  const tls = { certificate: 'ca.pem', client_certificate: 'client.pem', private_key: 'key.pem' };
+  assert.deepEqual(
+    observability.openTelemetryEndpoint({ type: 'full', endpoint: 'https://collector.example', tls }).tls,
+    tls,
+  );
+  assert.deepEqual(observability.openTelemetrySignalEndpoint({ endpoint: 'https://collector.example', tls }).tls, tls);
+});

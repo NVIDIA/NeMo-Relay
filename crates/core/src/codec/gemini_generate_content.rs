@@ -20,14 +20,17 @@ use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
+use super::model_pricing::{
+    GeminiBilling, SeparateUsageCounts, ToolUsePromptBilling, billed_usage,
+    estimate_billed_cost_for_provider,
+};
 use super::request::{
     AnnotatedLlmRequest, ContentPart, FunctionCall, FunctionDefinition, GenerationParams, Message,
     MessageContent, ToolCall, ToolDefinition,
 };
 use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
 use super::response::{
-    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage, estimate_cost_for_provider,
-    infer_model_provider,
+    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage, infer_model_provider,
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
 
@@ -95,6 +98,8 @@ struct RawUsageMetadata {
     cached_content_token_count: Option<u64>,
     #[serde(rename = "thoughtsTokenCount")]
     thoughts_token_count: Option<u64>,
+    #[serde(rename = "toolUsePromptTokenCount")]
+    tool_use_prompt_token_count: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -487,51 +492,44 @@ fn extract_parts_tool_calls(parts: &[Json]) -> Result<Option<Vec<ResponseToolCal
     Ok(if calls.is_empty() { None } else { Some(calls) })
 }
 
-/// Map Gemini `usageMetadata` to a normalized [`Usage`] and the raw thinking-token count.
-///
-/// Returns `(usage, thoughts_token_count)`. The thoughts token count is kept
-/// separate because it belongs in `ApiSpecificResponse::GeminiGenerateContent`, not in the
-/// provider-neutral `Usage` struct.
-fn map_usage(meta: Option<RawUsageMetadata>, model: Option<&str>) -> (Option<Usage>, Option<u64>) {
+/// Map Gemini `usageMetadata` to a normalized [`Usage`] and the counts kept in
+/// `ApiSpecificResponse::GeminiGenerateContent`.
+fn map_usage(
+    meta: Option<RawUsageMetadata>,
+    model: Option<&str>,
+    tool_use_billing: ToolUsePromptBilling,
+) -> (Option<Usage>, SeparateUsageCounts) {
     let model_provider = infer_model_provider("google", model);
     let Some(m) = meta else {
-        return (None, None);
+        return (None, SeparateUsageCounts::default());
     };
-    let thoughts_token_count = m.thoughts_token_count;
+    let separate = SeparateUsageCounts {
+        thoughts_tokens: m.thoughts_token_count,
+        tool_use_prompt_tokens: m.tool_use_prompt_token_count,
+    };
     let prompt = m.prompt_token_count;
     let completion = m.candidates_token_count;
     // When totalTokenCount is absent, compute a fallback from every count that is
     // available.  Thinking tokens count as billable output and must be included even
     // when candidatesTokenCount is missing (e.g. thinking-only partial responses).
     let total = m.total_token_count.or_else(|| {
-        let has_any = prompt.is_some() || completion.is_some() || thoughts_token_count.is_some();
-        has_any.then(|| {
-            prompt.unwrap_or(0) + completion.unwrap_or(0) + thoughts_token_count.unwrap_or(0)
-        })
+        let counts = [
+            prompt,
+            completion,
+            separate.thoughts_tokens,
+            separate.tool_use_prompt_tokens,
+        ];
+        if counts.iter().all(Option::is_none) {
+            return None;
+        }
+        counts
+            .into_iter()
+            .flatten()
+            .try_fold(0_u64, u64::checked_add)
     });
-    // For cost estimation: treat thinking tokens as additional completion tokens
-    // so the pricing table applies the output-token rate to them even when
-    // candidatesTokenCount is absent.
-    let completion_for_cost = match (completion, thoughts_token_count) {
-        (Some(c), Some(t)) => Some(c + t),
-        (Some(c), None) => Some(c),
-        (None, Some(t)) => Some(t),
-        (None, None) => None,
-    };
     let uncached_input_tokens = prompt
         .zip(m.cached_content_token_count)
         .and_then(|(total, cached)| total.checked_sub(cached));
-    let usage_for_cost = Usage {
-        prompt_tokens: prompt,
-        completion_tokens: completion_for_cost,
-        total_tokens: total,
-        cache_read_tokens: m.cached_content_token_count,
-        cache_write_tokens: None,
-        uncached_input_tokens,
-        cost: None,
-    };
-    let cost = model
-        .and_then(|m| estimate_cost_for_provider(model_provider.as_deref(), m, &usage_for_cost));
     let usage = Usage {
         prompt_tokens: prompt,
         completion_tokens: completion,
@@ -539,9 +537,20 @@ fn map_usage(meta: Option<RawUsageMetadata>, model: Option<&str>) -> (Option<Usa
         cache_read_tokens: m.cached_content_token_count,
         cache_write_tokens: None,
         uncached_input_tokens,
-        cost,
+        cost: None,
     };
-    (Some(usage), thoughts_token_count)
+    let cost = model.and_then(|m| {
+        let billed = billed_usage(
+            &usage,
+            Some(GeminiBilling {
+                separate,
+                tool_use_billing,
+            }),
+        )
+        .ok()?;
+        estimate_billed_cost_for_provider(model_provider.as_deref(), m, &billed)
+    });
+    (Some(Usage { cost, ..usage }), separate)
 }
 
 /// Validate the shape of a Gemini `systemInstruction` value.
@@ -1353,32 +1362,39 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
             .or_else(|| map_prompt_block_reason(prompt_block_reason));
 
         let model = raw.model_version;
-        let (usage, thoughts_tokens) = map_usage(raw.usage_metadata, model.as_deref());
 
         // Capture candidate-level metadata (safetyRatings, groundingMetadata,
         // citationMetadata, thinking token count, …) that cannot be normalized
         // across providers.  thoughts_tokens lives here, not in shared Usage.
-        let api_specific = {
-            let mut extra = candidate.map(|c| c.extra).unwrap_or_default();
-            extra.remove("api");
-            let has_candidate_data = !extra.is_empty() || thoughts_tokens.is_some();
-            if !has_candidate_data {
-                None
-            } else {
-                let safety_ratings = extra.remove("safetyRatings");
-                let grounding_metadata = extra.remove("groundingMetadata");
-                let citation_metadata = extra.remove("citationMetadata");
-                Some(
-                    super::response::ApiSpecificResponse::GeminiGenerateContent {
-                        thoughts_tokens,
-                        safety_ratings,
-                        grounding_metadata,
-                        citation_metadata,
-                        extra,
-                    },
-                )
-            }
-        };
+        let mut extra = candidate.map(|c| c.extra).unwrap_or_default();
+        extra.remove("api");
+        let safety_ratings = extra.remove("safetyRatings");
+        let grounding_metadata = extra.remove("groundingMetadata");
+        let citation_metadata = extra.remove("citationMetadata");
+        let (usage, separate) = map_usage(
+            raw.usage_metadata,
+            model.as_deref(),
+            ToolUsePromptBilling::from_tool_evidence(
+                grounding_metadata.as_ref(),
+                &extra,
+                message.as_ref(),
+            ),
+        );
+        let has_candidate_data = !extra.is_empty()
+            || safety_ratings.is_some()
+            || grounding_metadata.is_some()
+            || citation_metadata.is_some()
+            || separate != SeparateUsageCounts::default();
+        let api_specific = has_candidate_data.then_some(
+            super::response::ApiSpecificResponse::GeminiGenerateContent {
+                thoughts_tokens: separate.thoughts_tokens,
+                tool_use_prompt_tokens: separate.tool_use_prompt_tokens,
+                safety_ratings,
+                grounding_metadata,
+                citation_metadata,
+                extra,
+            },
+        );
 
         Ok(AnnotatedLlmResponse {
             id: raw.response_id,

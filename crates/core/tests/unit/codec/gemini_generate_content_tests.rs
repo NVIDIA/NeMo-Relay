@@ -6,8 +6,12 @@
 use super::*;
 use serde_json::json;
 
+use super::super::model_pricing::pricing_test_mutex;
 use super::super::request::{ContentPart, Message, MessageContent, ToolDefinition};
-use super::super::response::FinishReason;
+use super::super::response::{
+    FinishReason, PricingCatalog, PricingResolver, reset_active_pricing_resolver,
+    set_active_pricing_resolver,
+};
 use super::super::streaming::StreamingCodec;
 
 use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
@@ -22,6 +26,32 @@ fn make_request(content: Json) -> LlmRequest {
         headers: serde_json::Map::new(),
         content,
     }
+}
+
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
+
+fn gemini_test_catalog() -> PricingCatalog {
+    PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [{
+                "provider": "google",
+                "model_id": "gemini-test",
+                "pricing_as_of": "2026-10-20",
+                "pricing_source": "test",
+                "rates": {"input_per_million": 1.0, "output_per_million": 2.0},
+                "prompt_cache": {"read_accounting": "included_in_prompt_tokens"}
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap()
 }
 
 // ===================================================================
@@ -1103,38 +1133,45 @@ fn test_gemini_remaining_message_and_generation_parameter_branches() {
 
 #[test]
 fn test_gemini_usage_mapping_handles_absent_and_partial_metadata() {
-    assert_eq!(map_usage(None, None), (None, None));
-    let (usage, thoughts) = map_usage(
+    assert_eq!(
+        map_usage(None, None, ToolUsePromptBilling::InputTokens),
+        (None, SeparateUsageCounts::default())
+    );
+    let (usage, separate) = map_usage(
         Some(RawUsageMetadata {
             prompt_token_count: Some(3),
             candidates_token_count: None,
             total_token_count: None,
             cached_content_token_count: Some(2),
             thoughts_token_count: Some(5),
+            tool_use_prompt_token_count: None,
         }),
         None,
+        ToolUsePromptBilling::InputTokens,
     );
     let usage = usage.unwrap();
     assert_eq!(usage.prompt_tokens, Some(3));
     assert_eq!(usage.completion_tokens, None);
     assert_eq!(usage.total_tokens, Some(8));
     assert_eq!(usage.cache_read_tokens, Some(2));
-    assert_eq!(thoughts, Some(5));
+    assert_eq!(separate.thoughts_tokens, Some(5));
 
-    let (usage, thoughts) = map_usage(
+    let (usage, separate) = map_usage(
         Some(RawUsageMetadata {
             prompt_token_count: None,
             candidates_token_count: Some(4),
             total_token_count: Some(10),
             cached_content_token_count: None,
             thoughts_token_count: None,
+            tool_use_prompt_token_count: None,
         }),
         Some("unknown-model"),
+        ToolUsePromptBilling::InputTokens,
     );
     let usage = usage.unwrap();
     assert_eq!(usage.completion_tokens, Some(4));
     assert_eq!(usage.total_tokens, Some(10));
-    assert_eq!(thoughts, None);
+    assert_eq!(separate, SeparateUsageCounts::default());
 }
 
 #[test]
@@ -4865,6 +4902,361 @@ fn test_decode_response_thoughts_only_usage_computes_fallback_total() {
         Some(40),
         "fallback total must be prompt(10) + thoughts(30) = 40 even without candidatesTokenCount"
     );
+}
+
+#[test]
+fn test_decode_response_fallback_total_includes_tool_use_prompt_tokens() {
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 33,
+            "candidatesTokenCount": 106,
+            "thoughtsTokenCount": 106,
+            "toolUsePromptTokenCount": 39
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.total_tokens, Some(284));
+}
+
+#[test]
+fn test_decode_response_reports_tool_use_prompt_tokens_in_api_specific() {
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 33,
+            "candidatesTokenCount": 106,
+            "toolUsePromptTokenCount": 39,
+            "totalTokenCount": 178
+        }
+    });
+
+    let api_specific = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .api_specific;
+
+    assert_eq!(
+        serde_json::to_value(api_specific).unwrap(),
+        json!({"api": "gemini_generate_content", "tool_use_prompt_tokens": 39})
+    );
+}
+
+#[test]
+fn test_decode_response_bills_tool_use_prompt_tokens_at_the_input_rate() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP",
+            "urlContextMetadata": {"urlMetadata": [{"retrievedUrl": "https://example.test"}]}
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "toolUsePromptTokenCount": 30,
+            "totalTokenCount": 45
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.prompt_tokens, Some(10));
+    let cost = usage.cost.unwrap();
+    assert!((cost.input.unwrap() - 0.00004).abs() < 1e-12, "{cost:?}");
+    assert!((cost.total.unwrap() - 0.00005).abs() < 1e-12, "{cost:?}");
+}
+
+#[test]
+fn test_decode_response_leaves_search_grounded_tool_use_prompt_tokens_unbilled() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP",
+            "groundingMetadata": {
+                "webSearchQueries": ["weather in Rome"],
+                "groundingChunks": [{"web": {"uri": "https://example.test", "title": "Rome"}}]
+            }
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "toolUsePromptTokenCount": 30,
+            "totalTokenCount": 45
+        }
+    });
+
+    let decoded = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap();
+
+    let cost = decoded.usage.unwrap().cost.unwrap();
+    assert!((cost.input.unwrap() - 0.00001).abs() < 1e-12, "{cost:?}");
+    assert!((cost.total.unwrap() - 0.00002).abs() < 1e-12, "{cost:?}");
+    assert_eq!(
+        serde_json::to_value(decoded.api_specific).unwrap()["tool_use_prompt_tokens"],
+        30
+    );
+}
+
+#[test]
+fn test_decode_response_bills_tool_use_prompt_tokens_by_tool_evidence() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let text = json!({"text": "Hi"});
+    let code = json!({"executableCode": {"language": "PYTHON", "code": "print(1)"}});
+    let code_result = json!({"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "1"}});
+    let url_context = json!({"urlMetadata": [{"retrievedUrl": "https://example.test"}]});
+    let file_search_chunk = json!({"retrievedContext": {"fileSearchStore": "fileSearchStores/1"}});
+    let vertex_search_chunk = json!({"retrievedContext": {"uri": "gs://bucket/doc"}});
+    let unnamed_store_chunk = json!({"retrievedContext": {"fileSearchStore": ""}});
+
+    for (parts, candidate_fields, expected_total) in [
+        (json!([code, code_result]), json!({}), Some(0.00005)),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"groundingChunks": [file_search_chunk]}}),
+            Some(0.00005),
+        ),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"imageSearchQueries": ["Rome skyline"]}}),
+            Some(0.00002),
+        ),
+        (
+            json!([text]),
+            json!({
+                "groundingMetadata": {"webSearchQueries": ["weather in Rome"]},
+                "urlContextMetadata": url_context
+            }),
+            None,
+        ),
+        (
+            json!([code, code_result]),
+            json!({"groundingMetadata": {"webSearchQueries": ["weather in Rome"]}}),
+            None,
+        ),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"groundingChunks": [vertex_search_chunk]}}),
+            None,
+        ),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"groundingChunks": [unnamed_store_chunk]}}),
+            None,
+        ),
+        (
+            json!([text]),
+            json!({"urlContextMetadata": {"urlMetadata": []}}),
+            None,
+        ),
+        (json!([text]), json!({}), None),
+    ] {
+        let mut candidate = json!({
+            "content": {"role": "model", "parts": parts},
+            "finishReason": "STOP"
+        });
+        candidate
+            .as_object_mut()
+            .unwrap()
+            .extend(candidate_fields.as_object().unwrap().clone());
+        let response = json!({
+            "candidates": [candidate],
+            "modelVersion": "gemini-test",
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "toolUsePromptTokenCount": 30,
+                "totalTokenCount": 45
+            }
+        });
+
+        let usage = GeminiGenerateContentCodec
+            .decode_response(&response)
+            .unwrap()
+            .usage
+            .unwrap();
+
+        let total = usage.cost.map(|cost| cost.total.unwrap());
+        match (total, expected_total) {
+            (Some(total), Some(expected)) => {
+                assert!((total - expected).abs() < 1e-12, "{response}: {total}");
+            }
+            (total, expected) => assert_eq!(total, expected, "{response}"),
+        }
+    }
+}
+
+#[test]
+fn test_decode_response_prices_zero_tool_use_prompt_tokens_without_tool_evidence() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP"
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "toolUsePromptTokenCount": 0,
+            "totalTokenCount": 15
+        }
+    });
+
+    let cost = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap()
+        .cost
+        .unwrap();
+
+    assert!((cost.total.unwrap() - 0.00002).abs() < 1e-12, "{cost:?}");
+}
+
+#[test]
+fn test_decode_response_omits_cost_when_billed_input_tokens_overflow() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP",
+            "urlContextMetadata": {"urlMetadata": [{"retrievedUrl": "https://example.test"}]}
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": u64::MAX,
+            "candidatesTokenCount": 5,
+            "toolUsePromptTokenCount": 1,
+            "totalTokenCount": 20
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.prompt_tokens, Some(u64::MAX));
+    assert_eq!(usage.cost, None);
+}
+
+#[test]
+fn test_decode_response_bills_thoughts_only_usage_at_the_output_rate() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": []},
+            "finishReason": "STOP"
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "thoughtsTokenCount": 30
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.completion_tokens, None);
+    let total = usage.cost.unwrap().total.unwrap();
+    assert!((total - 0.00007).abs() < 1e-12, "{total}");
+}
+
+#[test]
+fn test_decode_response_omits_cost_when_billed_output_tokens_overflow() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP"
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": u64::MAX,
+            "thoughtsTokenCount": 1,
+            "totalTokenCount": 20
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.completion_tokens, Some(u64::MAX));
+    assert_eq!(usage.cost, None);
+}
+
+#[test]
+fn test_decode_response_omits_a_fallback_total_that_overflows() {
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": []},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": u64::MAX,
+            "thoughtsTokenCount": 1
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.prompt_tokens, Some(u64::MAX));
+    assert_eq!(usage.total_tokens, None);
 }
 
 // Decode validation: table-driven negative tests for malformed contents items.
