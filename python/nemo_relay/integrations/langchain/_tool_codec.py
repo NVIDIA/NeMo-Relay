@@ -113,6 +113,11 @@ def _decode(data: Any, opaque: dict[str, Any]) -> Any:
 ToolResultValue = ToolMessage | Command[Any] | list[Any]
 
 
+def _is_tool_message_dict(value: dict[str, Any]) -> bool:
+    """Recognize LangChain message dictionaries and LangGraph role shorthand."""
+    return value.get("role", value.get("type")) == "tool"
+
+
 def _rebind_tool_messages(value: Any, source_id: str | None, tool_call_id: str, *, messages: bool = False) -> Any:
     """Give replayed framework messages the current invocation's identity."""
     if isinstance(value, ToolMessage) and value.tool_call_id == source_id:
@@ -127,7 +132,7 @@ def _rebind_tool_messages(value: Any, source_id: str | None, tool_call_id: str, 
     if isinstance(value, Send):
         return Send(value.node, _rebind_tool_messages(value.arg, source_id, tool_call_id))
     if isinstance(value, dict):
-        if messages and value.get("type") == "tool" and value.get("tool_call_id") == source_id:
+        if messages and _is_tool_message_dict(value) and value.get("tool_call_id") == source_id:
             return {**value, "tool_call_id": tool_call_id, "id": None}
         return {
             key: _rebind_tool_messages(item, source_id, tool_call_id, messages=key == "messages")
@@ -163,7 +168,7 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
             candidates = []
             if isinstance(messages, list | tuple):
                 for message in messages:
-                    if isinstance(message, dict) and message.get("type") == "tool":
+                    if isinstance(message, dict) and _is_tool_message_dict(message):
                         message = ToolMessage.model_validate(message)
                     if isinstance(message, ToolMessage):
                         candidates.append(message)
@@ -236,18 +241,14 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
             original_content = [
                 {"type": "text", "text": part} if isinstance(part, str) else part for part in original_content
             ]
-        if original_content == content and (message.status == "error") == is_error and not replayed:
-            return result
-        changes: dict[str, Any] = {
-            "content": content if content is not None else "",
-            "status": "error" if is_error else "success",
-        }
-        if replayed:
-            # A graph message ID belongs to the old invocation too. Let the graph
-            # assign a new one instead of replacing the previous tool message.
-            changes.update(tool_call_id=self._tool_call_id, id=None)
-        updated = message.model_copy(update=changes)
-        result = self._replace_message(result, message, updated)
+        changes: dict[str, Any] = {}
+        if original_content != content:
+            changes["content"] = content if content is not None else ""
+        if (message.status == "error") != is_error:
+            changes["status"] = "error" if is_error else "success"
+        if changes:
+            updated = message.model_copy(update=changes)
+            result = self._replace_message(result, message, updated)
         if replayed and self._tool_call_id is not None:
             return _rebind_tool_messages(result, source_id, self._tool_call_id)
         return result
@@ -268,7 +269,7 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
             if item is message
             or (
                 isinstance(item, dict)
-                and item.get("type") == "tool"
+                and _is_tool_message_dict(item)
                 and item.get("tool_call_id") == message.tool_call_id
             )
             else item

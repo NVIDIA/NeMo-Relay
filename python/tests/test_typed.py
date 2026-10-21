@@ -99,6 +99,16 @@ prefix_codec = PrefixCodec()
 sum_codec = SumCodec()
 
 
+@dataclasses.dataclass
+class NestedResult:
+    value: object
+
+
+class DictReducingValue:
+    def __reduce__(self) -> tuple[object, tuple[dict[str, int]]]:
+        return dict, ({"answer": 42},)
+
+
 class SearchModel(BaseModel):
     answer: str
 
@@ -267,6 +277,23 @@ class TestTypedToolExecute:
             pytest.param(FaultyDumpValue(), (), False, id="unsupported-pickle"),
             pytest.param({FaultyDumpValue()}, (), False, id="nested-unsupported-pickle"),
             pytest.param(UnpickleableValue(), (), False, id="string-fallback"),
+            pytest.param(DictReducingValue(), (), False, id="type-changing-pickle"),
+            pytest.param(
+                NestedResult(SearchResult(["answer"], 1)), (NestedResult, SearchResult), False, id="nested-dataclass"
+            ),
+            pytest.param(
+                NestedResult([SearchResult(["answer"], 1)]),
+                (NestedResult, SearchResult),
+                False,
+                id="nested-dataclass-list",
+            ),
+            pytest.param(
+                NestedResult({"answer": SearchResult(["answer"], 1)}),
+                (NestedResult, SearchResult),
+                False,
+                id="nested-dataclass-dict",
+            ),
+            pytest.param(NestedResult({"answer": 42}), (NestedResult,), True, id="dataclass-with-json"),
         ],
     )
     async def test_best_effort_tool_result_replays_with_a_fresh_codec(self, value, allowed_types, replayable) -> None:

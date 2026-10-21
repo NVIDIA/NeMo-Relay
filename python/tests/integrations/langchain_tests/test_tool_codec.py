@@ -56,6 +56,61 @@ def test_tool_codec_round_trip_and_projection(command, status):
         assert isinstance(restored.update["state"], tuple)
 
 
+@pytest.mark.parametrize("command", [False, True])
+@pytest.mark.parametrize("replayed", [False, True])
+@pytest.mark.parametrize("edit", [None, "status", "content"])
+def test_tool_codec_preserves_mixed_content_unless_content_is_edited(command, replayed, edit):
+    """Rebinding IDs or editing status must preserve the native content representation."""
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    content = ["answer", {"type": "image_url", "image_url": {"url": "https://example.test/image.png"}}]
+    message = ToolMessage(content=content, tool_call_id="call-1", id="message-1")
+    result = Command(update={"messages": [message]}) if command else message
+    encoded = json.loads(json.dumps(LangChainToolResultCodec("call-1").to_json(result)))
+    if edit == "status":
+        encoded["is_error"] = True
+    elif edit == "content":
+        encoded["content"] = ["edited", content[1]]
+    restored = LangChainToolResultCodec("call-2" if replayed else "call-1").from_json(encoded)
+    if command:
+        assert isinstance(restored, Command)
+        restored_message = restored.update["messages"][0]
+    else:
+        restored_message = restored
+    assert isinstance(restored_message, ToolMessage)
+    assert restored_message.content == (["edited", content[1]] if edit == "content" else content)
+    assert restored_message.status == ("error" if edit == "status" else "success")
+    assert restored_message.tool_call_id == ("call-2" if replayed else "call-1")
+    assert restored_message.id == (None if replayed else "message-1")
+    assert message.content == content
+
+
+@pytest.mark.parametrize("message_key", ["type", "role"])
+def test_replayed_graph_destination_rebinds_tool_message_dictionaries(message_key):
+    """Dictionary tool messages in graph destinations receive fresh call and message IDs."""
+    from langchain_core.messages import ToolMessage
+    from langgraph.graph.message import add_messages
+    from langgraph.types import Command, Send
+
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    message = {message_key: "tool", "content": "answer", "tool_call_id": "call-1", "id": "message-1"}
+    unrelated = {message_key: "tool", "content": "other", "tool_call_id": "other", "id": "message-other"}
+    command = Command(update={"state": 42}, goto=Send("next", {"messages": [message, unrelated]}))
+    encoded = json.loads(json.dumps(LangChainToolResultCodec("call-1").to_json(command)))
+    restored = LangChainToolResultCodec("call-2").from_json(encoded)
+    assert isinstance(restored, Command)
+    assert isinstance(restored.goto, Send)
+    replayed_message, restored_unrelated = restored.goto.arg["messages"]
+    assert replayed_message == {**message, "tool_call_id": "call-2", "id": None}
+    assert restored_unrelated == unrelated
+    history = [ToolMessage(content="original", tool_call_id="call-1", id="message-1")]
+    assert len(add_messages(history, [replayed_message])) == 2
+
+
 def test_tool_codec_rejects_invalid_cached_tool_call_id():
     """Reject malformed invocation metadata from a persisted tool result."""
     from langchain_core.messages import ToolMessage
@@ -95,7 +150,7 @@ def test_opaque_artifacts_remain_local_without_python_deserialization():
 
 
 @pytest.mark.parametrize("integration", ["langchain", "langgraph"])
-@pytest.mark.parametrize("result_kind", ["message", "command", "dict_command", "list"])
+@pytest.mark.parametrize("result_kind", ["message", "command", "dict_command", "role_dict_command", "list"])
 @pytest.mark.parametrize("opaque", [False, True])
 @pytest.mark.parametrize("status", ["success", "error"])
 def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
@@ -129,8 +184,10 @@ def test_tool_cache_replays_current_call_identity_or_runs_opaque_results_live(
         )
         if result_kind == "message":
             return message
-        if result_kind == "dict_command":
+        if result_kind in ("dict_command", "role_dict_command"):
             message = message.model_dump(mode="python")
+            if result_kind == "role_dict_command":
+                message["role"] = message.pop("type")
         command = Command(
             update={"messages": [unrelated, message], "state": (1, 2)},
             goto=Send("next", {"messages": [message]}),
@@ -335,7 +392,7 @@ def test_tool_codec_rejects_unrecognized_payloads():
         codec.from_json(encoded)
 
 
-@pytest.mark.parametrize("update_kind", ["dict", "list", "dict_messages"])
+@pytest.mark.parametrize("update_kind", ["dict", "list", "dict_messages", "role_messages"])
 def test_command_projection_matches_call_id_and_applies_edits(update_kind):
     from langchain_core.messages import ToolMessage
     from langgraph.types import Command
@@ -345,8 +402,11 @@ def test_command_projection_matches_call_id_and_applies_edits(update_kind):
     unrelated = ToolMessage(content="other failure", status="error", tool_call_id="other")
     matching = ToolMessage(content="answer", tool_call_id="target", artifact={"keep": True})
     messages = [unrelated, matching]
-    if update_kind == "dict_messages":
+    if update_kind in ("dict_messages", "role_messages"):
         messages = [message.model_dump() for message in messages]
+        if update_kind == "role_messages":
+            for message in messages:
+                message["role"] = message.pop("type")
     update = messages if update_kind == "list" else {"messages": messages, "state": {"keep": 42}}
     result = Command(update=update, goto="next")
     codec = LangChainToolResultCodec("target")
