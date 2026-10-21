@@ -48,10 +48,13 @@ models, include an `anthropic-version` header. An `anthropic-beta` header also
 selects Anthropic. Relay uses OpenAI when neither header is present. The API
 key's format does not select a provider.
 
-Each model-list request follows the provider's managed auth rules. The caller
-must have Relay access to use Relay's credentials. Relay keeps provider API
-keys sent by the caller. Without a replacement, OpenAI requests keep the
-caller's credential. Model lists do not create LLM events.
+Model lists follow the provider's managed auth rules and do not create LLM
+events. The caller must have Relay access to use Relay's credentials. A
+configured helper replaces the caller's provider credential. Without a helper,
+Relay keeps provider API keys sent by the caller. OpenAI requests also keep the
+caller's ChatGPT credential if Relay has no replacement. For the credential
+selection order, refer to
+[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
 
 Other unmanaged routes include compaction and voice calls. Relay never adds its
 own provider credentials to these requests. With a custom `openai_base_url`,
