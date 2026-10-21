@@ -47,10 +47,10 @@ pub(crate) struct Cli {
     #[command(flatten)]
     pub(super) logging: LoggingArgs,
     /// Enable bounded diagnostic collection at startup (default: false).
-    #[arg(long, global = true, env = "NEMO_RELAY_DIAGNOSTICS", num_args = 0..=1, default_missing_value = "true")]
+    #[arg(long, global = true, env = "NEMO_RELAY_DIAGNOSTICS", num_args = 0..=1, require_equals = true, default_missing_value = "true")]
     pub(crate) diagnostics: Option<bool>,
     /// Permit authorized whole-context diagnostic reads on the existing listener.
-    #[arg(long, global = true, env = "NEMO_RELAY_DIAGNOSTICS_HTTP", num_args = 0..=1, default_missing_value = "true")]
+    #[arg(long, global = true, env = "NEMO_RELAY_DIAGNOSTICS_HTTP", num_args = 0..=1, require_equals = true, default_missing_value = "true")]
     pub(crate) diagnostics_http: Option<bool>,
     /// Write one bounded local snapshot to stderr after command and logging teardown.
     #[arg(long, global = true)]
