@@ -4317,3 +4317,63 @@ fn repeated_borrowed_queries_reuse_owned_selectors_without_allocations() {
         assert!(!lease.as_bytes().is_empty());
     }
 }
+
+#[test]
+fn extension_class_sets_cover_all_builtin_causes_and_reject_duplicates() {
+    let service = diagnostics(limits());
+    let component = register(&service, "producer");
+    let classes: Vec<_> = enumset::EnumSet::<FailureClass>::all().iter().collect();
+    let extension = component
+        .register_extension(ExtensionRegistration {
+            namespace: "acme",
+            name: "failure",
+            description: "all typed causes",
+            allowed_classes: &classes,
+            outcome: DiagnosticOutcome::Failure,
+        })
+        .unwrap()
+        .unwrap();
+    for class in &classes {
+        component
+            .record_without_projection_lazy(|| {
+                Observation::extension(
+                    extension,
+                    Some(*class),
+                    DiagnosticOutcome::Failure,
+                    "observed",
+                    NonZeroU64::MIN,
+                )
+            })
+            .unwrap();
+    }
+    let occupied = service.memory_usage().counters;
+    assert_eq!(
+        component
+            .register_extension(ExtensionRegistration {
+                namespace: "acme",
+                name: "duplicate",
+                description: "invalid duplicate declaration",
+                allowed_classes: &[FailureClass::Io, FailureClass::Io],
+                outcome: DiagnosticOutcome::Failure,
+            })
+            .unwrap_err(),
+        DiagnosticError::InvalidClassification
+    );
+    assert_eq!(service.memory_usage().counters, occupied);
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.events.len(), classes.len());
+    assert_eq!(
+        view.components[0]
+            .counters
+            .iter()
+            .find(|counter| counter.code == "acme.failure")
+            .unwrap()
+            .occurrences
+            .value
+            .get(),
+        classes.len() as u64
+    );
+    for (event, class) in view.events.iter().zip(classes) {
+        assert_eq!(event.classification.failure_class(), Some(class.as_str()));
+    }
+}

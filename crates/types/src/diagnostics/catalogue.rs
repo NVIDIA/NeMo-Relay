@@ -23,11 +23,13 @@ use super::Classification;
     Deserialize,
     strum::EnumString,
     strum::IntoStaticStr,
+    enumset::EnumSetType,
 )]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[enumset(no_super_impls)]
 pub enum FailureClass {
     /// The supplied input is invalid.
     InvalidInput,

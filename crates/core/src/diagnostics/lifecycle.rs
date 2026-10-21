@@ -14,29 +14,6 @@ use super::{
 use chrono::Utc;
 use uuid::Uuid;
 
-pub(super) fn class_bit(class: FailureClass) -> u32 {
-    let bit = match class {
-        FailureClass::InvalidInput => 0,
-        FailureClass::InvalidState => 1,
-        FailureClass::NotFound => 2,
-        FailureClass::Conflict => 3,
-        FailureClass::Authentication => 4,
-        FailureClass::PermissionDenied => 5,
-        FailureClass::Unsupported => 6,
-        FailureClass::Incompatible => 7,
-        FailureClass::Timeout => 8,
-        FailureClass::Unavailable => 9,
-        FailureClass::ResourceExhausted => 10,
-        FailureClass::Io => 11,
-        FailureClass::ExecutionFailed => 12,
-        FailureClass::PolicyRejected => 13,
-        FailureClass::Internal => 14,
-        FailureClass::Unknown => 15,
-        _ => return 0,
-    };
-    1 << bit
-}
-
 fn valid_name(value: &str, max: usize) -> bool {
     !value.is_empty()
         && value.len() <= max
@@ -278,15 +255,13 @@ pub(super) fn register_extension(
     if BuiltinDiagnosticCode::from_canonical_name(name).is_some() {
         return Err(DiagnosticError::InvalidCode);
     }
-    let mut classes = 0;
+    let mut classes = enumset::EnumSet::new();
     for class in registration.allowed_classes {
-        let bit = class_bit(*class);
-        if bit == 0 || classes & bit != 0 {
+        if !classes.insert(*class) {
             return Err(DiagnosticError::InvalidClassification);
         }
-        classes |= bit;
     }
-    if registration.outcome != DiagnosticOutcome::Failure && classes != 0 {
+    if registration.outcome != DiagnosticOutcome::Failure && !classes.is_empty() {
         return Err(DiagnosticError::InvalidClassification);
     }
     for (slot, value) in state.extensions.iter().enumerate() {

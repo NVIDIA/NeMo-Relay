@@ -7,7 +7,7 @@ use super::{
     BuiltinDiagnosticCode, CapturedOrigin, ComponentHandle, DiagnosticDetailRef, DiagnosticError,
     DiagnosticOutcome, EvidenceDisposition, FailureClass, Inner, Observation, ObservationCode,
     PublicationWorkspace, RecordReceipt, State, StoredCode, StoredFailureClass, StoredObservation,
-    StoredPluginContext, lifecycle,
+    StoredPluginContext,
 };
 use chrono::Utc;
 use std::fmt;
@@ -125,9 +125,7 @@ pub(super) fn record_observation(
                 .filter(|v| v.generation == extension.generation && v.component == handle)
                 .ok_or(DiagnosticError::InvalidCode)?;
             if descriptor.outcome == DiagnosticOutcome::Failure {
-                if class.is_none_or(|class| {
-                    descriptor.allowed_classes & lifecycle::class_bit(class) == 0
-                }) {
+                if class.is_none_or(|class| !descriptor.allowed_classes.contains(class)) {
                     return Err(DiagnosticError::InvalidClassification);
                 }
             } else if class.is_some() {
