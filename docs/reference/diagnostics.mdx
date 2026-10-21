@@ -159,6 +159,36 @@ process RSS. It excludes allocator overhead, caller-owned inputs and decoded
 snapshots, producer handles, callback captures, and operational output storage.
 File-sink queues and on-disk retention remain governed by logging configuration.
 
+### Query Budgets
+
+Query pages have independent startup capacities. `max_counters` and
+`max_window_buckets` reserve recording state across the source;
+`max_query_counters` and `max_query_window_buckets` bound copied rows in each
+query workspace. Smaller pages do not reduce recording or retention capacity.
+
+| Setting | Default | Scope |
+| --- | --- | --- |
+| `max_queries` | 4 | Simultaneously leased query workspaces. |
+| `max_query_components`, `max_query_events` | 64, 256 | Component and event rows per page. |
+| `max_query_counters`, `max_query_window_buckets` | 256, 512 | Matched code counters and outcome buckets per page. |
+| `query_text_bytes` | 64 KiB | Copied text per workspace. |
+| `max_snapshot_bytes` | 128 KiB | Encoded JSON response per workspace. |
+
+Larger selections continue through `DiagnosticSnapshot.continuation`. Each
+component row is atomic: its matched counters and covered window buckets must
+fit together in a page, along with its text and encoded response. If a single
+selected component cannot fit, reading returns `DiagnosticError::SnapshotCapacity`.
+Increase the relevant page budgets or narrow the selection. This error does not
+change retained evidence or accepted totals. Event-only queries can set
+`max_components` to zero.
+
+For recording and projections without snapshot reads, set `max_queries` to zero
+at startup. The enabled context then allocates no query pool or page backing;
+unused query capacities are ignored. Snapshot calls return
+`DiagnosticError::QueryDisabled`, while recording, retained history, and
+projections remain enabled. This is distinct from disabling the entire service.
+Enabled query paths remain preallocated and enforce their own capacities.
+
 ### Memory Inspection
 
 `Diagnostics::memory_usage()` and `DiagnosticsReader::memory_usage()` return the

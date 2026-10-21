@@ -106,12 +106,16 @@ pub struct DiagnosticLimits {
     pub detail_pool_bytes: usize,
     /// Payload bytes per reclaimable detail block, at least four for UTF-8 scalars.
     pub detail_block_bytes: usize,
-    /// Simultaneously leased query workspaces; held leases retain their permits.
+    /// Simultaneously leased query workspaces; zero disables reads and their pool.
     pub max_queries: usize,
     /// Maximum component rows materialized in one query page.
     pub max_query_components: usize,
     /// Maximum recent-event rows materialized in one query page.
     pub max_query_events: usize,
+    /// Code-counter rows materialized per page, independent of store reservations.
+    pub max_query_counters: usize,
+    /// Outcome buckets materialized per page, independent of store reservations.
+    pub max_query_window_buckets: usize,
     /// Serialized bytes per query response, including its envelope and coverage.
     pub max_snapshot_bytes: usize,
     /// Text-arena bytes reserved for each leased query workspace.
@@ -140,8 +144,10 @@ impl Default for DiagnosticLimits {
             max_queries: 4,
             max_query_components: 64,
             max_query_events: 256,
-            max_snapshot_bytes: 524288,
-            query_text_bytes: 524288,
+            max_query_counters: 256,
+            max_query_window_buckets: 512,
+            max_snapshot_bytes: 131072,
+            query_text_bytes: 65536,
             max_projections: 16,
             max_projection_workspaces: 4,
             max_owned_bytes: 32 * 1024 * 1024,
@@ -156,9 +162,8 @@ impl DiagnosticLimits {
             || self.max_detail_bytes > MAX_DETAIL_BYTES
             || self.max_correlation_bytes > ID_BYTES
             || self.detail_block_bytes < 4
-            || self.max_queries == 0
-            || self.max_query_components == 0
-            || self.max_snapshot_bytes < 4096
+            || (self.max_queries > 0
+                && (self.max_query_components == 0 || self.max_snapshot_bytes < 4096))
             || self.max_projection_workspaces == 0
         {
             return Err(DiagnosticError::InvalidLimits);
@@ -507,6 +512,9 @@ pub enum DiagnosticError {
     /// A sequence or generation cannot advance without identity reuse.
     #[error("diagnostic sequence exhausted")]
     SequenceExhausted,
+    /// Startup intentionally disabled query materialization with max_queries = 0.
+    #[error("diagnostic queries are disabled")]
+    QueryDisabled,
     /// Every bounded query workspace is currently leased.
     #[error("diagnostic query capacity exhausted")]
     QueryCapacity,
@@ -516,8 +524,8 @@ pub enum DiagnosticError {
     /// Continuation has the wrong source/scope or its captured state changed.
     #[error("diagnostic continuation is invalid or its capture changed")]
     InvalidCursor,
-    /// The page cannot fit its required envelope in the response budget.
-    #[error("diagnostic response budget cannot hold its envelope")]
+    /// A selected atomic row or required envelope cannot fit the query budgets.
+    #[error("diagnostic query page cannot hold a required row or envelope")]
     SnapshotCapacity,
     /// Subscription slots or unique registration IDs are exhausted.
     #[error("diagnostic projection capacity exhausted")]
@@ -557,7 +565,7 @@ struct Inner {
 }
 struct Backend {
     state: Mutex<State>,
-    queries: Arc<read::QueryPool>,
+    queries: Option<Arc<read::QueryPool>>,
     projections: Mutex<Projections>,
     publication: Mutex<Box<[Option<PublicationWorkspace>]>>,
     reserved_bytes: usize,
@@ -755,8 +763,14 @@ impl Diagnostics {
         let backend = if settings.enabled {
             settings.limits.validate()?;
             let state = State::new(&settings.limits)?;
-            let queries =
-                read::QueryPool::new(&settings.limits).map_err(|_| DiagnosticError::Allocation)?;
+            let queries = if settings.limits.max_queries == 0 {
+                None
+            } else {
+                Some(
+                    read::QueryPool::new(&settings.limits)
+                        .map_err(|_| DiagnosticError::Allocation)?,
+                )
+            };
             let mut publication = empty_slots(settings.limits.max_projection_workspaces)?;
             for slot in &mut publication {
                 *slot = Some(PublicationWorkspace::new(&settings.limits)?);
@@ -767,7 +781,7 @@ impl Diagnostics {
             };
             let reserved_bytes = state
                 .reserved_bytes()
-                .checked_add(queries.reserved_bytes())
+                .checked_add(queries.as_ref().map_or(0, |pool| pool.reserved_bytes()))
                 .and_then(|v| {
                     v.checked_add(
                         publication
@@ -1044,7 +1058,8 @@ impl DiagnosticsReader {
     ///
     /// A held lease occupies one workspace. Serialization follows store unlocking;
     /// polling neither increments counters nor resets refresh summaries. Disabled collection
-    /// returns [`DiagnosticError::Disabled`].
+    /// returns [`DiagnosticError::Disabled`]. An enabled context with no query
+    /// pool returns [`DiagnosticError::QueryDisabled`].
     pub fn snapshot(&self, query: DiagnosticQuery) -> Result<SnapshotLease, DiagnosticError> {
         read::capture(&self.inner, query)
     }
@@ -1842,7 +1857,7 @@ fn diagnostic_memory_usage(inner: &Inner) -> DiagnosticMemoryUsage {
         metadata_bytes: state.metadata_used,
         window_buckets: state.windows.iter().flatten().count(),
         extensions: state.extensions.iter().flatten().count(),
-        query_workspaces: backend.queries.occupancy(),
+        query_workspaces: backend.queries.as_ref().map_or(0, |pool| pool.occupancy()),
         projections: lock(&backend.projections).slots.iter().flatten().count(),
         projection_workspaces: lock(&backend.publication)
             .iter()
