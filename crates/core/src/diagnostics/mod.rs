@@ -106,6 +106,6 @@ pub use read::SnapshotLease;
 use state::{
     CapturedOrigin, ComponentHandle, ComponentSlot, CounterIndex, CounterSlot, DESCRIPTION_BYTES,
     ExtensionSlot, ID_BYTES, LifetimeState, Ownership, RefreshState, State, StoredCode,
-    StoredFailureClass, StoredObservation, StoredPluginContext, Text, WindowReservation,
-    WindowSlot, empty_slots,
+    StoredFailureClass, StoredObservation, StoredPluginContext, WindowReservation, WindowSlot,
+    empty_slots, text,
 };
