@@ -91,39 +91,50 @@ navigation:
     title: "Instrument Applications"
     slug: instrument-applications
     title-source: frontmatter
-  - section: "Configure Plugins"
+  - section: "Use Plugins"
     slug: configure-plugins
     contents:
       - page: "About"
         path: ./configure-plugins/about.mdx
         slug: about
-      - page: "Configure and Initialize Plugins"
-        path: ./configure-plugins/initialize-plugins.mdx
-        slug: initialize-plugins
-      - folder: ./configure-plugins/observability
-        title: "Observability"
-        title-source: frontmatter
-      - folder: ./configure-plugins/adaptive
-        title: "Adaptive"
-        title-source: frontmatter
-      - folder: ./configure-plugins/nemo-guardrails
-        title: "NeMo Guardrails (Deprecated)"
-        title-source: frontmatter
-      - folder: ./configure-plugins/pii-redaction
-        title: "PII Redaction"
-        title-source: frontmatter
-      - page: "Model Pricing"
-        path: ./configure-plugins/model-pricing.mdx
-        slug: model-pricing
-      - page: "Resource Metrics"
-        path: ./configure-plugins/resource-metrics.mdx
-        slug: resource-metrics
-      - page: "Configure Discoverable Plugins"
-        path: ./configure-plugins/discoverable-plugins.mdx
-        slug: discoverable-plugins
-      - page: "Plugin Configuration Files"
+      - page: "Configure"
         path: ./configure-plugins/plugin-configuration-files.mdx
         slug: plugin-configuration-files
+      - page: "Manage"
+        path: ./configure-plugins/discoverable-plugins.mdx
+        slug: discoverable-plugins
+      - page: "Initialize"
+        path: ./configure-plugins/initialize-plugins.mdx
+        slug: initialize-plugins
+      - section: "Built-in Plugins"
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - folder: ./configure-plugins/observability
+            title: "Observability"
+            title-source: frontmatter
+          - folder: ./configure-plugins/adaptive
+            title: "Adaptive Runtime"
+            title-source: frontmatter
+          - folder: ./configure-plugins/nemo-guardrails
+            title: "NeMo Guardrails (Deprecated)"
+            title-source: frontmatter
+          - folder: ./configure-plugins/pii-redaction
+            title: "PII Redaction"
+            title-source: frontmatter
+          - page: "Model Pricing"
+            path: ./configure-plugins/model-pricing.mdx
+            slug: model-pricing
+          - page: "Resource Metrics"
+            path: ./configure-plugins/resource-metrics.mdx
+            slug: resource-metrics
+      - section: "First Party Plugins"
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - page: "NeMo Switchyard"
+            path: ./configure-plugins/switchyard.mdx
+            slug: switchyard
   - folder: ./integrate-into-frameworks
     title: "Integrate into Frameworks"
     slug: integrate-into-frameworks

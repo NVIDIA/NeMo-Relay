@@ -65,6 +65,28 @@ fn tool_call_execute_adds_otel_status_metadata_to_end_events() {
         assert_eq!(result.result, json!({"ok": true}));
         assert!(result.annotation.is_none());
 
+        // A handled tool failure is returned normally, but its span is an error.
+        let handled = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("tool-handled-error")
+                .args(json!({}))
+                .func(Arc::new(|_args| {
+                    Box::pin(async {
+                        Ok(json!({
+                            "schema": "nemo.relay.tool_result@1",
+                            "content": "handled failure",
+                            "is_error": true,
+                            "result": {"native": "preserved"}
+                        })
+                        .into())
+                    })
+                }))
+                .build(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(handled.result["result"]["native"], json!("preserved"));
+
         let error = tool_call_execute(
             ToolCallExecuteParams::builder()
                 .name("tool-error")
@@ -96,6 +118,10 @@ fn tool_call_execute_adds_otel_status_metadata_to_end_events() {
     assert_eq!(success_metadata["caller"], json!("tool-ok"));
     assert_eq!(success_metadata["otel.status_code"], json!("OK"));
     assert!(success_metadata.get("otel.status_description").is_none());
+
+    let handled_metadata = metadata_for("tool-handled-error");
+    assert_eq!(handled_metadata["otel.status_code"], json!("ERROR"));
+    assert!(handled_metadata.get("error.type").is_none());
 
     let error_metadata = metadata_for("tool-error");
     assert_eq!(error_metadata["caller"], json!("tool-error"));

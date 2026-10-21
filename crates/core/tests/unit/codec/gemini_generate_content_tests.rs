@@ -6,8 +6,12 @@
 use super::*;
 use serde_json::json;
 
+use super::super::model_pricing::pricing_test_mutex;
 use super::super::request::{ContentPart, Message, MessageContent, ToolDefinition};
-use super::super::response::FinishReason;
+use super::super::response::{
+    FinishReason, PricingCatalog, PricingResolver, reset_active_pricing_resolver,
+    set_active_pricing_resolver,
+};
 use super::super::streaming::StreamingCodec;
 
 use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
@@ -22,6 +26,32 @@ fn make_request(content: Json) -> LlmRequest {
         headers: serde_json::Map::new(),
         content,
     }
+}
+
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
+
+fn gemini_test_catalog() -> PricingCatalog {
+    PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [{
+                "provider": "google",
+                "model_id": "gemini-test",
+                "pricing_as_of": "2026-10-20",
+                "pricing_source": "test",
+                "rates": {"input_per_million": 1.0, "output_per_million": 2.0},
+                "prompt_cache": {"read_accounting": "included_in_prompt_tokens"}
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap()
 }
 
 // ===================================================================
@@ -4865,6 +4895,88 @@ fn test_decode_response_thoughts_only_usage_computes_fallback_total() {
         Some(40),
         "fallback total must be prompt(10) + thoughts(30) = 40 even without candidatesTokenCount"
     );
+}
+
+#[test]
+fn test_decode_response_bills_thoughts_only_usage_at_the_output_rate() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": []},
+            "finishReason": "STOP"
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "thoughtsTokenCount": 30
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.completion_tokens, None);
+    let total = usage.cost.unwrap().total.unwrap();
+    assert!((total - 0.00007).abs() < 1e-12, "{total}");
+}
+
+#[test]
+fn test_decode_response_omits_cost_when_billed_output_tokens_overflow() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP"
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": u64::MAX,
+            "thoughtsTokenCount": 1,
+            "totalTokenCount": 20
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.completion_tokens, Some(u64::MAX));
+    assert_eq!(usage.cost, None);
+}
+
+#[test]
+fn test_decode_response_omits_a_fallback_total_that_overflows() {
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": []},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": u64::MAX,
+            "thoughtsTokenCount": 1
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.prompt_tokens, Some(u64::MAX));
+    assert_eq!(usage.total_tokens, None);
 }
 
 // Decode validation: table-driven negative tests for malformed contents items.
