@@ -3299,3 +3299,116 @@ fn diagnostic_recording_profile() {
         assert_eq!(service.memory_usage().reserved_bytes, reserved);
     }
 }
+
+#[test]
+fn builtin_query_selectors_are_independent_of_small_identity_limits() {
+    let service = diagnostics(DiagnosticLimits {
+        max_identity_bytes: 8,
+        ..limits()
+    });
+    let component = service
+        .register_component(ComponentRegistration::new(
+            "sink",
+            BuiltinDiagnosticCode::all(),
+        ))
+        .unwrap();
+    for code in BuiltinDiagnosticCode::all() {
+        let classes: Vec<_> = match code {
+            BuiltinDiagnosticCode::Failure(_) => {
+                code.allowed_classes().iter().copied().map(Some).collect()
+            }
+            _ => vec![None],
+        };
+        for class in classes {
+            component
+                .record_without_projection_lazy(|| {
+                    Observation::new(Classification::new(*code, class).unwrap(), "observed", 1)
+                })
+                .unwrap();
+            let query = DiagnosticQuery {
+                component_key: Some("sink".into()),
+                code: Some(code.canonical_name().into()),
+                failure_class: class.map(|class| class.as_str().into()),
+                ..Default::default()
+            };
+            let view = snapshot(&service, query);
+            assert!(!view.events.is_empty(), "missing {code:?}/{class:?}");
+            assert!(
+                view.events
+                    .iter()
+                    .all(|event| event.code() == code.canonical_name())
+            );
+            assert!(view.events.iter().all(
+                |event| event.classification.failure_class() == class.map(FailureClass::as_str)
+            ));
+        }
+    }
+    for query in [
+        DiagnosticQuery {
+            component_key: Some("x".repeat(9)),
+            ..Default::default()
+        },
+        DiagnosticQuery {
+            code: Some("x".repeat(9)),
+            ..Default::default()
+        },
+        DiagnosticQuery {
+            failure_class: Some("x".repeat(33)),
+            ..Default::default()
+        },
+        DiagnosticQuery {
+            ownership: ComponentOwnership {
+                responsibility: Some("x".repeat(9)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(
+            service.snapshot(query).unwrap_err(),
+            DiagnosticError::InvalidQuery
+        );
+    }
+}
+
+#[test]
+fn extension_causes_remain_queryable_above_the_identity_limit() {
+    let service = diagnostics(DiagnosticLimits {
+        max_identity_bytes: 8,
+        ..limits()
+    });
+    let component = register(&service, "sink");
+    let code = component
+        .register_extension(ExtensionRegistration {
+            namespace: "acme",
+            name: "err",
+            description: "custom",
+            allowed_classes: &[],
+            outcome: DiagnosticOutcome::Failure,
+        })
+        .unwrap()
+        .unwrap();
+    let name = "x".repeat(32);
+    let class = component
+        .register_extension_class(code, &name)
+        .unwrap()
+        .unwrap();
+    component
+        .record_without_projection_lazy(|| {
+            Observation::extension_with_class(code, class, "custom", 1)
+        })
+        .unwrap();
+    let view = snapshot(
+        &service,
+        DiagnosticQuery {
+            code: Some("acme.err".into()),
+            failure_class: Some(name.clone()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(view.events.len(), 1);
+    assert_eq!(
+        view.events[0].classification.failure_class(),
+        Some(name.as_str())
+    );
+}
