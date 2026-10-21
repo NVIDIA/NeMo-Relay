@@ -2966,6 +2966,7 @@ impl super::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
 #[derive(Debug, Default)]
 struct GeminiGenerateContentStreamingState {
     parts: Vec<Json>,
+    active_call: Option<GeminiStreamingFunctionCall>,
     candidate_index: Option<u64>,
     finish_reason: Option<String>,
     usage_metadata: Option<Json>,
@@ -3127,9 +3128,71 @@ impl GeminiGenerateContentStreamingState {
                     "Gemini streaming response parts must not contain functionResponse".into(),
                 ));
             }
+            Some("functionCall") => self.observe_function_call_part(part, part_obj)?,
             _ => self.parts.push(part.clone()),
         }
         Ok(())
+    }
+
+    fn observe_function_call_part(
+        &mut self,
+        part: &Json,
+        part_obj: &serde_json::Map<String, Json>,
+    ) -> Result<()> {
+        let call =
+            RawStreamedFunctionCall::deserialize(&part_obj["functionCall"]).map_err(|error| {
+                FlowError::InvalidArgument(format!("Gemini streaming functionCall: {error}"))
+            })?;
+        let joins_active = self.active_call.as_ref().is_some_and(|active| {
+            !gemini_streamed_call_differs(active.name.as_deref(), call.name.as_deref())
+                && !gemini_streamed_call_differs(active.id.as_deref(), call.id.as_deref())
+        });
+        if !joins_active {
+            self.flush_function_call();
+            if call.partial_args.is_empty() && call.will_continue.is_none() {
+                self.parts.push(part.clone());
+                return Ok(());
+            }
+        }
+        let active = match &mut self.active_call {
+            Some(active) => active,
+            None => {
+                self.parts.push(Json::Null);
+                self.active_call
+                    .insert(GeminiStreamingFunctionCall::new(self.parts.len() - 1))
+            }
+        };
+        if active.name.is_none() {
+            active.name = call.name;
+        }
+        if active.id.is_none() {
+            active.id = call.id;
+        }
+        for (key, value) in part_obj {
+            if key != "functionCall" && !active.part.contains_key(key) {
+                active.part.insert(key.clone(), value.clone());
+            }
+        }
+        for (key, value) in call.args {
+            active.set_arg(key, value);
+        }
+        for partial in &call.partial_args {
+            active.apply_partial_arg(partial)?;
+        }
+        if call.will_continue != Some(true) {
+            self.flush_function_call();
+        }
+        Ok(())
+    }
+
+    fn flush_function_call(&mut self) {
+        let Some(active) = self.active_call.take() else {
+            return;
+        };
+        let slot = active.slot;
+        if let Some(part) = active.into_part() {
+            self.parts[slot] = part;
+        }
     }
 
     fn observe_finish_reason(&mut self, candidate: &Json) -> Result<()> {
@@ -3148,7 +3211,9 @@ impl GeminiGenerateContentStreamingState {
         Ok(())
     }
 
-    fn finalize(self) -> Json {
+    fn finalize(mut self) -> Json {
+        self.flush_function_call();
+        self.parts.retain(|part| !part.is_null());
         let mut candidate_obj = serde_json::Map::new();
         candidate_obj.insert(
             "content".into(),
@@ -3180,6 +3245,359 @@ impl GeminiGenerateContentStreamingState {
             output.insert("responseId".to_string(), Json::String(rid));
         }
         Json::Object(output)
+    }
+}
+
+fn gemini_streamed_call_differs(active: Option<&str>, fragment: Option<&str>) -> bool {
+    active
+        .zip(fragment)
+        .is_some_and(|(active, fragment)| active != fragment)
+}
+
+const GEMINI_STREAMED_ARG_MAX_INDEX: usize = 10_000;
+const GEMINI_STREAMED_ARG_MAX_DEPTH: usize = 128;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawStreamedFunctionCall {
+    name: Option<String>,
+    id: Option<String>,
+    #[serde(default)]
+    args: serde_json::Map<String, Json>,
+    #[serde(default)]
+    partial_args: Vec<RawPartialArg>,
+    will_continue: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawPartialArg {
+    json_path: Option<String>,
+    string_value: Option<String>,
+    number_value: Option<serde_json::Number>,
+    bool_value: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_gemini_null_value")]
+    null_value: bool,
+}
+
+fn deserialize_gemini_null_value<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Json::deserialize(deserializer)? {
+        Json::Null => Ok(true),
+        Json::String(name) if name == "NULL_VALUE" => Ok(true),
+        other => Err(serde::de::Error::custom(format!(
+            "nullValue must be null or \"NULL_VALUE\", got {other}"
+        ))),
+    }
+}
+
+#[derive(Debug)]
+struct GeminiStreamingFunctionCall {
+    slot: usize,
+    part: serde_json::Map<String, Json>,
+    name: Option<String>,
+    id: Option<String>,
+    args: Json,
+    chunks: Vec<(Vec<GeminiArgPathToken>, Vec<String>)>,
+}
+
+impl GeminiStreamingFunctionCall {
+    fn new(slot: usize) -> Self {
+        Self {
+            slot,
+            part: serde_json::Map::new(),
+            name: None,
+            id: None,
+            args: Json::Object(serde_json::Map::new()),
+            chunks: Vec::new(),
+        }
+    }
+
+    fn set_arg(&mut self, key: String, value: Json) {
+        self.write_arg(&[GeminiArgPathToken::Key(key)], value);
+    }
+
+    fn write_arg(&mut self, tokens: &[GeminiArgPathToken], value: Json) {
+        self.chunks
+            .retain(|(chunked, _)| !chunked.starts_with(tokens));
+        set_gemini_arg(&mut self.args, tokens, value);
+    }
+
+    fn apply_partial_arg(&mut self, partial: &RawPartialArg) -> Result<()> {
+        let Some(path) = partial.json_path.as_deref().filter(|path| !path.is_empty()) else {
+            return Ok(());
+        };
+        let tokens = streamed_gemini_arg_path(path)?;
+        if let Some(chunk) = &partial.string_value {
+            if let Some((_, chunks)) = self
+                .chunks
+                .iter_mut()
+                .find(|(chunked, _)| *chunked == tokens)
+            {
+                chunks.push(chunk.clone());
+                return Ok(());
+            }
+            let mut chunks: Vec<String> = get_gemini_arg(&self.args, &tokens)
+                .and_then(Json::as_str)
+                .map(str::to_string)
+                .into_iter()
+                .collect();
+            set_gemini_arg(&mut self.args, &tokens, Json::String(String::new()));
+            chunks.push(chunk.clone());
+            self.chunks.push((tokens, chunks));
+            return Ok(());
+        }
+        let value = if let Some(number) = &partial.number_value {
+            Json::Number(number.clone())
+        } else if let Some(flag) = partial.bool_value {
+            Json::Bool(flag)
+        } else if partial.null_value {
+            Json::Null
+        } else {
+            return Ok(());
+        };
+        self.write_arg(&tokens, value);
+        Ok(())
+    }
+
+    fn into_part(self) -> Option<Json> {
+        let Self {
+            mut part,
+            name,
+            id,
+            mut args,
+            chunks,
+            ..
+        } = self;
+        let name = name?;
+        for (tokens, pieces) in chunks {
+            set_gemini_arg(&mut args, &tokens, Json::String(pieces.concat()));
+        }
+        let mut call = serde_json::Map::new();
+        call.insert("name".into(), Json::String(name));
+        if let Some(id) = id {
+            call.insert("id".into(), Json::String(id));
+        }
+        call.insert("args".into(), args);
+        part.insert("functionCall".into(), Json::Object(call));
+        Some(Json::Object(part))
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum GeminiArgPathToken {
+    Key(String),
+    Index(usize),
+}
+
+fn streamed_gemini_arg_path(path: &str) -> Result<Vec<GeminiArgPathToken>> {
+    let tokens = parse_gemini_arg_path(path);
+    if tokens.is_empty() {
+        return Err(FlowError::InvalidArgument(format!(
+            "Gemini streaming partialArgs jsonPath '{path}' does not address an argument"
+        )));
+    }
+    if tokens.len() > GEMINI_STREAMED_ARG_MAX_DEPTH {
+        return Err(FlowError::InvalidArgument(format!(
+            "Gemini streaming partialArgs jsonPath '{path}' nests deeper than {GEMINI_STREAMED_ARG_MAX_DEPTH} levels"
+        )));
+    }
+    if tokens.iter().any(|token| {
+        matches!(token, GeminiArgPathToken::Index(index) if *index > GEMINI_STREAMED_ARG_MAX_INDEX)
+    }) {
+        return Err(FlowError::InvalidArgument(format!(
+            "Gemini streaming partialArgs jsonPath '{path}' indexes past {GEMINI_STREAMED_ARG_MAX_INDEX}"
+        )));
+    }
+    Ok(tokens)
+}
+
+fn parse_gemini_arg_path(path: &str) -> Vec<GeminiArgPathToken> {
+    let path = path
+        .strip_prefix("$.")
+        .or_else(|| path.strip_prefix('$'))
+        .unwrap_or(path);
+    let chars: Vec<char> = path.chars().collect();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '[' => match gemini_arg_path_bracket_token(&chars, i) {
+                Some((token, end)) => {
+                    tokens.push(token);
+                    i = end;
+                }
+                None => i += 1,
+            },
+            '.' | ']' => i += 1,
+            _ => {
+                let (key, end) = gemini_arg_path_bare_key(&chars, i);
+                if end == i {
+                    i += 1;
+                } else {
+                    tokens.push(GeminiArgPathToken::Key(key));
+                    i = end;
+                }
+            }
+        }
+    }
+    tokens
+}
+
+fn gemini_arg_path_bracket_token(
+    chars: &[char],
+    open: usize,
+) -> Option<(GeminiArgPathToken, usize)> {
+    match chars.get(open + 1) {
+        Some(&quote @ ('\'' | '"')) => gemini_arg_path_quoted_key(chars, open + 1, quote)
+            .map(|(key, end)| (GeminiArgPathToken::Key(key), end)),
+        _ => {
+            let close = open + 1 + chars[open + 1..].iter().position(|c| *c == ']')?;
+            let inner = &chars[open + 1..close];
+            let start = inner.iter().position(|c| !c.is_whitespace())?;
+            let end = inner.iter().rposition(|c| !c.is_whitespace())? + 1;
+            let digits = &inner[start..end];
+            digits.iter().all(char::is_ascii_digit).then(|| {
+                let index = digits
+                    .iter()
+                    .collect::<String>()
+                    .parse()
+                    .unwrap_or(usize::MAX);
+                (GeminiArgPathToken::Index(index), close + 1)
+            })
+        }
+    }
+}
+
+fn gemini_arg_path_quoted_key(chars: &[char], open: usize, quote: char) -> Option<(String, usize)> {
+    let mut key = String::new();
+    let mut i = open + 1;
+    while i < chars.len() && chars[i] != quote {
+        if chars[i] == '\\' {
+            i = gemini_arg_path_escape(chars, i, &mut key)?;
+        } else {
+            key.push(chars[i]);
+            i += 1;
+        }
+    }
+    (i < chars.len() && chars.get(i + 1) == Some(&']')).then_some((key, i + 2))
+}
+
+fn gemini_arg_path_bare_key(chars: &[char], start: usize) -> (String, usize) {
+    let mut key = String::new();
+    let mut i = start;
+    while i < chars.len() {
+        match chars[i] {
+            '.' | '[' | ']' => break,
+            '\\' => match gemini_arg_path_escape(chars, i, &mut key) {
+                Some(end) => i = end,
+                None => break,
+            },
+            c => {
+                key.push(c);
+                i += 1;
+            }
+        }
+    }
+    (key, i)
+}
+
+fn gemini_arg_path_escape(chars: &[char], backslash: usize, out: &mut String) -> Option<usize> {
+    let escaped = *chars.get(backslash + 1)?;
+    if escaped == 'u'
+        && let Some(high) = gemini_arg_path_hex4(chars, backslash + 2)
+    {
+        let mut end = backslash + 6;
+        let mut units = vec![high];
+        if (0xD800..=0xDBFF).contains(&high)
+            && chars.get(end..end + 2) == Some(['\\', 'u'].as_slice())
+            && let Some(low) = gemini_arg_path_hex4(chars, end + 2)
+            && (0xDC00..=0xDFFF).contains(&low)
+        {
+            units.push(low);
+            end += 6;
+        }
+        out.extend(
+            char::decode_utf16(units).map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER)),
+        );
+        return Some(end);
+    }
+    out.push(match escaped {
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
+        'b' => '\u{8}',
+        'f' => '\u{c}',
+        other => other,
+    });
+    Some(backslash + 2)
+}
+
+fn gemini_arg_path_hex4(chars: &[char], start: usize) -> Option<u16> {
+    let hex = chars.get(start..start + 4)?;
+    hex.iter().all(char::is_ascii_hexdigit).then(|| {
+        hex.iter()
+            .filter_map(|digit| digit.to_digit(16))
+            .fold(0, |code, digit| code * 16 + digit as u16)
+    })
+}
+
+fn get_gemini_arg<'a>(target: &'a Json, tokens: &[GeminiArgPathToken]) -> Option<&'a Json> {
+    tokens
+        .iter()
+        .try_fold(target, |current, token| match token {
+            GeminiArgPathToken::Key(key) => current.as_object()?.get(key),
+            GeminiArgPathToken::Index(index) => current.as_array()?.get(*index),
+        })
+}
+
+fn set_gemini_arg(target: &mut Json, tokens: &[GeminiArgPathToken], value: Json) {
+    let Some((last, head)) = tokens.split_last() else {
+        return;
+    };
+    let mut current = target;
+    for (position, token) in head.iter().enumerate() {
+        let container = || match tokens[position + 1] {
+            GeminiArgPathToken::Index(_) => Json::Array(Vec::new()),
+            GeminiArgPathToken::Key(_) => Json::Object(serde_json::Map::new()),
+        };
+        current = match token {
+            GeminiArgPathToken::Key(key) => {
+                let Some(object) = current.as_object_mut() else {
+                    return;
+                };
+                object.entry(key.clone()).or_insert_with(container)
+            }
+            GeminiArgPathToken::Index(index) => {
+                let Some(array) = current.as_array_mut() else {
+                    return;
+                };
+                while array.len() <= *index {
+                    array.push(Json::Null);
+                }
+                if array[*index].is_null() {
+                    array[*index] = container();
+                }
+                &mut array[*index]
+            }
+        };
+    }
+    match last {
+        GeminiArgPathToken::Key(key) => {
+            if let Some(object) = current.as_object_mut() {
+                object.insert(key.clone(), value);
+            }
+        }
+        GeminiArgPathToken::Index(index) => {
+            if let Some(array) = current.as_array_mut() {
+                while array.len() <= *index {
+                    array.push(Json::Null);
+                }
+                array[*index] = value;
+            }
+        }
     }
 }
 

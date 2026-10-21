@@ -2158,6 +2158,231 @@ fn test_encode_system_instruction_edit() {
 // ===================================================================
 
 #[test]
+fn test_streaming_merges_partial_function_call_arguments_into_one_call() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    for chunk in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [{"text": "Checking "}]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "thoughtSignature": "sig",
+            "functionCall": {
+                "name": "get_weather", "id": "call-1", "willContinue": true,
+                "partialArgs": [{"jsonPath": "$.city", "stringValue": "Pa", "willContinue": true}]
+            }
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {
+                "willContinue": false,
+                "partialArgs": [
+                    {"jsonPath": "$['city']", "stringValue": "ris"},
+                    {"jsonPath": "$.days", "numberValue": 3},
+                    {"jsonPath": "$.units['temp']", "stringValue": "C"},
+                    {"jsonPath": "$.tags[1]", "boolValue": true},
+                    {"jsonPath": "$.note", "nullValue": "NULL_VALUE"},
+                    {"jsonPath": "$.gap", "nullValue": null}
+                ]
+            }
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{"text": "now."}]}, "finishReason": "STOP"}]}),
+    ] {
+        collector(chunk).unwrap();
+    }
+
+    let assembled = finalizer();
+
+    assert_eq!(
+        assembled["candidates"][0]["content"]["parts"],
+        json!([
+            {"text": "Checking "},
+            {"thoughtSignature": "sig", "functionCall": {
+                "name": "get_weather", "id": "call-1",
+                "args": {"city": "Paris", "days": 3, "units": {"temp": "C"}, "tags": [null, true], "note": null, "gap": null}
+            }},
+            {"text": "now."}
+        ])
+    );
+    let decoded = GeminiGenerateContentCodec
+        .decode_response(&assembled)
+        .unwrap();
+    assert_eq!(decoded.tool_calls.map(|calls| calls.len()), Some(1));
+    assert_eq!(decoded.finish_reason, Some(FinishReason::ToolUse));
+}
+
+#[test]
+fn test_streaming_keeps_whole_calls_and_drops_a_streamed_call_that_never_names_itself() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    for chunk in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "first", "willContinue": true, "partialArgs": [{"jsonPath": "$.a", "stringValue": "x"}]}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "second", "args": {"b": 1}}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"willContinue": true, "partialArgs": [{"jsonPath": "$.c", "stringValue": "y"}]}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{"text": "done"}]}, "finishReason": "STOP"}]}),
+    ] {
+        collector(chunk).unwrap();
+    }
+
+    assert_eq!(
+        finalizer()["candidates"][0]["content"]["parts"],
+        json!([
+            {"functionCall": {"name": "first", "args": {"a": "x"}}},
+            {"functionCall": {"name": "second", "args": {"b": 1}}},
+            {"text": "done"}
+        ]),
+        "a whole call flushes the streamed one before it; a nameless streamed call is dropped"
+    );
+}
+
+#[test]
+fn test_streaming_starts_a_new_call_when_a_fragment_carries_a_different_id() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    for chunk in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "get_weather", "id": "c1", "willContinue": true, "partialArgs": [{"jsonPath": "$.city", "stringValue": "Paris"}]}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "get_weather", "id": "c2", "willContinue": true, "partialArgs": [{"jsonPath": "$.city", "stringValue": "Rome"}]}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"willContinue": false, "partialArgs": [{"jsonPath": "$.days", "numberValue": 2}]}
+        }]}}], "finishReason": "STOP"}),
+    ] {
+        collector(chunk).unwrap();
+    }
+
+    assert_eq!(
+        finalizer()["candidates"][0]["content"]["parts"],
+        json!([
+            {"functionCall": {"name": "get_weather", "id": "c1", "args": {"city": "Paris"}}},
+            {"functionCall": {"name": "get_weather", "id": "c2", "args": {"city": "Rome", "days": 2}}}
+        ])
+    );
+}
+
+#[test]
+fn test_streaming_treats_empty_partial_args_as_a_whole_call_and_empty_args_as_a_fragment() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    for chunk in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "first", "willContinue": true, "partialArgs": [{"jsonPath": "$.q", "stringValue": "x"}]}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "first", "args": {}}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "second", "args": {"k": 1}, "partialArgs": []}
+        }]}}], "finishReason": "STOP"}),
+    ] {
+        collector(chunk).unwrap();
+    }
+
+    assert_eq!(
+        finalizer()["candidates"][0]["content"]["parts"],
+        json!([
+            {"functionCall": {"name": "first", "args": {"q": "x"}}},
+            {"functionCall": {"name": "second", "args": {"k": 1}, "partialArgs": []}}
+        ])
+    );
+}
+
+#[test]
+fn test_streaming_merges_args_carried_by_a_fragment_and_rejects_a_malformed_fragment() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    for chunk in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {
+                "name": "f", "willContinue": true, "args": {"city": "Pa", "days": 2},
+                "partialArgs": [
+                    {"jsonPath": "$.city", "stringValue": "ris"},
+                    {"jsonPath": "$.address.city", "stringValue": "Paris"},
+                    {"jsonPath": "$.tags[0].name", "stringValue": "x"},
+                    {"jsonPath": "$.tags[0]", "nullValue": "NULL_VALUE"}
+                ]
+            }
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"args": {"days": 3, "address": {"city": "London"}}}
+        }]}}]}),
+    ] {
+        collector(chunk).unwrap();
+    }
+    let deep = format!("$.{}", vec!["d"; 129].join("."));
+    for partial_args in [
+        json!("nope"),
+        json!([{"jsonPath": "$.x", "nullValue": "null"}]),
+        json!([{"jsonPath": "$", "numberValue": 1}]),
+        json!([{"jsonPath": "$.big[10001]", "stringValue": "x"}]),
+        json!([{"jsonPath": deep, "numberValue": 1}]),
+    ] {
+        let mut collector = GeminiGenerateContentStreamingCodec::new().collector();
+        assert!(
+            collector(json!({"candidates": [{"index": 0, "content": {"parts": [{
+                "functionCall": {"name": "g", "partialArgs": partial_args}
+            }]}}]}))
+            .is_err()
+        );
+    }
+
+    assert_eq!(
+        finalizer()["candidates"][0]["content"]["parts"],
+        json!([{"functionCall": {
+            "name": "f",
+            "args": {"city": "Paris", "days": 3, "address": {"city": "London"}, "tags": [null]}
+        }}])
+    );
+}
+
+#[test]
+fn test_streaming_reads_function_call_argument_paths_like_adk() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    collector(json!({"candidates": [{"index": 0, "content": {"parts": [{
+        "functionCall": {
+            "name": "paths",
+            "partialArgs": [
+                {"jsonPath": "$['a.b']", "stringValue": "dotted"},
+                {"jsonPath": "$[\"q\\u0041\"]", "numberValue": 1},
+                {"jsonPath": "$['\\u12']", "numberValue": 2},
+                {"jsonPath": "$.x\\.y", "boolValue": true},
+                {"jsonPath": "$.list[ 1 ]", "stringValue": "one"},
+                {"jsonPath": "$.k\\", "stringValue": "trail"},
+                {"jsonPath": "$['\\uD83D\\uDE00']", "stringValue": "pair"},
+                {"jsonPath": "$['\\uD83Dx']", "stringValue": "lone"}
+            ]
+        }
+    }]}}]}))
+    .unwrap();
+
+    assert_eq!(
+        finalizer()["candidates"][0]["content"]["parts"][0]["functionCall"]["args"],
+        json!({
+            "a.b": "dotted",
+            "qA": 1,
+            "u12": 2,
+            "x.y": true,
+            "list": [null, "one"],
+            "k": "trail",
+            "\u{1F600}": "pair",
+            "\u{FFFD}x": "lone"
+        })
+    );
+}
+
+#[test]
 fn test_streaming_two_chunks_accumulated() {
     let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
