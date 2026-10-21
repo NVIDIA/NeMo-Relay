@@ -3848,3 +3848,93 @@ fn activation_unwind_is_recorded_before_scoped_rollback_and_closure() {
             .contains("private panic payload")
     );
 }
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn plugin_attribution_uses_selected_context_limit_through_public_initialization() {
+    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let _guard = lock_runtime_owner();
+    let _config = TestConfigEnvironment::set(Some(OsStr::new("1")));
+    reset_global();
+    register_plugin(Arc::new(PartialFailPlugin)).unwrap();
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_identity_bytes: 32,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = runtime.block_on(dynamic::initialize_with_diagnostics(
+        PluginConfig {
+            components: vec![PluginComponentSpec::new("partial.fail.plugin")],
+            ..Default::default()
+        },
+        None,
+        &service,
+    ));
+    match result {
+        Err(PluginError::RegistrationFailed(message)) => {
+            assert!(message.contains("partial.fail.plugin refused to finish initialization"));
+        }
+        _ => panic!("expected the original registration failure"),
+    }
+    let snapshot = service
+        .snapshot(DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let event = snapshot
+        .events
+        .iter()
+        .find(|event| event.code() == "plugin.registration_failed")
+        .unwrap();
+    assert_eq!(
+        event.origin.ownership.responsibility.as_deref(),
+        Some(&component_namespace("partial.fail.plugin", 1)[..32])
+    );
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(snapshot.coverage.loss.metadata_rejected.value.get(), 0);
+    assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 1);
+    assert!(test_plugin_host_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn plugin_attribution_truncation_preserves_utf8_boundaries() {
+    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_identity_bytes: 31,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let context = PluginRegistrationContext::in_diagnostic_context(
+        &service,
+        Some(PluginRegistrationNamespace::Plain("é".repeat(20))),
+    );
+    context.record_activation_failure(&PluginError::RegistrationFailed("original".into()));
+    let snapshot = service
+        .snapshot(DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(
+        snapshot.events[0].origin.ownership.responsibility,
+        Some("é".repeat(15))
+    );
+    assert_eq!(snapshot.coverage.loss.metadata_rejected.value.get(), 0);
+}
