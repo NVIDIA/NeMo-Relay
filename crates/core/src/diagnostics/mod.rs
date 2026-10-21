@@ -1188,19 +1188,18 @@ impl ComponentRecorder {
                 detail,
                 truncated,
                 projection_requested,
-                publication.as_mut().map(|(_, workspace)| workspace),
+                publication.as_mut().map(PublicationLease::workspace_mut),
             );
             if result.is_err() {
                 state.loss.observations_rejected.add(1);
             }
             result
         };
-        if let Some((index, mut workspace)) = publication {
+        if let Some(publication) = publication.as_mut() {
+            let workspace = publication.workspace_mut();
             if recorded.is_ok() && workspace.ready {
-                publish(&self.inner, &mut workspace);
+                publish(&self.inner, workspace);
             }
-            workspace.reset();
-            lock(&backend.publication)[index] = Some(workspace);
         }
         recorded.map(RecordOutcome::Recorded)
     }
@@ -1720,17 +1719,47 @@ impl PublicationWorkspace {
         self.ready = false;
     }
 }
-fn take_publication(backend: &Backend) -> Option<(usize, PublicationWorkspace)> {
-    let (index, mut workspace) = {
+/// Owns one bounded publication permit, following the query SnapshotLease.
+/// Cleanup runs before taking the pool lock: callback captures may reenter.
+struct PublicationLease<'a> {
+    backend: &'a Backend,
+    index: usize,
+    workspace: Option<PublicationWorkspace>,
+}
+impl PublicationLease<'_> {
+    fn workspace_mut(&mut self) -> &mut PublicationWorkspace {
+        self.workspace.as_mut().expect("live publication lease")
+    }
+}
+impl Drop for PublicationLease<'_> {
+    fn drop(&mut self) {
+        if let Some(mut workspace) = self.workspace.take() {
+            workspace.reset();
+            lock(&self.backend.publication)[self.index] = Some(workspace);
+        }
+    }
+}
+fn take_publication(backend: &Backend) -> Option<PublicationLease<'_>> {
+    let (index, workspace) = {
         let mut pool = lock(&backend.publication);
         let index = pool.iter().position(Option::is_some)?;
         (index, pool[index].take().expect("available workspace"))
     };
+    let mut lease = PublicationLease {
+        backend,
+        index,
+        workspace: Some(workspace),
+    };
     let projections = lock(&backend.projections);
-    for (target, source) in workspace.callbacks.iter_mut().zip(projections.slots.iter()) {
+    for (target, source) in lease
+        .workspace_mut()
+        .callbacks
+        .iter_mut()
+        .zip(projections.slots.iter())
+    {
         *target = source.as_ref().map(|(_, callback)| Arc::clone(callback));
     }
-    Some((index, workspace))
+    Some(lease)
 }
 thread_local! {static PROJECTING:RefCell<(usize,[usize;MAX_PROJECTION_DEPTH])>=const{RefCell::new((0,[0;MAX_PROJECTION_DEPTH]))};}
 struct ProjectionScope;
@@ -1819,4 +1848,48 @@ fn context_layout_bytes() -> usize {
         .0
         .pad_to_align()
         .size()
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    #[test]
+    fn publication_lease_restores_payload_and_permit_after_unwind() {
+        let diagnostics = Diagnostics::from_settings(
+            Diagnostics::default().source().clone(),
+            DiagnosticsSettings {
+                enabled: true,
+                limits: DiagnosticLimits {
+                    max_projection_workspaces: 1,
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+        let backend = diagnostics.inner.backend.as_ref().unwrap();
+        let reserved = diagnostics.memory_usage().reserved_bytes;
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let mut lease = take_publication(backend).unwrap();
+            assert!(take_publication(backend).is_none());
+            let workspace = lease.workspace_mut();
+            workspace.detail.push_str("retained payload");
+            workspace.event.detail = Some(DiagnosticDetail {
+                message: std::mem::take(&mut workspace.detail),
+                truncated: false,
+            });
+            workspace.ready = true;
+            panic!("unwind while holding a publication permit");
+        }));
+        assert!(outcome.is_err());
+        let mut lease = take_publication(backend).unwrap();
+        let workspace = lease.workspace_mut();
+        assert!(!workspace.ready);
+        assert!(workspace.event.detail.is_none());
+        assert!(workspace.detail.is_empty());
+        assert!(workspace.detail.capacity() >= diagnostics.limits().max_detail_bytes);
+        drop(lease);
+        assert_eq!(diagnostics.memory_usage().projection_workspaces, 0);
+        assert_eq!(diagnostics.memory_usage().reserved_bytes, reserved);
+    }
 }
