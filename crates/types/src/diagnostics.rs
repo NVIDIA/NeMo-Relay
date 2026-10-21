@@ -22,9 +22,10 @@ pub const DIAGNOSTIC_CATALOGUE_VERSION: u32 = 1;
 
 mod catalogue;
 pub use catalogue::{
-    BuiltinDiagnosticCode, ClassificationError, CommonPluginFailureCode, DiagnosticClassifier,
-    DiagnosticDomain, FailureClass, FailureCode, LoggingFailureCode, NoticeCode,
-    PluginDiagnosticFamily, PluginExecution, PluginFailureCode, PluginPhase, SuccessCode,
+    BuiltinDiagnosticCode, ClassificationError, CliFailureCode, CommonPluginFailureCode,
+    DiagnosticClassifier, DiagnosticDomain, FailureClass, FailureCode, LoggingFailureCode,
+    NoticeCode, PluginDiagnosticFamily, PluginExecution, PluginFailureCode, PluginPhase,
+    SuccessCode,
 };
 mod number;
 pub use number::DiagnosticNumber;
@@ -40,7 +41,7 @@ pub use accounting::{
 mod event;
 pub use event::{
     Classification, DiagnosticCorrelation, DiagnosticDetail, DiagnosticEvent, DiagnosticOutcome,
-    DiagnosticSeverity,
+    DiagnosticOutputSummary, DiagnosticSeverity,
 };
 mod context;
 pub use context::{PluginExecutionName, PluginObservationContext, PluginPhaseName};
@@ -53,3 +54,37 @@ mod query;
 pub use query::{DiagnosticCursor, DiagnosticQuery};
 mod snapshot;
 pub use snapshot::{ComponentSnapshot, DiagnosticSnapshot};
+
+/// Side-effect-free discovery, available even when snapshot queries are disabled.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DiagnosticDiscovery {
+    /// Version of this discovery contract.
+    pub discovery_version: u32,
+    /// Supported canonical snapshot version.
+    pub snapshot_version: u32,
+    /// Catalogue revision independent of snapshot shape.
+    pub catalogue_version: u32,
+    /// Running owner identity.
+    pub source: SourceIdentity,
+    /// Whether this owner selected collection at startup.
+    pub collection_enabled: bool,
+    /// Whether snapshot workspace was configured; not a transient busy signal.
+    pub queries_enabled: bool,
+    /// Configured component capacity.
+    pub max_components: DiagnosticNumber,
+    /// Configured shared recent-event capacity.
+    pub max_events: DiagnosticNumber,
+    /// Configured retained detail-pool bytes.
+    pub detail_pool_bytes: DiagnosticNumber,
+    /// Configured snapshot concurrency.
+    pub max_queries: DiagnosticNumber,
+    /// Configured maximum encoded snapshot bytes.
+    pub max_snapshot_bytes: DiagnosticNumber,
+    /// Backing allocation ceiling, excluding transport and whole-process RSS.
+    pub max_owned_bytes: DiagnosticNumber,
+    /// Aggregate backing-memory inspection is implemented.
+    pub memory_inspection: bool,
+    /// Detailed retained evidence requires explicit inspection authority.
+    pub restricted_detail: bool,
+}

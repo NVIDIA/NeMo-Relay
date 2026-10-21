@@ -2488,6 +2488,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
+        diagnostics_http: None,
         config: config.clone(),
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,
@@ -2541,6 +2542,7 @@ async fn models_rejects_non_get_requests_directly() {
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
+        diagnostics_http: None,
         config: config.clone(),
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,
@@ -3169,6 +3171,7 @@ async fn models_refuses_an_unusable_named_upstream() {
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
+        diagnostics_http: None,
         config: config.clone(),
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,

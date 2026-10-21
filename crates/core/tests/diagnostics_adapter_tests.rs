@@ -488,14 +488,15 @@ fn typed_projection_reuses_logging_without_replaying_history_or_pinning_reader()
         .filter(|record: &Value| record["event"] == "plugin.internal")
         .collect();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["message"], "One projected observation");
+    assert_eq!(records[0]["message"], "Diagnostic observation");
+    assert!(!output.contains("One projected observation"));
     assert_eq!(records[0]["target"], "nemo_relay.diagnostics");
     assert_eq!(
         records[0]["fields"]["diagnostic"]["classification"]["canonical_code"],
         "plugin.internal"
     );
     assert_eq!(
-        records[0]["fields"]["diagnostic"]["component"]["instance_id"],
+        records[0]["fields"]["diagnostic"]["component_instance_id"],
         producer.identity().unwrap().instance_id.to_string()
     );
     assert_eq!(
@@ -528,7 +529,7 @@ fn typed_projection_reuses_logging_without_replaying_history_or_pinning_reader()
 }
 
 #[test]
-fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs() {
+fn restricted_detail_does_not_consume_logging_projection_payload_budget() {
     let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
     let service = enabled();
     let producer = service
@@ -537,7 +538,7 @@ fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs()
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("capped.jsonl");
     let runtime = file_logging(&service, path.clone());
-    // JSON escaping exceeds the adapter's fixed serialization ceiling despite bounded input.
+    // Raw detail stays in retention; its escaping cost cannot exhaust output payloads.
     let message = "\u{1}".repeat(4096);
     producer.record_lazy(|| internal(&message)).unwrap();
     log::error!(target: "nemo_relay.test", event = "operational_after_projection_limit"; "The ordinary logger still works");
@@ -571,7 +572,7 @@ fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs()
     assert_eq!(page.events.len(), 1);
     assert_eq!(
         page.coverage.loss.projection_deliveries_omitted.value.get(),
-        1
+        0
     );
     let output = std::fs::read_to_string(path).unwrap();
     assert!(
@@ -580,7 +581,8 @@ fn capped_logging_projection_reports_loss_without_undoing_counts_or_other_logs()
             .any(|line| serde_json::from_str::<Value>(line).unwrap()["event"]
                 == "operational_after_projection_limit")
     );
-    assert!(!output.contains("plugin.internal"));
+    assert!(output.contains("plugin.internal"));
+    assert!(!output.contains("\\u0001"));
 }
 
 #[test]

@@ -82,7 +82,7 @@ pub struct ExtensionHandle {
 pub enum DiagnosticDetailRef<'a> {
     /// Supply no optional text evidence.
     None,
-    /// Borrow already-safe text for a capped copy; bounding does not redact secrets.
+    /// Borrow restricted text for a capped copy; bounding does not redact secrets.
     Text(&'a str),
     /// Format into capped scratch only when enabled; retain no source value.
     Display(&'a dyn fmt::Display),
@@ -138,7 +138,7 @@ pub struct Observation<'a> {
     pub severity: DiagnosticSeverity,
     /// Explicit observed operation outcome for summaries and windows.
     pub outcome: DiagnosticOutcome,
-    /// Borrowed safe correlation, never an aggregate key.
+    /// Borrowed caller correlation, never an aggregate key.
     pub correlation: DiagnosticCorrelation<'a>,
     /// Plugin execution and phase names, validated before fixed-size core retention.
     pub context: PluginObservationContext,

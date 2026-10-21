@@ -2690,6 +2690,7 @@ anthropic_auth_header = "Basic file-anthropic"
         ready_file: None,
         max_hook_payload_bytes: Some(222),
         max_passthrough_body_bytes: Some(333),
+        prepared: None,
     };
 
     let resolved = resolve_server_config(&args).unwrap();

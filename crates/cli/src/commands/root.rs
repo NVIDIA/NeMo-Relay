@@ -46,12 +46,24 @@ pub(crate) struct Cli {
     pub(crate) server: ServerArgs,
     #[command(flatten)]
     pub(super) logging: LoggingArgs,
+    /// Enable bounded diagnostic collection at startup (default: false).
+    #[arg(long, global = true, env = "NEMO_RELAY_DIAGNOSTICS", num_args = 0..=1, default_missing_value = "true")]
+    pub(crate) diagnostics: Option<bool>,
+    /// Permit authorized whole-context diagnostic reads on the existing listener.
+    #[arg(long, global = true, env = "NEMO_RELAY_DIAGNOSTICS_HTTP", num_args = 0..=1, default_missing_value = "true")]
+    pub(crate) diagnostics_http: Option<bool>,
+    /// Write one bounded local snapshot to stderr after command and logging teardown.
+    #[arg(long, global = true)]
+    pub(crate) diagnostics_final: bool,
+
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum Command {
+    /// Inspect diagnostics on an existing local gateway; never launches or recovers it.
+    Diagnostics(super::runtime_diagnostics::InspectCommand),
     /// Run or connect to the multi-user NeMo Relay daemon.
     Daemon(DaemonCommand),
     /// Run Claude Code with observability (setup on first use)
@@ -149,6 +161,7 @@ pub(crate) enum Command {
 impl Command {
     pub(crate) fn log_name(&self) -> &'static str {
         match self {
+            Self::Diagnostics(_) => "diagnostics",
             Self::Daemon(_) => "daemon",
             Self::Claude(_) => "claude",
             Self::Codex(_) => "codex",
@@ -172,7 +185,7 @@ impl Command {
     /// Administrative and configuration-editing commands must not depend on ambient personal
     /// logging state. This keeps repair and managed deployment workflows deterministic.
     pub(crate) fn skips_logging(&self) -> bool {
-        matches!(self, Self::Config(_))
+        matches!(self, Self::Config(_) | Self::Diagnostics(_))
             || matches!(self, Self::Gateway(command) if command.is_stop())
             || matches!(self, Self::Plugins(command) if command.is_edit())
             || matches!(self, Self::Doctor(command) if command.managed_bundle.is_some())

@@ -3,10 +3,15 @@
 
 mod http_model_hosts;
 mod logging;
+mod runtime_diagnostics;
+pub(crate) use runtime_diagnostics::{PreparedConfig, RuntimeDiagnosticsConfig};
 mod types;
 
 pub(crate) use http_model_hosts::{HttpModelHosts, remote_http};
 pub(crate) use types::*;
+
+use crate::runtime_diagnostics::{self as diag, Operation};
+use nemo_relay::diagnostics::CliFailureCode;
 
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -62,6 +67,7 @@ struct FileConfig {
     upstream: Option<FileUpstreamConfig>,
     agents: Option<FileAgentsConfig>,
     logging: Option<logging::FileLoggingConfig>,
+    diagnostics: Option<RuntimeDiagnosticsConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -107,7 +113,22 @@ struct FileAgentCommandConfig {
 /// File discovery and merge behavior live in `load_shared_config`; this function only applies the
 /// server-facing command-line layer so launcher-only settings cannot leak into daemon mode.
 pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedConfig, CliError> {
-    let mut resolved = load_shared_config(args.config.as_ref(), args.plugin_config_path.as_ref())?;
+    let result = resolve_server_config_inner(args);
+    diag::result(
+        Operation::Configuration,
+        CliFailureCode::Configuration,
+        None,
+        &result,
+    );
+    result
+}
+
+fn resolve_server_config_inner(args: &GatewayOverrides) -> Result<ResolvedConfig, CliError> {
+    let mut resolved = load_shared_config_prepared(
+        args.config.as_ref(),
+        args.plugin_config_path.as_ref(),
+        args.prepared.as_deref(),
+    )?;
     apply_server_overrides(&mut resolved.gateway, args)?;
     let explicit_plugin_config =
         explicit_plugin_config_path(args.config.as_ref(), args.plugin_config_path.as_ref());
@@ -235,7 +256,14 @@ fn resolve_logging_config_section(
         merge_gateway_config_toml(&mut merged, parsed);
     }
 
-    let Some(logging) = toml_value_at_path(&merged, section).cloned() else {
+    resolve_logging_from_document(&merged, section)
+}
+
+fn resolve_logging_from_document(
+    document: &toml::Value,
+    section: &[&str],
+) -> Result<LoggingConfig, CliError> {
+    let Some(logging) = toml_value_at_path(document, section).cloned() else {
         return Ok(LoggingConfig::default());
     };
     let mut document = toml::map::Map::new();
@@ -257,13 +285,26 @@ fn toml_value_at_path<'a>(value: &'a toml::Value, path: &[&str]) -> Option<&'a t
 pub(crate) fn resolve_persistent_server_config(
     args: &GatewayOverrides,
 ) -> Result<ResolvedConfig, CliError> {
+    let result = resolve_persistent_server_config_inner(args);
+    diag::result(
+        Operation::Configuration,
+        CliFailureCode::Configuration,
+        None,
+        &result,
+    );
+    result
+}
+
+fn resolve_persistent_server_config_inner(
+    args: &GatewayOverrides,
+) -> Result<ResolvedConfig, CliError> {
     if args.config.is_some() || args.plugin_config_path.is_some() || args.ready_file.is_some() {
         return Err(CliError::Config(
             "nemo-relay mcp uses system and user configuration only; use `nemo-relay run` for explicit configuration"
                 .into(),
         ));
     }
-    let mut resolved = load_shared_config(None, None)?;
+    let mut resolved = load_shared_config_prepared(None, None, args.prepared.as_deref())?;
     apply_server_overrides(&mut resolved.gateway, args)?;
     let active_dynamic_plugins = active_dynamic_plugin_components_for_identity(None, &resolved)?;
     resolved.bootstrap_fingerprint = Some(persistent_bootstrap_fingerprint(
@@ -386,7 +427,11 @@ fn persistent_bootstrap_fingerprint(
     let environment = env::vars_os().filter_map(|(name, _)| name.into_string().ok());
     for name in crate::mcp_environment::forwarded_names(environment, gateway.plugin_config.as_ref())
     {
-        if name == PLUGIN_IDLE_TIMEOUT_ENV || name == PLUGIN_HEARTBEAT_INTERVAL_ENV {
+        if name == PLUGIN_IDLE_TIMEOUT_ENV
+            || name == PLUGIN_HEARTBEAT_INTERVAL_ENV
+            || name.eq_ignore_ascii_case("NEMO_RELAY_DIAGNOSTICS")
+            || name.eq_ignore_ascii_case("NEMO_RELAY_DIAGNOSTICS_HTTP")
+        {
             continue;
         }
         digest.update(&[0]);
@@ -670,9 +715,20 @@ impl BootstrapChallengeKey {
         hmac::verify(&self.0, &message, &tag).is_ok()
     }
 
-    /// Returns a stable, per-user proof that authorizes use of credentials forwarded to a
-    /// managed sidecar. The HMAC key remains in Relay's private bootstrap state; coding-agent
-    /// configuration stores only this domain-separated proof.
+    /// Domain-separated read capability; provider and shutdown credentials cannot authorize it.
+    pub(crate) fn diagnostics_token(&self) -> String {
+        encode_hmac_tag(hmac::sign(&self.0, b"nemo-relay/diagnostics-read/v1"))
+    }
+    pub(crate) fn verify_diagnostics_token(&self, token: &str) -> bool {
+        token
+            .strip_prefix("hmac-sha256:")
+            .and_then(decode_fixed_hex::<32>)
+            .is_some_and(|tag| {
+                hmac::verify(&self.0, b"nemo-relay/diagnostics-read/v1", &tag).is_ok()
+            })
+    }
+
+    /// Stable per-user provider proof; coding-agent configuration receives no read authority.
     pub(crate) fn client_token(&self) -> String {
         encode_hmac_tag(hmac::sign(&self.0, BOOTSTRAP_CLIENT_TOKEN_DOMAIN))
     }
@@ -1334,6 +1390,20 @@ pub(crate) fn resolve_run_config(
     command: &RunOverrides,
     inherited: Option<&GatewayOverrides>,
 ) -> Result<ResolvedConfig, CliError> {
+    let result = resolve_run_config_inner(command, inherited);
+    diag::result(
+        Operation::Configuration,
+        CliFailureCode::Configuration,
+        None,
+        &result,
+    );
+    result
+}
+
+fn resolve_run_config_inner(
+    command: &RunOverrides,
+    inherited: Option<&GatewayOverrides>,
+) -> Result<ResolvedConfig, CliError> {
     let config = command
         .config
         .as_ref()
@@ -1342,7 +1412,11 @@ pub(crate) fn resolve_run_config(
         .plugin_config_path
         .as_ref()
         .or_else(|| inherited.and_then(|args| args.plugin_config_path.as_ref()));
-    let mut resolved = load_shared_config(config, plugin_config_path)?;
+    let mut resolved = load_shared_config_prepared(
+        config,
+        plugin_config_path,
+        inherited.and_then(|args| args.prepared.as_deref()),
+    )?;
     if let Some(args) = inherited {
         apply_server_overrides(&mut resolved.gateway, args)?;
     }
@@ -1510,11 +1584,38 @@ fn load_shared_config(
     )
 }
 
+fn load_shared_config_prepared(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+    prepared: Option<&PreparedConfig>,
+) -> Result<ResolvedConfig, CliError> {
+    match prepared.and_then(PreparedConfig::take_document) {
+        Some(document) => finish_shared_config(
+            document,
+            plugin_config_paths(explicit, plugin_config_path),
+            apply_env_config,
+        ),
+        None => load_shared_config(explicit, plugin_config_path),
+    }
+}
+
 fn load_config_from_paths(
     config_paths: Vec<(PathBuf, bool)>,
     plugin_config_paths: Vec<PathBuf>,
     apply_environment: fn(&mut GatewayConfig) -> Result<(), CliError>,
 ) -> Result<ResolvedConfig, CliError> {
+    let merged = read_shared_documents(config_paths)?;
+    finish_shared_config(merged, plugin_config_paths, apply_environment)
+}
+
+fn read_shared_documents(config_paths: Vec<(PathBuf, bool)>) -> Result<toml::Value, CliError> {
+    read_shared_documents_for_startup(config_paths, true)
+}
+
+fn read_shared_documents_for_startup(
+    config_paths: Vec<(PathBuf, bool)>,
+    validate_runtime: bool,
+) -> Result<toml::Value, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
     for (path, required) in config_paths {
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
@@ -1527,7 +1628,7 @@ fn load_config_from_paths(
                 CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
             })?;
         let legacy_observability = legacy_observability_sections(&parsed);
-        if !legacy_observability.is_empty() {
+        if validate_runtime && !legacy_observability.is_empty() {
             return Err(CliError::Config(format!(
                 "legacy observability config in {} is no longer supported: {}; configure \
                  observability in plugins.toml with `nemo-relay plugins edit`",
@@ -1535,13 +1636,24 @@ fn load_config_from_paths(
                 legacy_observability.join(", ")
             )));
         }
-        if parsed.get("plugins").is_some() {
+        if validate_runtime && parsed.get("plugins").is_some() {
             return Err(CliError::Config(format!(
                 "plugin configuration in {} is no longer supported; move it to plugins.toml",
                 path.display()
             )));
         }
         merge_gateway_config_toml(&mut merged, parsed);
+    }
+    Ok(merged)
+}
+
+fn finish_shared_config(
+    merged: toml::Value,
+    plugin_config_paths: Vec<PathBuf>,
+    apply_environment: fn(&mut GatewayConfig) -> Result<(), CliError>,
+) -> Result<ResolvedConfig, CliError> {
+    if merged.get("plugins").is_some() || !legacy_observability_sections(&merged).is_empty() {
+        return Err(CliError::Config("legacy observability/plugin sections in config.toml are unsupported; configure them in plugins.toml".into()));
     }
     let plugin_toml = load_plugin_toml_config_from_paths(plugin_config_paths)?;
     let mut resolved = ResolvedConfig {
@@ -1699,6 +1811,10 @@ pub(crate) fn set_test_system_config_dir(path: Option<PathBuf>) -> Option<PathBu
 // are ignored, preserving defaults and prior merge layers.
 fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Result<(), CliError> {
     let config = parse_file_config(value)?;
+    if let Some(diagnostics) = config.diagnostics {
+        diagnostics.validate()?;
+        resolved.diagnostics = diagnostics;
+    }
     apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
     apply_file_upstream_config(&mut resolved.gateway, config.upstream)?;
     apply_file_agents_config(&mut resolved.agents, config.agents);

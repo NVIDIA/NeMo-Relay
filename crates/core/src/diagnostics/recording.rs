@@ -257,21 +257,16 @@ pub(super) fn record_observation(
         state.loss.correlations_truncated.add(1);
     }
     if let Some(workspace) = publication {
-        workspace.fill(
-            state,
-            &component,
-            origin,
+        if !workspace.fill(
+            component.instance_id,
             code,
             class,
             sequence,
             observed_at,
             observation,
-            context,
-            detail,
-            truncated,
-            session,
-            request,
-        );
+        ) {
+            state.loss.projections_suppressed.add(1);
+        }
     } else if projection_requested {
         state.loss.projection_deliveries_omitted.add(1);
     }

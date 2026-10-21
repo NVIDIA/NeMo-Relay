@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct GatewayOverrides {
+    pub(crate) prepared: Option<std::sync::Arc<crate::configuration::PreparedConfig>>,
     pub(crate) config: Option<PathBuf>,
     pub(crate) bind: Option<SocketAddr>,
     pub(crate) openai_base_url: Option<String>,

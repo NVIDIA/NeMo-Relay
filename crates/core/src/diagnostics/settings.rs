@@ -87,7 +87,8 @@ impl Default for DiagnosticLimits {
     }
 }
 impl DiagnosticLimits {
-    pub(super) fn validate(&self) -> Result<(), DiagnosticError> {
+    /// Validate capacities and checked backing sizes without allocating a store.
+    pub fn validate(&self) -> Result<(), DiagnosticError> {
         if self.max_components == 0
             || self.max_identity_bytes == 0
             || self.max_identity_bytes > ID_BYTES

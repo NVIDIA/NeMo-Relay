@@ -101,6 +101,8 @@ impl FailureClass {
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticDomain {
+    /// CLI-owned execution and transport operations.
+    Cli,
     /// Plugin configuration and activation.
     Plugin,
     /// Operational logging and its sinks.
@@ -415,12 +417,79 @@ impl PluginFailureCode {
     }
 }
 
+/// Failures at integrated CLI operation boundaries; causes come from producers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(strum::EnumIter))]
+pub enum CliFailureCode {
+    /// Failure to clean up a supervised child tree.
+    ChildCleanup,
+    /// Failure while reading or decoding an upstream response body.
+    UpstreamResponse,
+    /// Observation identified by `cli.command_failed`.
+    Command,
+    /// Observation identified by `cli.configuration_failed`.
+    Configuration,
+    /// Observation identified by `cli.gateway.bind_failed`.
+    GatewayBind,
+    /// Observation identified by `cli.gateway.serve_failed`.
+    GatewayServe,
+    /// Observation identified by `cli.acquire_failed`.
+    Acquire,
+    /// Observation identified by `cli.child.spawn_failed`.
+    ChildSpawn,
+    /// Observation identified by `cli.child.wait_failed`.
+    ChildWait,
+    /// Observation identified by `cli.hook.forward_failed`.
+    HookForward,
+    /// Observation identified by `cli.upstream.transport_failed`.
+    UpstreamTransport,
+}
+impl CliFailureCode {
+    /// Stable catalogue name.
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::ChildCleanup => "cli.child.cleanup_failed",
+            Self::UpstreamResponse => "cli.upstream.response_failed",
+            Self::Command => "cli.command_failed",
+            Self::Configuration => "cli.configuration_failed",
+            Self::GatewayBind => "cli.gateway.bind_failed",
+            Self::GatewayServe => "cli.gateway.serve_failed",
+            Self::Acquire => "cli.acquire_failed",
+            Self::ChildSpawn => "cli.child.spawn_failed",
+            Self::ChildWait => "cli.child.wait_failed",
+            Self::HookForward => "cli.hook.forward_failed",
+            Self::UpstreamTransport => "cli.upstream.transport_failed",
+        }
+    }
+    /// Causes admissible at CLI boundaries; producers must not infer from text.
+    pub const fn allowed_classes(self) -> &'static [FailureClass] {
+        &[
+            FailureClass::Unknown,
+            FailureClass::Io,
+            FailureClass::InvalidInput,
+            FailureClass::Timeout,
+            FailureClass::Authentication,
+            FailureClass::PolicyRejected,
+            FailureClass::Unavailable,
+            FailureClass::PermissionDenied,
+            FailureClass::NotFound,
+            FailureClass::Conflict,
+            FailureClass::ExecutionFailed,
+        ]
+    }
+}
+
 /// Failure event hierarchy for integrated producers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum FailureCode {
+    /// CLI execution and transport failures.
+    Cli(CliFailureCode),
     /// Plugin failures.
     Plugin(PluginFailureCode),
     /// Logging failures.
@@ -432,6 +501,7 @@ impl FailureCode {
     #[must_use]
     pub const fn canonical_name(self) -> &'static str {
         match self {
+            Self::Cli(code) => code.canonical_name(),
             Self::Plugin(code) => code.canonical_name(),
             Self::Logging(code) => code.canonical_name(),
         }
@@ -440,6 +510,7 @@ impl FailureCode {
     #[must_use]
     pub const fn domain(self) -> DiagnosticDomain {
         match self {
+            Self::Cli(_) => DiagnosticDomain::Cli,
             Self::Plugin(_) => DiagnosticDomain::Plugin,
             Self::Logging(_) => DiagnosticDomain::Logging,
         }
@@ -448,6 +519,7 @@ impl FailureCode {
     #[must_use]
     pub const fn allowed_classes(self) -> &'static [FailureClass] {
         match self {
+            Self::Cli(code) => code.allowed_classes(),
             Self::Plugin(code) => code.allowed_classes(),
             Self::Logging(code) => code.allowed_classes(),
         }
@@ -461,6 +533,27 @@ impl FailureCode {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(strum::EnumIter))]
 pub enum SuccessCode {
+    /// An upstream transport returned headers, independently of provider status.
+    CliUpstreamHeadersReceived,
+    /// An upstream response body was fully read, independently of provider status.
+    CliUpstreamBodyCompleted,
+    /// A supervised child tree was cleaned up.
+    CliChildCleaned,
+    /// Observation identified by `cli.command_completed`.
+    CliCommandCompleted,
+    /// Observation identified by `cli.gateway.bound`.
+    CliGatewayBound,
+    /// Observation identified by `cli.gateway.stopped`.
+    CliGatewayStopped,
+    /// Observation identified by `cli.acquired`.
+    CliAcquired,
+    /// Observation identified by `cli.child.spawned`.
+    CliChildSpawned,
+    /// Observation identified by `cli.child.waited`.
+    CliChildWaited,
+    /// Observation identified by `cli.hook.forwarded`.
+    CliHookForwarded,
+
     /// Observation identified by `logging.initialized`.
     LoggingInitialized,
     /// Observation identified by `logging.shutdown_completed`.
@@ -474,6 +567,17 @@ impl SuccessCode {
     #[must_use]
     pub const fn canonical_name(self) -> &'static str {
         match self {
+            Self::CliUpstreamHeadersReceived => "cli.upstream.headers_received",
+            Self::CliUpstreamBodyCompleted => "cli.upstream.body_completed",
+            Self::CliChildCleaned => "cli.child.cleaned",
+            Self::CliCommandCompleted => "cli.command_completed",
+            Self::CliGatewayBound => "cli.gateway.bound",
+            Self::CliGatewayStopped => "cli.gateway.stopped",
+            Self::CliAcquired => "cli.acquired",
+            Self::CliChildSpawned => "cli.child.spawned",
+            Self::CliChildWaited => "cli.child.waited",
+            Self::CliHookForwarded => "cli.hook.forwarded",
+
             Self::LoggingInitialized => "logging.initialized",
             Self::LoggingShutdownCompleted => "logging.shutdown_completed",
             Self::SinkInitialized => "logging.sink.initialized",
@@ -488,6 +592,13 @@ impl SuccessCode {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(strum::EnumIter))]
 pub enum NoticeCode {
+    /// Observation identified by `cli.nonzero_exit`.
+    CliNonzeroExit,
+    /// Observation identified by `cli.policy_rejected`.
+    CliPolicyRejected,
+    /// Observation identified by `cli.child.exited`.
+    CliChildExited,
+
     /// Observation identified by `plugin.configuration_inherited`.
     ConfigurationInherited,
 }
@@ -497,6 +608,10 @@ impl NoticeCode {
     #[must_use]
     pub const fn canonical_name(self) -> &'static str {
         match self {
+            Self::CliNonzeroExit => "cli.nonzero_exit",
+            Self::CliPolicyRejected => "cli.policy_rejected",
+            Self::CliChildExited => "cli.child.exited",
+
             Self::ConfigurationInherited => "plugin.configuration_inherited",
         }
     }
@@ -535,6 +650,23 @@ impl BuiltinDiagnosticCode {
         match self {
             Self::Failure(code) => code.domain(),
             Self::Success(
+                SuccessCode::CliUpstreamHeadersReceived
+                | SuccessCode::CliUpstreamBodyCompleted
+                | SuccessCode::CliChildCleaned
+                | SuccessCode::CliCommandCompleted
+                | SuccessCode::CliGatewayBound
+                | SuccessCode::CliGatewayStopped
+                | SuccessCode::CliAcquired
+                | SuccessCode::CliChildSpawned
+                | SuccessCode::CliChildWaited
+                | SuccessCode::CliHookForwarded,
+            )
+            | Self::Notice(
+                NoticeCode::CliNonzeroExit
+                | NoticeCode::CliPolicyRejected
+                | NoticeCode::CliChildExited,
+            ) => DiagnosticDomain::Cli,
+            Self::Success(
                 SuccessCode::LoggingInitialized
                 | SuccessCode::LoggingShutdownCompleted
                 | SuccessCode::SinkInitialized,
@@ -553,7 +685,25 @@ impl BuiltinDiagnosticCode {
             Self::Notice(NoticeCode::ConfigurationInherited) => {
                 Some(PluginDiagnosticFamily::Common)
             }
-            Self::Failure(FailureCode::Logging(_))
+            Self::Failure(FailureCode::Cli(_))
+            | Self::Success(
+                SuccessCode::CliUpstreamHeadersReceived
+                | SuccessCode::CliUpstreamBodyCompleted
+                | SuccessCode::CliChildCleaned
+                | SuccessCode::CliCommandCompleted
+                | SuccessCode::CliGatewayBound
+                | SuccessCode::CliGatewayStopped
+                | SuccessCode::CliAcquired
+                | SuccessCode::CliChildSpawned
+                | SuccessCode::CliChildWaited
+                | SuccessCode::CliHookForwarded,
+            )
+            | Self::Notice(
+                NoticeCode::CliNonzeroExit
+                | NoticeCode::CliPolicyRejected
+                | NoticeCode::CliChildExited,
+            )
+            | Self::Failure(FailureCode::Logging(_))
             | Self::Success(
                 SuccessCode::LoggingInitialized
                 | SuccessCode::LoggingShutdownCompleted
@@ -578,10 +728,34 @@ impl BuiltinDiagnosticCode {
             _ => false,
         }
     }
-    /// All phase-one catalogue entries.
+    /// All implemented catalogue entries.
     #[must_use]
     pub fn all() -> &'static [Self] {
         &[
+            Self::Failure(FailureCode::Cli(CliFailureCode::ChildCleanup)),
+            Self::Failure(FailureCode::Cli(CliFailureCode::UpstreamResponse)),
+            Self::Success(SuccessCode::CliUpstreamHeadersReceived),
+            Self::Success(SuccessCode::CliUpstreamBodyCompleted),
+            Self::Success(SuccessCode::CliChildCleaned),
+            Self::Failure(FailureCode::Cli(CliFailureCode::Command)),
+            Self::Failure(FailureCode::Cli(CliFailureCode::Configuration)),
+            Self::Failure(FailureCode::Cli(CliFailureCode::GatewayBind)),
+            Self::Failure(FailureCode::Cli(CliFailureCode::GatewayServe)),
+            Self::Failure(FailureCode::Cli(CliFailureCode::Acquire)),
+            Self::Failure(FailureCode::Cli(CliFailureCode::ChildSpawn)),
+            Self::Failure(FailureCode::Cli(CliFailureCode::ChildWait)),
+            Self::Failure(FailureCode::Cli(CliFailureCode::HookForward)),
+            Self::Failure(FailureCode::Cli(CliFailureCode::UpstreamTransport)),
+            Self::Success(SuccessCode::CliCommandCompleted),
+            Self::Success(SuccessCode::CliGatewayBound),
+            Self::Success(SuccessCode::CliGatewayStopped),
+            Self::Success(SuccessCode::CliAcquired),
+            Self::Success(SuccessCode::CliChildSpawned),
+            Self::Success(SuccessCode::CliChildWaited),
+            Self::Success(SuccessCode::CliHookForwarded),
+            Self::Notice(NoticeCode::CliNonzeroExit),
+            Self::Notice(NoticeCode::CliPolicyRejected),
+            Self::Notice(NoticeCode::CliChildExited),
             Self::Failure(FailureCode::Plugin(PluginFailureCode::Common(
                 CommonPluginFailureCode::ConfigurationInvalid,
             ))),
@@ -665,6 +839,10 @@ mod tests {
             .chain(
                 LoggingFailureCode::iter()
                     .map(|code| BuiltinDiagnosticCode::Failure(FailureCode::Logging(code))),
+            )
+            .chain(
+                CliFailureCode::iter()
+                    .map(|code| BuiltinDiagnosticCode::Failure(FailureCode::Cli(code))),
             )
             .chain(SuccessCode::iter().map(BuiltinDiagnosticCode::Success))
             .chain(NoticeCode::iter().map(BuiltinDiagnosticCode::Notice))
