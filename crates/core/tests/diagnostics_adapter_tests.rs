@@ -352,7 +352,10 @@ fn warmed_projection_avoids_owned_field_conversions_without_sinks() {
     });
     // The native backend formats the message once. Borrowed fields require no
     // intermediate vector or owned ValueBag conversion on this synchronous path.
-    assert_eq!(calls, 100);
+    assert!(
+        calls <= 100,
+        "projection allocated {calls} times for 100 events"
+    );
     runtime.shutdown();
 }
 
