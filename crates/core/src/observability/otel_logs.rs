@@ -47,10 +47,11 @@ use super::otel_signal::{
     SignalResourceLineage, SignalRuntimeDiagnostics, automatic_otlp_http_client,
     automatic_protocol_is_grpc, automatic_protocol_is_unset, automatic_signal_endpoint,
     automatic_signal_headers_configured, build_grpc_metadata, build_in_owned_runtime,
-    classify_metric_mark, promoted_signal_resource_attributes, record_resource_pipeline_limit,
-    reject_signal_header_environment, resolve_header_env, resolve_http_signal_endpoint,
-    retry_batch_processor_channel_full, should_relog_runtime_diagnostic, signal_resource,
-    telemetry_resource, validate_signal_headers, validate_telemetry_sdk_resource_attributes,
+    classify_metric_mark, drain_startup_queue, promoted_signal_resource_attributes,
+    record_resource_pipeline_limit, reject_signal_header_environment, resolve_header_env,
+    resolve_http_signal_endpoint, retry_batch_processor_channel_full,
+    should_relog_runtime_diagnostic, signal_resource, telemetry_resource, validate_signal_headers,
+    validate_telemetry_sdk_resource_attributes,
 };
 use super::{OpenTelemetryRuntimeDiagnostics, validate_metadata_promotion_prefixes};
 
@@ -710,7 +711,7 @@ fn build_log_provider(
         diagnostics,
         retry_timeout: config.timeout,
     };
-    Ok(SdkLoggerProvider::builder()
+    let provider = SdkLoggerProvider::builder()
         .with_resource(if config.automatic {
             Resource::builder().build()
         } else if let Some(attributes) = resource_attributes {
@@ -724,7 +725,9 @@ fn build_log_provider(
             )
         })
         .with_log_processor(processor)
-        .build())
+        .build();
+    drain_startup_queue(|| provider.force_flush())?;
+    Ok(provider)
 }
 
 /// Return false at capacity so callers route through the configured base provider.
