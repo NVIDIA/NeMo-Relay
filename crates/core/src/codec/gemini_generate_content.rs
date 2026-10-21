@@ -2286,16 +2286,12 @@ fn replacement_content_part(
     replacement: Json,
     content_is_parts_form: bool,
 ) -> Json {
-    if !content_is_parts_form
-        && orig_part.get("text").is_some()
-        && replacement.get("text").is_some()
-    {
-        let mut obj = orig_part.as_object().cloned().unwrap_or_default();
-        obj.insert("text".into(), replacement.get("text").unwrap().clone());
-        Json::Object(obj)
-    } else {
-        replacement
+    if content_is_parts_form {
+        return replacement;
     }
+    let mut part = orig_part.as_object().cloned().unwrap_or_default();
+    part.extend(replacement.as_object().cloned().unwrap_or_default());
+    Json::Object(part)
 }
 
 fn merge_gemini_original_parts(
@@ -2348,7 +2344,9 @@ fn merge_gemini_original_part(
         return false;
     }
     let is_thought = orig_part.get("thought").and_then(Json::as_bool) == Some(true);
-    let is_content_part = !is_thought && orig_part.get("functionResponse").is_none();
+    let is_content_part = !is_thought
+        && orig_part.get("functionResponse").is_none()
+        && (content_is_parts_form || orig_part.get("text").is_some());
     if !is_content_part {
         parts.push(orig_part.clone());
         return false;
@@ -2360,12 +2358,6 @@ fn merge_gemini_original_part(
             content_is_parts_form,
         ));
         return true;
-    }
-    if !content_is_parts_form
-        && (orig_part.get("text").is_none()
-            || (orig_part.get("text").is_some() && orig_part.get("thoughtSignature").is_some()))
-    {
-        parts.push(orig_part.clone());
     }
     false
 }

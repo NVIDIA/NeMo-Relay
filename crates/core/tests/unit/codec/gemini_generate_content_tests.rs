@@ -2894,6 +2894,76 @@ fn test_encode_inline_data_preserved_when_text_changes() {
 }
 
 #[test]
+fn test_encode_leading_inline_data_preserved_when_text_changes() {
+    let codec = GeminiGenerateContentCodec;
+    let image_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ==";
+    let original = make_request(json!({
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"inlineData": {"mimeType": "image/png", "data": image_data}},
+                {"text": "what is in this image?"}
+            ]
+        }]
+    }));
+
+    let mut annotated = codec.decode(&original).unwrap();
+
+    if let Message::User { content, .. } = &mut annotated.messages[0] {
+        *content = MessageContent::Text("Please describe this image in detail.".into());
+    }
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let parts = encoded.content.get("contents").unwrap().as_array().unwrap()[0]
+        .get("parts")
+        .unwrap()
+        .as_array()
+        .unwrap();
+
+    assert_eq!(
+        parts,
+        &vec![
+            json!({"inlineData": {"mimeType": "image/png", "data": image_data}}),
+            json!({"text": "Please describe this image in detail."}),
+        ],
+        "a leading inlineData part must keep its slot when only the text changes"
+    );
+}
+
+#[test]
+fn test_encode_string_edit_drops_a_signed_last_text_part_that_lost_its_slot() {
+    let codec = GeminiGenerateContentCodec;
+    let original = make_request(json!({
+        "contents": [
+            {"role": "user", "parts": [{"text": "hi"}]},
+            {
+                "role": "model",
+                "parts": [{"text": "One."}, {"text": "Two.", "thoughtSignature": "sig-last"}]
+            }
+        ]
+    }));
+
+    let mut annotated = codec.decode(&original).unwrap();
+
+    if let Message::Assistant { content, .. } = &mut annotated.messages[1] {
+        *content = Some(MessageContent::Text("Edited.".into()));
+    }
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let parts = encoded.content.get("contents").unwrap().as_array().unwrap()[1]
+        .get("parts")
+        .unwrap()
+        .as_array()
+        .unwrap();
+
+    assert_eq!(
+        parts,
+        &vec![json!({"text": "Edited."})],
+        "a string edit replaces the turn's text; a signed text part without a slot is dropped"
+    );
+}
+
+#[test]
 fn test_decode_inline_data_as_provider_native_content_part() {
     let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
