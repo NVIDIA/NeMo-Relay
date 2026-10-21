@@ -131,6 +131,10 @@ drain. Set the pod's termination grace period long enough for accepted requests
 to finish. Stopping the daemon can interrupt active streams. Follow
 [Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back).
 
+A daemon restart clears route credential bindings. By default, requests bypass
+worker plugins until MCP registers again and a worker is ready. Use
+`--require-worker` to reject requests while worker processing is unavailable.
+
 Before adding users, complete
 [Verify Worker-Backed Operation](/daemon/operations#verify-worker-backed-operation)
 through the actual Service and ingress. Confirm a worker becomes ready, a model
