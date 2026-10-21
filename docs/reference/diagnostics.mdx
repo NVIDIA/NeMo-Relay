@@ -211,6 +211,14 @@ the existing `metadata_bytes` gauge, which describes admitted registration text.
 A pool rounds payload capacity down to whole blocks; block size comes from
 `DiagnosticLimits.detail_block_bytes` and defaults to 256 bytes.
 
+Each retained event packs its message, session ID, and request ID into one
+block chain. Compact ranges preserve the three fields, including present but
+empty strings; UTF-8 characters are never split across blocks. Fields are
+admitted in message, session, then request order. A field that cannot fit in the
+whole pool is omitted without evicting prior evidence; selected fields can
+reclaim older events when free blocks are exhausted. Projections still receive
+the independently bounded input fields.
+
 Inspection derives the breakdown from existing storage. Logical text bytes
 require a bounded scan of block metadata when the view is requested; recording
 adds no size ledger, per-event size field, or additional retained store. Disabled

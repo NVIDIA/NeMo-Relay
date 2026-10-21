@@ -1272,18 +1272,27 @@ fn copy_event(
             .failure_class
             .map(|class| page.copy_text(state.class_name(class)?))
             .transpose_option()?;
-        let detail = event
-            .detail
-            .map(|v| copy_detail(page, state, v))
+        let payload = event
+            .text
+            .payload
+            .map(|handle| copy_detail(page, state, handle))
             .transpose_option()?;
-        let session_id = event
-            .session_id
-            .map(|v| copy_detail(page, state, v))
-            .transpose_option()?;
-        let request_id = event
-            .request_id
-            .map(|v| copy_detail(page, state, v))
-            .transpose_option()?;
+        let range = |range: Option<state::TextRange>| -> Option<Option<TextRef>> {
+            range
+                .map(|range| {
+                    let payload = payload?;
+                    let start = usize::from(range.start);
+                    let len = usize::from(range.len);
+                    (start.checked_add(len)? <= payload.len).then_some(TextRef {
+                        offset: payload.offset.checked_add(start)?,
+                        len,
+                    })
+                })
+                .transpose_option()
+        };
+        let detail = range(event.text.detail)?;
+        let session_id = range(event.text.session_id)?;
+        let request_id = range(event.text.request_id)?;
         let ownership = copy_ownership(page, &event.origin.ownership)?;
         page.events.push(PageEvent {
             source_position: position,

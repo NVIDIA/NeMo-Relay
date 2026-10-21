@@ -2814,14 +2814,14 @@ fn memory_usage_reports_retained_text_and_utf8_block_slack() {
     let reader = service.reader();
     let (occupied, allocations) = allocations_during(|| reader.memory_usage());
     assert_eq!(allocations, 0);
-    // Each three-byte scalar occupies its own four-byte block; correlation
-    // fields each use a separate block, even though their text is shorter.
-    assert_eq!(occupied.detail_bytes, 5 * 4);
+    // Complete UTF-8 scalars share blocks across field boundaries:
+    // [€, €, €x, yz]. All three fields use one chain.
+    assert_eq!(occupied.detail_bytes, 4 * 4);
     assert_eq!(
         occupied.detail_logical_bytes,
         "€€€".len() + session.len() + request.len()
     );
-    assert_eq!(occupied.detail_slack_bytes, 8);
+    assert_eq!(occupied.detail_slack_bytes, 4);
     assert_eq!(
         (
             occupied.detail_reserved_bytes,
@@ -4013,4 +4013,76 @@ fn window_reservation_reuse_preserves_neighbors_and_rejects_stale_owner() {
     assert_eq!(failures("survivor"), 5);
     assert_eq!(failures("replacement"), 3);
     assert_eq!(service.memory_usage().window_buckets, 3);
+}
+
+#[test]
+fn packed_event_fields_share_blocks_without_recording_allocations() {
+    let service = diagnostics(DiagnosticLimits {
+        max_events: 256,
+        detail_pool_bytes: 256 * 256,
+        detail_block_bytes: 256,
+        ..limits()
+    });
+    let component = register(&service, "producer");
+    let (_, allocations) = allocations_during(|| {
+        for _ in 0..256 {
+            component
+                .record_without_projection_lazy(|| {
+                    Observation::new(classification(FailureClass::Unknown), "message🙂", 1)
+                        .with_correlation(DiagnosticCorrelation {
+                            session_id: Some("session€".into()),
+                            request_id: Some("request".into()),
+                        })
+                })
+                .unwrap();
+        }
+    });
+    assert_eq!(allocations, 0);
+    let occupied = service.memory_usage();
+    assert_eq!(occupied.events, 256);
+    assert_eq!(occupied.detail_bytes, 256 * 256);
+    assert_eq!(
+        occupied.detail_logical_bytes,
+        256 * ("message🙂".len() + "session€".len() + "request".len())
+    );
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.events.len(), 256);
+    assert_eq!(view.coverage.loss.events_evicted.value.get(), 0);
+    for event in &view.events {
+        assert_eq!(event.message(), Some("message🙂"));
+        assert_eq!(event.correlation.session_id.as_deref(), Some("session€"));
+        assert_eq!(event.correlation.request_id.as_deref(), Some("request"));
+    }
+    // Exactly one prior chain is reclaimed for another complete event.
+    record(&component, 1);
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.events.len(), 256);
+    assert_eq!(view.coverage.loss.events_evicted.value.get(), 1);
+    assert_eq!(code_total(&view.components[0], WRITE), 257);
+}
+
+#[test]
+fn packed_text_preserves_empty_fields_without_pool_capacity() {
+    let service = diagnostics(DiagnosticLimits {
+        detail_pool_bytes: 0,
+        ..limits()
+    });
+    let component = register(&service, "producer");
+    component
+        .record_without_projection_lazy(|| {
+            Observation::new(classification(FailureClass::Unknown), "", 1).with_correlation(
+                DiagnosticCorrelation {
+                    session_id: Some("".into()),
+                    request_id: None,
+                },
+            )
+        })
+        .unwrap();
+    let view = snapshot(&service, DiagnosticQuery::default());
+    assert_eq!(view.events[0].message(), Some(""));
+    assert_eq!(view.events[0].correlation.session_id.as_deref(), Some(""));
+    assert_eq!(view.events[0].correlation.request_id, None);
+    assert_eq!(service.memory_usage().detail_bytes, 0);
+    assert_eq!(view.coverage.loss.details_omitted.value.get(), 0);
+    assert_eq!(view.coverage.loss.correlations_omitted.value.get(), 0);
 }
