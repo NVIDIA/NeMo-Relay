@@ -171,8 +171,14 @@ pub(crate) fn get_diagnostics(
     url: &str,
     path: &str,
     max_bytes: usize,
+    daemon: bool,
 ) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
-    if !path.starts_with(crate::diagnostics_http::PREFIX)
+    let worker_route = daemon
+        && path
+            .strip_prefix("/_nemo_relay/v1/workers/")
+            .and_then(|s| s.strip_suffix("/diagnostics"))
+            .is_some_and(|s| s.parse::<uuid::Uuid>().is_ok());
+    if (!path.starts_with(crate::diagnostics_http::PREFIX) && !worker_route)
         || path.bytes().any(|b| b == b'\r' || b == b'\n')
     {
         return Err(VerifiedHttpError::before_payload(
@@ -187,7 +193,7 @@ pub(crate) fn get_diagnostics(
         &[],
         Duration::from_secs(5),
         max_bytes,
-        false,
+        daemon,
         None,
         true,
     )
@@ -241,9 +247,9 @@ fn post_authenticated(
             ))
         })?;
 
-    // A daemon proves its identity only through the pinned TLS certificate, so daemon delivery
-    // needs no per-user challenge key. Skipping it keeps hook-only users free of bootstrap state.
-    let key = if daemon {
+    // Daemon delivery needs no per-user key. Explicit diagnostics inspection additionally
+    // requires the operator key; it still authenticates the daemon using pinned TLS.
+    let key = if daemon && !inspection {
         None
     } else {
         let key = if inspection {

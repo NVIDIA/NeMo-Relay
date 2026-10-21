@@ -42,6 +42,7 @@ async fn inspection_reuses_tls_without_touching_gateway_activity_or_query_state(
             &format!("http://{address}"),
             &format!("{}/capabilities", crate::diagnostics_http::PREFIX),
             8192,
+            false,
         )
     })
     .await
@@ -68,13 +69,15 @@ async fn inspection_never_creates_bootstrap_state_or_starts_a_gateway() {
     let address = listener.local_addr().unwrap();
     let path = format!("{}/capabilities", crate::diagnostics_http::PREFIX);
     assert!(
-        crate::gateway::client::get_diagnostics(&format!("http://{address}"), &path, 8192).is_err()
+        crate::gateway::client::get_diagnostics(&format!("http://{address}"), &path, 8192, false)
+            .is_err()
     );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     drop(listener);
     // No acquisition path is called when there is no listener at all.
     assert!(
-        crate::gateway::client::get_diagnostics(&format!("http://{address}"), &path, 8192).is_err()
+        crate::gateway::client::get_diagnostics(&format!("http://{address}"), &path, 8192, false)
+            .is_err()
     );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }

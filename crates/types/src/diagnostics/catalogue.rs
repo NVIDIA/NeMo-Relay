@@ -101,6 +101,8 @@ impl FailureClass {
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticDomain {
+    /// Daemon control, runtime, forwarding, and collection operations.
+    Daemon,
     /// CLI-owned execution and transport operations.
     Cli,
     /// Plugin configuration and activation.
@@ -577,12 +579,76 @@ impl CliFailureCode {
     }
 }
 
+/// Failures observed by daemon operation owners, independent of health policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(strum::EnumIter))]
+pub enum DaemonFailureCode {
+    /// Observation identified by `daemon.registration_failed`.
+    Registration,
+    /// Observation identified by `daemon.activation_reported_failed`.
+    ActivationReported,
+    /// Observation identified by `daemon.activation_deadline_exceeded`.
+    ActivationDeadline,
+    /// Observation identified by `daemon.readiness_failed`.
+    Readiness,
+    /// Observation identified by `daemon.control_lost`.
+    ControlLost,
+    /// Observation identified by `daemon.forward_failed`.
+    Forward,
+    /// Observation identified by `daemon.collection_failed`.
+    Collection,
+    /// Observation identified by `daemon.worker.initialize_failed`.
+    WorkerInitialize,
+    /// Observation identified by `daemon.worker.listener_failed`.
+    WorkerListener,
+    /// Observation identified by `daemon.worker.teardown_failed`.
+    WorkerTeardown,
+}
+impl DaemonFailureCode {
+    /// Stable wire name.
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Registration => "daemon.registration_failed",
+            Self::ActivationReported => "daemon.activation_reported_failed",
+            Self::ActivationDeadline => "daemon.activation_deadline_exceeded",
+            Self::Readiness => "daemon.readiness_failed",
+            Self::ControlLost => "daemon.control_lost",
+            Self::Forward => "daemon.forward_failed",
+            Self::Collection => "daemon.collection_failed",
+            Self::WorkerInitialize => "daemon.worker.initialize_failed",
+            Self::WorkerListener => "daemon.worker.listener_failed",
+            Self::WorkerTeardown => "daemon.worker.teardown_failed",
+        }
+    }
+    /// Structured causes accepted from the owning operation.
+    pub const fn allowed_classes(self) -> &'static [FailureClass] {
+        &[
+            FailureClass::Unknown,
+            FailureClass::Io,
+            FailureClass::Timeout,
+            FailureClass::Unavailable,
+            FailureClass::Authentication,
+            FailureClass::InvalidInput,
+            FailureClass::InvalidState,
+            FailureClass::ResourceExhausted,
+            FailureClass::Unsupported,
+            FailureClass::PermissionDenied,
+            FailureClass::ExecutionFailed,
+        ]
+    }
+}
+
 /// Failure event hierarchy for integrated producers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum FailureCode {
+    /// Daemon-owned failures.
+    Daemon(DaemonFailureCode),
     /// CLI execution and transport failures.
     Cli(CliFailureCode),
     /// Plugin failures.
@@ -597,6 +663,7 @@ impl FailureCode {
     pub const fn canonical_name(self) -> &'static str {
         match self {
             Self::Cli(code) => code.canonical_name(),
+            Self::Daemon(code) => code.canonical_name(),
             Self::Plugin(code) => code.canonical_name(),
             Self::Logging(code) => code.canonical_name(),
         }
@@ -606,6 +673,7 @@ impl FailureCode {
     pub const fn domain(self) -> DiagnosticDomain {
         match self {
             Self::Cli(_) => DiagnosticDomain::Cli,
+            Self::Daemon(_) => DiagnosticDomain::Daemon,
             Self::Plugin(_) => DiagnosticDomain::Plugin,
             Self::Logging(_) => DiagnosticDomain::Logging,
         }
@@ -615,6 +683,7 @@ impl FailureCode {
     pub const fn allowed_classes(self) -> &'static [FailureClass] {
         match self {
             Self::Cli(code) => code.allowed_classes(),
+            Self::Daemon(code) => code.allowed_classes(),
             Self::Plugin(code) => code.allowed_classes(),
             Self::Logging(code) => code.allowed_classes(),
         }
@@ -826,7 +895,8 @@ impl BuiltinDiagnosticCode {
             Self::Notice(NoticeCode::ConfigurationInherited) => {
                 Some(PluginDiagnosticFamily::Common)
             }
-            Self::Failure(FailureCode::Cli(_))
+            Self::Failure(FailureCode::Daemon(_))
+            | Self::Failure(FailureCode::Cli(_))
             | Self::Success(
                 SuccessCode::CliUpstreamHeadersReceived
                 | SuccessCode::CliUpstreamBodyCompleted
@@ -929,6 +999,16 @@ impl BuiltinDiagnosticCode {
             Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
                 PluginOperationFailureCode::WorkerExit,
             ))),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::Registration)),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::ActivationReported)),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::ActivationDeadline)),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::Readiness)),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::ControlLost)),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::Forward)),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::Collection)),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::WorkerInitialize)),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::WorkerListener)),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::WorkerTeardown)),
             Self::Failure(FailureCode::Cli(CliFailureCode::ChildCleanup)),
             Self::Failure(FailureCode::Cli(CliFailureCode::UpstreamResponse)),
             Self::Success(SuccessCode::CliUpstreamHeadersReceived),
@@ -1045,6 +1125,10 @@ mod tests {
             .chain(
                 CliFailureCode::iter()
                     .map(|code| BuiltinDiagnosticCode::Failure(FailureCode::Cli(code))),
+            )
+            .chain(
+                DaemonFailureCode::iter()
+                    .map(|code| BuiltinDiagnosticCode::Failure(FailureCode::Daemon(code))),
             )
             .chain(SuccessCode::iter().map(BuiltinDiagnosticCode::Success))
             .chain(NoticeCode::iter().map(BuiltinDiagnosticCode::Notice))

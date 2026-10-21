@@ -21,9 +21,22 @@ const MAX_QUERY_BYTES: usize = 4096;
 const DISCOVERY_BYTES: usize = 8192;
 
 #[derive(Clone)]
+pub(crate) enum ReadAuthority {
+    Bootstrap(BootstrapChallengeKey),
+    Worker(crate::daemon::diagnostics::WorkerReadAuthority),
+}
+impl ReadAuthority {
+    fn verify(&self, token: &str) -> bool {
+        match self {
+            Self::Bootstrap(key) => key.verify_diagnostics_token(token),
+            Self::Worker(grant) => grant.verify(token),
+        }
+    }
+}
+#[derive(Clone)]
 pub(crate) struct DiagnosticsHttp {
     reader: DiagnosticsReader,
-    key: BootstrapChallengeKey,
+    authority: ReadAuthority,
     pool: Arc<Mutex<Vec<Vec<u8>>>>,
     capacity: usize,
     coverage: Arc<Vec<&'static str>>,
@@ -35,6 +48,13 @@ impl DiagnosticsHttp {
     pub(crate) fn new(
         reader: DiagnosticsReader,
         key: BootstrapChallengeKey,
+        coverage: Vec<&'static str>,
+    ) -> Result<Self, DiagnosticError> {
+        Self::with_authority(reader, ReadAuthority::Bootstrap(key), coverage)
+    }
+    pub(crate) fn with_authority(
+        reader: DiagnosticsReader,
+        authority: ReadAuthority,
         coverage: Vec<&'static str>,
     ) -> Result<Self, DiagnosticError> {
         let limits = reader.limits();
@@ -58,7 +78,7 @@ impl DiagnosticsHttp {
         }
         Ok(Self {
             reader,
-            key,
+            authority,
             pool: Arc::new(Mutex::new(pool)),
             capacity,
             coverage: Arc::new(coverage),
@@ -103,17 +123,16 @@ impl DiagnosticsHttp {
             notified.await;
         }
     }
-    fn authorize(&self, headers: &HeaderMap) -> Result<(), ReadError> {
+    pub(crate) fn authorize(&self, headers: &HeaderMap) -> Result<(), ReadError> {
         if headers.contains_key(header::ORIGIN) {
             return Err(ReadError(StatusCode::FORBIDDEN, "forbidden"));
         }
         let value = headers
             .get(AUTH_HEADER)
             .ok_or(ReadError(StatusCode::UNAUTHORIZED, "unauthorized"))?;
-        if value.len() > 128
-            || !value
-                .to_str()
-                .is_ok_and(|v| self.key.verify_diagnostics_token(v))
+        if headers.get_all(AUTH_HEADER).iter().count() != 1
+            || value.len() > 128
+            || !value.to_str().is_ok_and(|v| self.authority.verify(v))
         {
             return Err(ReadError(StatusCode::FORBIDDEN, "forbidden"));
         }
@@ -184,13 +203,13 @@ fn response(slot: ResponseSlot) -> Response {
         .insert("x-content-type-options", "nosniff".parse().unwrap());
     response
 }
-struct ReadError(StatusCode, &'static str);
+pub(crate) struct ReadError(StatusCode, &'static str);
 impl IntoResponse for ReadError {
     fn into_response(self) -> Response {
         error(self.0, self.1)
     }
 }
-fn error(status: StatusCode, reason: &'static str) -> Response {
+pub(crate) fn error(status: StatusCode, reason: &'static str) -> Response {
     let mut response = (
         status,
         axum::Json(serde_json::json!({"error": {"reason": reason}})),

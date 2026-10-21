@@ -1599,7 +1599,11 @@ async fn pass_through_auth_injection_supports_environment_and_anthropic_configur
     assert_eq!(configured[AUTHORIZATION], "configured");
 }
 
-fn test_daemon_state(pass_through: bool, token: &str, config: GatewayConfig) -> Arc<DaemonState> {
+pub(super) fn test_daemon_state(
+    pass_through: bool,
+    token: &str,
+    config: GatewayConfig,
+) -> Arc<DaemonState> {
     test_daemon_state_at(pass_through, token, config, "http://127.0.0.1:47632".into())
 }
 
@@ -1614,6 +1618,7 @@ pub(super) fn test_daemon_state_at(
         .keep()
         .join("active-worker-generations.json");
     Arc::new(DaemonState {
+        collector: None,
         sockets: socket::Hub::default(),
         registry: Registry::new(pass_through),
         descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
@@ -1632,6 +1637,7 @@ pub(super) fn test_daemon_state_at(
         active_worker_generations: ActiveWorkerGenerations::load_for_test(generation_path)
             .expect("generation state"),
         worker_generation_publication: Mutex::new(()),
+        diagnostics_http: None,
         identity: MachineIdentity::generate()
             .expect("daemon identity")
             .identity,
@@ -2283,6 +2289,7 @@ async fn worker_registration_and_recovery_fail_closed_at_each_authority_boundary
     .unwrap()
     .proof;
     let unknown = WorkerRegisterRequest {
+        diagnostics: None,
         proof,
         worker_id: "unknown-activation".into(),
         endpoint: "http://127.0.0.1:41000".into(),
@@ -2321,6 +2328,7 @@ async fn worker_registration_and_recovery_fail_closed_at_each_authority_boundary
         },
     );
     let wrong_secret = WorkerRegisterRequest {
+        diagnostics: None,
         proof,
         worker_id: "wrong-secret".into(),
         endpoint: "http://127.0.0.1:41000".into(),
@@ -2359,6 +2367,7 @@ async fn worker_registration_and_recovery_fail_closed_at_each_authority_boundary
         },
     );
     let mismatched = WorkerRegisterRequest {
+        diagnostics: None,
         proof,
         worker_id: "endpoint-mismatch".into(),
         endpoint: "http://127.0.0.1:41001".into(),
@@ -2398,6 +2407,7 @@ async fn worker_registration_and_recovery_fail_closed_at_each_authority_boundary
         .unwrap()
         .proof;
         let replay = WorkerRegisterRequest {
+            diagnostics: None,
             proof,
             worker_id: worker_id.into(),
             endpoint: "http://127.0.0.1:41002".into(),
@@ -2424,6 +2434,7 @@ async fn worker_registration_and_recovery_fail_closed_at_each_authority_boundary
     .unwrap()
     .proof;
     let stolen = WorkerRegisterRequest {
+        diagnostics: None,
         proof,
         worker_id: "activation-thief".into(),
         endpoint: "http://127.0.0.1:41002".into(),
@@ -2459,6 +2470,7 @@ async fn worker_registration_and_recovery_fail_closed_at_each_authority_boundary
     )
     .unwrap();
     let invalid_recovery = WorkerRecoverRequest {
+        diagnostics: None,
         proof,
         worker_id: "invalid-recovery".into(),
         endpoint: "http://127.0.0.1:41000".into(),
@@ -2492,6 +2504,7 @@ async fn worker_registration_and_recovery_fail_closed_at_each_authority_boundary
     )
     .unwrap();
     let revoked = WorkerRecoverRequest {
+        diagnostics: None,
         proof,
         worker_id: "revoked-recovery".into(),
         endpoint: "http://127.0.0.1:41000".into(),
@@ -2608,6 +2621,7 @@ async fn worker_readiness_probe_failure_removes_the_staged_session() {
         WorkerPublication::Activation {
             activation_id: "unreachable-activation".into(),
         },
+        None,
         daemon_proof,
     );
     assert_eq!(response.status(), StatusCode::OK);
@@ -2891,6 +2905,7 @@ fn worker_staging_and_replay_are_bound_to_endpoint_and_publication() {
             None,
             None,
             publication.clone(),
+            None,
             proof.clone(),
         )
         .status(),
@@ -2905,6 +2920,7 @@ fn worker_staging_and_replay_are_bound_to_endpoint_and_publication() {
             None,
             None,
             publication.clone(),
+            None,
             proof.clone(),
         )
         .status()
@@ -2919,6 +2935,7 @@ fn worker_staging_and_replay_are_bound_to_endpoint_and_publication() {
             None,
             Some("activation"),
             None,
+            None,
             proof.clone(),
         )
         .is_some()
@@ -2931,6 +2948,7 @@ fn worker_staging_and_replay_are_bound_to_endpoint_and_publication() {
             "http://127.0.0.1:41001",
             None,
             Some("activation"),
+            None,
             None,
             proof.clone(),
         )
@@ -2945,6 +2963,7 @@ fn worker_staging_and_replay_are_bound_to_endpoint_and_publication() {
             None,
             None,
             publication,
+            None,
             proof,
         )
         .status(),
@@ -2952,7 +2971,10 @@ fn worker_staging_and_replay_are_bound_to_endpoint_and_publication() {
     );
 }
 
-fn staged_worker_session(worker_id: &str, lease_expires_at_unix_ms: u64) -> WorkerControlSession {
+pub(super) fn staged_worker_session(
+    worker_id: &str,
+    lease_expires_at_unix_ms: u64,
+) -> WorkerControlSession {
     let worker = MachineIdentity::generate()
         .expect("worker identity")
         .identity;
@@ -2963,6 +2985,10 @@ fn staged_worker_session(worker_id: &str, lease_expires_at_unix_ms: u64) -> Work
     let secret = SensitiveString::new("control-secret").expect("control secret");
     let data = SensitiveString::new("data-secret").expect("data secret");
     WorkerControlSession {
+        diagnostic_offer: None,
+        diagnostic_grant: None,
+        diagnostic_connected: false,
+        diagnostic_poll_stopped: false,
         fingerprint: worker.fingerprint(),
         worker_id: worker_id.into(),
         secret: secret.clone(),
@@ -4105,6 +4131,7 @@ async fn recovering_worker_fixture(
         state,
         credential,
         WorkerRecoverRequest {
+            diagnostics: None,
             proof,
             worker_id: "recovered-worker".into(),
             endpoint,
@@ -5032,4 +5059,80 @@ async fn http_model_hosts_daemon_pass_through_is_credential_free_and_does_not_fo
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(received.lock().unwrap().len(), 3);
     server.abort();
+}
+
+#[tokio::test]
+async fn broker_diagnostics_share_local_facts_require_operator_auth_and_do_not_mutate_state() {
+    use nemo_relay::diagnostics::*;
+    let context = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let owner =
+        crate::daemon::diagnostics::DaemonDiagnostics::new(&context, "daemon_broker").unwrap();
+    owner.record(
+        DaemonFailureCode::Forward,
+        FailureClass::Timeout,
+        "restricted operator detail",
+    );
+    let before = context
+        .snapshot(&Default::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let key = crate::configuration::BootstrapChallengeKey::from_bytes(b"broker-operator");
+    let token = key.diagnostics_token();
+    let mut state = test_daemon_state(false, "route-token", GatewayConfig::default());
+    Arc::get_mut(&mut state).unwrap().diagnostics_http =
+        Some(crate::diagnostics_http::DiagnosticsHttp::new(context.reader(), key, vec![]).unwrap());
+    let path = crate::diagnostics_http::PREFIX;
+    let response = router_with_diagnostics(state.clone(), false)
+        .oneshot(
+            Request::get(path)
+                .header(crate::diagnostics_http::AUTH_HEADER, &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+    let router = router_with_diagnostics(state.clone(), true);
+    let response = router
+        .clone()
+        .oneshot(Request::get(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    for _ in 0..3 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header(crate::diagnostics_http::AUTH_HEADER, &token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let page: DiagnosticSnapshot = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(page.source, before.source);
+        assert_eq!(page.sequence, before.sequence);
+        assert_eq!(
+            page.components[1].lifetime.totals,
+            before.components[1].lifetime.totals
+        );
+    }
+    assert!(state.registry.worker_status_snapshots().is_empty());
+    let response = router
+        .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }

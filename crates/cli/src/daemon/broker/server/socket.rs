@@ -652,6 +652,13 @@ async fn register_worker_command(
         return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
     }
     let response = register_worker(State(state.clone()), Json(request)).await;
+    if !response.status().is_success() {
+        diag::record(
+            DaemonFailureCode::Registration,
+            FailureClass::Unknown,
+            "Worker registration operation rejected",
+        );
+    }
     if response.status().is_success() {
         *id = Some(worker_id.clone());
         reset_worker(state, &worker_id);
@@ -715,6 +722,7 @@ fn expired(state: &DaemonState, role: ComponentRole, id: &str) -> bool {
 }
 fn reset_worker(state: &DaemonState, id: &str) {
     if let Some(session) = lock(&state.worker_sessions).get_mut(id) {
+        session.diagnostic_connected = true;
         session.last_sequence = 0;
         session.last_request_id.clear();
         session.pending_target.set_control_available(false);
@@ -743,8 +751,10 @@ async fn disconnected(
         *peer.disconnected.get_or_insert(now) + GRACE
     };
     if role == ComponentRole::Worker
-        && let Some(session) = lock(&state.worker_sessions).get(&id)
+        && let Some(session) = lock(&state.worker_sessions).get_mut(&id)
     {
+        session.diagnostic_connected = false;
+        session.diagnostic_grant = None;
         session.pending_target.set_control_available(false);
     }
     if role == ComponentRole::Mcp {
@@ -782,6 +792,13 @@ async fn disconnected(
                 nominate_relaunch(&state, fingerprint, session_id);
             }
         }
+    }
+    if role == ComponentRole::Worker {
+        diag::record(
+            DaemonFailureCode::ControlLost,
+            FailureClass::Unavailable,
+            "Broker observed worker control disconnect; process exit is unknown",
+        );
     }
     log_control_disconnected(role, &id, reason);
     state.sockets.changed.notify_waiters();

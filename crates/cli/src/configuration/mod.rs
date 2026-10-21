@@ -155,7 +155,14 @@ pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayCo
             (path, required)
         })
         .collect();
-    let mut resolved = load_config_from_paths(paths, Vec::new(), apply_env_config)?;
+    let mut resolved = match args
+        .prepared
+        .as_deref()
+        .and_then(PreparedConfig::take_document)
+    {
+        Some(document) => finish_shared_config(document, Vec::new(), apply_env_config)?,
+        None => load_config_from_paths(paths, Vec::new(), apply_env_config)?,
+    };
     apply_server_overrides(&mut resolved.gateway, args)?;
     log::info!(
         target: "nemo_relay.configuration",
@@ -177,17 +184,21 @@ pub(crate) struct ManagedWorkerConfig {
 }
 
 /// Resolves daemon-worker configuration from user and system layers.
-pub(crate) fn resolve_managed_worker_config() -> Result<ManagedWorkerConfig, CliError> {
+pub(crate) fn resolve_managed_worker_config(
+    prepared: Option<&PreparedConfig>,
+) -> Result<ManagedWorkerConfig, CliError> {
     let system_directory = system_config_dir();
     resolve_managed_worker_config_from_paths(
         system_directory.join("config.toml"),
         system_directory.join(PLUGINS_TOML),
+        prepared,
     )
 }
 
 fn resolve_managed_worker_config_from_paths(
     config_path: PathBuf,
     plugin_config_path: PathBuf,
+    prepared: Option<&PreparedConfig>,
 ) -> Result<ManagedWorkerConfig, CliError> {
     let mut config_paths = Vec::new();
     if let Some(user_path) = user_config_path() {
@@ -201,8 +212,14 @@ fn resolve_managed_worker_config_from_paths(
     }
     plugin_paths.push(plugin_config_path);
     let plugin_config_path = selected_plugin_path;
-    let resolved =
-        load_config_from_paths(config_paths, plugin_paths, apply_managed_worker_env_config)?;
+    let resolved = match prepared.and_then(PreparedConfig::take_document) {
+        Some(document) => {
+            finish_shared_config(document, plugin_paths, apply_managed_worker_env_config)?
+        }
+        None => {
+            load_config_from_paths(config_paths, plugin_paths, apply_managed_worker_env_config)?
+        }
+    };
     enforce_required_dynamic_plugin_startup(Some(&plugin_config_path), &resolved)?;
     log::info!(
         target: "nemo_relay.configuration",

@@ -10,6 +10,12 @@ pub(crate) struct InspectCommand {
     /// Existing local gateway address. Missing listeners are reported as unavailable.
     #[arg(long, default_value = "http://127.0.0.1:47632")]
     gateway_url: String,
+    /// Inspect an existing local daemon using its pinned TLS identity and operator credential.
+    #[arg(long, conflicts_with = "gateway_url")]
+    daemon_url: Option<String>,
+    /// Read one cached managed Relay worker page from the daemon, without polling on demand.
+    #[arg(long, requires = "daemon_url", conflicts_with_all = ["query", "capabilities"])]
+    worker: Option<uuid::Uuid>,
     /// Read effective settings and supported producer coverage without a snapshot.
     #[arg(long)]
     capabilities: bool,
@@ -17,11 +23,23 @@ pub(crate) struct InspectCommand {
     #[arg(long, conflicts_with = "capabilities")]
     query: Option<String>,
     /// Maximum response bytes accepted by this inspector, independent of the server.
-    #[arg(long, default_value_t = 131072, value_parser = clap::value_parser!(u32).range(4096..=33554432))]
-    max_response_bytes: u32,
+    #[arg(long, value_parser = clap::value_parser!(u32).range(4096..=33554432))]
+    max_response_bytes: Option<u32>,
 }
 pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliError> {
-    let mut path = crate::diagnostics_http::PREFIX.to_owned();
+    let max_bytes = command
+        .max_response_bytes
+        .unwrap_or(if command.worker.is_some() {
+            262144
+        } else {
+            131072
+        });
+    let daemon = command.daemon_url.is_some();
+    let url = command.daemon_url.unwrap_or(command.gateway_url);
+    let mut path = command.worker.map_or_else(
+        || crate::diagnostics_http::PREFIX.to_owned(),
+        |worker| format!("/_nemo_relay/v1/workers/{worker}/diagnostics"),
+    );
     if command.capabilities {
         path.push_str("/capabilities");
     }
@@ -38,16 +56,16 @@ pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliErro
         );
     }
     let response = tokio::task::spawn_blocking(move || crate::gateway::client::get_diagnostics(
-        &command.gateway_url, &path, command.max_response_bytes as usize)).await
+        &url, &path, max_bytes as usize, daemon)).await
         .map_err(|_| CliError::Launch("diagnostic inspection task failed".into()))?
         .map_err(|error| {
             CliError::Launch(format!(
-                "diagnostic inspection unavailable ({error}); an existing gateway, private credentials, HTTP read policy, and a sufficient --max-response-bytes are required"
+                "diagnostic inspection unavailable ({error}); an existing listener, private operator credentials, HTTP read policy, and a sufficient --max-response-bytes are required"
             ))
         })?;
     if response.status == 404 {
         return Err(CliError::Launch(
-            "gateway diagnostics unsupported or not exposed".into(),
+            "listener diagnostics unsupported or not exposed".into(),
         ));
     }
     // Explicit inspection alone may print restricted evidence. No logging of the body.

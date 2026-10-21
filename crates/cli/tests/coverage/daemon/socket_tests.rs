@@ -215,6 +215,7 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
     .await
     .unwrap();
     let mut register = WorkerRegisterRequest {
+        diagnostics: None,
         proof: handshake.proof,
         worker_id: "worker".into(),
         endpoint: endpoint.clone(),
@@ -367,6 +368,7 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
     .unwrap();
     let recovered: WorkerRegisterResponse = restored
         .request(Command::RecoverWorker(WorkerRecoverRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint: endpoint.clone(),
@@ -440,6 +442,7 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
     .unwrap();
     let _: WorkerRegisterResponse = draining
         .request(Command::RecoverWorker(WorkerRecoverRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint,
@@ -506,6 +509,7 @@ async fn activation_cancellation_fences_an_in_progress_readiness_probe() {
     .unwrap();
     let worker_registration: WorkerRegisterResponse = worker
         .request(Command::RegisterWorker(WorkerRegisterRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "cancelled-worker".into(),
             endpoint,
@@ -940,6 +944,7 @@ async fn recovering_worker() -> RecoveryFixture {
     .unwrap();
     let registration: WorkerRegisterResponse = worker
         .request(Command::RegisterWorker(WorkerRegisterRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint: endpoint.clone(),
@@ -1033,6 +1038,7 @@ async fn recovering_worker() -> RecoveryFixture {
     .unwrap();
     let recovered: WorkerRegisterResponse = restored
         .request(Command::RecoverWorker(WorkerRecoverRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint: endpoint.clone(),
@@ -1162,6 +1168,7 @@ async fn slow_probe_does_not_block_other_control_sessions_or_stale_publication()
     .unwrap();
     let _: WorkerRegisterResponse = replacement
         .request(Command::RecoverWorker(WorkerRecoverRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint: fixture.target.endpoint().into(),
@@ -1415,6 +1422,7 @@ async fn worker_setup_failure_releases_staged_sessions_before_disconnect_grace()
     .unwrap();
     let staged: WorkerRegisterResponse = worker
         .request(Command::RegisterWorker(WorkerRegisterRequest {
+            diagnostics: None,
             proof: handshake.proof,
             worker_id: worker_id.into(),
             endpoint: "http://127.0.0.1:41000".into(),

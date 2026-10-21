@@ -27,8 +27,8 @@ pub const DIAGNOSTIC_CATALOGUE_VERSION: u32 = 1;
 mod catalogue;
 pub use catalogue::{
     BuiltinDiagnosticCode, ClassificationError, CliFailureCode, CommonPluginFailureCode,
-    DiagnosticClassifier, DiagnosticDomain, FailureClass, FailureCode, LoggingFailureCode,
-    NoticeCode, PluginDiagnosticFamily, PluginExecution, PluginFailureCode,
+    DaemonFailureCode, DiagnosticClassifier, DiagnosticDomain, FailureClass, FailureCode,
+    LoggingFailureCode, NoticeCode, PluginDiagnosticFamily, PluginExecution, PluginFailureCode,
     PluginOperationFailureCode, PluginPhase, SuccessCode,
 };
 mod number;
