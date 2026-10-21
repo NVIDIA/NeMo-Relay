@@ -3135,7 +3135,7 @@ fn configuration_inheritance_records_once_per_ambient_source_in_selected_context
     assert!(view.events.iter().all(|event| {
         event.code() == "plugin.configuration_inherited"
             && event.severity == DiagnosticSeverity::Warning
-            && event.classification.failure_class.is_none()
+            && event.classification.failure_class().is_none()
     }));
     assert!(
         !serde_json::to_string(&view)
@@ -3769,7 +3769,7 @@ fn typed_activation_failure_records_once_through_its_scoped_context() {
     );
     assert!(page.events[0].context.execution.is_none());
     assert_eq!(
-        page.events[0].classification.failure_class.as_deref(),
+        page.events[0].classification.failure_class(),
         Some("unknown")
     );
     let row = page
@@ -3829,7 +3829,7 @@ fn activation_unwind_is_recorded_before_scoped_rollback_and_closure() {
     );
     assert!(page.events[0].context.execution.is_none());
     assert_eq!(
-        page.events[0].classification.failure_class.as_deref(),
+        page.events[0].classification.failure_class(),
         Some("internal")
     );
     assert!(page.components[0].closed_at.is_some());

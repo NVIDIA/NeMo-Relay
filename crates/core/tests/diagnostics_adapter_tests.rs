@@ -136,7 +136,7 @@ fn typed_plugin_error_records_once_without_projections_or_legacy_replay() {
     assert_eq!(page.events.len(), 1);
     assert_eq!(page.events[0].code(), "plugin.registration_failed");
     assert_eq!(
-        page.events[0].classification.failure_class.as_deref(),
+        page.events[0].classification.failure_class(),
         Some("unknown")
     );
     assert_eq!(page.events[0].count.get(), 3);

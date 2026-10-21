@@ -3,7 +3,16 @@
 
 //! Atomic component reservations and owner-authorized refresh transitions.
 
-use super::*;
+use super::{
+    BuiltinDiagnosticCode, ComponentHandle, ComponentIdentity, ComponentOwnership,
+    ComponentRegistration, ComponentSlot, CounterIndex, CounterSlot, DESCRIPTION_BYTES,
+    DiagnosticCount, DiagnosticError, DiagnosticLimits, DiagnosticOutcome, DiagnosticTotals,
+    ExtensionClassHandle, ExtensionHandle, ExtensionRegistration, ExtensionSlot, FailureClass,
+    ID_BYTES, Inner, LifetimeState, Ownership, RefreshState, State, StoredCode, Text,
+    WindowReservation, WindowSlot, lock,
+};
+use chrono::Utc;
+use uuid::Uuid;
 
 pub(super) fn class_bit(class: FailureClass) -> u32 {
     let bit = match class {

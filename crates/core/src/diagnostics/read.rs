@@ -14,7 +14,15 @@ use serde::ser::{Serialize, SerializeSeq, SerializeStruct, Serializer};
 use uuid::Uuid;
 
 use super::storage::CappedWriter;
-use super::*;
+use super::{
+    BuiltinDiagnosticCode, DIAGNOSTIC_CATALOGUE_VERSION, DIAGNOSTIC_SCHEMA_VERSION,
+    DiagnosticAvailability, DiagnosticCount, DiagnosticCursor, DiagnosticError,
+    DiagnosticLifetimeSummary, DiagnosticLimits, DiagnosticLoss, DiagnosticNumber,
+    DiagnosticOutcome, DiagnosticQuery, DiagnosticRetention, DiagnosticSeverity,
+    DiagnosticSnapshot, DiagnosticSummaryScope, DiagnosticTotals, DiagnosticWindowBucket,
+    DiagnosticWindowCoverage, FailureClass, Inner, LifetimeState, ObservationTime, SourceIdentity,
+    StoredPluginContext, state, storage,
+};
 
 #[derive(Clone, Copy)]
 struct TextRef {
@@ -1398,6 +1406,11 @@ impl<T: Serialize> Serialize for SizingRows<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostics::lock;
+    use crate::diagnostics::{
+        Classification, ComponentRegistration, Diagnostics, DiagnosticsSettings, Observation,
+        SuccessCode, WindowSettings,
+    };
 
     #[test]
     fn zero_queries_omit_pool_backing_and_ignore_unused_page_capacities() {
