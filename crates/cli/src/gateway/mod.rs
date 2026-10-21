@@ -59,7 +59,7 @@ pub(crate) fn daemon_gateway_start(
     request_json: Value,
     streaming: bool,
 ) -> Option<crate::sessions::LlmGatewayStart> {
-    let provider = ProviderRoute::from_path(path)?;
+    let provider = ProviderRoute::from_request(path, headers)?;
     Some(request::build_llm_gateway_start_from_parts(
         headers,
         path,
@@ -97,7 +97,7 @@ pub(crate) fn daemon_provider_upstream_url_with_access(
     let path = path_and_query
         .split_once('?')
         .map_or(path_and_query, |(path, _)| path);
-    let Some(provider) = ProviderRoute::from_path(path) else {
+    let Some(provider) = ProviderRoute::from_request(path, headers) else {
         return Ok(None);
     };
     match client_named_upstream_url(provider, headers, path_and_query, invocation_authenticated) {
@@ -159,7 +159,7 @@ pub(crate) fn daemon_provider_forward_headers_with_access(
     config: &crate::configuration::GatewayConfig,
     allow_provider_auth: bool,
 ) -> Option<HeaderMap> {
-    let provider = ProviderRoute::from_path(path)?;
+    let provider = ProviderRoute::from_request(path, headers)?;
     Some(strip_replaceable_agent_auth_headers(
         headers,
         provider,
@@ -167,6 +167,12 @@ pub(crate) fn daemon_provider_forward_headers_with_access(
         allow_provider_auth && provider.allows_relay_auth(),
         config,
     ))
+}
+
+/// Both model APIs share a path. Anthropic protocol headers select Anthropic; token shapes do not.
+pub(crate) fn is_anthropic_models_request(path: &str, headers: &HeaderMap) -> bool {
+    matches!(path, "/models" | "/v1/models")
+        && (headers.contains_key("anthropic-version") || headers.contains_key("anthropic-beta"))
 }
 
 /// Model discovery and managed routes may use Relay credentials, including in daemon mode.
@@ -1569,9 +1575,9 @@ where
         | ProviderRoute::OpenAiMemoriesSummarize
         | ProviderRoute::OpenAiStandaloneSearch
         | ProviderRoute::OpenAiModels => ("OPENAI_API_KEY", http::header::AUTHORIZATION.as_str()),
-        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
-            ("ANTHROPIC_API_KEY", "x-api-key")
-        }
+        ProviderRoute::AnthropicMessages
+        | ProviderRoute::AnthropicCountTokens
+        | ProviderRoute::AnthropicModels => ("ANTHROPIC_API_KEY", "x-api-key"),
     };
     let Some(value) = env_lookup(env_var) else {
         return builder;
@@ -1594,7 +1600,9 @@ where
         | ProviderRoute::OpenAiMemoriesSummarize
         | ProviderRoute::OpenAiStandaloneSearch
         | ProviderRoute::OpenAiModels => format!("Bearer {value}"),
-        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => value,
+        ProviderRoute::AnthropicMessages
+        | ProviderRoute::AnthropicCountTokens
+        | ProviderRoute::AnthropicModels => value,
     };
     builder.header(header_name, header_value)
 }
@@ -1838,11 +1846,15 @@ pub(crate) async fn models(
             Body::empty(),
         );
     }
-    let provider = ProviderRoute::OpenAiModels;
-    let configured_auth_header = provider.configured_auth_header(&state.config);
     let request_path = parts.uri.path().to_string();
     let (authorization, provider_path) =
         state.authorize_provider_request(&mut parts.headers, &request_path)?;
+    let provider = if is_anthropic_models_request(&provider_path, &parts.headers) {
+        ProviderRoute::AnthropicModels
+    } else {
+        ProviderRoute::OpenAiModels
+    };
+    let configured_auth_header = provider.configured_auth_header(&state.config);
     let path_and_query = request::provider_path_and_query(&provider_path, parts.uri.query());
     let mut allow_environment_provider_auth = authorization.allow_environment_provider_auth;
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);

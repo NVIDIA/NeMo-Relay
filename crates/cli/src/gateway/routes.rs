@@ -20,6 +20,7 @@ pub(super) enum ProviderRoute {
     OpenAiModels,
     AnthropicMessages,
     AnthropicCountTokens,
+    AnthropicModels,
 }
 
 #[derive(Clone)]
@@ -63,6 +64,7 @@ impl ProviderRoute {
                 | Self::OpenAiModels
                 | Self::AnthropicMessages
                 | Self::AnthropicCountTokens
+                | Self::AnthropicModels
         )
     }
 
@@ -98,6 +100,14 @@ impl ProviderRoute {
         }
     }
 
+    pub(super) fn from_request(path: &str, headers: &HeaderMap) -> Option<Self> {
+        if super::is_anthropic_models_request(path, headers) {
+            Some(Self::AnthropicModels)
+        } else {
+            Self::from_path(path)
+        }
+    }
+
     pub(super) fn from_dispatch_override(value: &str) -> Option<Self> {
         match value {
             "openai_chat"
@@ -129,6 +139,7 @@ impl ProviderRoute {
             Self::OpenAiChatCompletions => Some(ProviderSurface::OpenAIChat),
             Self::AnthropicMessages => Some(ProviderSurface::AnthropicMessages),
             Self::AnthropicCountTokens
+            | Self::AnthropicModels
             | Self::OpenAiResponsesCompact
             | Self::OpenAiRealtime
             | Self::OpenAiRealtimeCalls
@@ -168,7 +179,7 @@ impl ProviderRoute {
             | Self::OpenAiMemoriesSummarize
             | Self::OpenAiStandaloneSearch
             | Self::OpenAiModels => config.openai_base_url.as_str(),
-            Self::AnthropicMessages | Self::AnthropicCountTokens => {
+            Self::AnthropicMessages | Self::AnthropicCountTokens | Self::AnthropicModels => {
                 config.anthropic_base_url.as_str()
             }
         };
@@ -227,6 +238,7 @@ impl ProviderRoute {
             Self::OpenAiModels => GatewayRouteKind::OpenAiModels,
             Self::AnthropicMessages => GatewayRouteKind::AnthropicMessages,
             Self::AnthropicCountTokens => GatewayRouteKind::AnthropicCountTokens,
+            Self::AnthropicModels => GatewayRouteKind::AnthropicModels,
         }
     }
 }
@@ -248,9 +260,9 @@ fn configured_auth_header<'a>(
         | ProviderRoute::OpenAiMemoriesSummarize
         | ProviderRoute::OpenAiStandaloneSearch
         | ProviderRoute::OpenAiModels => openai_auth_header,
-        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
-            anthropic_auth_header
-        }
+        ProviderRoute::AnthropicMessages
+        | ProviderRoute::AnthropicCountTokens
+        | ProviderRoute::AnthropicModels => anthropic_auth_header,
     }
 }
 

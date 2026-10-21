@@ -1620,7 +1620,7 @@ async fn public_proxy_inner(
     State(state): State<Arc<DaemonState>>,
     mut request: Request<Body>,
 ) -> Response<Body> {
-    let Some(route) = PublicRoute::from_path(request.uri().path()) else {
+    let Some(route) = PublicRoute::from_request(request.uri().path(), request.headers()) else {
         return crate::operational::unmatched_route(
             "daemon",
             request.method(),

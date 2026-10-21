@@ -702,10 +702,15 @@ credential. If the daemon has `openai_auth_header` or `OPENAI_API_KEY`, Relay
 uses that credential for managed routes. It sends those requests to the
 administrator's OpenAI-compatible upstream.
 
-`GET /models` and `GET /v1/models` follow the same rules as managed OpenAI routes.
-Relay can use its OpenAI credentials only if the caller has Relay access.
-Without a replacement, Relay keeps the caller's credential. These requests do
-not create LLM events.
+`GET /models` and `GET /v1/models` can list OpenAI or Anthropic models. Include
+`anthropic-version` when listing Anthropic models. Relay also selects Anthropic
+if the request has an `anthropic-beta` header. Without either header, Relay uses
+OpenAI. Relay does not choose a provider from the API key's format.
+
+Model lists follow the managed auth rules for the selected provider. The caller
+must have Relay access to use Relay's credentials. Without a replacement,
+OpenAI requests keep the caller's credential. Model lists do not create LLM
+events.
 
 Other unmanaged routes include compaction and voice calls. Relay never adds its
 own provider credentials to these requests. With a custom `openai_base_url`,
