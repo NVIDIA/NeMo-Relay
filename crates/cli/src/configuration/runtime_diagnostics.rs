@@ -53,7 +53,11 @@ impl PreparedConfig {
             Some(value) => value
                 .clone()
                 .try_into()
-                .map_err(|_| CliError::Config("invalid diagnostics configuration shape".into()))?,
+                .map_err(|error| {
+                    CliError::Config(format!(
+                        "invalid diagnostics configuration shape: {error}"
+                    ))
+                })?,
             None => RuntimeDiagnosticsConfig::default(),
         };
         Ok(Self {
