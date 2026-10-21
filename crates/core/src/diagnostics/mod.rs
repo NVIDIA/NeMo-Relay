@@ -1545,6 +1545,7 @@ fn record_observation(
 
 struct PublicationWorkspace {
     event: DiagnosticEvent,
+    code: String,
     detail: String,
     class: String,
     session: String,
@@ -1591,10 +1592,7 @@ impl PublicationWorkspace {
                     refresh_generation: 0.into(),
                     ownership: ComponentOwnership::default(),
                 },
-                classification: Classification {
-                    canonical_code: Cow::Owned(reserved_string(ID_BYTES)?),
-                    failure_class: None,
-                },
+                classification: Classification::success(SuccessCode::LoggingInitialized),
                 severity: DiagnosticSeverity::Info,
                 outcome: DiagnosticOutcome::Unknown,
                 context: PluginObservationContext::default(),
@@ -1602,6 +1600,7 @@ impl PublicationWorkspace {
                 count: 0.into(),
                 correlation: DiagnosticCorrelation::default(),
             },
+            code: reserved_string(ID_BYTES)?,
             detail: reserved_string(limits.max_detail_bytes)?,
             class: reserved_string(32)?,
             session: reserved_string(limits.max_correlation_bytes)?,
@@ -1614,10 +1613,7 @@ impl PublicationWorkspace {
     }
     fn reserved_bytes(&self) -> usize {
         self.event.component.key.capacity()
-            + match &self.event.classification.canonical_code {
-                Cow::Owned(value) => value.capacity(),
-                Cow::Borrowed(_) => 0,
-            }
+            + self.code.capacity()
             + self.detail.capacity()
             + self.class.capacity()
             + self.session.capacity()
@@ -1668,19 +1664,19 @@ impl PublicationWorkspace {
             self.event.origin.ownership.responsibility =
                 Some(std::mem::take(&mut self.origin_responsibility));
         }
-        self.event.classification.canonical_code.to_mut().clear();
-        self.event
-            .classification
-            .canonical_code
-            .to_mut()
+        self.code.clear();
+        self.code
             .push_str(state.code_name(code).expect("admitted code"));
-        if let Some(class) = class {
+        let failure_class = class.map(|class| {
             self.class.clear();
             self.class
                 .push_str(state.class_name(class).expect("admitted class"));
-            self.event.classification.failure_class =
-                Some(Cow::Owned(std::mem::take(&mut self.class)));
-        }
+            Cow::Owned(std::mem::take(&mut self.class))
+        });
+        self.event.classification = Classification::from_opaque_names(
+            Cow::Owned(std::mem::take(&mut self.code)),
+            failure_class,
+        );
         self.event.context = context.into();
         self.event.severity = observation.severity;
         self.event.outcome = observation.outcome;
@@ -1718,7 +1714,16 @@ impl PublicationWorkspace {
             self.detail = value.message;
             self.detail.clear();
         }
-        if let Some(value) = self.event.classification.failure_class.take() {
+        let (code, class) = std::mem::replace(
+            &mut self.event.classification,
+            Classification::success(SuccessCode::LoggingInitialized),
+        )
+        .into_names();
+        if let Cow::Owned(code) = code {
+            self.code = code;
+            self.code.clear();
+        }
+        if let Some(value) = class {
             self.class = value.into_owned();
             self.class.clear();
         }

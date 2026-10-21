@@ -1559,7 +1559,7 @@ fn outcomes_windows_and_failure_classes_have_independent_scopes() {
     );
     assert_eq!(filtered.events.len(), 1);
     assert_eq!(
-        filtered.events[0].classification.failure_class.as_deref(),
+        filtered.events[0].classification.failure_class(),
         Some("timeout")
     );
     let component = &filtered.components[0];
@@ -1824,10 +1824,10 @@ fn oversized_unrecognized_payload_names_are_rejected_without_allocating() {
     let inputs = [
         (
             Observation::new(
-                Classification {
-                    canonical_code: Cow::Owned(oversized.clone()),
-                    failure_class: Some("unknown".into()),
-                },
+                Classification::from_opaque_names(
+                    Cow::Owned(oversized.clone()),
+                    Some("unknown".into()),
+                ),
                 "unknown code",
                 1,
             ),
@@ -1835,10 +1835,10 @@ fn oversized_unrecognized_payload_names_are_rejected_without_allocating() {
         ),
         (
             Observation::new(
-                Classification {
-                    canonical_code: WRITE.canonical_name().into(),
-                    failure_class: Some(Cow::Owned(oversized.clone())),
-                },
+                Classification::from_opaque_names(
+                    WRITE.canonical_name().into(),
+                    Some(Cow::Owned(oversized.clone())),
+                ),
                 "unknown class",
                 1,
             ),
@@ -2419,12 +2419,9 @@ fn custom_extension_classes_are_admitted_once_and_overflow_is_summary_only() {
         },
     );
     assert_eq!(view.events.len(), 1);
+    assert_eq!(view.events[0].classification.code(), "acme.request_failed");
     assert_eq!(
-        view.events[0].classification.canonical_code,
-        "acme.request_failed"
-    );
-    assert_eq!(
-        view.events[0].classification.failure_class.as_deref(),
+        view.events[0].classification.failure_class(),
         Some("backend_overloaded")
     );
     assert_eq!(view.components[0].counters[0].occurrences.value.get(), 2);
@@ -2991,10 +2988,10 @@ fn owned_shared_payloads_record_and_project_without_new_allocations() {
     let observations: Vec<_> = (0..100)
         .map(|_| {
             Observation::new(
-                Classification {
-                    canonical_code: Cow::Owned("logging.sink.write_failed".to_owned()),
-                    failure_class: Some(Cow::Owned("unknown".to_owned())),
-                },
+                Classification::from_opaque_names(
+                    Cow::Owned("logging.sink.write_failed".to_owned()),
+                    Some(Cow::Owned("unknown".to_owned())),
+                ),
                 "owned",
                 1,
             )

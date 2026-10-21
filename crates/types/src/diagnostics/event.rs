@@ -59,16 +59,40 @@ pub struct DiagnosticCorrelation<'a> {
 /// names. Decoded future names remain opaque. Core validates recording input and
 /// resolves admitted identifiers before changing counters or retaining evidence.
 /// Transport adapters must bound received names before materializing owned data.
+/// Private fields prevent mutation after construction. Explicit opaque-name
+/// construction and deserialization preserve evidence without asserting validity.
+///
+/// ```compile_fail
+/// use nemo_relay_types::diagnostics::{Classification, SuccessCode};
+/// let mut value = Classification::success(SuccessCode::SinkInitialized);
+/// value.canonical_code = "different.name".into();
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Classification {
     /// Stable built-in name or registered namespaced extension name.
-    pub canonical_code: Cow<'static, str>,
+    canonical_code: Cow<'static, str>,
     /// Cause name; absent for successful observations and notices.
-    pub failure_class: Option<Cow<'static, str>>,
+    failure_class: Option<Cow<'static, str>>,
 }
 
 impl Classification {
+    /// Preserve names from a wire payload or an admitted extension descriptor.
+    /// This does not validate catalogue membership or authorize recording. Core
+    /// revalidates every recording input, including values decoded with Serde.
+    pub fn from_opaque_names(
+        canonical_code: Cow<'static, str>,
+        failure_class: Option<Cow<'static, str>>,
+    ) -> Self {
+        Self {
+            canonical_code,
+            failure_class,
+        }
+    }
+    /// Consume the payload without cloning borrowed names or owned buffers.
+    pub fn into_names(self) -> (Cow<'static, str>, Option<Cow<'static, str>>) {
+        (self.canonical_code, self.failure_class)
+    }
     /// Validate the required cause and the catalogue entry's permitted classes.
     pub fn new(
         code: BuiltinDiagnosticCode,
@@ -177,7 +201,7 @@ impl DiagnosticEvent {
     /// Borrow the canonical code without allocating a second representation.
     #[must_use]
     pub fn code(&self) -> &str {
-        &self.classification.canonical_code
+        self.classification.code()
     }
     /// Borrow retained detail, when available.
     #[must_use]

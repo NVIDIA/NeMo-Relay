@@ -406,10 +406,10 @@ fn lifetime_refresh_origin_and_cursor_values_remain_lossless() {
 fn future_classifications_remain_opaque_without_reclassifying_them() {
     let mut expected = snapshot();
     expected.catalogue_version = DIAGNOSTIC_CATALOGUE_VERSION + 1;
-    expected.events[0].classification = Classification {
-        canonical_code: "vendor.extension.new_failure".into(),
-        failure_class: Some("new_remote_cause".into()),
-    };
+    expected.events[0].classification = Classification::from_opaque_names(
+        "vendor.extension.new_failure".into(),
+        Some("new_remote_cause".into()),
+    );
     let wire = serde_json::to_value(&expected).unwrap();
     let decoded: DiagnosticSnapshot = serde_json::from_value(wire).unwrap();
     assert_eq!(decoded, expected);
@@ -701,16 +701,22 @@ fn shared_payloads_borrow_producer_values_and_own_decoded_values() {
         FailureClass::Io,
     )
     .unwrap();
-    assert!(matches!(&classification.canonical_code, Cow::Borrowed(_)));
     assert!(matches!(
-        &classification.failure_class,
+        &classification.clone().into_names().0,
+        Cow::Borrowed(_)
+    ));
+    assert!(matches!(
+        &classification.clone().into_names().1,
         Some(Cow::Borrowed(_))
     ));
     let decoded: Classification =
         serde_json::from_value(serde_json::to_value(&classification).unwrap()).unwrap();
     assert_eq!(decoded, classification);
-    assert!(matches!(&decoded.canonical_code, Cow::Owned(_)));
-    assert!(matches!(&decoded.failure_class, Some(Cow::Owned(_))));
+    assert!(matches!(&decoded.clone().into_names().0, Cow::Owned(_)));
+    assert!(matches!(
+        &decoded.clone().into_names().1,
+        Some(Cow::Owned(_))
+    ));
 
     let session = String::from("session-dynamic");
     let request = String::from("request-dynamic");
