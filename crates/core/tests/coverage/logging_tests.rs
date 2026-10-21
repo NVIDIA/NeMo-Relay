@@ -2107,3 +2107,114 @@ fn configure_rejects_preinstalled_foreign_logger() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn typed_projection_respects_facade_filter_before_serializing_and_keeps_recording() {
+    let _guard = lock_logging_tests();
+    struct RestoreMaxLevel(log::LevelFilter);
+    impl Drop for RestoreMaxLevel {
+        fn drop(&mut self) {
+            log::set_max_level(self.0);
+        }
+    }
+    let _restore_max_level = RestoreMaxLevel(log::max_level());
+    let diagnostics = enabled_diagnostics(DiagnosticLimits::default());
+    let failure = FailureCode::Plugin(PluginFailureCode::Common(CommonPluginFailureCode::Internal));
+    let code = BuiltinDiagnosticCode::Failure(failure);
+    let producer = diagnostics
+        .register_component(ComponentRegistration::new(
+            "test.facade_projection",
+            &[code],
+        ))
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("diagnostic-facade-filter.jsonl");
+    let runtime = LoggingRuntime::configure_with_diagnostics(
+        LoggingConfig {
+            level: LogLevel::Trace,
+            stderr_enabled: false,
+            flush_interval_millis: 0,
+            sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+                path: path.clone(),
+                level: LogLevel::Trace,
+                ..Default::default()
+            })],
+            ..default_config()
+        },
+        &diagnostics,
+    )
+    .unwrap();
+    assert!(runtime.logger.should_log(Level::Trace));
+    log::set_max_level(log::LevelFilter::Warn);
+    for severity in [
+        DiagnosticSeverity::Trace,
+        DiagnosticSeverity::Debug,
+        DiagnosticSeverity::Info,
+        DiagnosticSeverity::Warning,
+        DiagnosticSeverity::Error,
+    ] {
+        producer
+            .record_lazy(|| {
+                Observation::new(
+                    Classification::failure(failure, FailureClass::Internal).unwrap(),
+                    "facade threshold observation",
+                    NonZeroU64::MIN,
+                )
+                .with_severity(severity)
+            })
+            .unwrap();
+    }
+    log::set_max_level(log::LevelFilter::Off);
+    // Escaping this admitted detail exceeds the projection JSON cap. Filtering
+    // must happen before serialization, so it must not report projection loss.
+    let oversized_json_detail = "\0".repeat(4096);
+    producer
+        .record_lazy(|| {
+            Observation::new(
+                Classification::failure(failure, FailureClass::Internal).unwrap(),
+                oversized_json_detail.as_str(),
+                NonZeroU64::MIN,
+            )
+        })
+        .unwrap();
+    runtime.shutdown();
+    let output = std::fs::read_to_string(path).unwrap();
+    let levels = output
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|row| row["target"] == "nemo_relay.diagnostics")
+        .map(|row| row["level"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(levels, ["warn", "error"]);
+    let page = diagnostics
+        .snapshot(&DiagnosticQuery {
+            component_key: Some("test.facade_projection".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(page.events.len(), 6);
+    assert_eq!(
+        page.components[0]
+            .lifetime
+            .totals
+            .recorded_events_total
+            .value
+            .get(),
+        6
+    );
+    assert_eq!(
+        page.components[0]
+            .lifetime
+            .totals
+            .occurrences_total
+            .value
+            .get(),
+        6
+    );
+    assert_eq!(
+        page.coverage.loss.projection_deliveries_omitted.value.get(),
+        0
+    );
+}

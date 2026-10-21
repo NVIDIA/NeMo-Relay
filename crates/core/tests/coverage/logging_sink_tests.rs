@@ -505,6 +505,14 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
     };
 
     let _guard = crate::logging::lock_test_logging();
+    struct RestoreMaxLevel(log::LevelFilter);
+    impl Drop for RestoreMaxLevel {
+        fn drop(&mut self) {
+            log::set_max_level(self.0);
+        }
+    }
+    let _restore_max_level = RestoreMaxLevel(log::max_level());
+    log::set_max_level(log::LevelFilter::Trace);
     let diagnostics = enabled_diagnostics();
     let producer = diagnostic_test_producer(&diagnostics);
     let config = LoggingConfig {

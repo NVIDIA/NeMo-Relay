@@ -313,13 +313,17 @@ fn project_event(
     logger: Arc<Logger>,
     event: &DiagnosticEvent,
 ) -> std::result::Result<(), ProjectionError> {
-    let level = match event.severity {
-        DiagnosticSeverity::Trace => spdlog::Level::Trace,
-        DiagnosticSeverity::Debug => spdlog::Level::Debug,
-        DiagnosticSeverity::Info => spdlog::Level::Info,
-        DiagnosticSeverity::Warning => spdlog::Level::Warn,
-        DiagnosticSeverity::Error => spdlog::Level::Error,
+    let facade_level = match event.severity {
+        DiagnosticSeverity::Trace => log::Level::Trace,
+        DiagnosticSeverity::Debug => log::Level::Debug,
+        DiagnosticSeverity::Info => log::Level::Info,
+        DiagnosticSeverity::Warning => log::Level::Warn,
+        DiagnosticSeverity::Error => log::Level::Error,
     };
+    if facade_level > log::max_level() {
+        return Ok(());
+    }
+    let level = spdlog::Level::from(facade_level);
     if !logger.should_log(level) {
         return Ok(());
     }
@@ -434,6 +438,14 @@ mod tests {
     #[test]
     fn projections_overlap_and_shutdown_waits_for_inflight_delivery() {
         let _logging = super::super::lock_test_logging();
+        struct RestoreMaxLevel(log::LevelFilter);
+        impl Drop for RestoreMaxLevel {
+            fn drop(&mut self) {
+                log::set_max_level(self.0);
+            }
+        }
+        let _restore_max_level = RestoreMaxLevel(log::max_level());
+        log::set_max_level(log::LevelFilter::Trace);
         let diagnostics = Diagnostics::from_settings(
             Diagnostics::default().source().clone(),
             crate::diagnostics::DiagnosticsSettings {
