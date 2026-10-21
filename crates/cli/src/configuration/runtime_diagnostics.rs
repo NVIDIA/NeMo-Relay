@@ -50,14 +50,9 @@ impl PreparedConfig {
             .collect();
         let document = read_shared_documents_for_startup(paths, false)?;
         let diagnostics = match document.merged.get("diagnostics") {
-            Some(value) => value
-                .clone()
-                .try_into()
-                .map_err(|error| {
-                    CliError::Config(format!(
-                        "invalid diagnostics configuration shape: {error}"
-                    ))
-                })?,
+            Some(value) => value.clone().try_into().map_err(|error| {
+                CliError::Config(format!("invalid diagnostics configuration shape: {error}"))
+            })?,
             None => RuntimeDiagnosticsConfig::default(),
         };
         Ok(Self {

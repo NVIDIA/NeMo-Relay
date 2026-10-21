@@ -1686,13 +1686,7 @@ fn finish_shared_config(
         let sources = shared
             .legacy_sources
             .iter()
-            .map(|source| {
-                format!(
-                    "{} ({})",
-                    source.path.display(),
-                    source.sections.join(", ")
-                )
-            })
+            .map(|source| format!("{} ({})", source.path.display(), source.sections.join(", ")))
             .collect::<Vec<_>>()
             .join("; ");
         let context = if sources.is_empty() {
