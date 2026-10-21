@@ -197,6 +197,7 @@ fn chatgpt_auth_strip_allows_api_key_substitution_for_codex_access_token() {
     let stripped =
         strip_chatgpt_auth_for_openai_route(&headers, GatewayRouteKind::OpenAiResponses, true);
     assert!(stripped.get("authorization").is_none());
+    assert!(stripped.get("chatgpt-account-id").is_none());
 
     let preserved =
         strip_chatgpt_auth_for_openai_route(&headers, GatewayRouteKind::OpenAiResponses, false);

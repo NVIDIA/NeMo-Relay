@@ -298,55 +298,100 @@ use `nemo-relay plugins edit` for user configuration.
 
 ### Edit Gateway Configuration
 
-Use the config editor to change settings in your user `config.toml` file.
-Run the following command to open the editor:
+Use the config editor to change settings in `config.toml`. Run the following
+command to open it:
 
 ```bash
 nemo-relay config edit
 ```
 
-Use `--global` to edit system configuration at
+#### Choose a File
+
+By default, the editor opens your user `config.toml`. To open a different file,
+pass `--config path/to/config.toml` before `config edit`. Both `config edit` and
+`config edit --user` use that file.
+
+Use `--global` to edit the system file. The path is
 `/etc/nemo-relay/config.toml` on Unix or
-`%ProgramData%\nemo-relay\config.toml` on Windows. The editor creates a
-missing target only after you select **Save**, preserves unrelated TOML
-sections, and lets you clear a setting to restore normal configuration
-precedence and defaults. Global saves are system-readable (`0644` on Unix), so
-they reject authorization headers; store credentials in a user config or
-environment variables instead.
+`%ProgramData%\nemo-relay\config.toml` on Windows. On Unix, the editor saves
+system files with mode `0644`, which lets other users read them.
 
-When the top-level CLI receives `--config path/to/config.toml`, the editor uses
-that exact file as its user target, so the default editor and
-`config edit --user` both open it. Use `--global` to edit the system layer.
-This selects only the file opened by the editor; it does
-not change runtime discovery, layering, or merge precedence.
+These options choose the file to edit. At runtime, Relay combines config files
+in the order described under [Shared Configuration](#shared-configuration).
 
-The editor lets you make the following changes:
+#### Change Settings
 
-- Set gateway limits for request sizes.
-- Change provider URLs and authorization headers in `[upstream]`.
-- Set how long Relay waits for a provider response. Use `0` to turn off the timeout.
-- Set the ChatGPT backend URL used by Codex.
-- Choose which command starts Claude Code, Codex, or Pi.
-- Set up log output and log files in `[logging]` and `[daemon.logging]`.
-- Turn log output to standard error (stderr) on or off.
+Choose a menu for the settings you want to change:
 
-You can also set up agents with `nemo-relay config`.
-Use `nemo-relay plugins edit` to change plugin settings.
+- **Gateway limits**: Set request size limits in `[gateway]`.
+- **Provider upstreams**: Set provider URLs, credentials, and response timeouts
+  in `[upstream]`. This menu also includes the ChatGPT backend URL used by Codex.
+  Set the response timeout to `0` to turn it off.
+- **Agent commands**: Choose which command starts Claude Code, Codex, or Pi.
+- **Operational logging**: Set log output in `[logging]`.
+- **Daemon logging**: Set log output in `[daemon.logging]`.
 
-When an explicit plugin file is selected, it becomes the editor's user target:
-the default editor and `--user` open that file. Use `--global` to edit the
-system file.
+Clear a setting to use values from other config sources or the defaults.
 
-Use `nemo-relay plugins edit --global` for `/etc/nemo-relay/plugins.toml` on
-Unix or `%ProgramData%\nemo-relay\plugins.toml` on Windows. Global plugin
-configuration is system-readable (`0644` on Unix), so do not store credentials
-there. The editor rejects schema-declared secret values in global plugin
-configuration.
+#### Provider Credentials
 
-The upstream authorization-header controls show only whether a value is
-configured and never print it in menus or previews. Prefer
-`NEMO_RELAY_OPENAI_AUTH_HEADER` and `NEMO_RELAY_ANTHROPIC_AUTH_HEADER` instead
-of storing credentials in `config.toml`.
+In **Provider upstreams**, set, replace, or clear a credential source for OpenAI
+or Anthropic. Choose a static API key, an authorization header, or an API key
+helper. When you set one source, the editor removes the provider's other sources
+from the selected file.
+
+Helper setup replaces all fields in that helper. Set the command, arguments,
+timeout, and authentication scheme. Enter arguments as a JSON array of strings.
+Leave the arguments blank if the helper needs none. The editor hides credentials,
+helper commands, and helper arguments during entry and in **Preview**.
+
+The editor rejects authorization headers and static API keys in global files.
+Store those values in a user config or environment variables. For authorization
+headers, you can use `NEMO_RELAY_OPENAI_AUTH_HEADER` or
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`.
+
+#### Log Output
+
+Use **Operational logging** for `[logging]` and **Daemon logging** for
+`[daemon.logging]`. Both menus let you set log levels, standard error (stderr)
+output, and log files. You can turn stderr output on or off.
+
+For log files, use `sinks = [{ path = "relay.log" }]`, `[[logging.sinks]]`, or
+`[[daemon.logging.sinks]]`. The editor keeps the format you use.
+
+#### Save Changes
+
+Select **Preview** to review your changes. The editor keeps unrelated TOML
+sections. It creates a missing file only after you select **Save**.
+
+Select **Save** to check and save the file. The editor checks provider URLs,
+credential sources, helper settings, and log settings. If a check fails, the
+editor leaves the file unchanged. It stays open so you can fix the settings.
+These checks do not run API key helpers.
+
+Select **Cancel** to leave the editor without saving.
+
+### Edit Plugin Configuration
+
+Use the plugin editor to change `plugins.toml`. These settings include
+observability exporters and other Relay components. Run the following command
+to open it:
+
+```bash
+nemo-relay plugins edit
+```
+
+By default, the editor opens your user `plugins.toml`. Pass
+`--plugin-config-path path/to/plugins.toml` to choose another file. If you pass
+`--config path/to/config.toml`, the editor uses `path/to/plugins.toml` unless
+you also set `--plugin-config-path`. The default editor and `--user` both open
+the selected file. Put path options before `plugins edit`.
+
+Use `--global` to edit `/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows. Other users can read this
+file. On Unix, the editor saves it with mode `0644`. Keep credentials out of
+global plugin files. The editor rejects values that the plugin schema marks
+as secret.
 
 ### Provider Upstreams
 
@@ -578,8 +623,9 @@ credential. The replacement can come from `openai_auth_header`,
 `[upstream.openai_api_key_helper]`, or `OPENAI_API_KEY`. The value must not be
 empty. Relay then sends the request to `openai_base_url`.
 
-Without a replacement, Relay keeps the ChatGPT credential. It uses the ChatGPT
-backend only if `openai_base_url` is `https://api.openai.com/v1`, the default value.
+Without a replacement, managed routes keep the ChatGPT credential. Relay uses
+the ChatGPT backend only with the default `openai_base_url`,
+`https://api.openai.com/v1`.
 If you set a different `openai_base_url`, Relay uses that URL. ChatGPT voice calls
 use a separate rule, described below.
 
@@ -588,17 +634,37 @@ different backend, set `chatgpt_codex_base_url` under `[upstream]`. Relay sends 
 caller's ChatGPT credential to this URL. Use a backend you trust with that
 credential.
 
-Unmanaged OpenAI routes keep the caller's ChatGPT credential. These routes
-include compaction, model discovery, and voice calls. They follow the upstream
-settings described above. Relay never adds its own provider credentials to
-these requests.
+`GET /models` and `GET /v1/models` return a model list. To request Anthropic
+models, include an `anthropic-version` header. An `anthropic-beta` header also
+selects Anthropic. Relay uses OpenAI when neither header is present. The API
+key's format does not select a provider.
+
+Model lists use the same auth rules as the provider's managed routes. These
+requests do not create LLM events. Relay keeps provider API keys sent by the
+caller.
+
+OpenAI requests use `openai_base_url`. For auth, Relay tries `openai_auth_header`,
+`openai_api_key`, `[upstream.openai_api_key_helper]`, then `OPENAI_API_KEY`.
+Anthropic requests use `anthropic_base_url` with the corresponding
+`anthropic_auth_header`, `anthropic_api_key`,
+`[upstream.anthropic_api_key_helper]`, or `ANTHROPIC_API_KEY`. The caller must
+have Relay access to use Relay's credentials.
+
+If Relay has no replacement, OpenAI model requests keep the caller's credential.
+This also applies to a custom `openai_base_url`.
+
+Other unmanaged OpenAI routes include compaction and voice calls. Relay never
+adds its own provider credentials to these requests. With a custom
+`openai_base_url`, Relay removes `Authorization` and `chatgpt-account-id` if it
+recognizes a ChatGPT token. Relay keeps other caller credentials.
 
 ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
 They keep the caller's ChatGPT credential and use the ChatGPT backend
 (`chatgpt_codex_base_url` when set) even when a replacement credential is
 configured. Sideband attachment routes use `openai_base_url` and preserve
 the caller's provider credential, even when an administrator credential is
-configured. Refer to
+configured. With a custom `openai_base_url`, Relay removes recognized ChatGPT
+tokens and `chatgpt-account-id` from sideband requests. Refer to
 [Known Issues in 0.11.0](/about-nemo-relay/release-notes#known-issues-in-0110)
 before routing a ChatGPT voice sideband through Relay with a replacement key.
 

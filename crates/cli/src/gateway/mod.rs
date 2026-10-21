@@ -62,7 +62,7 @@ pub(crate) fn daemon_gateway_start(
     request_json: Value,
     streaming: bool,
 ) -> Option<crate::sessions::LlmGatewayStart> {
-    let provider = ProviderRoute::from_path(path)?;
+    let provider = ProviderRoute::from_request(path, headers)?;
     Some(request::build_llm_gateway_start_from_parts(
         headers,
         path,
@@ -100,7 +100,7 @@ pub(crate) fn daemon_provider_upstream_url_with_access(
     let path = path_and_query
         .split_once('?')
         .map_or(path_and_query, |(path, _)| path);
-    let Some(provider) = ProviderRoute::from_path(path) else {
+    let Some(provider) = ProviderRoute::from_request(path, headers) else {
         return Ok(None);
     };
     match client_named_upstream_url(provider, headers, path_and_query, invocation_authenticated) {
@@ -162,16 +162,13 @@ pub(crate) fn daemon_provider_forward_headers_with_access(
     config: &crate::configuration::GatewayConfig,
     allow_provider_auth: bool,
 ) -> Option<HeaderMap> {
-    let provider = ProviderRoute::from_path(path)?;
+    let provider = ProviderRoute::from_request(path, headers)?;
     Some(strip_replaceable_agent_auth_headers(
         headers,
         provider,
+        path,
         allow_provider_auth && provider.allows_relay_auth(),
-        if provider.has_replacement(config) {
-            Some("configured")
-        } else {
-            None
-        },
+        config,
     ))
 }
 
@@ -183,7 +180,13 @@ pub(crate) fn daemon_allows_provider_auth(
     daemon_allows_environment_provider_auth(headers) && provider_route_allows_relay_auth(path)
 }
 
-/// Unmanaged provider routes forward only caller-supplied credentials, including in daemon mode.
+/// Both model APIs share a path. Anthropic protocol headers select Anthropic; token shapes do not.
+pub(crate) fn is_anthropic_models_request(path: &str, headers: &HeaderMap) -> bool {
+    matches!(path, "/models" | "/v1/models")
+        && (headers.contains_key("anthropic-version") || headers.contains_key("anthropic-beta"))
+}
+
+/// Model discovery and managed routes may use Relay credentials, including in daemon mode.
 pub(crate) fn provider_route_allows_relay_auth(path: &str) -> bool {
     let path = path.split_once('?').map_or(path, |(path, _)| path);
     ProviderRoute::from_path(path).is_some_and(ProviderRoute::allows_relay_auth)
@@ -1909,7 +1912,7 @@ fn bounded_error_body(body: &[u8]) -> String {
     String::from_utf8_lossy(&body[..body.len().min(MAX_UPSTREAM_ERROR_BODY_BYTES)]).into_owned()
 }
 
-/// Proxies OpenAI model-list requests without creating LLM runtime events.
+/// Proxies provider model-list requests without creating LLM runtime events.
 ///
 /// The route is registered as GET-only but still verifies the method so direct tests or future
 /// router changes return a 405 instead of forwarding a nonsensical request upstream.
@@ -1926,10 +1929,14 @@ pub(crate) async fn models(
             Body::empty(),
         );
     }
-    let provider = ProviderRoute::OpenAiModels;
     let request_path = parts.uri.path().to_string();
     let (authorization, provider_path) =
         state.authorize_provider_request(&mut parts.headers, &request_path)?;
+    let provider = if is_anthropic_models_request(&provider_path, &parts.headers) {
+        ProviderRoute::AnthropicModels
+    } else {
+        ProviderRoute::OpenAiModels
+    };
     let path_and_query = request::provider_path_and_query(&provider_path, parts.uri.query());
     let mut allow_environment_provider_auth =
         authorization.allow_environment_provider_auth && provider.allows_relay_auth();
@@ -1971,12 +1978,9 @@ pub(crate) async fn models(
     let sanitized = strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,
+        &provider_path,
         allow_environment_provider_auth,
-        if provider.has_replacement(&state.config) {
-            Some("configured")
-        } else {
-            None
-        },
+        &state.config,
     );
     let http = if allow_environment_provider_auth && provider.has_helper(&state.config) {
         &state.http_helper
