@@ -494,25 +494,7 @@ pub(super) fn register_extension_class(
     }
     // A known portable class must use its built-in value, rather than a second
     // descriptor with the same spelling and potentially different admission.
-    let builtin_classes = [
-        FailureClass::InvalidInput,
-        FailureClass::InvalidState,
-        FailureClass::NotFound,
-        FailureClass::Conflict,
-        FailureClass::Authentication,
-        FailureClass::PermissionDenied,
-        FailureClass::Unsupported,
-        FailureClass::Incompatible,
-        FailureClass::Timeout,
-        FailureClass::Unavailable,
-        FailureClass::ResourceExhausted,
-        FailureClass::Io,
-        FailureClass::ExecutionFailed,
-        FailureClass::PolicyRejected,
-        FailureClass::Internal,
-        FailureClass::Unknown,
-    ];
-    if builtin_classes.iter().any(|class| class.as_str() == name) {
+    if FailureClass::from_canonical_name(name).is_some() {
         return Err(DiagnosticError::InvalidClassification);
     }
     let index = descriptor

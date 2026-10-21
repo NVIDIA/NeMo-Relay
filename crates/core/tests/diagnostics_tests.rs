@@ -3617,3 +3617,53 @@ fn rejected_record_returns_the_publication_permit_before_next_delivery() {
     );
     assert_eq!(service.memory_usage().projection_workspaces, 0);
 }
+
+#[test]
+fn extension_causes_reuse_the_reserved_builtin_name_catalogue() {
+    let service = diagnostics(limits());
+    let component = register(&service, "producer");
+    let extension = component
+        .register_extension(ExtensionRegistration {
+            namespace: "acme",
+            name: "failure",
+            description: "custom failure",
+            allowed_classes: &[],
+            outcome: DiagnosticOutcome::Failure,
+        })
+        .unwrap()
+        .unwrap();
+    let metadata = service.memory_usage().metadata_bytes;
+    for name in [
+        "invalid_input",
+        "invalid_state",
+        "not_found",
+        "conflict",
+        "authentication",
+        "permission_denied",
+        "unsupported",
+        "incompatible",
+        "timeout",
+        "unavailable",
+        "resource_exhausted",
+        "io",
+        "execution_failed",
+        "policy_rejected",
+        "internal",
+        "unknown",
+    ] {
+        assert!(FailureClass::from_canonical_name(name).is_some());
+        assert_eq!(
+            component
+                .register_extension_class(extension, name)
+                .unwrap_err(),
+            DiagnosticError::InvalidClassification
+        );
+    }
+    assert_eq!(service.memory_usage().metadata_bytes, metadata);
+    assert!(
+        component
+            .register_extension_class(extension, "backend_busy")
+            .unwrap()
+            .is_some()
+    );
+}
