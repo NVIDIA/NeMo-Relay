@@ -158,97 +158,64 @@ impl DetailPool {
         self.blocks.iter().map(|block| block.len).sum()
     }
 
-    /// Whether the bounded prefix can fit after reclaiming retained history.
-    /// Pending observation handles are protected: they cannot be reclaimed by
-    /// eviction until their event has been inserted into history.
-    pub(super) fn can_fit(
-        &self,
-        text: &str,
-        max_bytes: usize,
-        protected: &[Option<DetailHandle>],
-    ) -> bool {
-        let end = chunk_end(text, max_bytes);
-        let mut remainder = &text[..end];
-        if remainder.is_empty() {
-            return true;
-        }
-        if self.generation == u64::MAX {
-            return false;
-        }
-        let mut reclaimable = self.blocks.len();
-        for handle in protected.iter().flatten() {
-            let Some(blocks) = self.block_count(*handle) else {
-                return false;
-            };
-            reclaimable = reclaimable.saturating_sub(blocks);
-        }
-        let mut required = 0usize;
-        while !remainder.is_empty() {
-            required += 1;
-            if required > reclaimable {
-                return false;
-            }
-            remainder = &remainder[chunk_end(remainder, self.block_bytes)..];
-        }
-        true
+    /// Whether all selected text fits after reclaiming retained history.
+    /// Uses exactly the same UTF-8 block geometry as allocation.
+    pub(super) fn can_fit_parts(&self, parts: &[&str]) -> bool {
+        let needed = TextChunks::new(parts, self.block_bytes)
+            .filter(|(_, new_block)| *new_block)
+            .take(self.blocks.len().saturating_add(1))
+            .count();
+        needed == 0 || (self.generation != u64::MAX && needed <= self.blocks.len())
     }
 
-    /// Copy at most max_bytes from already-safe borrowed text. None means that
-    /// the caller should reclaim evidence or omit detail; backing never grows.
-    /// An empty/truncated-to-empty string consumes no block.
-    pub(super) fn allocate(&mut self, text: &str, max_bytes: usize) -> Option<DetailHandle> {
-        let mut end = text.len().min(max_bytes);
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        self.allocate_prefix(&text[..end])
-    }
-
-    fn allocate_prefix(&mut self, text: &str) -> Option<DetailHandle> {
-        if text.is_empty() {
+    /// Copy selected fields into one chain, sharing unused block space across
+    /// field boundaries. Inputs are already bounded by recording admission.
+    /// No temporary concatenation buffer or per-field allocation is needed.
+    pub(super) fn allocate_parts(&mut self, parts: &[&str]) -> Option<DetailHandle> {
+        let needed = TextChunks::new(parts, self.block_bytes)
+            .filter(|(_, new_block)| *new_block)
+            .take(self.free_blocks.saturating_add(1))
+            .count();
+        if needed == 0 {
             return Some(DetailHandle {
                 first: NO_BLOCK,
                 generation: 0,
                 len: 0,
             });
         }
-        let mut needed = 0usize;
-        let mut remainder = text;
-        while !remainder.is_empty() {
-            let end = chunk_end(remainder, self.block_bytes);
-            needed = needed.checked_add(1)?;
-            if needed > self.free_blocks {
-                return None;
-            }
-            remainder = &remainder[end..];
+        if needed > self.free_blocks {
+            return None;
         }
         let generation = self.generation.checked_add(1)?;
         let first = self.free_head;
-        let mut previous = NO_BLOCK;
-        let mut remainder = text;
-        while !remainder.is_empty() {
-            let end = chunk_end(remainder, self.block_bytes);
-            let index = self.free_head;
-            self.free_head = self.blocks[index].next;
-            self.free_blocks -= 1;
-            let offset = index * self.block_bytes;
-            self.bytes[offset..offset + end].copy_from_slice(&remainder.as_bytes()[..end]);
-            self.blocks[index] = Block {
-                next: NO_BLOCK,
-                generation,
-                len: end,
-            };
-            if previous != NO_BLOCK {
-                self.blocks[previous].next = index;
+        let mut current = NO_BLOCK;
+        let mut len = 0;
+        for (piece, new_block) in TextChunks::new(parts, self.block_bytes) {
+            if new_block {
+                let index = self.free_head;
+                self.free_head = self.blocks[index].next;
+                self.free_blocks -= 1;
+                self.blocks[index] = Block {
+                    next: NO_BLOCK,
+                    generation,
+                    len: 0,
+                };
+                if current != NO_BLOCK {
+                    self.blocks[current].next = index;
+                }
+                current = index;
             }
-            previous = index;
-            remainder = &remainder[end..];
+            let block = &mut self.blocks[current];
+            let offset = current * self.block_bytes + block.len;
+            self.bytes[offset..offset + piece.len()].copy_from_slice(piece.as_bytes());
+            block.len += piece.len();
+            len += piece.len();
         }
         self.generation = generation;
         Some(DetailHandle {
             first,
             generation,
-            len: text.len(),
+            len,
         })
     }
 
@@ -319,6 +286,51 @@ impl DetailPool {
     }
 }
 
+/// Stream complete UTF-8 fragments across field boundaries into fixed blocks.
+/// A fragment starts a new block only when the previous block cannot fit its
+/// next scalar. Empty fields remain represented by the event's ranges.
+struct TextChunks<'parts, 'text> {
+    parts: &'parts [&'text str],
+    part: usize,
+    offset: usize,
+    used: usize,
+    block_bytes: usize,
+}
+impl<'parts, 'text> TextChunks<'parts, 'text> {
+    fn new(parts: &'parts [&'text str], block_bytes: usize) -> Self {
+        Self {
+            parts,
+            part: 0,
+            offset: 0,
+            used: 0,
+            block_bytes,
+        }
+    }
+}
+impl<'text> Iterator for TextChunks<'_, 'text> {
+    type Item = (&'text str, bool);
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.part < self.parts.len() {
+            let remainder = &self.parts[self.part][self.offset..];
+            if remainder.is_empty() {
+                self.part += 1;
+                self.offset = 0;
+                continue;
+            }
+            let mut end = chunk_end(remainder, self.block_bytes - self.used);
+            if end == 0 {
+                self.used = 0;
+                end = chunk_end(remainder, self.block_bytes);
+            }
+            let new_block = self.used == 0;
+            self.used += end;
+            self.offset += end;
+            return Some((&remainder[..end], new_block));
+        }
+        None
+    }
+}
+
 fn chunk_end(text: &str, max_bytes: usize) -> usize {
     let mut end = text.len().min(max_bytes);
     while !text.is_char_boundary(end) {
@@ -372,6 +384,38 @@ impl fmt::Write for CappedWriter<'_> {
 #[cfg(test)]
 mod tests {
     use super::BoundedHistory;
+
+    #[test]
+    fn packed_pool_uses_exact_utf8_geometry_and_reuses_chains() {
+        let fields = ["", "abc", "€€€", "🙂x", "xy"];
+        for block_bytes in 4..=9 {
+            for capacity in 0..=8 {
+                let mut pool = super::DetailPool::new(capacity * block_bytes, block_bytes).unwrap();
+                for a in fields {
+                    for b in fields {
+                        for c in fields {
+                            let parts = [a, b, c];
+                            let fits = pool.can_fit_parts(&parts);
+                            let handle = pool.allocate_parts(&parts);
+                            assert_eq!(handle.is_some(), fits);
+                            if let Some(handle) = handle {
+                                let mut text = String::new();
+                                pool.copy_into(handle, &mut text).unwrap();
+                                assert_eq!(text, parts.concat());
+                                assert_eq!(pool.logical_bytes(), text.len());
+                                pool.free(handle);
+                                assert_eq!(pool.used_bytes(), 0);
+                                assert_eq!(pool.logical_bytes(), 0);
+                                if !text.is_empty() {
+                                    assert_eq!(pool.byte_len(handle), None);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn history_preflight_matches_library_backing_including_alignment() {

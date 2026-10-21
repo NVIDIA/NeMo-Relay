@@ -1500,23 +1500,12 @@ fn record_observation(
         state.loss.events_omitted.add(1);
         EvidenceDisposition::Dropped
     } else {
-        let retained_detail =
-            detail.and_then(|text| state.allocate_detail(text, inner.limits.max_detail_bytes, &[]));
-        if detail.is_some() && retained_detail.is_none() {
+        let retained = state.retain_event_text([detail, session, request]);
+        if detail.is_some() && retained.detail.is_none() {
             state.loss.details_omitted.add(1);
         }
-        let retained_session = session.and_then(|text| {
-            state.allocate_detail(text, inner.limits.max_correlation_bytes, &[retained_detail])
-        });
-        let retained_request = request.and_then(|text| {
-            state.allocate_detail(
-                text,
-                inner.limits.max_correlation_bytes,
-                &[retained_detail, retained_session],
-            )
-        });
-        let correlation_omitted = (session.is_some() && retained_session.is_none()) as u64
-            + (request.is_some() && retained_request.is_none()) as u64;
+        let correlation_omitted = (session.is_some() && retained.session_id.is_none()) as u64
+            + (request.is_some() && retained.request_id.is_none()) as u64;
         state.loss.correlations_omitted.add(correlation_omitted);
         let event = StoredObservation {
             sequence,
@@ -1529,10 +1518,8 @@ fn record_observation(
             context,
             severity: observation.severity,
             outcome: observation.outcome,
-            detail: retained_detail,
+            text: retained,
             detail_truncated: truncated,
-            session_id: retained_session,
-            request_id: retained_request,
         };
         if let Some(evicted) = state.recent.push_back(event) {
             state.evict_event(evicted);
@@ -1540,7 +1527,7 @@ fn record_observation(
         if truncated
             || session_truncated
             || request_truncated
-            || detail.is_some() && retained_detail.is_none()
+            || detail.is_some() && retained.detail.is_none()
             || correlation_omitted > 0
         {
             EvidenceDisposition::Truncated

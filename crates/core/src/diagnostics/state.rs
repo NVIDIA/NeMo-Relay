@@ -260,6 +260,21 @@ impl From<StoredPluginContext> for PluginObservationContext {
     }
 }
 
+/// Logical offsets into one packed message/correlation allocation. Admission
+/// caps their combined length at 4096 + 128 + 128 bytes.
+#[derive(Clone, Copy)]
+pub(super) struct TextRange {
+    pub start: u16,
+    pub len: u16,
+}
+#[derive(Clone, Copy, Default)]
+pub(super) struct RetainedText {
+    pub payload: Option<DetailHandle>,
+    pub detail: Option<TextRange>,
+    pub session_id: Option<TextRange>,
+    pub request_id: Option<TextRange>,
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct StoredObservation {
     pub sequence: u64,
@@ -272,10 +287,8 @@ pub(super) struct StoredObservation {
     pub context: StoredPluginContext,
     pub severity: DiagnosticSeverity,
     pub outcome: DiagnosticOutcome,
-    pub detail: Option<DetailHandle>,
+    pub text: RetainedText,
     pub detail_truncated: bool,
-    pub session_id: Option<DetailHandle>,
-    pub request_id: Option<DetailHandle>,
 }
 
 pub(super) struct State {
@@ -510,10 +523,7 @@ impl State {
         }
         self.lifetime.totals.history_evictions_total.add(1);
         self.loss.events_evicted.add(1);
-        for handle in [event.detail, event.session_id, event.request_id]
-            .into_iter()
-            .flatten()
-        {
+        if let Some(handle) = event.text.payload {
             self.detail.free(handle);
         }
     }
@@ -581,22 +591,47 @@ impl State {
         let _ = self.next_sequence();
         true
     }
-    pub fn allocate_detail(
-        &mut self,
-        value: &str,
-        max: usize,
-        protected: &[Option<DetailHandle>],
-    ) -> Option<DetailHandle> {
-        if !self.detail.can_fit(value, max, protected) {
-            return None;
+    /// Admit message, session, and request in priority order, before evicting
+    /// anything. An intrinsically impossible field cannot displace history.
+    pub fn retain_event_text(&mut self, fields: [Option<&str>; 3]) -> RetainedText {
+        let mut selected = [""; 3];
+        let mut ranges = [None; 3];
+        let mut len = 0u16;
+        for (index, field) in fields.into_iter().enumerate() {
+            let Some(field) = field else { continue };
+            let Ok(field_len) = u16::try_from(field.len()) else {
+                continue;
+            };
+            let Some(end) = len.checked_add(field_len) else {
+                continue;
+            };
+            selected[index] = field;
+            if self.detail.can_fit_parts(&selected) {
+                ranges[index] = Some(TextRange {
+                    start: len,
+                    len: field_len,
+                });
+                len = end;
+            } else {
+                selected[index] = "";
+            }
         }
-        loop {
-            if let Some(handle) = self.detail.allocate(value, max) {
-                return Some(handle);
+        if ranges.iter().all(Option::is_none) {
+            return RetainedText::default();
+        }
+        let payload = loop {
+            if let Some(handle) = self.detail.allocate_parts(&selected) {
+                break handle;
             }
             if !self.evict_oldest() {
-                return None;
+                return RetainedText::default();
             }
+        };
+        RetainedText {
+            payload: Some(payload),
+            detail: ranges[0],
+            session_id: ranges[1],
+            request_id: ranges[2],
         }
     }
     pub fn record_window(
@@ -737,15 +772,7 @@ mod tests {
                 "cause",
                 std::mem::offset_of!(StoredObservation, failure_class),
             ),
-            ("detail", std::mem::offset_of!(StoredObservation, detail)),
-            (
-                "session",
-                std::mem::offset_of!(StoredObservation, session_id),
-            ),
-            (
-                "request",
-                std::mem::offset_of!(StoredObservation, request_id),
-            ),
+            ("text", std::mem::offset_of!(StoredObservation, text)),
         ] {
             eprintln!("event field {name} offset={offset}");
         }
