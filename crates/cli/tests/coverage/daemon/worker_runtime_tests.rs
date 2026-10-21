@@ -1100,3 +1100,98 @@ async fn unmanaged_routes_forward_only_client_credentials() {
         task.abort();
     }
 }
+
+#[tokio::test]
+async fn model_catalog_workers_keep_provider_credentials_on_the_selected_upstream() {
+    let _plugins = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _env = EnvScope::set(&[
+        (
+            "OPENAI_API_KEY",
+            Some(std::ffi::OsStr::new("environment-openai")),
+        ),
+        (
+            "ANTHROPIC_API_KEY",
+            Some(std::ffi::OsStr::new("environment-anthropic")),
+        ),
+    ]);
+    async fn upstream(name: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().fallback(move |request: Request<Body>| async move {
+            Json(json!({
+                "provider": name,
+                "authorization": request.headers().get("authorization").map(|v| v.to_str().unwrap()),
+                "key": request.headers().get("x-api-key").map(|v| v.to_str().unwrap()),
+                "uri": request.uri().to_string(),
+            }))
+        });
+        (
+            base,
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }),
+        )
+    }
+    let (openai, openai_task) = upstream("openai").await;
+    let (anthropic, anthropic_task) = upstream("anthropic").await;
+    for configured in [false, true] {
+        let config = GatewayConfig {
+            openai_base_url: format!("{openai}/v1"),
+            anthropic_base_url: anthropic.clone(),
+            openai_auth_header: configured.then(|| "Bearer configured-openai".into()),
+            anthropic_auth_header: configured.then(|| "Bearer configured-anthropic".into()),
+            ..GatewayConfig::default()
+        };
+        for managed in [false, true] {
+            let mut state = state_with_config(config.clone());
+            if managed {
+                Arc::get_mut(&mut state).unwrap().managed = Some(
+                    ManagedRuntime::initialize(
+                        config.clone(),
+                        Vec::new(),
+                        "model-catalog-test".into(),
+                    )
+                    .await
+                    .unwrap()
+                    .into(),
+                );
+            }
+            let app = router(state.clone());
+            for provider in ["openai", "anthropic"] {
+                for path in ["/models", "/v1/models"] {
+                    let mut request = Request::get(format!("{path}?limit=1"))
+                        .header(WORKER_TOKEN_HEADER, "data-secret");
+                    if provider == "anthropic" {
+                        request = request.header("anthropic-version", "2023-06-01");
+                    }
+                    let response = app
+                        .clone()
+                        .oneshot(request.body(Body::empty()).unwrap())
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let body = response.into_body().collect().await.unwrap().to_bytes();
+                    let observed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(observed["provider"], provider, "managed={managed}");
+                    assert_eq!(observed["uri"], "/v1/models?limit=1");
+                    let auth = if configured {
+                        Some(format!("Bearer configured-{provider}"))
+                    } else {
+                        (provider == "openai").then(|| "Bearer environment-openai".into())
+                    };
+                    assert_eq!(observed["authorization"], json!(auth));
+                    assert_eq!(
+                        observed["key"],
+                        json!(
+                            (!configured && provider == "anthropic")
+                                .then_some("environment-anthropic")
+                        )
+                    );
+                }
+            }
+            if let Some(runtime) = &state.managed {
+                runtime.close().await.unwrap();
+            }
+        }
+    }
+    openai_task.abort();
+    anthropic_task.abort();
+}

@@ -123,9 +123,14 @@ pub(crate) fn strip_chatgpt_auth_for_openai_route(
     if !is_chatgpt_backend_route(route) || !has_replacement_key {
         return headers.clone();
     }
+    strip_chatgpt_auth(headers)
+}
+
+pub(crate) fn strip_chatgpt_auth(headers: &HeaderMap) -> HeaderMap {
     let mut out = headers.clone();
     if has_chatgpt_auth_token(&out) {
         out.remove(http::header::AUTHORIZATION);
+        out.remove("chatgpt-account-id");
     }
     out
 }

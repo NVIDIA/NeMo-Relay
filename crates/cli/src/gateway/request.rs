@@ -50,7 +50,7 @@ pub(super) async fn prepare_gateway_request(
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
     // Dispatch controls are trusted only when set by in-process middleware.
     super::strip_internal_dispatch_headers(&mut parts.headers);
-    let provider = ProviderRoute::from_path(provider_path).ok_or_else(|| {
+    let provider = ProviderRoute::from_request(provider_path, &parts.headers).ok_or_else(|| {
         crate::operational::unmatched_route(
             "gateway",
             &parts.method,
@@ -128,12 +128,9 @@ pub(super) async fn prepare_gateway_request(
     parts.headers = super::routes::strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,
+        provider_path,
         authorization.allow_environment_provider_auth,
-        if provider.has_replacement(config) {
-            Some("configured")
-        } else {
-            None
-        },
+        config,
     );
     if authorization.allow_environment_provider_auth
         && provider.has_replacement(config)

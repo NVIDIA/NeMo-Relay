@@ -34,6 +34,39 @@ For a complete example, refer to [Using Codecs](/integrate-into-frameworks/using
 
 ### Coding-Agent Integration Changes
 
+#### Review Managed Provider Credentials
+
+Managed Codex routes use the native ChatGPT Codex backend when no administrator
+OpenAI credential is configured. Relay keeps the caller's ChatGPT OAuth
+credential. If the daemon has `openai_auth_header`, `openai_api_key`,
+`[upstream.openai_api_key_helper]`, or `OPENAI_API_KEY`, Relay uses that
+credential for managed routes. It sends those requests to the
+administrator's OpenAI-compatible upstream.
+
+`GET /models` and `GET /v1/models` return a model list. To request Anthropic
+models, include an `anthropic-version` header. An `anthropic-beta` header also
+selects Anthropic. Relay uses OpenAI when neither header is present. The API
+key's format does not select a provider.
+
+Each model-list request follows the provider's managed auth rules. The caller
+must have Relay access to use Relay's credentials. Relay keeps provider API
+keys sent by the caller. Without a replacement, OpenAI requests keep the
+caller's credential. Model lists do not create LLM events.
+
+Other unmanaged routes include compaction and voice calls. Relay never adds its
+own provider credentials to these requests. With a custom `openai_base_url`,
+Relay removes `Authorization` and `chatgpt-account-id` if it recognizes a ChatGPT
+token. ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` keep the
+caller's ChatGPT credential.
+Review these routes if you use administrator credentials to select the upstream.
+Refer to [Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
+
+Managed Claude model routing requires an Anthropic API key or an
+administrator's Anthropic-compatible gateway credential. Claude.ai OAuth is
+not supported with `ANTHROPIC_BASE_URL`. If your deployment uses only OAuth,
+keep native routing instead of setting the managed base URL. Refer to
+[Daemon Configuration](/daemon/configuration#claude-code).
+
 ## Related Release Information
 
 For release highlights, compatibility updates, and current known issues, refer
