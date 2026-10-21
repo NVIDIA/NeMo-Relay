@@ -57,6 +57,7 @@ async fn forwarding_waits_for_cancellation_unless_a_deadline_is_configured() {
                     response_timeout_secs,
                     ..GatewayConfig::default()
                 },
+                false,
             )
             .await
         });
@@ -768,6 +769,7 @@ async fn forwarding_rejects_invalid_destinations_and_worker_credentials_before_i
         None,
         None,
         &GatewayConfig::default(),
+        false,
     )
     .await;
     assert_eq!(
@@ -789,6 +791,7 @@ async fn forwarding_rejects_invalid_destinations_and_worker_credentials_before_i
         )),
         None,
         &GatewayConfig::default(),
+        false,
     )
     .await;
     assert_eq!(
@@ -1557,9 +1560,11 @@ async fn pass_through_auth_injection_supports_environment_and_anthropic_configur
         ),
     ]);
     let mut openai = HeaderMap::new();
-    inject_provider_auth(
+    crate::upstream_auth::apply_for_destination(
         &mut openai,
-        ProviderRoute::OpenAi,
+        "https://provider.example",
+        false,
+        true,
         &GatewayConfig::default(),
     )
     .await
@@ -1567,9 +1572,11 @@ async fn pass_through_auth_injection_supports_environment_and_anthropic_configur
     assert_eq!(openai[AUTHORIZATION], "Bearer openai-env");
 
     let mut anthropic = HeaderMap::new();
-    inject_provider_auth(
+    crate::upstream_auth::apply_for_destination(
         &mut anthropic,
-        ProviderRoute::Anthropic,
+        "https://provider.example",
+        true,
+        true,
         &GatewayConfig::default(),
     )
     .await
@@ -1577,9 +1584,11 @@ async fn pass_through_auth_injection_supports_environment_and_anthropic_configur
     assert_eq!(anthropic["x-api-key"], "anthropic-env");
 
     let mut configured = HeaderMap::new();
-    inject_provider_auth(
+    crate::upstream_auth::apply_for_destination(
         &mut configured,
-        ProviderRoute::Anthropic,
+        "https://provider.example",
+        true,
+        true,
         &GatewayConfig {
             anthropic_auth_header: Some("configured".into()),
             ..GatewayConfig::default()
@@ -2720,18 +2729,30 @@ async fn pass_through_provider_auth_preserves_callers_and_fills_missing_configur
     };
     let mut headers = HeaderMap::new();
     headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer caller"));
-    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config)
-        .await
-        .unwrap();
+    crate::upstream_auth::apply_for_destination(
+        &mut headers,
+        "https://provider.example",
+        false,
+        true,
+        &config,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         headers.get(AUTHORIZATION).expect("caller auth"),
         "Bearer caller"
     );
 
     headers.remove(AUTHORIZATION);
-    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config)
-        .await
-        .unwrap();
+    crate::upstream_auth::apply_for_destination(
+        &mut headers,
+        "https://provider.example",
+        false,
+        true,
+        &config,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         headers.get(AUTHORIZATION).expect("configured auth"),
         "Bearer configured"
@@ -3580,15 +3601,19 @@ async fn daemon_provider_responses_do_not_expose_redirect_targets() {
                 .unwrap()
         }
     });
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (listener, address) = crate::test_support::http_model_listener().await;
+    let origin = format!("http://{address}");
     let server = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
     let app = router(test_daemon_state(
         true,
         "",
         GatewayConfig {
             openai_base_url: origin,
-            response_timeout_secs: 2,
+            insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+                address.ip().to_string(),
+            ])
+            .unwrap(),
+            response_timeout_secs: 10,
             ..GatewayConfig::default()
         },
     ));
@@ -4901,4 +4926,110 @@ async fn model_catalogs_use_the_selected_provider_credentials_and_destination() 
     }
     openai_task.abort();
     anthropic_task.abort();
+}
+
+#[tokio::test]
+async fn http_model_hosts_daemon_pass_through_is_credential_free_and_does_not_follow_redirects() {
+    let _environment = EnvScope::set(&[
+        (
+            "OPENAI_API_KEY",
+            Some(std::ffi::OsStr::new("environment-secret")),
+        ),
+        (
+            "ANTHROPIC_API_KEY",
+            Some(std::ffi::OsStr::new("environment-secret")),
+        ),
+    ]);
+    let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = Arc::clone(&received);
+    let app = Router::new().fallback(move |request: Request<Body>| {
+        let captured = Arc::clone(&captured);
+        async move {
+            let (parts, body) = request.into_parts();
+            let body = body.collect().await.unwrap().to_bytes();
+            let redirect = parts.uri.path().contains("redirect");
+            captured.lock().unwrap().push((parts.headers, body));
+            Response::builder()
+                .status(if redirect {
+                    StatusCode::TEMPORARY_REDIRECT
+                } else {
+                    StatusCode::OK
+                })
+                .header("location", "http://127.0.0.1:1/must-not-follow")
+                .body(Body::from("provider response"))
+                .unwrap()
+        }
+    });
+    let (listener, address) = crate::test_support::http_model_listener().await;
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let config = GatewayConfig {
+        openai_base_url: format!("http://{address}/v1"),
+        anthropic_base_url: format!("http://{address}/v1"),
+        insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+            address.ip().to_string(),
+        ])
+        .unwrap(),
+        response_timeout_secs: 10,
+        ..Default::default()
+    };
+    let state = test_daemon_state(true, "", config.clone());
+    for (path, route, status) in [
+        ("/v1/responses", ProviderRoute::OpenAi, StatusCode::OK),
+        ("/v1/messages", ProviderRoute::Anthropic, StatusCode::OK),
+        (
+            "/v1/redirect",
+            ProviderRoute::OpenAi,
+            StatusCode::TEMPORARY_REDIRECT,
+        ),
+    ] {
+        let response = forward_to_provider(
+            &state,
+            Request::post(path)
+                .header("authorization", "Bearer caller-secret")
+                .header("x-api-key", "caller-secret")
+                .header("cookie", "session=secret")
+                .header("x-custom-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from("opaque-body"))
+                .unwrap(),
+            route,
+            ProviderAccess::BoundRoute,
+        )
+        .await;
+        assert_eq!(response.status(), status);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "provider response"
+        );
+    }
+    {
+        let captured = received.lock().unwrap();
+        assert_eq!(captured.len(), 3);
+        for (headers, body) in captured.iter() {
+            assert_eq!(headers["content-type"], "application/json");
+            assert_eq!(body.as_ref(), b"opaque-body");
+            for name in headers.keys() {
+                assert!(
+                    matches!(
+                        name.as_str(),
+                        "host" | "te" | "content-length" | "transfer-encoding" | "content-type"
+                    ),
+                    "unexpected forwarded header: {name}"
+                );
+            }
+        }
+    }
+    let mut blocked = config;
+    blocked.insecure_http_model_hosts = Default::default();
+    let state = test_daemon_state(true, "", blocked);
+    let response = forward_to_provider(
+        &state,
+        Request::post("/v1/responses").body(Body::empty()).unwrap(),
+        ProviderRoute::OpenAi,
+        ProviderAccess::BoundRoute,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(received.lock().unwrap().len(), 3);
+    server.abort();
 }

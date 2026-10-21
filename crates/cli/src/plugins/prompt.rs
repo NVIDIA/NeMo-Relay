@@ -246,7 +246,7 @@ pub(super) fn menu_error(error: std::io::Error) -> CliError {
     ) {
         CliError::Config(PLUGIN_EDIT_CANCELLED_MESSAGE.into())
     } else {
-        CliError::Config(format!("plugin editor terminal error: {error}"))
+        CliError::Config(format!("configuration editor terminal error: {error}"))
     }
 }
 
@@ -255,7 +255,7 @@ pub(super) fn print_editor_help() {
     println!(
         "{} {}",
         style("?").yellow(),
-        style("Plugin editor keys").bold()
+        style("Configuration editor keys").bold()
     );
     println!("  {}  move", style("↑/↓ or j/k").cyan());
     println!(
@@ -498,6 +498,36 @@ where
     Ok(())
 }
 
+/// Edit a string list using the same schema-backed controls as plugin fields.
+pub(crate) fn edit_string_list(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    values: &[String],
+    document_name: &str,
+) -> Result<Option<Vec<String>>, CliError> {
+    let mut value = json!(values);
+    let result = edit_list_value_in_document(
+        theme,
+        prompt,
+        &mut value,
+        None,
+        &nemo_relay::config_editor::STRING_LIST_ITEM,
+        document_name,
+    )?;
+    if result.changed || result.explicitly_set {
+        serde_json::from_value(value)
+            .map(Some)
+            .map_err(|error| CliError::Config(format!("invalid string list: {error}")))
+    } else {
+        Ok(None)
+    }
+}
+
+struct ListEditResult {
+    changed: bool,
+    explicitly_set: bool,
+}
+
 fn edit_list_value(
     theme: &ColorfulTheme,
     prompt: &str,
@@ -505,10 +535,22 @@ fn edit_list_value(
     default: Option<Value>,
     item: &nemo_relay::config_editor::EditorListItemSpec,
 ) -> Result<bool, CliError> {
+    Ok(edit_list_value_in_document(theme, prompt, value, default, item, "plugins.toml")?.changed)
+}
+
+fn edit_list_value_in_document(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    value: &mut Value,
+    default: Option<Value>,
+    item: &nemo_relay::config_editor::EditorListItemSpec,
+    document_name: &str,
+) -> Result<ListEditResult, CliError> {
     if !value.is_array() {
         *value = default.clone().unwrap_or_else(|| json!([]));
     }
     let original = value.clone();
+    let mut explicitly_set = false;
     let mut selected_index = 0;
     loop {
         let entries = value.as_array().expect("list value is an array");
@@ -545,13 +587,19 @@ fn edit_list_value(
             MenuResponse::Selected(index) if index <= entries.len() => {
                 edit_existing_list_item(theme, prompt, value, index - 1, item)?;
             }
-            MenuResponse::Cancel | MenuResponse::Selected(_) => return Ok(*value != original),
+            MenuResponse::Cancel | MenuResponse::Selected(_) => {
+                return Ok(ListEditResult {
+                    changed: *value != original,
+                    explicitly_set,
+                });
+            }
             MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
             MenuResponse::Shortcut(shortcut @ (MenuShortcut::Reset | MenuShortcut::Clear), _) => {
+                explicitly_set = true;
                 *value = collection_shortcut_value(default.as_ref(), json!([]), shortcut)
             }
             MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
-                println!("  Preview and save are available from the main plugins.toml menu.");
+                println!("  Preview and save are available from the main {document_name} menu.");
             }
         }
     }
@@ -1501,7 +1549,7 @@ pub(super) fn editor_error(err: dialoguer::Error) -> CliError {
         {
             CliError::Config(PLUGIN_EDIT_CANCELLED_MESSAGE.into())
         }
-        other => CliError::Config(format!("plugin edit error: {other}")),
+        other => CliError::Config(format!("configuration edit error: {other}")),
     }
 }
 

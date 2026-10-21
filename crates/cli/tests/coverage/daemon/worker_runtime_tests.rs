@@ -18,6 +18,7 @@ use hyper_util::rt::TokioIo;
 use tokio::sync::oneshot;
 use tower::ServiceExt as _;
 
+use crate::daemon::common::transport::box_body;
 use crate::test_support::EnvScope;
 
 fn state() -> Arc<WorkerState> {
@@ -476,15 +477,27 @@ async fn configured_provider_auth_never_replaces_caller_auth() {
     };
     let mut headers = HeaderMap::new();
     headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer caller"));
-    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config)
-        .await
-        .unwrap();
+    crate::upstream_auth::apply_for_destination(
+        &mut headers,
+        "https://provider.example",
+        false,
+        true,
+        &config,
+    )
+    .await
+    .unwrap();
     assert_eq!(headers.get(AUTHORIZATION).expect("auth"), "Bearer caller");
 
     headers.remove(AUTHORIZATION);
-    inject_provider_auth(&mut headers, ProviderRoute::OpenAi, &config)
-        .await
-        .unwrap();
+    crate::upstream_auth::apply_for_destination(
+        &mut headers,
+        "https://provider.example",
+        false,
+        true,
+        &config,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         headers.get(AUTHORIZATION).expect("configured auth"),
         "Bearer configured"
@@ -718,9 +731,11 @@ async fn provider_auth_supports_both_configured_and_environment_credentials() {
         ),
     ]);
     let mut openai = HeaderMap::new();
-    inject_provider_auth(
+    crate::upstream_auth::apply_for_destination(
         &mut openai,
-        ProviderRoute::OpenAi,
+        "https://provider.example",
+        false,
+        true,
         &GatewayConfig::default(),
     )
     .await
@@ -728,9 +743,11 @@ async fn provider_auth_supports_both_configured_and_environment_credentials() {
     assert_eq!(openai[AUTHORIZATION], "Bearer openai-env");
 
     let mut anthropic = HeaderMap::new();
-    inject_provider_auth(
+    crate::upstream_auth::apply_for_destination(
         &mut anthropic,
-        ProviderRoute::Anthropic,
+        "https://provider.example",
+        true,
+        true,
         &GatewayConfig::default(),
     )
     .await
@@ -738,9 +755,11 @@ async fn provider_auth_supports_both_configured_and_environment_credentials() {
     assert_eq!(anthropic["x-api-key"], "anthropic-env");
 
     let mut configured = HeaderMap::new();
-    inject_provider_auth(
+    crate::upstream_auth::apply_for_destination(
         &mut configured,
-        ProviderRoute::Anthropic,
+        "https://provider.example",
+        true,
+        true,
         &GatewayConfig {
             anthropic_auth_header: Some("configured-anthropic".into()),
             ..GatewayConfig::default()
@@ -1194,4 +1213,104 @@ async fn model_catalog_workers_keep_provider_credentials_on_the_selected_upstrea
     }
     openai_task.abort();
     anthropic_task.abort();
+}
+
+#[tokio::test]
+async fn http_model_hosts_unmanaged_worker_forwards_both_providers_without_credentials() {
+    let _environment = EnvScope::set(&[
+        (
+            "OPENAI_API_KEY",
+            Some(std::ffi::OsStr::new("environment-secret")),
+        ),
+        (
+            "ANTHROPIC_API_KEY",
+            Some(std::ffi::OsStr::new("environment-secret")),
+        ),
+    ]);
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&received);
+    let app = axum::Router::new().fallback(move |request: Request<Body>| {
+        let captured = Arc::clone(&captured);
+        async move {
+            let (parts, body) = request.into_parts();
+            let body = body.collect().await.unwrap().to_bytes();
+            captured.lock().unwrap().push((parts.headers, body));
+            "provider response"
+        }
+    });
+    let (listener, address) = crate::test_support::http_model_listener().await;
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let config = GatewayConfig {
+        openai_base_url: format!("http://{address}/v1"),
+        anthropic_base_url: format!("http://{address}/v1"),
+        insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+            address.ip().to_string(),
+        ])
+        .unwrap(),
+        response_timeout_secs: 10,
+        ..Default::default()
+    };
+    let state = state_with_config(config.clone());
+    let app = router(Arc::clone(&state));
+    for path in ["/v1/responses", "/v1/messages"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(path)
+                    .header(WORKER_TOKEN_HEADER, "data-secret")
+                    .header("authorization", "Bearer caller-secret")
+                    .header("x-api-key", "caller-secret")
+                    .header("cookie", "session=secret")
+                    .header("x-custom-token", "secret")
+                    .header("connection", "content-language")
+                    .header("content-language", "nominated-secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from("opaque-body"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "provider response"
+        );
+    }
+    assert_eq!(state.in_flight.load(Ordering::Acquire), 0);
+    {
+        let captured = received.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        for (headers, body) in captured.iter() {
+            assert_eq!(headers["content-type"], "application/json");
+            assert_eq!(body.as_ref(), b"opaque-body");
+            for name in headers.keys() {
+                assert!(
+                    matches!(
+                        name.as_str(),
+                        "host" | "te" | "content-length" | "transfer-encoding" | "content-type"
+                    ),
+                    "unexpected forwarded header: {name}"
+                );
+            }
+        }
+    }
+    let mut blocked = config;
+    blocked.insecure_http_model_hosts = Default::default();
+    let blocked_app = router(state_with_config(blocked));
+    let response = blocked_app
+        .oneshot(
+            Request::post("/v1/responses")
+                .header(WORKER_TOKEN_HEADER, "data-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        received.lock().unwrap().len(),
+        2,
+        "denial must not contact the provider"
+    );
+    server.abort();
 }

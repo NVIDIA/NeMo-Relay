@@ -800,3 +800,55 @@ fn daemon_logging_edits_preserve_application_logging() {
     assert_eq!(document.string_summary("logging", "level"), "warn");
     assert_eq!(document.boolean("logging", "stderr_enabled"), Some(true));
 }
+
+#[test]
+fn http_model_host_list_edits_preserve_toml_and_allow_explicit_revocation() {
+    let mut document = document("# keep this comment\n[upstream]\nresponse_timeout_secs = 15\n");
+    assert!(document.http_model_hosts().unwrap().is_empty());
+    assert!(!document.has_key("upstream", "insecure_http_model_hosts"));
+
+    let hosts = vec!["MODEL.test.".into(), "192.168.1.10".into()];
+    document.set_http_model_hosts(hosts.clone()).unwrap();
+    assert_eq!(document.http_model_hosts().unwrap(), hosts);
+    let original = document.document.to_string();
+    assert!(
+        document
+            .set_http_model_hosts(vec!["http://bad.test".into()])
+            .is_err()
+    );
+    assert_eq!(document.document.to_string(), original);
+
+    document.set_http_model_hosts(Vec::new()).unwrap();
+    assert!(document.has_key("upstream", "insecure_http_model_hosts"));
+    assert!(document.http_model_hosts().unwrap().is_empty());
+    assert_eq!(
+        document.integer("upstream", "response_timeout_secs"),
+        Some(15)
+    );
+    assert!(
+        document
+            .document
+            .to_string()
+            .contains("# keep this comment")
+    );
+    crate::configuration::validate_config_document(
+        toml::from_str(&document.document.to_string()).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn http_model_host_list_rejects_non_string_config_entries() {
+    for contents in [
+        "[upstream]\ninsecure_http_model_hosts = 'model.test'\n",
+        "[upstream]\ninsecure_http_model_hosts = [42]\n",
+    ] {
+        assert!(
+            document(contents)
+                .http_model_hosts()
+                .unwrap_err()
+                .to_string()
+                .contains("must be a list of strings")
+        );
+    }
+}

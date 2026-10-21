@@ -405,12 +405,74 @@ anthropic_base_url = "https://api.anthropic.com"
 chatgpt_codex_base_url = "https://chatgpt.com/backend-api/codex"
 ```
 
-All provider base URLs must use HTTPS, except that HTTP is allowed for loopback
-hosts such as `localhost`, `127.0.0.1`, and `::1`. This applies to the personal
-gateway and managed daemon workers. Relay validates TOML values, environment
-variables, and command-line overrides at startup. Base URLs must not include
-user information, query strings, or fragments. Remote endpoints, including
-private Kubernetes service addresses, require HTTPS.
+Provider base URLs require HTTPS by default. HTTP is allowed for loopback hosts
+such as `localhost`, `127.0.0.1`, and `::1`. Relay validates TOML values,
+environment variables, and command-line overrides at startup. Base URLs must not
+include user information, query strings, or fragments.
+
+### Credential-Free HTTP Model Upstreams
+
+For a personal gateway or managed worker connected to an unauthenticated HTTP inference gateway,
+explicitly list the trusted hosts in `config.toml`:
+
+```toml
+[upstream]
+openai_base_url = "http://inference-gateway.internal:8080/custom/v1"
+insecure_http_model_hosts = ["inference-gateway.internal"]
+```
+
+<Warning>
+HTTP exposes prompts, tool results, and model responses without encryption or
+transport integrity. Prefer HTTPS. This exception supports unauthenticated model
+upstreams only: Relay removes credential headers and does not inject environment
+API keys or invoke credential helpers for these requests. Model content and
+request query strings are forwarded; do not place credentials in either.
+</Warning>
+
+Entries are bare DNS hostnames or IP addresses. Matching is exact, ignores DNS
+case and one trailing DNS dot, and does not trust subdomains or DNS-resolved
+addresses automatically. Schemes, ports, paths, user information, wildcards, and
+alternate numeric IPv4 spellings are invalid entries. A listed host may use custom
+ports and paths, but each request must still target the origin of a configured
+OpenAI or Anthropic upstream. A higher-priority configuration list replaces the
+lower list; an empty list revokes trust.
+
+For hardened deployments, set an explicit empty list in the system `config.toml`
+to prevent lower-priority files from enabling remote HTTP model hosts:
+
+```toml
+[upstream]
+insecure_http_model_hosts = []
+```
+
+System configuration has the highest file-level priority. Omitting this setting
+preserves the lower-priority list; specifying `[]` replaces it. The interactive
+editor uses the same schema-backed list controls as plugin configuration, and
+Reset or Clear saves an explicit empty list.
+
+Remote HTTP upstreams conflict with that provider's configured `api_key`,
+`auth_header`, or `api_key_helper`, including `NEMO_RELAY_*_AUTH_HEADER` environment
+overrides. Startup fails on a conflict. Raw `OPENAI_API_KEY` and
+`ANTHROPIC_API_KEY` environment fallbacks are ignored on these requests. Changing
+an upstream URL continues to clear credentials associated with the previous URL.
+
+Only content and protocol headers are forwarded: `Accept`, `Accept-Encoding`,
+`Content-Type`, `Content-Length`, `Content-Encoding`, `Content-Language`,
+`Anthropic-Version`, `Anthropic-Beta`, and `OpenAI-Beta`. Cookies, authorization,
+API keys, and custom headers are removed, including headers added by middleware.
+The HTTP client does not use environment proxies, follow redirects, or retry
+automatically. Existing HTTPS and loopback behavior is unchanged.
+
+This opt-in supports HTTP requests and SSE streaming in personal gateways,
+managed workers, and daemon pass-through routing. Managed workers load user
+configuration followed by system configuration, so administrators can deny remote
+HTTP model hosts with an explicit empty system list. Credential fields in request
+trailers are filtered by the same header allowlist.
+Remote HTTP WebSockets, ChatGPT credential backends,
+caller-selected destinations, MCP endpoints, and observability exporters retain
+their existing transport policies. The host list has no environment-variable or
+CLI override; configure it explicitly in the file. You can also edit it through
+`nemo-relay config edit` under **Provider upstreams**.
 
 For the ChatGPT Codex upstream, `--chatgpt-codex-base-url` overrides
 `NEMO_RELAY_CHATGPT_CODEX_BASE_URL`, which overrides the TOML value. The flag

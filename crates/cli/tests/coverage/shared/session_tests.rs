@@ -1797,6 +1797,7 @@ async fn has_pending_alignment(manager: &SessionManager, session_id: &str) -> bo
 #[tokio::test]
 async fn nests_agent_subagent_and_tool_lifecycle() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -3859,6 +3860,7 @@ async fn writes_atif_on_session_end_from_plugin_config() {
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -4524,6 +4526,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -4719,6 +4722,7 @@ async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
 #[tokio::test]
 async fn handles_out_of_order_subagent_and_tool_end_events() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -4804,6 +4808,7 @@ async fn terminal_retry_for_unknown_session_is_ignored() {
 #[tokio::test]
 async fn out_of_order_started_subagent_end_does_not_leak_scope() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -4885,6 +4890,7 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
 #[tokio::test]
 async fn agent_end_closes_nested_active_subagents_lifo() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -4950,6 +4956,7 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
 #[tokio::test]
 async fn llm_lifecycle_starts_implicit_gateway_session() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -5612,6 +5619,7 @@ async fn claude_internal_agent_stops_keep_unclassified_marks() {
 #[tokio::test]
 async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -5756,6 +5764,7 @@ async fn unidentified_concurrent_gateway_calls_use_isolated_ephemeral_sessions()
 #[tokio::test]
 async fn single_pending_llm_hint_claims_next_gateway_llm() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -5862,6 +5871,7 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
 #[tokio::test]
 async fn multiple_llm_hints_resolve_by_generation_id() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -5986,6 +5996,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
 #[tokio::test]
 async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -6088,6 +6099,7 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
 #[tokio::test]
 async fn no_active_hint_reuses_last_llm_owner() {
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -7932,6 +7944,7 @@ fn merge_metadata_handles_objects_nulls_and_scalars() {
 fn session_test_config() -> GatewayConfig {
     crate::test_support::enable_operational_logs();
     GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -7955,6 +7968,7 @@ fn session_test_config() -> GatewayConfig {
 async fn turn_ended_is_noop_without_active_turn_scope() {
     let temp = tempfile::tempdir().unwrap();
     let config = GatewayConfig {
+        insecure_http_model_hosts: Default::default(),
         response_timeout_secs: 0,
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),

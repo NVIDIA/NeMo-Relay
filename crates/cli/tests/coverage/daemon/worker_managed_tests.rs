@@ -1051,27 +1051,33 @@ async fn managed_request_helpers_cover_overrides_streaming_and_provider_credenti
     );
 
     let mut headers = HeaderMap::new();
-    inject_provider_auth(
+    crate::upstream_auth::apply_for_destination(
         &mut headers,
-        ProviderRoute::OpenAi,
+        "https://provider.example",
+        false,
+        true,
         &GatewayConfig::default(),
     )
     .await
     .unwrap();
     assert_eq!(headers[AUTHORIZATION], "Bearer openai-env-key");
     headers.clear();
-    inject_provider_auth(
+    crate::upstream_auth::apply_for_destination(
         &mut headers,
-        ProviderRoute::Anthropic,
+        "https://provider.example",
+        true,
+        true,
         &GatewayConfig::default(),
     )
     .await
     .unwrap();
     assert_eq!(headers["x-api-key"], "anthropic-env-key");
     headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer caller"));
-    inject_provider_auth(
+    crate::upstream_auth::apply_for_destination(
         &mut headers,
-        ProviderRoute::OpenAi,
+        "https://provider.example",
+        false,
+        true,
         &GatewayConfig::default(),
     )
     .await
@@ -2565,9 +2571,11 @@ async fn managed_observation_and_provider_environment_values_reject_invalid_inpu
     ]);
     assert!(observation_capture_limit_from_environment().is_err());
     let mut headers = HeaderMap::new();
-    inject_provider_auth(
+    crate::upstream_auth::apply_for_destination(
         &mut headers,
-        ProviderRoute::OpenAi,
+        "https://provider.example",
+        false,
+        true,
         &GatewayConfig {
             openai_auth_header: Some("bad\nvalue".into()),
             ..GatewayConfig::default()
@@ -2762,7 +2770,7 @@ async fn managed_forwarding_rejects_remote_http_as_an_upstream_error() {
     .unwrap_err();
     assert!(matches!(
         error,
-        CliError::UpstreamTransport(TransportError::InsecureDestination)
+        CliError::UpstreamTransport(TransportError::UntrustedHttpModelDestination)
     ));
     assert_eq!(error.into_response().status(), StatusCode::BAD_GATEWAY);
 
@@ -2779,7 +2787,7 @@ async fn managed_forwarding_rejects_remote_http_as_an_upstream_error() {
     .expect("remote HTTP must be rejected before connecting");
     assert!(matches!(
         error,
-        CliError::UpstreamTransport(TransportError::InsecureDestination)
+        CliError::UpstreamTransport(TransportError::UntrustedHttpModelDestination)
     ));
     assert!(!error.to_string().contains("hook payload"));
 }
@@ -2975,4 +2983,188 @@ async fn managed_pre_tool_hooks_reject_when_conditional_guardrail_blocks() {
         assert_eq!(body["error"]["reason"], "blocked by policy");
     }
     runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn http_model_hosts_all_managed_dispatch_paths_are_credential_free() {
+    let _environment = EnvScope::set(&[
+        ("OPENAI_API_KEY", Some(OsStr::new("environment-secret"))),
+        ("ANTHROPIC_API_KEY", Some(OsStr::new("environment-secret"))),
+        ("HTTP_PROXY", Some(OsStr::new("http://127.0.0.1:1"))),
+        ("HTTPS_PROXY", Some(OsStr::new("http://127.0.0.1:1"))),
+        ("ALL_PROXY", Some(OsStr::new("http://127.0.0.1:1"))),
+        ("NO_PROXY", Some(OsStr::new(""))),
+    ]);
+    let received: ProviderRequests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = Arc::clone(&received);
+    let app = Router::new().fallback(move |request: Request<Body>| {
+        let captured = Arc::clone(&captured);
+        async move {
+            let (parts, body) = request.into_parts();
+            let body = body.collect().await.unwrap().to_bytes();
+            captured.lock().unwrap().push((parts.headers, body));
+            Response::builder()
+                .status(StatusCode::CREATED)
+                .header(CONTENT_TYPE, "text/event-stream")
+                .body(Body::from("data: test\n\n"))
+                .unwrap()
+        }
+    });
+    let (listener, address) = crate::test_support::http_model_listener().await;
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let config = GatewayConfig {
+        openai_base_url: format!("http://{address}/custom/v1"),
+        anthropic_base_url: format!("http://{address}/custom/v1"),
+        insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+            address.ip().to_string(),
+        ])
+        .unwrap(),
+        response_timeout_secs: 10,
+        ..Default::default()
+    };
+    for route in [ProviderRoute::OpenAi, ProviderRoute::Anthropic] {
+        for path in 0..3 {
+            let request = Request::post(if route == ProviderRoute::OpenAi {
+                "/v1/responses"
+            } else {
+                "/v1/messages"
+            })
+            .header("authorization", "Bearer caller-secret")
+            .header("x-api-key", "caller-secret")
+            .header("cookie", "session=secret")
+            .header("x-custom-token", "custom-secret")
+            .header("content-type", "application/json")
+            .header("anthropic-version", "2023-06-01")
+            .body(Body::from(r#"{"model":"test","stream":false}"#))
+            .unwrap();
+            let response = match path {
+                0 => dispatch_unmanaged(pooled_client().unwrap(), request, route, &config)
+                    .await
+                    .unwrap(),
+                1 => {
+                    dispatch_unbuffered_observed(
+                        pooled_client().unwrap(),
+                        request,
+                        route,
+                        &config,
+                        1024,
+                        OperationalContext::new(),
+                    )
+                    .await
+                    .unwrap()
+                    .0
+                }
+                _ => {
+                    let prepared = PreparedProviderRequest::read(request, &config)
+                        .await
+                        .unwrap();
+                    let mut effective = LlmRequest {
+                        headers: crate::gateway::daemon_observable_headers(&prepared.headers),
+                        content: json!({"model":"test", "stream":false}),
+                    };
+                    effective
+                        .headers
+                        .insert("authorization".into(), json!("Bearer middleware-secret"));
+                    effective
+                        .headers
+                        .insert("x-custom-token".into(), json!("middleware-secret"));
+                    dispatch_observed(
+                        pooled_client().unwrap(),
+                        prepared,
+                        route,
+                        Some(&effective),
+                        &config,
+                        1024,
+                        OperationalContext::new(),
+                    )
+                    .await
+                    .unwrap()
+                    .0
+                }
+            };
+            assert_eq!(
+                response.status(),
+                StatusCode::CREATED,
+                "{route:?}, path={path}"
+            );
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                "data: test\n\n"
+            );
+        }
+    }
+    let captured = received.lock().unwrap();
+    assert_eq!(captured.len(), 6);
+    for (headers, body) in captured.iter() {
+        assert_eq!(headers["content-type"], "application/json");
+        assert_eq!(headers["anthropic-version"], "2023-06-01");
+        for name in headers.keys() {
+            assert!(
+                matches!(
+                    name.as_str(),
+                    "host"
+                        | "te"
+                        | "content-length"
+                        | "transfer-encoding"
+                        | "content-type"
+                        | "anthropic-version"
+                ),
+                "unexpected forwarded header: {name}"
+            );
+        }
+        assert_eq!(
+            serde_json::from_slice::<Value>(body).unwrap()["model"],
+            "test"
+        );
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn http_model_hosts_managed_middleware_cannot_escape_the_configured_origin() {
+    let config = GatewayConfig {
+        openai_base_url: "http://model.test:8000/v1".into(),
+        insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+            "model.test".into(),
+            "other.test".into(),
+        ])
+        .unwrap(),
+        ..Default::default()
+    };
+    for destination in [
+        "http://model.test:9000/v1/responses",
+        "http://other.test:8000/v1/responses",
+        "http://unlisted.test/v1/responses",
+    ] {
+        let prepared = prepared_request(HeaderMap::new());
+        let mut effective = LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"model":"test", "stream":false}),
+        };
+        effective
+            .headers
+            .insert(INTERNAL_DISPATCH_URL_HEADER.into(), json!(destination));
+        effective
+            .headers
+            .insert("authorization".into(), json!("Bearer middleware-secret"));
+        let error = dispatch_observed(
+            pooled_client().unwrap(),
+            prepared,
+            ProviderRoute::OpenAi,
+            Some(&effective),
+            &config,
+            1024,
+            OperationalContext::new(),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(
+            matches!(
+                error,
+                CliError::UpstreamTransport(TransportError::UntrustedHttpModelDestination)
+            ),
+            "{destination}: {error}"
+        );
+    }
 }
