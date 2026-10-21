@@ -3470,3 +3470,108 @@ fn warmed_small_response_budgets_paginate_full_history_without_allocating() {
     assert_eq!(view.lifetime.totals.recorded_events_total.value.get(), 256);
     assert_eq!(view.coverage.loss.events_evicted.value.get(), 0);
 }
+
+#[test]
+fn large_interleaved_history_reclamation_preserves_order_counts_and_storage() {
+    const CAPACITY: usize = 8192;
+    const WRAP: usize = 32;
+    let service = diagnostics(DiagnosticLimits {
+        max_components: 2,
+        max_events: CAPACITY,
+        max_query_events: CAPACITY,
+        max_queries: 1,
+        max_snapshot_bytes: 8 * 1024 * 1024,
+        query_text_bytes: 1024 * 1024,
+        detail_pool_bytes: CAPACITY * 64,
+        max_owned_bytes: 32 * 1024 * 1024,
+        ..limits()
+    });
+    let (owner, first) = service
+        .register_owned_component(ComponentRegistration::new("first", &CODES))
+        .unwrap();
+    let old_identity = first.identity().unwrap().clone();
+    let second = register(&service, "second");
+    let reserved = service.memory_usage().reserved_bytes;
+    for pair in 1..=(CAPACITY + WRAP) / 2 {
+        record(&first, (pair * 2 - 1) as u64);
+        record(&second, (pair * 2) as u64);
+    }
+    owner.close().unwrap();
+    let replacement = register(&service, "first");
+    assert_ne!(
+        replacement.identity().unwrap().instance_id,
+        old_identity.instance_id
+    );
+    assert!(replacement.identity().unwrap().generation > old_identity.generation);
+    let view = snapshot(&service, DiagnosticQuery::default());
+    let expected: Vec<_> = (WRAP + 2..=CAPACITY + WRAP)
+        .step_by(2)
+        .map(|count| count as u64)
+        .collect();
+    assert_eq!(
+        view.events
+            .iter()
+            .map(|event| event.count.get())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert!(
+        view.events
+            .iter()
+            .all(|event| event.component.key == "second" && event.message() == Some("failure"))
+    );
+    let evicted = (WRAP + CAPACITY / 2) as u64;
+    assert_eq!(view.coverage.loss.events_evicted.value.get(), evicted);
+    assert_eq!(
+        view.lifetime.totals.history_evictions_total.value.get(),
+        evicted
+    );
+    assert_eq!(
+        row(&view, "second")
+            .lifetime
+            .totals
+            .history_evictions_total
+            .value
+            .get(),
+        (WRAP / 2) as u64
+    );
+    assert_eq!(
+        view.lifetime.totals.recorded_events_total.value.get(),
+        (CAPACITY + WRAP) as u64
+    );
+    let usage = service.memory_usage();
+    assert_eq!(
+        (usage.detail_bytes, usage.reserved_bytes),
+        (CAPACITY / 2 * 64, reserved)
+    );
+    assert_eq!(
+        first
+            .record_without_projection_lazy(|| Observation::new(
+                classification(FailureClass::Unknown),
+                "stale",
+                1,
+            ))
+            .unwrap_err(),
+        DiagnosticError::ComponentClosed
+    );
+    record(&replacement, 1);
+    let replaced = snapshot(
+        &service,
+        DiagnosticQuery {
+            component_key: Some("first".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(replaced.events.len(), 1);
+    assert_eq!(
+        replaced.events[0].component,
+        *replacement.identity().unwrap()
+    );
+    assert_eq!(replaced.events[0].message(), Some("failure"));
+    assert_eq!(replaced.coverage.loss.events_evicted.value.get(), evicted);
+    let usage = service.memory_usage();
+    assert_eq!(
+        (usage.detail_bytes, usage.reserved_bytes),
+        ((CAPACITY / 2 + 1) * 64, reserved)
+    );
+}

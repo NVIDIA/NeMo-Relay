@@ -54,10 +54,6 @@ impl<T> BoundedHistory<T> {
     pub(super) fn push_back(&mut self, value: T) -> Option<T> {
         self.buffer.push_back(value)
     }
-
-    pub(super) fn remove(&mut self, index: usize) -> Option<T> {
-        self.buffer.remove(index)
-    }
 }
 
 const NO_BLOCK: usize = usize::MAX;

@@ -429,17 +429,15 @@ impl State {
         let component = *self.components[index].as_ref().expect("selected component");
         let handle = component.handle;
         // Charge evidence loss while the original registration is still present.
-        let mut event = 0;
-        while event < self.recent.len() {
-            if self
-                .recent
-                .get(event)
-                .is_some_and(|value| value.component == handle)
-            {
-                let old = self.recent.remove(event).expect("retained event");
-                self.evict_event(old);
+        // Visit each original entry once. Popping first guarantees a free
+        // slot for each survivor, without shifting the remaining event headers.
+        for _ in 0..self.recent.len() {
+            let event = self.recent.pop_front().expect("retained event");
+            if event.component == handle {
+                self.evict_event(event);
             } else {
-                event += 1;
+                let displaced = self.recent.push_back(event);
+                debug_assert!(displaced.is_none(), "a popped slot must remain available");
             }
         }
         self.components[index] = None;
