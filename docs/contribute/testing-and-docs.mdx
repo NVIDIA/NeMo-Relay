@@ -82,6 +82,114 @@ A passing check does not establish that packages have been published, that a
 provider accepts the example, or that the guide runs on every supported system.
 Live execution and cross-platform quickstart validation remain separate work.
 
+## Execute Quick Starts
+
+Run all ten Quick Starts with the same command locally and in the
+`Execute Quick Starts` GitHub Actions workflow. The runner discovers cases from
+the contracts. `all` is the default; `local` selects Python, Node.js, Rust, and
+LangGraph. Individual IDs select a focused run:
+
+```bash
+just test-quickstarts --list
+just test-quickstarts --version 0.11.0-rc.2 --cases local
+just test-quickstarts --version 0.11.0-rc.2 --cases langchain,deep-agents
+```
+
+The version selects exact packages from that tag's GitHub release metadata.
+It does not select the documentation revision: the current checkout supplies
+the commands, sample files, and checks. This is a version override of the
+installation steps; the runner records the original and executed commands.
+The referenced programs and verification expressions run without modification.
+
+For development before release assets exist, fetch the desired branch and pass
+its local Git ref or full commit SHA:
+
+```bash
+git fetch upstream main
+just test-quickstarts --source-ref upstream/main --cases all
+```
+
+The runner resolves the ref once, creates a separate checkout at that commit,
+and builds the selected CLI, Python, and Node.js assets with their production
+features and a development build profile. Rust uses source from that same
+checkout. The commands and sample files also come from that commit. The source
+version is read from its manifest; an optional `--version` must agree. The report
+records the SHA, build commands, profile, and asset hashes. Uncommitted changes
+in the harness checkout are excluded. Do not combine `--source-ref` with external
+asset locations, build-run downloads, or overrides. On GitHub, use `origin/main`
+for the equivalent `source_ref` input.
+To repeat selected cases without rebuilding, point `--asset-location` at that
+run's `packages` directory. Its generated build manifest retains the original
+commit and verifies the reused asset hashes. The current checkout supplies the
+guides for this repeated run.
+
+Hermes, pi, Codex, Claude Code, LangChain, and Deep Agents use a loopback HTTP
+provider implementing their actual model protocol. It requests the documented
+tool action and returns the completion marker after receiving a successful tool
+result. The real agent executes the tool; Relay writes the event stream. The
+fixture writes neither the marker file nor ATOF. No inference credentials are
+needed. Passing establishes the installation, execution, tool, and contracted
+observability path with deterministic responses; it does not establish live
+model quality or provider authentication.
+
+Install supported Codex and Claude Code hosts before selecting their cases
+locally. CI installs pinned host versions. pi is installed at the guide's exact
+pin in a disposable npm prefix. Hermes is installed in a disposable environment
+from the immutable commit selected by `--hermes-ref` (or the matching workflow
+input). Its selected Relay wheel is explicitly installed after Hermes resolves
+its own dependencies; the report records this candidate compatibility override.
+Agent configuration directories are temporary. The runner records optional
+Hermes provider alternatives as omitted and keeps `hermes doctor` diagnostics;
+the native Relay event and file checks remain mandatory.
+The Codex adapter refuses to run when system-managed configuration forces a
+different provider, because that would bypass the local fixture.
+
+For prerelease assets elsewhere, supply a GitHub release URL, a local artifact
+directory, or an HTTPS directory containing Relay's `SHA256SUMS` inventory:
+
+```bash
+just test-quickstarts --version 0.11.0-rc.2 --asset-location /path/to/r2-assets
+just test-quickstarts --version 0.11.0-rc.2 --asset-location https://example.com/r2
+```
+
+Use `--run-id BUILD_RUN_ID` instead of an asset location to download artifacts
+from a completed GitHub Actions build. `--repository OWNER/REPO` changes the
+source repository. These paths require the `gh` CLI and appropriate read access.
+Rust crates without supplied `.crate` assets are resolved from crates.io at the
+exact requested version; an unpublished version must have crate assets or an
+explicit local source override.
+
+No configuration file is needed for regular runs. Optional `--overrides FILE`
+accepts `python` (wheel path), `nodejs` (metapackage and native tarball paths),
+and `rust_source` (local `nemo-relay` crate directory). For example, a local
+source test can set `rust_source` to the absolute path of `crates/core` while
+using existing Python and Node.js package artifacts. Selected asset metadata
+must match the requested version. Remote assets require matching SHA-256
+checksums; local artifacts without a checksum inventory have their hashes
+recorded. Python wheel compatibility and the Node.js native platform are
+selected from the available artifacts. Dependencies still require registry
+access unless cached.
+
+Each invocation uses fresh temporary workspaces outside the checkout. The
+runner captures output, verifies exit codes and the contracted ATOF lifecycle,
+records dependency lockfiles, and removes temporary environments. It exits
+nonzero if any selected case fails. System-managed Relay plugin configuration
+still applies; use a clean host when testing the standalone Quick Starts.
+The runner records the system configuration's hash when present.
+
+Results go below the ignored `artifacts/quickstarts/` directory, or a new
+directory supplied by `--output`. `results.json` records each case and failing
+block; `resolved-assets.json` records exact asset locations, versions, hashes,
+and build/source provenance. Logs, sample hashes, dependency locks, and exported
+event files support diagnosis. These JSON files are generated evidence, not
+configuration that needs updating for every run.
+
+The initial GitHub matrix runs Linux x86-64 with Bash. The same runner also
+supports local glibc Linux ARM64 and Apple Silicon macOS execution. Windows and
+PowerShell do not yet have unattended execution adapters. The workflow must
+exist on the default branch before GitHub exposes its normal manual trigger;
+select the implementation branch after that workflow has been registered.
+
 ## Testing Rule
 
 Run tests for every language surface whose observable behavior can change. Start
