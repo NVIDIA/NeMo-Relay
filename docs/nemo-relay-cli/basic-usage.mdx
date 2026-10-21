@@ -437,6 +437,19 @@ ports and paths, but each request must still target the origin of a configured
 OpenAI or Anthropic upstream. A higher-priority configuration list replaces the
 lower list; an empty list revokes trust.
 
+For hardened deployments, set an explicit empty list in the system `config.toml`
+to prevent lower-priority files from enabling remote HTTP model hosts:
+
+```toml
+[upstream]
+insecure_http_model_hosts = []
+```
+
+System configuration has the highest file-level priority. Omitting this setting
+preserves the lower-priority list; specifying `[]` replaces it. The interactive
+editor uses the same schema-backed list controls as plugin configuration, and
+Reset or Clear saves an explicit empty list.
+
 Remote HTTP upstreams conflict with that provider's configured `api_key`,
 `auth_header`, or `api_key_helper`, including `NEMO_RELAY_*_AUTH_HEADER` environment
 overrides. Startup fails on a conflict. Raw `OPENAI_API_KEY` and

@@ -231,7 +231,10 @@ HTTP exposes model content without encryption. HTTPS remains the default; daemon
 workers and remote HTTP WebSockets do not support this exception. Entries are exact
 DNS hostnames or canonical IP addresses, without schemes, ports, paths, or wildcards.
 DNS matching ignores case and a trailing dot; any port or path on the listed host
-is permitted. An explicit empty list revokes remote HTTP trust.
+is permitted. An explicit empty list revokes remote HTTP trust. Hardened
+deployments can set `insecure_http_model_hosts = []` under `[upstream]` in the
+system `config.toml` to prevent lower-priority files from enabling remote HTTP
+model hosts. Omitting the setting preserves the lower-priority list.
 
 ### Edit Plugin Configuration
 
