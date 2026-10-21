@@ -96,6 +96,8 @@ export interface OpenTelemetryConfig {
   transport?: string
   /** OTLP endpoint, such as `http://localhost:4318/v1/traces`. */
   endpoint: string
+  /** TLS certificate and private key file paths for this endpoint. */
+  tls?: OpenTelemetryTlsConfig
   /** Extra exporter headers/metadata as string key/value pairs. */
   headers?: Json
   /** Header names mapped to environment variables resolved during subscriber activation. */
@@ -126,6 +128,21 @@ export interface OpenTelemetryConfig {
   promoteMetadataPrefixes?: Array<string>
   /** Literal root-scope Event metadata prefixes copied to OTLP resource attributes. */
   promoteResourceMetadataPrefixes?: Array<string>
+}
+```
+
+### `OpenTelemetryTlsConfig`
+
+Paths to PEM certificate and private key files for one OTLP endpoint.
+
+```ts
+export interface OpenTelemetryTlsConfig {
+  /** CA bundle that replaces the system's trusted CAs. */
+  certificate?: string
+  /** Client certificate chain. Also set `privateKey`. */
+  clientCertificate?: string
+  /** Client private key. Also set `clientCertificate`. */
+  privateKey?: string
 }
 ```
 
@@ -180,6 +197,8 @@ Configuration object for `OpenTelemetryLogSubscriber`.
 export interface OpenTelemetryLogConfig {
   /** OTLP endpoint. Bare HTTP origins append `/v1/logs`. */
   endpoint: string
+  /** TLS certificate and private key file paths for this endpoint. */
+  tls?: OpenTelemetryTlsConfig
   /** `"http_binary"` (default) or `"grpc"`. */
   transport?: "http_binary" | "grpc"
   /** Extra exporter headers/metadata as string key/value pairs. */
@@ -221,6 +240,8 @@ Configuration object for `OpenTelemetryMetricSubscriber`.
 export interface OpenTelemetryMetricConfig {
   /** OTLP endpoint. Bare HTTP origins append `/v1/metrics`. */
   endpoint: string
+  /** TLS certificate and private key file paths for this endpoint. */
+  tls?: OpenTelemetryTlsConfig
   /** `"http_binary"` (default) or `"grpc"`. */
   transport?: "http_binary" | "grpc"
   /** Extra exporter headers/metadata as string key/value pairs. */

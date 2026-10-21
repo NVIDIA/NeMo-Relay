@@ -128,10 +128,10 @@ behavior; it does not inherit the setting.
 | `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`, `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT`, `OTEL_SPAN_EVENT_COUNT_LIMIT`, `OTEL_SPAN_LINK_COUNT_LIMIT` | No | Relay preserves its trace payload and lifecycle contract. |
 | `OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT`, `OTEL_LINK_ATTRIBUTE_COUNT_LIMIT` | No | Relay preserves its trace payload and lifecycle contract. |
 | `OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`, `OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT` | No | Relay preserves its log payload contract. |
-| `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` | No | No OTLP certificate or client-key environment configuration is added. |
-| `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`, `OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY` | No | No trace-specific certificate or client-key environment configuration is added. |
-| `OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY` | No | No log-specific certificate or client-key environment configuration is added. |
-| `OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE`, `OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY` | No | No metric-specific certificate or client-key environment configuration is added. |
+| `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` | Automatic exporters | Paths to PEM files for the trusted certificate authorities, client certificate, and private key. Refer to [TLS and Mutual TLS](#tls-and-mutual-tls). |
+| `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`, `OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY` | Automatic exporters | TLS files for traces. Nonempty values take priority over the shared TLS variables. |
+| `OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY` | Automatic exporters | TLS files for logs. Nonempty values take priority over the shared TLS variables. |
+| `OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE`, `OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY` | Automatic exporters | TLS files for metrics. Nonempty values take priority over the shared TLS variables. |
 
 </StickySearchableTable>
 
@@ -322,6 +322,7 @@ are configured. gRPC does not use HTTP redirects.
 | `type` | Required | `full`, `gen_ai`, or `openinference`. |
 | `endpoint` | Required | Nonblank OTLP endpoint. For OTLP/HTTP, Relay appends `/v1/traces` when the endpoint contains only a scheme, host, and optional port with no explicit path. Add a trailing `/` to export traces to the root path. Any other explicit path is preserved. gRPC endpoints are always preserved. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
+| `tls` | Omitted | Certificate and private key files for this endpoint. Refer to [TLS and Mutual TLS](#tls-and-mutual-tls). |
 | `service_name` | `unknown_service` | `service.name` resource attribute. |
 | `service_namespace` | Omitted | Optional `service.namespace`. |
 | `service_version` | Omitted | Optional `service.version`. |
@@ -340,6 +341,107 @@ are configured. gRPC does not use HTTP redirects.
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 | `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
+
+## TLS and Mutual TLS
+
+Transport Layer Security (TLS) encrypts the connection to a collector.
+Relay checks the server's certificate and hostname. Mutual TLS (mTLS) also lets
+the collector check Relay's client certificate.
+
+Each trace, log, or metric endpoint accepts an optional `tls` object.
+It works with HTTP/protobuf and gRPC. All three trace types support it:
+`full`, `gen_ai`, and `openinference`.
+
+A certificate authority (CA) signs certificates. A CA bundle lists the
+CAs that Relay trusts. PEM is a text format for certificates and keys.
+The `tls` object supports these fields.
+
+| TLS Field | Default | Meaning |
+|---|---|---|
+| `certificate` | Omitted | Path to a PEM CA bundle. This bundle replaces the system's trusted CAs for this endpoint. |
+| `client_certificate` | Omitted | Path to a PEM client certificate chain. Also set `private_key`. |
+| `private_key` | Omitted | Path to the client's PEM private key. Also set `client_certificate`. |
+
+Omit `tls`, or use an empty object, to keep the system's trusted CAs.
+Relay then sends no client certificate. Set only `certificate` to use a
+custom CA bundle. To enable mTLS, set both `client_certificate` and
+`private_key`. You can use mTLS with the system's CAs or a custom bundle.
+Relay still checks the server's certificate and hostname.
+
+If you set any TLS file path, the endpoint must use `https://`.
+This rule also applies to gRPC and local endpoints.
+The following example sends traces to a collector that requires mTLS.
+
+```toml
+[[components.config.opentelemetry.traces]]
+type = "full"
+endpoint = "https://collector.example:4317"
+transport = "grpc"
+
+[components.config.opentelemetry.traces.tls]
+certificate = "/run/secrets/collector-ca.pem"
+client_certificate = "/run/secrets/relay-client-chain.pem"
+private_key = "/run/secrets/relay-client-key.pem"
+```
+
+You can also use `endpoints` as an alias for `traces` in this example.
+Set TLS files for log and metric endpoints in
+`opentelemetry.logs.endpoints[].tls` and
+`opentelemetry.metrics.endpoints[].tls`.
+
+When Relay creates log or metric endpoints from a trace endpoint, it copies
+all TLS settings from that trace endpoint. If you list log or metric endpoints
+yourself, set TLS on each one. They use their own settings even if they share
+a collector with traces.
+
+Use absolute file paths or paths relative to the process working directory.
+Relay reads the PEM files when it creates the exporter. Recreate the exporter
+after you replace certificates or keys.
+
+Relay rejects blank paths and files that it cannot read or parse.
+It also rejects a client certificate without a matching private key, or a key
+without a certificate.
+The plugin reports the failed endpoint and keeps valid endpoints active.
+TLS settings apply only to network endpoints.
+
+Use `OpenTelemetryTlsConfig` with Python plugin helpers or direct subscribers.
+The following example configures both types.
+
+```python
+from nemo_relay import OpenTelemetryConfig, OpenTelemetryTlsConfig
+from nemo_relay.observability import OpenTelemetryEndpointConfig
+
+tls = OpenTelemetryTlsConfig(
+    certificate="/run/secrets/collector-ca.pem",
+    client_certificate="/run/secrets/relay-client-chain.pem",
+    private_key="/run/secrets/relay-client-key.pem",
+)
+endpoint = OpenTelemetryEndpointConfig(
+    type="full", endpoint="https://collector.example:4317", transport="grpc", tls=tls
+)
+config = OpenTelemetryConfig("full", "https://collector.example:4317")
+config.transport = "grpc"
+config.tls = tls
+```
+
+Other languages use these APIs for the same file paths.
+
+- In Rust, call `with_tls` with an `OpenTelemetryTlsConfig` value.
+- In Node.js, set `tls` on a direct subscriber config. Use `certificate`,
+  `clientCertificate`, and `privateKey` inside this object. Plugin configs use
+  `client_certificate` and `private_key`.
+- In Go, set `TLS` to an `OpenTelemetryTLSConfig` pointer.
+
+Automatic exporters read `OTEL_EXPORTER_OTLP_CERTIFICATE`,
+`OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, and `OTEL_EXPORTER_OTLP_CLIENT_KEY`.
+For one signal, insert `TRACES_`, `LOGS_`, or `METRICS_` after `OTLP_`.
+A nonempty setting for one signal takes priority over the shared setting.
+These variables also work with automatic HTTP/JSON export.
+
+Relay does not use these variables for endpoints that you configure in plugins
+or code. Set `tls` on those endpoints.
+To enable automatic export, also set `OTEL_EXPORTER_OTLP_ENDPOINT` or a
+signal-specific endpoint variable.
 
 ## Trace File Sinks
 
@@ -554,7 +656,7 @@ service_name = "agent-service"
 enabled = true
 ```
 
-The signal endpoint fields are `endpoint`, `transport`, `headers`,
+The signal endpoint fields are `endpoint`, `transport`, `tls`, `headers`,
 `header_env`, `header_file`, `resource_attributes`,
 `promote_resource_metadata_prefixes`, `service_name`, `service_namespace`,
 `service_version`, `instrumentation_scope`, and `timeout_millis`. Their defaults

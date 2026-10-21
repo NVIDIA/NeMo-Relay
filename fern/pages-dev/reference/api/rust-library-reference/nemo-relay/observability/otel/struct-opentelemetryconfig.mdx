@@ -109,6 +109,12 @@ Creates a typed OpenTelemetry exporter for a required OTLP endpoint.
 
 Overrides the OTLP endpoint. If unset, exporter defaults and OTEL_* env vars apply.
 
+#### `with_tls`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_tls(self, tls: <a href=\"../struct-opentelemetrytlsconfig\">OpenTelemetryTlsConfig</a>) -&gt; Self"}} /></pre>
+
+Sets the certificate and private key file paths for this endpoint.
+
 #### `with_transport`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_transport(self, transport: <a href=\"enum-otlptransport\">OtlpTransport</a>) -&gt; Self"}} /></pre>
