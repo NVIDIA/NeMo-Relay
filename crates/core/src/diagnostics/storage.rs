@@ -67,6 +67,38 @@ pub(super) struct DetailHandle {
     len: usize,
 }
 
+/// Immutable input and geometry computed once, then reused while history is reclaimed.
+/// Owns only borrowed field references; it neither allocates nor pins pool blocks.
+pub(super) struct DetailPlan<'a> {
+    parts: [&'a str; 3],
+    needed: usize,
+    block_bytes: usize,
+}
+
+/// A validated borrow prevents mutation/reclamation until copying is complete.
+pub(super) struct DetailView<'a> {
+    pool: &'a DetailPool,
+    handle: DetailHandle,
+}
+impl DetailView<'_> {
+    pub(super) fn len(&self) -> usize {
+        self.handle.len
+    }
+
+    pub(super) fn copy_into(&self, output: &mut impl fmt::Write) -> fmt::Result {
+        let mut index = self.handle.first;
+        while index != NO_BLOCK {
+            let block = &self.pool.blocks[index];
+            let offset = index * self.pool.block_bytes;
+            let text = std::str::from_utf8(&self.pool.bytes[offset..offset + block.len])
+                .map_err(|_| fmt::Error)?;
+            output.write_str(text)?;
+            index = block.next;
+        }
+        Ok(())
+    }
+}
+
 struct Block {
     next: usize,
     generation: u64,
@@ -158,24 +190,28 @@ impl DetailPool {
         self.blocks.iter().map(|block| block.len).sum()
     }
 
-    /// Whether all selected text fits after reclaiming retained history.
-    /// Uses exactly the same UTF-8 block geometry as allocation.
-    pub(super) fn can_fit_parts(&self, parts: &[&str]) -> bool {
-        let needed = TextChunks::new(parts, self.block_bytes)
+    /// Plan exact UTF-8 geometry against total capacity before evicting evidence.
+    pub(super) fn plan_parts<'a>(&self, parts: [&'a str; 3]) -> Option<DetailPlan<'a>> {
+        let needed = TextChunks::new(&parts, self.block_bytes)
             .filter(|(_, new_block)| *new_block)
             .take(self.blocks.len().saturating_add(1))
             .count();
-        needed == 0 || (self.generation != u64::MAX && needed <= self.blocks.len())
+        (needed == 0 || (self.generation != u64::MAX && needed <= self.blocks.len())).then_some(
+            DetailPlan {
+                parts,
+                needed,
+                block_bytes: self.block_bytes,
+            },
+        )
     }
 
-    /// Copy selected fields into one chain, sharing unused block space across
-    /// field boundaries. Inputs are already bounded by recording admission.
-    /// No temporary concatenation buffer or per-field allocation is needed.
-    pub(super) fn allocate_parts(&mut self, parts: &[&str]) -> Option<DetailHandle> {
-        let needed = TextChunks::new(parts, self.block_bytes)
-            .filter(|(_, new_block)| *new_block)
-            .take(self.free_blocks.saturating_add(1))
-            .count();
+    /// Retry a precomputed plan as blocks become free. UTF-8 requirements are
+    /// not recalculated on each reclamation; only free capacity is checked.
+    pub(super) fn allocate_plan(&mut self, plan: &DetailPlan<'_>) -> Option<DetailHandle> {
+        if plan.block_bytes != self.block_bytes || plan.needed > self.free_blocks {
+            return None;
+        }
+        let needed = plan.needed;
         if needed == 0 {
             return Some(DetailHandle {
                 first: NO_BLOCK,
@@ -190,7 +226,7 @@ impl DetailPool {
         let first = self.free_head;
         let mut current = NO_BLOCK;
         let mut len = 0;
-        for (piece, new_block) in TextChunks::new(parts, self.block_bytes) {
+        for (piece, new_block) in TextChunks::new(&plan.parts, self.block_bytes) {
             if new_block {
                 let index = self.free_head;
                 self.free_head = self.blocks[index].next;
@@ -245,8 +281,9 @@ impl DetailPool {
         (len == handle.len).then_some(seen)
     }
 
-    pub(super) fn byte_len(&self, handle: DetailHandle) -> Option<usize> {
-        self.valid(handle).then_some(handle.len)
+    pub(super) fn view(&self, handle: DetailHandle) -> Option<DetailView<'_>> {
+        self.valid(handle)
+            .then_some(DetailView { pool: self, handle })
     }
 
     pub(super) fn free(&mut self, handle: DetailHandle) -> bool {
@@ -263,26 +300,6 @@ impl DetailPool {
             index = next;
         }
         true
-    }
-
-    pub(super) fn copy_into(
-        &self,
-        handle: DetailHandle,
-        output: &mut impl fmt::Write,
-    ) -> fmt::Result {
-        if !self.valid(handle) {
-            return Err(fmt::Error);
-        }
-        let mut index = handle.first;
-        while index != NO_BLOCK {
-            let block = &self.blocks[index];
-            let offset = index * self.block_bytes;
-            let text = std::str::from_utf8(&self.bytes[offset..offset + block.len])
-                .map_err(|_| fmt::Error)?;
-            output.write_str(text)?;
-            index = block.next;
-        }
-        Ok(())
     }
 }
 
@@ -395,19 +412,20 @@ mod tests {
                     for b in fields {
                         for c in fields {
                             let parts = [a, b, c];
-                            let fits = pool.can_fit_parts(&parts);
-                            let handle = pool.allocate_parts(&parts);
+                            let plan = pool.plan_parts(parts);
+                            let fits = plan.is_some();
+                            let handle = plan.and_then(|plan| pool.allocate_plan(&plan));
                             assert_eq!(handle.is_some(), fits);
                             if let Some(handle) = handle {
                                 let mut text = String::new();
-                                pool.copy_into(handle, &mut text).unwrap();
+                                pool.view(handle).unwrap().copy_into(&mut text).unwrap();
                                 assert_eq!(text, parts.concat());
                                 assert_eq!(pool.logical_bytes(), text.len());
                                 pool.free(handle);
                                 assert_eq!(pool.used_bytes(), 0);
                                 assert_eq!(pool.logical_bytes(), 0);
                                 if !text.is_empty() {
-                                    assert_eq!(pool.byte_len(handle), None);
+                                    assert!(pool.view(handle).is_none());
                                 }
                             }
                         }
@@ -415,6 +433,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn detail_plan_survives_reclamation_and_views_reject_reused_handles() {
+        let mut pool = super::DetailPool::new(16, 4).unwrap();
+        let old_plan = pool.plan_parts(["🙂🙂", "", ""]).unwrap();
+        let first = pool.allocate_plan(&old_plan).unwrap();
+        let second = pool.allocate_plan(&old_plan).unwrap();
+        let plan = pool.plan_parts(["€abc", "🙂", "id"]).unwrap();
+        assert!(pool.allocate_plan(&plan).is_none());
+        assert!(pool.free(first));
+        assert!(pool.allocate_plan(&plan).is_none());
+        assert!(pool.free(second));
+        let replacement = pool.allocate_plan(&plan).unwrap();
+        assert!(pool.view(first).is_none());
+        assert!(pool.view(second).is_none());
+        assert!(!pool.free(first));
+        let view = pool.view(replacement).unwrap();
+        assert_eq!(view.len(), 12);
+        let mut copied = String::new();
+        view.copy_into(&mut copied).unwrap();
+        assert_eq!(copied, "€abc🙂id");
+        assert!(
+            super::DetailPool::new(16, 8)
+                .unwrap()
+                .allocate_plan(&plan)
+                .is_none()
+        );
     }
 
     #[test]
