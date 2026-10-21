@@ -27,3 +27,4 @@ uuid = { workspace = true, features = ["v7", "serde"] }
 
 [dev-dependencies]
 regex = "1"
+strum = { version = "0.27", features = ["derive"] }
