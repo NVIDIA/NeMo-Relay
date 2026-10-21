@@ -98,9 +98,9 @@ impl PageWorkspace {
     fn new(limits: &DiagnosticLimits) -> Result<Self, TryReserveError> {
         Ok(Self {
             components: reserved(limits.max_query_components)?,
-            counters: reserved(limits.max_counters)?,
+            counters: reserved(limits.max_query_counters)?,
             windows: reserved(limits.max_query_components)?,
-            buckets: reserved(limits.max_window_buckets)?,
+            buckets: reserved(limits.max_query_window_buckets)?,
             events: reserved(limits.max_query_events)?,
             text: bytes(limits.query_text_bytes)?,
             text_len: 0,
@@ -162,19 +162,25 @@ pub(super) struct QueryPool {
 }
 impl QueryPool {
     pub(super) fn required_bytes(limits: &DiagnosticLimits) -> Result<usize, DiagnosticError> {
+        if limits.max_queries == 0 {
+            return Ok(0);
+        }
         let mut per_page = 0usize;
         for (count, size) in [
             (
                 limits.max_query_components,
                 std::mem::size_of::<PageComponent>(),
             ),
-            (limits.max_counters, std::mem::size_of::<PageCounter>()),
+            (
+                limits.max_query_counters,
+                std::mem::size_of::<PageCounter>(),
+            ),
             (
                 limits.max_query_components,
                 std::mem::size_of::<PageWindow>(),
             ),
             (
-                limits.max_window_buckets,
+                limits.max_query_window_buckets,
                 std::mem::size_of::<DiagnosticWindowBucket>(),
             ),
             (limits.max_query_events, std::mem::size_of::<PageEvent>()),
@@ -781,8 +787,12 @@ pub(super) fn capture(
     query: DiagnosticQuery,
 ) -> Result<SnapshotLease, DiagnosticError> {
     let backend = inner.backend.as_ref().ok_or(DiagnosticError::Disabled)?;
+    let queries = backend
+        .queries
+        .as_ref()
+        .ok_or(DiagnosticError::QueryDisabled)?;
     validate_query(&query, &inner.limits)?;
-    let Some(mut lease) = backend.queries.acquire() else {
+    let Some(mut lease) = queries.acquire() else {
         super::lock(&backend.state).loss.queries_rejected.add(1);
         return Err(DiagnosticError::QueryCapacity);
     };
@@ -1384,6 +1394,44 @@ impl<T: Serialize> Serialize for SizingRows<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_queries_omit_pool_backing_and_ignore_unused_page_capacities() {
+        let limits = DiagnosticLimits {
+            max_queries: 0,
+            max_query_components: usize::MAX,
+            max_query_events: usize::MAX,
+            max_query_counters: usize::MAX,
+            max_query_window_buckets: usize::MAX,
+            max_snapshot_bytes: usize::MAX,
+            query_text_bytes: usize::MAX,
+            ..Default::default()
+        };
+        assert_eq!(QueryPool::required_bytes(&limits).unwrap(), 0);
+        let diagnostics = Diagnostics::from_settings(
+            Diagnostics::default().source().clone(),
+            DiagnosticsSettings {
+                enabled: true,
+                limits,
+            },
+        )
+        .unwrap();
+        assert!(
+            diagnostics
+                .inner
+                .backend
+                .as_ref()
+                .unwrap()
+                .queries
+                .is_none()
+        );
+        assert_eq!(
+            diagnostics
+                .snapshot(DiagnosticQuery::default())
+                .unwrap_err(),
+            DiagnosticError::QueryDisabled
+        );
+    }
 
     #[test]
     fn response_prefix_search_has_bounded_attempts_and_preserves_empty_pages() {

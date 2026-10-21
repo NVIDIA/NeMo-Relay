@@ -2637,6 +2637,20 @@ fn impossible_startup_profiles_fail_before_backend_allocation() {
 fn impossible_query_capacities_are_invalid_limits() {
     for (case, profile) in [
         (
+            "enabled reads require component page capacity",
+            DiagnosticLimits {
+                max_query_components: 0,
+                ..limits()
+            },
+        ),
+        (
+            "enabled reads require response envelope capacity",
+            DiagnosticLimits {
+                max_snapshot_bytes: 0,
+                ..limits()
+            },
+        ),
+        (
             "component rows overflow",
             DiagnosticLimits {
                 max_query_components: usize::MAX,
@@ -2647,6 +2661,20 @@ fn impossible_query_capacities_are_invalid_limits() {
             "event rows overflow",
             DiagnosticLimits {
                 max_query_events: usize::MAX,
+                ..limits()
+            },
+        ),
+        (
+            "query counter rows overflow",
+            DiagnosticLimits {
+                max_query_counters: usize::MAX,
+                ..limits()
+            },
+        ),
+        (
+            "query window buckets overflow",
+            DiagnosticLimits {
+                max_query_window_buckets: usize::MAX,
                 ..limits()
             },
         ),
@@ -3665,5 +3693,176 @@ fn extension_causes_reuse_the_reserved_builtin_name_catalogue() {
             .register_extension_class(extension, "backend_busy")
             .unwrap()
             .is_some()
+    );
+}
+
+#[test]
+fn query_counter_and_bucket_page_budgets_are_independent_of_store_capacity() {
+    for (counter_cap, bucket_cap) in [(1, 3), (3, 1)] {
+        let service = diagnostics(DiagnosticLimits {
+            max_query_counters: counter_cap,
+            max_query_window_buckets: bucket_cap,
+            ..limits()
+        });
+        let mut recorders = Vec::new();
+        for index in 1..=3 {
+            let key = format!("component.{index}");
+            let recorder = service
+                .register_component(ComponentRegistration {
+                    window: Some(WindowSettings {
+                        resolution_millis: 60_000,
+                        bucket_count: 1,
+                    }),
+                    ..ComponentRegistration::new(&key, &[WRITE])
+                })
+                .unwrap();
+            record(&recorder, index);
+            recorders.push(recorder);
+        }
+        let mut query = DiagnosticQuery {
+            max_events: Some(0),
+            ..Default::default()
+        };
+        let mut seen = BTreeSet::new();
+        for _ in 0..3 {
+            let view = snapshot(&service, query.clone());
+            assert_eq!(view.components.len(), 1);
+            assert_eq!(view.components[0].counters.len(), 1);
+            assert_eq!(view.components[0].windows[0].buckets.len(), 1);
+            assert!(seen.insert(view.components[0].identity.instance_id));
+            assert_eq!(view.lifetime.totals.occurrences_total.value.get(), 6);
+            query.continuation = view.continuation;
+        }
+        assert!(query.continuation.is_none());
+        assert_eq!(seen.len(), 3);
+        assert_eq!(service.memory_usage().counters, 3);
+        assert_eq!(service.memory_usage().window_buckets, 3);
+    }
+}
+
+#[test]
+fn oversized_component_rows_report_query_capacity_without_losing_evidence() {
+    for (counter_cap, bucket_cap, window) in [
+        (1, 32, None),
+        (
+            64,
+            0,
+            Some(WindowSettings {
+                resolution_millis: 60_000,
+                bucket_count: 1,
+            }),
+        ),
+    ] {
+        let service = diagnostics(DiagnosticLimits {
+            max_query_counters: counter_cap,
+            max_query_window_buckets: bucket_cap,
+            ..limits()
+        });
+        let component = service
+            .register_component(ComponentRegistration {
+                window,
+                ..ComponentRegistration::new("producer", &[WRITE, SUCCESS])
+            })
+            .unwrap();
+        record(&component, 2);
+        component
+            .record_without_projection_lazy(|| {
+                Observation::new(
+                    Classification::success(SuccessCode::SinkInitialized),
+                    "success",
+                    1,
+                )
+            })
+            .unwrap();
+        let reserved = service.memory_usage().reserved_bytes;
+        assert_eq!(
+            service.snapshot(DiagnosticQuery::default()).unwrap_err(),
+            DiagnosticError::SnapshotCapacity
+        );
+        let view = snapshot(
+            &service,
+            DiagnosticQuery {
+                max_components: Some(0),
+                ..Default::default()
+            },
+        );
+        assert_eq!(view.events.len(), 2);
+        assert_eq!(view.lifetime.totals.occurrences_total.value.get(), 3);
+        assert_eq!(view.coverage.loss.events_evicted.value.get(), 0);
+        assert_eq!(service.memory_usage().reserved_bytes, reserved);
+    }
+}
+
+#[test]
+fn recording_and_projection_work_without_query_backing() {
+    let with_queries = diagnostics(limits());
+    let service = diagnostics(DiagnosticLimits {
+        max_queries: 0,
+        max_query_components: 0,
+        max_query_events: 0,
+        max_query_counters: 0,
+        max_query_window_buckets: 0,
+        max_snapshot_bytes: 0,
+        query_text_bytes: 0,
+        ..limits()
+    });
+    assert!(service.memory_usage().reserved_bytes < with_queries.memory_usage().reserved_bytes);
+    assert_eq!(
+        service.reader().availability(),
+        DiagnosticAvailability::Available
+    );
+    let component = register(&service, "producer");
+    let delivered = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&delivered);
+    let _subscription = service
+        .subscribe_projection(move |event| {
+            count.fetch_add(event.count.get() as usize, Ordering::Relaxed);
+        })
+        .unwrap();
+    component
+        .record_lazy(|| Observation::new(classification(FailureClass::Unknown), "failure", 2))
+        .unwrap();
+    assert_eq!(delivered.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        service.snapshot(DiagnosticQuery::default()).unwrap_err(),
+        DiagnosticError::QueryDisabled
+    );
+    assert_eq!(
+        component
+            .reader()
+            .snapshot(DiagnosticQuery::default())
+            .unwrap_err(),
+        DiagnosticError::QueryDisabled
+    );
+    assert_eq!(service.memory_usage().events, 1);
+    assert_eq!(service.memory_usage().query_workspaces, 0);
+    assert_eq!(service.memory_usage().projection_workspaces, 0);
+}
+
+#[test]
+fn default_query_profile_is_smaller_than_store_sized_workspaces() {
+    let profile = DiagnosticLimits::default();
+    let previous_query_profile = DiagnosticLimits {
+        max_query_counters: profile.max_counters,
+        max_query_window_buckets: profile.max_window_buckets,
+        max_snapshot_bytes: 524_288,
+        query_text_bytes: 524_288,
+        ..profile.clone()
+    };
+    let current = diagnostics(profile);
+    let previous = diagnostics(previous_query_profile);
+    let current_bytes = current.memory_usage().reserved_bytes;
+    let previous_bytes = previous.memory_usage().reserved_bytes;
+    eprintln!(
+        "default context backing: {current_bytes} bytes; store-sized query profile: {previous_bytes} bytes"
+    );
+    assert!(current_bytes < previous_bytes / 2);
+    assert_eq!(
+        current.limits().max_counters,
+        previous.limits().max_counters
+    );
+    assert_eq!(
+        current.limits().max_window_buckets,
+        previous.limits().max_window_buckets
     );
 }
