@@ -309,39 +309,18 @@ impl io::Write for ProjectionBuffer {
     }
 }
 
-struct ProjectionFields<'a> {
-    code: &'a str,
-    json: &'a str,
-}
-
-impl log::kv::Source for ProjectionFields<'_> {
-    fn visit<'kvs>(
-        &'kvs self,
-        visitor: &mut dyn log::kv::VisitSource<'kvs>,
-    ) -> std::result::Result<(), log::kv::Error> {
-        visitor.visit_pair(
-            log::kv::Key::from_str("event"),
-            log::kv::Value::from(self.code),
-        )?;
-        visitor.visit_pair(
-            log::kv::Key::from_str("diagnostic"),
-            log::kv::Value::from_display(&self.json),
-        )
-    }
-}
-
 fn project_event(
     logger: Arc<Logger>,
     event: &DiagnosticEvent,
 ) -> std::result::Result<(), ProjectionError> {
     let level = match event.severity {
-        DiagnosticSeverity::Trace => log::Level::Trace,
-        DiagnosticSeverity::Debug => log::Level::Debug,
-        DiagnosticSeverity::Info => log::Level::Info,
-        DiagnosticSeverity::Warning => log::Level::Warn,
-        DiagnosticSeverity::Error => log::Level::Error,
+        DiagnosticSeverity::Trace => spdlog::Level::Trace,
+        DiagnosticSeverity::Debug => spdlog::Level::Debug,
+        DiagnosticSeverity::Info => spdlog::Level::Info,
+        DiagnosticSeverity::Warning => spdlog::Level::Warn,
+        DiagnosticSeverity::Error => spdlog::Level::Error,
     };
-    if !logger.should_log(level.into()) {
+    if !logger.should_log(level) {
         return Ok(());
     }
     let mut buffer = ProjectionBuffer::new();
@@ -352,23 +331,15 @@ fn project_event(
             ProjectionError::SerializationFailed
         });
     }
-    let fields = ProjectionFields {
-        code: event.code(),
-        json: buffer.as_str()?,
-    };
+    let json = buffer.as_str()?;
     let message = event.message().unwrap_or("Diagnostic observation");
-    let args = format_args!("{message}");
-    let record = log::Record::builder()
-        .args(args)
-        .level(level)
-        .target("nemo_relay.diagnostics")
-        .key_values(&fields)
-        .build();
-    // Reuse the existing logger/filter/formatter/sinks. The proxy borrows this
-    // capped serialization synchronously; no history slot or detail is pinned.
-    let proxy = spdlog::LogCrateProxy::default();
-    proxy.set_logger(Some(logger));
-    log::Log::log(&proxy, &record);
+    // Native backend fields borrow the capped buffer through synchronous delivery.
+    // The backend formats the payload once; asynchronous sinks make their own
+    // required ownership copies before this buffer goes out of scope.
+    spdlog::log!(logger: logger, level, "{message}", kv: {
+        event = event.code(),
+        diagnostic: = json,
+    });
     Ok(())
 }
 
@@ -376,6 +347,13 @@ pub(super) fn attach_projection(
     diagnostics: &Diagnostics,
     logger: &Arc<Logger>,
 ) -> Result<LoggingProjection> {
+    // Preserve the facade target in RelayFormatter without converting every
+    // event through LogCrateProxy. This logger shares the existing sinks.
+    let projection_logger = logger
+        .fork_with_name(Some("nemo_relay.diagnostics"))
+        .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
+    // Only the runtime owns periodic flushing and final sink drain.
+    projection_logger.set_flush_period(None);
     let logger = Arc::downgrade(logger);
     let active = Arc::new(Mutex::new(true));
     let callback_active = Arc::clone(&active);
@@ -393,7 +371,7 @@ pub(super) fn attach_projection(
             if !super::is_active_relay_logger(&logger) {
                 return Ok(());
             }
-            project_event(logger, event)
+            project_event(Arc::clone(&projection_logger), event)
         })
         .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
     Ok(LoggingProjection {
