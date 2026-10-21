@@ -144,7 +144,7 @@ fn record(recorder: &ComponentRecorder, count: u64) -> RecordReceipt {
 }
 
 fn snapshot(service: &Diagnostics, query: DiagnosticQuery) -> DiagnosticSnapshot {
-    service.snapshot(query).unwrap().to_snapshot().unwrap()
+    service.snapshot(&query).unwrap().to_snapshot().unwrap()
 }
 
 fn row<'a>(view: &'a DiagnosticSnapshot, key: &str) -> &'a ComponentSnapshot {
@@ -189,7 +189,7 @@ fn disabled_facade_has_no_identity_backend_or_lazy_work() {
             RecordOutcome::Disabled
         );
         assert_eq!(
-            service.snapshot(DiagnosticQuery::default()).unwrap_err(),
+            service.snapshot(&DiagnosticQuery::default()).unwrap_err(),
             DiagnosticError::Disabled
         );
         let _guard = service
@@ -978,7 +978,7 @@ fn final_recorder_drop_closes_without_a_reader_extending_registration_lifetime()
     drop(component);
     assert!(
         reader
-            .snapshot(DiagnosticQuery::default())
+            .snapshot(&DiagnosticQuery::default())
             .unwrap()
             .to_snapshot()
             .unwrap()
@@ -988,7 +988,7 @@ fn final_recorder_drop_closes_without_a_reader_extending_registration_lifetime()
     );
     drop(cloned);
     let retained = reader
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -1947,15 +1947,15 @@ fn query_leases_enforce_concurrency_and_return_their_permits() {
     });
     let component = register(&service, "producer");
     record(&component, 1);
-    let first = service.snapshot(DiagnosticQuery::default()).unwrap();
-    let second = service.snapshot(DiagnosticQuery::default()).unwrap();
+    let first = service.snapshot(&DiagnosticQuery::default()).unwrap();
+    let second = service.snapshot(&DiagnosticQuery::default()).unwrap();
     assert_eq!(service.memory_usage().query_workspaces, 2);
     assert_eq!(
-        service.snapshot(DiagnosticQuery::default()).unwrap_err(),
+        service.snapshot(&DiagnosticQuery::default()).unwrap_err(),
         DiagnosticError::QueryCapacity
     );
     drop(first);
-    let replacement = service.snapshot(DiagnosticQuery::default()).unwrap();
+    let replacement = service.snapshot(&DiagnosticQuery::default()).unwrap();
     assert_eq!(
         replacement
             .to_snapshot()
@@ -2003,7 +2003,7 @@ fn bounded_pages_continue_without_recounting_or_widening_scope() {
     let mut events = BTreeSet::new();
     let mut first_cursor = None;
     for _ in 0..8 {
-        let lease = service.snapshot(query.clone()).unwrap();
+        let lease = service.snapshot(&query).unwrap();
         assert!(lease.as_bytes().len() <= 4096);
         let view = lease.to_snapshot().unwrap();
         assert_bounded_page_totals_and_unique_rows(&view, &mut registrations, &mut events);
@@ -2025,13 +2025,13 @@ fn bounded_pages_continue_without_recounting_or_widening_scope() {
         ..base.clone()
     };
     assert_eq!(
-        service.snapshot(changed_scope).unwrap_err(),
+        service.snapshot(&changed_scope).unwrap_err(),
         DiagnosticError::InvalidCursor
     );
     record(&components[0], 1);
     assert_eq!(
         service
-            .snapshot(DiagnosticQuery {
+            .snapshot(&DiagnosticQuery {
                 continuation: Some(cursor),
                 ..base
             })
@@ -2087,7 +2087,7 @@ fn encoded_byte_pagination_keeps_history_and_makes_forward_progress() {
     };
     let mut events = BTreeSet::new();
     for _ in 0..10 {
-        let lease = service.snapshot(query.clone()).unwrap();
+        let lease = service.snapshot(&query).unwrap();
         assert!(lease.as_bytes().len() <= 4096);
         let view = lease.to_snapshot().unwrap();
         assert!(
@@ -2110,7 +2110,7 @@ fn encoded_byte_pagination_keeps_history_and_makes_forward_progress() {
     assert_eq!(code_total(&view.components[0], WRITE), 6);
     assert_eq!(
         service
-            .snapshot(DiagnosticQuery {
+            .snapshot(&DiagnosticQuery {
                 max_response_bytes: Some(64),
                 ..DiagnosticQuery::default()
             })
@@ -2172,7 +2172,7 @@ fn projections_can_query_and_record_reentrantly_without_recursion() {
             callback.fetch_add(1, Ordering::Relaxed);
             assert!(
                 !reader
-                    .snapshot(DiagnosticQuery::default())
+                    .snapshot(&DiagnosticQuery::default())
                     .unwrap()
                     .to_snapshot()
                     .unwrap()
@@ -2574,7 +2574,7 @@ fn enabled_recording_and_leased_queries_do_not_allocate_new_backing_storage() {
         })
         .unwrap();
     record(&component, 1);
-    drop(service.snapshot(DiagnosticQuery::default()).unwrap());
+    drop(service.snapshot(&DiagnosticQuery::default()).unwrap());
     let reserved = service.memory_usage().reserved_bytes;
     let (_, recording_allocations) = allocations_during(|| {
         for _ in 0..1000 {
@@ -2583,7 +2583,7 @@ fn enabled_recording_and_leased_queries_do_not_allocate_new_backing_storage() {
     });
     assert_eq!(recording_allocations, 0);
     let (page, query_allocations) =
-        allocations_during(|| service.snapshot(DiagnosticQuery::default()).unwrap());
+        allocations_during(|| service.snapshot(&DiagnosticQuery::default()).unwrap());
     assert_eq!(query_allocations, 0);
     let view = page.to_snapshot().unwrap(); // decoding explicitly allocates caller-owned DTOs
     assert_eq!(
@@ -3228,7 +3228,7 @@ fn diagnostic_recording_profile() {
                     .unwrap();
             }
         }
-        drop(service.snapshot(DiagnosticQuery::default()).unwrap());
+        drop(service.snapshot(&DiagnosticQuery::default()).unwrap());
         let reserved = service.memory_usage().reserved_bytes;
         let barrier = Barrier::new(if contended { WRITERS + 2 } else { 2 });
         let begin = Instant::now();
@@ -3269,7 +3269,7 @@ fn diagnostic_recording_profile() {
                     barrier.wait();
                     for _ in 0..64 {
                         let started = Instant::now();
-                        let page = service.snapshot(DiagnosticQuery::default()).unwrap();
+                        let page = service.snapshot(&DiagnosticQuery::default()).unwrap();
                         black_box(page.as_bytes());
                         drop(page);
                         reads.push(started.elapsed().as_nanos());
@@ -3393,7 +3393,7 @@ fn builtin_query_selectors_are_independent_of_small_identity_limits() {
         },
     ] {
         assert_eq!(
-            service.snapshot(query).unwrap_err(),
+            service.snapshot(&query).unwrap_err(),
             DiagnosticError::InvalidQuery
         );
     }
@@ -3463,10 +3463,10 @@ fn warmed_small_response_budgets_paginate_full_history_without_allocating() {
         max_response_bytes: Some(4096),
         ..Default::default()
     };
-    drop(service.snapshot(query.clone()).unwrap());
+    drop(service.snapshot(&query).unwrap());
     let mut sequences = BTreeSet::new();
     for _ in 0..256 {
-        let (lease, allocations) = allocations_during(|| service.snapshot(query.clone()).unwrap());
+        let (lease, allocations) = allocations_during(|| service.snapshot(&query).unwrap());
         assert_eq!(allocations, 0);
         assert!(lease.as_bytes().len() <= 4096);
         let view = lease.to_snapshot().unwrap();
@@ -3776,7 +3776,7 @@ fn oversized_component_rows_report_query_capacity_without_losing_evidence() {
             .unwrap();
         let reserved = service.memory_usage().reserved_bytes;
         assert_eq!(
-            service.snapshot(DiagnosticQuery::default()).unwrap_err(),
+            service.snapshot(&DiagnosticQuery::default()).unwrap_err(),
             DiagnosticError::SnapshotCapacity
         );
         let view = snapshot(
@@ -3824,13 +3824,13 @@ fn recording_and_projection_work_without_query_backing() {
         .unwrap();
     assert_eq!(delivered.load(Ordering::Relaxed), 2);
     assert_eq!(
-        service.snapshot(DiagnosticQuery::default()).unwrap_err(),
+        service.snapshot(&DiagnosticQuery::default()).unwrap_err(),
         DiagnosticError::QueryDisabled
     );
     assert_eq!(
         component
             .reader()
-            .snapshot(DiagnosticQuery::default())
+            .snapshot(&DiagnosticQuery::default())
             .unwrap_err(),
         DiagnosticError::QueryDisabled
     );
@@ -4085,4 +4085,43 @@ fn packed_text_preserves_empty_fields_without_pool_capacity() {
     assert_eq!(service.memory_usage().detail_bytes, 0);
     assert_eq!(view.coverage.loss.details_omitted.value.get(), 0);
     assert_eq!(view.coverage.loss.correlations_omitted.value.get(), 0);
+}
+
+#[test]
+fn repeated_borrowed_queries_reuse_owned_selectors_without_allocations() {
+    let service = diagnostics(limits());
+    let component = service
+        .register_component(ComponentRegistration {
+            ownership: ComponentOwnership {
+                configuration_id: Some("configuration".into()),
+                responsibility: Some("owner".into()),
+                ..Default::default()
+            },
+            ..ComponentRegistration::new("producer", &CODES)
+        })
+        .unwrap();
+    record(&component, 2);
+    let mut query = DiagnosticQuery {
+        component_key: Some("producer".into()),
+        code: Some(WRITE.canonical_name().into()),
+        failure_class: Some(FailureClass::Unknown.as_str().into()),
+        ownership: ComponentOwnership {
+            configuration_id: Some("configuration".into()),
+            responsibility: Some("owner".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let reader = service.reader();
+    drop(reader.snapshot(&query).unwrap());
+    for _ in 0..32 {
+        let (lease, allocations) = allocations_during(|| reader.snapshot(&query).unwrap());
+        assert_eq!(allocations, 0);
+        let view = lease.to_snapshot().unwrap();
+        assert_eq!(view.components.len(), 1);
+        assert_eq!(view.events.len(), 1);
+        // A live lease owns its captured page and does not borrow the query.
+        query.continuation = view.continuation;
+        assert!(!lease.as_bytes().is_empty());
+    }
 }

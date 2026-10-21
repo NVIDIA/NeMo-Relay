@@ -427,7 +427,7 @@ fn diagnostics_count_each_queue_loss_even_when_emergency_notices_are_limited() {
     logger.flush();
 
     let snapshot = diagnostics
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -538,7 +538,7 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
     runtime.shutdown();
 
     let snapshot = diagnostics
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -594,7 +594,7 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
     .shutdown();
 
     let snapshot = diagnostics
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -670,7 +670,7 @@ fn synchronous_sink_boundary_reports_once_and_preserves_exit_flush_errors() {
         Err(mpsc::TryRecvError::Empty)
     ));
     let snapshot = diagnostics
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();
@@ -762,7 +762,7 @@ fn stderr_backend_failures_record_once_without_projection_recursion() {
     assert_eq!(projected.load(Ordering::Relaxed), 1);
     runtime.shutdown();
     let snapshot = diagnostics
-        .snapshot(DiagnosticQuery::default())
+        .snapshot(&DiagnosticQuery::default())
         .unwrap()
         .to_snapshot()
         .unwrap();

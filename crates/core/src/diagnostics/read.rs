@@ -784,20 +784,20 @@ struct CapabilityView<'a> {
 
 pub(super) fn capture(
     inner: &Inner,
-    query: DiagnosticQuery,
+    query: &DiagnosticQuery,
 ) -> Result<SnapshotLease, DiagnosticError> {
     let backend = inner.backend.as_ref().ok_or(DiagnosticError::Disabled)?;
     let queries = backend
         .queries
         .as_ref()
         .ok_or(DiagnosticError::QueryDisabled)?;
-    validate_query(&query, &inner.limits)?;
+    validate_query(query, &inner.limits)?;
     let Some(mut lease) = queries.acquire() else {
         super::lock(&backend.state).loss.queries_rejected.add(1);
         return Err(DiagnosticError::QueryCapacity);
     };
     let page = lease.workspace.as_mut().expect("acquired query workspace");
-    let scope = query_scope(&query, inner.context_id);
+    let scope = query_scope(query, inner.context_id);
     let state = super::lock(&backend.state);
     let captured_at = Utc::now();
     let tick = inner.tick();
@@ -838,7 +838,7 @@ pub(super) fn capture(
             component_position += 1;
             continue;
         };
-        if !component_matches(component, &query) {
+        if !component_matches(component, query) {
             component_position += 1;
             continue;
         }
@@ -846,7 +846,7 @@ pub(super) fn capture(
             truncated = true;
             break;
         }
-        if copy_component(page, &state, position, component, &query, tick).is_none() {
+        if copy_component(page, &state, position, component, query, tick).is_none() {
             if page.components.is_empty() {
                 return Err(DiagnosticError::SnapshotCapacity);
             }
@@ -864,7 +864,7 @@ pub(super) fn capture(
             .recent
             .get(position)
             .expect("retained history position");
-        if !event_matches(&state, event, &query) {
+        if !event_matches(&state, event, query) {
             event_position += 1;
             continue;
         }
@@ -1431,7 +1431,7 @@ mod tests {
         );
         assert_eq!(
             diagnostics
-                .snapshot(DiagnosticQuery::default())
+                .snapshot(&DiagnosticQuery::default())
                 .unwrap_err(),
             DiagnosticError::QueryDisabled
         );
@@ -1555,7 +1555,7 @@ mod tests {
                 state.record_window(handle, observed, DiagnosticOutcome::Success, 7);
             }
             let snapshot = diagnostics
-                .snapshot(DiagnosticQuery::default())
+                .snapshot(&DiagnosticQuery::default())
                 .unwrap()
                 .to_snapshot()
                 .unwrap();
