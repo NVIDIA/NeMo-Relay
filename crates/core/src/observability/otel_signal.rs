@@ -231,6 +231,15 @@ pub(super) fn retry_batch_processor_channel_full(
     }
 }
 
+/// Clears SDK's startup resource message from a new provider's batch channel so first span or record is accepted.
+pub(super) fn drain_startup_queue(force_flush: impl FnOnce() -> OTelSdkResult) -> Result<()> {
+    force_flush().map_err(|error| {
+        OpenTelemetryError::ExporterBuild(format!(
+            "OpenTelemetry batch processor did not drain its startup message: {error}"
+        ))
+    })
+}
+
 fn truncate_runtime_diagnostic_message(message: String) -> String {
     if message.chars().count() <= MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS {
         return message;
