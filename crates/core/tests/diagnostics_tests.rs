@@ -1016,6 +1016,73 @@ fn code_capacity_rejection_preserves_existing_component_accounting() {
 }
 
 #[test]
+fn rejected_refresh_metadata_is_counted_without_changing_component_state() {
+    let service = diagnostics(DiagnosticLimits {
+        max_identity_bytes: 128,
+        max_metadata_bytes: 64,
+        ..limits()
+    });
+    let (owner, component) = service
+        .register_owned_component(ComponentRegistration {
+            ownership: ComponentOwnership {
+                configuration_id: Some("old".into()),
+                ..Default::default()
+            },
+            ..ComponentRegistration::new("producer", &CODES)
+        })
+        .unwrap();
+    record(&component, 3);
+    let before = snapshot(&service, DiagnosticQuery::default());
+    let memory_before = serde_json::to_value(service.memory_usage()).unwrap();
+    let rejected_ownerships = [
+        ComponentOwnership {
+            configuration_id: Some("x".repeat(129)),
+            ..Default::default()
+        },
+        ComponentOwnership {
+            responsibility: Some("x".repeat(129)),
+            ..Default::default()
+        },
+        // Fits the per-field limit, but exceeds the shared metadata budget.
+        ComponentOwnership {
+            configuration_id: Some("x".repeat(64)),
+            ..Default::default()
+        },
+    ];
+    for (index, ownership) in rejected_ownerships.into_iter().enumerate() {
+        assert_eq!(
+            owner.refresh(ownership),
+            Err(DiagnosticError::MetadataCapacity)
+        );
+        let after = snapshot(&service, DiagnosticQuery::default());
+        assert_eq!(
+            after.coverage.loss.metadata_rejected.value.get(),
+            index as u64 + 1
+        );
+        assert_eq!(after.sequence, before.sequence);
+        assert_eq!(after.lifetime.totals, before.lifetime.totals);
+        assert_eq!(after.events, before.events);
+        assert_eq!(after.components.len(), 1);
+        let component_before = &before.components[0];
+        let component_after = &after.components[0];
+        assert_eq!(component_after.identity, component_before.identity);
+        assert_eq!(component_after.counters, component_before.counters);
+        assert_eq!(
+            component_after.lifetime.totals,
+            component_before.lifetime.totals
+        );
+        let mut refresh_after = component_after.since_refresh.clone();
+        // Capture time advances even when the refresh itself is rejected.
+        refresh_after.elapsed_millis = component_before.since_refresh.elapsed_millis;
+        assert_eq!(refresh_after, component_before.since_refresh);
+        assert_eq!(
+            serde_json::to_value(service.memory_usage()).unwrap(),
+            memory_before
+        );
+    }
+}
+
+#[test]
 fn refresh_preserves_lifetime_code_totals_window_and_history() {
     let service = diagnostics(DiagnosticLimits {
         max_components: 1,

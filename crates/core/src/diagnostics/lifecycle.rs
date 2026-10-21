@@ -382,8 +382,9 @@ pub(super) fn refresh_component(
     let Some(backend) = &inner.backend else {
         return Err(DiagnosticError::Disabled);
     };
-    let attribution = ownership(&new_ownership, &inner.limits)?;
     let mut state = lock(&backend.state);
+    let attribution = ownership(&new_ownership, &inner.limits)
+        .map_err(|error| note_admission(&mut state, error))?;
     let old = *state
         .component(handle)
         .filter(|value| value.closed_at.is_none())
