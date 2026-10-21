@@ -158,7 +158,7 @@ unsafe extern "C" fn codec_encode_invalid_json_cb(
     CString::new("not-json").unwrap().into_raw()
 }
 
-unsafe extern "C" fn finalizer_null_cb() -> *mut c_char {
+unsafe extern "C" fn finalizer_null_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
     ptr::null_mut()
 }
 
@@ -256,8 +256,10 @@ fn test_callable_extra_trampoline_and_helper_paths() {
     };
     assert!(stream_err.to_string().contains("stream next failed"));
 
-    let finalizer = wrap_finalizer_fn(finalizer_null_cb);
+    let (_, finalizer, error) =
+        wrap_stream_callbacks(None, Some(finalizer_null_cb), std::ptr::null_mut(), None);
     assert_eq!(finalizer(), Json::Null);
+    assert!(error.lock().unwrap().is_none());
 }
 
 #[test]

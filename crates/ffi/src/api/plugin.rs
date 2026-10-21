@@ -11,12 +11,11 @@ use super::{
     PluginConfig, PluginError, PluginHostActivation, PluginRegistrationContext, c_char,
     c_str_to_json, c_str_to_string, clear_last_error, deregister_plugin, json_to_c_string,
     last_error_message, list_plugin_kinds, nemo_relay_string_free, register_adaptive_component,
-    register_plugin, set_last_error, status_from_plugin_error, tokio_runtime,
-    wrap_event_metadata_injector_fn, wrap_event_sanitize_fn, wrap_event_subscriber,
-    wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_intercept_fn,
-    wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
-    wrap_tool_sanitize_fn,
+    register_plugin, set_last_error, status_from_plugin_error, wrap_event_metadata_injector_fn,
+    wrap_event_sanitize_fn, wrap_event_subscriber, wrap_llm_conditional_fn,
+    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn,
+    wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
+    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::api::event_registry::Surface;
 use nemo_relay::plugin::dynamic::{initialize, validate, validate_exact};
@@ -210,8 +209,7 @@ pub unsafe extern "C" fn nemo_relay_plugin_initialize(
             Err(status) => return status,
         }
     };
-    let mut activation = match tokio_runtime().block_on(initialize(config, additional_plugins_toml))
-    {
+    let mut activation = match super::block_on(initialize(config, additional_plugins_toml)) {
         Ok(activation) => activation,
         Err(error) => return status_from_plugin_error(&error),
     };

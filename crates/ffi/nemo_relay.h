@@ -1366,6 +1366,8 @@ NemoRelayStatus nemo_relay_llm_call_execute(const char *name,
  * - `finalizer`: Callback invoked once when the stream is exhausted to produce
  *   the aggregated response as a JSON C string. May be null, in which case the
  *   finalizer returns `Json::Null`.
+ * - `callback_user_data`: Opaque pointer passed to `collector` and `finalizer`.
+ * - `callback_free`: Optional destructor for `callback_user_data`.
  * - `parent`: Optional parent scope handle, or null.
  * - `attributes`: Bitfield of LLM attributes.
  * - `data_json`: Optional JSON data, or null.
@@ -1384,6 +1386,8 @@ NemoRelayStatus nemo_relay_llm_stream_call_execute(const char *name,
                                                    NemoRelayFreeFn func_free,
                                                    struct Option_NemoRelayCollectorCb collector,
                                                    struct Option_NemoRelayFinalizerCb finalizer,
+                                                   void *callback_user_data,
+                                                   NemoRelayFreeFn callback_free,
                                                    const struct FfiScopeHandle *parent,
                                                    uint32_t attributes,
                                                    const char *data_json,

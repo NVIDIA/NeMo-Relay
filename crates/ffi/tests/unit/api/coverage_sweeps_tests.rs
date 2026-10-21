@@ -1807,6 +1807,8 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 None,
                 None,
                 None,
+                ptr::null_mut(),
+                None,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -1830,6 +1832,8 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 ptr::null_mut(),
                 None,
                 None,
+                None,
+                ptr::null_mut(),
                 None,
                 ptr::null(),
                 0,
@@ -1866,9 +1870,12 @@ fn test_ffi_stream_next_reports_error_items() {
     drop(tx);
 
     let stream = Box::into_raw(Box::new(FfiStream {
+        pending: std::sync::Mutex::new(None),
         receiver: tokio::sync::Mutex::new(rx),
         cancel: tokio::sync::watch::channel(false).0,
         closed: tokio::sync::watch::channel(Some(Ok(()))).1,
+        callback_error: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        close_result: tokio::sync::Mutex::new(None),
     }));
 
     unsafe {
@@ -2540,6 +2547,8 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 None,
                 None,
+                ptr::null_mut(),
+                None,
                 parent,
                 0,
                 ptr::null(),
@@ -2563,6 +2572,8 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 None,
                 None,
+                ptr::null_mut(),
+                None,
                 parent,
                 0,
                 ptr::null(),
@@ -2585,6 +2596,8 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null_mut(),
                 None,
                 None,
+                None,
+                ptr::null_mut(),
                 None,
                 parent,
                 0,
@@ -2608,6 +2621,8 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null_mut(),
                 None,
                 None,
+                None,
+                ptr::null_mut(),
                 None,
                 parent,
                 0,
@@ -2632,6 +2647,8 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 Some(collector_cb),
                 Some(finalizer_cb),
+                ptr::null_mut(),
+                None,
                 parent,
                 1,
                 data.as_ptr(),
@@ -4199,4 +4216,43 @@ fn defaulted_file_names(directory: &std::path::Path, extension: &str) -> Vec<Str
         })
         .filter(|name| name.starts_with("nemo-relay-otlp-") && name.ends_with(extension))
         .collect()
+}
+
+#[test]
+fn stream_close_reports_undelivered_error_once() {
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    tx.blocking_send(Err(nemo_relay::error::FlowError::Internal(
+        "undelivered ffi stream failure".to_string(),
+    )))
+    .expect("expected error payload to be queued");
+    drop(tx);
+    let stream = Box::into_raw(Box::new(FfiStream {
+        pending: std::sync::Mutex::new(None),
+        receiver: tokio::sync::Mutex::new(rx),
+        cancel: tokio::sync::watch::channel(false).0,
+        closed: tokio::sync::watch::channel(Some(Err("cleanup failed".to_string()))).1,
+        callback_error: std::sync::Arc::new(std::sync::Mutex::new(Some(
+            "finalizer failed".to_string(),
+        ))),
+        close_result: tokio::sync::Mutex::new(None),
+    }));
+
+    unsafe {
+        assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Internal);
+        let message = CStr::from_ptr(nemo_relay_last_error())
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            message,
+            "internal error: undelivered ffi stream failure; stream cleanup also failed: finalizer failed; stream cleanup also failed: cleanup failed"
+        );
+        assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Internal);
+        let repeated = CStr::from_ptr(nemo_relay_last_error())
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(repeated, message);
+        let mut chunk = ptr::null_mut();
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 0);
+        nemo_relay_stream_free(stream);
+    }
 }

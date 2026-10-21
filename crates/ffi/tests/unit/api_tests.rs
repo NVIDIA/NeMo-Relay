@@ -666,7 +666,10 @@ unsafe extern "C" fn llm_exec_intercept_cb(
     unsafe { next_fn(native_json, next_ctx) }
 }
 
-unsafe extern "C" fn collector_cb(chunk_json: *const c_char) {
+unsafe extern "C" fn collector_cb(
+    _user_data: *mut std::ffi::c_void,
+    chunk_json: *const c_char,
+) -> i32 {
     let chunk: Json = serde_json::from_str(
         unsafe { CStr::from_ptr(chunk_json) }
             .to_str()
@@ -674,9 +677,10 @@ unsafe extern "C" fn collector_cb(chunk_json: *const c_char) {
     )
     .unwrap();
     lock_unpoisoned(collected_chunks()).push(chunk);
+    0
 }
 
-unsafe extern "C" fn finalizer_cb() -> *mut c_char {
+unsafe extern "C" fn finalizer_cb(_user_data: *mut std::ffi::c_void) -> *mut c_char {
     *lock_unpoisoned(finalizer_calls()) += 1;
     CString::new(json!({"finalized": true}).to_string())
         .unwrap()
