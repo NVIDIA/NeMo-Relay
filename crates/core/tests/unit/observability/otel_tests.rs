@@ -7880,3 +7880,51 @@ fn otlp_timestamp_range_drops_invalid_events_and_preserves_boundaries() {
         }
     }
 }
+
+#[test]
+fn provider_build_drains_the_startup_resource_message_before_the_first_span() {
+    use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
+
+    let runtime = test_tokio_runtime();
+    let _runtime_guard = runtime.enter();
+    let _held_worker = runtime.spawn(async { thread::sleep(Duration::from_millis(250)) });
+    let directory = tempfile::tempdir().unwrap();
+    let config = TraceConfig::File(
+        OpenTelemetryFileSinkConfig::new(
+            OpenTelemetryType::Full,
+            OtlpFileSinkSettings {
+                output_directory: directory.path().to_path_buf(),
+                filename: "trace.jsonl".to_string(),
+                format: crate::observability::otel_file::OtlpFileFormat::JsonLines,
+                mode: crate::observability::otel::OtlpFileSinkMode::Overwrite,
+            },
+        )
+        .with_max_queue_size(1)
+        .with_max_export_batch_size(1),
+    );
+    let attributes = configured_resource_attributes(&config);
+    let provider = build_tracer_provider_with_resource(
+        &config,
+        SignalRuntimeDiagnostics::new(None),
+        attributes,
+    )
+    .unwrap();
+    provider.tracer("drain-test").start("first").end();
+    provider.force_flush().unwrap();
+    provider.shutdown().unwrap();
+
+    let contents = std::fs::read_to_string(directory.path().join("trace.jsonl")).unwrap();
+    let names = contents
+        .lines()
+        .map(|line| serde_json::from_str::<Json>(line).unwrap())
+        .flat_map(|request| request["resourceSpans"].as_array().unwrap().clone())
+        .flat_map(|resource| resource["scopeSpans"].as_array().unwrap().clone())
+        .flat_map(|scope| scope["spans"].as_array().unwrap().clone())
+        .map(|span| span["name"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        ["first"],
+        "the first span must survive the startup message: {contents}"
+    );
+}
