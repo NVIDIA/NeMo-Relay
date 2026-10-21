@@ -55,7 +55,7 @@ on:
         description: 'Whether Python jobs should run'
         value: ${{ jobs.changes.outputs.run_python }}
       run_python_integration_langchain:
-        description: 'Whether LangChain, LangGraph, and DeepAgents Python integration jobs should run'
+        description: 'Whether LangChain, LangGraph, DeepAgents, and Google ADK Python integration jobs should run'
         value: ${{ jobs.changes.outputs.run_python_integration_langchain }}
       run_python_package:
         description: 'Whether Python packaging jobs should run'
