@@ -3962,3 +3962,55 @@ fn component_counter_index_survives_refresh_and_reclaimed_lower_slots() {
     assert_eq!(code_total(row(&view, "target"), WRITE), 1);
     assert_eq!(code_total(row(&view, "last"), WRITE), 5);
 }
+
+#[test]
+fn window_reservation_reuse_preserves_neighbors_and_rejects_stale_owner() {
+    let service = diagnostics(DiagnosticLimits {
+        max_components: 2,
+        max_window_buckets: 3,
+        ..limits()
+    });
+    let registration = |key, bucket_count| ComponentRegistration {
+        key,
+        builtin_codes: &CODES,
+        ownership: ComponentOwnership::default(),
+        window: Some(WindowSettings {
+            resolution_millis: 60_000,
+            bucket_count,
+        }),
+    };
+    let (owner, donor) = service
+        .register_owned_component(registration("donor", 2))
+        .unwrap();
+    let survivor = service
+        .register_component(registration("survivor", 1))
+        .unwrap();
+    record(&donor, 2);
+    record(&survivor, 5);
+    owner.close().unwrap();
+    let replacement = service
+        .register_component(registration("replacement", 2))
+        .unwrap();
+    assert_eq!(
+        donor
+            .record_without_projection_lazy(|| Observation::new(
+                classification(FailureClass::Unknown),
+                "stale",
+                1
+            ))
+            .unwrap_err(),
+        DiagnosticError::ComponentClosed
+    );
+    record(&replacement, 3);
+    let view = snapshot(&service, DiagnosticQuery::default());
+    let failures = |key| {
+        row(&view, key).windows[0]
+            .buckets
+            .iter()
+            .map(|bucket| bucket.failures.value.get())
+            .sum::<u64>()
+    };
+    assert_eq!(failures("survivor"), 5);
+    assert_eq!(failures("replacement"), 3);
+    assert_eq!(service.memory_usage().window_buckets, 3);
+}
