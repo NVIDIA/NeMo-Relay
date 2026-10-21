@@ -152,7 +152,15 @@ let response = llm_call_execute(
 
 ## Streaming LLM Execution
 
-Use the streaming helper when subscribers need chunk collection plus one final response payload. Natural exhaustion finalizes the collected response automatically. If your application stops reading early, explicitly close the stream in cleanup; close is idempotent, waits for producer cleanup, finalizes the partial response, and emits an interrupted end event.
+Use the streaming helper when a model returns its response in chunks. The
+collector gathers those chunks. The finalizer builds one response from the
+collected data for the LLM end event.
+
+When the stream ends normally, Relay runs the finalizer automatically. If you
+stop reading early, close the stream to stop the producer and finalize the
+partial response. Relay records that early close as an interruption.
+
+The following examples read one chunk and then close the stream:
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -271,6 +279,60 @@ stream.close().await?;
 </Tab>
 
 </Tabs>
+
+### Handle Stream Failures
+
+Always close a stream after you finish reading it, including after a read
+error. Use `await stream.aclose()` in Python, `await stream.close()` in
+Node.js, or `stream.close().await` in Rust. Closing waits for producer cleanup
+and finalization. Repeated calls return the same close result.
+
+In Node.js, both `llmStreamCallExecute` and `typedLlmStreamExecute` report
+failures at the following points:
+
+| Failure | Where It Is Reported |
+|---|---|
+| The provider callback throws or rejects before returning an async iterable. | The call that creates the stream rejects. |
+| The provider returns a value that is not an async iterable. | The call that creates the stream rejects. |
+| The iterator or collector throws or rejects while reading a chunk. | `stream.next()` rejects. The stream stops. |
+| Producer cleanup fails. | `stream.close()` rejects. |
+| The finalizer throws, rejects, or returns a value that cannot be encoded as JSON. | `stream.close()` rejects. |
+
+Node.js collectors and finalizers can return a `Promise`. Relay waits for a
+collector before yielding its chunk. It waits for the finalizer before
+reporting the end of the stream.
+
+If the finalizer fails, the combined response is `null`. Relay omits the response
+payload from the end event. It does not use the call's `data` value as a
+fallback. A finalizer failure marks an otherwise completed LLM end event as
+`ERROR`.
+
+In Node.js, `stream.close()` gives priority to a stream error that `next()` has
+not yet reported. Cleanup errors take priority over finalizer errors. If `next()`
+already reported the stream error, close does not report it again. It can
+still report a cleanup or finalizer error. Handle errors from both reading
+and closing. Keep the read error if cleanup also fails, and report the
+cleanup error separately.
+
+### Cancel the Producer
+
+Closing requests cancellation, but the producer must be able to stop its work.
+In Node.js, the provider callback receives `(request, signal)`. Pass this
+`AbortSignal` to provider operations that support it. Stop pending work when
+the signal aborts. Release resources in the iterator's cleanup path.
+
+Close has no cleanup timeout. It can remain pending if the producer does not
+stop. An asynchronous collector must also finish after the producer stops.
+Set time limits on provider operations and make cleanup finish promptly.
+
+### Wait for Subscriber Delivery
+
+Stream completion and subscriber delivery are separate steps. Reading the
+last chunk or closing the stream does not wait for queued response sanitizers
+and subscribers. Close the stream first. Then flush subscribers before
+reading captured events, checking exporter output, or shutting down.
+Refer to [Waiting for Delivery](/about-nemo-relay/concepts/subscribers#waiting-for-delivery)
+for the flush API and exporter requirements for each binding.
 
 ## Temporarily Exclude a Global Registration
 
