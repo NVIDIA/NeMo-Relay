@@ -41,9 +41,10 @@ header from redirect responses. Set the final provider URL directly. Refer to
 
 #### Review Configuration Loaded by Workers
 
-Daemon workers now load the user's `config.toml`, `plugins.toml`, and dynamic
-plugins alongside the system configuration. System settings take priority.
-Observability destination lists can include entries from both layers.
+Local and remote-client daemon workers now load the user's `config.toml`,
+`plugins.toml`, and dynamic plugins alongside the system configuration. System
+settings take priority. Observability destination lists can include entries
+from both layers.
 
 Review settings and plugins that workers previously ignored. Then restart the
 affected harness sessions to load the updated configuration. Managed workers
@@ -211,17 +212,19 @@ If a loopback daemon runs under another account, publish its hook certificate
 for local users. This applies to daemon addresses that use `http://`. Refer to
 [Publish the Hook Certificate](/daemon/reference#publish-the-hook-certificate).
 
-Refresh personal Relay-managed hooks before starting new sessions. Run the
-following command:
+Refresh personal Relay-managed Codex and Claude Code integrations before
+starting new sessions. Run the following command:
 
 ```bash
 nemo-relay integrations refresh
 ```
 
-To refresh one integration, use `nemo-relay install <agent> --force`. Replace
-manually installed Pi extensions with the updated source. For managed daemon
-bundles, follow [Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back)
-instead. Do not regenerate those bundles with personal install commands.
+To refresh one Codex or Claude Code integration, use
+`nemo-relay install <agent> --force`. For a personal Relay-managed Pi extension,
+run `nemo-relay install pi --force`. Replace manually installed Pi extensions
+with the updated source. For managed daemon bundles, follow
+[Upgrade and Roll Back](/daemon/operations#upgrade-and-roll-back) instead. Do not
+regenerate those bundles with personal install commands.
 
 Generated tool checks use `PreToolUse`. Relay no longer generates a separate
 `PermissionRequest` hook. Without an explicit policy flag, tool checks and

@@ -16,7 +16,8 @@ the harness, MCP, and worker locally. They do not start a local daemon service.
 Install `/opt/nvidia/bin/nemo-relay` using the binary-copy steps in
 [Linux Deployment](/daemon/linux#prepare-the-host). Install the administrator's
 `config.toml` and `plugins.toml` in `/etc/nemo-relay` on each client. Workers do
-not download these files from the daemon and ignore personal Relay configuration.
+not download these files from the daemon. They merge the local user configuration
+and plugins with these system files. System settings take priority.
 
 Use `/opt/nvidia/bin/nemo-relay-dispatch` as the dispatcher for this remote bundle.
 The wrapper below supplies assigned worker network settings even when a harness
