@@ -752,7 +752,7 @@ mod tests {
     #[test]
     #[ignore = "informational private layout and reserved-backing inspection"]
     fn diagnostic_storage_layout_profile() {
-        eprintln!(
+        println!(
             "event={} origin={} ownership={} stored_cause={} optional_cause={} detail_handle={} optional_detail_handle={} counter_slot={} optional_counter_slot={} window_slot={} optional_window_slot={}",
             size_of::<StoredObservation>(),
             size_of::<CapturedOrigin>(),
@@ -774,7 +774,7 @@ mod tests {
             ),
             ("text", std::mem::offset_of!(StoredObservation, text)),
         ] {
-            eprintln!("event field {name} offset={offset}");
+            println!("event field {name} offset={offset}");
         }
         let diagnostics = Diagnostics::from_settings(
             Diagnostics::default().source().clone(),
@@ -784,7 +784,7 @@ mod tests {
             },
         )
         .unwrap();
-        eprintln!(
+        println!(
             "default reserved backing={}",
             diagnostics.memory_usage().reserved_bytes
         );
