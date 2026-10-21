@@ -104,8 +104,10 @@ trajectories, and any configured `headers`, `header_env`, or `header_file`
 values unencrypted. Prefer HTTPS, or a collector reached over loopback.
 </Warning>
 
-Remote OpenTelemetry trace endpoints require HTTPS, even without configured
-headers. Log and metric endpoints, ATOF stream sinks, and ATIF HTTP storage
+OpenTelemetry trace endpoints require HTTPS unless the destination is
+`localhost`, a loopback IP address, or a host in `insecure_http_hosts`. This rule
+applies even when no headers are configured. Log and metric endpoints, ATOF
+stream sinks, and ATIF HTTP storage
 require HTTPS or WSS when they send configured headers. The header settings are
 `headers`, `header_env`, and `header_file`. Without configured headers, these
 other destinations can use plain HTTP or WebSocket without a host allowlist.
