@@ -879,8 +879,6 @@ fn validate_query(
 ) -> Result<(), DiagnosticError> {
     let fields = [
         query.component_key.as_deref(),
-        query.code.as_deref(),
-        query.failure_class.as_deref(),
         query.ownership.configuration_id.as_deref(),
         query.ownership.responsibility.as_deref(),
     ];
@@ -888,6 +886,18 @@ fn validate_query(
         .into_iter()
         .flatten()
         .any(|v| v.len() > limits.max_identity_bytes)
+    {
+        return Err(DiagnosticError::InvalidQuery);
+    }
+    // Built-in catalogue names are admitted independently of identity limits.
+    // Extensions retain their own code-name and cause-name admission bounds.
+    if query.code.as_deref().is_some_and(|name| {
+        BuiltinDiagnosticCode::from_canonical_name(name).is_none()
+            && name.len() > limits.max_identity_bytes
+    }) || query
+        .failure_class
+        .as_deref()
+        .is_some_and(|name| FailureClass::from_canonical_name(name).is_none() && name.len() > 32)
     {
         return Err(DiagnosticError::InvalidQuery);
     }
