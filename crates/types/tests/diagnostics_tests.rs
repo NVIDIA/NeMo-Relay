@@ -731,6 +731,7 @@ fn typed_context_helpers_use_canonical_borrowed_names() {
         let name: Cow<'static, str> = execution.into();
         assert!(matches!(&name, Cow::Borrowed(_)));
         assert_eq!(name.as_ref(), execution.as_str());
+        assert_eq!(<&'static str>::from(execution), execution.as_str());
         assert_eq!(serde_json::to_value(execution).unwrap(), json!(name));
         assert_eq!(
             PluginExecution::from_canonical_name(execution.as_str()),
@@ -746,6 +747,7 @@ fn typed_context_helpers_use_canonical_borrowed_names() {
         let name: Cow<'static, str> = phase.into();
         assert!(matches!(&name, Cow::Borrowed(_)));
         assert_eq!(name.as_ref(), phase.as_str());
+        assert_eq!(<&'static str>::from(phase), phase.as_str());
         assert_eq!(serde_json::to_value(phase).unwrap(), json!(name));
         assert_eq!(
             PluginPhase::from_canonical_name(phase.as_str()),
@@ -775,6 +777,7 @@ fn failure_class_names_match_serialization_and_lookup() {
         FailureClass::Unknown,
     ] {
         assert_eq!(serde_json::to_value(class).unwrap(), json!(class.as_str()));
+        assert_eq!(<&'static str>::from(class), class.as_str());
         assert_eq!(
             FailureClass::from_canonical_name(class.as_str()),
             Some(class)
@@ -914,5 +917,21 @@ fn snapshot_schema_version_matches_decoder_and_numeric_wire_notation() {
             schema_accepts,
             "schema and decoder disagree for {candidate}",
         );
+    }
+}
+
+#[test]
+fn canonical_enum_conversions_keep_const_names_and_reject_noncanonical_input() {
+    const CAUSE: &str = FailureClass::ResourceExhausted.as_str();
+    const EXECUTION: &str = PluginExecution::WorkerProtocol.as_str();
+    const PHASE: &str = PluginPhase::Activation.as_str();
+    assert_eq!(
+        (CAUSE, EXECUTION, PHASE),
+        ("resource_exhausted", "worker_protocol", "activation")
+    );
+    for invalid in ["", "Activation", " activation", "future_value"] {
+        assert_eq!(FailureClass::from_canonical_name(invalid), None);
+        assert_eq!(PluginExecution::from_canonical_name(invalid), None);
+        assert_eq!(PluginPhase::from_canonical_name(invalid), None);
     }
 }

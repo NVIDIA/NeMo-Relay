@@ -10,10 +10,24 @@ use serde::{Deserialize, Serialize};
 use super::Classification;
 
 /// Supported general cause, independent of health, retries, and operation outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum FailureClass {
     /// The supplied input is invalid.
     InvalidInput,
@@ -50,31 +64,12 @@ pub enum FailureClass {
 }
 
 impl FailureClass {
-    /// Interpret an exact built-in cause name without allocating.
+    /// Interpret an exact supported canonical name without allocating.
     #[must_use]
     pub fn from_canonical_name(name: &str) -> Option<Self> {
-        match name {
-            "invalid_input" => Some(Self::InvalidInput),
-            "invalid_state" => Some(Self::InvalidState),
-            "not_found" => Some(Self::NotFound),
-            "conflict" => Some(Self::Conflict),
-            "authentication" => Some(Self::Authentication),
-            "permission_denied" => Some(Self::PermissionDenied),
-            "unsupported" => Some(Self::Unsupported),
-            "incompatible" => Some(Self::Incompatible),
-            "timeout" => Some(Self::Timeout),
-            "unavailable" => Some(Self::Unavailable),
-            "resource_exhausted" => Some(Self::ResourceExhausted),
-            "io" => Some(Self::Io),
-            "execution_failed" => Some(Self::ExecutionFailed),
-            "policy_rejected" => Some(Self::PolicyRejected),
-            "internal" => Some(Self::Internal),
-            "unknown" => Some(Self::Unknown),
-            _ => None,
-        }
+        name.parse().ok()
     }
-
-    /// Stable portable name of this cause.
+    /// Stable portable name, also available in const contexts.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -128,10 +123,24 @@ pub enum PluginDiagnosticFamily {
 /// Phase-one core activation recording leaves execution unset. These values
 /// support later native/worker producer integrations; they do not describe
 /// currently implemented automatic collection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum PluginExecution {
     /// The plugin executes through the native ABI.
     NativeAbi,
@@ -140,21 +149,17 @@ pub enum PluginExecution {
 }
 
 impl PluginExecution {
-    /// Stable portable execution name.
+    /// Interpret an exact supported canonical name without allocating.
+    #[must_use]
+    pub fn from_canonical_name(name: &str) -> Option<Self> {
+        name.parse().ok()
+    }
+    /// Stable portable name, also available in const contexts.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::NativeAbi => "native_abi",
             Self::WorkerProtocol => "worker_protocol",
-        }
-    }
-    /// Interpret an exact supported execution name without allocating.
-    #[must_use]
-    pub fn from_canonical_name(name: &str) -> Option<Self> {
-        match name {
-            "native_abi" => Some(Self::NativeAbi),
-            "worker_protocol" => Some(Self::WorkerProtocol),
-            _ => None,
         }
     }
 }
@@ -171,10 +176,24 @@ impl From<PluginExecution> for Cow<'static, str> {
 /// The phase-one core adapter automatically supplies only [`Self::Activation`].
 /// Other values are authoring/wire contracts for producers integrated later;
 /// declaring a value does not mean its stage is currently observed by Relay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum PluginPhase {
     /// Validation lifecycle phase.
     Validation,
@@ -187,7 +206,12 @@ pub enum PluginPhase {
 }
 
 impl PluginPhase {
-    /// Stable portable lifecycle or policy context name.
+    /// Interpret an exact supported canonical name without allocating.
+    #[must_use]
+    pub fn from_canonical_name(name: &str) -> Option<Self> {
+        name.parse().ok()
+    }
+    /// Stable portable name, also available in const contexts.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -195,17 +219,6 @@ impl PluginPhase {
             Self::Activation => "activation",
             Self::Runtime => "runtime",
             Self::Policy => "policy",
-        }
-    }
-    /// Interpret an exact supported phase name without allocating.
-    #[must_use]
-    pub fn from_canonical_name(name: &str) -> Option<Self> {
-        match name {
-            "validation" => Some(Self::Validation),
-            "activation" => Some(Self::Activation),
-            "runtime" => Some(Self::Runtime),
-            "policy" => Some(Self::Policy),
-            _ => None,
         }
     }
 }
