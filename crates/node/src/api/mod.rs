@@ -3549,6 +3549,9 @@ pub fn tool_call_execute_async(
 /// recorded in the LLM event category profile. Optional `timestamp` is a Unix timestamp
 /// in microseconds recorded as the handle start time and start event timestamp. It must
 /// be a safe integer number; omit it to use the current runtime time.
+/// Optional `codecDecode` and `codecEncode` callbacks help sanitize and annotate
+/// the telemetry copy. Supply both callbacks together. The caller's request stays
+/// unchanged. `codecEncode` receives an object with `annotated` and `original` fields.
 #[allow(clippy::too_many_arguments)]
 #[napi]
 pub fn llm_call(
@@ -3561,11 +3564,22 @@ pub fn llm_call(
     metadata: Option<Json>,
     model_name: Option<String>,
     timestamp: Option<f64>,
+    #[napi(ts_arg_type = "(arg: Json) => any")] codec_decode: Option<JsFunction>,
+    #[napi(ts_arg_type = "(arg: Json) => any")] codec_encode: Option<JsFunction>,
 ) -> Result<LlmHandle> {
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let timestamp = parse_timestamp_micros(timestamp)?;
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
+    let codec = match (codec_decode.as_ref(), codec_encode.as_ref()) {
+        (Some(decode), Some(encode)) => Some(node_llm_codec(&env, decode, encode)?.0),
+        (None, None) => None,
+        _ => {
+            return Err(napi::Error::from_reason(
+                "codecDecode and codecEncode must be provided together",
+            ));
+        }
+    };
     let params = core_llm_api::LlmCallParams::builder()
         .name(&name)
         .request(&llm_request)
@@ -3575,6 +3589,7 @@ pub fn llm_call(
         .metadata_opt(opt_json(metadata))
         .model_name_opt(model_name)
         .timestamp_opt(timestamp)
+        .codec_opt(codec)
         .build();
     with_effective_scope_stack(&env, || core_llm_api::llm_call(params))?
         .map(LlmHandle::from)

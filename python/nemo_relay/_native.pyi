@@ -1946,6 +1946,7 @@ def llm_call(
     metadata: _Json | None = None,
     model_name: str | None = None,
     timestamp: datetime | None = None,
+    codec: object | None = None,
 ) -> LLMHandle:
     """Begin a manual LLM lifecycle span.
 
@@ -1962,6 +1963,8 @@ def llm_call(
             category profile.
         timestamp: Optional timezone-aware datetime recorded on the start event.
             When omitted, the current runtime time is used.
+        codec: Optional request codec used to sanitize and annotate the request
+            copy saved in telemetry. The caller's request stays unchanged.
 
     Returns:
         LLM handle that must be passed to ``llm_call_end``.
