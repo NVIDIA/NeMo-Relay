@@ -645,9 +645,10 @@ requests do not create LLM events. A configured helper replaces the caller's
 provider credential. Without a helper, Relay keeps provider API keys sent by
 the caller.
 
-OpenAI model requests use `openai_base_url`. Anthropic model requests use
-`anthropic_base_url`. For the credential selection order and access requirement,
-refer to [Provider Upstreams](#provider-upstreams).
+OpenAI model requests normally use `openai_base_url`. With the default URL and
+no replacement credential, requests with recognized ChatGPT OAuth use the ChatGPT
+Codex backend instead. Anthropic model requests use `anthropic_base_url`.
+For the credential selection order and access requirement, refer to [Provider Upstreams](#provider-upstreams).
 
 If Relay has no replacement, OpenAI model requests keep the caller's credential.
 This also applies to a custom `openai_base_url`.
