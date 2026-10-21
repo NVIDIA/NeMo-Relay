@@ -40,7 +40,11 @@ pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliErro
     let response = tokio::task::spawn_blocking(move || crate::gateway::client::get_diagnostics(
         &command.gateway_url, &path, command.max_response_bytes as usize)).await
         .map_err(|_| CliError::Launch("diagnostic inspection task failed".into()))?
-        .map_err(|_| CliError::Launch("diagnostic inspection unavailable; existing gateway, private credentials, and HTTP read policy are required".into()))?;
+        .map_err(|error| {
+            CliError::Launch(format!(
+                "diagnostic inspection unavailable ({error}); an existing gateway, private credentials, HTTP read policy, and a sufficient --max-response-bytes are required"
+            ))
+        })?;
     if response.status == 404 {
         return Err(CliError::Launch(
             "gateway diagnostics unsupported or not exposed".into(),
