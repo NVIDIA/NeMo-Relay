@@ -464,6 +464,15 @@ that cannot change the result, such as tracing metadata. The normalized
 `arg_skip` policy itself is part of key identity, so changing it starts a
 separate keyspace instead of reusing values created under a different policy.
 
+Framework results must also support replay in a new call. For
+[normalized tool results](/reference/tool-execution-intercept-outcomes#normalized-tool-results),
+the codec must set `cache.replayable` to `true`. The cache skips stored wrappers
+that lack this flag. LangChain and LangGraph codecs set it for portable results
+with a known tool-call ID. They bind replayed tool messages to the current call.
+Results with custom Python objects stay in the original call's memory, so Relay
+runs those tools again.
+These rules do not change caching for ordinary JSON results.
+
 ### Tool Errors and Middleware Order
 
 Tool callbacks that return an actual execution error are never stored. By

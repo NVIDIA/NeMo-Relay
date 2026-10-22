@@ -592,6 +592,7 @@ pub(crate) fn inspect(
     let entry = find_registered_entry(&scopes, Some(&resolved), "plugins inspect", &command.id)?;
     let manifest_ref = manifest_ref_from_record(&entry.record)?;
     let (manifest, manifest_ref) = load_manifest_for_action("inspect", &manifest_ref)?;
+    let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
     if command.json {
         print_response_json(&inspect_success(
             "plugins inspect",
@@ -600,6 +601,7 @@ pub(crate) fn inspect(
             &manifest,
             &manifest_ref,
             host_config_by_id.get(&command.id),
+            &policy,
         ))?;
     } else {
         println!(
@@ -609,6 +611,7 @@ pub(crate) fn inspect(
                 manifest: &manifest,
                 manifest_ref: &manifest_ref,
                 host_config: host_config_by_id.get(&command.id),
+                policy: &policy,
             }
         );
     }

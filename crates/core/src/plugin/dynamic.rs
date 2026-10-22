@@ -25,6 +25,7 @@ pub const DYNAMIC_PLUGIN_MANIFEST_FILENAME: &str = "relay-plugin.toml";
 
 mod bounded;
 mod configuration;
+mod diagnostics;
 mod host;
 mod http_error;
 mod manifest;
@@ -403,7 +404,7 @@ pub enum DynamicPluginRuntimeState {
     Failed,
 }
 
-/// Recent failure phase for diagnostics and operator UX.
+/// Recent failure phase or policy-gate context for diagnostics and operator UX.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -415,7 +416,7 @@ pub enum DynamicPluginFailurePhase {
     Activation,
     /// Failure occurred after activation while running.
     Runtime,
-    /// Failure occurred because policy no longer permits realization.
+    /// Host policy evaluation blocked or revoked permission for realization.
     Policy,
 }
 
@@ -560,7 +561,7 @@ pub struct DynamicPluginRustLoadContract {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DynamicPluginFailure {
-    /// Failure phase.
+    /// Failure phase or policy-gate context.
     pub phase: DynamicPluginFailurePhase,
     /// Machine-readable failure code.
     pub code: String,

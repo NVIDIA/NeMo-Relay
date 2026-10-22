@@ -518,6 +518,9 @@ jobs:
 
       - name: Build, install, and import Python source distribution
         if: ${{ matrix.platform == 'source-and-plugin' }}
+        env:
+          # The sdist builds outside the checkout's rustup directory override.
+          RUSTUP_TOOLCHAIN: ${{ steps.ci-config.outputs.rust_version }}
         run: |
           set -euo pipefail
           sdist="$(find python-sdist -maxdepth 1 -name '*.tar.gz' -print -quit)"

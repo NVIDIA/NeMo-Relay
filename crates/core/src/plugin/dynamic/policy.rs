@@ -56,6 +56,8 @@ impl DynamicPluginHostPolicy {
 pub struct DynamicPluginHostPolicyEffect {
     /// Whether matching plugins are permitted to load.
     pub allowed: Option<bool>,
+    /// Explicit whole-context diagnostic read grant for native plugins only.
+    pub native_diagnostics_read_context: Option<bool>,
     /// Whether failure blocks startup.
     pub startup: Option<DynamicPluginStartupClass>,
     /// Required artifact attestation mode.
@@ -66,6 +68,9 @@ pub struct DynamicPluginHostPolicyEffect {
 
 impl DynamicPluginHostPolicyEffect {
     fn merge_from(&mut self, other: Self) {
+        if other.native_diagnostics_read_context.is_some() {
+            self.native_diagnostics_read_context = other.native_diagnostics_read_context;
+        }
         if other.allowed.is_some() {
             self.allowed = other.allowed;
         }
@@ -112,6 +117,7 @@ pub struct FileDynamicPluginHostPolicy {
 #[serde(deny_unknown_fields)]
 pub struct FileDynamicPluginHostPolicyEffect {
     allowed: Option<bool>,
+    native_diagnostics_read_context: Option<bool>,
     startup: Option<DynamicPluginStartupClass>,
     attestation: Option<DynamicPluginAttestationMode>,
     trusted_public_keys: Option<Vec<String>>,
@@ -124,6 +130,7 @@ pub struct FileDynamicPluginHostPolicyRule {
     match_kind: Option<DynamicPluginKind>,
     match_plugin_id: Option<String>,
     allowed: Option<bool>,
+    native_diagnostics_read_context: Option<bool>,
     startup: Option<DynamicPluginStartupClass>,
     attestation: Option<DynamicPluginAttestationMode>,
     trusted_public_keys: Option<Vec<String>>,
@@ -147,6 +154,7 @@ impl From<FileDynamicPluginHostPolicyEffect> for DynamicPluginHostPolicyEffect {
     fn from(value: FileDynamicPluginHostPolicyEffect) -> Self {
         Self {
             allowed: value.allowed,
+            native_diagnostics_read_context: value.native_diagnostics_read_context,
             startup: value.startup,
             attestation: value.attestation,
             trusted_public_keys: value
@@ -163,6 +171,7 @@ impl From<FileDynamicPluginHostPolicyRule> for DynamicPluginHostPolicyRule {
             match_plugin_id: value.match_plugin_id.map(|id| id.trim().to_owned()),
             effect: DynamicPluginHostPolicyEffect {
                 allowed: value.allowed,
+                native_diagnostics_read_context: value.native_diagnostics_read_context,
                 startup: value.startup,
                 attestation: value.attestation,
                 trusted_public_keys: value
@@ -178,6 +187,8 @@ impl From<FileDynamicPluginHostPolicyRule> for DynamicPluginHostPolicyRule {
 pub struct EvaluatedDynamicPluginHostPolicy {
     /// Whether policy allows this plugin.
     pub policy_satisfied: bool,
+    /// Native-only read authority; never grants worker snapshot access.
+    pub native_diagnostics_read_context: bool,
     /// Effective startup class.
     pub startup_class: DynamicPluginStartupClass,
     /// Effective artifact-attestation mode.
@@ -236,6 +247,7 @@ pub fn evaluate_dynamic_plugin_host_policy(
 ) -> EvaluatedDynamicPluginHostPolicy {
     let mut effect = DynamicPluginHostPolicyEffect {
         allowed: Some(true),
+        native_diagnostics_read_context: Some(false),
         startup: Some(DynamicPluginStartupClass::Optional),
         attestation: Some(DynamicPluginAttestationMode::IntegrityOnly),
         trusted_public_keys: None,
@@ -262,6 +274,8 @@ pub fn evaluate_dynamic_plugin_host_policy(
         (effect.allowed == Some(false)).then_some(DynamicPluginHostPolicyFailure::Blocked);
     EvaluatedDynamicPluginHostPolicy {
         policy_satisfied: failure.is_none(),
+        native_diagnostics_read_context: manifest.plugin.kind == DynamicPluginKind::RustDynamic
+            && effect.native_diagnostics_read_context == Some(true),
         startup_class: effect
             .startup
             .unwrap_or(DynamicPluginStartupClass::Optional),

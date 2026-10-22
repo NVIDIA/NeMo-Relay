@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Mutex, RwLock, TryLockError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -31,6 +31,7 @@ use crate::plugins::resource_metrics::config::{
 };
 
 static GLOBAL_MANAGER: Mutex<Option<Arc<ResourceMetricsManager>>> = Mutex::new(None);
+static MANAGER_OWNER_PID: AtomicU32 = AtomicU32::new(0);
 static ACTIVE_OWNER_PID: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) fn runtime_inherited_across_fork() -> bool {
@@ -68,6 +69,8 @@ struct DiskBaseline {
 }
 
 struct ManagerState {
+    memory: super::memory::LatestMemory,
+    collection_ordinal: u64,
     application_target: CollectionTarget,
     target: CollectionTarget,
     target_generation: u64,
@@ -88,6 +91,7 @@ struct ManagerState {
 }
 
 pub(crate) struct ResourceMetricsManager {
+    collector_id: uuid::Uuid,
     owner_pid: u32,
     state: Mutex<ManagerState>,
 }
@@ -96,8 +100,11 @@ impl ResourceMetricsManager {
     fn new() -> Result<Self> {
         let application_target = current_process_target(ResourceMeasurementScope::ProcessTree)?;
         Ok(Self {
+            collector_id: uuid::Uuid::now_v7(),
             owner_pid: std::process::id(),
             state: Mutex::new(ManagerState {
+                memory: super::memory::LatestMemory::default(),
+                collection_ordinal: 0,
                 application_target: application_target.clone(),
                 target: application_target,
                 target_generation: 1,
@@ -133,6 +140,7 @@ impl ResourceMetricsManager {
             ));
         }
         state.target_generation = state.target_generation.saturating_add(1);
+        state.memory = super::memory::LatestMemory::default();
         let runtime_generation = state.target_generation;
         state.target = target;
         state.awaiting_owned_target = state.cli_launch_prepared
@@ -160,6 +168,7 @@ impl ResourceMetricsManager {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.active_runtime_generation == Some(runtime_generation) {
             state.target_generation = state.target_generation.saturating_add(1);
+            state.memory = super::memory::LatestMemory::default();
             state.target = state.application_target.clone();
             state.active_runtime_generation = None;
             state.config = None;
@@ -189,6 +198,7 @@ impl ResourceMetricsManager {
             return None;
         }
         state.target_generation = state.target_generation.saturating_add(1);
+        state.memory = super::memory::LatestMemory::default();
         state.target = target;
         state.awaiting_owned_target = false;
         state.on_demand_baseline = None;
@@ -206,6 +216,7 @@ impl ResourceMetricsManager {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.target_generation == generation {
             state.target_generation = state.target_generation.saturating_add(1);
+            state.memory = super::memory::LatestMemory::default();
             state.target = state.application_target.clone();
             state.awaiting_owned_target = state.cli_launch_prepared;
             state.on_demand_baseline = None;
@@ -231,8 +242,8 @@ impl ResourceMetricsManager {
                 "resource_metrics manager belongs to a different process".into(),
             ));
         }
-        let (target, config, target_generation, sampling_state) = {
-            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let (target, config, target_generation, sampling_state, ticket) = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             let config = state.config.clone().ok_or_else(|| {
                 FlowError::InvalidArgument(
                     "resource_metrics.collect() requires an active resource_metrics component"
@@ -248,11 +259,27 @@ impl ResourceMetricsManager {
                 SamplingSeries::OnDemand => Arc::clone(&state.on_demand_sampling_state),
                 SamplingSeries::Polling => Arc::clone(&state.polling_sampling_state),
             };
+            state.collection_ordinal = state
+                .collection_ordinal
+                .checked_add(1)
+                .ok_or_else(|| FlowError::Internal("resource sample order exhausted".into()))?;
+            let ticket = super::memory::Ticket {
+                collector: self.collector_id,
+                runtime: state
+                    .active_runtime_generation
+                    .expect("active configuration"),
+                target: state.target_generation,
+                ordinal: state.collection_ordinal,
+                started_at: Utc::now(),
+                started: Instant::now(),
+                stream: series,
+            };
             (
                 state.target.clone(),
                 config,
                 state.target_generation,
                 sampling_state,
+                ticket,
             )
         };
         let collected = collector::collect_with_state(
@@ -262,18 +289,29 @@ impl ResourceMetricsManager {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()),
         );
-        self.finish_collection(collected, &config, target_generation, series)
+        self.finish_collection_with_ticket(
+            collected,
+            &config,
+            target_generation,
+            series,
+            &target,
+            ticket,
+        )
     }
 
-    fn finish_collection(
+    fn finish_collection_with_ticket(
         &self,
         mut collected: collector::CollectedSnapshot,
         config: &ResourceMetricsConfig,
         target_generation: u64,
         series: SamplingSeries,
+        target: &CollectionTarget,
+        ticket: super::memory::Ticket,
     ) -> Result<ResourceMetricsSnapshot> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.target_generation != target_generation {
+        if state.target_generation != target_generation
+            || state.active_runtime_generation != Some(ticket.runtime)
+        {
             let mut snapshot = invalidated_snapshot(collected.snapshot);
             if state.config.as_ref() == Some(config) && config.network.enabled {
                 let sampler = match series {
@@ -336,6 +374,15 @@ impl ResourceMetricsManager {
         }
         convert_snapshot(&mut collected.snapshot, &config.units);
         collected.snapshot.timestamp = Utc::now();
+        if config.memory.enabled && config.memory_inspection.enabled {
+            state.memory.publish(
+                &collected.snapshot,
+                target,
+                collected.root_verified,
+                collected.successful,
+                ticket,
+            );
+        }
         Ok(collected.snapshot)
     }
 
@@ -635,18 +682,38 @@ pub(crate) async fn collect_on_demand() -> Result<ResourceMetricsSnapshot> {
 
 pub(crate) fn global_manager() -> Result<Arc<ResourceMetricsManager>> {
     ensure_process_owner()?;
-    let mut manager = GLOBAL_MANAGER
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    if let Some(manager) = manager
-        .as_ref()
-        .filter(|manager| manager.owner_pid == std::process::id())
-    {
-        return Ok(Arc::clone(manager));
-    }
-    let created = Arc::new(ResourceMetricsManager::new()?);
-    *manager = Some(Arc::clone(&created));
-    Ok(created)
+    let pid = std::process::id();
+    let owner = MANAGER_OWNER_PID
+        .compare_exchange(0, pid, Ordering::AcqRel, Ordering::Acquire)
+        .unwrap_or_else(|owner| owner);
+    let mut manager = if owner != 0 && owner != pid {
+        // A vanished parent thread may have held this mutex at fork. Never wait on it.
+        match GLOBAL_MANAGER.try_lock() {
+            Ok(manager) => manager,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                return Err(FlowError::InvalidArgument(
+                    "resource_metrics manager lock was inherited across fork and is unavailable; exec and activate it in the child before collecting"
+                        .into(),
+                ));
+            }
+        }
+    } else {
+        GLOBAL_MANAGER
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    };
+    let selected =
+        if let Some(manager) = manager.as_ref().filter(|manager| manager.owner_pid == pid) {
+            Arc::clone(manager)
+        } else {
+            let created = Arc::new(ResourceMetricsManager::new()?);
+            *manager = Some(Arc::clone(&created));
+            created
+        };
+    // Reconcile inspection ownership after installation/reuse, before releasing the lock.
+    MANAGER_OWNER_PID.store(pid, Ordering::Release);
+    Ok(selected)
 }
 
 /// Owns the optional resource metrics polling thread for a built-in plugin activation.
@@ -836,4 +903,50 @@ fn polling_loop(
             Err(RecvTimeoutError::Timeout) => {}
         }
     }
+}
+
+/// Read an existing manager only. Inspection must not resolve settings, start a manager,
+/// collect, or retarget it. Fork checks precede every potentially inherited lock.
+pub(crate) fn latest_memory_view(
+    source_pid: Option<u32>,
+) -> nemo_relay_types::diagnostics::ResourceMemoryView {
+    use nemo_relay_types::diagnostics::{ResourceMemoryAvailability, ResourceMemoryView};
+    let mut result = ResourceMemoryView::disabled();
+    // Claim the lock's process owner even when no manager exists yet. Otherwise
+    // a read-only caller could fork while this mutex is held with owner still zero.
+    let owner = MANAGER_OWNER_PID
+        .compare_exchange(0, std::process::id(), Ordering::AcqRel, Ordering::Acquire)
+        .unwrap_or_else(|owner| owner);
+    if (owner != 0 && owner != std::process::id()) || runtime_inherited_across_fork() {
+        result.availability = ResourceMemoryAvailability::Invalidated;
+        return result;
+    }
+    let manager = GLOBAL_MANAGER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let Some(manager) = manager else {
+        return result;
+    };
+    if manager.owner_pid != std::process::id() {
+        result.availability = ResourceMemoryAvailability::Invalidated;
+        return result;
+    }
+    result.projection_slot_bytes = (size_of::<super::memory::LatestMemory>() as u64).into();
+    let state = manager.state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(config) = &state.config else {
+        return result;
+    };
+    if !config.memory.enabled || !config.memory_inspection.enabled {
+        return result;
+    }
+    if state.awaiting_owned_target {
+        result.availability = ResourceMemoryAvailability::AwaitingTarget;
+        return result;
+    }
+    state.memory.view(
+        source_pid,
+        &state.application_target,
+        config.memory_inspection.stale_after_millis,
+    )
 }

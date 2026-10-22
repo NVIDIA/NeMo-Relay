@@ -313,6 +313,8 @@ impl WorkerBootstrap {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WorkerRegisterRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) diagnostics: Option<crate::daemon::diagnostics::DiagnosticOffer>,
     pub(crate) proof: RegistrationProof,
     pub(crate) worker_id: String,
     pub(crate) endpoint: String,
@@ -323,6 +325,8 @@ pub(crate) struct WorkerRegisterRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WorkerRecoverRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) diagnostics: Option<crate::daemon::diagnostics::DiagnosticOffer>,
     pub(crate) proof: RegistrationProof,
     pub(crate) worker_id: String,
     pub(crate) endpoint: String,
@@ -332,6 +336,8 @@ pub(crate) struct WorkerRecoverRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WorkerRegisterResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) diagnostics: Option<crate::daemon::diagnostics::DiagnosticReadGrant>,
     pub(crate) daemon_proof: HandshakeProof,
     pub(crate) session_token: SensitiveString,
     pub(crate) data_token: SensitiveString,
@@ -586,7 +592,8 @@ pub(crate) fn descriptor(role: ComponentRole) -> ComponentDescriptor {
         role,
         super::protocol::ProtocolRange::default(),
         super::protocol::Capabilities::streaming_transport()
-            .with_capability(ACTIVATION_CANCEL_CAPABILITY),
+            .with_capability(ACTIVATION_CANCEL_CAPABILITY)
+            .with_capability(crate::daemon::diagnostics::CAPABILITY),
         env!("CARGO_PKG_VERSION"),
     )
 }

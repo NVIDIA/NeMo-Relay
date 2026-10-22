@@ -216,3 +216,12 @@ are available at `nemo-relay-node/typed`, `nemo-relay-node/plugin`,
 ## Documentation
 
 NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay
+
+## Runtime Diagnostics
+
+Set `diagnostics: { enabled: true }` on the existing plugin initialization config,
+or configure `[diagnostics]` in the resolved `plugins.toml`. Optional readers live
+at `nemo-relay-node/diagnostics`. Native snapshots use `bigint` for diagnostic
+integers; use `snapshotJson()` for portable serialization. The service outlives
+plugin activation handles. See [Runtime Diagnostics](https://docs.nvidia.com/nemo/relay/reference/diagnostics)
+for lifetime, authorization, memory bounds, and coverage.

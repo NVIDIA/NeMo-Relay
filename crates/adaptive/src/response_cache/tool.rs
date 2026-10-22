@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use nemo_relay::api::runtime::{ToolExecutionFn, ToolExecutionNextFn};
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
+use nemo_relay::codec::tool::TOOL_RESULT_SCHEMA;
 use nemo_relay::error::Result as FlowResult;
 use serde_json::{Value as Json, json};
 
@@ -278,25 +279,28 @@ async fn run_tool_cache(
     }
 
     match store.get(&key).await {
-        Ok(Some(entry))
-            if !tools.cache_errors
-                && is_error_shaped_tool_result(&decode_tool_result(&entry.response).result) =>
-        {
-            // A prior Relay version could have stored a snake_case `is_error`
-            // result under this same policy. Never replay it after error
-            // caching is disabled; a successful live result replaces it.
-            emit_cache_mark(
-                CacheMark::new(CacheMarkStatus::Bypass, backend)
-                    .surface(CacheSurface::Tool)
-                    .reason(CacheReason::CachedError)
-                    .key_hash(&key),
-            );
-            let result = next(args).await?;
-            store_tool_result(&store, &key, policy.ttl, &result, tools.cache_errors).await;
-            Ok(result.into())
-        }
         Ok(Some(entry)) => {
             let result = decode_tool_result(&entry.response);
+            // Old entries can contain invocation-local framework state or errors
+            // that the current policy excludes. Run live instead of replaying them.
+            let reason = if !is_replayable_tool_result(&result.result) {
+                Some(CacheReason::ReplayLossy)
+            } else if !tools.cache_errors && is_error_shaped_tool_result(&result.result) {
+                Some(CacheReason::CachedError)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                emit_cache_mark(
+                    CacheMark::new(CacheMarkStatus::Bypass, backend)
+                        .surface(CacheSurface::Tool)
+                        .reason(reason)
+                        .key_hash(&key),
+                );
+                let result = next(args).await?;
+                store_tool_result(&store, &key, policy.ttl, &result, tools.cache_errors).await;
+                return Ok(result.into());
+            }
             let age_ms = now_unix_ms().saturating_sub(entry.created_unix_ms);
             emit_cache_mark(
                 CacheMark::new(CacheMarkStatus::Hit, backend)
@@ -338,11 +342,24 @@ async fn store_tool_result(
     result: &ToolExecutionResult,
     cache_errors: bool,
 ) {
-    if !cache_errors && is_error_shaped_tool_result(&result.result) {
+    if !is_replayable_tool_result(&result.result)
+        || (!cache_errors && is_error_shaped_tool_result(&result.result))
+    {
         return;
     }
     let entry = CacheEntry::new(encode_tool_result(result), ttl, key.to_string(), None, None);
     let _ = store.set(key, entry, ttl).await;
+}
+
+// Framework wrappers need their codec's explicit replay guarantee. In particular,
+// older entries can contain object references owned by a previous invocation.
+fn is_replayable_tool_result(result: &Json) -> bool {
+    result.get("schema").and_then(Json::as_str) != Some(TOOL_RESULT_SCHEMA)
+        || result
+            .get("cache")
+            .and_then(|cache| cache.get("replayable"))
+            .and_then(Json::as_bool)
+            == Some(true)
 }
 
 fn encode_tool_result(result: &ToolExecutionResult) -> Json {

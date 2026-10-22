@@ -5,6 +5,9 @@
 
 pub(crate) mod state;
 
+use crate::runtime_diagnostics::{self as diag, Operation};
+use nemo_relay::diagnostics::{CliFailureCode, FailureClass, SuccessCode};
+
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -139,7 +142,15 @@ impl GatewaySpec {
     /// Return the compatible gateway already bound at this endpoint, or start the existing server
     /// under a per-user lock and wait for authenticated readiness.
     pub(crate) fn acquire(&self) -> Result<GatewayEndpoint, String> {
-        match acquire_gateway(self) {
+        match acquire_gateway(self)
+            .inspect(|_| diag::success(Operation::Acquire, SuccessCode::CliAcquired))
+            .inspect_err(|_| {
+                diag::failure(
+                    Operation::Acquire,
+                    CliFailureCode::Acquire,
+                    FailureClass::Unknown,
+                )
+            }) {
             Ok(endpoint) => Ok(endpoint),
             Err(error) => {
                 log::error!(
@@ -165,7 +176,15 @@ impl GatewaySpec {
             instance_id = expected_instance;
             "Gateway recovery started"
         );
-        match recover_gateway(self, expected_instance) {
+        match recover_gateway(self, expected_instance)
+            .inspect(|_| diag::success(Operation::Acquire, SuccessCode::CliAcquired))
+            .inspect_err(|_| {
+                diag::failure(
+                    Operation::Acquire,
+                    CliFailureCode::Acquire,
+                    FailureClass::Unknown,
+                )
+            }) {
             Ok(endpoint) => {
                 log::info!(
                     target: "nemo_relay.bootstrap",

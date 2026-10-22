@@ -380,6 +380,8 @@ class PluginConfig:
         components: Ordered list of top-level components. This may mix
             `plugin.ComponentSpec(...)` and `adaptive.ComponentSpec(...)`.
         policy: Plugin-level unsupported-config policy.
+        diagnostics: Optional startup-only host service settings. Omission uses
+            file layers; supplying settings overrides the complete service profile.
 
     Behavior:
         Component order is preserved during initialization.
@@ -388,6 +390,7 @@ class PluginConfig:
     version: int = 1
     components: list[object] = field(default_factory=list)
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
+    diagnostics: JsonObject | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this config to the canonical JSON document shape."""
@@ -395,6 +398,7 @@ class PluginConfig:
             "version": self.version,
             "components": [_normalize(component) for component in self.components],
             "policy": self.policy.to_dict(),
+            **({"diagnostics": self.diagnostics} if self.diagnostics is not None else {}),
         }
 
 
@@ -541,14 +545,20 @@ def validate_exact(config: PluginConfig | JsonObject) -> PluginHostReport:
 
     Unlike :func:`validate`, this does not discover or merge ``plugins.toml``
     files. Use it for component-specific validation when ``config`` is the
-    complete document to check.
+    complete document to check. Host-only ``diagnostics`` settings are rejected;
+    use :func:`validate` to validate those settings.
 
     Args:
         config: Complete static plugin configuration.
 
     Returns:
         The static validation report with no dynamic plugin results.
+
+    Raises:
+        ValueError: If ``config`` contains host-only diagnostics settings.
     """
+    if isinstance(config, dict) and "diagnostics" in config:
+        raise ValueError("diagnostics is a host-only setting; use layered validation")
     return cast(PluginHostReport, _validate_exact(_normalize_object(config)))
 
 

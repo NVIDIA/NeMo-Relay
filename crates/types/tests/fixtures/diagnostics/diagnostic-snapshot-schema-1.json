@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "catalogue_version": 1,
+  "source": {
+    "instance_id": "0199942f-1000-7000-8000-000000000001",
+    "process_id": 42,
+    "process_role": "gateway",
+    "relay_version": "0.11.0"
+  },
+  "captured_at": "2026-10-15T09:00:00Z",
+  "sequence": "18446744073709551615",
+  "lifetime": {
+    "totals": {
+      "recorded_events_total": {
+        "value": "7",
+        "saturated": false
+      },
+      "occurrences_total": {
+        "value": "18446744073709551615",
+        "saturated": true
+      },
+      "history_evictions_total": {
+        "value": "3",
+        "saturated": false
+      },
+      "successes_total": {
+        "value": "0",
+        "saturated": false
+      },
+      "failures_total": {
+        "value": "18446744073709551615",
+        "saturated": true
+      },
+      "unspecified_total": {
+        "value": "0",
+        "saturated": false
+      }
+    },
+    "elapsed_millis": "50",
+    "last_failure_at": "2026-10-15T09:00:00Z",
+    "since_last_failure_millis": "10"
+  },
+  "components": [
+    {
+      "identity": {
+        "key": "logging.file_sink",
+        "instance_id": "0199942f-1000-7000-8000-000000000002",
+        "generation": "2"
+      },
+      "registered_at": "2026-10-15T09:00:00Z",
+      "closed_at": "2026-10-15T09:00:00Z",
+      "lifetime": {
+        "totals": {
+          "recorded_events_total": {
+            "value": "7",
+            "saturated": false
+          },
+          "occurrences_total": {
+            "value": "18446744073709551615",
+            "saturated": true
+          },
+          "history_evictions_total": {
+            "value": "3",
+            "saturated": false
+          },
+          "successes_total": {
+            "value": "0",
+            "saturated": false
+          },
+          "failures_total": {
+            "value": "18446744073709551615",
+            "saturated": true
+          },
+          "unspecified_total": {
+            "value": "0",
+            "saturated": false
+          }
+        },
+        "elapsed_millis": "50",
+        "last_failure_at": "2026-10-15T09:00:00Z",
+        "since_last_failure_millis": "10"
+      },
+      "since_refresh": {
+        "generation": "18446744073709551615",
+        "started_at": "2026-10-15T09:00:00Z",
+        "elapsed_millis": "30",
+        "ownership": {
+          "subscriber_instance_id": null,
+          "plugin_instance_id": null,
+          "configuration_id": "configuration-a",
+          "responsibility": "operational_file_output"
+        },
+        "totals": {
+          "recorded_events_total": {
+            "value": "7",
+            "saturated": false
+          },
+          "occurrences_total": {
+            "value": "18446744073709551615",
+            "saturated": true
+          },
+          "history_evictions_total": {
+            "value": "3",
+            "saturated": false
+          },
+          "successes_total": {
+            "value": "0",
+            "saturated": false
+          },
+          "failures_total": {
+            "value": "18446744073709551615",
+            "saturated": true
+          },
+          "unspecified_total": {
+            "value": "0",
+            "saturated": false
+          }
+        }
+      },
+      "counters": [
+        {
+          "code": "logging.sink.write_failed",
+          "occurrences": {
+            "value": "18446744073709551615",
+            "saturated": true
+          },
+          "last_observed_at": "2026-10-15T09:00:00Z"
+        }
+      ],
+      "windows": []
+    }
+  ],
+  "events": [
+    {
+      "sequence": "18446744073709551615",
+      "observed_at": "2026-10-15T09:00:00Z",
+      "component": {
+        "key": "logging.file_sink",
+        "instance_id": "0199942f-1000-7000-8000-000000000002",
+        "generation": "2"
+      },
+      "origin": {
+        "refresh_generation": "18446744073709551615",
+        "ownership": {
+          "subscriber_instance_id": null,
+          "plugin_instance_id": null,
+          "configuration_id": "configuration-a",
+          "responsibility": "operational_file_output"
+        }
+      },
+      "classification": {
+        "canonical_code": "logging.sink.write_failed",
+        "failure_class": "unknown"
+      },
+      "context": {
+        "execution": null,
+        "phase": null
+      },
+      "severity": "error",
+      "outcome": "failure",
+      "detail": {
+        "message": "The file delivery attempt failed",
+        "truncated": false
+      },
+      "count": "9007199254740993",
+      "correlation": {
+        "session_id": "session-1",
+        "request_id": "request-1"
+      }
+    }
+  ],
+  "coverage": {
+    "availability": "available",
+    "summary_scope": "whole_component_lifetime",
+    "retention": {
+      "oldest_event_sequence": "18446744073709551615",
+      "latest_event_sequence": "18446744073709551615",
+      "events_retained": "1",
+      "components_retained": "1",
+      "query_truncated": true
+    },
+    "loss": {
+      "events_evicted": {
+        "value": "3",
+        "saturated": false
+      },
+      "events_omitted": {
+        "value": "0",
+        "saturated": false
+      },
+      "components_evicted": {
+        "value": "0",
+        "saturated": false
+      },
+      "components_rejected": {
+        "value": "0",
+        "saturated": false
+      },
+      "keys_rejected": {
+        "value": "0",
+        "saturated": false
+      },
+      "observations_rejected": {
+        "value": "0",
+        "saturated": false
+      },
+      "messages_truncated": {
+        "value": "0",
+        "saturated": false
+      },
+      "details_omitted": {
+        "value": "0",
+        "saturated": false
+      },
+      "correlations_truncated": {
+        "value": "0",
+        "saturated": false
+      },
+      "correlations_omitted": {
+        "value": "0",
+        "saturated": false
+      },
+      "metadata_rejected": {
+        "value": "0",
+        "saturated": false
+      },
+      "classifications_overflowed": {
+        "value": "0",
+        "saturated": false
+      },
+      "windows_rejected": {
+        "value": "0",
+        "saturated": false
+      },
+      "queries_rejected": {
+        "value": "0",
+        "saturated": false
+      },
+      "stale_observations": {
+        "value": "0",
+        "saturated": false
+      },
+      "projection_deliveries_omitted": {
+        "value": "0",
+        "saturated": false
+      },
+      "projections_panicked": {
+        "value": "0",
+        "saturated": false
+      },
+      "projections_suppressed": {
+        "value": "0",
+        "saturated": false
+      },
+      "sequence_saturated": false
+    },
+    "capabilities": []
+  },
+  "continuation": {
+    "source_instance_id": "0199942f-1000-7000-8000-000000000001",
+    "sequence": "18446744073709551615",
+    "component_offset": "1",
+    "event_offset": "1",
+    "scope": "99"
+  }
+}
