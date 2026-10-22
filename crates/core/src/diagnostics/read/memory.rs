@@ -645,19 +645,3 @@ fn fit(
         },
     )
 }
-
-#[cfg(test)]
-mod layout_tests {
-    use super::*;
-    #[test]
-    fn report_incremental_memory_workspace_backing() {
-        let limits = DiagnosticLimits::default();
-        let bytes = Workspace::required_bytes(&limits).unwrap();
-        eprintln!(
-            "memory_workspace: per_query_arrays={bytes} inline_workspace={} default_queries={} resource_view={}",
-            size_of::<Workspace>(),
-            limits.max_queries,
-            size_of::<ResourceMemoryView>()
-        );
-    }
-}
