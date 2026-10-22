@@ -28,7 +28,7 @@ fn diagnostic_boolean_spellings_preserve_hook_parsing_and_cli_precedence() {
             ("NEMO_RELAY_DIAGNOSTICS", Some(OsStr::new(value))),
             ("NEMO_RELAY_DIAGNOSTICS_HTTP", Some(OsStr::new(value))),
         ]);
-        let cli = Cli::try_parse_from(["nemo-relay", "hook-forward"]).unwrap();
+        let cli = Cli::try_parse_from(["nemo-relay", "hook-forward", "claude"]).unwrap();
         assert_eq!(cli.diagnostics, Some(expected));
         assert_eq!(cli.diagnostics_http, Some(expected));
         let cli = Cli::try_parse_from([
@@ -36,6 +36,7 @@ fn diagnostic_boolean_spellings_preserve_hook_parsing_and_cli_precedence() {
             "--diagnostics=off",
             "--diagnostics-http=on",
             "hook-forward",
+            "claude",
         ])
         .unwrap();
         assert_eq!(cli.diagnostics, Some(false));
@@ -45,6 +46,7 @@ fn diagnostic_boolean_spellings_preserve_hook_parsing_and_cli_precedence() {
             "--diagnostics",
             "--diagnostics-http",
             "hook-forward",
+            "claude",
         ])
         .unwrap();
         assert_eq!(cli.diagnostics, Some(true));
@@ -54,7 +56,7 @@ fn diagnostic_boolean_spellings_preserve_hook_parsing_and_cli_precedence() {
         ("NEMO_RELAY_DIAGNOSTICS", Some(OsStr::new("maybe"))),
         ("NEMO_RELAY_DIAGNOSTICS_HTTP", None),
     ]);
-    assert!(Cli::try_parse_from(["nemo-relay", "hook-forward"]).is_err());
+    assert!(Cli::try_parse_from(["nemo-relay", "hook-forward", "claude"]).is_err());
 }
 #[test]
 fn startup_uses_run_selection_then_system_then_explicit_diagnostic_overrides() {
