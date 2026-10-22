@@ -15,13 +15,6 @@ Relay writes operational logs to stderr by default. Set `stderr_enabled` to
 `false` to disable that sink; optional file sinks continue receiving records.
 Each record includes a root Relay ID for correlation.
 
-Rust hosts can create a [diagnostic context](/reference/diagnostics) before
-logging initialization and pass it to
-`LoggingRuntime::configure_with_diagnostics`. Sink failures remain inspectable
-through that context even if logging cannot initialize. This opt-in API also
-projects typed diagnostic events through the configured logging destinations.
-Configured file sinks remain required.
-
 MCP failure records include `error_kind`. The `mcp_session_failed` record and
 the matching `command_failed` record for `command = "mcp"` also include
 `failure_reason`. This field is a short, fixed code that names the MCP step that
