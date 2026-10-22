@@ -35,12 +35,12 @@ The three-tier evaluation checks whether the skill:
 
 | Measure | Claude Code (Baseline → Skill Uplift) | Codex (Baseline → Skill Uplift) |
 |---|---:|---:|
-| Overall | 77.4% — baseline ran, but no comparable score was available; uplift unavailable | 71.4% — baseline ran, but no comparable score was available; uplift unavailable |
-| Security | 86.7% → 80.0% (-6.7 points) | 80.0% → 66.7% (-13.3 points) |
-| Correctness | 46.7% → 81.3% (+34.6 points) | 57.3% → 89.3% (+32.0 points) |
-| Discoverability | 90.4% — baseline ran, but no comparable score was available; uplift unavailable | 78.6% — baseline ran, but no comparable score was available; uplift unavailable |
-| Effectiveness | 39.96% → 61.39% (+21.43 points) | 35.0% → 56.6% (+21.6 points) |
-| Efficiency | 73.9% — baseline ran, but no comparable score was available; uplift unavailable | 65.6% — baseline ran, but no comparable score was available; uplift unavailable |
+| Overall | 77.2% — baseline ran, but no comparable score was available; uplift unavailable | 69.7% — baseline ran, but no comparable score was available; uplift unavailable |
+| Security | 70.0% → 76.7% (+6.7 points) | 73.3% → 76.7% (+3.4 points) |
+| Correctness | 50.7% → 82.7% (+32.0 points) | 52.0% → 81.3% (+29.3 points) |
+| Discoverability | 92.8% — baseline ran, but no comparable score was available; uplift unavailable | 71.8% — baseline ran, but no comparable score was available; uplift unavailable |
+| Effectiveness | 35.9% → 59.0% (+23.1 points) | 27.1% → 53.1% (+26.0 points) |
+| Efficiency | 75.0% — baseline ran, but no comparable score was available; uplift unavailable | 65.7% — baseline ran, but no comparable score was available; uplift unavailable |
 
 **How to read this table:** baseline is the same task attempted without the target skill. Scores are rounded to one decimal; threshold-adjacent values use additional precision so their displayed band matches the verdict. Uplift is derived from those displayed scores and shown in percentage points.
 
@@ -54,39 +54,39 @@ Actual Tier 3 execution usage is reported for every observed agent/case pair and
 
 | Agent | Dataset case | With skill | Without skill | Delta | Change | Coverage |
 |---|---|---:|---:|---:|---:|---|
-| claude-code | All cases | 4,455,650 | 2,371,194 | +2,084,456 | +87.91% | skill 15/15; base 15/15 |
-| claude-code | nemo-relay-install-001 | 162,667 | 225,307 | -62,640 | -27.80% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-002 | 230,842 | 90,805 | +140,037 | +154.22% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-003 | 336,754 | 121,416 | +215,338 | +177.36% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-004 | 515,190 | 122,927 | +392,263 | +319.10% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-005 | 332,291 | 151,985 | +180,306 | +118.63% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-006 | 92,279 | 343,396 | -251,117 | -73.13% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-007 | 92,164 | 90,299 | +1,865 | +2.07% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-008 | 456,799 | 91,221 | +365,578 | +400.76% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-009 | 580,468 | 123,825 | +456,643 | +368.78% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-010 | 135,037 | 127,415 | +7,622 | +5.98% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-011 | 155,895 | 155,074 | +821 | +0.53% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-012 | 502,936 | 164,712 | +338,224 | +205.34% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-013 | 126,432 | 153,225 | -26,793 | -17.49% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-014 | 328,036 | 123,537 | +204,499 | +165.54% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-install-015 | 407,860 | 286,050 | +121,810 | +42.58% | skill 1/1; base 1/1 |
-| codex | All cases | 4,473,150 | 6,359,481 | -1,886,331 | -29.66% | skill 15/15; base 15/15 |
-| codex | nemo-relay-install-001 | 65,084 | 30,402 | +34,682 | +114.08% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-002 | 192,352 | 68,701 | +123,651 | +179.98% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-003 | 203,514 | 103,025 | +100,489 | +97.54% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-004 | 456,736 | 250,390 | +206,346 | +82.41% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-005 | 338,220 | 311,924 | +26,296 | +8.43% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-006 | 28,301 | 452,435 | -424,134 | -93.74% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-007 | 173,181 | 32,304 | +140,877 | +436.10% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-008 | 18,458 | 18,347 | +111 | +0.61% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-009 | 469,707 | 3,213,997 | -2,744,290 | -85.39% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-010 | 114,387 | 77,146 | +37,241 | +48.27% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-011 | 145,451 | 153,515 | -8,064 | -5.25% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-012 | 1,287,056 | 664,730 | +622,326 | +93.62% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-013 | 279,119 | 113,393 | +165,726 | +146.15% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-014 | 454,994 | 654,532 | -199,538 | -30.49% | skill 1/1; base 1/1 |
-| codex | nemo-relay-install-015 | 246,590 | 214,640 | +31,950 | +14.89% | skill 1/1; base 1/1 |
-| ALL AGENTS | Dataset aggregate | 8,928,800 | 8,730,675 | +198,125 | +2.27% | skill 30/30; base 30/30 |
+| claude-code | All cases | 4,062,774 | 2,610,570 | +1,452,204 | +55.63% | skill 15/15; base 15/15 |
+| claude-code | nemo-relay-install-001 | 162,809 | 257,414 | -94,605 | -36.75% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-002 | 160,303 | 122,622 | +37,681 | +30.73% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-003 | 327,890 | 261,602 | +66,288 | +25.34% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-004 | 473,425 | 352,027 | +121,398 | +34.49% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-005 | 673,325 | 151,777 | +521,548 | +343.63% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-006 | 92,180 | 292,456 | -200,276 | -68.48% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-007 | 92,183 | 90,628 | +1,555 | +1.72% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-008 | 166,602 | 123,547 | +43,055 | +34.85% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-009 | 170,504 | 90,667 | +79,837 | +88.06% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-010 | 294,998 | 127,425 | +167,573 | +131.51% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-011 | 157,017 | 152,321 | +4,696 | +3.08% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-012 | 451,265 | 156,993 | +294,272 | +187.44% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-013 | 125,842 | 153,099 | -27,257 | -17.80% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-014 | 321,309 | 121,598 | +199,711 | +164.24% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-install-015 | 393,122 | 156,394 | +236,728 | +151.37% | skill 1/1; base 1/1 |
+| codex | All cases | 5,499,543 | 4,294,538 | +1,205,005 | +28.06% | skill 15/15; base 15/15 |
+| codex | nemo-relay-install-001 | 85,962 | 34,662 | +51,300 | +148.00% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-002 | 136,675 | 98,264 | +38,411 | +39.09% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-003 | 149,777 | 107,805 | +41,972 | +38.93% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-004 | 465,913 | 146,084 | +319,829 | +218.93% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-005 | 368,161 | 324,015 | +44,146 | +13.62% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-006 | 27,977 | 449,507 | -421,530 | -93.78% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-007 | 144,075 | 92,781 | +51,294 | +55.29% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-008 | 13,735 | 18,352 | -4,617 | -25.16% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-009 | 891,238 | 908,199 | -16,961 | -1.87% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-010 | 91,681 | 155,406 | -63,725 | -41.01% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-011 | 124,309 | 132,452 | -8,143 | -6.15% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-012 | 1,514,917 | 810,088 | +704,829 | +87.01% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-013 | 350,101 | 128,955 | +221,146 | +171.49% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-014 | 958,599 | 750,465 | +208,134 | +27.73% | skill 1/1; base 1/1 |
+| codex | nemo-relay-install-015 | 176,423 | 137,503 | +38,920 | +28.30% | skill 1/1; base 1/1 |
+| ALL AGENTS | Dataset aggregate | 9,562,317 | 6,905,108 | +2,657,209 | +38.48% | skill 30/30; base 30/30 |
 
 Prompt tokens include cached reads, so total tokens are `prompt + completion` (cached is not added twice). The Efficiency score uses `(prompt - cached) + completion`. N/A means the relevant trajectory counters were not available; coverage is never estimated.
 

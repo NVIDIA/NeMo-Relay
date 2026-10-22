@@ -1,5 +1,5 @@
 ## Description: <br>
-Use this skill when choosing or running NeMo Relay installation for an agent runtime, application language, framework integration, or plugin bundle, or checking a runtime's native Relay readiness. <br>
+Use this skill when choosing or running NeMo Relay installation for an agent runtime, application language, framework integration, or plugin bundle, or checking a runtime's native Relay readiness. Do not use it for first-run instrumentation or export configuration. <br>
 
 This skill is ready for commercial/non-commercial use. <br>
 
@@ -9,7 +9,7 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers use this skill to select and install the appropriate current stable NeMo Relay package or executable for a chosen agent runtime, application language, framework integration, or plugin bundle, and to verify that the installation is available. <br>
+Developers and engineers use this skill to disambiguate the intended NeMo Relay install target (CLI/host integration, maintained framework or plugin integration, or an application-owned language binding), install the current stable package or executable from authoritative sources, and verify availability without extending into configuration, scopes, or a model-consuming trial. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
@@ -49,19 +49,19 @@ Mitigation: Review and scan skill before deployment. <br>
 
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
-- Security: Whether the skill is safe to use, covering unsafe operations, secret leakage, and unauthorized access. <br>
-- Correctness: Whether the final answer is correct against the reference answer. <br>
-- Discoverability: Whether the right skill was loaded when needed and decoys were avoided. <br>
-- Effectiveness: Whether the skill helped complete the task, combining goal completion and expected workflow adherence. <br>
-- Efficiency: Whether the skill avoided wasted tool calls and token usage. <br>
+- Security: Is it safe to use? Checks unsafe operations, secret leakage, and unauthorized access. <br>
+- Correctness: Is the answer correct? Final-answer correctness against the reference answer. <br>
+- Discoverability: Was the right skill loaded when needed, with decoys avoided? <br>
+- Effectiveness: Did the skill help complete the task? Equal-weight mean of goal completion and expected workflow adherence. <br>
+- Efficiency: Did it avoid wasted tool calls and token usage? Equal-weight mean of tool-call productivity and token efficiency. <br>
 
 Underlying evaluation signals used in this run: <br>
 - `security`: Unsafe operations, secret leakage, and unauthorized access. <br>
 - `skill_execution`: Whether the expected skill was selected, decoys were avoided, and the workflow executed. <br>
+- `skill_efficiency`: Tool-call productivity (legacy wire id; routing is scored under Discoverability). <br>
 - `accuracy`: Final-answer correctness against the reference answer. <br>
 - `goal_accuracy`: Whether the user's goal was achieved. <br>
 - `behavior_check`: Whether the expected workflow behavior was followed. <br>
-- `skill_efficiency`: Tool-call productivity (legacy wire id; routing is scored under Discoverability). <br>
 - `token_efficiency`: Actual uncached prompt plus completion usage (50% of Efficiency). <br>
 
 
@@ -69,15 +69,15 @@ Underlying evaluation signals used in this run: <br>
 ## Evaluation Results: <br>
 | Measure | Claude Code (Baseline → Skill Uplift) | Codex (Baseline → Skill Uplift) |
 |---|---:|---:|
-| Overall | 77.4% — baseline ran, but no comparable score was available; uplift unavailable | 71.4% — baseline ran, but no comparable score was available; uplift unavailable |
-| Security | 86.7% → 80.0% (-6.7 points) | 80.0% → 66.7% (-13.3 points) |
-| Correctness | 46.7% → 81.3% (+34.6 points) | 57.3% → 89.3% (+32.0 points) |
-| Discoverability | 90.4% — baseline ran, but no comparable score was available; uplift unavailable | 78.6% — baseline ran, but no comparable score was available; uplift unavailable |
-| Effectiveness | 39.96% → 61.39% (+21.43 points) | 35.0% → 56.6% (+21.6 points) |
-| Efficiency | 73.9% — baseline ran, but no comparable score was available; uplift unavailable | 65.6% — baseline ran, but no comparable score was available; uplift unavailable |
+| Overall | 77.2% — uplift unavailable | 69.7% — uplift unavailable |
+| Security | 70.0% → 76.7% (+6.7 points) | 73.3% → 76.7% (+3.4 points) |
+| Correctness | 50.7% → 82.7% (+32.0 points) | 52.0% → 81.3% (+29.3 points) |
+| Discoverability | 92.8% — uplift unavailable | 71.8% — uplift unavailable |
+| Effectiveness | 35.9% → 59.0% (+23.1 points) | 27.1% → 53.1% (+26.0 points) |
+| Efficiency | 75.0% — uplift unavailable | 65.7% — uplift unavailable |
 
 ## Skill Version(s): <br>
-2e0b348a (source: git SHA, committed 2026-10-20) <br>
+41cf25e2 (source: git SHA, committed 2026-10-22) <br>
 
 ## Ethical Considerations: <br>
 NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal team to ensure this skill meets requirements for the relevant industry and use case and addresses unforeseen product misuse. <br>

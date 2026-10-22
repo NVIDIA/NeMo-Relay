@@ -35,12 +35,12 @@ The three-tier evaluation checks whether the skill:
 
 | Measure | Claude Code (Baseline → Skill Uplift) | Codex (Baseline → Skill Uplift) |
 |---|---:|---:|
-| Overall | 83.2% — baseline ran, but no comparable score was available; uplift unavailable | 66.9% — baseline ran, but no comparable score was available; uplift unavailable |
-| Security | 95.5% → 88.6% (-6.9 points) | 81.8% → 84.1% (+2.3 points) |
-| Correctness | 35.5% → 86.4% (+50.9 points) | 54.6% → 78.2% (+23.6 points) |
-| Discoverability | 94.9% — baseline ran, but no comparable score was available; uplift unavailable | 81.4% — baseline ran, but no comparable score was available; uplift unavailable |
-| Effectiveness | 36.4% → 68.0% (+31.6 points) | 35.7% → 56.5% (+20.8 points) |
-| Efficiency | 78.0% — baseline ran, but no comparable score was available; uplift unavailable | 34.3% — baseline ran, but no comparable score was available; uplift unavailable |
+| Overall | 81.0% — baseline ran, but no comparable score was available; uplift unavailable | 71.3% — baseline ran, but no comparable score was available; uplift unavailable |
+| Security | 86.4% → 86.4% (±0.0 points) | 79.6% → 70.5% (-9.1 points) |
+| Correctness | 33.6% → 84.6% (+51.0 points) | 56.4% → 85.5% (+29.1 points) |
+| Discoverability | 92.7% — baseline ran, but no comparable score was available; uplift unavailable | 83.8% — baseline ran, but no comparable score was available; uplift unavailable |
+| Effectiveness | 34.4% → 62.9% (+28.5 points) | 38.7% → 55.5% (+16.8 points) |
+| Efficiency | 78.5% — baseline ran, but no comparable score was available; uplift unavailable | 61.0% — baseline ran, but no comparable score was available; uplift unavailable |
 
 **How to read this table:** baseline is the same task attempted without the target skill. Scores are rounded to one decimal; threshold-adjacent values use additional precision so their displayed band matches the verdict. Uplift is derived from those displayed scores and shown in percentage points.
 
@@ -54,53 +54,53 @@ Actual Tier 3 execution usage is reported for every observed agent/case pair and
 
 | Agent | Dataset case | With skill | Without skill | Delta | Change | Coverage |
 |---|---|---:|---:|---:|---:|---|
-| claude-code | All cases | 8,501,714 | 2,841,312 | +5,660,402 | +199.22% | skill 22/22; base 22/22 |
-| claude-code | nemo-relay-get-started-001 | 234,300 | 90,328 | +143,972 | +159.39% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-002 | 501,566 | 89,724 | +411,842 | +459.01% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-003 | 1,281,565 | 120,761 | +1,160,804 | +961.24% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-004 | 669,151 | 29,060 | +640,091 | +2202.65% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-005 | 163,588 | 89,706 | +73,882 | +82.36% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-006 | 566,837 | 121,225 | +445,612 | +367.59% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-007 | 325,431 | 59,026 | +266,405 | +451.34% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-008 | 259,030 | 153,136 | +105,894 | +69.15% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-009 | 128,810 | 120,904 | +7,906 | +6.54% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-010 | 191,136 | 181,637 | +9,499 | +5.23% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-011 | 329,840 | 151,120 | +178,720 | +118.26% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-012 | 60,403 | 30,582 | +29,821 | +97.51% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-013 | 299,576 | 89,462 | +210,114 | +234.86% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-014 | 377,437 | 60,903 | +316,534 | +519.73% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-015 | 804,985 | 153,982 | +651,003 | +422.78% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-016 | 352,848 | 122,166 | +230,682 | +188.83% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-017 | 448,571 | 280,717 | +167,854 | +59.79% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-018 | 437,991 | 420,860 | +17,131 | +4.07% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-019 | 439,503 | 120,656 | +318,847 | +264.26% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-020 | 133,817 | 90,144 | +43,673 | +48.45% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-021 | 327,526 | 174,764 | +152,762 | +87.41% | skill 1/1; base 1/1 |
-| claude-code | nemo-relay-get-started-022 | 167,803 | 90,449 | +77,354 | +85.52% | skill 1/1; base 1/1 |
-| codex | All cases | 7,500,771 | 12,726,457 | N/A | N/A | skill 21/22; base 21/22 |
-| codex | nemo-relay-get-started-001 | 32,351 | 18,475 | +13,876 | +75.11% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-002 | N/A | 75,390 | N/A | N/A | skill 0/1; base 1/1 |
-| codex | nemo-relay-get-started-003 | 1,297,787 | 392,320 | +905,467 | +230.80% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-004 | 13,340 | 13,284 | +56 | +0.42% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-005 | 571,101 | N/A | N/A | N/A | skill 1/1; base 0/1 |
-| codex | nemo-relay-get-started-006 | 39,240 | 13,493 | +25,747 | +190.82% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-007 | 56,325 | 38,983 | +17,342 | +44.49% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-008 | 139,829 | 76,289 | +63,540 | +83.29% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-009 | 81,040 | 1,280,482 | -1,199,442 | -93.67% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-010 | 79,819 | 13,524 | +66,295 | +490.20% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-011 | 39,096 | 52,962 | -13,866 | -26.18% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-012 | 25,411 | 39,926 | -14,515 | -36.35% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-013 | 43,618 | 66,226 | -22,608 | -34.14% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-014 | 80,456 | 41,991 | +38,465 | +91.60% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-015 | 1,450,454 | 712,199 | +738,255 | +103.66% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-016 | 2,211,957 | 1,903,076 | +308,881 | +16.23% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-017 | 46,635 | 29,892 | +16,743 | +56.01% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-018 | 92,424 | 7,200,869 | -7,108,445 | -98.72% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-019 | 1,064,010 | 497,376 | +566,634 | +113.92% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-020 | 28,229 | 69,149 | -40,920 | -59.18% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-021 | 68,457 | 101,834 | -33,377 | -32.78% | skill 1/1; base 1/1 |
-| codex | nemo-relay-get-started-022 | 39,192 | 88,717 | -49,525 | -55.82% | skill 1/1; base 1/1 |
-| ALL AGENTS | Dataset aggregate | 16,002,485 | 15,567,769 | N/A | N/A | skill 43/44; base 43/44 |
+| claude-code | All cases | 8,269,624 | 3,485,549 | +4,784,075 | +137.25% | skill 22/22; base 22/22 |
+| claude-code | nemo-relay-get-started-001 | 241,424 | 89,531 | +151,893 | +169.65% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-002 | 465,266 | 89,838 | +375,428 | +417.89% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-003 | 1,463,446 | 153,853 | +1,309,593 | +851.20% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-004 | 89,411 | 29,043 | +60,368 | +207.86% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-005 | 238,131 | 92,203 | +145,928 | +158.27% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-006 | 203,743 | 121,315 | +82,428 | +67.95% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-007 | 471,803 | 89,896 | +381,907 | +424.83% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-008 | 460,852 | 89,464 | +371,388 | +415.13% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-009 | 130,898 | 90,247 | +40,651 | +45.04% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-010 | 152,580 | 133,923 | +18,657 | +13.93% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-011 | 375,286 | 90,170 | +285,116 | +316.20% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-012 | 30,948 | 30,704 | +244 | +0.79% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-013 | 173,818 | 89,630 | +84,188 | +93.93% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-014 | 581,420 | 90,133 | +491,287 | +545.07% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-015 | 392,726 | 125,348 | +267,378 | +213.31% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-016 | 482,696 | 121,978 | +360,718 | +295.72% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-017 | 389,983 | 583,370 | -193,387 | -33.15% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-018 | 615,449 | 770,940 | -155,491 | -20.17% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-019 | 415,012 | 121,441 | +293,571 | +241.74% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-020 | 130,578 | 90,211 | +40,367 | +44.75% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-021 | 297,366 | 237,340 | +60,026 | +25.29% | skill 1/1; base 1/1 |
+| claude-code | nemo-relay-get-started-022 | 466,788 | 154,971 | +311,817 | +201.21% | skill 1/1; base 1/1 |
+| codex | All cases | 12,363,606 | 8,470,742 | +3,892,864 | +45.96% | skill 22/22; base 22/22 |
+| codex | nemo-relay-get-started-001 | 34,536 | 18,302 | +16,234 | +88.70% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-002 | 786,313 | 40,813 | +745,500 | +1826.62% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-003 | 439,518 | 425,422 | +14,096 | +3.31% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-004 | 13,297 | 13,237 | +60 | +0.45% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-005 | 1,054,171 | 625,168 | +429,003 | +68.62% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-006 | 78,490 | 13,436 | +65,054 | +484.18% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-007 | 88,674 | 32,031 | +56,643 | +176.84% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-008 | 39,197 | 74,301 | -35,104 | -47.25% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-009 | 39,604 | 116,973 | -77,369 | -66.14% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-010 | 85,988 | 27,658 | +58,330 | +210.90% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-011 | 32,923 | 51,971 | -19,048 | -36.65% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-012 | 31,298 | 38,018 | -6,720 | -17.68% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-013 | 41,136 | 66,886 | -25,750 | -38.50% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-014 | 54,303 | 39,969 | +14,334 | +35.86% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-015 | 1,781,789 | 552,045 | +1,229,744 | +222.76% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-016 | 4,540,882 | 109,076 | +4,431,806 | +4063.04% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-017 | 90,050 | 31,479 | +58,571 | +186.06% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-018 | 1,220,978 | 5,786,295 | -4,565,317 | -78.90% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-019 | 1,669,588 | 210,266 | +1,459,322 | +694.04% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-020 | 43,549 | 13,420 | +30,129 | +224.51% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-021 | 157,687 | 120,182 | +37,505 | +31.21% | skill 1/1; base 1/1 |
+| codex | nemo-relay-get-started-022 | 39,635 | 63,794 | -24,159 | -37.87% | skill 1/1; base 1/1 |
+| ALL AGENTS | Dataset aggregate | 20,633,230 | 11,956,291 | +8,676,939 | +72.57% | skill 44/44; base 44/44 |
 
 Prompt tokens include cached reads, so total tokens are `prompt + completion` (cached is not added twice). The Efficiency score uses `(prompt - cached) + completion`. N/A means the relevant trajectory counters were not available; coverage is never estimated.
 
