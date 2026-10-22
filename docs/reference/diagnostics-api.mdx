@@ -125,6 +125,58 @@ describes its current refresh period. Inspect `coverage` for unavailable evidenc
 truncated detail, evictions, and saturated counts. Evicted events do not erase
 accumulated lifetime counts. A saturated count is a lower bound.
 
+### Distinguish Calls, Occurrences, and Retained Evidence
+
+One recording call can describe several occurrences. For example, two accepted
+failure observations with occurrence deltas of two and three produce these totals:
+
+```json
+{
+  "recorded_events_total": {"value": "2", "saturated": false},
+  "occurrences_total": {"value": "5", "saturated": false},
+  "failures_total": {"value": "5", "saturated": false},
+  "history_evictions_total": {"value": "0", "saturated": false}
+}
+```
+
+This is an excerpt from `lifetime.totals`, not a complete snapshot. If history
+later evicts one of those events, the first three totals remain unchanged and
+`history_evictions_total` increases. Event rows describe recording calls; they
+are not one row per occurrence.
+
+| Field or View | Interpretation |
+| --- | --- |
+| `lifetime.totals.recorded_events_total` | Accepted recording calls, independent of each call's occurrence delta. |
+| `lifetime.totals.occurrences_total` | Sum of accepted deltas across success, failure, and unspecified outcomes. |
+| `lifetime.totals.failures_total` | Explicit failed-operation occurrences; not a unique failed-request count across different producers. |
+| Component `since_refresh` | The current counting period for that registration. Refresh resets this period, not its lifetime totals or rolling windows. |
+| `lifetime.elapsed_millis` | Monotonic elapsed context or component lifetime, not CPU time. |
+| `lifetime.since_last_failure_millis` | Elapsed time since an observed failure. A missing value means no failure has established this value; it does not prove health or recovery. |
+| Component `windows` | Fixed-resolution outcome buckets with their own covered interval. Batched deltas belong to their recording interval; individual occurrence times cannot be reconstructed. |
+
+A window's `coverage.partial_start` and `partial_end` identify partial edge
+buckets; `incomplete` identifies known loss. Use the actual covered interval when
+interpreting rates. Do not treat a partial bucket as a full interval or assume
+that an unavailable window is a zero-error window.
+
+### Distinguish Retention Loss from Read Limits
+
+Inspect `coverage.loss` and `coverage.retention` separately:
+
+| Field | Meaning and Consequence |
+| --- | --- |
+| `loss.events_evicted` | Previously retained evidence was reclaimed. Accepted lifetime totals remain. |
+| `loss.events_omitted` | An observation was counted but its incoming event evidence was not retained. |
+| `loss.observations_rejected` | An observation was rejected before canonical counting; its occurrences are absent from accepted totals. |
+| `loss.messages_truncated`, `details_omitted` | Detail was shortened or omitted; the retained event can lack the original message. |
+| `loss.correlations_truncated`, `correlations_omitted` | Correlation was shortened or omitted independently of the event's numeric accounting. |
+| `retention.query_truncated` | The page omitted matching retained rows because of read limits. This does not mean storage evicted those rows. Inspect `continuation`. |
+
+Loss counters are cumulative source information, not losses incurred by this
+particular filtered read. Reclamation of a closed component can remove its
+component aggregates, while context lifetime totals survive. Neither retained
+row counts nor a page's event list can reconstruct all lifetime occurrences.
+
 ### Continue or Restart a Read
 
 If `continuation` is non-null, copy that object unchanged into the next query,
