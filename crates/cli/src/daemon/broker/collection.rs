@@ -33,7 +33,9 @@ const SESSION_METADATA_ALLOWANCE_BYTES: usize =
         + crate::daemon::diagnostics::READ_GRANT_ENCODED_KEY_BYTES;
 const PER_SESSION_METADATA_ALLOWANCE_BYTES: usize =
     SESSION_METADATA_ALLOWANCE_BYTES.next_multiple_of(64);
-const MAX_JSON_NODES: usize = 8192;
+// The page byte cap already bounds parser work; allow up to one node per byte.
+// This leaves valid, field-rich snapshots under the byte limit admissible.
+const MAX_JSON_NODES: usize = PAGE_BYTES;
 const MAX_JSON_DEPTH: usize = 24;
 
 pub(crate) const fn owned_bytes() -> usize {

@@ -62,13 +62,6 @@ fn collection_parser_bounds_structure_and_preserves_future_codes() {
         )
         .is_err()
     );
-    assert!(
-        validate_page(
-            format!("[{}]", "0,".repeat(MAX_JSON_NODES) + "0").as_bytes(),
-            context.source().instance_id
-        )
-        .is_err()
-    );
     let mut value: serde_json::Value = serde_json::from_slice(&buffer.bytes).unwrap();
     value["future_field"] = serde_json::json!({"unknown_code":"future.failure"});
     assert!(
@@ -78,6 +71,36 @@ fn collection_parser_bounds_structure_and_preserves_future_codes() {
         )
         .is_ok()
     );
+}
+#[test]
+fn collection_parser_accepts_supported_forward_failure_history() {
+    let context = source();
+    let component = context
+        .register_component(ComponentRegistration::new(
+            "forwarding",
+            &[BuiltinDiagnosticCode::Failure(FailureCode::Daemon(
+                DaemonFailureCode::Forward,
+            ))],
+        ))
+        .unwrap();
+    for _ in 0..256 {
+        component
+            .record_without_projection(Observation::new(
+                Classification::failure(
+                    FailureCode::Daemon(DaemonFailureCode::Forward),
+                    FailureClass::Unknown,
+                )
+                .unwrap(),
+                "forward failure",
+                std::num::NonZeroU64::new(1).unwrap(),
+            ))
+            .unwrap();
+    }
+    let page = context.snapshot(&Default::default()).unwrap();
+    assert!(page.as_bytes().len() <= PAGE_BYTES);
+    let snapshot: serde_json::Value = serde_json::from_slice(page.as_bytes()).unwrap();
+    assert!(snapshot["events"].as_array().unwrap().len() > 160);
+    assert!(validate_page(page.as_bytes(), context.source().instance_id).is_ok());
 }
 #[tokio::test(start_paused = true)]
 async fn collection_refreshes_same_sequence_without_recounting_and_keeps_last_page() {
