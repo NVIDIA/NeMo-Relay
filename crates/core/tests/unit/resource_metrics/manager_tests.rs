@@ -597,17 +597,28 @@ fn collection_finishing_after_target_change_keeps_only_fresh_global_network_data
         let mut stale = snapshot_fixture::full_snapshot();
         stale.network = None;
         let finished = manager
-            .finish_collection(
+            .finish_collection_with_ticket(
                 collector::CollectedSnapshot {
                     snapshot: stale,
                     process_sampled_instant: Instant::now(),
                     successful: true,
+                    root_verified: false,
                     process_cpu_samples: Vec::new(),
                     process_io_samples: Vec::new(),
                 },
                 &config,
                 old_generation,
                 series,
+                &current_process_target(ResourceMeasurementScope::ProcessTree).unwrap(),
+                super::super::memory::Ticket {
+                    collector: manager.collector_id,
+                    runtime,
+                    target: old_generation,
+                    ordinal: 1,
+                    started_at: Utc::now(),
+                    started: Instant::now(),
+                    stream: series,
+                },
             )
             .unwrap();
         assert!(finished.cpu.unwrap().total_time.is_none());
@@ -619,6 +630,7 @@ fn collection_finishing_after_target_change_keeps_only_fresh_global_network_data
         let state = manager.state.lock().unwrap();
         assert!(state.on_demand_baseline.is_none());
         assert!(state.polling_baseline.is_none());
+        assert!(state.memory.sample.is_none());
         assert_eq!(
             state.on_demand_network_sampler.is_some(),
             matches!(series, SamplingSeries::OnDemand)
@@ -646,20 +658,32 @@ fn collection_finishing_after_deactivation_does_not_restart_any_sampler() {
     let mut stale = snapshot_fixture::full_snapshot();
     stale.network = None;
     let finished = manager
-        .finish_collection(
+        .finish_collection_with_ticket(
             collector::CollectedSnapshot {
                 snapshot: stale,
                 process_sampled_instant: Instant::now(),
                 successful: true,
+                root_verified: false,
                 process_cpu_samples: Vec::new(),
                 process_io_samples: Vec::new(),
             },
             &config,
             runtime,
             SamplingSeries::OnDemand,
+            &current_process_target(ResourceMeasurementScope::ProcessTree).unwrap(),
+            super::super::memory::Ticket {
+                collector: manager.collector_id,
+                runtime,
+                target: runtime,
+                ordinal: 1,
+                started_at: Utc::now(),
+                started: Instant::now(),
+                stream: SamplingSeries::OnDemand,
+            },
         )
         .unwrap();
     assert!(finished.network.is_none());
+    assert!(manager.state.lock().unwrap().memory.sample.is_none());
     assert!(finished.cpu.unwrap().total_time.is_none());
     let state = manager.state.lock().unwrap();
     assert!(state.on_demand_network_sampler.is_none());

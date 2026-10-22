@@ -80,6 +80,17 @@ func TestDiagnosticsConfiguredService(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reader.Close()
+	memory, err := reader.InspectMemory(DiagnosticQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if memory.ComponentOccupiedBytes+memory.SharedOrUnassignedReservedBytes != memory.Aggregate.ReservedBytes {
+		t.Fatal("memory conservation failed")
+	}
+	if memory.Resource.Availability != "disabled" {
+		t.Fatal("inspection started resource collection")
+	}
+
 	first, err := reader.Snapshot(DiagnosticQuery{})
 	if err != nil {
 		t.Fatal(err)

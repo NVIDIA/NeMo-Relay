@@ -88,6 +88,19 @@ async fn reader_owns_strings_and_survives_plugin_close() {
     unsafe {
         crate::convert::nemo_relay_string_free(out);
     }
+    assert_eq!(
+        unsafe { nemo_relay_diagnostics_memory_json(reader, std::ptr::null(), &mut out) },
+        NemoRelayStatus::Ok
+    );
+    let memory: nemo_relay::diagnostics::DiagnosticMemoryPage =
+        serde_json::from_str(unsafe { CStr::from_ptr(out) }.to_str().unwrap()).unwrap();
+    assert_eq!(
+        memory.component_occupied_bytes.get() + memory.shared_or_unassigned_reserved_bytes.get(),
+        memory.aggregate.reserved_bytes as u64
+    );
+    unsafe {
+        crate::convert::nemo_relay_string_free(out);
+    }
     for (query, status, reason) in [
         (
             r#"{"schema_version":2}"#,

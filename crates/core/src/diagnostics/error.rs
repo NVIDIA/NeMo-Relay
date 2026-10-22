@@ -63,6 +63,9 @@ pub enum DiagnosticError {
     /// A selected atomic row or required envelope cannot fit the query budgets.
     #[error("diagnostic query page cannot hold a required row or envelope")]
     SnapshotCapacity,
+    /// Backing ownership could not be reconciled; no partial accounting is returned.
+    #[error("diagnostic memory accounting is inconsistent")]
+    InconsistentAccounting,
     /// Subscription slots or unique registration IDs are exhausted.
     #[error("diagnostic projection capacity exhausted")]
     ProjectionCapacity,

@@ -58,6 +58,13 @@ test('configured inspection survives plugin and Node environment cleanup', async
   );
   const activation = await plugin.initialize(config);
   const reader = diagnostics.reader();
+  const memory = reader.inspectMemory();
+  assert.equal(memory.schemaVersion, 1);
+  assert.equal(typeof memory.aggregate.reservedBytes, 'bigint');
+  assert.equal(memory.componentOccupiedBytes + memory.sharedOrUnassignedReservedBytes, memory.aggregate.reservedBytes);
+  assert.equal(memory.resource.availability, 'disabled');
+  assert.equal(typeof JSON.parse(reader.inspectMemoryJson()).aggregate.reserved_bytes, 'string');
+  assert(reader.info().discovery.detailedMemoryInspection);
   const first = reader.snapshot();
   assert.equal(typeof first.sequence, 'bigint');
   assert.equal(typeof first.lifetime.totals.failuresTotal.value, 'bigint');
@@ -80,6 +87,31 @@ test('configured inspection survives plugin and Node environment cleanup', async
   assert.equal(source, first.source.instanceId);
   assert.equal(reader.info().loggingCoverage, 'attached_since_service_start');
   await activation.close();
+  const resources = await plugin.initialize({
+    diagnostics: config.diagnostics,
+    components: [
+      {
+        kind: 'resource_metrics',
+        config: {
+          measurement_scope: 'application_process',
+          polling: { enabled: false },
+          units: { memory: { system_used: 'gibibytes' } },
+        },
+      },
+    ],
+  });
+  assert.equal(reader.inspectMemory().resource.availability, 'not_yet_sampled');
+  await require('../index.js').collectResourceMetrics();
+  const sample = reader.inspectMemory().resource.sample;
+  assert(sample);
+  assert.equal(typeof sample.ordinal, 'bigint');
+  if (sample.memory.systemUsed !== null) {
+    assert.equal(sample.memory.systemUsed.measurementScope, 'system');
+    assert.equal(sample.memory.systemUsed.value.kind, 'decimal');
+    assert.equal(typeof sample.memory.systemUsed.value.value, 'number');
+  }
+  await resources.close();
+  assert.equal(reader.inspectMemory().resource.availability, 'disabled');
   assert.equal(reader.snapshot().source.instanceId, source);
   assert.throws(
     () => reader.snapshot({ afterSequence: Number.MAX_SAFE_INTEGER + 1 }),
@@ -102,7 +134,10 @@ test('configured inspection survives plugin and Node environment cleanup', async
     [{ maxResponseBytes: 1 }, 'snapshot_capacity'],
     [{ ownership: { unknown: 'restricted-input' } }, 'invalid_query'],
   ]) {
-    assert.throws(() => reader.snapshot(query), (error) => error.reason === reason);
+    assert.throws(
+      () => reader.snapshot(query),
+      (error) => error.reason === reason,
+    );
   }
   await assert.rejects(plugin.initialize({ diagnostics: { enabled: false } }), /configuration_conflict/);
   assert.equal(reader.snapshot().source.instanceId, source);

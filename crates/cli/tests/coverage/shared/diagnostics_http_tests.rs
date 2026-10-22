@@ -431,3 +431,28 @@ async fn http_read_is_the_same_source_evidence_without_recounting() {
     assert_eq!(page.lifetime.totals.failures_total.value.get(), 5);
     assert_eq!(page.lifetime.totals.recorded_events_total.value.get(), 2);
 }
+
+#[tokio::test]
+async fn memory_view_uses_operator_authority_and_separate_cursor_scope() {
+    let context = context(true, 1);
+    let adapter = adapter(&context);
+    let token = bootstrap(&adapter).diagnostics_token();
+    let router = adapter.router();
+    let path = format!("{PREFIX}/memory");
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request(&path, None))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let response = router.oneshot(request(&path, Some(&token))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    let data = json(response).await;
+    assert!(data["aggregate"]["reserved_bytes"].is_string());
+    assert_eq!(data["resource"]["availability"], "disabled");
+    assert_eq!(context.memory_usage().query_workspaces, 0);
+}

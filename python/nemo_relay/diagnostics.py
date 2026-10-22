@@ -103,6 +103,20 @@ class DiagnosticsReader:
         except RuntimeError as exc:
             raise DiagnosticsError(getattr(exc, "reason", "unavailable")) from None
 
+    def inspect_memory(self, query: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return one bounded memory page; diagnostic counters and durations are int."""
+        try:
+            return self._native.inspect_memory(_query_json(query))
+        except RuntimeError as exc:
+            raise DiagnosticsError(getattr(exc, "reason", "unavailable")) from None
+
+    def inspect_memory_json(self, query: dict[str, Any] | None = None) -> str:
+        """Return canonical JSON with decimal-string diagnostic integers."""
+        try:
+            return self._native.inspect_memory_json(_query_json(query))
+        except RuntimeError as exc:
+            raise DiagnosticsError(getattr(exc, "reason", "unavailable")) from None
+
     def info(self) -> dict[str, Any]:
         """Return separate core/copy budgets, occupancy, and logging coverage."""
         try:

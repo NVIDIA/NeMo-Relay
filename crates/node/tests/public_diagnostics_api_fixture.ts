@@ -21,3 +21,9 @@ void [failures, source, component, portable, lossy];
 const rowCap: bigint = reader().info().discovery.maxQueryEvents;
 const coverage: boolean = reader().info().discovery.producerSupport[0].supported;
 void [rowCap, coverage];
+
+const memory = reader().inspectMemory(query);
+const reservation: bigint = memory.aggregate.reservedBytes;
+const memoryJson: string = reader().inspectMemoryJson(query);
+const sampleOrdinal: bigint | undefined = memory.resource.sample?.ordinal;
+void [reservation, memoryJson, sampleOrdinal];

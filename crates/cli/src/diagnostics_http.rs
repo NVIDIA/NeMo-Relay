@@ -93,6 +93,7 @@ impl DiagnosticsHttp {
             .route(PREFIX, get(tls_required))
             .route(&format!("{PREFIX}/components"), get(tls_required))
             .route(&format!("{PREFIX}/events"), get(tls_required))
+            .route(&format!("{PREFIX}/memory"), get(tls_required))
             .route(&format!("{PREFIX}/capabilities"), get(tls_required))
     }
     pub(crate) fn router(self) -> Router {
@@ -100,6 +101,7 @@ impl DiagnosticsHttp {
             .route(PREFIX, get(snapshot))
             .route(&format!("{PREFIX}/components"), get(snapshot))
             .route(&format!("{PREFIX}/events"), get(snapshot))
+            .route(&format!("{PREFIX}/memory"), get(snapshot))
             .route(&format!("{PREFIX}/capabilities"), get(discovery))
             .with_state(self)
     }
@@ -280,6 +282,18 @@ async fn snapshot(
     }
     if uri.path().ends_with("/events") {
         query.max_components = Some(0);
+    }
+    if uri.path().ends_with("/memory") {
+        let page = match adapter.reader.inspect_memory(&query) {
+            Ok(page) => page,
+            Err(e) => return reader_error(e),
+        };
+        use std::io::Write;
+        if slot.write_all(page.as_bytes()).is_err() {
+            return reader_error(DiagnosticError::SnapshotCapacity);
+        }
+        drop(page);
+        return response(slot);
     }
     let page = match adapter.reader.snapshot(&query) {
         Ok(page) => page,

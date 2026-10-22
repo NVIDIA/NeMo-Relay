@@ -1068,3 +1068,55 @@ fn read_reason_wire_names_match_language_error_spelling() {
         );
     }
 }
+
+#[test]
+fn memory_page_wire_quantities_are_lossless_and_versioned() {
+    let page = DiagnosticMemoryPage {
+        schema_version: DIAGNOSTIC_MEMORY_VERSION,
+        source: snapshot().source,
+        captured_at: observed_at(),
+        sequence: u64::MAX.into(),
+        aggregate: DiagnosticMemoryUsage {
+            reserved_bytes: usize::MAX,
+            ..Default::default()
+        },
+        component_occupied_bytes: 0.into(),
+        shared_or_unassigned_reserved_bytes: (usize::MAX as u64).into(),
+        loss: DiagnosticLoss::default(),
+        selection: MemorySelectionTotals::default(),
+        page: MemorySelectionTotals::default(),
+        components: vec![],
+        entries: vec![],
+        resource: ResourceMemoryView::disabled(),
+        continuation: None,
+    };
+    let mut wire = serde_json::to_value(&page).unwrap();
+    assert_eq!(wire["aggregate"]["reserved_bytes"], usize::MAX.to_string());
+    assert_eq!(wire["sequence"], u64::MAX.to_string());
+    assert_eq!(
+        serde_json::from_value::<DiagnosticMemoryPage>(wire.clone()).unwrap(),
+        page
+    );
+    wire["schema_version"] = json!(2);
+    assert!(serde_json::from_value::<DiagnosticMemoryPage>(wire).is_err());
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn memory_schema_uses_versioned_envelope_and_lossless_aggregate_fields() {
+    let schema = serde_json::to_value(schemars::schema_for!(DiagnosticMemoryPage)).unwrap();
+    assert_eq!(schema["properties"]["schema_version"]["enum"], json!([1]));
+    let fields = schema["definitions"]["DiagnosticMemoryUsage"]["properties"]
+        .as_object()
+        .unwrap();
+    assert!(!fields.is_empty());
+    for value in fields.values() {
+        let reference = json!("#/definitions/DiagnosticNumber");
+        assert!(
+            value["$ref"] == reference
+                || value["allOf"]
+                    .as_array()
+                    .is_some_and(|items| { items.iter().any(|item| item["$ref"] == reference) })
+        );
+    }
+}

@@ -450,5 +450,22 @@ fn discovery_is_independent_of_query_permits_and_matches_core() {
     assert!(info.discovery.producer_support.iter().any(
         |p| p.name == "plugin.worker.emission" && p.supported == cfg!(feature = "worker-grpc")
     ));
-    assert!(!info.discovery.detailed_memory_inspection && !info.discovery.resource_correlation);
+    assert!(info.discovery.detailed_memory_inspection && info.discovery.resource_correlation);
+}
+
+#[test]
+fn memory_and_snapshot_copies_share_admission_and_release_core_before_conversion() {
+    let service = service();
+    let memory = service.reader.inspect_memory_json("{}").unwrap();
+    let snapshot = service.reader.snapshot_json("{}").unwrap();
+    assert_eq!(service.context.memory_usage().query_workspaces, 0);
+    assert!(matches!(
+        service.reader.inspect_memory_json("{}"),
+        Err(EmbeddedDiagnosticError::Core(
+            DiagnosticError::QueryCapacity
+        ))
+    ));
+    drop(snapshot);
+    drop(memory);
+    assert!(service.reader.inspect_memory_json("{}").is_ok());
 }

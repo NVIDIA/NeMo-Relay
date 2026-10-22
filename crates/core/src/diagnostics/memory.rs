@@ -4,64 +4,18 @@
 //! Inspection of reserved backing and bounded storage occupancy.
 
 use super::{Inner, StoredObservation, lock};
-use serde::Serialize;
-
-#[derive(Debug, Default, Clone, Copy, Serialize)]
-/// Backing capacity and current occupancy of one context.
-///
-/// These gauges describe the bounded backend rather than whole-process RSS.
-/// Reserved bytes describe allocated capacity; occupied bytes describe its use
-/// and are not additional allocations. History and detail totals are subsets of
-/// `reserved_bytes`; logical detail and slack are subsets of `detail_bytes`.
-/// All values are zero when collection is disabled.
-pub struct DiagnosticMemoryUsage {
-    /// Bytes reserved for context-owned backend backing storage.
-    pub reserved_bytes: usize,
-    /// Occupied active or retained closed component slots.
-    pub components: usize,
-    /// Occupied lifetime code-counter slots across admitted components.
-    pub counters: usize,
-    /// Currently retained shared circular-history event headers.
-    pub events: usize,
-    /// Compiled size of one fixed event slot, excluding separately stored text.
-    pub event_slot_bytes: usize,
-    /// Event slots admitted for the shared circular history.
-    pub event_capacity: usize,
-    /// Complete history allocation, including all slots, shared header, and padding.
-    pub history_reserved_bytes: usize,
-    /// Retained slot bytes; excludes the shared history header and separate text pool.
-    pub history_occupied_bytes: usize,
-    /// Pool payload bytes occupied in whole reclaimable blocks.
-    pub detail_bytes: usize,
-    /// Actual payload capacity, rounded down to whole detail blocks.
-    pub detail_capacity_bytes: usize,
-    /// Complete detail-pool backing: payload capacity plus all block metadata.
-    pub detail_reserved_bytes: usize,
-    /// Reserved metadata bytes for all detail blocks, occupied or free.
-    pub detail_metadata_bytes: usize,
-    /// Retained UTF-8 message and correlation bytes, excluding block slack.
-    pub detail_logical_bytes: usize,
-    /// Unused payload bytes inside occupied blocks; excludes entirely free blocks.
-    pub detail_slack_bytes: usize,
-    /// Admitted key, ownership, and extension metadata content bytes.
-    pub metadata_bytes: usize,
-    /// Reserved rolling outcome-bucket slots belonging to components.
-    pub window_buckets: usize,
-    /// Admitted extension descriptors, including retained closed components.
-    pub extensions: usize,
-    /// Query leases currently holding preallocated materialization buffers.
-    pub query_workspaces: usize,
-    /// Optional projection subscriptions currently admitted.
-    pub projections: usize,
-    /// Projection workspaces currently materializing or delivering evidence.
-    pub projection_workspaces: usize,
-}
+pub use nemo_relay_types::diagnostics::DiagnosticMemoryUsage;
 
 pub(super) fn diagnostic_memory_usage(inner: &Inner) -> DiagnosticMemoryUsage {
     let Some(backend) = &inner.backend else {
         return DiagnosticMemoryUsage::default();
     };
     let state = lock(&backend.state);
+    memory_usage_locked(inner, &state)
+}
+
+pub(super) fn memory_usage_locked(inner: &Inner, state: &super::State) -> DiagnosticMemoryUsage {
+    let backend = inner.backend.as_ref().expect("enabled capture");
     let event_slot_bytes = size_of::<StoredObservation>();
     let detail_bytes = state.detail.used_bytes();
     let detail_logical_bytes = state.detail.logical_bytes();

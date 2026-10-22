@@ -2894,6 +2894,14 @@ class DiagnosticsReader:
         """Return a snapshot dictionary with lossless integer values."""
         ...
 
+    def inspect_memory_json(self, query_json: str = "{}") -> str:
+        """Return canonical JSON using a bounded canonical query."""
+        ...
+
+    def inspect_memory(self, query_json: str = "{}") -> dict[str, object]:
+        """Return a snapshot dictionary with lossless integer values."""
+        ...
+
     def info(self) -> dict[str, object]:
         """Return core/adapter budgets, memory usage, and integration coverage."""
         ...

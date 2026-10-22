@@ -112,6 +112,14 @@ async def main():
         raise AssertionError("validation started diagnostics")
     activation = await plugin.initialize(config)
     reader = diagnostics.reader()
+    memory = reader.inspect_memory()
+    assert type(memory["aggregate"]["reserved_bytes"]) is int
+    assert (
+        memory["component_occupied_bytes"] + memory["shared_or_unassigned_reserved_bytes"]
+        == memory["aggregate"]["reserved_bytes"]
+    )
+    assert memory["resource"]["availability"] == "disabled"
+    assert type(json.loads(reader.inspect_memory_json())["aggregate"]["reserved_bytes"]) is str
     first = reader.snapshot()
     assert type(first["sequence"]) is int
     assert type(first["lifetime"]["totals"]["failures_total"]["value"]) is int
@@ -119,6 +127,29 @@ async def main():
     assert reader.info()["limits"]["max_events"] == 3
     assert reader.info()["logging_coverage"] == "attached_since_service_start"
     await activation.close()
+    from nemo_relay import resource_metrics
+    resource_config = plugin.PluginConfig(
+        diagnostics={"enabled": True, "limits": {"max_events": 3}},
+        components=[plugin.ComponentSpec(
+            kind="resource_metrics",
+            config={"measurement_scope": "application_process", "polling": {"enabled": False}},
+        )],
+    )
+    async with plugin.activate(resource_config):
+        assert reader.inspect_memory()["resource"]["availability"] == "not_yet_sampled"
+        await resource_metrics.collect()
+        context = reader.inspect_memory()["resource"]
+        assert context["sample"] is not None
+        assert type(context["sample"]["ordinal"]) is int
+        assert context["association"] in ("host_process", "unverified")
+        assert context["sample"]["memory"]["system_used"]["measurement_scope"] == "system"
+        empty_query = {"max_events": 0, "max_components": 0}
+        full_bytes = len(reader.inspect_memory_json(empty_query).encode("utf-8"))
+        bounded = reader.inspect_memory({**empty_query, "max_response_bytes": full_bytes - 128})
+        assert bounded["resource"]["availability"] == "capacity_unavailable"
+        assert bounded["resource"]["sample"] is None
+        assert bounded["aggregate"]["reserved_bytes"] == memory["aggregate"]["reserved_bytes"]
+    assert reader.inspect_memory()["resource"]["availability"] == "disabled"
     second = reader.snapshot()
     assert second["source"] == first["source"]
     assert "diagnostics" not in activation.report["resolved_config"]
