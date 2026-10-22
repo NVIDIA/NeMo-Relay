@@ -234,6 +234,53 @@ process RSS. It excludes allocator overhead, caller-owned inputs and decoded
 snapshots, producer handles, callback captures, and operational output storage.
 File-sink queues and on-disk retention remain governed by logging configuration.
 
+### Storage Limits and Sizing
+
+Configure these fields under `[diagnostics.limits]` at startup. Defaults below
+apply to one context; capacities are shared across its components. Byte values
+are bytes in TOML. KiB and MiB in this table use powers of 1,024.
+
+| Setting | Default | Capacity and Exhaustion Behavior |
+| --- | --- | --- |
+| `max_components` | 64 | Active and retained closed registrations. Closed registrations can be reclaimed; registration fails if capacity cannot be admitted. |
+| `max_counters` | 2,048 | Reserved lifetime code-counter slots. A producer cannot reserve more than the available slots. |
+| `max_events` | 256 | Shared circular-history slots. New evidence replaces older events; zero retains summaries without event history. |
+| `max_window_buckets` | 3,840 | Shared outcome-bucket reservations. Window admission can fail independently of history capacity. |
+| `max_extensions` | 128 | Registered extension descriptors; additional extension admission can fail. |
+| `max_metadata_bytes` | 64 KiB | Registration keys, ownership strings, and extension descriptions. Insufficient space rejects metadata admission. |
+| `max_identity_bytes` | 128 | Per-key or ownership-string admission limit; oversized identities are rejected. |
+| `max_detail_bytes` | 4 KiB | Per-observation detail limit; longer detail is truncated. |
+| `max_correlation_bytes` | 128 | Per-request/session correlation limit; longer fields are truncated. |
+| `detail_pool_bytes` | 256 KiB | Shared payload capacity, rounded down to whole blocks. Retention can reclaim older evidence; fields that cannot fit can be omitted. |
+| `detail_block_bytes` | 256 | Payload allocation granularity, at least four bytes. Smaller blocks reduce slack but increase block metadata. |
+| `max_projections` | 16 | Registered output callbacks. Further registration fails when full. |
+| `max_projection_workspaces` | 4 | Concurrent output publications. Exhaustion can omit projection delivery without undoing accepted recording. |
+| `max_owned_bytes` | 32 MiB | Admission ceiling for calculated core backing. Startup fails if the selected capacities exceed it. |
+
+Raising `max_owned_bytes` only permits a larger calculated allocation; it does
+not enlarge the history, detail pool, or any other capacity. Increase the specific
+capacity and ensure the resulting allocation fits the ceiling. Invalid profiles
+fail startup. The ceiling does not reserve that entire amount automatically.
+
+Use the [query limits below](#query-budgets) for response sizing and
+[Memory Inspection](/reference/diagnostics-memory) for actual reserved backing,
+occupancy, and compiled entry sizes. A practical tuning sequence is:
+
+1. Check loss and admission counters before changing limits. Frequent history
+   eviction can come from either event-slot pressure or detail-pool pressure.
+   Compare history occupancy and detail occupancy to identify which pool to grow.
+2. For rejected registrations, inspect component, counter, metadata, and extension
+   capacities. Raising `max_events` cannot repair a registration shortage.
+3. For `snapshot_capacity`, narrow the query or increase the relevant query row,
+   counter, window, text, or response budget. A larger retention pool alone does
+   not make a component row fit a page.
+4. For `busy`, release outstanding pages promptly and bound caller concurrency
+   before increasing `max_queries`. Each query workspace adds backing allocations.
+5. Include delivery storage separately: embedded copy buffers, HTTP response
+   buffers, daemon worker caches, and worker SDK queues are outside the core
+   ceiling. Caller-owned decoded pages and operational log sinks also need their
+   own allowance. None of these ceilings is a process RSS limit.
+
 ### Query Budgets
 
 Query pages have independent startup capacities. `max_counters` and
