@@ -121,6 +121,7 @@ async fn deliver(
                 break;
             }
             Ok(Err(error)) if error.code() == Code::InvalidArgument => {
+                increment(&state.rejected);
                 result = Err(DiagnosticDeliveryError::NotConsumed);
                 break;
             }

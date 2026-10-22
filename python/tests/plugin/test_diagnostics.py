@@ -211,7 +211,7 @@ def test_rejections_and_sequence_consumption(status, consumed):
         component.try_record_lazy(lambda: good)
         await facade.flush()
         assert pb.DiagnosticSubmission.FromString(host.requests[-1]).sequence == (3 if consumed else 2)
-        assert facade.delivery_stats().rejected == int(consumed)
+        assert facade.delivery_stats().rejected == 1
         await facade.close()
 
     asyncio.run(run())

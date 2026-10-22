@@ -68,7 +68,9 @@ overhead, and core pools; they are not a whole-process RSS ceiling. Slow respons
 delivery retains its permit until the body is polled to its deadline or dropped.
 
 `delivery_stats` reports local dropped, rejected, and uncertain totals separately
-from host occurrences. `flush` waits for earlier queued work; uncertainty is an
+from host occurrences. Rejected includes an explicit `INVALID_ARGUMENT` response,
+even when the host leaves its sequence available for a corrected submission.
+`flush` waits for earlier queued work; uncertainty is an
 error and counters expose known losses. `close` bounds drain and releases queued
 work within the shutdown allowance. Activation teardown fences submissions and
 closes registrations without closing the runtime context. Restricted evidence is

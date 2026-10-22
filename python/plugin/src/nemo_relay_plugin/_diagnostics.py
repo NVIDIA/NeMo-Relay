@@ -45,7 +45,7 @@ class DiagnosticDeliveryError(RuntimeError):
 
 @dataclass(frozen=True)
 class DiagnosticDeliveryStats:
-    """Local delivery totals; these are never replayed as host occurrences."""
+    """Local delivery totals; rejected includes host responses that leave the sequence reusable."""
 
     dropped: int = 0
     rejected: int = 0
@@ -222,6 +222,7 @@ class WorkerDiagnostics:
                             result = await self._stub.SubmitDiagnostic(request, timeout=_TIMEOUT)
                         except grpc.RpcError as failure:
                             if failure.code() == grpc.StatusCode.INVALID_ARGUMENT:
+                                self._increment("rejected")
                                 error = DiagnosticDeliveryError("not_consumed")
                                 break
                             if failure.code() in (

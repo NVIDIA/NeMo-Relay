@@ -11,6 +11,7 @@ use wire::relay_diagnostics_server::{RelayDiagnostics, RelayDiagnosticsServer};
 struct Host {
     requests: Arc<Mutex<Vec<wire::DiagnosticSubmission>>>,
     failures: Arc<AtomicUsize>,
+    invalid_arguments: Arc<AtomicUsize>,
     disabled: bool,
 }
 #[tonic::async_trait]
@@ -50,6 +51,16 @@ impl RelayDiagnostics for Host {
             .is_ok()
         {
             return Err(Status::unavailable("lost reply"));
+        }
+        if matches!(
+            &request.operation,
+            Some(wire::diagnostic_submission::Operation::Record(_))
+        ) && self
+            .invalid_arguments
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1))
+            .is_ok()
+        {
+            return Err(Status::invalid_argument("invalid observation timestamp"));
         }
         let status = match request.operation.unwrap() {
             wire::diagnostic_submission::Operation::RegisterComponent(_) => {
@@ -161,6 +172,37 @@ async fn retry_is_identical_and_fences_after_unknown_acceptance() {
     assert_eq!(requests.len(), 6);
     assert_eq!(requests[3], requests[4]);
     assert_eq!(requests[4], requests[5]);
+}
+
+#[tokio::test]
+async fn invalid_argument_counts_rejection_without_consuming_sequence() {
+    let host = Host::default();
+    host.invalid_arguments.store(1, Ordering::Relaxed);
+    let (facade, _server) = connect(host.clone()).await;
+    let component = facade.component("internal", vec![]).await.unwrap();
+
+    component.try_record_lazy(observation).unwrap();
+    facade.flush(TIMEOUT).await.unwrap();
+    assert_eq!(facade.delivery_stats().rejected, 1);
+    assert_eq!(facade.delivery_stats().uncertain, 0);
+
+    let mut next = observation();
+    next.count = 3;
+    component.try_record_lazy(|| next).unwrap();
+    facade.flush(TIMEOUT).await.unwrap();
+    let requests = host.requests.lock().unwrap();
+    let record_sequences = requests
+        .iter()
+        .filter(|request| {
+            matches!(
+                request.operation,
+                Some(wire::diagnostic_submission::Operation::Record(_))
+            )
+        })
+        .map(|request| request.sequence)
+        .collect::<Vec<_>>();
+    assert_eq!(record_sequences, vec![2, 2]);
+    assert_eq!(facade.delivery_stats().rejected, 1);
 }
 
 #[tokio::test]

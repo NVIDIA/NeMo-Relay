@@ -35,7 +35,7 @@ pub enum DiagnosticDeliveryError {
     /// The payload is invalid or exceeds its bound.
     #[error("invalid diagnostic submission")]
     Invalid,
-    /// Explicit host rejection that did not consume a sequence.
+    /// Explicit host rejection that did not consume a sequence; counted as rejected.
     #[error("diagnostic submission not consumed")]
     NotConsumed,
     /// Terminal host rejection; the sequence was consumed.
@@ -53,7 +53,7 @@ pub enum DiagnosticDeliveryError {
 pub struct DiagnosticDeliveryStats {
     /// Queue or input admission losses.
     pub dropped: u64,
-    /// Terminal host rejections.
+    /// Host-rejected submissions, whether or not their sequence was consumed.
     pub rejected: u64,
     /// Submissions with uncertain acceptance.
     pub uncertain: u64,
