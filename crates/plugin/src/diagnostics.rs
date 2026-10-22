@@ -16,10 +16,13 @@ pub use nemo_relay_types::diagnostics::{
     DiagnosticReadReason, DiagnosticSeverity, DiagnosticSnapshot, EvidenceDisposition,
     FailureClass, FailureCode, PluginFailureCode, RecordOutcome, RecordReceipt,
 };
+use std::cell::RefCell;
+use std::marker::PhantomData;
 use std::num::NonZeroU64;
+use std::rc::Rc;
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 
 /// Diagnostic operation error. These values never classify plugin execution.
@@ -34,7 +37,7 @@ pub enum DiagnosticError {
     Closed,
     /// Host did not grant whole-context read access.
     PermissionDenied,
-    /// Bounded concurrent admission is exhausted; no automatic retry occurs.
+    /// Re-entrant call or exhausted bounded admission; no automatic retry occurs.
     Busy,
     /// Registration or request exceeds its capacity.
     Capacity,
@@ -204,9 +207,19 @@ pub struct DeliveryStats {
     /// Internal authoring failures whose acceptance is unsafe to retry.
     pub uncertain: u64,
 }
+// SDK admission precedes producer factories, scratch arrays, and read buffers.
+// These limits are independent of the host's process-wide data-call permits.
+const MAX_SDK_CALLS: usize = abi::MAX_CALLS;
+const MAX_NESTED_ACTIVATIONS: usize = abi::MAX_SESSIONS;
+thread_local! {
+    static ACTIVE_CALLS: RefCell<[usize; MAX_NESTED_ACTIVATIONS]> =
+        const { RefCell::new([0; MAX_NESTED_ACTIVATIONS]) };
+}
+
 #[derive(Default)]
 pub(crate) struct SdkState {
-    in_call: AtomicBool,
+    active_calls: AtomicUsize,
+    reading: AtomicBool,
     dropped: AtomicU64,
     rejected: AtomicU64,
     uncertain: AtomicU64,
@@ -216,14 +229,28 @@ fn increment(value: &AtomicU64) {
         Some(v.saturating_add(1))
     });
 }
-struct CallGuard<'a>(&'a AtomicBool);
+struct CallGuard<'a> {
+    state: &'a SdkState,
+    slot: usize,
+    // Thread-local entries must be removed on the thread that inserted them.
+    _thread: PhantomData<Rc<()>>,
+}
 impl Drop for CallGuard<'_> {
+    fn drop(&mut self) {
+        let _ = ACTIVE_CALLS.try_with(|keys| keys.borrow_mut()[self.slot] = 0);
+        self.state.active_calls.fetch_sub(1, Ordering::Release);
+    }
+}
+struct ReadGuard<'a>(&'a AtomicBool);
+impl Drop for ReadGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
 }
 
 /// Cloneable activation-scoped diagnostic facade. It does not start a service.
+/// Clones share four concurrent-call slots and one in-flight read-buffer slot.
+/// Same-thread recursion into the same activation returns [`DiagnosticError::Busy`].
 #[derive(Clone)]
 pub struct Diagnostics {
     runtime: PluginRuntime,
@@ -280,10 +307,31 @@ impl Diagnostics {
     }
     fn enter(&self) -> Result<CallGuard<'_>> {
         let state = &self.runtime.diagnostic_state;
-        if state.in_call.swap(true, Ordering::Acquire) {
-            return Err(DiagnosticError::Busy);
-        }
-        Ok(CallGuard(&state.in_call))
+        let key = Arc::as_ptr(state) as usize;
+        ACTIVE_CALLS
+            .try_with(|keys| {
+                let mut keys = keys.borrow_mut();
+                if keys.contains(&key) {
+                    return Err(DiagnosticError::Busy);
+                }
+                let slot = keys
+                    .iter()
+                    .position(|key| *key == 0)
+                    .ok_or(DiagnosticError::Busy)?;
+                state
+                    .active_calls
+                    .fetch_update(Ordering::Acquire, Ordering::Relaxed, |n| {
+                        (n < MAX_SDK_CALLS).then_some(n + 1)
+                    })
+                    .map_err(|_| DiagnosticError::Busy)?;
+                keys[slot] = key;
+                Ok(CallGuard {
+                    state,
+                    slot,
+                    _thread: PhantomData,
+                })
+            })
+            .unwrap_or(Err(DiagnosticError::Busy))
     }
     fn refused_locally(&self, error: DiagnosticError) -> DiagnosticError {
         increment(&self.runtime.diagnostic_state.dropped);
@@ -552,6 +600,11 @@ impl DiagnosticReader {
     fn read(&self, kind: u32, query: &DiagnosticQuery) -> Result<String> {
         let d = &self.diagnostics;
         let _guard = d.enter()?;
+        let reading = &d.runtime.diagnostic_state.reading;
+        if reading.swap(true, Ordering::Acquire) {
+            return Err(DiagnosticError::Busy);
+        }
+        let _read = ReadGuard(reading);
         let caps = d.capabilities()?;
         let mut encoded = BoundedBuffer::new(caps.max_query_bytes)?;
         serde_json::to_writer(&mut encoded, query)

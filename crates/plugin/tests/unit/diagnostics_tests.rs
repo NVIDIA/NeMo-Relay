@@ -272,3 +272,163 @@ fn native_diagnostics_unknown_status_is_not_success() {
         sdk::DiagnosticError::Read(sdk::DiagnosticReadReason::InvalidCursor)
     );
 }
+
+fn sdk_diagnostics(host: &abi::NativeHostApiV8WithDiagnostics) -> sdk::Diagnostics {
+    let ctx = unsafe {
+        PluginContext::from_raw(
+            &host.v8.v7.v6.v5.v4.v3.v1,
+            NonNull::<NemoRelayNativePluginContext>::dangling().as_ptr(),
+        )
+    };
+    ctx.runtime().diagnostics()
+}
+fn sdk_component(d: &sdk::Diagnostics) -> sdk::DiagnosticComponent {
+    let codes = [sdk::DiagnosticCode::Extension {
+        name: "lookup",
+        description: "lookup attempt",
+        outcome: sdk::DiagnosticOutcome::Failure,
+        allowed_classes: &[sdk::FailureClass::Unavailable],
+    }];
+    d.component_lazy(|| sdk::ComponentDeclaration {
+        name: "backend",
+        codes: &codes,
+    })
+    .unwrap()
+}
+fn sdk_observation() -> sdk::Observation<'static> {
+    sdk::Observation::failure(1, sdk::FailureClass::Unavailable, "test", NonZeroU64::MIN)
+}
+
+#[test]
+fn native_diagnostics_bounds_thread_local_nesting_and_releases_slots() {
+    let _lock = begin_test();
+    ENABLED.store(true, Ordering::Relaxed);
+    ACCEPTED.store(0, Ordering::Relaxed);
+    let host = extended();
+    let components = (0..=abi::MAX_SESSIONS)
+        .map(|_| sdk_component(&sdk_diagnostics(&host)))
+        .collect::<Vec<_>>();
+    fn nested(components: &[sdk::DiagnosticComponent]) {
+        let result = components[0].try_record_lazy(|| {
+            assert!(
+                components.len() > 1,
+                "nesting capacity must skip the factory"
+            );
+            nested(&components[1..]);
+            sdk_observation()
+        });
+        if components.len() == 1 {
+            assert_eq!(result, Err(sdk::DiagnosticError::Busy));
+        } else {
+            assert!(matches!(result, Ok(sdk::RecordOutcome::Recorded(_))));
+        }
+    }
+    for _ in 0..2 {
+        nested(&components);
+        components
+            .last()
+            .unwrap()
+            .try_record_lazy(sdk_observation)
+            .unwrap();
+    }
+    assert_eq!(
+        ACCEPTED.load(Ordering::Relaxed),
+        2 * (abi::MAX_SESSIONS + 1)
+    );
+}
+
+struct ReadBlock {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+static READ_BLOCK: Mutex<Option<ReadBlock>> = Mutex::new(None);
+static READ_CAPABILITIES: AtomicUsize = AtomicUsize::new(0);
+unsafe extern "C" fn readable_capabilities(
+    runtime: *const NemoRelayNativePluginRuntime,
+    out: *mut abi::Capabilities,
+) -> u32 {
+    READ_CAPABILITIES.fetch_add(1, Ordering::Relaxed);
+    let status = unsafe { capabilities(runtime, out) };
+    unsafe {
+        (*out).can_read_context = 1;
+        (*out).max_query_bytes = 1024;
+        (*out).max_response_bytes = 1024;
+    }
+    status
+}
+unsafe extern "C" fn blocking_read(
+    _: *const NemoRelayNativePluginRuntime,
+    _: u32,
+    _: abi::Bytes,
+    output: *mut u8,
+    capacity: usize,
+    written: *mut usize,
+) -> u32 {
+    unsafe {
+        written.write(0);
+    }
+    let block = READ_BLOCK.lock().unwrap().take();
+    if let Some(block) = block {
+        let _ = block.entered.send(());
+        let _ = block.release.recv();
+        return 11; // An explicit host error must release both SDK guards.
+    }
+    if capacity < 2 {
+        return 10;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(b"{}".as_ptr(), output, 2);
+        written.write(2);
+    }
+    0
+}
+
+#[test]
+fn native_diagnostics_limits_read_buffers_while_allowing_recording() {
+    let _lock = begin_test();
+    ENABLED.store(true, Ordering::Relaxed);
+    ACCEPTED.store(0, Ordering::Relaxed);
+    let mut host = extended();
+    let api = abi::NativeDiagnosticsApiV1 {
+        capabilities: readable_capabilities,
+        read: blocking_read,
+        ..API
+    };
+    host.diagnostics_api = &api;
+    let d = sdk_diagnostics(&host);
+    let c = sdk_component(&d);
+    let reader = d.reader().unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    *READ_BLOCK.lock().unwrap() = Some(ReadBlock {
+        entered: entered_tx,
+        release: release_rx,
+    });
+    let other = reader.clone();
+    let reading = std::thread::spawn(move || other.snapshot_json(&sdk::DiagnosticQuery::default()));
+    if entered_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+        let _ = release_tx.send(());
+        let _ = reading.join();
+        panic!("read did not reach the host");
+    }
+    let before = READ_CAPABILITIES.load(Ordering::Relaxed);
+    let busy = reader.snapshot_json(&sdk::DiagnosticQuery::default());
+    let after = READ_CAPABILITIES.load(Ordering::Relaxed);
+    let recorded = c.try_record_lazy(sdk_observation);
+    let _ = release_tx.send(());
+    let failed = reading.join().unwrap();
+    assert_eq!(busy, Err(sdk::DiagnosticError::Busy));
+    assert_eq!(
+        before, after,
+        "reject before querying buffer sizes or allocating"
+    );
+    assert!(matches!(recorded, Ok(sdk::RecordOutcome::Recorded(_))));
+    assert_eq!(failed, Err(sdk::DiagnosticError::Internal));
+    assert_eq!(
+        reader
+            .snapshot_json(&sdk::DiagnosticQuery::default())
+            .unwrap(),
+        "{}"
+    );
+    assert_eq!(d.delivery_stats(), sdk::DeliveryStats::default());
+}

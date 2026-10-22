@@ -310,6 +310,27 @@ correlation are not forwarded to operational logs, legacy reports, marks,
 subscribers, or exporters. Ordinary `PluginRuntime::log` calls keep their
 existing independent behavior. Native code remains trusted and unsandboxed.
 
+### Concurrent Calls
+
+Cloned components can record from concurrent callback threads. The SDK admits
+up to four registration, recording, or read calls per activation, shared across
+its runtime and facade clones. Admission happens before producer factories and
+SDK scratch/buffer allocation. Exhaustion returns `Busy` without waiting or
+automatic retry; local authoring refusals increment `delivery_stats().dropped`.
+Read refusals do not change authoring counters.
+
+The SDK separately permits one in-flight read query/output-buffer pair per
+activation. A read can overlap recording; another read returns `Busy` before
+allocating buffers. Returned pages belong to the caller and remain outside this
+limit. Host calls still use four process-wide permits and serialize access to
+each activation.
+
+Recursion is checked per thread and shared activation state. A nested call into
+the same activation returns `Busy`; calls into different activations are allowed.
+Each SDK copy tracks up to 32 nested activations per thread in a fixed array with
+no heap allocation. Guards release their slots on return, error, or panic unwind.
+Closing components remains independent of these data-call limits.
+
 ### Inspect Canonical Diagnostics
 
 `runtime_diagnostics()` reads the existing legacy host report. Use

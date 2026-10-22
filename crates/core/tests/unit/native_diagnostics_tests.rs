@@ -576,3 +576,117 @@ fn native_close_serializes_with_recording_without_reusing_authority() {
     );
     assert!(page.components[0].closed_at.is_some());
 }
+
+#[test]
+fn native_sdk_admits_concurrent_clones_and_bounds_factories() {
+    let _lock = SERIAL.lock().unwrap();
+    let context = new_context(true, 8);
+    let (_owner, runtime) = new_runtime(&context, true);
+    let d = runtime.diagnostics();
+    let c = component(&d, "parallel");
+    let reader = d.reader().unwrap();
+    std::thread::scope(|scope| {
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let mut releases = Vec::new();
+        let mut writers = Vec::new();
+        for _ in 0..abi::MAX_CALLS {
+            let c = c.clone();
+            let ready = ready_tx.clone();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            releases.push(release_tx);
+            writers.push(scope.spawn(move || {
+                c.try_record_lazy(|| {
+                    ready.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    sdk::Observation::failure(
+                        1,
+                        FailureClass::Internal,
+                        "parallel",
+                        NonZeroU64::MIN,
+                    )
+                })
+            }));
+        }
+        drop(ready_tx);
+        let all_entered = (0..abi::MAX_CALLS).all(|_| {
+            ready_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok()
+        });
+        let overflow = c.try_record_lazy(|| panic!("full admission must skip the factory"));
+        let registration = d.component_lazy(|| panic!("registration shares the admission budget"));
+        let read = reader.snapshot(&DiagnosticQuery::default());
+        // Release blocked factories before asserting so a regression cannot strand a thread.
+        for release in releases {
+            let _ = release.send(());
+        }
+        let results = writers
+            .into_iter()
+            .map(|writer| writer.join().unwrap())
+            .collect::<Vec<_>>();
+        assert!(all_entered, "distinct threads must enter concurrently");
+        assert_eq!(overflow, Err(Error::Busy));
+        assert!(matches!(registration, Err(Error::Busy)));
+        assert!(matches!(read, Err(Error::Busy)));
+        for result in results {
+            assert!(matches!(result, Ok(RecordOutcome::Recorded(_))));
+        }
+    });
+    assert_eq!(d.delivery_stats().dropped, 2);
+    assert_eq!(
+        record(&c, 1).code_total.unwrap().value.get(),
+        abi::MAX_CALLS as u64 + 1
+    );
+}
+
+#[test]
+fn native_sdk_reentrancy_is_scoped_to_activation_and_unwinds_cleanly() {
+    let _lock = SERIAL.lock().unwrap();
+    let context = new_context(true, 8);
+    let (_owner_a, runtime_a) = new_runtime(&context, true);
+    let (_owner_b, runtime_b) = new_runtime(&context, false);
+    let a = component(&runtime_a.diagnostics(), "first");
+    let b = component(&runtime_b.diagnostics(), "second");
+    let clone = a.clone();
+    let reader = runtime_a.diagnostics().reader().unwrap();
+    a.try_record_lazy(|| {
+        b.try_record_lazy(|| {
+            assert_eq!(
+                clone.try_record_lazy(|| panic!("recursive factory")),
+                Err(Error::Busy)
+            );
+            assert!(matches!(
+                reader.snapshot(&DiagnosticQuery::default()),
+                Err(Error::Busy)
+            ));
+            sdk::Observation::failure(1, FailureClass::Internal, "nested", NonZeroU64::MIN)
+        })
+        .unwrap();
+        sdk::Observation::failure(1, FailureClass::Internal, "outer", NonZeroU64::MIN)
+    })
+    .unwrap();
+    for _ in 0..=abi::MAX_CALLS {
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            a.try_record_lazy(|| panic!("producer panic"))
+        }));
+        assert!(panic.is_err());
+    }
+    assert_eq!(record(&a, 1).code_total.unwrap().value.get(), 2);
+    let d = runtime_a.diagnostics();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            d.component_lazy(|| panic!("declaration panic"))
+        }))
+        .is_err()
+    );
+    assert!(matches!(
+        d.component_lazy(|| ComponentDeclaration {
+            name: "invalid",
+            codes: &[]
+        }),
+        Err(Error::Invalid)
+    ));
+    let after_error = component(&d, "after-error");
+    record(&after_error, 1);
+    reader.snapshot(&DiagnosticQuery::default()).unwrap();
+}

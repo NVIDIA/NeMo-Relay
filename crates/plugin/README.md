@@ -226,6 +226,17 @@ A component closes when its last clone is dropped or `close()` is called. Host
 activation teardown revokes every handle and releases adapter backing; retained
 counts remain subject to core retention. The service lifetime is host-owned.
 
+### Concurrent Calls
+
+Clones share four SDK registration/recording/read slots per activation and one
+in-flight read query/output-buffer pair. Concurrent callbacks can record; a read
+can overlap recording. Same-thread recursion into the same activation, nesting
+beyond 32 activations per thread, and exhausted admission return `Busy`. Nesting
+uses fixed thread-local storage. Guards release slots on return, error, or
+producer panic. Host calls retain their separate four process-wide permits.
+See the [native SDK guide](../../docs/build-plugins/native/runtime-events-and-scopes.mdx#concurrent-calls)
+for admission, accounting, and cleanup behavior.
+
 ### Authorized Reads
 
 The host can separately grant whole-context canonical reads:
