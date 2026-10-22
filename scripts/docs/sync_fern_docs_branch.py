@@ -20,6 +20,8 @@ from typing import Any
 import yaml
 
 VERSION_RE = re.compile(r"^(?P<base>[0-9]+\.[0-9]+\.[0-9]+)(?:-(?P<label>alpha|beta|rc)\.(?P<number>[0-9]+))?$")
+SNAPSHOT_RE = re.compile(r"^v([0-9]+)\.([0-9]+)\.([0-9]+)$")
+MAX_RELEASE_VERSIONS = 5
 COPY_EXCLUDES = {
     ".DS_Store",
     "__pycache__",
@@ -138,6 +140,69 @@ def write_docs_yml(source_docs_yml: Path, target_docs_yml: Path) -> None:
     write_yaml(target_docs_yml, docs_yml)
 
 
+def prune_release_versions(target_fern: Path) -> None:
+    """Keep the highest patch per major/minor and the five newest snapshots.
+
+    Beta and RC tags already share a snapshot path with their base version.
+    The dev entry is independent of the release limit; latest aliases the
+    highest retained stable snapshot.
+    """
+    docs_path = target_fern / "docs.yml"
+    docs_yml = read_yaml(docs_path)
+    product = docs_yml["products"][0]
+    versions = product.get("versions", [])
+    releases = {}
+    for entry in versions:
+        slug = entry.get("slug", "")
+        match = SNAPSHOT_RE.fullmatch(slug)
+        if match:
+            releases[slug] = (tuple(int(part) for part in match.groups()), entry)
+
+    retained = []
+    seen_minor_versions = set()
+    for slug in sorted(releases, key=lambda slug: releases[slug][0], reverse=True):
+        minor_version = releases[slug][0][:2]
+        if minor_version not in seen_minor_versions and len(retained) < MAX_RELEASE_VERSIONS:
+            retained.append(slug)
+            seen_minor_versions.add(minor_version)
+
+    # Include on-disk snapshots so old, unlisted content is removed as well.
+    snapshots = set(releases)
+    snapshots.update(path.name.removeprefix("pages-") for path in target_fern.glob("pages-v*"))
+    snapshots.update(path.stem for path in (target_fern / "versions").glob("v*.yml"))
+    for slug in sorted(snapshots - set(retained)):
+        if not SNAPSHOT_RE.fullmatch(slug):
+            continue
+        pages = target_fern / f"pages-{slug}"
+        if pages.is_dir():
+            shutil.rmtree(pages)
+        (target_fern / "versions" / f"{slug}.yml").unlink(missing_ok=True)
+
+    # Rebuild aliases too: pruning must never leave a dangling default or latest.
+    stable_slug = next((slug for slug in retained if releases[slug][1].get("availability") == "stable"), None)
+    latest_entries = []
+    if stable_slug:
+        latest_entries.append(
+            {
+                "display-name": f"Latest ({stable_slug})",
+                "path": f"./versions/{stable_slug}.yml",
+                "slug": "latest",
+                "availability": "stable",
+            }
+        )
+    product["path"] = f"./versions/{stable_slug or 'dev'}.yml"
+    other_entries = [
+        entry
+        for entry in versions
+        if entry.get("slug") not in releases
+        and entry.get("slug") != "latest"
+        and entry.get("display-name") != "Latest"
+        and not str(entry.get("display-name", "")).startswith("Latest (")
+    ]
+    product["versions"] = [*latest_entries, *other_entries, *(releases[slug][1] for slug in retained)]
+    write_yaml(docs_path, docs_yml)
+
+
 def sync_dev(source_root: Path, target_root: Path) -> None:
     source_docs = source_root / "docs"
     source_fern = source_root / "fern"
@@ -166,6 +231,7 @@ def sync_dev(source_root: Path, target_root: Path) -> None:
             copy_path(source, target_fern / item)
 
     write_docs_yml(source_fern / "docs.yml", target_fern / "docs.yml")
+    prune_release_versions(target_fern)
 
 
 def update_github_links(pages_dir: Path, tag: str) -> None:
@@ -260,6 +326,7 @@ def release_version(target_root: Path, tag: str, source_root: Path) -> None:
     else:
         product["versions"] = [*existing_latest_entries[:1], dev_entry, version_entry, *remaining_versions]
     write_yaml(docs_yml_path, docs_yml)
+    prune_release_versions(target_fern)
 
 
 def parse_args() -> argparse.Namespace:
