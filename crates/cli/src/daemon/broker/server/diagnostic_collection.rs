@@ -9,6 +9,9 @@ use http_body_util::BodyExt;
 use std::io::Write;
 use tokio::time::Instant;
 
+const COLLECTION_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const COLLECTION_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Closes only diagnostic work on every serve exit, including setup failure/cancellation.
 pub(super) struct Lifetime {
     collector: Option<Arc<collection::Collector>>,
@@ -82,7 +85,9 @@ impl Drop for PollGuard {
 }
 
 pub(super) async fn run(state: std::sync::Weak<DaemonState>) {
-    let mut interval = tokio::time::interval(Duration::from_millis(250));
+    // Freshness is an age classification, not a per-worker polling SLA: the 15-second
+    // cutoff in collection.rs is well above this cadence, but POLLS bounds concurrency.
+    let mut interval = tokio::time::interval(COLLECTION_POLL_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut jobs = tokio::task::JoinSet::new();
     let mut cursor = String::new();
@@ -152,7 +157,7 @@ async fn poll(
     mut guard: PollGuard,
     buffer: Buffer,
 ) {
-    let result = tokio::time::timeout(Duration::from_secs(2), fetch(&target, &grant, buffer))
+    let result = tokio::time::timeout(COLLECTION_REQUEST_TIMEOUT, fetch(&target, &grant, buffer))
         .await
         .unwrap_or(Err(PollOutcome::Timeout));
     let mut sessions = lock(&state.worker_sessions);

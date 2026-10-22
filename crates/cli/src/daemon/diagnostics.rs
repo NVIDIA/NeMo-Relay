@@ -9,6 +9,13 @@ use nemo_relay::diagnostics::*;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 pub(crate) const CAPABILITY: &str = "daemon_diagnostics_v1";
+const READ_GRANT_POLICY_REVISION: u32 = 1;
+pub(crate) const READ_GRANT_KEY_BYTES: usize = 32;
+pub(crate) const READ_GRANT_ENCODED_KEY_BYTES: usize = (READ_GRANT_KEY_BYTES * 8).div_ceil(6);
+const READ_GRANT_TOKEN_LIFETIME_MILLIS: u64 = 60_000;
+const READ_GRANT_CLOCK_SKEW_MILLIS: u64 = 60_000;
+const READ_GRANT_MAX_FUTURE_EXPIRATION_MILLIS: u64 =
+    READ_GRANT_TOKEN_LIFETIME_MILLIS + READ_GRANT_CLOCK_SKEW_MILLIS;
 use std::num::NonZeroU64;
 
 /// Independent collection admission ceiling, including bounded session metadata.
@@ -220,13 +227,10 @@ impl DiagnosticReadGrant {
         Some(Self {
             source,
             generation: generation.to_owned(),
-            policy_revision: 1,
+            policy_revision: READ_GRANT_POLICY_REVISION,
             max_page_bytes,
             key: SensitiveString::new(
-                super::common::control::random_secret(
-                    super::broker::collection::DIAGNOSTIC_KEY_BYTES,
-                )
-                .ok()?,
+                super::common::control::random_secret(READ_GRANT_KEY_BYTES).ok()?,
             )
             .ok()?,
         })
@@ -237,8 +241,8 @@ impl DiagnosticReadGrant {
     pub(crate) fn matches(&self, offer: &DiagnosticOffer, generation: &str) -> bool {
         self.source == offer.source
             && self.generation == generation
-            && self.policy_revision == 1
-            && self.key.expose().len() == super::broker::collection::ENCODED_DIAGNOSTIC_KEY_BYTES
+            && self.policy_revision == READ_GRANT_POLICY_REVISION
+            && self.key.expose().len() == READ_GRANT_ENCODED_KEY_BYTES
             && self.max_page_bytes > 0
             && self.max_page_bytes <= offer.max_page_bytes
             && offer.whole_context_read
@@ -257,7 +261,7 @@ impl DiagnosticReadGrant {
         message
     }
     pub(crate) fn token(&self, now: u64) -> String {
-        let expires = now.saturating_add(60_000);
+        let expires = now.saturating_add(READ_GRANT_TOKEN_LIFETIME_MILLIS);
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, self.key.expose().as_bytes());
         format!(
             "{expires}.{}",
@@ -271,7 +275,11 @@ impl DiagnosticReadGrant {
         let Ok(expires) = expires.parse::<u64>() else {
             return false;
         };
-        if self.policy_revision != 1 || expires <= now || expires > now.saturating_add(120_000) {
+        // The accepted horizon is twice the issued lifetime to allow one lifetime of clock skew.
+        if self.policy_revision != READ_GRANT_POLICY_REVISION
+            || expires <= now
+            || expires > now.saturating_add(READ_GRANT_MAX_FUTURE_EXPIRATION_MILLIS)
+        {
             return false;
         }
         let mut decoded = [0u8; 32];

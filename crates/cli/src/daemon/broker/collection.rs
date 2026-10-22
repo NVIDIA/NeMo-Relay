@@ -18,8 +18,11 @@ pub(crate) const RESPONSE_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_STAGED_WORKER_SESSIONS: usize = 4_096;
 pub(crate) const MAX_WORKER_ID_BYTES: usize = 256;
 pub(crate) const MAX_GENERATION_BYTES: usize = 256;
-pub(crate) const DIAGNOSTIC_KEY_BYTES: usize = 32;
-pub(crate) const ENCODED_DIAGNOSTIC_KEY_BYTES: usize = (DIAGNOSTIC_KEY_BYTES * 8).div_ceil(6);
+const FAILURE_BACKOFF_BASE_SECONDS: u64 = 5;
+const FAILURE_BACKOFF_MAX_EXPONENT: u32 = 4;
+const FAILURE_BACKOFF_MAX_SECONDS: u64 = 60;
+const RETRY_JITTER_WINDOW_MILLIS: u64 = 1_000;
+const COLLECTION_FRESHNESS_MILLIS: u64 = 15_000;
 const SESSION_METADATA_ALLOWANCE_BYTES: usize =
     std::mem::size_of::<Option<crate::daemon::diagnostics::DiagnosticOffer>>()
         + std::mem::size_of::<Option<crate::daemon::diagnostics::DiagnosticReadGrant>>()
@@ -27,7 +30,7 @@ const SESSION_METADATA_ALLOWANCE_BYTES: usize =
         + MAX_GENERATION_BYTES
         + std::mem::size_of::<uuid::Uuid>()
         + std::mem::size_of::<TokenDigest>()
-        + ENCODED_DIAGNOSTIC_KEY_BYTES;
+        + crate::daemon::diagnostics::READ_GRANT_ENCODED_KEY_BYTES;
 const PER_SESSION_METADATA_ALLOWANCE_BYTES: usize =
     SESSION_METADATA_ALLOWANCE_BYTES.next_multiple_of(64);
 const MAX_JSON_NODES: usize = 8192;
@@ -425,9 +428,13 @@ impl Cache {
             }
         }
         // Jitter is deterministic from the request ordinal; no queue or extra task.
-        let delay = 5u64.saturating_mul(1 << slot.failures.min(4)).min(60);
-        slot.retry_at =
-            now + std::time::Duration::from_millis(delay * 1000 + ticket.ordinal % 1000);
+        let delay_seconds = FAILURE_BACKOFF_BASE_SECONDS
+            .saturating_mul(1u64 << slot.failures.min(FAILURE_BACKOFF_MAX_EXPONENT))
+            .min(FAILURE_BACKOFF_MAX_SECONDS);
+        let jitter_millis = ticket.ordinal % RETRY_JITTER_WINDOW_MILLIS;
+        slot.retry_at = now
+            + std::time::Duration::from_secs(delay_seconds)
+            + std::time::Duration::from_millis(jitter_millis);
     }
     pub(super) fn abandon(&mut self, ticket: Ticket) {
         let slot = &mut self.slots[ticket.index];
@@ -473,7 +480,7 @@ impl Cache {
         let collection = Collection {
             availability: match age {
                 None => "missing",
-                Some(ms) if ms > 15_000 => "stale",
+                Some(ms) if ms > COLLECTION_FRESHNESS_MILLIS => "stale",
                 Some(_) => "fresh",
             },
             latest_poll: slot.map_or(PollOutcome::Pending, |s| s.outcome),
