@@ -254,3 +254,75 @@ failure cleanup:
 Success means event parentage is intentional, no scope or isolated stack leaks on
 failure, later work regains its original context, and unload begins only after callback
 ownership has ended.
+
+## Record Internal Diagnostics
+
+Use `ctx.runtime().diagnostics()` for observations of plugin-internal work.
+Relay supplies the selected diagnostics service through the existing native
+runtime capability. Startup configuration controls collection; disabled or
+unsupported facades skip declaration and observation factories.
+
+```rust
+use nemo_relay_plugin::diagnostics::{
+    ComponentDeclaration, DiagnosticCode, DiagnosticOutcome, FailureClass, Observation,
+};
+use std::num::NonZeroU64;
+
+let diagnostics = ctx.runtime().diagnostics();
+let codes = [DiagnosticCode::Extension {
+    name: "lookup_failed",
+    description: "An internal lookup failed",
+    outcome: DiagnosticOutcome::Failure,
+    allowed_classes: &[FailureClass::Unavailable],
+}];
+let backend = diagnostics.component_lazy(|| ComponentDeclaration {
+    name: "backend",
+    codes: &codes,
+});
+// Capture the admitted component in callbacks that observe this internal work.
+if let Ok(backend) = &backend {
+    let _ = backend.try_record_lazy(|| Observation::failure(
+        1, FailureClass::Unavailable, "Internal lookup unavailable", NonZeroU64::MIN,
+    ));
+}
+```
+
+Code positions are one-based within the component's declaration. Counts are
+positive occurrence deltas: submitting 2, then 3, records five occurrences from
+two calls. An accepted receipt reports retained, truncated, or dropped evidence;
+core's counters survive history eviction. Keep the execution result independent
+of diagnostic admission, and do not automatically retry uncertain failures.
+
+Retain a component for its registration lifetime. Last drop or `close()` closes
+it; activation teardown revokes all handles. Common plugin failure codes and
+admitted extensions share core's existing storage and classification rules.
+Record distinct internal work; loading, validation, registration, and callback
+failures retain their existing host observers.
+
+Native-authored diagnostics use state-only recording. Restricted detail and
+correlation are not forwarded to operational logs, legacy reports, marks,
+subscribers, or exporters. Ordinary `PluginRuntime::log` calls keep their
+existing independent behavior. Native code remains trusted and unsandboxed.
+
+### Inspect Canonical Diagnostics
+
+Whole-context reads require an explicit host-policy grant, resolved from the
+existing configuration layers:
+
+```toml
+[plugins.policy.overrides."example.native"]
+native_diagnostics_read_context = true
+```
+
+The key is the manifest plugin ID. The default is false; workers receive no
+read grant. `diagnostics.reader()` returns a permission error without the grant.
+An authorized reader offers `discovery()`, `snapshot(&DiagnosticQuery)`,
+`inspect_memory(&DiagnosticQuery)`, and snapshot/memory JSON methods. These read
+the selected host context, including other components' restricted diagnostics,
+and preserve the shared schema, cursor rules, precision-safe counts, and read
+reasons. Each call checks live authority and returns an independently owned page.
+
+`runtime_diagnostics()` retains the legacy host report contract; it does not
+return the canonical store. Neither API starts a resource collector or service.
+See the [native ABI contract](/build-plugins/native/native-abi-reference#native-diagnostics-extension)
+for admission limits and buffer ownership.

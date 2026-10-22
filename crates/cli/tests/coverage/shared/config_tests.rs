@@ -2203,6 +2203,7 @@ fn dynamic_plugin_host_policy_evaluator_applies_rules_before_plugin_overrides() 
     let (manifest, _) = DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
     let policy = DynamicPluginHostPolicy {
         defaults: DynamicPluginHostPolicyEffect {
+            native_diagnostics_read_context: None,
             allowed: Some(true),
             startup: Some(DynamicPluginStartupClass::Optional),
             attestation: Some(DynamicPluginAttestationMode::IntegrityOnly),
@@ -2212,6 +2213,7 @@ fn dynamic_plugin_host_policy_evaluator_applies_rules_before_plugin_overrides() 
             match_kind: Some(DynamicPluginKind::Worker),
             match_plugin_id: None,
             effect: DynamicPluginHostPolicyEffect {
+                native_diagnostics_read_context: None,
                 allowed: None,
                 startup: Some(DynamicPluginStartupClass::Required),
                 attestation: None,
@@ -2221,6 +2223,7 @@ fn dynamic_plugin_host_policy_evaluator_applies_rules_before_plugin_overrides() 
         overrides: std::iter::once((
             "acme.worker".into(),
             DynamicPluginHostPolicyEffect {
+                native_diagnostics_read_context: None,
                 allowed: Some(false),
                 startup: None,
                 attestation: Some(DynamicPluginAttestationMode::SignatureRequired),

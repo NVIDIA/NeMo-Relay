@@ -1034,6 +1034,7 @@ fn trust_evaluation_short_circuits_when_policy_is_blocked() {
         .map_err(|error| CliError::Config(error.to_string()))
         .unwrap();
     let blocked_policy = crate::plugins::policy::EvaluatedDynamicPluginHostPolicy {
+        native_diagnostics_read_context: false,
         policy_satisfied: false,
         startup_class: nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required,
         attestation_mode:

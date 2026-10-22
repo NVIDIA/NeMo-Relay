@@ -55,3 +55,38 @@ fn matching_rules_and_id_overrides_apply_in_order() {
     assert!(evaluated.policy_satisfied);
     assert_eq!(evaluated.startup_class, DynamicPluginStartupClass::Required);
 }
+
+#[test]
+fn native_diagnostic_read_grant_uses_policy_layers_and_never_grants_worker_reads() {
+    let lower: FileDynamicPluginHostPolicy = toml::from_str(
+        r#"
+[defaults]
+native_diagnostics_read_context = true
+"#,
+    )
+    .unwrap();
+    let upper: FileDynamicPluginHostPolicy = toml::from_str(
+        r#"
+[[rules]]
+match_kind = "rust_dynamic"
+native_diagnostics_read_context = false
+[overrides."fixture.policy"]
+native_diagnostics_read_context = true
+"#,
+    )
+    .unwrap();
+    let mut policy: DynamicPluginHostPolicy = lower.into();
+    policy.merge_from(upper.into());
+    let mut native = manifest();
+    native.plugin.kind = DynamicPluginKind::RustDynamic;
+    assert!(evaluate_dynamic_plugin_host_policy(&policy, &native).native_diagnostics_read_context);
+    assert!(
+        !evaluate_dynamic_plugin_host_policy(&policy, &manifest()).native_diagnostics_read_context
+    );
+    policy.overrides.clear();
+    assert!(!evaluate_dynamic_plugin_host_policy(&policy, &native).native_diagnostics_read_context);
+    assert!(
+        !evaluate_dynamic_plugin_host_policy(&DynamicPluginHostPolicy::default(), &native)
+            .native_diagnostics_read_context
+    );
+}

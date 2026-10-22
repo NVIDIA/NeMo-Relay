@@ -2914,3 +2914,143 @@ fn fixture_library_name() -> &'static str {
         "libnemo_relay_plugin_fixture.so"
     }
 }
+
+#[tokio::test]
+async fn sdk_cdylib_native_diagnostics_records_reads_and_closes_selected_context() {
+    use nemo_relay::diagnostics::*;
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest = write_manifest_with_integrity(&fixture, &sha256(&fixture.library_path));
+    for (enabled, grant, failure) in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
+    ] {
+        let context = Diagnostics::from_settings(
+            SourceIdentity {
+                instance_id: Uuid::now_v7(),
+                process_id: None,
+                process_role: "native-integration".into(),
+                relay_version: "test".into(),
+            },
+            DiagnosticsSettings {
+                enabled,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let config = fixture.manifest_dir.path().join("diagnostics-plugins.toml");
+        std::fs::write(
+            &config,
+            format!(
+                r#"
+[plugins.policy.defaults]
+attestation = "integrity_only"
+[plugins.policy.overrides.fixture_native]
+native_diagnostics_read_context = {grant}
+[[plugins.dynamic]]
+manifest = {manifest}
+[plugins.dynamic.config]
+diagnostics_fixture = true
+expect_read = {grant}
+registration_failure = {failure}
+"#,
+                manifest = toml_string(&manifest.to_string_lossy())
+            ),
+        )
+        .unwrap();
+        let activated = nemo_relay::plugin::dynamic::initialize_with_diagnostics(
+            PluginConfig::default(),
+            Some(config),
+            &context,
+        )
+        .await;
+        if failure {
+            assert!(
+                activated
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("fixture registration failure")
+            );
+            let page = context
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            let internal = page
+                .components
+                .iter()
+                .find(|c| c.identity.key == "fixture.internal")
+                .unwrap();
+            assert!(internal.closed_at.is_some());
+            assert_eq!(internal.lifetime.totals.occurrences_total.value.get(), 5);
+            continue;
+        }
+        let mut host = activated.unwrap();
+        let args = json!({"input": "unchanged"});
+        assert_eq!(
+            tool_request_intercepts("fixture.lookup", args.clone())
+                .await
+                .unwrap(),
+            args
+        );
+        if enabled {
+            let page = context
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            let internal = page
+                .components
+                .iter()
+                .find(|c| c.identity.key == "fixture.internal")
+                .unwrap();
+            assert_eq!(internal.lifetime.totals.occurrences_total.value.get(), 6);
+            assert_eq!(
+                internal.lifetime.totals.recorded_events_total.value.get(),
+                3
+            );
+            let evidence: Vec<_> = page
+                .events
+                .iter()
+                .filter(|e| e.message() == Some("native-private-sentinel"))
+                .collect();
+            assert_eq!(evidence.len(), 3);
+            assert_eq!(
+                evidence[0].context.phase.as_ref().unwrap().as_str(),
+                "activation"
+            );
+            assert_eq!(
+                evidence[2].context.phase.as_ref().unwrap().as_str(),
+                "runtime"
+            );
+            assert!(
+                !host
+                    .report()
+                    .config
+                    .runtime_diagnostics
+                    .iter()
+                    .any(|d| d.message.contains("native-private-sentinel"))
+            );
+        } else {
+            assert_eq!(context.memory_usage().reserved_bytes, 0);
+        }
+        host.close().unwrap();
+        if enabled {
+            let page = context
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap()
+                .to_snapshot()
+                .unwrap();
+            let internal = page
+                .components
+                .iter()
+                .find(|c| c.identity.key == "fixture.internal")
+                .unwrap();
+            assert!(internal.closed_at.is_some());
+            assert_eq!(internal.lifetime.totals.occurrences_total.value.get(), 6);
+        }
+    }
+}

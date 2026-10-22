@@ -3,6 +3,9 @@
 
 //! Native dynamic plugin loader and host-side ABI adapter.
 
+#[path = "native_diagnostics.rs"]
+mod native_diagnostics;
+
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -267,14 +270,22 @@ where
             crate::diagnostics::PluginExecution::NativeAbi,
             uuid::Uuid::now_v7(),
         );
-        let instance =
-            load_one_native_plugin(&spec, artifact, observer.clone()).inspect_err(|_| {
-                observer.failure(
-                    crate::diagnostics::PluginOperationFailureCode::NativeLoad,
-                    crate::diagnostics::FailureClass::Unknown,
-                    crate::diagnostics::PluginPhase::Activation,
-                );
-            })?;
+        let instance = load_one_native_plugin(
+            &spec,
+            artifact,
+            observer.clone(),
+            diagnostics.clone(),
+            trust
+                .get(&spec.plugin_id)
+                .is_some_and(|t| t.policy.native_diagnostics_read_context),
+        )
+        .inspect_err(|_| {
+            observer.failure(
+                crate::diagnostics::PluginOperationFailureCode::NativeLoad,
+                crate::diagnostics::FailureClass::Unknown,
+                crate::diagnostics::PluginPhase::Activation,
+            );
+        })?;
         let plugin_kind = instance.plugin_kind.clone();
         observer.success(
             crate::diagnostics::SuccessCode::PluginNativeLoaded,
@@ -403,7 +414,13 @@ impl Plugin for NativePluginAdapter {
                 native_string_from_json(&Json::Object(plugin_config)).ok_or_else(|| {
                     PluginError::RegistrationFailed("failed to serialize plugin config".into())
                 })?;
+            let diagnostics = Arc::new(native_diagnostics::NativeDiagnostics::new(
+                self.instance.diagnostic_context.clone(),
+                self.instance.diagnostic_read_context,
+                &ctx.qualify_name(""),
+            ));
             let mut native_ctx = NativeHostPluginContext {
+                diagnostics: diagnostics.clone(),
                 ctx: ctx as *mut _,
                 instance: self.instance.clone(),
             };
@@ -415,6 +432,11 @@ impl Plugin for NativePluginAdapter {
                 )
             };
             unsafe { native_string_free(config_json) };
+            if status == NemoRelayStatus::Ok {
+                diagnostics.registered();
+            } else {
+                diagnostics.revoke();
+            }
             self.instance.diagnostics.native_status(
                 crate::diagnostics::PluginOperationFailureCode::NativeRegistration,
                 status,
@@ -447,6 +469,8 @@ fn native_error_diagnostic(plugin_kind: &str, code: &str, message: &str) -> Conf
 
 struct NativePluginInstance {
     diagnostics: super::diagnostics::PluginDiagnostics,
+    diagnostic_context: crate::diagnostics::Diagnostics,
+    diagnostic_read_context: bool,
     plugin_kind: String,
     relay_compat: String,
     allows_multiple_components: bool,
@@ -498,6 +522,8 @@ fn load_one_native_plugin(
     spec: &NativePluginLoadSpec,
     artifact: Option<PreparedNativePlugin>,
     diagnostics: super::diagnostics::PluginDiagnostics,
+    diagnostic_context: crate::diagnostics::Diagnostics,
+    diagnostic_read_context: bool,
 ) -> crate::plugin::Result<Arc<NativePluginInstance>> {
     let snapshot_required = artifact.is_some();
     let (manifest, manifest_ref, artifact_bytes) = match artifact {
@@ -607,6 +633,8 @@ fn load_one_native_plugin(
         )));
     }
     Ok(Arc::new(NativePluginInstance {
+        diagnostic_context,
+        diagnostic_read_context,
         diagnostics,
         plugin_kind,
         relay_compat,
@@ -754,11 +782,13 @@ fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
 
 #[repr(C)]
 struct NativeHostPluginContext {
+    diagnostics: Arc<native_diagnostics::NativeDiagnostics>,
     ctx: *mut PluginRegistrationContext,
     instance: Arc<NativePluginInstance>,
 }
 
 struct NativeHostPluginRuntime {
+    diagnostics: Arc<native_diagnostics::NativeDiagnostics>,
     namespace: String,
     encode_local_names: bool,
     instance: Weak<NativePluginInstance>,
@@ -773,6 +803,7 @@ struct NativeOwnedGate {
 
 impl NativeHostPluginRuntime {
     fn cleanup(&self) -> crate::plugin::Result<()> {
+        self.diagnostics.revoke();
         self.active.store(false, Ordering::Release);
         let mut gates = match self.gates.lock() {
             Ok(gates) => gates,
@@ -1199,9 +1230,20 @@ unsafe extern "C" fn native_llm_response_codec_decode(
 }
 
 fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
-    static HOST_API: OnceLock<NemoRelayNativeHostApiV8> = OnceLock::new();
+    static HOST_API: OnceLock<nemo_relay_plugin::diagnostics::abi::NativeHostApiV8WithDiagnostics> =
+        OnceLock::new();
     &HOST_API
-        .get_or_init(build_native_host_api_v8)
+        .get_or_init(|| {
+            let mut v8 = build_native_host_api_v8();
+            v8.v7.v6.v5.v4.v3.v1.struct_size = std::mem::size_of::<
+                nemo_relay_plugin::diagnostics::abi::NativeHostApiV8WithDiagnostics,
+            >();
+            nemo_relay_plugin::diagnostics::abi::NativeHostApiV8WithDiagnostics {
+                v8,
+                diagnostics_api: &native_diagnostics::API,
+            }
+        })
+        .v8
         .v7
         .v6
         .v5
@@ -4779,6 +4821,7 @@ unsafe extern "C" fn native_plugin_context_runtime(
     let context = unsafe { &*host_ctx.ctx };
     let namespace = context.qualify_name("");
     let runtime = Arc::new(NativeHostPluginRuntime {
+        diagnostics: host_ctx.diagnostics.clone(),
         namespace,
         encode_local_names: context.uses_plugin_component_namespace(),
         instance: Arc::downgrade(&host_ctx.instance),
