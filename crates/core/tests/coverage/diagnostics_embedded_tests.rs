@@ -102,10 +102,12 @@ fn nested_query_selectors_reject_unknown_fields_without_changing_response_models
             assert_eq!(decoded.continuation, Some(cursor.clone()));
         }
         let mut unknown_only = serde_json::json!({ (selector): {"configuration_typo": "PRIVATE"} });
-        assert!(matches!(
-            decode_query(&unknown_only.to_string()),
-            Err(EmbeddedDiagnosticError::Core(DiagnosticError::InvalidQuery))
-        ));
+        assert_eq!(
+            decode_query(&unknown_only.to_string())
+                .unwrap_err()
+                .reason(),
+            "invalid_query"
+        );
         unknown_only[selector] = query[selector].clone();
         unknown_only[selector]["future_field"] = serde_json::json!("PRIVATE");
         let error = decode_query(&unknown_only.to_string()).unwrap_err();
@@ -141,10 +143,10 @@ fn ownership_query_typos_cannot_broaden_embedded_snapshot_selection() {
         r#"{"ownership":{"configuration_typo":"other-config"}}"#,
         r#"{"ownership":{"configuration_id":"actual-config","configuration_typo":"other-config"}}"#,
     ] {
-        assert!(matches!(
-            service.reader.snapshot_json(query),
-            Err(EmbeddedDiagnosticError::Core(DiagnosticError::InvalidQuery))
-        ));
+        assert_eq!(
+            service.reader.snapshot_json(query).err().unwrap().reason(),
+            "invalid_query"
+        );
     }
     for (query, expected) in [
         ("{}", 1),
