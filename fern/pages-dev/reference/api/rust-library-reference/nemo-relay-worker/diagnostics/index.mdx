@@ -1,0 +1,35 @@
+---
+title: "Module diagnostics"
+sidebar-title: "diagnostics"
+description: "Negotiated, bounded plugin diagnostic submission and delivery controls. Bounded diagnostic delivery, independent of execution and operational logs. Counters, history, and recording permission remain owned by the Relay host."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Negotiated, bounded plugin diagnostic submission and delivery controls. Bounded diagnostic delivery, independent of execution and operational logs. Counters, history, and recording permission remain owned by the Relay host.
+
+## Structs
+
+- [DiagnosticCodeDefinition](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticcodedefinition)
+- [DiagnosticComponent](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticcomponent): Component-scoped authoring handle; code IDs are one-based registration positions.
+- [DiagnosticDeliveryStats](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticdeliverystats): SDK-local saturating delivery totals; never replayed as host observations.
+- [DiagnosticExtensionDefinition](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticextensiondefinition)
+- [DiagnosticObservation](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticobservation)
+- [DiagnosticReceipt](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-diagnosticreceipt)
+- [WorkerDiagnostics](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/struct-workerdiagnostics): One negotiated facade per activation. Disabled/unsupported facades are inert.
+
+## Enums
+
+- [DiagnosticDeliveryError](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticdeliveryerror): Delivery outcome, independent of plugin execution or health.
+- [DiagnosticEvidenceRetention](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticevidenceretention)
+- [DiagnosticObservationOutcome](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticobservationoutcome)
+- [DiagnosticObservationSeverity](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticobservationseverity)
+- [DiagnosticReceiptStatus](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/enum-diagnosticreceiptstatus)
+
+## Functions
+
+- [builtin_code](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/fn-builtin-code): Select a typed catalogue code without copying its spelling into plugin code.
+- [extension_code](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics/fn-extension-code): Define a bounded internal operation in the host-assigned session namespace.

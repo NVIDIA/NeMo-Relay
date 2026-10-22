@@ -100,6 +100,7 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [PluginPhaseName](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-pluginphasename): A plugin lifecycle phase name, preserving values unknown to this reader. Typed conversion accepts only the corresponding catalogue enum.
 - [ProjectionGuard](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-projectionguard): Bounded projection subscription, or inert disabled-mode handle.
 - [RecordReceipt](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-recordreceipt): Accepted lifetime and current-summary update, independent of retention and delivery.
+- [RemoteDiagnosticOrigin](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-remotediagnosticorigin): Fixed-size provenance retained by an authorized ingestion adapter.
 - [SnapshotLease](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-snapshotlease): A bounded serialized page. Dropping the lease returns its workspace permit; it owns copied bytes and never pins retained history or a component lease.
 - [SourceIdentity](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-sourceidentity): Identity of one Relay process or explicitly owned runtime incarnation.
 - [WindowSettings](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-windowsettings): Fixed-duration component outcome windows; no code/class Cartesian product.
@@ -109,6 +110,7 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [BuiltinDiagnosticCode](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-builtindiagnosticcode): Fixed-size canonical authoring value with one authoritative hierarchy.
 - [CliFailureCode](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-clifailurecode): Failures at integrated CLI operation boundaries; causes come from producers.
 - [CommonPluginFailureCode](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-commonpluginfailurecode): Plugin failures supported by phase-one activation recording.
+- [DaemonFailureCode](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-daemonfailurecode): Failures observed by daemon operation owners, independent of health policy.
 - [DiagnosticAvailability](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticavailability): Availability of evidence, without applying deployment or application health.
 - [DiagnosticDetailRef](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticdetailref): Borrowed producer-approved detail. A Display source is formatted into capped storage only when the enabled recorder invokes its lazy observation factory.
 - [DiagnosticDomain](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticdomain): Top-level owning subsystem, derived from its catalogue code.
@@ -124,6 +126,7 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [PluginDiagnosticFamily](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-plugindiagnosticfamily): Semantic family of related plugin diagnostic codes.
 - [PluginExecution](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-pluginexecution): Producer-authored plugin execution mechanism, excluded from counter identity.
 - [PluginFailureCode](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-pluginfailurecode): Plugin failure hierarchy for integrated producers.
+- [PluginOperationFailureCode](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-pluginoperationfailurecode): Failures at observed dynamic-plugin operation boundaries.
 - [PluginPhase](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-pluginphase): Observed plugin lifecycle phase or policy-gate context, independent of classification.
 - [ProjectionError](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-projectionerror): Subscriber conversion or delivery failure after canonical acceptance.
 - [RecordOutcome](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-recordoutcome): Accepted collection or intentional startup disablement.
@@ -131,7 +134,7 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 
 ## Constants
 
-- [DIAGNOSTIC_CATALOGUE_VERSION](/reference/api/rust-library-reference/nemo-relay/diagnostics/constant-diagnostic-catalogue-version): Initial stable typed-catalogue revision, independent of the envelope version.
+- [DIAGNOSTIC_CATALOGUE_VERSION](/reference/api/rust-library-reference/nemo-relay/diagnostics/constant-diagnostic-catalogue-version): Stable typed-catalogue revision, independent of the envelope version.
 - [DIAGNOSTIC_SCHEMA_VERSION](/reference/api/rust-library-reference/nemo-relay/diagnostics/constant-diagnostic-schema-version): Initial version of the canonical diagnostic snapshot envelope.
 
 ## Traits

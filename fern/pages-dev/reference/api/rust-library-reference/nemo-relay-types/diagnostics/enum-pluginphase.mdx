@@ -2,7 +2,7 @@
 title: "Enum Plugin Phase"
 sidebar-title: "PluginPhase"
 description: "Observed plugin lifecycle phase or policy-gate context, independent of classification."
-position: 47
+position: 50
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -15,6 +15,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
     Activation,
     Runtime,
     Policy,
+    Shutdown,
 }
 ```
 
@@ -47,6 +48,12 @@ Runtime lifecycle phase.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Policy"}} /></pre>
 
 Host policy evaluation that permits or blocks plugin realization.
+
+### `Shutdown`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Shutdown"}} /></pre>
+
+Plugin cleanup and confirmed process termination.
 
 ## Implementations
 

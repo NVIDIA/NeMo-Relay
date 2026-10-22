@@ -590,10 +590,18 @@ Call event, scope, and continuation operations on the Relay host.
 ##### `PluginRuntime`
 
 ```python
-def PluginRuntime(*, activation_id: str, auth_token: str, host_stub: Any) -> None
+def PluginRuntime(*, activation_id: str, auth_token: str, host_stub: Any, diagnostic_stub: Any = None) -> None
 ```
 
 Create an instance.
+
+##### `diagnostics`
+
+```python
+async def diagnostics() -> WorkerDiagnostics
+```
+
+Negotiate once; disabled/unsupported facades skip diagnostic factories.
 
 ##### `log`
 
@@ -882,4 +890,9 @@ Format an HTTP error status (400–599) for Relay plugin error forwarding.
 - `grpc`
 - `pb`
 - `pb_grpc`
+
+## Re-exports
+
+- `DiagnosticDeliveryError`
+- `WorkerDiagnostics`
 

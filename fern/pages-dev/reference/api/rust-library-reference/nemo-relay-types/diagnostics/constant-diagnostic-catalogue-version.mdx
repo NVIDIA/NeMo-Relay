@@ -1,8 +1,8 @@
 ---
 title: "Constant DIAGNOSTIC_CATALOGUE_VERSION"
 sidebar-title: "DIAGNOSTIC_CATALOGUE_VERSION"
-description: "Initial stable typed-catalogue revision, independent of the envelope version."
-position: 49
+description: "Stable typed-catalogue revision, independent of the envelope version."
+position: 52
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,4 +11,6 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const DIAGNOSTIC_CATALOGUE_VERSION: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a> = 1;"}} /></pre>
 
-Initial stable typed-catalogue revision, independent of the envelope version.
+Stable typed-catalogue revision, independent of the envelope version.
+
+Additive catalogue names do not change this revision: supported envelopes preserve unknown names opaquely. Increment it only when an existing catalogue name's meaning or representation changes incompatibly.

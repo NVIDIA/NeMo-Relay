@@ -2,7 +2,7 @@
 title: "Enum Diagnostic Domain"
 sidebar-title: "DiagnosticDomain"
 description: "Top-level owning subsystem, derived from its catalogue code."
-position: 56
+position: 58
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,6 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 ```rust
 #[non_exhaustive]pub enum DiagnosticDomain {
+    Daemon,
     Cli,
     Plugin,
     Logging,
@@ -20,6 +21,12 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 Top-level owning subsystem, derived from its catalogue code.
 
 ## Variants (Non-exhaustive)
+
+### `Daemon`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Daemon"}} /></pre>
+
+Daemon control, runtime, forwarding, and collection operations.
 
 ### `Cli`
 

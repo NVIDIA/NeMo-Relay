@@ -47,6 +47,7 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 - [PluginExecutionName](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-pluginexecutionname): A plugin execution mechanism name, preserving values unknown to this reader. Typed conversion accepts only the corresponding catalogue enum.
 - [PluginObservationContext](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-pluginobservationcontext): Shared plugin-operation facts for producers, projections, and decoded evidence.
 - [PluginPhaseName](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-pluginphasename): A plugin lifecycle phase name, preserving values unknown to this reader. Typed conversion accepts only the corresponding catalogue enum.
+- [RemoteDiagnosticOrigin](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-remotediagnosticorigin): Fixed-size provenance retained by an authorized ingestion adapter.
 - [SourceIdentity](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-sourceidentity): Identity of one Relay process or explicitly owned runtime incarnation.
 
 ## Enums
@@ -54,6 +55,7 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 - [BuiltinDiagnosticCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-builtindiagnosticcode): Fixed-size canonical authoring value with one authoritative hierarchy.
 - [CliFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-clifailurecode): Failures at integrated CLI operation boundaries; causes come from producers.
 - [CommonPluginFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-commonpluginfailurecode): Plugin failures supported by phase-one activation recording.
+- [DaemonFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-daemonfailurecode): Failures observed by daemon operation owners, independent of health policy.
 - [DiagnosticAvailability](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticavailability): Availability of evidence, without applying deployment or application health.
 - [DiagnosticDomain](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticdomain): Top-level owning subsystem, derived from its catalogue code.
 - [DiagnosticOutcome](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticoutcome): Observed operation outcome; severity does not imply this value.
@@ -66,12 +68,13 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 - [PluginDiagnosticFamily](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-plugindiagnosticfamily): Semantic family of related plugin diagnostic codes.
 - [PluginExecution](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-pluginexecution): Producer-authored plugin execution mechanism, excluded from counter identity.
 - [PluginFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-pluginfailurecode): Plugin failure hierarchy for integrated producers.
+- [PluginOperationFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-pluginoperationfailurecode): Failures at observed dynamic-plugin operation boundaries.
 - [PluginPhase](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-pluginphase): Observed plugin lifecycle phase or policy-gate context, independent of classification.
 - [SuccessCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-successcode): Explicit successful operations; successes do not recover or clear failures.
 
 ## Constants
 
-- [DIAGNOSTIC_CATALOGUE_VERSION](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/constant-diagnostic-catalogue-version): Initial stable typed-catalogue revision, independent of the envelope version.
+- [DIAGNOSTIC_CATALOGUE_VERSION](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/constant-diagnostic-catalogue-version): Stable typed-catalogue revision, independent of the envelope version.
 - [DIAGNOSTIC_SCHEMA_VERSION](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/constant-diagnostic-schema-version): Initial version of the canonical diagnostic snapshot envelope.
 
 ## Traits

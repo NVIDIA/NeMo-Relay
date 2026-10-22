@@ -2,7 +2,7 @@
 title: "Struct Plugin Runtime"
 sidebar-title: "PluginRuntime"
 description: "Cloneable handle for calling the Relay host runtime from worker callbacks."
-position: 32
+position: 33
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -20,6 +20,12 @@ Cloneable handle for calling the Relay host runtime from worker callbacks.
 ### `impl PluginRuntime`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn diagnostics(&amp;self) -&gt; &amp;<a href=\"diagnostics/struct-workerdiagnostics\">WorkerDiagnostics</a>"}} /></pre>
+
+Negotiate once per activation. Disabled/unsupported facades skip lazy diagnostic factories and leave execution and operational logging intact.
 
 #### `log`
 

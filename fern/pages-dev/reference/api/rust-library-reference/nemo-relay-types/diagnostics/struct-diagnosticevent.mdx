@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticEvent &#123;\n    pub sequence: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub observed_at: <a href=\"type-observationtime\">ObservationTime</a>,\n    pub component: <a href=\"struct-componentidentity\">ComponentIdentity</a>,\n    pub origin: <a href=\"struct-diagnosticorigin\">DiagnosticOrigin</a>,\n    pub classification: <a href=\"struct-classification\">Classification</a>,\n    pub context: <a href=\"struct-pluginobservationcontext\">PluginObservationContext</a>,\n    pub severity: <a href=\"enum-diagnosticseverity\">DiagnosticSeverity</a>,\n    pub outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>,\n    pub detail: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticdetail\">DiagnosticDetail</a>&gt;,\n    pub count: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub correlation: <a href=\"struct-diagnosticcorrelation\">DiagnosticCorrelation</a>&lt;'static&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticEvent &#123;\n    pub sequence: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub observed_at: <a href=\"type-observationtime\">ObservationTime</a>,\n    pub component: <a href=\"struct-componentidentity\">ComponentIdentity</a>,\n    pub origin: <a href=\"struct-diagnosticorigin\">DiagnosticOrigin</a>,\n    pub remote: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-remotediagnosticorigin\">RemoteDiagnosticOrigin</a>&gt;,\n    pub classification: <a href=\"struct-classification\">Classification</a>,\n    pub context: <a href=\"struct-pluginobservationcontext\">PluginObservationContext</a>,\n    pub severity: <a href=\"enum-diagnosticseverity\">DiagnosticSeverity</a>,\n    pub outcome: <a href=\"enum-diagnosticoutcome\">DiagnosticOutcome</a>,\n    pub detail: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticdetail\">DiagnosticDetail</a>&gt;,\n    pub count: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub correlation: <a href=\"struct-diagnosticcorrelation\">DiagnosticCorrelation</a>&lt;'static&gt;,\n&#125;"}} /></pre>
 
 One recent observation with its actual class and original configuration attribution.
 
@@ -30,6 +30,10 @@ Registration that owned the original observation.
 ### `origin: DiagnosticOrigin`
 
 Original configuration attribution, preserved through component refresh.
+
+### `remote: Option<RemoteDiagnosticOrigin>`
+
+Authenticated remote submission provenance, absent for local observations.
 
 ### `classification: Classification`
 

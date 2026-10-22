@@ -13,11 +13,15 @@ Generated protobuf and gRPC service definitions.
 
 ## Modules
 
+- [diagnostic_code_definition](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/diagnostic_code_definition): Nested message and enum types in `DiagnosticCodeDefinition`.
+- [diagnostic_submission](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/diagnostic_submission): Nested message and enum types in `DiagnosticSubmission`.
 - [invoke_request](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/invoke_request): Nested message and enum types in `InvokeRequest`.
 - [invoke_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/invoke_response): Nested message and enum types in `InvokeResponse`.
 - [llm_invocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/llm_invocation): Nested message and enum types in `LlmInvocation`.
 - [plugin_worker_client](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/plugin_worker_client): Generated client implementations.
 - [plugin_worker_server](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/plugin_worker_server): Generated server implementations.
+- [relay_diagnostics_client](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/relay_diagnostics_client): Generated client implementations.
+- [relay_diagnostics_server](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/relay_diagnostics_server): Generated server implementations.
 - [relay_host_runtime_client](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/relay_host_runtime_client): Generated client implementations.
 - [relay_host_runtime_server](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/relay_host_runtime_server): Generated server implementations.
 - [stream_chunk](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/stream_chunk): Nested message and enum types in `StreamChunk`.
@@ -31,6 +35,20 @@ Generated protobuf and gRPC service definitions.
 - [CreateScopeStackResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-createscopestackresponse)
 - [DeregisterConditionalMiddlewareGuardrailRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-deregisterconditionalmiddlewareguardrailrequest)
 - [DeregisterConditionalMiddlewareGuardrailResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-deregisterconditionalmiddlewareguardrailresponse)
+- [DiagnosticCapabilities](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticcapabilities)
+- [DiagnosticCodeDefinition](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticcodedefinition)
+- [DiagnosticComponentClose](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticcomponentclose)
+- [DiagnosticComponentRegistration](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticcomponentregistration)
+- [DiagnosticCredentials](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticcredentials)
+- [DiagnosticExtensionDefinition](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticextensiondefinition)
+- [DiagnosticObservation](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticobservation)
+- [DiagnosticOpenRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticopenrequest)
+- [DiagnosticReadRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticreadrequest)
+- [DiagnosticReadResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticreadresponse)
+- [DiagnosticReceipt](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticreceipt)
+- [DiagnosticSession](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticsession)
+- [DiagnosticSessionClose](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticsessionclose)
+- [DiagnosticSubmission](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-diagnosticsubmission): A single ordered stream serializes registration, recording, and closure. Identical retries reuse sequence and payload. No execution error is retried.
 - [DropScopeStackRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-dropscopestackrequest)
 - [EmitMarkRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-emitmarkrequest)
 - [EmptyResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-emptyresult)
@@ -92,6 +110,10 @@ Generated protobuf and gRPC service definitions.
 
 ## Enums
 
+- [DiagnosticEvidenceRetention](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-diagnosticevidenceretention)
+- [DiagnosticObservationOutcome](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-diagnosticobservationoutcome)
+- [DiagnosticObservationSeverity](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-diagnosticobservationseverity)
+- [DiagnosticReceiptStatus](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-diagnosticreceiptstatus)
 - [LlmCodecKind](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-llmcodeckind)
 - [LogLevel](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-loglevel): Process-log levels accepted from an authenticated plugin. The host owns the final sink configuration and filters records with its configured threshold.
 - [RegistrationSurface](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-registrationsurface)

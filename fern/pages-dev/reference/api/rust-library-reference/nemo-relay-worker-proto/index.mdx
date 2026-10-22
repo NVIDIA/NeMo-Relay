@@ -19,6 +19,8 @@ The protobuf schema owns transport control flow and the tool-result wrapper stru
 
 ## Constants
 
+- [DIAGNOSTIC_NOT_CONSUMED_METADATA](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-diagnostic-not-consumed-metadata): Metadata set to `1` on a diagnostic admission rejection before execution. This certifies only that attempt; an earlier lost reply can still be uncertain.
+- [DOWNSTREAM_CONTINUATION_METADATA](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-downstream-continuation-metadata): Continuation provenance for an error returned as gRPC status metadata. Used for stream-opening failures, where no `WorkerError` envelope is returned.
 - [WORKER_PROTOCOL_GRPC_V1](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-worker-protocol-grpc-v1): Stable worker protocol identifier accepted by `compat.worker_protocol`.
 
 ## Functions

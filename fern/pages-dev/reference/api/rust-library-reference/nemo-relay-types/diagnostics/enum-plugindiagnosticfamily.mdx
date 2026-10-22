@@ -2,7 +2,7 @@
 title: "Enum Plugin Diagnostic Family"
 sidebar-title: "PluginDiagnosticFamily"
 description: "Semantic family of related plugin diagnostic codes."
-position: 44
+position: 46
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -12,6 +12,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 ```rust
 #[non_exhaustive]pub enum PluginDiagnosticFamily {
     Common,
+    Operations,
 }
 ```
 
@@ -26,6 +27,12 @@ Family is derived from a code's catalogue ownership. Execution mechanism is sepa
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Common"}} /></pre>
 
 Shared plugin-operation codes applicable across execution mechanisms.
+
+### `Operations`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Operations"}} /></pre>
+
+Host-observed loading, validation, execution, and cleanup operations.
 
 ## Trait Implementations
 

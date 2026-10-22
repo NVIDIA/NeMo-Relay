@@ -2,14 +2,14 @@
 title: "Struct Worker Error"
 sidebar-title: "WorkerError"
 description: "API documentation for the Rust `WorkerError` struct in crate `nemo_relay_worker_proto`."
-position: 73
+position: 91
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct WorkerError &#123;\n    pub code: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub retryable: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct WorkerError &#123;\n    pub code: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub retryable: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub downstream_continuation_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n&#125;"}} /></pre>
 
 ## Fields
 
@@ -18,6 +18,22 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 ### `message: String`
 
 ### `retryable: bool`
+
+### `downstream_continuation_id: Option<String>`
+
+Host-issued continuation whose downstream failure is being propagated. SDKs preserve this on the same error, never on a newly created callback error. The host suppresses callback attribution only for the current invocation's nonempty continuation ID. Absent/unknown provenance retains legacy behavior.
+
+## Implementations
+
+### `impl WorkerError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-workererror\">WorkerError</a>"}} /></pre>
+
+#### `downstream_continuation_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn downstream_continuation_id(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+Returns the value of `downstream_continuation_id`, or the default value if `downstream_continuation_id` is unset.
 
 ## Trait Implementations
 

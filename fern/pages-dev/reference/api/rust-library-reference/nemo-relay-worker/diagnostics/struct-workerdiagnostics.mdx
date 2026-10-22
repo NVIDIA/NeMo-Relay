@@ -1,0 +1,66 @@
+---
+title: "Struct Worker Diagnostics"
+sidebar-title: "WorkerDiagnostics"
+description: "One negotiated facade per activation. Disabled/unsupported facades are inert."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct WorkerDiagnostics { /* private fields */ }
+```
+
+One negotiated facade per activation. Disabled/unsupported facades are inert.
+
+## Implementations
+
+### `impl WorkerDiagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-workerdiagnostics\">WorkerDiagnostics</a>"}} /></pre>
+
+#### `availability`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn availability(&amp;self) -&gt; DiagnosticAvailability"}} /></pre>
+
+Negotiated availability, independent of deployment health.
+
+#### `delivery_stats`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn delivery_stats(&amp;self) -&gt; <a href=\"struct-diagnosticdeliverystats\">DiagnosticDeliveryStats</a>"}} /></pre>
+
+Read local delivery totals without resetting them.
+
+#### `component`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn component(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    codes: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-diagnosticcodedefinition\">DiagnosticCodeDefinition</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-diagnosticcomponent\">DiagnosticComponent</a>, <a href=\"enum-diagnosticdeliveryerror\">DiagnosticDeliveryError</a>&gt;"}} /></pre>
+
+Register a bounded vocabulary; disabled mode returns an inert component.
+
+#### `flush`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn flush(\n    &amp;self,\n    deadline: <a href=\"https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html\">Duration</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"enum-diagnosticdeliveryerror\">DiagnosticDeliveryError</a>&gt;"}} /></pre>
+
+Wait for previously admitted work within a deadline; no disk/exporter acknowledgment.
+
+#### `close`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn close(\n    &amp;self,\n    deadline: <a href=\"https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html\">Duration</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"enum-diagnosticdeliveryerror\">DiagnosticDeliveryError</a>&gt;"}} /></pre>
+
+Drain and close within the existing plugin shutdown deadline.
+
+## Trait Implementations
+
+### `impl Clone for WorkerDiagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-workerdiagnostics\">WorkerDiagnostics</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-workerdiagnostics\">WorkerDiagnostics</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

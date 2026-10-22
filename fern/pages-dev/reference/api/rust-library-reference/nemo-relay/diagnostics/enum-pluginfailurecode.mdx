@@ -2,18 +2,24 @@
 title: "Enum Plugin Failure Code"
 sidebar-title: "PluginFailureCode"
 description: "Plugin failure hierarchy for integrated producers."
-position: 68
+position: 70
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[non_exhaustive]pub enum PluginFailureCode &#123;\n    Common(<a href=\"enum-commonpluginfailurecode\">CommonPluginFailureCode</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[non_exhaustive]pub enum PluginFailureCode &#123;\n    Operation(<a href=\"enum-pluginoperationfailurecode\">PluginOperationFailureCode</a>),\n    Common(<a href=\"enum-commonpluginfailurecode\">CommonPluginFailureCode</a>),\n&#125;"}} /></pre>
 
 Plugin failure hierarchy for integrated producers.
 
 ## Variants (Non-exhaustive)
+
+### `Operation(PluginOperationFailureCode)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Operation(<a href=\"enum-pluginoperationfailurecode\">PluginOperationFailureCode</a>)"}} /></pre>
+
+Host-observed operations across native and worker execution.
 
 ### `Common(CommonPluginFailureCode)`
 

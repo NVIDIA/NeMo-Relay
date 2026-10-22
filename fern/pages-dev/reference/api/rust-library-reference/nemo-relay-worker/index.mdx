@@ -17,6 +17,10 @@ The `grpc-v1` service tracks active unary and streaming callbacks by the host-pr
 
 Cancellation is cooperative. Dropping an async callback future releases its Rust-owned resources, but an accepted acknowledgment does not prove that arbitrary blocking work started by the callback has stopped.
 
+## Modules
+
+- [diagnostics](/reference/api/rust-library-reference/nemo-relay-worker/diagnostics): Negotiated, bounded plugin diagnostic submission and delivery controls. Bounded diagnostic delivery, independent of execution and operational logs. Counters, history, and recording permission remain owned by the Relay host.
+
 ## Macros
 
 - [relay_debug](/reference/api/rust-library-reference/nemo-relay-worker/macro-relay-debug): Emit a formatted debug-level gRPC worker record; await the returned future.

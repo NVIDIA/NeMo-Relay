@@ -2,7 +2,7 @@
 title: "Enum Success Code"
 sidebar-title: "SuccessCode"
 description: "Explicit successful operations; successes do not recover or clear failures."
-position: 72
+position: 75
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,7 +11,15 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 ```rust
 #[non_exhaustive]pub enum SuccessCode {
-Show 13 variants    CliUpstreamHeadersReceived,
+Show 21 variants    PluginNativeLoaded,
+    PluginNativeValidated,
+    PluginNativeRegistered,
+    PluginWorkerStarted,
+    PluginWorkerHandshakeCompleted,
+    PluginWorkerValidated,
+    PluginWorkerRegistered,
+    PluginWorkerProcessCleaned,
+    CliUpstreamHeadersReceived,
     CliUpstreamBodyCompleted,
     CliChildCleaned,
     CliCommandCompleted,
@@ -30,6 +38,54 @@ Show 13 variants    CliUpstreamHeadersReceived,
 Explicit successful operations; successes do not recover or clear failures.
 
 ## Variants (Non-exhaustive)
+
+### `PluginNativeLoaded`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PluginNativeLoaded"}} /></pre>
+
+Observation identified by `plugin.native.loaded`.
+
+### `PluginNativeValidated`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PluginNativeValidated"}} /></pre>
+
+Observation identified by `plugin.native.validated`.
+
+### `PluginNativeRegistered`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PluginNativeRegistered"}} /></pre>
+
+Observation identified by `plugin.native.registered`.
+
+### `PluginWorkerStarted`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PluginWorkerStarted"}} /></pre>
+
+Observation identified by `plugin.worker.started`.
+
+### `PluginWorkerHandshakeCompleted`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PluginWorkerHandshakeCompleted"}} /></pre>
+
+Observation identified by `plugin.worker.handshake_completed`.
+
+### `PluginWorkerValidated`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PluginWorkerValidated"}} /></pre>
+
+Observation identified by `plugin.worker.validated`.
+
+### `PluginWorkerRegistered`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PluginWorkerRegistered"}} /></pre>
+
+Observation identified by `plugin.worker.registered`.
+
+### `PluginWorkerProcessCleaned`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PluginWorkerProcessCleaned"}} /></pre>
+
+Observation identified by `plugin.worker.process_cleaned`.
 
 ### `CliUpstreamHeadersReceived`
 

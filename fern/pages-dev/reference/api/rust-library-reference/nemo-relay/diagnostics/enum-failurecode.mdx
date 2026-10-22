@@ -2,18 +2,24 @@
 title: "Enum Failure Code"
 sidebar-title: "FailureCode"
 description: "Failure event hierarchy for integrated producers."
-position: 63
+position: 65
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[non_exhaustive]pub enum FailureCode &#123;\n    Cli(<a href=\"enum-clifailurecode\">CliFailureCode</a>),\n    Plugin(<a href=\"enum-pluginfailurecode\">PluginFailureCode</a>),\n    Logging(<a href=\"enum-loggingfailurecode\">LoggingFailureCode</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[non_exhaustive]pub enum FailureCode &#123;\n    Daemon(<a href=\"enum-daemonfailurecode\">DaemonFailureCode</a>),\n    Cli(<a href=\"enum-clifailurecode\">CliFailureCode</a>),\n    Plugin(<a href=\"enum-pluginfailurecode\">PluginFailureCode</a>),\n    Logging(<a href=\"enum-loggingfailurecode\">LoggingFailureCode</a>),\n&#125;"}} /></pre>
 
 Failure event hierarchy for integrated producers.
 
 ## Variants (Non-exhaustive)
+
+### `Daemon(DaemonFailureCode)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Daemon(<a href=\"enum-daemonfailurecode\">DaemonFailureCode</a>)"}} /></pre>
+
+Daemon-owned failures.
 
 ### `Cli(CliFailureCode)`
 
