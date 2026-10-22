@@ -56,6 +56,8 @@
 /// Producer-owned pure mappings from existing typed errors to catalogue values.
 pub mod classifiers;
 pub use classifiers::PluginErrorClassifier;
+/// Configuration-driven service and bounded copies for embedded language runtimes.
+pub mod embedded;
 mod lifecycle;
 mod read;
 mod settings;

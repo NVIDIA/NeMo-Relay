@@ -117,6 +117,8 @@ pub struct LoggingRuntime {
     _thread_pools: Vec<Arc<ThreadPool>>,
     diagnostics: LoggingDiagnostics,
     projection: Option<LoggingProjection>,
+    config: LoggingConfig,
+    diagnostic_source: Option<uuid::Uuid>,
 }
 
 impl LoggingRuntime {
@@ -126,8 +128,13 @@ impl LoggingRuntime {
     /// Explicit file sinks fail initialization if they cannot be
     /// opened. Dropping the returned runtime flushes sinks and detaches its logger from the
     /// process-global `log` proxy when it is still installed.
+    /// Reuses an already selected diagnostics context. Otherwise, logging uses an inert context
+    /// without selecting the process default, leaving diagnostics enablement to runtime startup.
     pub fn configure(config: LoggingConfig) -> Result<Self> {
-        Self::configure_with_diagnostics(config, Diagnostics::process_default())
+        Self::configure_with_diagnostics(
+            config,
+            Diagnostics::selected_process_default().unwrap_or(&Diagnostics::default()),
+        )
     }
 
     /// Installs operational logging with diagnostics owned by an independent diagnostic context.
@@ -191,6 +198,10 @@ impl LoggingRuntime {
             _thread_pools: thread_pools,
             diagnostics,
             projection,
+            config,
+            diagnostic_source: (context.reader().availability()
+                == crate::diagnostics::DiagnosticAvailability::Available)
+                .then_some(context.source().instance_id),
         })
     }
 
@@ -293,7 +304,7 @@ pub fn initialize_default_logging() -> Result<()> {
         }
         match LoggingRuntime::configure_with_lifecycle_lock(
             config.unwrap_or_default(),
-            Diagnostics::process_default(),
+            Diagnostics::selected_process_default().unwrap_or(&Diagnostics::default()),
         ) {
             Ok(configured) => *runtime = Some(configured),
             // Language bindings initialize logging automatically. When Relay was not explicitly
@@ -303,6 +314,65 @@ pub fn initialize_default_logging() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Attach a newly selected embedded service without replacing the logger,
+/// reopening sinks, resetting queues/rate limits, or replaying previous records.
+#[doc(hidden)]
+pub fn attach_default_diagnostics(context: &Diagnostics) -> Result<()> {
+    let mut owner = DEFAULT_LOGGING_RUNTIME
+        .lock()
+        .map_err(|_| FlowError::Internal("logging owner unavailable".into()))?;
+    let Some(runtime) = owner.as_mut() else {
+        return Ok(());
+    };
+    let _lifecycle = lock_logger_lifecycle();
+    if !is_active_relay_logger(&runtime.logger)
+        || runtime.diagnostic_source.is_some()
+        || context.reader().availability() != crate::diagnostics::DiagnosticAvailability::Available
+    {
+        return Ok(());
+    }
+    runtime.diagnostics.attach(context);
+    runtime.diagnostic_source = Some(context.source().instance_id);
+    runtime.root_relay_id = context.source().instance_id.to_string();
+    let formats = runtime
+        .config
+        .stderr_enabled
+        .then_some(runtime.config.stderr_format)
+        .into_iter()
+        .chain(runtime.config.sinks.iter().map(|config| {
+            let LogSinkConfig::File(file) = config;
+            file.format
+        }));
+    for (sink, format) in runtime.logger.sinks().iter().zip(formats) {
+        sink.set_formatter(Box::new(self::format::RelayFormatter {
+            format,
+            root_relay_id: runtime.root_relay_id.clone(),
+        }));
+    }
+    runtime.projection = match self::diagnostics::attach_projection(context, &runtime.logger) {
+        Ok(projection) => Some(projection),
+        Err(_) => {
+            runtime.diagnostics.projection_unavailable();
+            None
+        }
+    };
+    Ok(())
+}
+
+/// Explicit adapter coverage; application-owned loggers remain unsupported.
+#[doc(hidden)]
+pub fn default_diagnostics_coverage() -> &'static str {
+    let owner = DEFAULT_LOGGING_RUNTIME
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    match owner.as_ref() {
+        Some(runtime) if !is_active_relay_logger(&runtime.logger) => "not_active_owner",
+        Some(runtime) if runtime.diagnostic_source.is_some() => "attached_since_service_start",
+        Some(_) => "not_attached",
+        None => "not_owned_or_closed",
+    }
 }
 
 /// Shuts down and releases the default process-wide logging runtime for a language binding.

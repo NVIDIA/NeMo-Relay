@@ -158,6 +158,11 @@ typedef struct FfiAtofExporter FfiAtofExporter;
 typedef struct FfiCodecHandle FfiCodecHandle;
 
 /**
+ * Opaque inspection authority. Caller must not copy, free, or forge the allocation.
+ */
+typedef struct FfiDiagnosticsReader FfiDiagnosticsReader;
+
+/**
  * Opaque wrapper around a lifecycle event emitted by the runtime.
  */
 typedef struct FfiEvent FfiEvent;
@@ -989,6 +994,50 @@ NemoRelayStatus nemo_relay_adaptive_build_cache_telemetry_event(const char *opti
  * Set manual latency sensitivity on the current scope.
  */
 NemoRelayStatus nemo_relay_adaptive_set_latency_sensitivity(uint32_t value);
+
+/**
+ * Return the core's maximum encoded embedded diagnostics query size.
+ */
+uint32_t nemo_relay_diagnostics_query_max_bytes(void);
+
+/**
+ * Obtain an embedded reader without starting or enabling diagnostics.
+ * Errors set a stable machine-readable reason in nemo_relay_last_error.
+ * # Safety
+ * `out` must be writable pointer storage. Success transfers one reader allocation.
+ */
+NemoRelayStatus nemo_relay_diagnostics_reader(struct FfiDiagnosticsReader **out);
+
+/**
+ * Free a reader once and clear its slot. Null slots are harmless.
+ * # Safety
+ * `reader` must be null or writable storage containing null or one live reader
+ * returned by nemo_relay_diagnostics_reader. No concurrent read may use it.
+ */
+void nemo_relay_diagnostics_reader_free(struct FfiDiagnosticsReader **reader);
+
+/**
+ * Capture a canonical page. Release successful output with nemo_relay_string_free.
+ * The optional query is bounded by the core's encoded query byte limit and
+ * uses canonical query fields.
+ * Failure always leaves `*out` null. A reader/filter does not restrict authority.
+ * # Safety
+ * Reader must be live; out must be writable and non-aliasing. Query must be null
+ * or readable through its NUL terminator (up to 4097 bytes). Freed/forged pointers
+ * cannot be detected. Native library must remain loaded while handles are live.
+ */
+NemoRelayStatus nemo_relay_diagnostics_snapshot_json(const struct FfiDiagnosticsReader *reader,
+                                                     const char *query,
+                                                     char **out);
+
+/**
+ * Inspect core and adapter capacities, occupancy, and logging coverage as JSON.
+ * # Safety
+ * Reader must be live; out must be writable and non-aliasing. Free successful
+ * output using nemo_relay_string_free. Failure always leaves `*out` null.
+ */
+NemoRelayStatus nemo_relay_diagnostics_info_json(const struct FfiDiagnosticsReader *reader,
+                                                 char **out);
 
 /**
  * Register a global event metadata injector.
@@ -2408,7 +2457,8 @@ NemoRelayStatus nemo_relay_plugin_validate(const char *config_json,
  * Validate only the supplied static plugin configuration.
  *
  * This entry point does not discover or merge `plugins.toml` layers. The
- * returned host report therefore has no dynamic-plugin reports.
+ * returned host report therefore has no dynamic-plugin reports. Host-only
+ * `diagnostics` settings are rejected; use `nemo_relay_plugin_validate` instead.
  *
  * # Safety
  * `config_json` must be a valid C string and `out_report_json` must be a valid

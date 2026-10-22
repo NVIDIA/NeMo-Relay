@@ -260,6 +260,15 @@ impl Diagnostics {
             }),
         })
     }
+    pub(crate) fn install_context(context: Self) -> Result<(), DiagnosticError> {
+        PROCESS_DIAGNOSTICS
+            .set(context)
+            .map_err(|_| DiagnosticError::AlreadyInitialized)
+    }
+    /// Inspect a selected context without consuming an uninitialized default.
+    pub fn selected_process_default() -> Option<&'static Self> {
+        PROCESS_DIAGNOSTICS.get()
+    }
     /// Install before handing out default handles. Once used, inert handles are
     /// never silently upgraded to a different startup mode.
     pub fn install_process_default(

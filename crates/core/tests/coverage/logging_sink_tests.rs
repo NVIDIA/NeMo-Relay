@@ -539,6 +539,8 @@ fn async_projection_failure_records_sink_evidence_without_reenqueuing_the_failur
         logger,
         _thread_pools: Vec::new(),
         diagnostics: logging,
+        config,
+        diagnostic_source: Some(diagnostics.source().instance_id),
         projection: Some(projection),
     };
 
@@ -598,6 +600,8 @@ fn logging_shutdown_records_final_flush_failures_before_closing_component_handle
         logger,
         _thread_pools: Vec::new(),
         diagnostics: logging,
+        config,
+        diagnostic_source: Some(diagnostics.source().instance_id),
         projection: None,
     }
     .shutdown();
@@ -801,5 +805,37 @@ fn stderr_backend_failures_record_once_without_projection_recursion() {
         events
             .iter()
             .all(|event| event.outcome == DiagnosticOutcome::Failure)
+    );
+}
+
+#[test]
+fn late_diagnostic_attachment_reaches_existing_sink_error_handlers() {
+    use crate::logging::diagnostics::LoggingDiagnostics;
+    let disabled = crate::diagnostics::Diagnostics::default();
+    let config = LoggingConfig::default();
+    let mut adapter = LoggingDiagnostics::new(&disabled, &config);
+    // This clone is what the logger's existing handler captures at import.
+    let retained_handler = adapter.stderr().unwrap();
+    let enabled = enabled_diagnostics();
+    adapter.attach(&enabled);
+    retained_handler.runtime_error(&Error::FlushBuffer(std::io::Error::other(
+        "restricted backend detail",
+    )));
+    let snapshot = enabled
+        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert!(
+        snapshot
+            .events
+            .iter()
+            .any(|event| event.component.key == "logging.stderr")
+    );
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("restricted backend detail")
     );
 }

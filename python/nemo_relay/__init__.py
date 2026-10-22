@@ -314,6 +314,7 @@ LlmStreamExecutionIntercept: TypeAlias = Callable[
 from nemo_relay import (  # noqa: E402
     adaptive,
     codecs,
+    diagnostics,
     event_metadata,
     guardrails,
     intercepts,
@@ -795,6 +796,7 @@ __all__ = [
     "pii_redaction",
     "model_pricing",
     "resource_metrics",
+    "diagnostics",
     # Scope stack isolation
     "ScopeStack",
     "ScopeStackEntry",

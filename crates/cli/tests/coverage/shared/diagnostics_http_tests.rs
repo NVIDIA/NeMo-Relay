@@ -217,10 +217,37 @@ async fn bounded_query_and_version_errors_are_safe() {
     let adapter = adapter(&context);
     let token = bootstrap(&adapter).diagnostics_token();
     let router = adapter.router();
-    for (query, expected) in [
-        (r#"{"schema_version":99}"#, StatusCode::NOT_ACCEPTABLE),
-        (r#"{"unknown":"PRIVATE"}"#, StatusCode::BAD_REQUEST),
-        (r#"{"max_events":99999}"#, StatusCode::BAD_REQUEST),
+    for (query, expected, reason) in [
+        (
+            r#"{"schema_version":99}"#,
+            StatusCode::NOT_ACCEPTABLE,
+            "unsupported_schema",
+        ),
+        (
+            r#"{"unknown":"PRIVATE"}"#,
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+        ),
+        (
+            r#"{"max_events":99999}"#,
+            StatusCode::BAD_REQUEST,
+            "invalid_page_limit",
+        ),
+        (
+            r#"{"ownership":{"configuration_typo":"PRIVATE"}}"#,
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+        ),
+        (
+            r#"{"ownership":{"configuration_id":"selected","configuration_typo":"PRIVATE"}}"#,
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+        ),
+        (
+            r#"{"continuation":{"source_instance_id":"00000000-0000-0000-0000-000000000001","sequence":"0","component_offset":"0","event_offset":"0","scope":"0","scope_typo":"PRIVATE"}}"#,
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+        ),
     ] {
         let path = format!(
             "{PREFIX}?query={}",
@@ -232,7 +259,44 @@ async fn bounded_query_and_version_errors_are_safe() {
             .await
             .unwrap();
         assert_eq!(response.status(), expected);
-        assert!(!json(response).await.to_string().contains("PRIVATE"));
+        let error = json(response).await;
+        assert_eq!(error["error"]["reason"], reason);
+        assert!(!error.to_string().contains("PRIVATE"));
+    }
+}
+
+#[tokio::test]
+async fn ownership_configuration_filter_preserves_matching_and_default_selection() {
+    let context = context(true, 1);
+    let codes = [BuiltinDiagnosticCode::Failure(FailureCode::Cli(
+        CliFailureCode::Command,
+    ))];
+    let mut registration = ComponentRegistration::new("cli.command", &codes);
+    registration.ownership.configuration_id = Some("selected".into());
+    let _component = context.register_component(registration).unwrap();
+    let adapter = adapter(&context);
+    let token = bootstrap(&adapter).diagnostics_token();
+    let router = adapter.router();
+    for (query, expected) in [
+        (r#"{"ownership":{"configuration_id":"selected"}}"#, 1),
+        (r#"{"ownership":{"configuration_id":"other"}}"#, 0),
+        ("{}", 1),
+    ] {
+        let path = format!(
+            "{PREFIX}/components?query={}",
+            percent_encoding::utf8_percent_encode(query, percent_encoding::NON_ALPHANUMERIC)
+        );
+        let response = router
+            .clone()
+            .oneshot(request(&path, Some(&token)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{query}");
+        assert_eq!(
+            json(response).await["components"].as_array().unwrap().len(),
+            expected,
+            "{query}"
+        );
     }
 }
 

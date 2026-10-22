@@ -5,7 +5,7 @@
 
 use std::io;
 use std::num::NonZeroU64;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use spdlog::Logger;
 
@@ -54,10 +54,17 @@ pub(super) struct LoggingDiagnostics {
 impl LoggingDiagnostics {
     pub(super) fn new(diagnostics: &Diagnostics, config: &LoggingConfig) -> Self {
         let register = |key: &str| {
-            diagnostics
-                .register_component(ComponentRegistration::new(key, SINK_CODES))
-                .ok()
-                .map(|recorder| SinkDiagnostics { recorder })
+            let sink = SinkDiagnostics {
+                recorder: Arc::new(OnceLock::new()),
+            };
+            if diagnostics.reader().availability()
+                == crate::diagnostics::DiagnosticAvailability::Available
+                && let Ok(recorder) =
+                    diagnostics.register_component(ComponentRegistration::new(key, SINK_CODES))
+            {
+                let _ = sink.recorder.set(recorder);
+            }
+            Some(sink)
         };
         let runtime = diagnostics
             .register_component(ComponentRegistration::new("logging", RUNTIME_CODES))
@@ -77,6 +84,27 @@ impl LoggingDiagnostics {
             stderr_enabled: config.stderr_enabled,
             stderr,
             files,
+        }
+    }
+
+    pub(super) fn attach(&mut self, context: &Diagnostics) {
+        self.runtime = context
+            .register_component(ComponentRegistration::new("logging", RUNTIME_CODES))
+            .ok();
+        let attach = |slot: &SinkDiagnostics, key: &str| {
+            if let Ok(recorder) =
+                context.register_component(ComponentRegistration::new(key, SINK_CODES))
+            {
+                let _ = slot.recorder.set(recorder);
+            }
+        };
+        if let Some(stderr) = &self.stderr {
+            attach(stderr, "logging.stderr");
+        }
+        for (index, file) in self.files.iter().enumerate() {
+            if let Some(file) = file {
+                attach(file, &format!("logging.file.{index}"));
+            }
         }
     }
 
@@ -158,13 +186,13 @@ impl LoggingDiagnostics {
 
 #[derive(Clone)]
 pub(super) struct SinkDiagnostics {
-    recorder: ComponentRecorder,
+    recorder: Arc<OnceLock<ComponentRecorder>>,
 }
 
 impl SinkDiagnostics {
     pub(super) fn initialized(&self) {
         record(
-            Some(&self.recorder),
+            self.recorder.get(),
             BuiltinDiagnosticCode::Success(SuccessCode::SinkInitialized),
             None,
             DiagnosticSeverity::Info,
@@ -180,7 +208,10 @@ impl SinkDiagnostics {
     }
 
     pub(super) fn runtime_error(&self, error: &spdlog::Error) {
-        let _ = self.recorder.record_without_projection_lazy(|| {
+        let Some(recorder) = self.recorder.get() else {
+            return;
+        };
+        let _ = recorder.record_without_projection_lazy(|| {
             let classification = LoggingErrorClassifier.classify(error);
             let message = match BuiltinDiagnosticCode::from_canonical_name(classification.code()) {
                 Some(BuiltinDiagnosticCode::Failure(FailureCode::Logging(
@@ -208,7 +239,7 @@ impl SinkDiagnostics {
 
     fn failure(&self, code: LoggingFailureCode, message: &'static str) {
         record(
-            Some(&self.recorder),
+            self.recorder.get(),
             BuiltinDiagnosticCode::Failure(FailureCode::Logging(code)),
             Some(FailureClass::Unknown),
             DiagnosticSeverity::Error,

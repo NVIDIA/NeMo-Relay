@@ -172,3 +172,7 @@ path = "tests/integration/api_surface_tests.rs"
 name = "atif_storage_integration"
 path = "tests/integration/atif_storage_tests.rs"
 required-features = ["object-store"]
+
+[[test]]
+name = "embedded_diagnostics_startup"
+path = "tests/embedded_diagnostics_startup.rs"

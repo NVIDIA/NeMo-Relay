@@ -273,6 +273,12 @@ fn decode(uri: &http::Uri) -> Result<DiagnosticQuery, ReadError> {
             .decode_utf8()
             .map_err(|_| ReadError(StatusCode::BAD_REQUEST, "invalid_query"))?
     };
+    {
+        let fields: serde_json::Value = serde_json::from_str(&decoded)
+            .map_err(|_| ReadError(StatusCode::BAD_REQUEST, "invalid_query"))?;
+        embedded::validate_query_selector_fields(&fields)
+            .map_err(|_| ReadError(StatusCode::BAD_REQUEST, "invalid_query"))?;
+    }
     let query: HttpQuery = serde_json::from_str(&decoded)
         .map_err(|_| ReadError(StatusCode::BAD_REQUEST, "invalid_query"))?;
     if query
