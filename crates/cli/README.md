@@ -299,3 +299,11 @@ code after verification.
 ## Documentation
 
 Refer to [NeMo Relay Documentation](https://docs.nvidia.com/nemo/relay).
+
+## Runtime Diagnostics Inspection
+
+`nemo-relay diagnostics --query '<JSON>'` accepts selectors and continuations
+within the HTTP adapter's 4,096-byte URI query budget, including `query=` and
+percent encoding. Refer to [CLI and Daemon Diagnostics](../../docs/reference/diagnostics/cli.mdx)
+for configuration and [Diagnostics API](../../docs/reference/diagnostics/api.mdx)
+for pagination and response limits.

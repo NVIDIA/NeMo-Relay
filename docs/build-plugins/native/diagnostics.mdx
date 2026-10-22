@@ -83,7 +83,6 @@ Set request or session IDs through `observation.correlation`. The shared
 never becomes a counter key and counts toward the input-text budget.
 
 Native recording is synchronous. There is no delivery queue or flush call.
-Concurrent SDK calls on the same runtime can return `DiagnosticError::Busy`.
 Explicit `component.close()` fences all clones. Last drop also closes the
 registration. Activation teardown revokes handles and releases adapter backing.
 
@@ -91,6 +90,27 @@ Closing a registration does not reset context totals or imply recovery.
 Closing live components frees their slots, but cumulative extension and declaration
 text budgets remain consumed for the session. Register a stable vocabulary once
 instead of creating a new component for each request.
+
+### Concurrent Calls and Recursion
+
+Cloned components can record from concurrent callback threads. Runtime and facade
+clones share four SDK registration, recording, or read slots per activation.
+Admission happens before producer factories and SDK scratch or buffer allocation.
+Exhaustion returns `DiagnosticError::Busy` without waiting or automatic retry.
+Local authoring refusals increment `delivery_stats().dropped`; read refusals do
+not change authoring counters.
+
+Separately, the SDK admits one in-flight read query/output-buffer pair per
+activation. A read can overlap recording within the call limit; another read
+returns `Busy` before allocating buffers. Returned JSON and decoded pages are
+caller-owned and are outside this in-flight limit and the core memory budget.
+Host work has its own four process-wide data permits and serializes access to
+each activation. The SDK admission limit does not guarantee host admission.
+
+Same-thread recursion into the same activation returns `Busy`. Nested calls into
+different activations are allowed, with up to 32 nested activations per thread
+tracked by each SDK copy. Guards release admission slots on return, error, or
+panic unwind. Component closure does not require a data-call permit.
 
 ## Read Host Evidence
 
@@ -153,7 +173,7 @@ Use stable reason labels to handle adapter errors:
 | `unavailable` | Adapter session storage could not be admitted. Keep the operation's original result. |
 | `closed` | The activation or registration is closed. Stop using its handles. |
 | `permission_denied` | Host policy did not grant whole-context reads. Recording can still be available. |
-| `busy` | Concurrent admission is full. Native recording does not retry automatically. |
+| `busy` | A call/read slot is unavailable or the call recurses into the same activation. Native recording does not retry automatically. |
 | `capacity` | A declaration or request exceeds an adapter limit. Reduce its size or vocabulary. |
 | `invalid` | An input value or handle is invalid. Check code positions, outcomes, and failure classes. |
 | `conflict` | A local component name is already registered. Reuse its existing handle. |
@@ -195,6 +215,16 @@ The optional `NativeDiagnosticsApiV1` table follows the frozen execution ABI-8
 prefix. The SDK checks the table's size and independent contract version before
 using it. Execution ABI 8, ABI-7 negotiation, and manifest native API 1 remain
 unchanged. This adds an optional tail to the native host table.
+
+| Contract | Current Version |
+| --- | --- |
+| Execution ABI | 8 |
+| Manifest `compat.native_api` | `"1"` |
+| Diagnostics extension contract | 1 |
+
+Incompatible diagnostics callback or payload layout changes require versioning
+that extension contract. Changes to private SDK synchronization do not change
+these ABI layouts or callback signatures.
 
 Core recorders and Rust-owned objects stay inside the host. Registration and
 recording cross the ABI as fixed layouts with borrowed UTF-8 spans. The host

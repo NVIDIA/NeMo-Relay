@@ -192,6 +192,17 @@ the live accounting fields when sizing a deployment. A configured byte ceiling
 is a storage admission bound, not a latency guarantee. Choose polling intervals
 that account for the bounded scan and serialization cost under your workload.
 
+### Native SDK Read Storage
+
+An authorized native plugin reader uses the selected host context. Its SDK
+allocates bounded query and output buffers outside core's `max_owned_bytes`.
+Clones share one in-flight read-buffer pair per activation; a second read returns
+`Busy` before allocating that pair. Returned JSON and decoded pages remain
+caller-owned, so retaining multiple results can exceed this in-flight allowance.
+Refer to [native concurrency and buffer ownership](/build-plugins/native/diagnostics#concurrent-calls-and-recursion)
+for the separate SDK and host call limits. Reading a memory page does not start
+resource collection.
+
 ## Resource Context and Precision
 
 ### Enable a Sampling Source

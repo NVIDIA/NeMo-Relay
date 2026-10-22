@@ -277,7 +277,7 @@ returns no pointers into stack handles, registries, or Rust containers.
 `NativeHostApiV8WithDiagnostics` preserves the complete ABI-8 prefix and appends
 an immutable pointer to `NativeDiagnosticsApiV1`. Read the pointer only when
 `abi_version == 8` and `struct_size` includes the full tail. Then check the
-pointed table's size and independent `contract_version` before copying callbacks.
+pointed table's size and independent `contract_version` (currently 1) before copying callbacks.
 A missing, null, truncated, or unknown table is unsupported. The execution ABI
 remains 8, ABI-7 negotiation is retained, and `compat.native_api = "1"` is unchanged.
 
@@ -316,6 +316,11 @@ The native adapter has these limits:
 | Declaration text | 16 KiB over the session's lifetime. |
 | Aggregate input text | 16 KiB per call. |
 | Concurrent host data calls | Four per process. Cleanup needs no data permit. |
+
+SDK clones also share per-activation admission: four data-call slots and one
+in-flight read query/output-buffer pair. These SDK limits are separate from the
+host permits above. Refer to [concurrent calls and recursion](/build-plugins/native/diagnostics#concurrent-calls-and-recursion)
+for admission order, recursion protection, and caller-owned results.
 
 Registration exhaustion can reject new components. Full core history evicts
 evidence without disabling existing recorders.

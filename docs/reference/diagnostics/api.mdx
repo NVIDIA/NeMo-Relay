@@ -124,8 +124,9 @@ Queries support these selections and page controls:
 
 Requests above configured row or byte limits return `invalid_query`. Limits are
 not silently clamped. Core and binding JSON query input is limited to 4,096
-UTF-8 bytes. The CLI `--query` argument has a tighter 1,024-byte cap. HTTP also
-limits the encoded URI query to 4,096 bytes. Duplicate or unknown fields,
+UTF-8 bytes. CLI and HTTP requests share a 4,096-byte URI query budget, including
+`query=` and percent encoding. This is not a 4,096-byte allowance for raw JSON.
+The original selectors and any continuation must fit together within that budget. Duplicate or unknown fields,
 including nested selectors, are rejected. An accepted response-byte cap that
 cannot fit the required envelope or a row returns `snapshot_capacity`.
 

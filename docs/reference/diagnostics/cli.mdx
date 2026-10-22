@@ -140,8 +140,10 @@ The capability response's `producers` lists supported CLI operation families and
 a plugin is loaded or a registration succeeded. Component pages report retained
 registrations, including their plugin identity.
 
-The CLI accepts at most 1,024 UTF-8 bytes in `--query`. The HTTP handler independently
-limits encoded query text to 4,096 bytes. `--max-response-bytes` controls the
+The CLI and HTTP handler enforce the same 4,096-byte URI query budget, including
+`query=` and percent encoding. Escaping can expand the JSON, so raw JSON below
+4,096 bytes can still exceed the limit. Selectors and continuations share this
+budget; keep the original selection when continuing a read. `--max-response-bytes` controls the
 inspector's receive cap, independently of the server's response budget. It accepts
 4 KiB through 32 MiB and defaults to 128 KiB for local pages or 256 KiB for cached
 worker wrappers. Increase it explicitly when inspecting a server configured for
