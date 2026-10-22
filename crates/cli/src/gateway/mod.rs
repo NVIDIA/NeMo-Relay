@@ -1777,6 +1777,11 @@ async fn passthrough_streaming(
         let mut guard = UpstreamStreamGuard::new(operational_for_stream);
         while let Some(chunk) = bytes.next().await {
             if chunk.is_err() {
+                diag::failure(
+                    Operation::Upstream,
+                    CliFailureCode::UpstreamResponse,
+                    FailureClass::Unknown,
+                );
                 if let Some(operational) = guard.context.as_ref() {
                     operational::upstream_stream_read_failed(operational);
                 }
@@ -1786,6 +1791,7 @@ async fn passthrough_streaming(
             }
             yield chunk;
         }
+        diag::success(Operation::Upstream, SuccessCode::CliUpstreamBodyCompleted);
         guard.complete();
     });
     build_response(status, headers, body)
