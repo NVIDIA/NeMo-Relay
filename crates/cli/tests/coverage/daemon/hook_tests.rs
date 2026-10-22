@@ -240,6 +240,12 @@ fn launcher_trace_headers_require_header_safe_traceparent() {
     assert!(headers(None, Some("vendor=value")).is_empty());
     assert!(headers(Some("  "), Some("vendor=value")).is_empty());
     assert!(headers(Some("00-a\r\nx-injected: 1"), None).is_empty());
+    let oversized = "a".repeat(crate::hooks::MAX_TRACE_HEADER_BYTES + 1);
+    assert!(headers(Some(&oversized), None).is_empty());
+    assert_eq!(
+        headers(Some("00-trace"), Some(&oversized)),
+        vec![("traceparent", "00-trace".to_owned())]
+    );
     assert_eq!(
         headers(Some("00-trace"), Some("bad\nstate")),
         vec![("traceparent", "00-trace".to_owned())]

@@ -17,6 +17,10 @@ pub(crate) const TRACESTATE_ENV: &str = "TRACESTATE";
 pub(crate) const TRACEPARENT_HEADER: &str = "traceparent";
 /// Hook request header carrying the launcher's W3C `tracestate`.
 pub(crate) const TRACESTATE_HEADER: &str = "tracestate";
+/// Largest forwarded value. Valid W3C values are far smaller (`traceparent` is 55 bytes and
+/// `tracestate` propagation targets 512), so a larger value is dropped rather than risking a
+/// receiver rejecting the hook request over an optional header.
+pub(crate) const MAX_TRACE_HEADER_BYTES: usize = 1024;
 
 /// Returns the launcher trace headers found in this process's environment.
 pub(crate) fn launcher_trace_headers() -> Vec<(&'static str, String)> {
@@ -25,8 +29,8 @@ pub(crate) fn launcher_trace_headers() -> Vec<(&'static str, String)> {
 
 /// Returns the launcher trace headers produced by `lookup`.
 ///
-/// Only values that are legal HTTP header text are forwarded, and `tracestate` is forwarded only
-/// with a `traceparent`. The receiver validates W3C syntax and ignores an invalid pair, so a
+/// Only values that are legal HTTP header text of at most [`MAX_TRACE_HEADER_BYTES`] are
+/// forwarded, and `tracestate` is forwarded only with a `traceparent`. The receiver validates W3C syntax and ignores an invalid pair, so a
 /// malformed environment never fails hook delivery.
 pub(crate) fn launcher_trace_headers_from(
     lookup: impl Fn(&str) -> Option<String>,
@@ -34,7 +38,11 @@ pub(crate) fn launcher_trace_headers_from(
     let header_text = |name: &str| {
         lookup(name)
             .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty() && HeaderValue::from_str(value).is_ok())
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= MAX_TRACE_HEADER_BYTES
+                    && HeaderValue::from_str(value).is_ok()
+            })
     };
     let Some(traceparent) = header_text(TRACEPARENT_ENV) else {
         return Vec::new();

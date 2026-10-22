@@ -276,14 +276,7 @@ async fn send_verified_hook_forward_request_with_context(
     Result<crate::gateway::client::VerifiedHttpResponse, crate::gateway::client::VerifiedHttpError>,
     CliError,
 > {
-    let mut headers = gateway_headers(
-        command.profile.as_deref(),
-        command.session_metadata.as_deref(),
-        command.gateway_mode,
-    )?;
-    attach_internal_hook_credentials(command, &mut headers)?;
-    attach_launcher_trace_context(&mut headers)?;
-    operational.attach_header(&mut headers);
+    let headers = hook_forward_headers(command, operational, |name| std::env::var(name).ok())?;
     let headers = headers
         .iter()
         .map(|(name, value)| {
@@ -340,14 +333,7 @@ pub(super) async fn send_hook_forward_request(
     input: String,
     operational: &OperationalContext,
 ) -> Result<Result<reqwest::Response, reqwest::Error>, CliError> {
-    let mut headers = gateway_headers(
-        command.profile.as_deref(),
-        command.session_metadata.as_deref(),
-        command.gateway_mode,
-    )?;
-    attach_internal_hook_credentials(command, &mut headers)?;
-    attach_launcher_trace_context(&mut headers)?;
-    operational.attach_header(&mut headers);
+    let headers = hook_forward_headers(command, operational, |name| std::env::var(name).ok())?;
     Ok(reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -396,13 +382,26 @@ fn attach_internal_hook_credentials(
     Ok(())
 }
 
-// Forwards the W3C trace context the agent inherited from its launcher, so the session this hook
-// opens can join the launcher's trace.
-fn attach_launcher_trace_context(headers: &mut HeaderMap) -> Result<(), CliError> {
-    for (name, value) in super::launcher_trace_headers() {
-        insert_header(headers, name, Some(&value))?;
+/// Builds the headers every `hook-forward` request carries: gateway selection, internal hook
+/// credentials, the W3C trace context the agent inherited from its launcher (read through
+/// `launcher_env`, so the session this hook opens can join the launcher's trace), and the
+/// operational correlation header.
+pub(super) fn hook_forward_headers(
+    command: &HookForwardRequest,
+    operational: &OperationalContext,
+    launcher_env: impl Fn(&str) -> Option<String>,
+) -> Result<HeaderMap, CliError> {
+    let mut headers = gateway_headers(
+        command.profile.as_deref(),
+        command.session_metadata.as_deref(),
+        command.gateway_mode,
+    )?;
+    attach_internal_hook_credentials(command, &mut headers)?;
+    for (name, value) in super::trace_context::launcher_trace_headers_from(launcher_env) {
+        insert_header(&mut headers, name, Some(&value))?;
     }
-    Ok(())
+    operational.attach_header(&mut headers);
+    Ok(headers)
 }
 
 // Handles hook delivery results without changing agent control flow unless `--fail-closed` was

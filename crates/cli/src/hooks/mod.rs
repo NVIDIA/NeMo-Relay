@@ -43,7 +43,9 @@ pub(crate) use merging::merge_hooks;
 #[cfg(test)]
 pub(crate) use response::{handle_hook_forward_status, handle_verified_hook_forward_response};
 #[cfg(test)]
-pub(crate) use trace_context::{TRACEPARENT_ENV, TRACESTATE_ENV, launcher_trace_headers_from};
+pub(crate) use trace_context::{
+    MAX_TRACE_HEADER_BYTES, TRACEPARENT_ENV, TRACESTATE_ENV, launcher_trace_headers_from,
+};
 pub(crate) use trace_context::{TRACEPARENT_HEADER, TRACESTATE_HEADER, launcher_trace_headers};
 pub(crate) use types::{GatewayMode, HookFailurePolicy, HookForwardRequest};
 
