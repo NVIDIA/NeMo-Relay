@@ -149,3 +149,98 @@ fn doctor_keeps_reporting_after_bad_startup_inputs() {
             .is_none()
     );
 }
+
+#[test]
+fn daemon_helpers_preserve_no_ambient_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("nemo-relay")).unwrap();
+    std::fs::write(temp.path().join("nemo-relay/config.toml"), "malformed[").unwrap();
+    let _env = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("NEMO_RELAY_DIAGNOSTICS", None),
+        ("NEMO_RELAY_DIAGNOSTICS_HTTP", None),
+    ]);
+    let mut cli = Cli::parse_from([
+        "nemo-relay",
+        "daemon",
+        "mcp",
+        "--daemon-address",
+        "http://127.0.0.1:47632",
+    ]);
+    let config = prepare_diagnostic_configuration(&mut cli).unwrap().unwrap();
+    assert!(!config.enabled);
+    assert!(cli.server.prepared.is_none());
+}
+#[test]
+fn managed_worker_ignores_diagnostic_environment_and_cli_overrides() {
+    let temp = tempfile::tempdir().unwrap();
+    let system = temp.path().join("system");
+    std::fs::create_dir(&system).unwrap();
+    std::fs::write(
+        system.join("config.toml"),
+        "[diagnostics]\nenabled = false\nhttp_read = false",
+    )
+    .unwrap();
+    let _env = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        (
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            Some(system.as_os_str()),
+        ),
+        ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
+        ("NEMO_RELAY_DIAGNOSTICS", Some(OsStr::new("true"))),
+        ("NEMO_RELAY_DIAGNOSTICS_HTTP", Some(OsStr::new("true"))),
+    ]);
+    let mut cli = Cli::parse_from([
+        "nemo-relay",
+        "--diagnostics=true",
+        "daemon",
+        "worker",
+        "--daemon-address",
+        "http://127.0.0.1:47632",
+    ]);
+    let config = prepare_diagnostic_configuration(&mut cli).unwrap().unwrap();
+    assert!(!config.enabled);
+    assert!(!config.http_read);
+    assert!(cli.server.prepared.is_some());
+}
+
+#[test]
+fn diagnostic_inspector_requires_explicit_daemon_selection_for_worker_pages() {
+    let uuid = uuid::Uuid::now_v7().to_string();
+    assert!(
+        Cli::try_parse_from([
+            "nemo-relay",
+            "diagnostics",
+            "--daemon-url",
+            "http://127.0.0.1:48400",
+            "--worker",
+            &uuid
+        ])
+        .is_ok()
+    );
+    assert!(Cli::try_parse_from(["nemo-relay", "diagnostics", "--worker", &uuid]).is_err());
+    assert!(
+        Cli::try_parse_from([
+            "nemo-relay",
+            "diagnostics",
+            "--daemon-url",
+            "http://127.0.0.1:48400",
+            "--worker",
+            &uuid,
+            "--capabilities"
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "nemo-relay",
+            "diagnostics",
+            "--daemon-url",
+            "http://127.0.0.1:48400",
+            "--gateway-url",
+            "http://127.0.0.1:4040"
+        ])
+        .is_err()
+    );
+}

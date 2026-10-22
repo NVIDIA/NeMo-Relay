@@ -41,6 +41,8 @@ fn preparation_preserves_existing_merge_order_and_reuses_parsed_inputs() {
             legacy_sources: vec![],
         })),
         diagnostics,
+        collector: Default::default(),
+        daemon_logging: false,
     };
     std::fs::write(user, "this is now malformed").unwrap();
     let resolved =
@@ -130,4 +132,42 @@ fn staged_logging_uses_the_existing_decoder_and_validation() {
             _ => panic!("staging changed logging configuration semantics"),
         }
     }
+}
+
+#[test]
+fn daemon_preparation_preserves_its_logging_scope_and_retains_inputs() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("config.toml");
+    std::fs::write(&file, "[diagnostics]\nenabled = true\n[logging]\nlevel = 'trace'\n[daemon.logging]\nlevel = 'warn'\n[daemon.diagnostics]\ncollect_workers = true\n").unwrap();
+    let prepared = PreparedConfig::from_paths(vec![(file.clone(), true)], true).unwrap();
+    assert!(prepared.diagnostics.enabled);
+    assert!(prepared.collector.collect_workers);
+    assert_eq!(
+        prepared.logging().unwrap().level,
+        nemo_relay::logging::LogLevel::Warn
+    );
+    std::fs::write(file, "malformed[").unwrap();
+    let resolved =
+        finish_shared_config(prepared.take_document().unwrap(), vec![], |_| Ok(())).unwrap();
+    assert!(resolved.diagnostics.enabled);
+}
+#[test]
+fn managed_worker_preparation_preserves_system_precedence() {
+    let temp = tempfile::tempdir().unwrap();
+    let user = temp.path().join("user.toml");
+    let system = temp.path().join("system.toml");
+    std::fs::write(
+        &user,
+        "[diagnostics]\nenabled = true\nhttp_read = true\n[diagnostics.limits]\nmax_events = 3",
+    )
+    .unwrap();
+    std::fs::write(
+        &system,
+        "[diagnostics]\nhttp_read = false\n[diagnostics.limits]\nmax_events = 5",
+    )
+    .unwrap();
+    let prepared = PreparedConfig::from_paths(vec![(user, true), (system, true)], false).unwrap();
+    assert!(prepared.diagnostics.enabled);
+    assert!(!prepared.diagnostics.http_read);
+    assert_eq!(prepared.diagnostics.limits.max_events, 5);
 }

@@ -286,18 +286,33 @@ fn prepare_diagnostics(cli: &mut Cli) -> Result<bool, error::CliError> {
     let Some(config) = prepare_diagnostic_configuration(cli)? else {
         return Ok(false);
     };
-    crate::runtime_diagnostics::install(config)?;
+    let role = match cli.command.as_ref() {
+        Some(Command::Daemon(command)) if command.command.is_none() => "daemon_broker",
+        Some(Command::Daemon(command))
+            if matches!(command.command, Some(daemon::DaemonSubcommand::Worker(_))) =>
+        {
+            "daemon_worker"
+        }
+        _ => "cli",
+    };
+    let collector = cli
+        .server
+        .prepared
+        .as_ref()
+        .map(|p| p.collector.clone())
+        .unwrap_or_default();
+    crate::runtime_diagnostics::install_role(config, role, collector)?;
     Ok(true)
 }
 
 fn prepare_diagnostic_configuration(
     cli: &mut Cli,
 ) -> Result<Option<runtime_configuration::RuntimeDiagnosticsConfig>, error::CliError> {
-    // Daemon composition remains Phase 3; never consume its process default here.
-    if matches!(cli.command, Some(Command::Daemon(_))) {
-        return Ok(None);
-    }
-    let no_ambient = cli.command.as_ref().is_some_and(|c| c.skips_logging())
+    let daemon_helper = matches!(&cli.command, Some(Command::Daemon(command)) if matches!(command.command,
+        Some(daemon::DaemonSubcommand::Mcp(_) | daemon::DaemonSubcommand::Hook(_) | daemon::DaemonSubcommand::ManagedBundle(_) | daemon::DaemonSubcommand::Token(_) | daemon::DaemonSubcommand::TlsCertificate)));
+    let managed_worker = matches!(&cli.command, Some(Command::Daemon(command)) if matches!(command.command, Some(daemon::DaemonSubcommand::Worker(_))));
+    let no_ambient = daemon_helper
+        || cli.command.as_ref().is_some_and(|c| c.skips_logging())
         || matches!(
             cli.command,
             Some(Command::Uninstall(_) | Command::Integrations(_))
@@ -307,14 +322,7 @@ fn prepare_diagnostic_configuration(
         && cli.server.config.is_none()
         && !runtime_configuration::any_config_file_exists();
     if !no_ambient && !setup_pending {
-        let explicit = match &cli.command {
-            Some(Command::Run(command)) => {
-                command.config.as_deref().or(cli.server.config.as_deref())
-            }
-            Some(Command::Mcp) => None,
-            _ => cli.server.config.as_deref(),
-        };
-        let prepared = runtime_configuration::PreparedConfig::load(explicit);
+        let prepared = prepare_startup_inputs(cli, managed_worker);
         match prepared {
             Ok(prepared) => {
                 selected = prepared.diagnostics.clone();
@@ -325,10 +333,10 @@ fn prepare_diagnostic_configuration(
             Err(error) => return Err(error),
         }
     }
-    if let Some(enabled) = cli.diagnostics {
+    if !managed_worker && let Some(enabled) = cli.diagnostics {
         selected.enabled = enabled;
     }
-    if let Some(http_read) = cli.diagnostics_http {
+    if !managed_worker && let Some(http_read) = cli.diagnostics_http {
         selected.http_read = http_read;
     }
     if let Err(error) = selected.validate() {
@@ -339,6 +347,24 @@ fn prepare_diagnostic_configuration(
         return Err(error);
     }
     Ok(Some(selected))
+}
+
+fn prepare_startup_inputs(
+    cli: &Cli,
+    managed_worker: bool,
+) -> Result<runtime_configuration::PreparedConfig, error::CliError> {
+    let explicit = match &cli.command {
+        Some(Command::Run(command)) => command.config.as_deref().or(cli.server.config.as_deref()),
+        Some(Command::Mcp) => None,
+        _ => cli.server.config.as_deref(),
+    };
+    if managed_worker {
+        runtime_configuration::PreparedConfig::load_managed_worker()
+    } else if matches!(&cli.command, Some(Command::Daemon(command)) if command.command.is_none()) {
+        runtime_configuration::PreparedConfig::load_daemon(explicit)
+    } else {
+        runtime_configuration::PreparedConfig::load(explicit)
+    }
 }
 
 async fn run_command(

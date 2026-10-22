@@ -242,29 +242,6 @@ fn windows_rotation_sharing_violation_records_once_without_projection_recursion(
     file_logging(&service, path).shutdown();
 }
 
-fn read_closed_summary_log(path: &std::path::Path, excluded_details: &[&str]) -> Vec<Value> {
-    let output = std::fs::read_to_string(path).unwrap();
-    // JSON escaping must not hide raw detail leaking into the log file.
-    for message in excluded_details {
-        assert!(!output.contains(&serde_json::to_string(message).unwrap()));
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        // An exclusive open verifies all worker-owned file handles closed.
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .share_mode(0)
-            .open(path)
-            .unwrap();
-    }
-    output
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
 #[test]
 fn unicode_paths_preserve_summary_logs_and_retained_details_through_rotation_and_shutdown() {
     let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
@@ -307,48 +284,86 @@ fn unicode_paths_preserve_summary_logs_and_retained_details_through_rotation_and
         } else {
             vec![path.clone()]
         };
-        let rows: Vec<Value> = files
-            .iter()
-            .flat_map(|file| read_closed_summary_log(file, &messages))
-            .collect();
-        assert_eq!(rows.len(), messages.len());
-        for row in &rows {
-            assert_eq!(row["message"], "Diagnostic observation");
-            assert_eq!(row["event"], "plugin.internal");
-            assert!(row["fields"]["diagnostic"].get("detail").is_none());
-            assert_eq!(
-                row["fields"]["diagnostic"]["component_instance_id"],
-                producer.identity().unwrap().instance_id.to_string()
-            );
+        let instance_id = producer.identity().unwrap().instance_id;
+        let rows = read_unicode_log_rows(&files, &messages);
+        assert_unicode_log_projection(&rows, instance_id, messages.len());
+        assert_unicode_diagnostic_history(&service, instance_id, &messages);
+    }
+}
+
+fn read_unicode_log_rows(files: &[std::path::PathBuf], messages: &[&str]) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for file in files {
+        let output = std::fs::read_to_string(file).unwrap();
+        // JSON escaping must not hide raw detail leaking into either log file.
+        for message in messages {
+            assert!(!output.contains(&serde_json::to_string(message).unwrap()));
         }
-        let view = service
-            .snapshot(&DiagnosticQuery::default())
-            .unwrap()
-            .to_snapshot()
-            .unwrap();
-        let retained: Vec<_> = view
-            .events
-            .iter()
-            .filter(|event| event.component.instance_id == producer.identity().unwrap().instance_id)
-            .collect();
-        assert_eq!(retained.len(), messages.len());
-        for (event, message) in retained.iter().zip(messages) {
-            let detail = event.detail.as_ref().unwrap();
-            assert_eq!(detail.message, message);
-            assert!(!detail.truncated);
-        }
-        assert!(
-            !view
-                .events
-                .iter()
-                .any(|event| event.code().starts_with("logging.sink.")
-                    && event.classification.failure_class().is_some())
+        rows.extend(
+            output
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap()),
         );
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // An exclusive open verifies all worker-owned file handles closed.
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(file)
+                .unwrap();
+        }
+    }
+    rows
+}
+
+fn assert_unicode_log_projection(rows: &[Value], instance_id: uuid::Uuid, expected: usize) {
+    assert_eq!(rows.len(), expected);
+    for row in rows {
+        assert_eq!(row["message"], "Diagnostic observation");
+        assert_eq!(row["event"], "plugin.internal");
+        assert!(row["fields"]["diagnostic"].get("detail").is_none());
         assert_eq!(
-            view.coverage.loss.projection_deliveries_omitted.value.get(),
-            0
+            row["fields"]["diagnostic"]["component_instance_id"],
+            instance_id.to_string()
         );
     }
+}
+
+fn assert_unicode_diagnostic_history(
+    service: &Diagnostics,
+    instance_id: uuid::Uuid,
+    messages: &[&str],
+) {
+    let view = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let retained: Vec<_> = view
+        .events
+        .iter()
+        .filter(|event| event.component.instance_id == instance_id)
+        .collect();
+    assert_eq!(retained.len(), messages.len());
+    for (event, message) in retained.iter().zip(messages) {
+        let detail = event.detail.as_ref().unwrap();
+        assert_eq!(detail.message, *message);
+        assert!(!detail.truncated);
+    }
+    assert!(
+        !view
+            .events
+            .iter()
+            .any(|event| event.code().starts_with("logging.sink.")
+                && event.classification.failure_class().is_some())
+    );
+    assert_eq!(
+        view.coverage.loss.projection_deliveries_omitted.value.get(),
+        0
+    );
 }
 
 #[test]

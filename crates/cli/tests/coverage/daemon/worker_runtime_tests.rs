@@ -27,6 +27,8 @@ fn state() -> Arc<WorkerState> {
 
 fn state_with_config(config: GatewayConfig) -> Arc<WorkerState> {
     Arc::new(WorkerState {
+        diagnostic_authority: Default::default(),
+        diagnostics_http: None,
         worker_id: "worker-one".into(),
         config,
         upstream: pooled_client().expect("pooled client"),
@@ -130,6 +132,33 @@ fn relative_drain_timeout_does_not_depend_on_the_daemon_wall_clock() {
         timeout_ms: Some(321),
     };
     assert_eq!(drain_timeout_ms(&request), 321);
+}
+
+#[test]
+fn diagnostic_revocation_clears_authority_but_generic_drain_preserves_it() {
+    let mut registration = control::test_registration("data", "control");
+    let grant = diag::DiagnosticReadGrant::issue(uuid::Uuid::now_v7(), "worker-generation", 1024)
+        .expect("diagnostic read grant");
+    registration.diagnostics = Some(grant.clone());
+    let state = state();
+    state.diagnostic_authority.replace(Some(grant.clone()));
+    let token = grant.token(now_unix_ms());
+    assert!(state.diagnostic_authority.verify(&token));
+
+    begin_drain(
+        &state,
+        &WorkerDrainRequest {
+            worker_id: "worker-one".into(),
+            deadline_unix_ms: now_unix_ms() + 1000,
+            timeout_ms: Some(1000),
+        },
+    );
+    assert!(state.diagnostic_authority.verify(&token));
+    assert!(registration.diagnostics.is_some());
+
+    revoke_diagnostic_authority(&state, &mut registration);
+    assert!(!state.diagnostic_authority.verify(&token));
+    assert!(registration.diagnostics.is_none());
 }
 
 #[tokio::test]
@@ -1313,4 +1342,130 @@ async fn http_model_hosts_unmanaged_worker_forwards_both_providers_without_crede
         "denial must not contact the provider"
     );
     server.abort();
+}
+
+#[tokio::test]
+async fn diagnostic_reads_do_not_activate_pending_or_draining_workers_and_revoke_on_control_loss() {
+    use nemo_relay::diagnostics::*;
+    let context = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut state = state();
+    let mutable = Arc::get_mut(&mut state).unwrap();
+    mutable.accepting.store(false, Ordering::Release);
+    let grant = diag::DiagnosticReadGrant::issue(
+        context.source().instance_id,
+        &uuid::Uuid::now_v7().to_string(),
+        131072,
+    )
+    .unwrap();
+    let token = grant.token(now_unix_ms());
+    mutable.diagnostic_authority.replace(Some(grant));
+    mutable.diagnostics_http = Some(
+        crate::diagnostics_http::DiagnosticsHttp::with_authority(
+            context.reader(),
+            crate::diagnostics_http::ReadAuthority::Worker(mutable.diagnostic_authority.clone()),
+            vec![],
+        )
+        .unwrap(),
+    );
+    let app = router(state.clone());
+    let before = context
+        .snapshot(&Default::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap()
+        .sequence;
+    for draining in [false, true] {
+        if draining {
+            state.begin_drain(30_000);
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(crate::diagnostics_http::PREFIX)
+                    .header(crate::diagnostics_http::AUTH_HEADER, &token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!state.accepting.load(Ordering::Acquire));
+        assert_eq!(state.in_flight.load(Ordering::Acquire), 0);
+        let page: DiagnosticSnapshot =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(page.sequence, before);
+    }
+    for invalid in ["data-secret", "control-secret"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(crate::diagnostics_http::PREFIX)
+                    .header(crate::diagnostics_http::AUTH_HEADER, invalid)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(crate::diagnostics_http::PREFIX)
+                .header(crate::diagnostics_http::AUTH_HEADER, &token)
+                .header(crate::diagnostics_http::AUTH_HEADER, &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    state.control_lost();
+    let response = app
+        .oneshot(
+            Request::get(crate::diagnostics_http::PREFIX)
+                .header(crate::diagnostics_http::AUTH_HEADER, &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn diagnostic_recovery_rotates_authority_without_reopening_draining_worker() {
+    let state = state();
+    let mut registration = control::test_registration("recovered-data", "recovered-control");
+    let source = uuid::Uuid::now_v7();
+    let old = crate::daemon::diagnostics::DiagnosticReadGrant::issue(source, "old", 8192).unwrap();
+    let next = crate::daemon::diagnostics::DiagnosticReadGrant::issue(source, "new", 8192).unwrap();
+    let old_token = old.token(now_unix_ms());
+    let next_token = next.token(now_unix_ms());
+    state.diagnostic_authority.replace(Some(old));
+    state.control_lost();
+    assert!(!state.diagnostic_authority.verify(&old_token));
+    assert!(!state.accepting.load(Ordering::Acquire));
+    registration.diagnostics = Some(next);
+    state.control_restored(&registration);
+    assert!(state.diagnostic_authority.verify(&next_token));
+    assert!(!state.diagnostic_authority.verify(&old_token));
+    assert!(state.accepting.load(Ordering::Acquire));
+    state.begin_drain(1000);
+    state.control_lost();
+    state.control_restored(&registration);
+    assert!(state.diagnostic_authority.verify(&next_token));
+    assert!(!state.accepting.load(Ordering::Acquire));
+    revoke_diagnostic_authority(&state, &mut registration);
+    state.control_restored(&registration);
+    assert!(!state.diagnostic_authority.verify(&next_token));
+    assert!(state.draining.load(Ordering::Acquire));
 }

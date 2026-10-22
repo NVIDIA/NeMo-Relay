@@ -47,6 +47,8 @@ const OPERATIONS: [Operation; 7] = [
 pub(crate) struct CliDiagnostics {
     pub context: Diagnostics,
     pub http_read: bool,
+    pub daemon: Option<crate::daemon::diagnostics::DaemonDiagnostics>,
+    pub collector: crate::daemon::diagnostics::CollectorConfig,
     recorders: [Option<ComponentRecorder>; 7],
 }
 impl CliDiagnostics {
@@ -91,6 +93,8 @@ impl CliDiagnostics {
         Self {
             context,
             http_read,
+            daemon: None,
+            collector: Default::default(),
             recorders,
         }
     }
@@ -125,26 +129,33 @@ impl CliDiagnostics {
             .into_iter()
             .map(Operation::key)
             .chain(["plugin.native_abi", "plugin.worker_protocol"])
+            .chain(self.daemon.iter().flat_map(|owner| owner.coverage()))
             .collect()
     }
 }
 
-pub(crate) fn install(
+pub(crate) fn install_role(
     config: RuntimeDiagnosticsConfig,
+    role: &str,
+    collector: crate::daemon::diagnostics::CollectorConfig,
 ) -> Result<&'static CliDiagnostics, CliError> {
     config.validate()?;
+    collector.validate()?;
     let context = Diagnostics::install_process_default(
         SourceIdentity {
             instance_id: uuid::Uuid::now_v7(),
             process_id: Some(std::process::id()),
-            process_role: "cli".into(),
+            process_role: role.into(),
             relay_version: env!("CARGO_PKG_VERSION").into(),
         },
         config.settings(),
     )
     .map_err(|e| CliError::Config(e.to_string()))?;
+    let mut runtime = CliDiagnostics::new(context.clone(), config.http_read);
+    runtime.daemon = crate::daemon::diagnostics::DaemonDiagnostics::new(context, role);
+    runtime.collector = collector;
     RUNTIME
-        .set(CliDiagnostics::new(context.clone(), config.http_read))
+        .set(runtime)
         .map_err(|_| CliError::Config("CLI diagnostics was already selected".into()))?;
     Ok(RUNTIME.get().expect("installed CLI diagnostics"))
 }

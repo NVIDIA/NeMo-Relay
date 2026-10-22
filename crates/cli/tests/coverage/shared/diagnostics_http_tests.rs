@@ -42,8 +42,8 @@ async fn json(response: Response) -> serde_json::Value {
 async fn authorization_precedes_parsing_and_private_reads() {
     let context = context(true, 1);
     let adapter = adapter(&context);
-    let token = adapter.key.diagnostics_token();
-    let provider = adapter.key.client_token();
+    let token = bootstrap(&adapter).diagnostics_token();
+    let provider = bootstrap(&adapter).client_token();
     let router = adapter.router();
     assert_eq!(
         router
@@ -86,7 +86,7 @@ async fn discovery_distinguishes_disabled_collection_and_disabled_queries() {
             runtime.coverage(),
         )
         .unwrap();
-        let token = adapter.key.diagnostics_token();
+        let token = bootstrap(&adapter).diagnostics_token();
         let router = adapter.router();
         let discovery = json(
             router
@@ -106,7 +106,7 @@ async fn discovery_distinguishes_disabled_collection_and_disabled_queries() {
         }
         assert_eq!(
             discovery["deferred"],
-            serde_json::json!(["otel", "daemon", "bindings"])
+            serde_json::json!(["otel", "bindings"])
         );
         let response = router.oneshot(request(PREFIX, Some(&token))).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -124,7 +124,7 @@ async fn discovery_distinguishes_disabled_collection_and_disabled_queries() {
 async fn body_owns_response_budget_but_releases_core_lease_before_delivery() {
     let context = context(true, 1);
     let adapter = adapter(&context);
-    let token = adapter.key.diagnostics_token();
+    let token = bootstrap(&adapter).diagnostics_token();
     let pool = adapter.pool.clone();
     let router = adapter.router();
     let response = router
@@ -191,7 +191,7 @@ async fn authorized_snapshot_preserves_restricted_detail_without_projection_disc
         })
         .unwrap();
     let adapter = adapter(&context);
-    let token = adapter.key.diagnostics_token();
+    let token = bootstrap(&adapter).diagnostics_token();
     let response = adapter
         .router()
         .oneshot(request(PREFIX, Some(&token)))
@@ -215,7 +215,7 @@ async fn authorized_snapshot_preserves_restricted_detail_without_projection_disc
 async fn bounded_query_and_version_errors_are_safe() {
     let context = context(true, 1);
     let adapter = adapter(&context);
-    let token = adapter.key.diagnostics_token();
+    let token = bootstrap(&adapter).diagnostics_token();
     let router = adapter.router();
     for (query, expected) in [
         (r#"{"schema_version":99}"#, StatusCode::NOT_ACCEPTABLE),
@@ -233,5 +233,12 @@ async fn bounded_query_and_version_errors_are_safe() {
             .unwrap();
         assert_eq!(response.status(), expected);
         assert!(!json(response).await.to_string().contains("PRIVATE"));
+    }
+}
+
+fn bootstrap(adapter: &DiagnosticsHttp) -> &BootstrapChallengeKey {
+    match &adapter.authority {
+        ReadAuthority::Bootstrap(key) => key,
+        _ => panic!("expected bootstrap authority"),
     }
 }

@@ -494,9 +494,12 @@ service_name = "admin-service"
         ),
     ]);
 
-    let managed =
-        resolve_managed_worker_config_from_paths(system_config.clone(), system_plugins.clone())
-            .unwrap();
+    let managed = resolve_managed_worker_config_from_paths(
+        system_config.clone(),
+        system_plugins.clone(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(
         managed.plugin_config_path,
@@ -544,7 +547,7 @@ service_name = "admin-service"
 
     std::fs::write(&system_config, "").unwrap();
     let user_defaults =
-        resolve_managed_worker_config_from_paths(system_config, system_plugins).unwrap();
+        resolve_managed_worker_config_from_paths(system_config, system_plugins, None).unwrap();
     assert_eq!(
         user_defaults.resolved.gateway.openai_base_url,
         "https://user.example/openai"
@@ -598,7 +601,8 @@ async fn managed_worker_dynamic_plugin_loading_reads_user_lifecycle_state() {
     let system_config = system_directory.join("config.toml");
     let system_plugins = system_directory.join(PLUGINS_TOML);
     std::fs::write(&system_config, "").unwrap();
-    let managed = resolve_managed_worker_config_from_paths(system_config, system_plugins).unwrap();
+    let managed =
+        resolve_managed_worker_config_from_paths(system_config, system_plugins, None).unwrap();
     let active =
         active_dynamic_plugin_components(Some(&managed.plugin_config_path), &managed.resolved)
             .unwrap();
@@ -5728,7 +5732,11 @@ async fn http_model_hosts_managed_layers_preserve_omission_and_enforce_system_de
         )).unwrap();
         std::fs::write(&system_config, "[upstream]\nresponse_timeout_secs = 15\n").unwrap();
         let resolve_worker = || {
-            resolve_managed_worker_config_from_paths(system_config.clone(), system_plugins.clone())
+            resolve_managed_worker_config_from_paths(
+                system_config.clone(),
+                system_plugins.clone(),
+                None,
+            )
         };
         let config = resolve_worker().unwrap().resolved.gateway;
         assert!(

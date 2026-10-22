@@ -15,6 +15,7 @@ use super::super::common::protocol::{ComponentRole, SensitiveString};
 use crate::error::CliError;
 
 pub(super) struct Registration {
+    pub(super) diagnostics: Option<crate::daemon::diagnostics::DiagnosticReadGrant>,
     client: Client,
     session_token: SensitiveString,
     data_token: SensitiveString,
@@ -145,6 +146,7 @@ async fn register_once(
     )
     .await?;
     let request = WorkerRegisterRequest {
+        diagnostics: crate::daemon::diagnostics::offer(),
         proof: handshake.proof.clone(),
         worker_id: worker_id.to_owned(),
         endpoint: endpoint.to_owned(),
@@ -195,6 +197,7 @@ async fn recover_once(
     )
     .await?;
     let request = WorkerRecoverRequest {
+        diagnostics: crate::daemon::diagnostics::offer(),
         proof: handshake.proof.clone(),
         worker_id: worker_id.to_owned(),
         endpoint: endpoint.to_owned(),
@@ -210,7 +213,12 @@ fn registration(
     client: Client,
     response: WorkerRegisterResponse,
 ) -> Result<Registration, CliError> {
+    let diagnostics = response.diagnostics.filter(|grant| {
+        crate::daemon::diagnostics::offer()
+            .is_some_and(|offer| grant.matches(&offer, &response.generation_grant.generation_id))
+    });
     Ok(Registration {
+        diagnostics,
         client,
         session_token: response.session_token,
         data_token: response.data_token,
@@ -232,6 +240,7 @@ pub(super) fn test_registration(data_token: &str, session_token: &str) -> Regist
     )
     .expect("test generation grant");
     Registration {
+        diagnostics: None,
         client: control_client().expect("test control client"),
         session_token: SensitiveString::new(session_token).expect("test session token"),
         data_token: SensitiveString::new(data_token).expect("test data token"),

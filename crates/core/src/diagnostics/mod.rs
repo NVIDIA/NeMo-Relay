@@ -91,17 +91,17 @@ use memory::{context_layout_bytes, diagnostic_memory_usage};
 pub use nemo_relay_types::diagnostics::{
     BuiltinDiagnosticCode, Classification, ClassificationError, CliFailureCode,
     CommonPluginFailureCode, ComponentIdentity, ComponentOwnership, ComponentSnapshot,
-    DIAGNOSTIC_CATALOGUE_VERSION, DIAGNOSTIC_SCHEMA_VERSION, DiagnosticAvailability,
-    DiagnosticCapability, DiagnosticClassifier, DiagnosticCorrelation, DiagnosticCount,
-    DiagnosticCounter, DiagnosticCoverage, DiagnosticCursor, DiagnosticDetail, DiagnosticDiscovery,
-    DiagnosticDomain, DiagnosticEvent, DiagnosticLifetimeSummary, DiagnosticLoss, DiagnosticNumber,
-    DiagnosticOrigin, DiagnosticOutcome, DiagnosticOutputSummary, DiagnosticQuery,
-    DiagnosticRefreshSummary, DiagnosticRetention, DiagnosticSeverity, DiagnosticSnapshot,
-    DiagnosticSummaryScope, DiagnosticTotals, DiagnosticWindow, DiagnosticWindowBucket,
-    DiagnosticWindowCoverage, FailureClass, FailureCode, LoggingFailureCode, NoticeCode,
-    ObservationTime, PluginDiagnosticFamily, PluginExecution, PluginExecutionName,
-    PluginFailureCode, PluginObservationContext, PluginOperationFailureCode, PluginPhase,
-    PluginPhaseName, RemoteDiagnosticOrigin, SourceIdentity, SuccessCode,
+    DIAGNOSTIC_CATALOGUE_VERSION, DIAGNOSTIC_SCHEMA_VERSION, DaemonFailureCode,
+    DiagnosticAvailability, DiagnosticCapability, DiagnosticClassifier, DiagnosticCorrelation,
+    DiagnosticCount, DiagnosticCounter, DiagnosticCoverage, DiagnosticCursor, DiagnosticDetail,
+    DiagnosticDiscovery, DiagnosticDomain, DiagnosticEvent, DiagnosticLifetimeSummary,
+    DiagnosticLoss, DiagnosticNumber, DiagnosticOrigin, DiagnosticOutcome, DiagnosticOutputSummary,
+    DiagnosticQuery, DiagnosticRefreshSummary, DiagnosticRetention, DiagnosticSeverity,
+    DiagnosticSnapshot, DiagnosticSummaryScope, DiagnosticTotals, DiagnosticWindow,
+    DiagnosticWindowBucket, DiagnosticWindowCoverage, FailureClass, FailureCode,
+    LoggingFailureCode, NoticeCode, ObservationTime, PluginDiagnosticFamily, PluginExecution,
+    PluginExecutionName, PluginFailureCode, PluginObservationContext, PluginOperationFailureCode,
+    PluginPhase, PluginPhaseName, RemoteDiagnosticOrigin, SourceIdentity, SuccessCode,
 };
 pub use read::SnapshotLease;
 use state::{

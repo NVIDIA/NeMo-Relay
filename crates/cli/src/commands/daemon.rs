@@ -226,12 +226,15 @@ pub(crate) async fn execute(
                     "a worker bound to 0.0.0.0 requires --advertise-address".into(),
                 ));
             }
-            daemon::worker::run(daemon::worker::Options {
-                daemon_address: command.daemon_address,
-                bind: command.bind,
-                port: command.port,
-                advertise_address: command.advertise_address,
-            })
+            daemon::worker::run(
+                daemon::worker::Options {
+                    daemon_address: command.daemon_address,
+                    bind: command.bind,
+                    port: command.port,
+                    advertise_address: command.advertise_address,
+                },
+                server.prepared.as_deref(),
+            )
             .await?;
         }
         Some(DaemonSubcommand::ManagedBundle(command)) => {
