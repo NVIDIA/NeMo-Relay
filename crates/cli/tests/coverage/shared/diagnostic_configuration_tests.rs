@@ -2,6 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+
+struct SystemConfigDir(Option<std::path::PathBuf>);
+
+impl SystemConfigDir {
+    fn set(path: &std::path::Path) -> Self {
+        Self(crate::configuration::set_test_system_config_dir(Some(
+            path.to_path_buf(),
+        )))
+    }
+}
+
+impl Drop for SystemConfigDir {
+    fn drop(&mut self) {
+        crate::configuration::set_test_system_config_dir(self.0.take());
+    }
+}
+
 #[test]
 fn preparation_preserves_existing_merge_order_and_reuses_parsed_inputs() {
     let directory = tempfile::tempdir().unwrap();
@@ -95,6 +112,8 @@ fn diagnostic_settings_and_environment_do_not_change_execution_fingerprint() {
 #[test]
 fn staged_logging_uses_the_existing_decoder_and_validation() {
     let temp = tempfile::tempdir().unwrap();
+    let system_config_dir = tempfile::tempdir().unwrap();
+    let _system_config = SystemConfigDir::set(system_config_dir.path());
     let file = temp.path().join("config.toml");
     for contents in [
         "[logging]\nstderr_format = 'human'",
