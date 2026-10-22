@@ -87,6 +87,6 @@ Paste this into a new Codex task if you want an agent to perform the recovery:
 Use these references for the upstream issue and supported Relay workflows:
 
 - [Codex Desktop provider-filter bug](https://github.com/openai/codex/issues/24648)
-- [Relay Codex integration](https://docs.nvidia.com/nemo/relay/dev/nemo-relay-cli/codex)
-- [Relay plugin installation and uninstall](https://docs.nvidia.com/nemo/relay/dev/nemo-relay-cli/plugin-installation)
-- [Relay transparent run](https://docs.nvidia.com/nemo/relay/dev/nemo-relay-cli/basic-usage#transparent-run)
+- [Relay Codex integration](https://docs.nvidia.com/nemo/relay/latest/nemo-relay-cli/codex)
+- [Relay plugin installation and uninstall](https://docs.nvidia.com/nemo/relay/latest/nemo-relay-cli/plugin-installation)
+- [Relay transparent run](https://docs.nvidia.com/nemo/relay/latest/nemo-relay-cli/basic-usage#transparent-run)

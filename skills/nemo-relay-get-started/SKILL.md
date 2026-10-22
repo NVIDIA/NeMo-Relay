@@ -84,7 +84,7 @@ Stop the initial trial when the guide's success checks pass. Explain the
 observed value and Relay's progression: attach once, then extend supported
 behavior through plugin configuration.
 
-Use the current [plugin overview](https://docs.nvidia.com/nemo/relay/dev/configure-plugins/about)
+Use the current [plugin overview](https://docs.nvidia.com/nemo/relay/latest/configure-plugins/about)
 and integration documentation to suggest one next plugin for the user's goal.
 Do not repeat Observability setup if the guide already established it, or offer
 capabilities unsupported by the selected integration.

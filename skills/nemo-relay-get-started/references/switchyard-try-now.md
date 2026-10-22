@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # Switchyard Trial Routing
 
 Find the current Switchyard guide through the
-[plugin overview](https://docs.nvidia.com/nemo/relay/dev/configure-plugins/about)
+[plugin overview](https://docs.nvidia.com/nemo/relay/latest/configure-plugins/about)
 and [Relay Plugins source](https://github.com/NVIDIA/NeMo-Relay-Plugins/tree/main/plugins/switchyard-plugin).
 Read the matching guide and its referenced files. Switchyard may live under
 plugin configuration rather than the quick-start index; do not assume an old

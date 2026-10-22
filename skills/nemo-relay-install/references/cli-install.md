@@ -13,8 +13,8 @@ coding-agent host integration.
 - [Installation](https://docs.nvidia.com/nemo/relay/getting-started/installation)
 - [Support matrix](https://docs.nvidia.com/nemo/relay/reference/support-matrix)
 - [Latest stable release](https://github.com/NVIDIA/NeMo-Relay/releases/latest)
-- [CLI usage](https://docs.nvidia.com/nemo/relay/dev/nemo-relay-cli/basic-usage)
-- [Persistent host installation](https://docs.nvidia.com/nemo/relay/dev/nemo-relay-cli/plugin-installation)
+- [CLI usage](https://docs.nvidia.com/nemo/relay/latest/nemo-relay-cli/basic-usage)
+- [Persistent host installation](https://docs.nvidia.com/nemo/relay/latest/nemo-relay-cli/plugin-installation)
 
 Resolve the current stable release and supported platform before deriving the
 command. Use its documented installer or package route and verify integrity
@@ -33,7 +33,7 @@ as basic executable verification. Hand the established target to get-started.
 
 ## Persistent Codex Desktop Continuity
 
-Read the [Codex integration guide](https://docs.nvidia.com/nemo/relay/dev/nemo-relay-cli/codex)
+Read the [Codex integration guide](https://docs.nvidia.com/nemo/relay/latest/nemo-relay-cli/codex)
 and the [provider-filtering issue](https://github.com/openai/codex/issues/24648).
 Check whether the issue still applies to the user's setup rather than asserting
 that an infrequently updated skill proves a current bug.
