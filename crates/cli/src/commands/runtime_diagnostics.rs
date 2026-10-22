@@ -7,6 +7,7 @@ use std::{io::Write, process::ExitCode};
 
 const DEFAULT_INSPECTOR_RESPONSE_BYTES: u32 = crate::daemon::broker::collection::PAGE_BYTES as u32;
 const DEFAULT_WORKER_RESPONSE_BYTES: u32 = crate::daemon::broker::collection::RESPONSE_BYTES as u32;
+const MIN_INSPECTOR_RESPONSE_BYTES: u32 = 4 * 1024;
 const MAX_INSPECTOR_RESPONSE_BYTES: u32 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Args)]
@@ -27,7 +28,7 @@ pub(crate) struct InspectCommand {
     #[arg(long, conflicts_with = "capabilities")]
     query: Option<String>,
     /// Maximum response bytes accepted by this inspector, independent of the server.
-    #[arg(long, value_parser = clap::value_parser!(u32).range(4096..=MAX_INSPECTOR_RESPONSE_BYTES))]
+    #[arg(long, value_parser = clap::value_parser!(u32).range(MIN_INSPECTOR_RESPONSE_BYTES..=MAX_INSPECTOR_RESPONSE_BYTES))]
     max_response_bytes: Option<u32>,
 }
 pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliError> {
