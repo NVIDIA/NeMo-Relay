@@ -1120,3 +1120,31 @@ fn memory_schema_uses_versioned_envelope_and_lossless_aggregate_fields() {
         );
     }
 }
+
+#[test]
+fn canonical_memory_fixture_preserves_complete_wire_shape_and_precision() {
+    let value: Value = serde_json::from_str(include_str!(
+        "fixtures/diagnostics/diagnostic-memory-schema-1.json"
+    ))
+    .unwrap();
+    let page: DiagnosticMemoryPage = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(page.sequence.get(), u64::MAX);
+    assert_eq!(page.aggregate.reserved_bytes as u64, 9_007_199_254_740_993);
+    assert_eq!(page.components[0].component.key, "9007199254740993");
+    let sample = page.resource.sample.unwrap();
+    assert_eq!(sample.ordinal.get(), u64::MAX);
+    assert_eq!(
+        sample.memory.system_used.unwrap().value,
+        ResourceMemoryNumber::Integer(u64::MAX.into())
+    );
+    assert_eq!(
+        sample.memory.private.unwrap().value,
+        ResourceMemoryNumber::Decimal(1.25)
+    );
+    assert_eq!(
+        sample.memory.virtual_memory.unwrap().value,
+        ResourceMemoryNumber::NonFinite
+    );
+    assert!(sample.memory.system_available.is_none());
+    assert_eq!(serde_json::to_value(page).unwrap(), value);
+}

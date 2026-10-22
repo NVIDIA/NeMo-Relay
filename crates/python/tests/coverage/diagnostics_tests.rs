@@ -37,3 +37,44 @@ fn canonical_fixture_converts_numbers_and_keeps_restricted_text() {
         true
     );
 }
+
+#[test]
+fn canonical_memory_fixture_converts_all_quantities_without_retyping_text_or_decimals() {
+    let mut value: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../types/tests/fixtures/diagnostics/diagnostic-memory-schema-1.json"
+    ))
+    .unwrap();
+    let original = value.clone();
+    native_numbers(&mut value, "");
+    fn compare(original: &serde_json::Value, converted: &serde_json::Value, field: &str) {
+        match original {
+            serde_json::Value::String(text)
+                if nemo_relay::diagnostics::embedded::is_diagnostic_number_field(field) =>
+            {
+                assert_eq!(converted.as_u64(), text.parse::<u64>().ok(), "{field}");
+                assert!(converted.is_u64(), "{field}");
+            }
+            serde_json::Value::Object(fields) => {
+                for (key, child) in fields {
+                    compare(child, &converted[key], key);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for (index, child) in values.iter().enumerate() {
+                    compare(child, &converted[index], "");
+                }
+            }
+            _ => assert_eq!(original, converted, "{field}"),
+        }
+    }
+    compare(&original, &value, "");
+    assert_eq!(value["sequence"].as_u64(), Some(u64::MAX));
+    assert_eq!(
+        value["components"][0]["component"]["key"],
+        "9007199254740993"
+    );
+    assert_eq!(
+        value["resource"]["sample"]["memory"]["private"]["value"]["value"],
+        1.25
+    );
+}

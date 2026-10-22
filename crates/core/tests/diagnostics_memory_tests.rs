@@ -209,6 +209,134 @@ fn inspection_shares_permits_cursors_and_never_changes_evidence() {
     assert_eq!(d.memory_usage().query_workspaces, 0);
 }
 #[test]
+fn memory_cursor_rejects_foreign_sources_changed_selections_and_invalid_offsets() {
+    let d = context(8);
+    let recorder = d
+        .register_component(ComponentRegistration::new("a", &[CODE]))
+        .unwrap();
+    record(&recorder, "one");
+    record(&recorder, "two");
+    let query = DiagnosticQuery {
+        max_components: Some(0),
+        max_events: Some(1),
+        ..Default::default()
+    };
+    let first = page(&d, &query);
+    let cursor = first.continuation.unwrap();
+    let foreign = page(&context(0), &DiagnosticQuery::default())
+        .source
+        .instance_id;
+    for mutation in 0..6 {
+        let mut next = DiagnosticQuery {
+            continuation: Some(cursor.clone()),
+            ..query.clone()
+        };
+        let token = next.continuation.as_mut().unwrap();
+        match mutation {
+            0 => token.source_instance_id = foreign,
+            1 => token.sequence = (token.sequence.get() + 1).into(),
+            2 => token.scope = (token.scope.get() ^ 1).into(),
+            3 => token.component_offset = u64::MAX.into(),
+            4 => token.event_offset = u64::MAX.into(),
+            5 => next.component_key = Some("other".into()),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            d.reader().inspect_memory(&next).unwrap_err(),
+            DiagnosticError::InvalidCursor,
+            "case {mutation}"
+        );
+        assert_eq!(d.memory_usage().query_workspaces, 0);
+    }
+    let resumed = page(
+        &d,
+        &DiagnosticQuery {
+            continuation: Some(cursor),
+            ..query
+        },
+    );
+    assert_eq!(resumed.entries.len(), 1);
+    assert!(resumed.entries[0].sequence > first.entries[0].sequence);
+    assert!(resumed.continuation.is_none());
+}
+
+#[test]
+fn memory_component_caps_advance_and_unfittable_identity_releases_the_permit() {
+    let d = context(0);
+    let _a = d
+        .register_component(ComponentRegistration::new("a", &[CODE]))
+        .unwrap();
+    let _b = d
+        .register_component(ComponentRegistration::new("b", &[CODE]))
+        .unwrap();
+    let query = DiagnosticQuery {
+        max_components: Some(1),
+        max_events: Some(0),
+        ..Default::default()
+    };
+    let first = page(&d, &query);
+    let second = page(
+        &d,
+        &DiagnosticQuery {
+            continuation: first.continuation.clone(),
+            ..query
+        },
+    );
+    assert_eq!(first.components.len(), 1);
+    assert_eq!(second.components.len(), 1);
+    assert_ne!(
+        first.components[0].component.instance_id,
+        second.components[0].component.instance_id
+    );
+    assert!(second.continuation.is_none());
+    assert_eq!(first.selection, second.selection);
+    let d = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                query_text_bytes: 1,
+                max_queries: 1,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let recorder = d
+        .register_component(ComponentRegistration::new("long-key", &[CODE]))
+        .unwrap();
+    record(&recorder, "retained");
+    for query in [
+        DiagnosticQuery {
+            max_events: Some(0),
+            ..Default::default()
+        },
+        DiagnosticQuery {
+            max_components: Some(0),
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(
+            d.reader().inspect_memory(&query).unwrap_err(),
+            DiagnosticError::SnapshotCapacity
+        );
+        assert_eq!(d.memory_usage().query_workspaces, 0);
+    }
+    let empty = page(
+        &d,
+        &DiagnosticQuery {
+            max_components: Some(0),
+            max_events: Some(0),
+            ..Default::default()
+        },
+    );
+    assert!(empty.components.is_empty() && empty.entries.is_empty());
+    assert!(empty.continuation.is_none());
+    assert_eq!(empty.aggregate.events, 1);
+    conserved(&empty);
+}
+
+#[test]
 fn copied_typed_views_and_json_access_allocate_nothing_and_survive_eviction() {
     let d = context(2);
     let a = d

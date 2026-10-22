@@ -306,6 +306,10 @@ fn native_integer_field_inventory_covers_the_canonical_schema() {
         &serde_json::to_value(schemars::schema_for!(DiagnosticSnapshot)).unwrap(),
         "",
     );
+    inspect(
+        &serde_json::to_value(schemars::schema_for!(DiagnosticMemoryPage)).unwrap(),
+        "",
+    );
 }
 
 #[test]

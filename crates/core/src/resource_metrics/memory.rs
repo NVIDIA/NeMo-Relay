@@ -314,6 +314,90 @@ mod tests {
         }
     }
 
+    #[test]
+    fn association_requires_verified_root_and_matching_process_incarnation() {
+        let application =
+            super::super::collector::current_process_target(ResourceMeasurementScope::ProcessTree)
+                .unwrap();
+        let pid = application.process_id;
+        for (scope, source, other_pid, other_start, verified, expected) in [
+            (
+                ResourceMeasurementScope::ApplicationProcess,
+                Some(pid),
+                false,
+                false,
+                true,
+                ResourceAssociation::HostProcess,
+            ),
+            (
+                ResourceMeasurementScope::ProcessTree,
+                Some(pid),
+                false,
+                false,
+                true,
+                ResourceAssociation::HostProcessTree,
+            ),
+            (
+                ResourceMeasurementScope::ProcessTree,
+                Some(pid),
+                true,
+                false,
+                true,
+                ResourceAssociation::OtherProcessTree,
+            ),
+            (
+                ResourceMeasurementScope::ProcessTree,
+                Some(pid),
+                false,
+                true,
+                true,
+                ResourceAssociation::OtherProcessTree,
+            ),
+            (
+                ResourceMeasurementScope::ApplicationProcess,
+                Some(pid),
+                false,
+                true,
+                true,
+                ResourceAssociation::Unverified,
+            ),
+            (
+                ResourceMeasurementScope::ProcessTree,
+                Some(pid),
+                false,
+                false,
+                false,
+                ResourceAssociation::Unverified,
+            ),
+            (
+                ResourceMeasurementScope::ApplicationProcess,
+                None,
+                false,
+                false,
+                true,
+                ResourceAssociation::Unverified,
+            ),
+        ] {
+            let mut target = application.clone();
+            if other_pid {
+                target.process_id = pid.wrapping_add(1);
+            }
+            if other_start {
+                target.start_identity = target.start_identity.wrapping_add(1);
+            }
+            let mut snapshot = super::super::snapshot_fixture::full_snapshot();
+            snapshot.measurement_scope = scope;
+            let mut cache = LatestMemory::default();
+            cache.publish(&snapshot, &target, verified, true, ticket(1));
+            let view = cache.view(source, &application, 30_000);
+            assert_eq!(
+                view.association, expected,
+                "{scope:?}, source={source:?}, pid_changed={other_pid}, start_changed={other_start}, verified={verified}"
+            );
+            assert_eq!(view.sample.unwrap().root.is_some(), verified);
+        }
+    }
+
     fn ticket(ordinal: u64) -> Ticket {
         Ticket {
             collector: Uuid::nil(),

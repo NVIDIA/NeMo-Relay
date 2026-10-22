@@ -35,7 +35,7 @@ def test_python_query_adapter_matches_shared_contract_fixture():
     assert NUMERIC_QUERY_FIELDS == frozenset(fixture["numeric_query_fields"])
 
 
-@pytest.mark.parametrize("method", ["snapshot", "snapshot_json"])
+@pytest.mark.parametrize("method", ["snapshot", "snapshot_json", "inspect_memory", "inspect_memory_json"])
 @pytest.mark.parametrize("query", [{"\ud800": "value"}, {"component_key": "\udfff"}])
 def test_reader_rejects_malformed_unicode_queries(method, query):
     # Malformed input must be rejected before the native reader is called.
@@ -52,7 +52,7 @@ class _EncodeForbidden(str):
         pytest.fail("query input was encoded before admission")
 
 
-@pytest.mark.parametrize("method", ["snapshot", "snapshot_json"])
+@pytest.mark.parametrize("method", ["snapshot", "snapshot_json", "inspect_memory", "inspect_memory_json"])
 @pytest.mark.parametrize(
     "query",
     [
@@ -74,7 +74,7 @@ def test_reader_bounds_query_strings_before_native_calls(method, query):
     assert native.mock_calls == []
 
 
-@pytest.mark.parametrize("method", ["snapshot", "snapshot_json"])
+@pytest.mark.parametrize("method", ["snapshot", "snapshot_json", "inspect_memory", "inspect_memory_json"])
 def test_reader_preserves_multibyte_query_at_encoded_size_limit(method):
     key = "component_key"
     overhead = len(json.dumps({key: ""}, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
@@ -88,6 +88,23 @@ def test_reader_preserves_multibyte_query_at_encoded_size_limit(method):
     encoded = call.call_args.args[0]
     assert len(encoded.encode("utf-8")) == MAX_QUERY_BYTES
     assert json.loads(encoded) == query
+
+
+@pytest.mark.parametrize("method", ["inspect_memory", "inspect_memory_json"])
+@pytest.mark.parametrize(
+    "reason", ["disabled", "query_disabled", "busy", "invalid_cursor", "snapshot_capacity", "unsupported_schema", None]
+)
+def test_memory_reader_preserves_safe_native_failure_reasons(method, reason):
+    native = Mock()
+    failure = RuntimeError("restricted native detail")
+    if reason is not None:
+        setattr(failure, "reason", reason)
+    getattr(native, method).side_effect = failure
+    with pytest.raises(DiagnosticsError) as error:
+        getattr(DiagnosticsReader(native), method)()
+    assert error.value.reason == (reason or "unavailable")
+    assert "restricted" not in str(error.value)
+    getattr(native, method).assert_called_once_with("{}")
 
 
 def test_configured_diagnostics_outlives_plugins(tmp_path):
