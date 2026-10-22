@@ -239,7 +239,7 @@ fn windows_rotation_sharing_violation_records_once_without_projection_recursion(
 }
 
 #[test]
-fn long_unicode_paths_and_crlf_details_survive_projection_rotation_and_shutdown() {
+fn unicode_paths_preserve_summary_logs_and_retained_details_through_rotation_and_shutdown() {
     let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
     for rotation in [None, Some(FileLogRotationConfig::new(1, 2).unwrap())] {
         let service = enabled();
@@ -283,6 +283,10 @@ fn long_unicode_paths_and_crlf_details_survive_projection_rotation_and_shutdown(
         let mut rows = Vec::<Value>::new();
         for file in files {
             let output = std::fs::read_to_string(&file).unwrap();
+            // JSON escaping must not hide raw detail leaking into either log file.
+            for message in messages {
+                assert!(!output.contains(&serde_json::to_string(message).unwrap()));
+            }
             rows.extend(
                 output
                     .lines()
@@ -301,11 +305,12 @@ fn long_unicode_paths_and_crlf_details_survive_projection_rotation_and_shutdown(
             }
         }
         assert_eq!(rows.len(), messages.len());
-        for (row, message) in rows.iter().zip(messages) {
-            assert_eq!(row["message"], message);
-            assert_eq!(row["fields"]["diagnostic"]["detail"]["message"], message);
+        for row in &rows {
+            assert_eq!(row["message"], "Diagnostic observation");
+            assert_eq!(row["event"], "plugin.internal");
+            assert!(row["fields"]["diagnostic"].get("detail").is_none());
             assert_eq!(
-                row["fields"]["diagnostic"]["component"]["instance_id"],
+                row["fields"]["diagnostic"]["component_instance_id"],
                 producer.identity().unwrap().instance_id.to_string()
             );
         }
@@ -314,6 +319,17 @@ fn long_unicode_paths_and_crlf_details_survive_projection_rotation_and_shutdown(
             .unwrap()
             .to_snapshot()
             .unwrap();
+        let retained: Vec<_> = view
+            .events
+            .iter()
+            .filter(|event| event.component.instance_id == producer.identity().unwrap().instance_id)
+            .collect();
+        assert_eq!(retained.len(), messages.len());
+        for (event, message) in retained.iter().zip(messages) {
+            let detail = event.detail.as_ref().unwrap();
+            assert_eq!(detail.message, message);
+            assert!(!detail.truncated);
+        }
         assert!(
             !view
                 .events
