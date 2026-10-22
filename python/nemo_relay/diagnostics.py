@@ -44,16 +44,17 @@ def _query_json(query: dict[str, Any] | None) -> str:
     def normalize(value: Any, key: str = "", depth: int = 0) -> Any:
         nonlocal admitted_bytes, nodes
         nodes += 1
-        if not isinstance(key, str) or len(key.encode("utf-8")) > MAX_QUERY_FIELD_NAME_BYTES:
+        if not isinstance(key, str):
             raise DiagnosticsError("invalid_query")
-        admitted_bytes += len(key.encode("utf-8"))
-        if isinstance(value, str):
-            admitted_bytes += len(value.encode("utf-8"))
-        if (
-            nodes > MAX_QUERY_NODES
-            or admitted_bytes > MAX_QUERY_BYTES
-            or depth > MAX_QUERY_DEPTH
-        ):
+        try:
+            key_bytes = len(key.encode("utf-8"))
+            value_bytes = len(value.encode("utf-8")) if isinstance(value, str) else 0
+        except UnicodeEncodeError:
+            raise DiagnosticsError("invalid_query") from None
+        if key_bytes > MAX_QUERY_FIELD_NAME_BYTES:
+            raise DiagnosticsError("invalid_query")
+        admitted_bytes += key_bytes + value_bytes
+        if nodes > MAX_QUERY_NODES or admitted_bytes > MAX_QUERY_BYTES or depth > MAX_QUERY_DEPTH:
             raise DiagnosticsError("invalid_query")
         if isinstance(value, dict):
             if len(value) > MAX_QUERY_OBJECT_FIELDS:

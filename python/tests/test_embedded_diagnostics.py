@@ -9,6 +9,9 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
 
 from nemo_relay._diagnostics_query_contract import (
     MAX_QUERY_BYTES,
@@ -18,13 +21,11 @@ from nemo_relay._diagnostics_query_contract import (
     MAX_QUERY_OBJECT_FIELDS,
     NUMERIC_QUERY_FIELDS,
 )
+from nemo_relay.diagnostics import DiagnosticsError, DiagnosticsReader
 
 
 def test_python_query_adapter_matches_shared_contract_fixture():
-    fixture_path = (
-        Path(__file__).resolve().parents[2]
-        / "crates/core/tests/fixtures/diagnostics_query_contract.json"
-    )
+    fixture_path = Path(__file__).resolve().parents[2] / "crates/core/tests/fixtures/diagnostics_query_contract.json"
     fixture = json.loads(fixture_path.read_text())
     assert MAX_QUERY_BYTES == fixture["max_query_bytes"]
     assert MAX_QUERY_NODES == fixture["adapter_limits"]["max_query_nodes"]
@@ -32,6 +33,18 @@ def test_python_query_adapter_matches_shared_contract_fixture():
     assert MAX_QUERY_OBJECT_FIELDS == fixture["adapter_limits"]["max_query_object_fields"]
     assert MAX_QUERY_FIELD_NAME_BYTES == fixture["adapter_limits"]["max_query_field_name_bytes"]
     assert NUMERIC_QUERY_FIELDS == frozenset(fixture["numeric_query_fields"])
+
+
+@pytest.mark.parametrize("method", ["snapshot", "snapshot_json"])
+@pytest.mark.parametrize("query", [{"\ud800": "value"}, {"component_key": "\udfff"}])
+def test_reader_rejects_malformed_unicode_queries(method, query):
+    # Malformed input must be rejected before the native reader is called.
+    native = Mock()
+    reader = DiagnosticsReader(native)
+    with pytest.raises(DiagnosticsError) as error:
+        getattr(reader, method)(query)
+    assert error.value.reason == "invalid_query"
+    assert native.mock_calls == []
 
 
 def test_configured_diagnostics_outlives_plugins(tmp_path):
