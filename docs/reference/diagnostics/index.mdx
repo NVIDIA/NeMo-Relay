@@ -27,8 +27,10 @@ is the part of Relay that records an operation's outcome. A *context* owns the
 shared diagnostic storage for those producers and their readers.
 
 The shared data types live in `nemo-relay-types`. Registration, storage, and queries
-live in `nemo_relay::diagnostics`. Recording works without a logger, active plugin,
-Tokio runtime, or HTTP listener.
+live in `nemo_relay::diagnostics`. Producers can submit diagnostic observations
+directly to the in-memory diagnostics service, which updates counters and retains
+bounded recent evidence. This requires no configured logger, active plugin, Tokio
+runtime, or HTTP listener.
 
 Diagnostic detail can contain private data that has not been sanitized. Only
 grant read access to callers allowed to inspect the whole context. Protect the
