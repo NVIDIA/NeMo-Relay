@@ -115,3 +115,14 @@ use state::{
     StoredFailureClass, StoredObservation, StoredPluginContext, WindowReservation, WindowSlot,
     empty_slots, text,
 };
+
+pub use nemo_relay_types::diagnostics::{
+    ComponentMemoryFootprint, ComponentMemoryUsage, DIAGNOSTIC_MEMORY_VERSION,
+    DiagnosticMemoryPage, EntryMemoryFootprint, EntryMemoryUsage, MemoryFieldScope,
+    MemoryLimitEvent, MemorySelectionTotals, ResourceAssociation, ResourceMemoryAvailability,
+    ResourceMemoryMeasurement, ResourceMemoryMetrics, ResourceMemoryNumber, ResourceMemorySample,
+    ResourceMemoryUnit, ResourceMemoryView, ResourceProcessIdentity, ResourceSampleStream,
+};
+pub use read::{ComponentMemoryView, EntryMemoryView, MemoryInspectionLease};
+
+pub use read::{ComponentView, EventView};

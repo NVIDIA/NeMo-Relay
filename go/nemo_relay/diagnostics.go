@@ -10,6 +10,7 @@ typedef struct FfiDiagnosticsReader FfiDiagnosticsReader;
 extern int32_t nemo_relay_diagnostics_reader(FfiDiagnosticsReader** out);
 extern void nemo_relay_diagnostics_reader_free(FfiDiagnosticsReader** reader);
 extern int32_t nemo_relay_diagnostics_snapshot_json(const FfiDiagnosticsReader* reader, const char* query, char** out);
+extern int32_t nemo_relay_diagnostics_memory_json(const FfiDiagnosticsReader* reader, const char* query, char** out);
 extern int32_t nemo_relay_diagnostics_info_json(const FfiDiagnosticsReader* reader, char** out);
 extern uint32_t nemo_relay_diagnostics_query_max_bytes(void);
 extern const char* nemo_relay_last_error(void);
@@ -78,7 +79,7 @@ func (reader *DiagnosticsReader) Close() {
 	}
 }
 
-func (reader *DiagnosticsReader) read(query string, info bool) (string, error) {
+func (reader *DiagnosticsReader) read(query string, mode string) (string, error) {
 	if reader == nil || reader.state == nil {
 		return "", &DiagnosticsError{Reason: "closed"}
 	}
@@ -95,12 +96,16 @@ func (reader *DiagnosticsReader) read(query string, info bool) (string, error) {
 	defer runtime.UnlockOSThread()
 	var out *C.char
 	var status C.int32_t
-	if info {
+	if mode == "info" {
 		status = C.nemo_relay_diagnostics_info_json(state.ptr, &out)
 	} else {
 		input := C.CString(query)
 		defer C.free(unsafe.Pointer(input))
-		status = C.nemo_relay_diagnostics_snapshot_json(state.ptr, input, &out)
+		if mode == "memory" {
+			status = C.nemo_relay_diagnostics_memory_json(state.ptr, input, &out)
+		} else {
+			status = C.nemo_relay_diagnostics_snapshot_json(state.ptr, input, &out)
+		}
 	}
 	if err := diagnosticStatus(status); err != nil {
 		return "", err
@@ -113,6 +118,15 @@ func (reader *DiagnosticsReader) read(query string, info bool) (string, error) {
 
 // SnapshotJSON returns one canonical page; the Go string is caller-owned.
 func (reader *DiagnosticsReader) SnapshotJSON(query DiagnosticQuery) (string, error) {
+	return reader.queryJSON(query, "snapshot")
+}
+
+// InspectMemoryJSON reads bounded backing attribution and existing resource context.
+func (reader *DiagnosticsReader) InspectMemoryJSON(query DiagnosticQuery) (string, error) {
+	return reader.queryJSON(query, "memory")
+}
+
+func (reader *DiagnosticsReader) queryJSON(query DiagnosticQuery, mode string) (string, error) {
 	for _, text := range []*string{
 		query.ComponentKey, query.ComponentInstanceID, query.Code, query.Domain,
 		query.PluginFamily, query.FailureClass, query.Ownership.ConfigurationID,
@@ -130,7 +144,7 @@ func (reader *DiagnosticsReader) SnapshotJSON(query DiagnosticQuery) (string, er
 	if err != nil {
 		return "", err
 	}
-	return reader.read(string(payload), false)
+	return reader.read(string(payload), mode)
 }
 
 // Snapshot decodes lossless counters and preserves opaque code/context names.
@@ -145,4 +159,4 @@ func (reader *DiagnosticsReader) Snapshot(query DiagnosticQuery) (DiagnosticSnap
 }
 
 // InfoJSON returns separate core/copy budgets, occupancy, and logging coverage.
-func (reader *DiagnosticsReader) InfoJSON() (string, error) { return reader.read("", true) }
+func (reader *DiagnosticsReader) InfoJSON() (string, error) { return reader.read("", "info") }

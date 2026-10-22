@@ -100,6 +100,14 @@ class DiagnosticsReader {
   snapshotJson(query) {
     return call(() => this.#native.snapshotJson(queryJson(query)));
   }
+  /** Return one camelCase memory page with every diagnostic u64 represented as bigint. */
+  inspectMemory(query) {
+    return call(() => this.#native.inspectMemory(queryJson(query)));
+  }
+  /** Return portable canonical JSON (snake_case, decimal-string integers). */
+  inspectMemoryJson(query) {
+    return call(() => this.#native.inspectMemoryJson(queryJson(query)));
+  }
   /** Return separate core/copy budgets, occupancy, and logging coverage. */
   info() {
     return call(() => this.#native.info());

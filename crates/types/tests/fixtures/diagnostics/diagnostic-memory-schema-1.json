@@ -1,0 +1,274 @@
+{
+  "schema_version": 1,
+  "source": {
+    "instance_id": "0199942f-1000-7000-8000-000000000001",
+    "process_id": 42,
+    "process_role": "gateway",
+    "relay_version": "0.11.0"
+  },
+  "captured_at": "2026-10-15T09:00:00Z",
+  "sequence": "18446744073709551615",
+  "aggregate": {
+    "reserved_bytes": "9007199254740993",
+    "components": "1",
+    "counters": "1",
+    "events": "1",
+    "event_slot_bytes": "128",
+    "event_capacity": "2",
+    "history_reserved_bytes": "272",
+    "history_occupied_bytes": "128",
+    "detail_bytes": "256",
+    "detail_capacity_bytes": "512",
+    "detail_reserved_bytes": "544",
+    "detail_metadata_bytes": "32",
+    "detail_logical_bytes": "7",
+    "detail_slack_bytes": "249",
+    "metadata_bytes": "17",
+    "window_buckets": "1",
+    "extensions": "1",
+    "query_workspaces": "1",
+    "projections": "0",
+    "projection_workspaces": "0"
+  },
+  "component_occupied_bytes": "528",
+  "shared_or_unassigned_reserved_bytes": "9007199254740465",
+  "loss": {
+    "events_evicted": {
+      "value": "3",
+      "saturated": false
+    },
+    "events_omitted": {
+      "value": "0",
+      "saturated": false
+    },
+    "components_evicted": {
+      "value": "0",
+      "saturated": false
+    },
+    "components_rejected": {
+      "value": "0",
+      "saturated": false
+    },
+    "keys_rejected": {
+      "value": "0",
+      "saturated": false
+    },
+    "observations_rejected": {
+      "value": "0",
+      "saturated": false
+    },
+    "messages_truncated": {
+      "value": "0",
+      "saturated": false
+    },
+    "details_omitted": {
+      "value": "0",
+      "saturated": false
+    },
+    "correlations_truncated": {
+      "value": "0",
+      "saturated": false
+    },
+    "correlations_omitted": {
+      "value": "0",
+      "saturated": false
+    },
+    "metadata_rejected": {
+      "value": "0",
+      "saturated": false
+    },
+    "classifications_overflowed": {
+      "value": "0",
+      "saturated": false
+    },
+    "windows_rejected": {
+      "value": "0",
+      "saturated": false
+    },
+    "queries_rejected": {
+      "value": "0",
+      "saturated": false
+    },
+    "stale_observations": {
+      "value": "0",
+      "saturated": false
+    },
+    "projection_deliveries_omitted": {
+      "value": "0",
+      "saturated": false
+    },
+    "projections_panicked": {
+      "value": "0",
+      "saturated": false
+    },
+    "projections_suppressed": {
+      "value": "0",
+      "saturated": false
+    },
+    "sequence_saturated": false
+  },
+  "selection": {
+    "components": "1",
+    "events": "1",
+    "component_occupied_bytes": "528",
+    "entry_occupied_bytes": "400"
+  },
+  "page": {
+    "components": "1",
+    "events": "1",
+    "component_occupied_bytes": "528",
+    "entry_occupied_bytes": "400"
+  },
+  "components": [
+    {
+      "component": {
+        "key": "9007199254740993",
+        "instance_id": "0199942f-1000-7000-8000-000000000002",
+        "generation": "9007199254740993"
+      },
+      "registration_bytes": "64",
+      "counter_bytes": "32",
+      "window_bytes": "16",
+      "extension_bytes": "16",
+      "retained_event_count": "1",
+      "retained_event_bytes": "400",
+      "occupied_bytes": "528"
+    }
+  ],
+  "entries": [
+    {
+      "sequence": "9007199254740993",
+      "component": {
+        "key": "9007199254740993",
+        "instance_id": "0199942f-1000-7000-8000-000000000002",
+        "generation": "9007199254740993"
+      },
+      "header_bytes": "128",
+      "detail_payload_bytes": "256",
+      "detail_metadata_bytes": "16",
+      "logical_text_bytes": "7",
+      "detail_slack_bytes": "249",
+      "occupied_bytes": "400"
+    }
+  ],
+  "resource": {
+    "availability": "available",
+    "sample": {
+      "collector_instance_id": "0199942f-1000-7000-8000-000000000003",
+      "runtime_generation": "9007199254740993",
+      "target_generation": "9007199254740993",
+      "stream": "on_demand",
+      "ordinal": "18446744073709551615",
+      "started_at": "2026-10-15T09:00:00Z",
+      "completed_at": "2026-10-15T09:00:00Z",
+      "collection_millis": "9007199254740993",
+      "operating_system": "linux",
+      "measurement_scope": "application_process",
+      "root": {
+        "process_id": 42,
+        "start_identity": "9007199254740993"
+      },
+      "visible_processes": "1",
+      "sampled_processes": "1",
+      "memory": {
+        "system_used": {
+          "value": {
+            "kind": "integer",
+            "value": "18446744073709551615"
+          },
+          "unit": {
+            "dimension": "capacity",
+            "name": "bytes"
+          },
+          "measurement_scope": "system",
+          "sampled_processes": null
+        },
+        "system_total": null,
+        "system_available": null,
+        "resident": {
+          "value": {
+            "kind": "integer",
+            "value": "9007199254740993"
+          },
+          "unit": {
+            "dimension": "capacity",
+            "name": "bytes"
+          },
+          "measurement_scope": "selected_processes",
+          "sampled_processes": "1"
+        },
+        "private": {
+          "value": {
+            "kind": "decimal",
+            "value": 1.25
+          },
+          "unit": {
+            "dimension": "capacity",
+            "name": "kibibytes"
+          },
+          "measurement_scope": "selected_processes",
+          "sampled_processes": "1"
+        },
+        "physical_footprint": null,
+        "virtual_memory": {
+          "value": {
+            "kind": "non_finite"
+          },
+          "unit": {
+            "dimension": "capacity",
+            "name": "bytes"
+          },
+          "measurement_scope": "selected_processes",
+          "sampled_processes": null
+        },
+        "peak_resident": null,
+        "limit": null,
+        "environment_accounted": null,
+        "some_pressure_stall_time": {
+          "value": {
+            "kind": "integer",
+            "value": "9007199254740993"
+          },
+          "unit": {
+            "dimension": "duration",
+            "name": "milliseconds"
+          },
+          "measurement_scope": "environment",
+          "sampled_processes": null
+        },
+        "full_pressure_stall_time": null,
+        "out_of_memory_event_count": null,
+        "limit_events": [
+          {
+            "resource": "memory",
+            "event": "high",
+            "count": {
+              "value": {
+                "kind": "integer",
+                "value": "18446744073709551615"
+              },
+              "unit": {
+                "dimension": "count",
+                "name": "events"
+              },
+              "measurement_scope": "environment",
+              "sampled_processes": null
+            }
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    "association": "host_process",
+    "age_millis": "9007199254740993",
+    "stale": true,
+    "projection_slot_bytes": "512"
+  },
+  "continuation": null
+}

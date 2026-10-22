@@ -431,3 +431,91 @@ async fn http_read_is_the_same_source_evidence_without_recounting() {
     assert_eq!(page.lifetime.totals.failures_total.value.get(), 5);
     assert_eq!(page.lifetime.totals.recorded_events_total.value.get(), 2);
 }
+
+#[tokio::test]
+async fn memory_view_uses_operator_authority_and_separate_cursor_scope() {
+    let context = context(true, 1);
+    let code = BuiltinDiagnosticCode::Success(SuccessCode::CliCommandCompleted);
+    let component = context
+        .register_component(ComponentRegistration::new("cli.command", &[code]))
+        .unwrap();
+    for _ in 0..2 {
+        component
+            .record_lazy(|| {
+                Observation::new(
+                    Classification::success(SuccessCode::CliCommandCompleted),
+                    "cursor",
+                    NonZeroU64::MIN,
+                )
+            })
+            .unwrap();
+    }
+    let cursor = context
+        .snapshot(&DiagnosticQuery {
+            max_events: Some(1),
+            ..Default::default()
+        })
+        .unwrap()
+        .to_snapshot()
+        .unwrap()
+        .continuation
+        .expect("snapshot continuation");
+    let adapter = adapter(&context);
+    let token = bootstrap(&adapter).diagnostics_token();
+    let provider = bootstrap(&adapter).client_token();
+    let router = adapter.router();
+    let path = format!("{PREFIX}/memory");
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request(&path, None))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request(&path, Some(&provider)))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let mut browser = request(&path, Some(&token));
+    browser
+        .headers_mut()
+        .insert(header::ORIGIN, "https://example.com".parse().unwrap());
+    assert_eq!(
+        router.clone().oneshot(browser).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    let cursor_query = serde_json::json!({
+        "max_events": 1,
+        "continuation": cursor
+    });
+    let cursor_path = format!(
+        "{path}?query={}",
+        percent_encoding::utf8_percent_encode(
+            &cursor_query.to_string(),
+            percent_encoding::NON_ALPHANUMERIC
+        )
+    );
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request(&cursor_path, Some(&token)))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let response = router.oneshot(request(&path, Some(&token))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    let data = json(response).await;
+    assert!(data["aggregate"]["reserved_bytes"].is_string());
+    assert_eq!(data["resource"]["availability"], "disabled");
+    assert_eq!(context.memory_usage().query_workspaces, 0);
+}

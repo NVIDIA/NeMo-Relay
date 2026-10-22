@@ -124,3 +124,8 @@ pub struct DiagnosticProducerSupport {
     /// This binary contains the producer integration.
     pub supported: bool,
 }
+
+mod memory;
+pub use memory::*;
+mod resource;
+pub use resource::*;

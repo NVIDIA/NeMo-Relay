@@ -482,8 +482,8 @@ impl DiagnosticsReader {
             .collect(),
             max_query_components: (limits.max_query_components as u64).into(),
             max_query_events: (limits.max_query_events as u64).into(),
-            detailed_memory_inspection: false,
-            resource_correlation: false,
+            detailed_memory_inspection: true,
+            resource_correlation: true,
         }
     }
 
@@ -677,4 +677,16 @@ pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl DiagnosticsReader {
+    /// Inspect bounded per-entry/component backing and independently copied resource context.
+    /// Selection never restricts whole-context totals or grants inspection authority.
+    /// Snapshot and memory reads share query permits. No collection is started.
+    pub fn inspect_memory(
+        &self,
+        query: &DiagnosticQuery,
+    ) -> Result<super::MemoryInspectionLease, DiagnosticError> {
+        read::memory_capture(&self.inner, query)
+    }
 }

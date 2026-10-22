@@ -57,11 +57,16 @@ fn native_value(env: &Env, value: &Json, field: &str) -> napi::Result<JsUnknown>
             Ok(array.into_unknown())
         }
         Json::Number(number) => {
-            let number = number
-                .as_u64()
-                .filter(|number| *number <= 9_007_199_254_740_991)
+            if let Some(integer) = number.as_u64()
+                && integer > 9_007_199_254_740_991
+            {
+                return Err(napi::Error::from_reason("numeric_out_of_range"));
+            }
+            let value = number
+                .as_f64()
+                .filter(|n| n.is_finite())
                 .ok_or_else(|| napi::Error::from_reason("numeric_out_of_range"))?;
-            Ok(env.create_double(number as f64)?.into_unknown())
+            Ok(env.create_double(value)?.into_unknown())
         }
         _ => env.to_js_value(value),
     }
@@ -87,6 +92,27 @@ impl DiagnosticsReader {
     pub fn snapshot(&self, env: Env, query_json: Option<JsString>) -> napi::Result<JsUnknown> {
         let query = bounded_query(query_json)?;
         let page = self.inner.snapshot_json(&query).map_err(error)?;
+        let value: Json = serde_json::from_str(page.as_str())
+            .map_err(|_| napi::Error::from_reason("invalid_snapshot"))?;
+        native_value(&env, &value, "")
+    }
+    /// Return canonical snake_case JSON with decimal-string diagnostic integers.
+    #[napi]
+    pub fn inspect_memory_json(&self, query_json: Option<JsString>) -> napi::Result<String> {
+        let query = bounded_query(query_json)?;
+        let page = self.inner.inspect_memory_json(&query).map_err(error)?;
+        Ok(page.as_str().to_owned())
+    }
+    /// Return a caller-owned camelCase object. Diagnostic u64 fields are always bigint.
+    /// Use inspectMemoryJson for portable serialization; JSON.stringify cannot encode bigint.
+    #[napi(ts_return_type = "object")]
+    pub fn inspect_memory(
+        &self,
+        env: Env,
+        query_json: Option<JsString>,
+    ) -> napi::Result<JsUnknown> {
+        let query = bounded_query(query_json)?;
+        let page = self.inner.inspect_memory_json(&query).map_err(error)?;
         let value: Json = serde_json::from_str(page.as_str())
             .map_err(|_| napi::Error::from_reason("invalid_snapshot"))?;
         native_value(&env, &value, "")

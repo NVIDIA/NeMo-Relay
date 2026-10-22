@@ -19,11 +19,14 @@ pub(crate) struct InspectCommand {
     #[arg(long, conflicts_with = "gateway_url")]
     daemon_url: Option<String>,
     /// Read one cached managed Relay worker page from the daemon, without polling on demand.
-    #[arg(long, requires = "daemon_url", conflicts_with_all = ["query", "capabilities"])]
+    #[arg(long, requires = "daemon_url", conflicts_with_all = ["query", "capabilities", "memory"])]
     worker: Option<uuid::Uuid>,
     /// Read effective settings and supported producer coverage without a snapshot.
     #[arg(long)]
     capabilities: bool,
+    /// Inspect retained-entry/component backing and existing resource context.
+    #[arg(long, conflicts_with = "capabilities")]
+    memory: bool,
     /// Bounded JSON selection, including any opaque continuation from the previous page.
     #[arg(long, conflicts_with = "capabilities")]
     query: Option<String>,
@@ -47,6 +50,9 @@ pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliErro
         || crate::diagnostics_http::PREFIX.to_owned(),
         |worker| format!("/_nemo_relay/v1/workers/{worker}/diagnostics"),
     );
+    if command.memory {
+        path.push_str("/memory");
+    }
     if command.capabilities {
         path.push_str("/capabilities");
     }

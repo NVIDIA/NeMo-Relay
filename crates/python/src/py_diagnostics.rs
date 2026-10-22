@@ -63,6 +63,28 @@ impl PyDiagnosticsReader {
         // Keep the adapter permit until Python conversion succeeds or fails.
         crate::convert::json_to_py(py, &value)
     }
+    /// Return canonical memory JSON; query_json uses canonical snake_case query fields.
+    #[pyo3(signature = (query_json = "{}"))]
+    fn inspect_memory_json(&self, py: Python<'_>, query_json: &str) -> PyResult<String> {
+        let page = self
+            .inner
+            .inspect_memory_json(query_json)
+            .map_err(|e| error(py, e))?;
+        Ok(page.as_str().to_owned())
+    }
+    /// Return a caller-owned dict with every diagnostic u64 represented as int.
+    #[pyo3(signature = (query_json = "{}"))]
+    fn inspect_memory(&self, py: Python<'_>, query_json: &str) -> PyResult<Py<PyAny>> {
+        let page = self
+            .inner
+            .inspect_memory_json(query_json)
+            .map_err(|e| error(py, e))?;
+        let mut value: Json = serde_json::from_str(page.as_str())
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("invalid_snapshot"))?;
+        native_numbers(&mut value, "");
+        // Keep the adapter permit until Python conversion succeeds or fails.
+        crate::convert::json_to_py(py, &value)
+    }
     /// Return capacities, occupancy, and explicit logging integration coverage.
     fn info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let info = self.inner.info().map_err(|e| error(py, e))?;

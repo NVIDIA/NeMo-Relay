@@ -281,6 +281,16 @@ impl DetailPool {
         (len == handle.len).then_some(seen)
     }
 
+    /// Validated exclusive chain geometry; no text copy or recording ledger.
+    pub(super) fn footprint(&self, handle: DetailHandle) -> Option<(usize, usize, usize)> {
+        let blocks = self.block_count(handle)?;
+        Some((
+            blocks.checked_mul(self.block_bytes)?,
+            blocks.checked_mul(size_of::<Block>())?,
+            handle.len,
+        ))
+    }
+
     pub(super) fn view(&self, handle: DetailHandle) -> Option<DetailView<'_>> {
         self.valid(handle)
             .then_some(DetailView { pool: self, handle })

@@ -167,7 +167,7 @@ fn disabled_facade_has_no_identity_backend_or_lazy_work() {
             .as_object()
             .unwrap()
             .values()
-            .all(|value| value.as_u64() == Some(0))
+            .all(|value| value.as_str() == Some("0"))
     );
 }
 
@@ -2895,10 +2895,16 @@ fn memory_usage_distinguishes_history_capacity_from_occupied_slots() {
     let (usage, allocations) = allocations_during(|| reader.memory_usage());
     assert_eq!(allocations, 0);
     let wire = serde_json::to_value(usage).unwrap();
-    assert_eq!(wire["event_slot_bytes"], usage.event_slot_bytes);
-    assert_eq!(wire["event_capacity"], 2);
-    assert_eq!(wire["history_occupied_bytes"], 2 * usage.event_slot_bytes);
-    assert_eq!(wire["history_reserved_bytes"], usage.history_reserved_bytes);
+    assert_eq!(wire["event_slot_bytes"], usage.event_slot_bytes.to_string());
+    assert_eq!(wire["event_capacity"], "2");
+    assert_eq!(
+        wire["history_occupied_bytes"],
+        (2 * usage.event_slot_bytes).to_string()
+    );
+    assert_eq!(
+        wire["history_reserved_bytes"],
+        usage.history_reserved_bytes.to_string()
+    );
 }
 
 #[test]

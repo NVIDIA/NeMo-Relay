@@ -92,6 +92,7 @@ struct PageEvent {
 /// One preallocated query page. The public DTO graph is deliberately not held
 /// here: text references and flat arrays resolve through borrowed serializers.
 pub(super) struct PageWorkspace {
+    memory: memory::Workspace,
     components: Vec<PageComponent>,
     counters: Vec<PageCounter>,
     windows: Vec<PageWindow>,
@@ -101,11 +102,14 @@ pub(super) struct PageWorkspace {
     text_len: usize,
     output: Box<[u8]>,
     output_len: usize,
+    emitted_components: usize,
+    emitted_events: usize,
 }
 
 impl PageWorkspace {
     fn new(limits: &DiagnosticLimits) -> Result<Self, TryReserveError> {
         Ok(Self {
+            memory: memory::Workspace::new(limits)?,
             components: reserved(limits.max_query_components)?,
             counters: reserved(limits.max_query_counters)?,
             windows: reserved(limits.max_query_components)?,
@@ -115,9 +119,12 @@ impl PageWorkspace {
             text_len: 0,
             output: bytes(limits.max_snapshot_bytes)?,
             output_len: 0,
+            emitted_components: 0,
+            emitted_events: 0,
         })
     }
     fn clear(&mut self) {
+        self.memory.clear();
         self.components.clear();
         self.counters.clear();
         self.windows.clear();
@@ -125,9 +132,12 @@ impl PageWorkspace {
         self.events.clear();
         self.text_len = 0;
         self.output_len = 0;
+        self.emitted_components = 0;
+        self.emitted_events = 0;
     }
     fn reserved_bytes(&self) -> usize {
-        self.components.capacity() * std::mem::size_of::<PageComponent>()
+        self.memory.reserved_bytes()
+            + self.components.capacity() * std::mem::size_of::<PageComponent>()
             + self.counters.capacity() * std::mem::size_of::<PageCounter>()
             + self.windows.capacity() * std::mem::size_of::<PageWindow>()
             + self.buckets.capacity() * std::mem::size_of::<DiagnosticWindowBucket>()
@@ -174,7 +184,7 @@ impl QueryPool {
         if limits.max_queries == 0 {
             return Ok(0);
         }
-        let mut per_page = 0usize;
+        let mut per_page = memory::Workspace::required_bytes(limits)?;
         for (count, size) in [
             (
                 limits.max_query_components,
@@ -436,7 +446,8 @@ impl Serialize for ComponentsView<'_> {
         out.end()
     }
 }
-struct ComponentView<'a> {
+/// Borrowed view of a component copied into a query workspace.
+pub struct ComponentView<'a> {
     exceeded: Option<&'a Cell<bool>>,
     page: &'a PageWorkspace,
     component: &'a PageComponent,
@@ -511,7 +522,8 @@ impl Serialize for EventsView<'_> {
         out.end()
     }
 }
-struct EventView<'a> {
+/// Borrowed view of an event copied into a query workspace.
+pub struct EventView<'a> {
     page: &'a PageWorkspace,
     event: &'a PageEvent,
 }
@@ -888,6 +900,8 @@ pub(super) fn capture(
     page.output = output;
     serialized.map_err(|_| DiagnosticError::SnapshotCapacity)?;
     page.output_len = output_len;
+    page.emitted_components = rows.min(page.components.len());
+    page.emitted_events = rows.saturating_sub(page.components.len());
     Ok(lease)
 }
 
@@ -1372,6 +1386,76 @@ impl<T: Serialize> Serialize for SizingRows<'_, T> {
             sequence.serialize_element(row)?;
         }
         sequence.end()
+    }
+}
+
+mod memory;
+pub(super) use memory::capture as memory_capture;
+pub use memory::{ComponentMemoryView, EntryMemoryView, MemoryInspectionLease};
+
+impl SnapshotLease {
+    /// Traverse only rows emitted on this page without decoding JSON or allocating.
+    /// Views borrow copied workspace data; they cannot pin live history.
+    pub fn events(&self) -> impl ExactSizeIterator<Item = EventView<'_>> {
+        let page = self.workspace.as_ref().expect("live lease");
+        page.events[..page.emitted_events]
+            .iter()
+            .map(move |event| EventView { page, event })
+    }
+    /// Traverse the returned component prefix without allocating an owned DTO graph.
+    pub fn components(&self) -> impl ExactSizeIterator<Item = ComponentView<'_>> {
+        let page = self.workspace.as_ref().expect("live lease");
+        page.components[..page.emitted_components]
+            .iter()
+            .map(move |component| ComponentView {
+                exceeded: None,
+                page,
+                component,
+            })
+    }
+}
+impl EventView<'_> {
+    /// Source acceptance sequence.
+    pub fn sequence(&self) -> DiagnosticNumber {
+        self.event.sequence
+    }
+    /// Original registration incarnation.
+    pub fn component_instance_id(&self) -> Uuid {
+        self.event.component.instance_id
+    }
+    /// Original logical component key.
+    pub fn component_key(&self) -> &str {
+        self.page.string(self.event.component.key)
+    }
+    /// Canonical code, including opaque extension names.
+    pub fn code(&self) -> &str {
+        self.page.string(self.event.code)
+    }
+    /// Accepted occurrence delta.
+    pub fn count(&self) -> DiagnosticNumber {
+        self.event.count
+    }
+    /// Optional retained detail, borrowed from copied workspace text.
+    pub fn detail(&self) -> Option<&str> {
+        self.event.detail.map(|r| self.page.string(r))
+    }
+    /// Producer's observed outcome, independent of health interpretation.
+    pub fn outcome(&self) -> DiagnosticOutcome {
+        self.event.outcome
+    }
+}
+impl ComponentView<'_> {
+    /// Logical key of this registration.
+    pub fn key(&self) -> &str {
+        self.page.string(self.component.identity.key)
+    }
+    /// Registration incarnation.
+    pub fn instance_id(&self) -> Uuid {
+        self.component.identity.instance_id
+    }
+    /// Whole-registration lifetime accounting.
+    pub fn lifetime(&self) -> &DiagnosticLifetimeSummary {
+        &self.component.lifetime
     }
 }
 

@@ -1031,6 +1031,17 @@ NemoRelayStatus nemo_relay_diagnostics_snapshot_json(const struct FfiDiagnostics
                                                      char **out);
 
 /**
+ * Inspect canonical diagnostic backing and independently copied resource memory.
+ * Free successful output with nemo_relay_string_free. Never initiates collection.
+ * # Safety
+ * Same live-reader, bounded UTF-8 query and writable output requirements as
+ * nemo_relay_diagnostics_snapshot_json. Output is null on failure.
+ */
+NemoRelayStatus nemo_relay_diagnostics_memory_json(const struct FfiDiagnosticsReader *reader,
+                                                   const char *query,
+                                                   char **out);
+
+/**
  * Inspect core and adapter capacities, occupancy, and logging coverage as JSON.
  * # Safety
  * Reader must be live; out must be writable and non-aliasing. Free successful

@@ -385,6 +385,30 @@ crate::editor_config! {
     }
 }
 
+/// Read-only latest memory projection. Does not enable polling or collection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ResourceMemoryInspectionConfig {
+    /// Retain one fixed memory sample from existing collections.
+    pub enabled: bool,
+    /// Mark a retained sample stale after this completion age, in milliseconds.
+    pub stale_after_millis: u64,
+}
+impl Default for ResourceMemoryInspectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            stale_after_millis: 30_000,
+        }
+    }
+}
+crate::editor_config! {
+    impl ResourceMemoryInspectionConfig {
+        enabled => { label: "enabled", kind: Boolean },
+        stale_after_millis => { label: "stale_after_millis", kind: Integer },
+    }
+}
+
 /// Configuration for the built-in `resource_metrics` plugin component.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -394,6 +418,8 @@ pub struct ResourceMetricsConfig {
     pub measurement_scope: ResourceMetricsMeasurementScope,
     /// Periodic polling behavior.
     pub polling: ResourceMetricsPollingConfig,
+    /// Fixed latest-memory projection policy, independent of polling.
+    pub memory_inspection: ResourceMemoryInspectionConfig,
     /// CPU observation category.
     pub cpu: ResourceMetricsCpuConfig,
     /// Memory observation category.
@@ -462,6 +488,7 @@ crate::editor_config! {
 
 crate::editor_config! {
     impl ResourceMetricsConfig {
+        memory_inspection => { label: "Memory inspection", kind: Section, nested: ResourceMemoryInspectionConfig, default: ResourceMemoryInspectionConfig },
         measurement_scope => {
             label: "measurement_scope",
             kind: Enum,
@@ -510,6 +537,12 @@ crate::editor_config! {
 
 impl ResourceMetricsConfig {
     pub(crate) fn validate(&self) -> Result<()> {
+        if self.memory_inspection.stale_after_millis == 0 {
+            return Err(FlowError::InvalidArgument(
+                "resource_metrics.memory_inspection.stale_after_millis must be greater than zero"
+                    .into(),
+            ));
+        }
         if self.polling.interval_millis == 0 {
             return Err(FlowError::InvalidArgument(
                 "resource_metrics.polling.interval_millis must be greater than zero".into(),

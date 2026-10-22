@@ -35,7 +35,7 @@ def test_python_query_adapter_matches_shared_contract_fixture():
     assert NUMERIC_QUERY_FIELDS == frozenset(fixture["numeric_query_fields"])
 
 
-@pytest.mark.parametrize("method", ["snapshot", "snapshot_json"])
+@pytest.mark.parametrize("method", ["snapshot", "snapshot_json", "inspect_memory", "inspect_memory_json"])
 @pytest.mark.parametrize("query", [{"\ud800": "value"}, {"component_key": "\udfff"}])
 def test_reader_rejects_malformed_unicode_queries(method, query):
     # Malformed input must be rejected before the native reader is called.
@@ -52,7 +52,7 @@ class _EncodeForbidden(str):
         pytest.fail("query input was encoded before admission")
 
 
-@pytest.mark.parametrize("method", ["snapshot", "snapshot_json"])
+@pytest.mark.parametrize("method", ["snapshot", "snapshot_json", "inspect_memory", "inspect_memory_json"])
 @pytest.mark.parametrize(
     "query",
     [
@@ -74,7 +74,7 @@ def test_reader_bounds_query_strings_before_native_calls(method, query):
     assert native.mock_calls == []
 
 
-@pytest.mark.parametrize("method", ["snapshot", "snapshot_json"])
+@pytest.mark.parametrize("method", ["snapshot", "snapshot_json", "inspect_memory", "inspect_memory_json"])
 def test_reader_preserves_multibyte_query_at_encoded_size_limit(method):
     key = "component_key"
     overhead = len(json.dumps({key: ""}, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
@@ -88,6 +88,23 @@ def test_reader_preserves_multibyte_query_at_encoded_size_limit(method):
     encoded = call.call_args.args[0]
     assert len(encoded.encode("utf-8")) == MAX_QUERY_BYTES
     assert json.loads(encoded) == query
+
+
+@pytest.mark.parametrize("method", ["inspect_memory", "inspect_memory_json"])
+@pytest.mark.parametrize(
+    "reason", ["disabled", "query_disabled", "busy", "invalid_cursor", "snapshot_capacity", "unsupported_schema", None]
+)
+def test_memory_reader_preserves_safe_native_failure_reasons(method, reason):
+    native = Mock()
+    failure = RuntimeError("restricted native detail")
+    if reason is not None:
+        setattr(failure, "reason", reason)
+    getattr(native, method).side_effect = failure
+    with pytest.raises(DiagnosticsError) as error:
+        getattr(DiagnosticsReader(native), method)()
+    assert error.value.reason == (reason or "unavailable")
+    assert "restricted" not in str(error.value)
+    getattr(native, method).assert_called_once_with("{}")
 
 
 def test_configured_diagnostics_outlives_plugins(tmp_path):
@@ -112,6 +129,14 @@ async def main():
         raise AssertionError("validation started diagnostics")
     activation = await plugin.initialize(config)
     reader = diagnostics.reader()
+    memory = reader.inspect_memory()
+    assert type(memory["aggregate"]["reserved_bytes"]) is int
+    assert (
+        memory["component_occupied_bytes"] + memory["shared_or_unassigned_reserved_bytes"]
+        == memory["aggregate"]["reserved_bytes"]
+    )
+    assert memory["resource"]["availability"] == "disabled"
+    assert type(json.loads(reader.inspect_memory_json())["aggregate"]["reserved_bytes"]) is str
     first = reader.snapshot()
     assert type(first["sequence"]) is int
     assert type(first["lifetime"]["totals"]["failures_total"]["value"]) is int
@@ -119,6 +144,31 @@ async def main():
     assert reader.info()["limits"]["max_events"] == 3
     assert reader.info()["logging_coverage"] == "attached_since_service_start"
     await activation.close()
+    from nemo_relay import resource_metrics
+    resource_config = plugin.PluginConfig(
+        diagnostics={"enabled": True, "limits": {"max_events": 3}},
+        components=[plugin.ComponentSpec(
+            kind="resource_metrics",
+            config={"measurement_scope": "application_process", "polling": {"enabled": False}},
+        )],
+    )
+    async with plugin.activate(resource_config):
+        assert reader.inspect_memory()["resource"]["availability"] == "not_yet_sampled"
+        await resource_metrics.collect()
+        context = reader.inspect_memory()["resource"]
+        assert context["sample"] is not None
+        assert type(context["sample"]["ordinal"]) is int
+        assert context["association"] in ("host_process", "unverified")
+        system_used = context["sample"]["memory"]["system_used"]
+        if system_used is not None:
+            assert system_used["measurement_scope"] == "system"
+        empty_query = {"max_events": 0, "max_components": 0}
+        full_bytes = len(reader.inspect_memory_json(empty_query).encode("utf-8"))
+        bounded = reader.inspect_memory({**empty_query, "max_response_bytes": full_bytes - 128})
+        assert bounded["resource"]["availability"] == "capacity_unavailable"
+        assert bounded["resource"]["sample"] is None
+        assert bounded["aggregate"]["reserved_bytes"] == memory["aggregate"]["reserved_bytes"]
+    assert reader.inspect_memory()["resource"]["availability"] == "disabled"
     second = reader.snapshot()
     assert second["source"] == first["source"]
     assert "diagnostics" not in activation.report["resolved_config"]

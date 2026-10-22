@@ -237,6 +237,18 @@ impl EmbeddedDiagnosticsReader {
     /// Capture one admitted copy. Drop the core lease before foreign conversion;
     /// hold this page until conversion finishes to retain adapter admission.
     pub fn snapshot(&self, query: &DiagnosticQuery) -> Result<EmbeddedDiagnosticPage> {
+        self.read_page(query, false)
+    }
+    /// Inspect memory through the same bounded adapter-copy pool.
+    pub fn inspect_memory(&self, query: &DiagnosticQuery) -> Result<EmbeddedDiagnosticPage> {
+        self.read_page(query, true)
+    }
+    /// Bounded canonical JSON query for the separate memory view.
+    pub fn inspect_memory_json(&self, query: &str) -> Result<EmbeddedDiagnosticPage> {
+        check_process(self.pid)?;
+        self.inspect_memory(&decode_query(query)?)
+    }
+    fn read_page(&self, query: &DiagnosticQuery, memory: bool) -> Result<EmbeddedDiagnosticPage> {
         check_process(self.pid)?;
         if self.inner.availability() == super::DiagnosticAvailability::Disabled {
             return Err(DiagnosticError::Disabled.into());
@@ -255,14 +267,21 @@ impl EmbeddedDiagnosticsReader {
             copies: self.copies.clone(),
             pid: self.pid,
         };
-        let lease = self.inner.snapshot(query)?;
+        let snapshot;
+        let inspection;
+        let bytes = if memory {
+            inspection = self.inner.inspect_memory(query)?;
+            inspection.as_bytes()
+        } else {
+            snapshot = self.inner.snapshot(query)?;
+            snapshot.as_bytes()
+        };
         let buffer = page.buffer.as_mut().expect("admitted buffer");
         // Core's max_snapshot_bytes is also the admitted copy capacity.
-        if lease.as_bytes().len() > buffer.capacity() {
+        if bytes.len() > buffer.capacity() {
             return Err(DiagnosticError::SnapshotCapacity.into());
         }
-        buffer.extend_from_slice(lease.as_bytes());
-        drop(lease);
+        buffer.extend_from_slice(bytes);
         Ok(page)
     }
     /// Bounded canonical JSON query. Missing fields use the core defaults;
@@ -312,7 +331,49 @@ pub fn decode_query(input: &str) -> Result<DiagnosticQuery> {
 pub fn is_diagnostic_number_field(field: &str) -> bool {
     matches!(
         field,
-        "value"
+        "reserved_bytes"
+            | "components"
+            | "counters"
+            | "events"
+            | "event_slot_bytes"
+            | "event_capacity"
+            | "history_reserved_bytes"
+            | "history_occupied_bytes"
+            | "detail_bytes"
+            | "detail_capacity_bytes"
+            | "detail_reserved_bytes"
+            | "detail_metadata_bytes"
+            | "detail_logical_bytes"
+            | "detail_slack_bytes"
+            | "metadata_bytes"
+            | "window_buckets"
+            | "extensions"
+            | "query_workspaces"
+            | "projections"
+            | "projection_workspaces"
+            | "header_bytes"
+            | "detail_payload_bytes"
+            | "logical_text_bytes"
+            | "occupied_bytes"
+            | "registration_bytes"
+            | "counter_bytes"
+            | "window_bytes"
+            | "extension_bytes"
+            | "retained_event_count"
+            | "retained_event_bytes"
+            | "component_occupied_bytes"
+            | "entry_occupied_bytes"
+            | "shared_or_unassigned_reserved_bytes"
+            | "runtime_generation"
+            | "target_generation"
+            | "ordinal"
+            | "collection_millis"
+            | "start_identity"
+            | "visible_processes"
+            | "sampled_processes"
+            | "age_millis"
+            | "projection_slot_bytes"
+            | "value"
             | "sequence"
             | "generation"
             | "refresh_generation"

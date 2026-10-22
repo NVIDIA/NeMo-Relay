@@ -424,11 +424,15 @@ export class DiagnosticsReader {
   snapshot(query?: DiagnosticQuery): DiagnosticSnapshot;
   /** Capture portable canonical JSON, retaining decimal-string diagnostic integers. */
   snapshotJson(query?: DiagnosticQuery): string;
+  /** Inspect bounded backing and existing scoped resource context. */
+  inspectMemory(query?: DiagnosticQuery): DiagnosticMemoryPage;
+  /** Canonical memory JSON with lossless integer strings. */
+  inspectMemoryJson(query?: DiagnosticQuery): string;
   /** Inspect separate core/copy budgets, occupancy, and logging coverage. */
   info(): {
     discovery: DiagnosticDiscovery;
     limits: Record<string, number>;
-    memory: Record<string, number>;
+    memory: DiagnosticMemoryUsage;
     bindingCopyConcurrency: number;
     bindingMaxPageBytes: number;
     bindingReservedBytes: number;
@@ -437,3 +441,162 @@ export class DiagnosticsReader {
 }
 /** Obtain a reader without initializing the service; may throw not_initialized. */
 export function reader(): DiagnosticsReader;
+
+/** Resource precision is explicit; non-finite values have no numeric value. */
+export type ResourceMemoryNumber =
+  | { kind: 'integer'; value: bigint }
+  | { kind: 'decimal'; value: number }
+  | { kind: 'non_finite' };
+export interface ResourceMemoryUnit {
+  dimension: 'capacity' | 'duration' | 'count';
+  name: string;
+}
+
+/** Reserved diagnostic backing and overlapping occupancy gauges. */
+export interface DiagnosticMemoryUsage {
+  reservedBytes: bigint;
+  components: bigint;
+  counters: bigint;
+  events: bigint;
+  eventSlotBytes: bigint;
+  eventCapacity: bigint;
+  historyReservedBytes: bigint;
+  historyOccupiedBytes: bigint;
+  detailBytes: bigint;
+  detailCapacityBytes: bigint;
+  detailReservedBytes: bigint;
+  detailMetadataBytes: bigint;
+  detailLogicalBytes: bigint;
+  detailSlackBytes: bigint;
+  metadataBytes: bigint;
+  windowBuckets: bigint;
+  extensions: bigint;
+  queryWorkspaces: bigint;
+  projections: bigint;
+  projectionWorkspaces: bigint;
+}
+
+/** One retained event header and its exclusive packed text chain. */
+export interface EntryMemoryFootprint {
+  headerBytes: bigint;
+  detailPayloadBytes: bigint;
+  detailMetadataBytes: bigint;
+  logicalTextBytes: bigint;
+  detailSlackBytes: bigint;
+  occupiedBytes: bigint;
+}
+
+/** Registration-owned diagnostic storage, independent of plugin heap usage. */
+export interface ComponentMemoryFootprint {
+  registrationBytes: bigint;
+  counterBytes: bigint;
+  windowBytes: bigint;
+  extensionBytes: bigint;
+  retainedEventCount: bigint;
+  retainedEventBytes: bigint;
+  occupiedBytes: bigint;
+}
+
+/** Identity and backing footprint of a retained observation. */
+export interface EntryMemoryUsage extends EntryMemoryFootprint {
+  sequence: bigint;
+  component: ComponentIdentity;
+}
+
+/** Identity and complete attributed backing of a registration. */
+export interface ComponentMemoryUsage extends ComponentMemoryFootprint {
+  component: ComponentIdentity;
+}
+
+/** Matching row counts and overlapping byte totals. */
+export interface MemorySelectionTotals {
+  components: bigint;
+  events: bigint;
+  componentOccupiedBytes: bigint;
+  entryOccupiedBytes: bigint;
+}
+
+/** One bounded attribution page with independent resource context. */
+export interface DiagnosticMemoryPage {
+  schemaVersion: number;
+  source: SourceIdentity;
+  capturedAt: string;
+  sequence: bigint;
+  aggregate: DiagnosticMemoryUsage;
+  loss: DiagnosticLoss;
+  componentOccupiedBytes: bigint;
+  sharedOrUnassignedReservedBytes: bigint;
+  selection: MemorySelectionTotals;
+  page: MemorySelectionTotals;
+  components: Array<ComponentMemoryUsage>;
+  entries: Array<EntryMemoryUsage>;
+  resource: ResourceMemoryView;
+  continuation: DiagnosticCursor | null;
+}
+
+/** A resource field with its original numeric kind, unit, scope, and coverage. */
+export interface ResourceMemoryMeasurement {
+  value: ResourceMemoryNumber;
+  unit: ResourceMemoryUnit;
+  measurementScope: string;
+  sampledProcesses: bigint | null;
+}
+
+/** One cumulative environment limit event. */
+export interface MemoryLimitEvent {
+  resource: string;
+  event: string;
+  count: ResourceMemoryMeasurement | null;
+}
+
+/** Memory-only measurements and at most eight limit-event slots. */
+export interface ResourceMemoryMetrics {
+  systemUsed: ResourceMemoryMeasurement | null;
+  systemTotal: ResourceMemoryMeasurement | null;
+  systemAvailable: ResourceMemoryMeasurement | null;
+  resident: ResourceMemoryMeasurement | null;
+  private: ResourceMemoryMeasurement | null;
+  physicalFootprint: ResourceMemoryMeasurement | null;
+  virtualMemory: ResourceMemoryMeasurement | null;
+  peakResident: ResourceMemoryMeasurement | null;
+  limit: ResourceMemoryMeasurement | null;
+  environmentAccounted: ResourceMemoryMeasurement | null;
+  somePressureStallTime: ResourceMemoryMeasurement | null;
+  fullPressureStallTime: ResourceMemoryMeasurement | null;
+  outOfMemoryEventCount: ResourceMemoryMeasurement | null;
+  limitEvents: Array<MemoryLimitEvent | null>;
+}
+
+/** Root process incarnation verified during resource collection. */
+export interface ResourceProcessIdentity {
+  processId: number;
+  startIdentity: bigint;
+}
+
+/** One collection identity, interval, scope, and memory result. */
+export interface ResourceMemorySample {
+  collectorInstanceId: string;
+  runtimeGeneration: bigint;
+  targetGeneration: bigint;
+  stream: string;
+  ordinal: bigint;
+  startedAt: string;
+  completedAt: string;
+  collectionMillis: bigint;
+  operatingSystem: string;
+  measurementScope: string;
+  root: ResourceProcessIdentity | null;
+  visibleProcesses: bigint | null;
+  sampledProcesses: bigint | null;
+  memory: ResourceMemoryMetrics;
+}
+
+/** Independent collection availability, association, and freshness. */
+export interface ResourceMemoryView {
+  availability: string;
+  sample: ResourceMemorySample | null;
+  association: string;
+  ageMillis: bigint | null;
+  stale: boolean;
+  projectionSlotBytes: bigint;
+}

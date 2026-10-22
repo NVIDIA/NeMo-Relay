@@ -86,6 +86,29 @@ pub unsafe extern "C" fn nemo_relay_diagnostics_snapshot_json(
     query: *const c_char,
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
+    unsafe { read_page(reader, query, out, false) }
+}
+
+/// Inspect canonical diagnostic backing and independently copied resource memory.
+/// Free successful output with nemo_relay_string_free. Never initiates collection.
+/// # Safety
+/// Same live-reader, bounded UTF-8 query and writable output requirements as
+/// nemo_relay_diagnostics_snapshot_json. Output is null on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_diagnostics_memory_json(
+    reader: *const FfiDiagnosticsReader,
+    query: *const c_char,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    unsafe { read_page(reader, query, out, true) }
+}
+
+unsafe fn read_page(
+    reader: *const FfiDiagnosticsReader,
+    query: *const c_char,
+    out: *mut *mut c_char,
+    memory: bool,
+) -> NemoRelayStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("null_pointer");
@@ -118,7 +141,13 @@ pub unsafe extern "C" fn nemo_relay_diagnostics_snapshot_json(
             }
         }
     };
-    match unsafe { &*reader }.0.snapshot_json(query) {
+    let reader = &unsafe { &*reader }.0;
+    let result = if memory {
+        reader.inspect_memory_json(query)
+    } else {
+        reader.snapshot_json(query)
+    };
+    match result {
         Ok(page) => {
             // Hold copy admission through C allocation, release core lease before it.
             let value = CString::new(page.as_str()).expect("JSON contains no raw NUL");

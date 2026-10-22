@@ -1706,7 +1706,14 @@ class TestLLMStreaming:
                     )
                     assert response == {"ok": True}
                 finally:
-                    subscribers.deregister("small-stack")
+                    try:
+                        # Deregistration leaves queued callbacks active. Drain
+                        # the final LLM events before closing the loop and Python.
+                        await subscribers.flush_async()
+                        final_events = [e for e in events if e.name == "small-stack-single"]
+                        assert [e.scope_category for e in final_events] == ["start", "end"]
+                    finally:
+                        subscribers.deregister("small-stack")
 
             result = Future()
 
