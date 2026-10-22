@@ -13,36 +13,6 @@ synchronous and asynchronous callback forms where the
 Python SDK permits them, and relies on the SDK for protobuf stubs, the authenticated
 server, and cooperative task cancellation.
 
-## Internal Diagnostic Observations
-
-Use `await runtime.diagnostics()` to negotiate diagnostic delivery. Keep the
-component handle for distinct internal operations; callback completion is already
-host-owned. No independent worker store or diagnostic configuration is created.
-
-```python
-from nemo_relay_plugin import (
-    DiagnosticCodeDefinition, DiagnosticObservation,
-    DiagnosticObservationOutcome as Outcome,
-    DiagnosticObservationSeverity as Severity,
-)
-
-diagnostics = await runtime.diagnostics()
-component = await diagnostics.component("example.internal", [
-    DiagnosticCodeDefinition(builtin_name="plugin.internal"),
-])
-component.try_record_lazy(lambda: DiagnosticObservation(
-    code=1, count=1, failure_class="internal",
-    outcome=Outcome.DIAGNOSTIC_OBSERVATION_OUTCOME_FAILURE,
-    severity=Severity.DIAGNOSTIC_OBSERVATION_SEVERITY_ERROR,
-    detail="The internal operation failed",
-))
-```
-
-Catch `DiagnosticDeliveryError` separately from execution failures. Disabled/full
-facades skip the factory. `delivery_stats()` exposes losses; `await flush(timeout)`
-waits for prior queue work. SDK shutdown bounds drain and closes delivery tasks.
-See [delivery contracts](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery).
-
 ## Test the Package
 
 Run the package's atomic tests before creating a managed environment:
