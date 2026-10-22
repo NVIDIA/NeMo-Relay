@@ -371,7 +371,7 @@ async fn discovery(
         #[serde(flatten)]
         core: DiagnosticDiscovery,
         producers: &'a [&'static str],
-        deferred: [&'static str; 3],
+        deferred: [&'static str; 2],
         inspection_policy: &'static str,
         #[serde(serialize_with = "serialize_limits")]
         limits: &'a DiagnosticLimits,
@@ -381,7 +381,7 @@ async fn discovery(
     let value = Capabilities {
         core: adapter.reader.discovery(),
         producers: &adapter.coverage,
-        deferred: ["otel", "daemon", "bindings"],
+        deferred: ["otel", "bindings"],
         inspection_policy: "whole_context_private_bootstrap",
         limits: adapter.reader.limits(),
         response_slots: adapter.reader.limits().max_queries.max(1),

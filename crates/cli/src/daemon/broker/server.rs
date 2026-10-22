@@ -212,7 +212,7 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         pending_directives: Mutex::new(HashMap::new()),
         active_worker_generations,
         worker_generation_publication: Mutex::new(()),
-        diagnostics_http: local_diagnostics(),
+        diagnostics_http: local_diagnostics()?,
     });
     if recovery_worker_count != 0 {
         log::info!(
@@ -306,11 +306,20 @@ fn router(state: Arc<DaemonState>) -> Router {
     router_with_diagnostics(state, false)
 }
 
-fn local_diagnostics() -> Option<crate::diagnostics_http::DiagnosticsHttp> {
-    let runtime = crate::runtime_diagnostics::runtime().filter(|r| r.http_read)?;
-    let key = crate::configuration::BootstrapChallengeKey::load().ok()?;
+fn local_diagnostics() -> Result<Option<crate::diagnostics_http::DiagnosticsHttp>, CliError> {
+    let Some(runtime) = crate::runtime_diagnostics::runtime().filter(|r| r.http_read) else {
+        return Ok(None);
+    };
+    let key = crate::configuration::BootstrapChallengeKey::load().map_err(|error| {
+        CliError::Config(format!("cannot load daemon diagnostics read key: {error}"))
+    })?;
     crate::diagnostics_http::DiagnosticsHttp::new(runtime.context.reader(), key, runtime.coverage())
-        .ok()
+        .map(Some)
+        .map_err(|error| {
+            CliError::Config(format!(
+                "cannot initialize daemon diagnostics reader: {error}"
+            ))
+        })
 }
 
 fn router_with_diagnostics(state: Arc<DaemonState>, encrypted: bool) -> Router {
@@ -930,9 +939,19 @@ fn activation_failed_blocking(
         Ok(()) => {
             revoke_activation(&state, &request.payload.activation_id);
             cancel_staged_activation(&state, &request.payload.activation_id, "activation_failed");
-            diag::record(DaemonFailureCode::ActivationReported,
-                if matches!(request.payload.failure_reason, crate::daemon::common::control::WorkerActivationFailureReason::WorkerReadinessTimeout) { FailureClass::Timeout } else { FailureClass::Unknown },
-                request.payload.failure_reason.as_str());
+            let class = if matches!(
+                request.payload.failure_reason,
+                crate::daemon::common::control::WorkerActivationFailureReason::WorkerReadinessTimeout
+            ) {
+                FailureClass::Timeout
+            } else {
+                FailureClass::Unknown
+            };
+            diag::record(
+                DaemonFailureCode::ActivationReported,
+                class,
+                request.payload.failure_reason.as_str(),
+            );
             let fingerprint = authenticated.fingerprint.to_string();
             log::error!(
                 target: "nemo_relay.daemon",
@@ -2122,13 +2141,7 @@ async fn forward_to_worker(
     if let Some(failure) = outcome.failure {
         diag::record(
             DaemonFailureCode::Forward,
-            match failure {
-                ForwardFailure::ResponseHeadTimeout => FailureClass::Timeout,
-                ForwardFailure::InvalidDestination | ForwardFailure::InvalidResponse => {
-                    FailureClass::InvalidInput
-                }
-                ForwardFailure::Transport => FailureClass::Unknown,
-            },
+            failure.failure_class(),
             "Broker forwarding to worker failed",
         );
     }
@@ -2225,6 +2238,14 @@ enum ForwardFailure {
 }
 
 impl ForwardFailure {
+    const fn failure_class(self) -> FailureClass {
+        match self {
+            Self::ResponseHeadTimeout => FailureClass::Timeout,
+            Self::InvalidDestination | Self::InvalidResponse => FailureClass::InvalidInput,
+            Self::Transport => FailureClass::Unknown,
+        }
+    }
+
     const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidDestination => "invalid_destination",
@@ -2254,13 +2275,7 @@ impl ForwardOutcome {
 fn log_upstream_request_failed(route: ProviderRoute, failure: ForwardFailure) {
     diag::record(
         DaemonFailureCode::Forward,
-        match failure {
-            ForwardFailure::ResponseHeadTimeout => FailureClass::Timeout,
-            ForwardFailure::InvalidDestination | ForwardFailure::InvalidResponse => {
-                FailureClass::InvalidInput
-            }
-            ForwardFailure::Transport => FailureClass::Unknown,
-        },
+        failure.failure_class(),
         failure.as_str(),
     );
     static LIMITER: OnceLock<LogRateLimiter> = OnceLock::new();

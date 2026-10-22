@@ -169,12 +169,25 @@ async fn poll(
     }
     let mut cache = lock(&guard.collector.cache);
     if current && !guard.collector.is_closed() {
-        if result.is_err() {
-            diag::record(
-                DaemonFailureCode::Collection,
-                FailureClass::Unknown,
-                "Worker diagnostic collection attempt failed",
-            );
+        if let Err(outcome) = &result {
+            let class = match outcome {
+                PollOutcome::Timeout => Some(FailureClass::Timeout),
+                PollOutcome::Oversized
+                | PollOutcome::InvalidPage
+                | PollOutcome::EnvelopeTooSmall => Some(FailureClass::InvalidInput),
+                PollOutcome::Disabled | PollOutcome::Unreachable => Some(FailureClass::Unavailable),
+                PollOutcome::Unauthorized => Some(FailureClass::Authentication),
+                PollOutcome::Unsupported => Some(FailureClass::Unsupported),
+                PollOutcome::Busy => None,
+                PollOutcome::Pending | PollOutcome::Succeeded => Some(FailureClass::Unknown),
+            };
+            if let Some(class) = class {
+                diag::record(
+                    DaemonFailureCode::Collection,
+                    class,
+                    "Worker diagnostic collection attempt failed",
+                );
+            }
         }
         cache.complete(ticket, result, Instant::now(), now_unix_ms());
     } else {

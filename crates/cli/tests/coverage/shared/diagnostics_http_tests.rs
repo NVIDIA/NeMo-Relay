@@ -106,7 +106,7 @@ async fn discovery_distinguishes_disabled_collection_and_disabled_queries() {
         }
         assert_eq!(
             discovery["deferred"],
-            serde_json::json!(["otel", "daemon", "bindings"])
+            serde_json::json!(["otel", "bindings"])
         );
         let response = router.oneshot(request(PREFIX, Some(&token))).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
