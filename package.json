@@ -16,6 +16,7 @@
     "typescript": "^5.9.3"
   },
   "overrides": {
+    "ip-address": "^10.7.4",
     "openclaw": {
       "@modelcontextprotocol/sdk": "1.32.1"
     }
