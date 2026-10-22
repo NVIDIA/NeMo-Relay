@@ -764,18 +764,19 @@ Rust APIs, refer to
 
 ### Runtime Diagnostics
 
-Bounded in-memory diagnostics is opt-in through `[diagnostics]` in the existing
-configuration files. Use `--diagnostics=true` for startup collection and
-`--diagnostics-http=true` to authorize private-bootstrap inspection on the gateway
-listener that this process starts. A reused gateway keeps its own diagnostic
-settings until it is restarted. `nemo-relay diagnostics --capabilities` reports
-the running owner's effective settings without starting or recovering a gateway. Use
-`--daemon-url URL` to inspect an existing local daemon, and add `--worker UUID`
-to read one authorized cached managed-worker page. Daemon collection requires
-`[daemon.diagnostics].collect_workers = true` and independent worker read enablement.
+Enable in-memory diagnostics with `[diagnostics]` in your configuration file.
+Use `--diagnostics=true` to enable collection at startup. Add
+`--diagnostics-http=true` to allow inspection with the gateway's private credentials.
+A running gateway keeps its settings until it restarts.
 
-For configuration, read authorization, retention bounds, and final command views,
-refer to [CLI and Daemon Diagnostics](/reference/diagnostics-cli#cli-startup-and-inspection).
+Use `nemo-relay diagnostics --capabilities` to check the running owner's settings.
+This command does not start or recover a gateway. To inspect an existing local
+daemon, use `--daemon-url URL`. Add `--worker UUID` to read one authorized cached
+worker page. Daemon collection requires
+`[daemon.diagnostics].collect_workers = true`. Each worker must also enable reads.
+
+For configuration, read access, storage limits, and final command views, refer to
+[CLI and Daemon Diagnostics](/reference/diagnostics/cli#cli-startup-and-inspection).
 
 ## Add Model Pricing for Cost Estimates
 

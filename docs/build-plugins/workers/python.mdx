@@ -15,37 +15,20 @@ server, and cooperative task cancellation.
 
 ## Internal Diagnostic Observations
 
-Use `await runtime.diagnostics()` to negotiate diagnostic delivery. Keep the
-component handle for distinct internal operations; callback completion is already
-host-owned. No independent worker store or diagnostic configuration is created.
+Use `await runtime.diagnostics()` to set up diagnostic delivery with the host.
+Keep a component handle for internal operations that the host cannot observe.
+The host already records callback completion, so do not record it again. The
+worker does not create a separate diagnostic store or configuration.
 
-```python
-from nemo_relay_plugin import (
-    DiagnosticCodeDefinition, DiagnosticDeliveryError, DiagnosticObservation,
-    DiagnosticObservationOutcome as Outcome,
-    DiagnosticObservationSeverity as Severity,
-)
+This example records an internal failure after that operation fails:
 
-diagnostics = await runtime.diagnostics()
-try:
-    component = await diagnostics.component("example.internal", [
-        DiagnosticCodeDefinition(builtin_name="plugin.internal"),
-    ])
-    component.try_record_lazy(lambda: DiagnosticObservation(
-        code=1, count=1, failure_class="internal",
-        outcome=Outcome.DIAGNOSTIC_OBSERVATION_OUTCOME_FAILURE,
-        severity=Severity.DIAGNOSTIC_OBSERVATION_SEVERITY_ERROR,
-        detail="The internal operation failed",
-    ))
-except DiagnosticDeliveryError:
-    # Optional evidence delivery must preserve the operation's original result.
-    pass
-```
+<Code src="_code/internal_diagnostics.py" language="python" title="internal_diagnostics.py" lines="4-38" showLineNumbers={false} />
 
-Catch `DiagnosticDeliveryError` separately from execution failures. Disabled/full
-facades skip the factory. `delivery_stats()` exposes losses; `await flush(timeout)`
-waits for prior queue work. SDK shutdown bounds drain and closes delivery tasks.
-See [delivery contracts](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery).
+Catch `DiagnosticDeliveryError` separately from execution failures. If collection
+is disabled or the queue is full, the helper skips the lazy factory.
+`delivery_stats()` reports losses. `await flush(timeout)` waits for earlier queued
+work. During shutdown, the SDK limits drain time and closes delivery tasks.
+Refer to [delivery contracts](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery).
 
 ## Test the Package
 

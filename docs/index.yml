@@ -199,6 +199,9 @@ navigation:
           - page: "Runtime Events and Scopes"
             path: ./build-plugins/native/runtime-events-and-scopes.mdx
             slug: runtime-events-and-scopes
+          - page: "Diagnostics"
+            path: ./build-plugins/native/diagnostics.mdx
+            slug: diagnostics
           - page: "Native ABI Reference"
             path: ./build-plugins/native/native-abi-reference.mdx
             slug: native-abi-reference

@@ -143,6 +143,10 @@ The diagnostic snapshot is bounded and ordered by code. It is a host-level view,
 does not identify the plugin that recorded a diagnostic. These operations require the
 native host ABI v4 extensions.
 
+`runtime_diagnostics()` reads the legacy host report. For canonical lifecycle and
+callback evidence, use an authorized host reader as described in
+[Native Plugin Diagnostics](/build-plugins/native/diagnostics).
+
 ## Control Global Runtime Registrations
 
 Native host ABI v4 adds activation-owned registration discovery and conditional

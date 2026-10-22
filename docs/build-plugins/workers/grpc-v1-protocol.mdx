@@ -9,90 +9,119 @@ SPDX-License-Identifier: Apache-2.0 */}
 `grpc-v1` is the stable worker protocol implemented by the Rust and Python SDKs. The
 current source of truth is
 [`crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto`](https://github.com/NVIDIA/NeMo-Relay/blob/e748bb85eaea31a7718f4cea621970913a418011/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto).
-Use SDK facades for lifecycle management. The diagnostic facade accepts generated
-closed observation and code-definition messages directly.
+Use SDK helpers to manage the lifecycle. The diagnostics helper accepts generated
+observation and code-definition messages directly.
 
 ## Diagnostic Delivery
 
-The additive `RelayDiagnostics` service shares the authenticated host endpoint:
-`GetDiagnosticCapabilities`, `OpenDiagnosticSession`, `SubmitDiagnostic`, and
-`ReadDiagnosticPage`. Its decode/admission limits are independent of existing
-`RelayHostRuntime`, ordinary logging, and execution payload limits. Old hosts
-return `UNIMPLEMENTED`. SDKs expose inert unsupported/disabled facades and skip
-lazy factories. Diagnostic admission does not determine whether a plugin executes.
+The optional `RelayDiagnostics` service shares the authenticated host endpoint.
+It exposes four RPCs:
 
-The host returns effective delivery settings through `DiagnosticCapabilities`
-both before opening and with the opened session. The SDK validates contract
-versions and local safety ceilings, then uses the session's exact request and
-response limits, queue capacity, retry-attempt count, and per-attempt timeout.
-The two capability values must agree; a mismatch or unsupported limit produces
-an inert `unsupported` facade without affecting plugin execution. SDKs do not
-counteroffer or substitute local delivery defaults. Bootstrap calls retain a
-separately named local safety timeout. Existing flush and shutdown-drain bounds
-also remain local lifecycle limits; they are distinct from the per-attempt RPC
-timeout advertised by the host.
+- `GetDiagnosticCapabilities`.
+- `OpenDiagnosticSession`.
+- `SubmitDiagnostic`.
+- `ReadDiagnosticPage`.
 
-Recording uses activation credentials; canonical reads are separately denied
-(`can_read_context = false`). Query filters do not confer authority. The read RPC
-reserves an explicit capability boundary.
+Its decode and admission limits are separate from `RelayHostRuntime`, logging,
+and execution payload limits.
 
-Open is idempotent while the activation's session is live. The host assigns its
-UUID and ownership. Registration returns component and code handles (code handles
-are one-based registration positions). Common plugin failure codes are accepted;
-host-owned lifecycle codes cannot be authored remotely. Extensions support
-failure, success, or unspecified outcomes under a host-assigned session namespace.
-Unknown authoring codes/classes are rejected. Detail/correlation limits come from
-the core context.
+Older hosts return `UNIMPLEMENTED`. For unsupported hosts or disabled collection,
+the SDK returns an inactive helper that skips lazy observation factories. Diagnostic
+availability does not decide whether a plugin executes.
 
-`SubmitDiagnostic` orders registration, record, component close, and session close
-on one sequence beginning at one. Positive deltas of two and three contribute
-five occurrences. The host commits one digest/receipt atomically with recording.
-An identical last retry returns its receipt without recounting. Conflicts, gaps,
-and older sequences fail. Malformed requests consume no sequence; structurally
-valid admission rejections consume a sequence with a terminal `Rejected` receipt.
-`Recorded` acknowledges in-memory counts, with retained/truncated/dropped evidence.
-`Registered`, `Closed`, and `Disabled` add no occurrences.
+### Negotiate Settings and Authority
 
-SDKs freeze bytes and send one request at a time, retrying the identical request
-up to the session's advertised attempt count, with its advertised per-attempt
-deadline. Uncertain acceptance fences delivery; pending observations are never
+The host returns `DiagnosticCapabilities` before opening a session and again when
+the session opens. Both values must agree. The SDK checks contract versions and
+its local safety ceilings. It then uses the host's exact request and response
+limits, queue capacity, retry count, and per-attempt timeout.
+
+A mismatch or unsupported limit produces an inactive `unsupported` helper.
+Plugin execution continues. The SDK does not negotiate different limits or use
+local delivery defaults. Bootstrap calls have a separate local safety timeout.
+Flush and shutdown drain also have local bounds. These are separate from the
+host's per-attempt RPC timeout.
+
+Recording uses activation credentials. Those credentials do not grant snapshot
+read access: `can_read_context` is false, and canonical reads are denied. Query
+filters do not grant permission. The read RPC reserves a separate access boundary.
+
+Opening an already live session returns the same session. The host assigns its
+UUID and ownership. Registration returns component and code handles. Code handles
+are one-based positions in the registration's code list.
+
+Workers can register common plugin failure codes, but not host-owned lifecycle
+codes. Extensions can describe failure, success, or unspecified outcomes under a
+host-assigned session namespace. Unknown authoring codes and failure classes are
+rejected. Detail and correlation limits come from the core context.
+
+### Submit and Retry Observations
+
+`SubmitDiagnostic` uses one sequence, starting at one, for registration, recording,
+component close, and session close. Positive counts of two and three add five
+occurrences. The host commits a digest and receipt atomically with the record.
+
+Receipts and sequence handling follow these rules:
+
+- Retrying the last request with identical content returns its receipt without
+  counting the observation again. Conflicts, gaps, and older sequences fail.
+- Malformed requests do not consume a sequence. A structurally valid request
+  rejected during admission consumes a sequence and returns a terminal `Rejected`
+  receipt.
+- `Recorded` confirms in-memory counts. Evidence can be retained, truncated, or
+  dropped. `Registered`, `Closed`, and `Disabled` add no occurrences.
+
+The SDK freezes request bytes and sends one request at a time. Each retry uses
+identical bytes, up to the host's attempt count and per-attempt deadline. If the
+SDK cannot confirm acceptance, it stops delivery. Pending observations are never
 replayed into a new session.
-This release admits one session per activation. Closed sessions retain their
-last receipt until activation cleanup; a new session requires a new activation.
 
-| Resource | Diagnostic limit |
+This release allows one session per activation. A closed session keeps its last
+receipt until activation cleanup. Starting a new session requires a new activation.
+
+### Delivery Limits
+
+Delivery uses the following limits in addition to core storage limits:
+
+| Resource | Diagnostic Limit |
 | --- | --- |
-| Sessions | 32 per host process; one per activation |
-| Components | 8 registrations per session, including closed registrations |
-| Extensions / codes | 16 extensions per session; 32 codes per component |
-| Registration metadata | 16 KiB per session, also subject to core capacity |
-| Protobuf frame | Host-advertised maximum; SDKs reserve a named 256-byte submission-envelope allowance for credentials, session identity, sequence ordering, and protobuf framing, then check the hydrated frame against the exact limit |
-| Extension name / description | 32 / 256 UTF-8 bytes |
-| SDK queue | Host-advertised queue slots plus one in-flight request; validated against each SDK's supported safety ceiling |
-| Host decode admission | 16 concurrent diagnostic requests, no wait queue |
-| Response ceiling | Host-advertised maximum; validated against each SDK's supported safety ceiling |
-| Replay storage | One digest and bounded receipt per session |
+| Sessions | Up to 32 per host process, with one session per activation. |
+| Components | Eight registrations per session, including closed registrations. |
+| Extensions and codes | Up to 16 extensions per session and 32 codes per component. |
+| Registration metadata | 16 KiB per session, also subject to core capacity. |
+| Protobuf frame | Host-advertised maximum. The SDK reserves 256 bytes for credentials, session identity, sequence, and framing, then checks the complete frame against the exact limit. |
+| Extension name and description | 32 and 256 UTF-8 bytes, respectively. |
+| SDK queue | Host-advertised slots plus one in-flight request, within the SDK's safety ceiling. |
+| Host decode admission | Up to 16 concurrent diagnostic requests. There is no wait queue. |
+| Response ceiling | Host-advertised maximum, within the SDK's safety ceiling. |
+| Replay storage | One digest and bounded receipt per session. |
 
-The service semaphore applies before protobuf decoding. These budgets are
-additional to existing HTTP/2 connection buffers, channel state, allocator
-overhead, and core pools; they are not a whole-process RSS ceiling. Slow response
-delivery retains its permit until the body is polled to its deadline or dropped.
+The service takes a concurrency permit before decoding protobuf. A slow response
+keeps that permit until its body reaches its delivery deadline or is dropped.
+HTTP/2 buffers, channel state, allocator overhead, and core pools have separate
+costs. These limits do not cap whole-process RSS.
+
+### Handle Loss and Shutdown
 
 `delivery_stats` reports local dropped, rejected, and uncertain totals separately
-from host occurrences. Rejected includes an explicit `INVALID_ARGUMENT` response,
-even when the host leaves its sequence available for a corrected submission.
-Host admission capacity rejections use `RESOURCE_EXHAUSTED` with
+from host occurrence counts. An explicit `INVALID_ARGUMENT` response counts as
+rejected, even when the host leaves its sequence available for a corrected request.
+
+A host capacity rejection uses `RESOURCE_EXHAUSTED` with
 `nemo-relay-diagnostic-not-consumed: 1` status metadata. The SDK counts a definite
-rejection and preserves the sequence so later submissions can continue. This
-metadata certifies only that attempt. After an earlier ambiguous failure, the SDK
-continues retrying the identical request within its policy; without a receipt,
-delivery remains uncertain and is fenced. A client-side or unmarked capacity
-error is also treated as uncertain. No decision relies on error-message text.
-`flush` waits for earlier queued work; uncertainty is an
-error and counters expose known losses. `close` bounds drain and releases queued
-work within the shutdown allowance. Activation teardown fences submissions and
-closes registrations without closing the runtime context. Restricted evidence is
-state-only; it never enters `Log`, `EmitMark`, legacy reports, or exporters.
+rejection and preserves the sequence for later submissions. The metadata confirms
+only that attempt. If an earlier attempt had an uncertain result, the SDK keeps
+retrying the identical request within its policy. Without a receipt, delivery stays
+uncertain and stops. A client-side or unmarked capacity error is also uncertain.
+These decisions never depend on error-message text.
+
+`flush` waits for earlier queued work. It returns an error for uncertain delivery.
+Counters expose known losses. `close` drains and releases queued work within the
+shutdown allowance. Activation teardown stops submissions and closes registrations.
+The runtime context remains available.
+
+Restricted evidence uses state-only recording. It never enters `Log`, `EmitMark`,
+legacy reports, or exporters.
 
 ## Execution Protocol Compatibility
 

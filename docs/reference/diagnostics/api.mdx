@@ -1,15 +1,15 @@
 ---
 title: "Diagnostics API"
 description: "Discover diagnostic capabilities, read bounded snapshots, and handle pagination and errors."
-position: 10
+position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use the diagnostics API to inspect component activity, accumulated counts, and
-recent observations from a running Relay context. Reads do not reset counters or
-change execution state. An empty event list does not establish health or recovery;
-interpret it alongside the snapshot's coverage and retention information.
+Use the diagnostics API to inspect component activity, total counts, and recent
+events in a running Relay context. Reads do not reset counters or change execution.
+An empty event list does not prove that the runtime is healthy or has recovered.
+Check the snapshot's coverage and retention fields for missing evidence.
 
 Diagnostics is disabled by default. Enable it at startup through your deployment's
 [diagnostics configuration](/reference/diagnostics). Reading does not start a
@@ -25,40 +25,51 @@ runtime you want to inspect:
 | --- | --- |
 | Rust-owned context | `DiagnosticsReader` |
 | Existing CLI gateway | `nemo-relay diagnostics` or authorized diagnostics HTTP routes |
-| Daemon broker or managed Relay worker | Authorized diagnostics HTTP routes; the broker also exposes cached worker pages |
+| Daemon broker or managed Relay worker | Use authorized diagnostics HTTP routes. The broker also exposes cached worker pages. |
 | Embedded Python or Node.js | Optional diagnostics reader with native objects or canonical JSON |
-| Experimental C or Go | Owned JSON through C; JSON or checked snapshot models through Go |
 
-See [CLI and Daemon Diagnostics](/reference/diagnostics-cli) or
-[Embedded Diagnostics](/reference/diagnostics-bindings) for startup configuration
-and language examples. A dynamic-plugin worker submits observations to its host; its
+Refer to [CLI and Daemon Diagnostics](/reference/diagnostics/cli) or
+[Embedded Diagnostics](/reference/diagnostics/bindings) for startup configuration
+and language examples. A dynamic-plugin worker submits observations to its host. Its
 recording permission does not grant access to host snapshots. The plugin host's
 reader remains available after a plugin closes or fails.
 
 ## Discover Capabilities and Limits
 
-Before choosing page sizes, inspect the running context's capabilities. For an
-existing local gateway, run:
+Before choosing page sizes, inspect the running context's capabilities. Select
+your reader below. The CLI command requires an existing gateway. Language examples
+assume that the service is already configured. The Rust example uses a core
+`DiagnosticsReader`. An embedded Rust reader exposes discovery through
+`reader.info()?.discovery`.
 
+<Tabs>
+<Tab title="CLI">
 ```bash
 nemo-relay diagnostics --capabilities
 ```
-
-Rust exposes discovery through `reader.discovery()`. Embedded Python and Node.js
-expose it in `reader.info().discovery`; Go and C provide metadata through
-`InfoJSON` and `nemo_relay_diagnostics_info_json`.
+</Tab>
+<Tab title="Rust" language="rust">
+<Code src="_code/api/discovery.rs" language="rust" title="Read capabilities" lines="4-4" showLineNumbers={false} />
+</Tab>
+<Tab title="Python" language="python">
+<Code src="_code/api/discovery.py" language="python" title="Read capabilities" lines="4-7" showLineNumbers={false} />
+</Tab>
+<Tab title="Node.js" language="node">
+<Code src="_code/api/discovery.js" language="javascript" title="Read capabilities" lines="4-4" showLineNumbers={false} />
+</Tab>
+</Tabs>
 
 Check these fields before requesting a snapshot:
 
 | Field | How to Use It |
 | --- | --- |
 | `discovery_version`, `snapshot_version`, `catalogue_version` | Check the independent contract versions, currently 1. |
-| `source` | Identify the context incarnation and process that owns the evidence. |
+| `source` | Identify the context instance and process that owns the evidence. |
 | `collection_enabled`, `queries_enabled` | Distinguish disabled collection from collection with no snapshot workspaces. |
 | `max_query_components`, `max_query_events`, `max_snapshot_bytes` | Keep requested row counts and response bytes within these page limits. |
 | `producer_support` | Check which producer integrations the build supports. This does not confirm that a particular plugin is configured or has emitted evidence. |
 | `memory_inspection` | Indicates support for aggregate core allocation and occupancy inspection. |
-| `detailed_memory_inspection`, `resource_correlation` | Indicate compiled per-entry/component accounting and latest resource-sample correlation, independently of collection/query enablement. |
+| `detailed_memory_inspection`, `resource_correlation` | Indicate compiled per-entry and component accounting and latest resource-sample correlation, independently of collection/query enablement. |
 | `restricted_detail` | Indicates that inspection can expose bounded, unsanitized evidence. |
 
 Discovery remains available when `max_queries = 0`, although HTTP still requires
@@ -77,7 +88,7 @@ nemo-relay diagnostics --query '{"max_components":0,"max_events":10}'
 
 Use a `max_events` value within the limits returned by discovery. Add
 `--gateway-url http://127.0.0.1:4040` when selecting an existing gateway explicitly.
-The command uses Relay's authenticated, pinned TLS tunnel; that URL is not a
+The command uses Relay's authenticated, pinned TLS tunnel. That URL is not a
 plain-HTTP read credential.
 
 HTTP readers use these routes:
@@ -90,23 +101,23 @@ HTTP readers use these routes:
 | `/_nemo_relay/v1/diagnostics/events` | A snapshot page with component rows disabled |
 
 Pass a query as one percent-encoded JSON `query` parameter. Canonical JSON uses
-`snake_case`; Node.js native helpers use `camelCase`. An omitted or null
+`snake_case`. Node.js native helpers use `camelCase`. An omitted or null
 `schema_version` selects the runtime's current snapshot version.
 
 Queries support these selections and page controls:
 
 | Fields | Selection |
 | --- | --- |
-| `component_key`, `component_instance_id` | A logical component or one registration incarnation |
+| `component_key`, `component_instance_id` | A logical component or one registration instance |
 | `code`, `domain`, `plugin_family` | Exact code or catalogue ownership |
-| `failure_class` | Event causes; code counters do not retain a cause breakdown |
+| `failure_class` | Selects events by cause. Code counters do not retain a cause breakdown. |
 | `ownership` | Component rows by current ownership and events by their original ownership |
-| `origin_generation`, `after_sequence` | Recent events from a refresh generation or after a sequence; summaries remain cumulative |
-| `max_components`, `max_events` | Requested row caps; zero omits that row kind |
+| `origin_generation`, `after_sequence` | Selects recent events from a refresh generation or after a sequence. Summaries remain cumulative. |
+| `max_components`, `max_events` | Sets the requested row caps. Zero omits that row kind. |
 | `max_response_bytes` | Requested encoded page cap |
 | `continuation` | The cursor returned by the previous page |
 
-Requests above configured row or byte limits return `invalid_query`; limits are
+Requests above configured row or byte limits return `invalid_query`. Limits are
 not silently clamped. Core and binding JSON query input is limited to 4,096
 UTF-8 bytes. The CLI `--query` argument has a tighter 1,024-byte cap. HTTP also
 limits the encoded URI query to 4,096 bytes. Duplicate or unknown fields,
@@ -116,10 +127,15 @@ cannot fit the required envelope or a row returns `snapshot_capacity`.
 ### Interpret the Page
 
 A snapshot identifies its `source`, capture time, and source update `sequence`.
-It contains context-wide `lifetime` totals, selected `components`, selected
-recent `events`, `coverage`, and an optional `continuation`.
+It contains these fields:
 
-Filters select rows; they do not filter the context-wide totals. Component
+- `lifetime` holds totals for the whole context.
+- `components` holds selected component rows.
+- `events` holds selected recent observations.
+- `coverage` describes missing or incomplete evidence.
+- `continuation` holds an optional cursor for the next page.
+
+Filters select rows. They do not filter the context-wide totals. Component
 lifetime summaries cover the whole registration instance, while `since_refresh`
 describes its current refresh period. Inspect `coverage` for unavailable evidence,
 truncated detail, evictions, and saturated counts. Evicted events do not erase
@@ -141,21 +157,21 @@ failure observations with occurrence deltas of two and three produce these total
 
 This is an excerpt from `lifetime.totals`, not a complete snapshot. If history
 later evicts one of those events, the first three totals remain unchanged and
-`history_evictions_total` increases. Event rows describe recording calls; they
+`history_evictions_total` increases. Event rows describe recording calls. They
 are not one row per occurrence.
 
 | Field or View | Interpretation |
 | --- | --- |
 | `lifetime.totals.recorded_events_total` | Accepted recording calls, independent of each call's occurrence delta. |
 | `lifetime.totals.occurrences_total` | Sum of accepted deltas across success, failure, and unspecified outcomes. |
-| `lifetime.totals.failures_total` | Explicit failed-operation occurrences; not a unique failed-request count across different producers. |
+| `lifetime.totals.failures_total` | Counts explicit failed-operation occurrences. Different producers can observe the same request, so this is not a unique failed-request count. |
 | Component `since_refresh` | The current counting period for that registration. Refresh resets this period, not its lifetime totals or rolling windows. |
 | `lifetime.elapsed_millis` | Monotonic elapsed context or component lifetime, not CPU time. |
-| `lifetime.since_last_failure_millis` | Elapsed time since an observed failure. A missing value means no failure has established this value; it does not prove health or recovery. |
-| Component `windows` | Fixed-resolution outcome buckets with their own covered interval. Batched deltas belong to their recording interval; individual occurrence times cannot be reconstructed. |
+| `lifetime.since_last_failure_millis` | Elapsed time since an observed failure. A missing value means no failure has established this value. It does not prove health or recovery. |
+| Component `windows` | Fixed-resolution outcome buckets with their own covered interval. Batched deltas belong to their recording interval. Individual occurrence times cannot be reconstructed. |
 
 A window's `coverage.partial_start` and `partial_end` identify partial edge
-buckets; `incomplete` identifies known loss. Use the actual covered interval when
+buckets. `incomplete` identifies known loss. Use the actual covered interval when
 interpreting rates. Do not treat a partial bucket as a full interval or assume
 that an unavailable window is a zero-error window.
 
@@ -167,8 +183,8 @@ Inspect `coverage.loss` and `coverage.retention` separately:
 | --- | --- |
 | `loss.events_evicted` | Previously retained evidence was reclaimed. Accepted lifetime totals remain. |
 | `loss.events_omitted` | An observation was counted but its incoming event evidence was not retained. |
-| `loss.observations_rejected` | An observation was rejected before canonical counting; its occurrences are absent from accepted totals. |
-| `loss.messages_truncated`, `details_omitted` | Detail was shortened or omitted; the retained event can lack the original message. |
+| `loss.observations_rejected` | An observation was rejected before canonical counting. Its occurrences are absent from accepted totals. |
+| `loss.messages_truncated`, `details_omitted` | Detail was shortened or omitted. The retained event can lack the original message. |
 | `loss.correlations_truncated`, `correlations_omitted` | Correlation was shortened or omitted independently of the event's numeric accounting. |
 | `retention.query_truncated` | The page omitted matching retained rows because of read limits. This does not mean storage evicted those rows. Inspect `continuation`. |
 
@@ -183,7 +199,7 @@ If `continuation` is non-null, copy that object unchanged into the next query,
 keeping the original selectors and page limits. Authorize every request. Stop
 when the response has a null continuation.
 
-A cursor binds the source incarnation, selection, and source revision. New
+A cursor binds the source instance, selection, and source revision. New
 observations or eviction can invalidate it. On `invalid_cursor`, discard the
 cursor and restart the query. Pages are not a frozen transaction: do not add
 repeated context-wide lifetime totals together across pages or polling attempts.
@@ -194,10 +210,9 @@ continuations. Query an authorized source reader when you need filtered pages.
 
 ## Handle Read Errors
 
-Python and Node.js errors expose `.reason`; Go exposes `DiagnosticsError.Reason`;
-C provides the reason through `nemo_relay_last_error`. Rust maps `DiagnosticError`
-through `read_reason()` to `DiagnosticReadReason`. Include a fallback arm when
-matching that non-exhaustive Rust enum.
+Python and Node.js errors expose `.reason`. Rust maps `DiagnosticError` through
+`read_reason()` to `DiagnosticReadReason`. Include a fallback arm when matching
+that non-exhaustive Rust enum.
 
 | Reason | HTTP Status | Action |
 | --- | --- | --- |
@@ -206,9 +221,9 @@ matching that non-exhaustive Rust enum.
 | `unsupported_schema` | 406 | Use the advertised supported snapshot version. |
 | `invalid_query` | 400 | Check fields, numeric encodings, and discovered limits. |
 | `invalid_cursor` | 409 | Restart the query without a continuation. |
-| `busy` | 429 | Retry later; HTTP supplies `Retry-After: 1`. |
+| `busy` | 429 | Retry later. HTTP supplies `Retry-After: 1`. |
 | `snapshot_capacity` | 422 | Increase the requested byte cap within the discovered limit. If a required row still cannot fit, adjust startup limits or narrow the selection. |
-| `internal` | 500 | Treat the read as failed; no raw source error is exposed. |
+| `internal` | 500 | Treat the read as failed. No raw source error is exposed. |
 
 The HTTP error body has this form:
 
@@ -218,45 +233,52 @@ The HTTP error body has this form:
 
 An `unsupported_schema` response also includes `supported_schema_version`.
 Startup can fail with `invalid_limits` or `allocation_failed`. Binding lifecycle
-errors such as `not_initialized`, `configuration_conflict`, `fork_requires_exec`,
-and Go's `closed` are separate from snapshot failures.
+errors such as `not_initialized`, `configuration_conflict`, and
+`fork_requires_exec` are separate from snapshot failures.
 
 HTTP authorization failures return 401 or 403. Plain HTTP returns 426 and requires
 Relay's authenticated TLS upgrade. Errors contain no raw query values, credentials,
-or retained diagnostic detail. These failures describe the inspection operation;
-they do not classify runtime health.
+or retained diagnostic detail. These failures describe the inspection operation.
+They do not classify runtime health.
 
 ## Preserve Numeric Precision and Compatibility
 
-Canonical JSON encodes diagnostic 64-bit counts, generations, sequences, durations,
-and discovery capacities as unsigned decimal strings. Values above 2^53 and up to
-the unsigned 64-bit maximum remain exact. Schema/catalogue versions, process IDs,
-and small row-cap requests remain JSON numbers.
+Canonical JSON uses unsigned decimal strings for these 64-bit values:
+
+- Counts.
+- Generations.
+- Sequences.
+- Durations.
+- Discovery capacities.
+
+This keeps values exact above 2^53, up to the unsigned 64-bit maximum. Schema and catalogue versions, process
+IDs, and small row caps remain JSON numbers.
 
 | Reader | Diagnostic 64-Bit Values |
 | --- | --- |
 | Rust | `DiagnosticNumber` with checked `u64` access |
 | Python native | `int` |
-| Node.js native | `bigint`; use `snapshotJson()` for portable JSON because `JSON.stringify` cannot encode `bigint` |
-| Canonical JSON and C JSON | Unsigned decimal strings |
-| Go model | Checked `DiagnosticNumber`, with no `float64` conversion |
+| Node.js native | Uses `bigint`. Call `snapshotJson()` for portable JSON because `JSON.stringify` cannot encode `bigint`. |
+| Canonical JSON | Unsigned decimal strings |
 
-Missing or null data means unavailable, not zero or recovery. Unknown catalogue
-and plugin-context names remain readable within a supported snapshot schema.
-Unknown snapshot object fields permit additive evolution; unknown query fields
-are rejected. Rust and Go owned decoders reject unsupported snapshot schemas.
-Python and Node.js readers consume their matching runtime's pages and do not
-provide a decoder for arbitrary remote snapshots.
+Missing or null data means the value is unavailable. It does not mean zero or
+recovery. Readers preserve unknown catalogue and plugin-context names within a
+supported snapshot version. Snapshots allow unknown object fields so later
+versions can add fields. Queries reject unknown fields to catch invalid requests.
+
+The Rust decoder rejects unsupported snapshot versions. Python and Node.js
+read pages from their matching runtime. They do not decode arbitrary remote
+snapshots.
 
 ## Protect Diagnostic Data
 
 Authorize readers for the whole context: filters and cursors are not access
 controls. HTTP responses use `Cache-Control: no-store`. Names, paths, detail, and
-caller correlation can contain unsanitized data; truncation does not sanitize it.
+caller correlation can contain unsanitized data. Truncation does not sanitize it.
 
 Snapshot reads never automatically feed logs, legacy reports, subscribers, or
-exporters. Logging projections receive only the approved built-in summary;
-state-only recording invokes no projection. An application that exports a reader
+exporters. Logging projections receive only the approved built-in summary.
+State-only recording invokes no projection. An application that exports a reader
 result must apply its own authorization and data-handling policy.
 
 Diagnostic storage and delivery have separate budgets. Caller-retained JSON and
@@ -265,16 +287,27 @@ core allocation and occupancy, not a whole-process RSS ceiling or a guaranteed
 polling rate. Refer to [Runtime Diagnostics](/reference/diagnostics) for the
 deployment-specific budgets.
 
-Existing health/status endpoints, config validation, plugin reports, native legacy
-callbacks, and worker `GetRuntimeDiagnostics` retain their own contracts. Snapshot
+These existing interfaces retain their own contracts:
+
+- Health and status endpoints.
+- Configuration validation.
+- Plugin reports.
+- Native legacy callbacks.
+- Worker `GetRuntimeDiagnostics`.
+ Snapshot
 readers do not fall back to those reports. OTel diagnostics integration, CPU
 attribution, and durable restart history are not supported.
 
 ## Detailed Memory Inspection
 
-Use the same authorized reader to request a separate bounded memory page:
-`reader.inspect_memory(&query)` in Rust, `nemo-relay diagnostics --memory` in the
-CLI, or `GET /_nemo_relay/v1/diagnostics/memory` over the existing authorized
-transport. The [memory inspection guide](/reference/diagnostics-memory) covers
-binding names, attribution, resource availability, and independent cursor/schema
-semantics.
+Use the same authorized reader to request a separate bounded memory page.
+Choose the operation for your reader:
+
+- In Rust, call `reader.inspect_memory(&query)`.
+- In the CLI, run `nemo-relay diagnostics --memory`.
+- Over the existing authorized HTTP transport, use
+  `GET /_nemo_relay/v1/diagnostics/memory`.
+
+The [memory inspection guide](/reference/diagnostics/memory) explains the binding
+APIs, memory accounting, and resource availability. It also describes memory
+pages' separate cursors and schema.

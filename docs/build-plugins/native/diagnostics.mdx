@@ -1,0 +1,69 @@
+---
+title: "Native Plugin Diagnostics"
+description: "Inspect native plugin lifecycle and callback outcomes from the host."
+position: 26
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The Relay host records native plugin outcomes in its diagnostic context. Enable
+diagnostics in the host before loading plugins. A native plugin uses that context.
+It does not need a separate diagnostic configuration or store.
+
+Use [CLI and Daemon Diagnostics](/reference/diagnostics/cli) for a gateway or daemon.
+Use [Embedded Diagnostics](/reference/diagnostics/bindings) for a language-hosted
+application. If your Rust application loads plugins directly, select its context
+with `load_native_plugins_with_diagnostics`.
+
+## Host Recording Coverage
+
+The host records outcomes at the operation that owns them:
+
+| Operation | Recorded Evidence |
+| --- | --- |
+| Policy, artifact, and schema checks | Failures from the shared dynamic plugin checks. |
+| Library loading | Native load success or failure. |
+| Plugin validation | Native validation success or failure. |
+| Component registration | Native registration success or failure. |
+| Runtime callbacks | Native callback failures. |
+
+Native observations use `PluginExecution::NativeAbi`. Their phase identifies
+policy, validation, activation, or runtime work. Failure classes come from
+structured status values. `Ok`, `StreamEnd`, and `Backpressured` are not failures.
+A later success does not erase an earlier failure.
+
+Common component activation also records its own summary. Do not add that summary
+to a native operation's failure count as if they were separate failed activations.
+Refer to [producer boundaries](/reference/diagnostics#plugin-producer-boundaries)
+for ownership across the two layers.
+
+## Read Host Evidence
+
+Use an authorized host reader to inspect component counts and retained events.
+Follow the [Diagnostics API](/reference/diagnostics/api) for filters, pagination,
+and coverage checks. Filters help select evidence. They do not limit the reader's
+permission to inspect the whole context.
+
+Closing a plugin closes its registrations. The host context and its lifetime
+totals remain available. Event storage is limited, so old events can be replaced.
+Check coverage fields before treating an empty event list as a complete history.
+
+Native observations use state-only recording. Restricted detail and correlation
+stay out of logs, marks, subscribers, exporters, and legacy reports.
+
+## SDK and ABI Boundaries
+
+The native SDK does not expose the canonical diagnostic recorder or snapshot
+reader through its C ABI. Keep core recorders and Rust objects inside the host.
+This diagnostics support does not change native ABI layouts. Plugin code should
+return its normal callback result. The host owns recording that callback's failure.
+
+`PluginRuntime::runtime_diagnostics()` remains the older host-level report exposed
+by ABI v4. It is ordered by code and does not identify the plugin that recorded an
+entry. It does not return canonical diagnostic snapshots or fall back to them.
+Refer to [Runtime Events and Scopes](/build-plugins/native/runtime-events-and-scopes#emit-typed-telemetry-and-read-diagnostics)
+for that SDK API.
+
+gRPC workers have a separate delivery API for internal observations. Refer to
+[worker diagnostic delivery](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery)
+when authoring a worker plugin.

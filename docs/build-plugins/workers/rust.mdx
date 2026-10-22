@@ -15,44 +15,23 @@ activation environment Relay provides.
 
 ## Internal Diagnostic Observations
 
-Use `runtime.diagnostics().await` to initialize delivery from the host's selected
-diagnostic context and session policy. Registration is separate from execution registration. Keep a component
-handle for distinct internal operations; callback completion is already host-owned.
-The example uses `nemo_relay_types` directly, so add that crate as a dependency
-to the plugin that uses these catalogue types.
+Use `runtime.diagnostics().await` to set up delivery through the host's selected
+context and session policy. Register diagnostic components separately from
+execution components. Keep a handle for internal operations that the host cannot
+observe. The host already records callback completion, so do not record it again.
 
-```rust
-use nemo_relay_worker::diagnostics::{
-    builtin_code, DiagnosticObservation, DiagnosticObservationOutcome,
-    DiagnosticObservationSeverity,
-};
-use nemo_relay_types::diagnostics::{BuiltinDiagnosticCode, CommonPluginFailureCode,
-    FailureCode, PluginFailureCode};
+This example records an internal failure after that operation fails. It uses
+`nemo_relay_types` directly. Add that crate as a dependency when using its catalogue
+types:
 
-let diagnostics = runtime.diagnostics().await;
-if let Ok(component) = diagnostics.component("example.internal", vec![builtin_code(
-    BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(
-        CommonPluginFailureCode::Internal,
-    ))),
-)]).await {
-    // Evidence delivery is optional; preserve the operation's original result.
-    let _ = component.try_record_lazy(|| DiagnosticObservation {
-        code: 1,
-        count: 1,
-        outcome: DiagnosticObservationOutcome::Failure as i32,
-        severity: DiagnosticObservationSeverity::Error as i32,
-        failure_class: Some("internal".into()),
-        detail: Some("The internal operation failed".into()),
-        ..Default::default()
-    });
-}
-```
+<Code src="_code/internal_diagnostics.rs" language="rust" title="internal_diagnostics.rs" lines="4-32" showLineNumbers={false} />
 
-If diagnostic component registration fails, continue execution without that
-optional component. Recording failures likewise preserve the operation's result;
-the example deliberately discards them. Disabled/full
-facades skip the factory. `delivery_stats()` exposes losses; `flush(Duration)`
-waits for prior queue work. The SDK bounds diagnostic drain on shutdown. See
+If diagnostic registration fails, continue without that optional component.
+A recording failure must also preserve the operation's original result. This
+example discards the optional delivery error. If collection is disabled or the
+queue is full, the helper skips the lazy factory. `delivery_stats()` reports losses.
+`flush(Duration)` waits for earlier queued work. The SDK limits diagnostic drain
+time during shutdown. Refer to
 [delivery contracts](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery).
 
 ## Configure the Snapshot Location

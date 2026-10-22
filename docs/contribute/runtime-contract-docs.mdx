@@ -127,20 +127,28 @@ Before landing a change that touches shared runtime wording, check:
 
 ## Diagnostic Producer Contracts
 
-When integrating a producer that needs a new built-in code, update its canonical
-name, domain, optional plugin family, catalogue listing, and selector tests
-alongside its production recording site. Domain and family belong to each entry;
-observation kind does not determine ownership. For example, a plugin success
-belongs to Plugin and its applicable family, rather than inheriting Logging
-ownership from other success codes.
+When adding a producer that needs a built-in code, update these parts of its
+contract:
+
+- The code's name and domain.
+- The optional plugin family.
+- The catalogue listing.
+- The selector tests.
+
+Make these changes alongside the code that records the observation.
+
+Each catalogue entry defines its domain and family. A success, failure, or notice
+does not determine ownership. For example, a plugin success belongs to Plugin and
+its applicable family. It does not belong to Logging just because Logging also
+has success codes.
 
 Keep consumer-facing ownership and compatibility rules in
 [Runtime Diagnostics](/reference/diagnostics). Keep shared query, pagination,
 error, numeric-encoding, and access-control rules in the
-[Diagnostics API](/reference/diagnostics-api). Deployment and binding guides
+[Diagnostics API](/reference/diagnostics/api). Deployment and binding guides
 should link to those contracts and document their specific lifecycle, authority,
 and conversion behavior.
 
 Describe allocation guarantees separately from benchmark or test results.
 Validation reports should identify the revision, workload, build target, and
-measurement method; an observed allocation result is not a portable API guarantee.
+measurement method. An observed allocation result is not a portable API guarantee.

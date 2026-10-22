@@ -53,7 +53,8 @@ plugins, Python workers, and the `grpc-v1` protocol.
 
 ## Embedded Diagnostics Service
 
-For language-hosted Relay, the existing initialization resolver also accepts a
-root `[diagnostics]` section in `plugins.toml`. It selects a process-owned service
-that survives individual plugin activations. See [embedded language diagnostics](/reference/diagnostics-bindings#embedded-language-runtimes)
-for configuration precedence, startup-only limits, and optional readers.
+For language-hosted Relay, add a root `[diagnostics]` section to `plugins.toml`.
+Initialization uses it to select a service owned by the process. The service
+remains available after individual plugins close. Refer to
+[Embedded Diagnostics](/reference/diagnostics/bindings#embedded-language-runtimes)
+for configuration precedence, startup limits, and optional readers.

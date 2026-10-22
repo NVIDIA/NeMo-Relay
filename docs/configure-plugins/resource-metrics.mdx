@@ -1008,32 +1008,22 @@ For plugin configuration files, precedence, and CLI editing, refer to
 
 ## Diagnostic Memory Context
 
-Successful collections can also retain one fixed memory-only projection for
-[authorized diagnostic memory inspection](/reference/diagnostics-memory#detailed-memory-inspection).
-Configure `memory_inspection.enabled` (default `true`) and
-`memory_inspection.stale_after_millis` (default `30000`, must be positive) inside
-the existing component configuration. This policy does not enable the component,
-polling, or diagnostic collection. A read schedules no collection or configuration
-reload. Memory-category disablement also disables this projection.
+Successful resource collections can retain one memory-only sample for
+[diagnostic memory inspection](/reference/diagnostics/memory#detailed-memory-inspection).
+In the existing component configuration, set `memory_inspection.enabled`
+(default `true`) and `memory_inspection.stale_after_millis` (default `30000`, which
+must be positive). This policy does not enable the component,
+polling, or diagnostic collection. Reading the sample does not schedule collection
+or reload configuration. Disabling the memory category also disables this sample.
 
 For example, extend an existing resource component definition:
 
-```toml
-version = 1
+<Code src="_code/diagnostics/resource_metrics.toml" language="toml" title="Resource metrics configuration" lines="4-12" showLineNumbers={false} />
 
-[[components]]
-kind = "resource_metrics"
-enabled = true
+The sample preserves target and sample identity, process coverage, units, and
+numeric precision. Runtime or target changes invalidate it. Storage supports a
+fixed set of memory fields and eight limit-event slots. If metadata exceeds those
+limits, the status reports unavailable capacity and keeps a valid older sample.
 
-[components.config.memory_inspection]
-enabled = true
-stale_after_millis = 30000
-```
-
-The projection preserves target/sample identity, process coverage, units, and
-integer/decimal precision. Runtime/target changes invalidate it. Eight fixed
-limit-event slots and a finite memory-field vocabulary bound retained storage;
-excess metadata yields capacity unavailability while preserving a valid older
-sample. No diagnostic page or restricted component identity is added to resource
-marks or exporter events. The existing resource API and its serialization remain
-unchanged.
+Diagnostic pages and restricted component identities never enter resource marks
+or exporter events. The existing resource API and its serialization stay the same.

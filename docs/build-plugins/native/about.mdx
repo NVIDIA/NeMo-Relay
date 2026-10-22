@@ -49,6 +49,10 @@ mark, or emit validated metric measurements. `PluginRuntime::runtime_diagnostics
 returns the current host-level diagnostic snapshot. The snapshot is ordered by code
 and is not attributed to a particular plugin.
 
+For host-recorded load, validation, registration, and callback outcomes, refer to
+[Native Plugin Diagnostics](/build-plugins/native/diagnostics). That guide explains
+how the canonical diagnostic service differs from the ABI v4 report.
+
 ## What the SDK Owns
 
 The Rust SDK exports the stable entry symbol, converts host-owned JSON handles into
