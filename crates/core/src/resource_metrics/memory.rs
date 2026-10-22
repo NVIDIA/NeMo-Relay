@@ -156,6 +156,12 @@ fn measurement<U: ResourceUnit + Copy>(
 }
 fn project(snapshot: &ResourceMetricsSnapshot) -> Option<ResourceMemoryMetrics> {
     let m = snapshot.memory.as_ref()?;
+    let pressure_scope = match snapshot.measurement_scope {
+        ResourceMeasurementScope::Global => MemoryFieldScope::System,
+        ResourceMeasurementScope::ApplicationProcess | ResourceMeasurementScope::ProcessTree => {
+            MemoryFieldScope::Environment
+        }
+    };
     let coverage = |key: &str| {
         snapshot
             .process_sampling
@@ -260,13 +266,13 @@ fn project(snapshot: &ResourceMetricsSnapshot) -> Option<ResourceMemoryMetrics> 
         some_pressure_stall_time: measurement(
             &m.some_pressure_stall_time,
             ResourceMemoryUnit::Duration,
-            MemoryFieldScope::Environment,
+            pressure_scope,
             coverage("memory.some_pressure_stall_time"),
         ),
         full_pressure_stall_time: measurement(
             &m.full_pressure_stall_time,
             ResourceMemoryUnit::Duration,
-            MemoryFieldScope::Environment,
+            pressure_scope,
             coverage("memory.full_pressure_stall_time"),
         ),
         out_of_memory_event_count: measurement(
@@ -282,6 +288,32 @@ fn project(snapshot: &ResourceMetricsSnapshot) -> Option<ResourceMemoryMetrics> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pressure_projection_preserves_system_and_environment_attribution() {
+        let mut snapshot = super::super::snapshot_fixture::full_snapshot();
+        for (scope, expected) in [
+            (ResourceMeasurementScope::Global, MemoryFieldScope::System),
+            (
+                ResourceMeasurementScope::ApplicationProcess,
+                MemoryFieldScope::Environment,
+            ),
+            (
+                ResourceMeasurementScope::ProcessTree,
+                MemoryFieldScope::Environment,
+            ),
+        ] {
+            snapshot.measurement_scope = scope;
+            let memory = project(&snapshot).unwrap();
+            for pressure in [
+                memory.some_pressure_stall_time,
+                memory.full_pressure_stall_time,
+            ] {
+                assert_eq!(pressure.unwrap().measurement_scope, expected, "{scope:?}");
+            }
+        }
+    }
+
     fn ticket(ordinal: u64) -> Ticket {
         Ticket {
             collector: Uuid::nil(),
