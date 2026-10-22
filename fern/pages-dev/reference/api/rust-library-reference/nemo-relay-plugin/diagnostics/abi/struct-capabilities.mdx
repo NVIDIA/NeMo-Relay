@@ -1,0 +1,114 @@
+---
+title: "Struct Capabilities"
+sidebar-title: "Capabilities"
+description: "Non-sensitive recording capabilities; no source-wide diagnostic content."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct Capabilities &#123;Show 16 fields\n    pub contract_version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub availability: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub can_read_context: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub max_components: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub max_codes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub max_extensions: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub max_request_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub max_detail_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub max_correlation_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub max_response_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_query_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub max_sessions: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub max_calls: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub adapter_max_session_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub adapter_session_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub adapter_registration_scratch_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n&#125;"}} /></pre>
+
+Non-sensitive recording capabilities; no source-wide diagnostic content.
+
+## Fields
+
+### `contract_version: u32`
+
+Diagnostic transport version.
+
+### `availability: u32`
+
+0 = disabled, 1 = available, 2 = unavailable.
+
+### `can_read_context: u32`
+
+Explicit host read grant as boolean 0/1.
+
+### `max_components: u32`
+
+Maximum simultaneously live component registrations per activation.
+
+### `max_codes: u32`
+
+Maximum codes per component.
+
+### `max_extensions: u32`
+
+Maximum cumulative extension declarations per activation.
+
+### `max_request_bytes: u32`
+
+Maximum aggregate request text bytes.
+
+### `max_detail_bytes: u32`
+
+Maximum retained detail bytes.
+
+### `max_correlation_bytes: u32`
+
+Maximum retained correlation bytes per field.
+
+### `max_response_bytes: usize`
+
+Maximum serialized canonical response bytes.
+
+### `max_query_bytes: usize`
+
+Maximum query bytes, independent of registration requests.
+
+### `max_sessions: u32`
+
+Process-wide session ceiling.
+
+### `max_calls: u32`
+
+Process-wide data-call ceiling.
+
+### `adapter_max_session_bytes: usize`
+
+Maximum admitted native session backing, excluding core and SDK memory.
+
+### `adapter_session_bytes: usize`
+
+Session backing currently held by this activation, excluding core storage.
+
+### `adapter_registration_scratch_bytes: usize`
+
+Fixed registration parsing arrays on the host stack; excludes call frames and the separately bounded canonical query decoder.
+
+## Trait Implementations
+
+### `impl Clone for Capabilities`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-capabilities\">Capabilities</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-capabilities\">Capabilities</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for Capabilities`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-capabilities\">Capabilities</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for Capabilities`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-capabilities\">Capabilities</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-capabilities\">Capabilities</a>"}} /></pre>
+
+### `impl Copy for Capabilities`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-capabilities\">Capabilities</a>"}} /></pre>

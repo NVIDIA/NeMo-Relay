@@ -1,7 +1,7 @@
 ---
 title: "Struct Record Receipt"
 sidebar-title: "RecordReceipt"
-description: "Accepted lifetime and current-summary update, independent of retention and delivery."
+description: "Accepted lifetime and current-summary update."
 position: 61
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,21 +11,21 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct RecordReceipt &#123;\n    pub sequence: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n    pub code_total: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticcount\">DiagnosticCount</a>&gt;,\n    pub evidence: <a href=\"enum-evidencedisposition\">EvidenceDisposition</a>,\n&#125;"}} /></pre>
 
-Accepted lifetime and current-summary update, independent of retention and delivery.
+Accepted lifetime and current-summary update.
 
 ## Fields
 
 ### `sequence: u64`
 
-Unique source-local accepted-update sequence, never an occurrence total.
+Source-local accepted-update sequence, not an occurrence count.
 
 ### `code_total: Option<DiagnosticCount>`
 
-Updated code total, absent for summary-only classification overflow.
+Code total; absent for summary-only classification overflow.
 
 ### `evidence: EvidenceDisposition`
 
-Evidence retention disposition, independent of projection delivery.
+Independent evidence retention result.
 
 ## Trait Implementations
 
@@ -47,7 +47,7 @@ Evidence retention disposition, independent of projection delivery.
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl PartialEq for RecordReceipt`
 

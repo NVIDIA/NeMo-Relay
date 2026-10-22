@@ -1,0 +1,62 @@
+---
+title: "Struct Native Diagnostics ApiV1"
+sidebar-title: "NativeDiagnosticsApiV1"
+description: "Frozen diagnostics callback table. Status 0 means success; other values are defined by `DiagnosticError::from_status`. Read kinds: 0 discovery, 1 snapshot, 2 memory. Read output is caller-owned; `written` is zero on any failure."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NativeDiagnosticsApiV1 &#123;\n    pub struct_size: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub contract_version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub capabilities: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../../struct-nemorelaynativepluginruntime\">NemoRelayNativePluginRuntime</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-capabilities\">Capabilities</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub register: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../../struct-nemorelaynativepluginruntime\">NemoRelayNativePluginRuntime</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-registration\">Registration</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub record: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../../struct-nemorelaynativepluginruntime\">NemoRelayNativePluginRuntime</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-observation\">Observation</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-receipt\">Receipt</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub close: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../../struct-nemorelaynativepluginruntime\">NemoRelayNativePluginRuntime</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub read: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../../struct-nemorelaynativepluginruntime\">NemoRelayNativePluginRuntime</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>, <a href=\"struct-bytes\">Bytes</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u8.html\">u8</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n&#125;"}} /></pre>
+
+Frozen diagnostics callback table. Status 0 means success; other values are defined by `DiagnosticError::from_status`. Read kinds: 0 discovery, 1 snapshot, 2 memory. Read output is caller-owned; `written` is zero on any failure.
+
+## Fields
+
+### `struct_size: usize`
+
+Actual size of this table.
+
+### `contract_version: u32`
+
+Independent diagnostic transport version.
+
+### `capabilities: unsafe extern "C" fn(*const NemoRelayNativePluginRuntime, *mut Capabilities) -> u32`
+
+Read non-sensitive capabilities for a live activation.
+
+### `register: unsafe extern "C" fn(*const NemoRelayNativePluginRuntime, *const Registration, *mut u64) -> u32`
+
+Register one bounded component; output token is zero on failure.
+
+### `record: unsafe extern "C" fn(*const NemoRelayNativePluginRuntime, u64, *const Observation, *mut Receipt) -> u32`
+
+Record once; a failed return must not be automatically retried.
+
+### `close: unsafe extern "C" fn(*const NemoRelayNativePluginRuntime, u64) -> u32`
+
+Close a component without requiring a data-call permit.
+
+### `read: unsafe extern "C" fn(*const NemoRelayNativePluginRuntime, u32, Bytes, *mut u8, usize, *mut usize) -> u32`
+
+Copy a canonical page into a caller-owned destination.
+
+## Trait Implementations
+
+### `impl Clone for NativeDiagnosticsApiV1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nativediagnosticsapiv1\">NativeDiagnosticsApiV1</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nativediagnosticsapiv1\">NativeDiagnosticsApiV1</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Copy for NativeDiagnosticsApiV1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nativediagnosticsapiv1\">NativeDiagnosticsApiV1</a>"}} /></pre>

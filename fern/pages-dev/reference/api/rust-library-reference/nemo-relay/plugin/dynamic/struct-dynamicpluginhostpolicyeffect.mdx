@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DynamicPluginHostPolicyEffect &#123;\n    pub allowed: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;,\n    pub startup: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-dynamicpluginstartupclass\">DynamicPluginStartupClass</a>&gt;,\n    pub attestation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-dynamicpluginattestationmode\">DynamicPluginAttestationMode</a>&gt;,\n    pub trusted_public_keys: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DynamicPluginHostPolicyEffect &#123;\n    pub allowed: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;,\n    pub native_diagnostics_read_context: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;,\n    pub startup: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-dynamicpluginstartupclass\">DynamicPluginStartupClass</a>&gt;,\n    pub attestation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-dynamicpluginattestationmode\">DynamicPluginAttestationMode</a>&gt;,\n    pub trusted_public_keys: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;&gt;,\n&#125;"}} /></pre>
 
 A partial policy effect that may overlay another effect.
 
@@ -18,6 +18,10 @@ A partial policy effect that may overlay another effect.
 ### `allowed: Option<bool>`
 
 Whether matching plugins are permitted to load.
+
+### `native_diagnostics_read_context: Option<bool>`
+
+Explicit whole-context diagnostic read grant for native plugins only.
 
 ### `startup: Option<DynamicPluginStartupClass>`
 

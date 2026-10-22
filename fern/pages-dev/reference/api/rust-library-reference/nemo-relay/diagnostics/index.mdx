@@ -113,7 +113,7 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [PluginObservationContext](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-pluginobservationcontext): Shared plugin-operation facts for producers, projections, and decoded evidence.
 - [PluginPhaseName](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-pluginphasename): A plugin lifecycle phase name, preserving values unknown to this reader. Typed conversion accepts only the corresponding catalogue enum.
 - [ProjectionGuard](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-projectionguard): Bounded projection subscription, or inert disabled-mode handle.
-- [RecordReceipt](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-recordreceipt): Accepted lifetime and current-summary update, independent of retention and delivery.
+- [RecordReceipt](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-recordreceipt): Accepted lifetime and current-summary update.
 - [RemoteDiagnosticOrigin](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-remotediagnosticorigin): Fixed-size provenance retained by an authorized ingestion adapter.
 - [ResourceMemoryMeasurement](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-resourcememorymeasurement): One available measurement; an absent field means not reported (unsupported or unreadable).
 - [ResourceMemoryMetrics](/reference/api/rust-library-reference/nemo-relay/diagnostics/struct-resourcememorymetrics): Memory-only projection; fixed fields and eight limit slots bound all copies.
@@ -138,7 +138,7 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [DiagnosticReadReason](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticreadreason): Stable reasons shared by canonical snapshot adapters. These are operation results, never a source health classification or a producer failure code. Include a fallback arm when matching: future releases can add reasons.
 - [DiagnosticSeverity](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticseverity): Severity of evidence, independent of an operation's outcome.
 - [DiagnosticSummaryScope](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-diagnosticsummaryscope): Scope of summary and outcome-window values in a filtered response.
-- [EvidenceDisposition](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-evidencedisposition): Evidence retention is separate from numeric acceptance and output delivery.
+- [EvidenceDisposition](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-evidencedisposition): Evidence retention is independent of numeric acceptance.
 - [FailureClass](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-failureclass): Supported general cause, independent of health, retries, and operation outcome.
 - [FailureCode](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-failurecode): Failure event hierarchy for integrated producers.
 - [LoggingFailureCode](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-loggingfailurecode): Initial Logging failure vocabulary.
@@ -150,7 +150,7 @@ Disabled contexts use the same producer calls and skip their lazy factories; rea
 - [PluginOperationFailureCode](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-pluginoperationfailurecode): Failures at observed dynamic-plugin operation boundaries.
 - [PluginPhase](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-pluginphase): Observed plugin lifecycle phase or policy-gate context, independent of classification.
 - [ProjectionError](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-projectionerror): Subscriber conversion or delivery failure after canonical acceptance.
-- [RecordOutcome](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-recordoutcome): Accepted collection or intentional startup disablement.
+- [RecordOutcome](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-recordoutcome): Accepted collection or intentional disablement.
 - [ResourceAssociation](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-resourceassociation): Relationship between the diagnostic process and measured target.
 - [ResourceMemoryAvailability](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-resourcememoryavailability): Availability of the latest-memory projection, independent of diagnostic reads.
 - [ResourceMemoryNumber](/reference/api/rust-library-reference/nemo-relay/diagnostics/enum-resourcememorynumber): Exact integers and finite converted decimals retain distinct numeric kinds.

@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EvaluatedDynamicPluginHostPolicy &#123;\n    pub policy_satisfied: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub startup_class: <a href=\"enum-dynamicpluginstartupclass\">DynamicPluginStartupClass</a>,\n    pub attestation_mode: <a href=\"enum-dynamicpluginattestationmode\">DynamicPluginAttestationMode</a>,\n    pub trusted_public_keys: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub failure: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-dynamicpluginhostpolicyfailure\">DynamicPluginHostPolicyFailure</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EvaluatedDynamicPluginHostPolicy &#123;\n    pub policy_satisfied: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub native_diagnostics_read_context: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub startup_class: <a href=\"enum-dynamicpluginstartupclass\">DynamicPluginStartupClass</a>,\n    pub attestation_mode: <a href=\"enum-dynamicpluginattestationmode\">DynamicPluginAttestationMode</a>,\n    pub trusted_public_keys: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub failure: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-dynamicpluginhostpolicyfailure\">DynamicPluginHostPolicyFailure</a>&gt;,\n&#125;"}} /></pre>
 
 The result of applying the effective host policy to one manifest.
 
@@ -18,6 +18,10 @@ The result of applying the effective host policy to one manifest.
 ### `policy_satisfied: bool`
 
 Whether policy allows this plugin.
+
+### `native_diagnostics_read_context: bool`
+
+Native-only read authority; never grants worker snapshot access.
 
 ### `startup_class: DynamicPluginStartupClass`
 

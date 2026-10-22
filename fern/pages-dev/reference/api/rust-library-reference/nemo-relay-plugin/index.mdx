@@ -13,6 +13,10 @@ Stable native plugin ABI and Rust authoring helpers for NeMo Relay.
 
 This crate intentionally does not depend on the `nemo-relay` runtime crate. Native plugins built with it communicate with a host through versioned C-compatible tables and host-owned string handles.
 
+## Modules
+
+- [diagnostics](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics): Native diagnostic authoring and authorized reads. Native diagnostic authoring and explicitly authorized canonical reads. Recording is synchronous, state-only, and independent of operational logs. Disabled/unsupported facades skip factories. Diagnostic errors must not be propagated as plugin execution failures unless the application chooses so.
+
 ## Macros
 
 - [nemo_relay_plugin](/reference/api/rust-library-reference/nemo-relay-plugin/macro-nemo-relay-plugin): Exports a concrete plugin constructor as a native plugin entry symbol body.

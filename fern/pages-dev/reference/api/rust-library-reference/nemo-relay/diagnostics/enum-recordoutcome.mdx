@@ -1,7 +1,7 @@
 ---
 title: "Enum Record Outcome"
 sidebar-title: "RecordOutcome"
-description: "Accepted collection or intentional startup disablement."
+description: "Accepted collection or intentional disablement."
 position: 95
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum RecordOutcome &#123;\n    Recorded(<a href=\"struct-recordreceipt\">RecordReceipt</a>),\n    Disabled,\n&#125;"}} /></pre>
 
-Accepted collection or intentional startup disablement.
+Accepted collection or intentional disablement.
 
 ## Variants
 
@@ -19,13 +19,13 @@ Accepted collection or intentional startup disablement.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Recorded(<a href=\"struct-recordreceipt\">RecordReceipt</a>)"}} /></pre>
 
-Accepted numeric state and the independent retention disposition.
+Numeric state was accepted once.
 
 ### `Disabled`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Disabled"}} /></pre>
 
-No factory, receipt, sequence, or loss accounting was produced.
+No observation or loss accounting was produced.
 
 ## Trait Implementations
 
@@ -47,7 +47,7 @@ No factory, receipt, sequence, or loss accounting was produced.
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl PartialEq for RecordOutcome`
 

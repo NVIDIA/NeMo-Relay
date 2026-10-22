@@ -1,7 +1,7 @@
 ---
 title: "Enum Evidence Disposition"
 sidebar-title: "EvidenceDisposition"
-description: "Evidence retention is separate from numeric acceptance and output delivery."
+description: "Evidence retention is independent of numeric acceptance."
 position: 83
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -17,7 +17,7 @@ pub enum EvidenceDisposition {
 }
 ```
 
-Evidence retention is separate from numeric acceptance and output delivery.
+Evidence retention is independent of numeric acceptance.
 
 ## Variants
 
@@ -25,19 +25,19 @@ Evidence retention is separate from numeric acceptance and output delivery.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Retained"}} /></pre>
 
-The header and supplied optional evidence fit retention budgets.
+The supplied evidence was retained in full.
 
 ### `Truncated`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Truncated"}} /></pre>
 
-The retained event has shortened or omitted optional detail/correlation.
+Optional detail or correlation was shortened or omitted.
 
 ### `Dropped`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Dropped"}} /></pre>
 
-Numeric acceptance succeeded without retaining an incoming event header.
+Counters were updated without retaining an incoming event header.
 
 ## Trait Implementations
 
@@ -59,7 +59,7 @@ Numeric acceptance succeeded without retaining an incoming event header.
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl PartialEq for EvidenceDisposition`
 

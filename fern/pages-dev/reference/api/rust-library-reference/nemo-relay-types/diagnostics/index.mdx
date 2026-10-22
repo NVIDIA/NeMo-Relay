@@ -56,6 +56,7 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 - [PluginExecutionName](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-pluginexecutionname): A plugin execution mechanism name, preserving values unknown to this reader. Typed conversion accepts only the corresponding catalogue enum.
 - [PluginObservationContext](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-pluginobservationcontext): Shared plugin-operation facts for producers, projections, and decoded evidence.
 - [PluginPhaseName](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-pluginphasename): A plugin lifecycle phase name, preserving values unknown to this reader. Typed conversion accepts only the corresponding catalogue enum.
+- [RecordReceipt](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-recordreceipt): Accepted lifetime and current-summary update.
 - [RemoteDiagnosticOrigin](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-remotediagnosticorigin): Fixed-size provenance retained by an authorized ingestion adapter.
 - [ResourceMemoryMeasurement](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-resourcememorymeasurement): One available measurement; an absent field means not reported (unsupported or unreadable).
 - [ResourceMemoryMetrics](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-resourcememorymetrics): Memory-only projection; fixed fields and eight limit slots bound all copies.
@@ -76,6 +77,7 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 - [DiagnosticReadReason](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticreadreason): Stable reasons shared by canonical snapshot adapters. These are operation results, never a source health classification or a producer failure code. Include a fallback arm when matching: future releases can add reasons.
 - [DiagnosticSeverity](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticseverity): Severity of evidence, independent of an operation's outcome.
 - [DiagnosticSummaryScope](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticsummaryscope): Scope of summary and outcome-window values in a filtered response.
+- [EvidenceDisposition](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-evidencedisposition): Evidence retention is independent of numeric acceptance.
 - [FailureClass](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-failureclass): Supported general cause, independent of health, retries, and operation outcome.
 - [FailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-failurecode): Failure event hierarchy for integrated producers.
 - [LoggingFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-loggingfailurecode): Initial Logging failure vocabulary.
@@ -86,6 +88,7 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 - [PluginFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-pluginfailurecode): Plugin failure hierarchy for integrated producers.
 - [PluginOperationFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-pluginoperationfailurecode): Failures at observed dynamic-plugin operation boundaries.
 - [PluginPhase](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-pluginphase): Observed plugin lifecycle phase or policy-gate context, independent of classification.
+- [RecordOutcome](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-recordoutcome): Accepted collection or intentional disablement.
 - [ResourceAssociation](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-resourceassociation): Relationship between the diagnostic process and measured target.
 - [ResourceMemoryAvailability](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-resourcememoryavailability): Availability of the latest-memory projection, independent of diagnostic reads.
 - [ResourceMemoryNumber](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-resourcememorynumber): Exact integers and finite converted decimals retain distinct numeric kinds.

@@ -2,7 +2,7 @@
 title: "Struct Plugin Runtime"
 sidebar-title: "PluginRuntime"
 description: "Cloneable high-level runtime handle for host APIs available to native plugins."
-position: 68
+position: 69
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -20,6 +20,12 @@ Cloneable high-level runtime handle for host APIs available to native plugins.
 ### `impl PluginRuntime`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn diagnostics(&amp;self) -&gt; <a href=\"diagnostics/struct-diagnostics\">Diagnostics</a>"}} /></pre>
+
+Native diagnostic authoring and separately authorized canonical reads. The host selects startup enablement; no service is started by this method.
 
 #### `new`
 
@@ -153,7 +159,7 @@ Emits a validated Relay metric-measurement mark under the current scope.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn runtime_diagnostics(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-runtimediagnostics\">RuntimeDiagnostics</a>&gt;"}} /></pre>
 
-Return a bounded snapshot of active host runtime diagnostics.
+Return the bounded legacy report for the active host configuration. Canonical observations, counters, and memory views use [`Self::diagnostics`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-pluginruntime) and require a separate host read grant.
 
 #### `create_scope_stack`
 
