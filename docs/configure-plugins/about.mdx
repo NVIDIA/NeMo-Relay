@@ -50,3 +50,10 @@ with the Relay CLI for a user account or a system-wide deployment.
 Use [Build Plugins](/build-plugins/about) only when you are authoring the
 plugin itself. It covers generic plugin components, manifests, native ABI
 plugins, Python workers, and the `grpc-v1` protocol.
+
+## Embedded Diagnostics Service
+
+For language-hosted Relay, the existing initialization resolver also accepts a
+root `[diagnostics]` section in `plugins.toml`. It selects a process-owned service
+that survives individual plugin activations. See [embedded language diagnostics](/reference/diagnostics-bindings#embedded-language-runtimes)
+for configuration precedence, startup-only limits, and optional readers.

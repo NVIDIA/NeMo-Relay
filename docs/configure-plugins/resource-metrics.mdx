@@ -1005,3 +1005,35 @@ process-sampling counts above JavaScript's safe-integer range.
 
 For plugin configuration files, precedence, and CLI editing, refer to
 [Configure](/configure-plugins/plugin-configuration-files).
+
+## Diagnostic Memory Context
+
+Successful collections can also retain one fixed memory-only projection for
+[authorized diagnostic memory inspection](/reference/diagnostics-memory#detailed-memory-inspection).
+Configure `memory_inspection.enabled` (default `true`) and
+`memory_inspection.stale_after_millis` (default `30000`, must be positive) inside
+the existing component configuration. This policy does not enable the component,
+polling, or diagnostic collection. A read schedules no collection or configuration
+reload. Memory-category disablement also disables this projection.
+
+For example, extend an existing resource component definition:
+
+```toml
+version = 1
+
+[[components]]
+kind = "resource_metrics"
+enabled = true
+
+[components.config.memory_inspection]
+enabled = true
+stale_after_millis = 30000
+```
+
+The projection preserves target/sample identity, process coverage, units, and
+integer/decimal precision. Runtime/target changes invalidate it. Eight fixed
+limit-event slots and a finite memory-field vocabulary bound retained storage;
+excess metadata yields capacity unavailability while preserving a valid older
+sample. No diagnostic page or restricted component identity is added to resource
+marks or exporter events. The existing resource API and its serialization remain
+unchanged.

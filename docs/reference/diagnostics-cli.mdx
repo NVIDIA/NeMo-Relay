@@ -1,0 +1,250 @@
+---
+title: "CLI and Daemon Diagnostics"
+description: "Configure startup collection and inspect existing gateways, brokers, and managed Relay workers."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+CLI gateways, daemon brokers, and managed Relay workers use the same
+[diagnostic foundation](/reference/diagnostics). Each process owns its settings,
+retained state, and inspection authority. Diagnostic reads reuse existing
+listeners and lifecycle; they never start or recover a runtime.
+
+## CLI Startup and Inspection
+
+Diagnostics is compiled in and disabled by default. Configure it through the
+existing CLI configuration layers:
+
+```toml
+[diagnostics]
+enabled = true
+http_read = true
+
+[diagnostics.limits]
+max_events = 256
+max_queries = 4
+max_snapshot_bytes = 131072
+```
+
+An explicit configuration replaces the user layer; the system layer retains its
+existing precedence. `run --config` takes precedence over the inherited path.
+`NEMO_RELAY_DIAGNOSTICS` and `NEMO_RELAY_DIAGNOSTICS_HTTP`, then
+`--diagnostics=true|false` and `--diagnostics-http=true|false`, override their
+respective settings. Both environment variables and flag values also accept
+`1`/`0`, `yes`/`no`, and `on`/`off`, without case sensitivity. A bare flag enables
+its setting; use `=` to supply a flag value. Limits come from the merged configuration. Command-line
+settings apply to that CLI process; an MCP client does not override an already
+running gateway's settings. A named logging
+configuration file affects logging only. Startup selects and validates diagnostics
+before configuring logging or activating plugins, and reuses the parsed inputs
+for runtime configuration. Repair/inspection commands keep their existing
+no-ambient configuration policy. Daemon composition follows the role-specific rules below.
+
+For an explicit local view after command completion and logging teardown, use
+`--diagnostics-final`. It writes one bounded canonical JSON page to stderr and
+does not change command stdout or exit codes. Restricted detail appears only
+because the caller requested inspection. Pre-context failures cannot be retained.
+
+### Existing Gateway Reads
+
+```bash
+nemo-relay diagnostics --capabilities
+nemo-relay diagnostics --gateway-url http://127.0.0.1:4040
+nemo-relay diagnostics --query '{"component_key":"cli.gateway","max_events":10}'
+```
+
+Inspection connects only to an existing local gateway over the existing pinned
+TLS tunnel. It loads existing private credentials and sends a domain-separated
+diagnostics-read capability. Provider, hook, and shutdown credentials do not grant
+read access. Plain HTTP returns `426 authenticated_transport_required`; the
+diagnostic TLS connection has a five-second delivery deadline and exposes only
+diagnostic routes. Reads require whole-context authority because pages include global
+totals. Browser-origin requests are rejected. Enable HTTP inspection explicitly
+with `http_read`; loopback or public health access alone grants no authority.
+
+Inspection does not acquire, start, recover, or health-poll a gateway, and does not
+refresh its idle timer. A reused gateway keeps its own immutable diagnostic
+settings. Diagnostic settings are excluded from execution fingerprints, including
+forwarded diagnostic environment variables. Inspect effective settings with
+`--capabilities`; change them through the existing explicit gateway restart
+workflow. An older or unexposed endpoint reports unsupported/unavailable.
+
+The [Diagnostics API](/reference/diagnostics-api) defines discovery, snapshot,
+component, and event routes, query fields, pagination, and stable HTTP errors.
+The [memory route](/reference/diagnostics-memory#detailed-memory-inspection)
+uses the same authorization and delivery budgets.
+
+The capability response's `producers` lists supported CLI operation families and
+`plugin.native_abi` / `plugin.worker_protocol` families. These names do not claim
+a plugin is loaded or a registration succeeded. Component pages report retained
+registrations, including their plugin identity.
+
+The CLI accepts at most 1,024 UTF-8 bytes in `--query`; the HTTP handler independently
+limits encoded query text to 4,096 bytes. `--max-response-bytes` controls the
+inspector's receive cap, independently of the server's response budget. It accepts
+4 KiB through 32 MiB and defaults to 128 KiB for local pages or 256 KiB for cached
+worker wrappers. Increase it explicitly when inspecting a server configured for
+larger responses. Reads with `--worker` cannot also use `--query`, `--capabilities`,
+or `--memory`.
+
+### CLI Producer Ownership and Memory
+
+The process owns finite recorders for command completion, post-startup
+configuration attempts, gateway bind/serve/shutdown, acquisition/recovery,
+child spawn/wait/cleanup, hook delivery, and upstream transport/body stages.
+Each boundary records its own outcome once. Command and child/request outcomes
+are distinct scopes, so their sum is not a unique failed-request count.
+Nonzero child exit is a notice; provider HTTP status is not inferred to be a
+transport failure. Header receipt and body completion are separate observations;
+a cancelled stream does not fabricate completion. Flattened errors retain an
+`unknown` cause. Logging and plugin adapters keep their existing recording owners.
+
+HTTP response storage is separate from core retention/query pools. It reserves
+`max(1, max_queries)` slots of `max(8192, max_snapshot_bytes)` bytes, using checked
+startup admission. Defaults add four 128 KiB response slots, or 512 KiB of payload
+backing. A response owns its slot until the final body reference is dropped;
+core snapshot leases are released before network delivery. Diagnostic TLS
+connections have separate permits with the same concurrency, a 16 KiB HTTP
+input buffer, a 32 KiB TLS output limit, and a five-second connection deadline.
+Existing gateway shutdown cancels those connections and stops new reads.
+Discovery remains
+available when collection is enabled with `max_queries = 0`. Requests do not
+alter counters, refresh markers, or deployment-owned health policy.
+
+Configured log files retain their existing required-sink behavior.
+
+## Daemon Broker and Managed Relay Workers
+
+The daemon broker and each managed Relay worker own separate process contexts.
+They use the CLI startup composition, core retention store, plugin host adapters,
+and the same authorized diagnostics HTTP handlers. Diagnostics does not decide
+worker health, readiness, restart, routing, or admission policy.
+
+### Configuration and Inspection
+
+The broker resolves `[diagnostics]` through its existing configuration layers and
+keeps its `[daemon.logging]` scope. Managed workers resolve user configuration
+followed by system configuration, with system precedence. Diagnostic environment
+variables and CLI overrides cannot override managed-worker settings. Parsed
+startup inputs are reused by the existing resolver. MCP/hook and administrative
+helper commands retain their existing no-ambient configuration behavior.
+
+Broker collection has its own opt-in setting and allocation ceiling:
+
+```toml
+[diagnostics]
+enabled = true
+http_read = true
+
+[daemon.diagnostics]
+collect_workers = true
+max_owned_bytes = 16777216
+```
+
+Each worker must independently enable diagnostics and `http_read` in its effective
+configuration. Broker collection cannot enable a worker's service or replace its
+immutable settings. Core retention, local HTTP delivery, and collection each have
+independent budgets. Collection can be enabled without local broker recording;
+operator access to its pages still requires the broker's `http_read` setting.
+
+Inspect an existing local broker using its pinned TLS tunnel and private operator
+credential:
+
+```bash
+nemo-relay diagnostics --daemon-url http://127.0.0.1:48400 --capabilities
+nemo-relay diagnostics --daemon-url http://127.0.0.1:48400
+nemo-relay diagnostics --daemon-url http://127.0.0.1:48400 --worker WORKER_UUID
+```
+
+Replace the address and `WORKER_UUID` with the running daemon's address and a
+worker ID from its existing worker listing. Inspection neither starts a daemon
+nor calls readiness. The inspector uses the existing local TLS-upgrade transport;
+it does not configure remote operator access. Run it with access to the daemon's
+private bootstrap credential. Publishing a daemon TLS certificate alone grants
+no diagnostic read authority.
+
+The broker's local routes use the same paths and canonical schema as gateway
+reads. Its additional route is:
+
+`GET /_nemo_relay/v1/workers/{instance_uuid}/diagnostics`
+
+This route returns a bounded wrapper with separate `assignment`, `collection`,
+and `snapshot` fields. The snapshot retains the worker's source identity and
+cumulative counters. Polling a failure total of five repeatedly leaves it at
+five; collection never replays those counts into the broker's local core.
+
+A successful lookup can return a stale last-good page. Collection metadata
+reports the latest poll outcome, receipt time, monotonic receipt age, request
+ordinal, retained sources, and aggregate cache evictions. Freshness uses broker
+receipt age; it does not compare worker and broker wall clocks or infer worker
+health. Pages older than 15 seconds are marked stale. An uncached current source
+returns a null snapshot and `missing`; no per-worker eviction ledger is retained.
+
+Missing assignments, unsupported peers, disabled reads, query-disabled workers,
+and revoked/unavailable read authority produce explicit diagnostic-operation
+errors. Every request authenticates the complete source context before lookup
+and rechecks its current session authority. Filters do not provide tenant
+isolation. Plain broker HTTP requires TLS upgrade (`426`).
+
+### Worker Read Authority and Lifetime
+
+The existing authenticated registration/recovery exchange carries optional
+source/schema/read-limit offers and independent diagnostic read grants. Older
+peers can omit these fields and keep their existing execution behavior. A grant
+binds the source incarnation, assignment generation, policy revision, and page
+limit. Its random session key is separate from forwarding, readiness, and control
+credentials. Signed read tokens last 60 seconds; control loss revokes authority,
+and authenticated recovery replaces it. A revoked session cannot expose an old
+cached page under a replacement source.
+
+Worker diagnostic routes sit outside the data-token middleware. They never call
+readiness activation and remain readable while admission is pending or draining
+when the worker listener and its authenticated control session are available.
+Loopback workers use the existing local transport; network workers use the
+existing pinned TLS transport. Token expiry is checked against both processes'
+wall clocks, so network workers require clock synchronization within the token's
+60-second validity window. Expiry-window rejections are recorded as collection
+authentication failures. This negotiation does not grant dynamic-plugin workers
+permission to read host snapshots.
+
+A worker can fail before its listener exists. The launcher records observed
+spawn/exit outcomes, and the broker records accepted, replay-fenced startup
+failure reports or activation deadline expiry. These are broker/launcher
+observations, not invented worker-authored detail. Control loss alone does not
+establish process exit. Existing errors, logging, rate limits, and legacy reports
+retain their behavior.
+
+### Collection Bounds and Producer Coverage
+
+| Resource | Limit and behavior |
+| --- | --- |
+| Retained worker pages | 64 preallocated slots, each at most 128 KiB; least-recently-polled eligible slot is replaced when full. |
+| Concurrent polls | Four; fair bounded selection with no growing task queue or continuation chase. |
+| Ingress | Four preallocated 128 KiB buffers, capped before each frame copy; negotiated smaller page limits are honored. |
+| Parsing | Streaming structural/header validation; at most 131,072 nodes and depth 24; no owned remote snapshot graph or decompression. |
+| Parser scratch allowance | Two input lengths per poll; structural and header passes release scratch between passes. |
+| Operator responses | Four preallocated 256 KiB buffers, charged until the last body reference is dropped. |
+| Metadata | Fixed source slots, bounded negotiation fields in the existing 4,096-session pool, and bounded poll state. |
+
+Startup checks the separate collector allocation ceiling before allocating these
+buffers. Its conservative admission amount includes metadata allowances checked
+against compiled layouts; this is owned diagnostic storage, not total process
+RSS. HTTP/TLS transport allocations, allocator overhead, core storage, local read
+buffers, and operational log sinks need separate deployment allowances.
+
+Each poll has a two-second total request/body deadline. Successful sources are
+polled approximately every five seconds plus bounded jitter; failures back off
+to 60 seconds. Unsupported or disabled sources stop polling until renegotiation. Authorization
+failures back off, allowing an authenticated recovery reply to reach the worker
+without a polling race permanently disabling collection. Cache pressure does not reject worker registration. Failed polls
+retain the last good page; cancellation returns its workspace. Generation,
+source, session credential, and request ordinal fence cache publication.
+
+Finite components own broker control, forwarding, and collection observations,
+and worker runtime and forwarding observations. Producers classify structured
+causes and leave flattened causes unknown. Broker `ActivationFailed` observations
+are counted only at the accepted registry transition. Collection failure records
+one broker-local operation, never a copy of remote failures. All daemon recording
+uses state-only adapters; restricted details stay outside operational projections,
+exporters, and plugin reports. Collection and local HTTP adapters close on shutdown.
