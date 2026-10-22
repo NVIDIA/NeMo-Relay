@@ -762,6 +762,22 @@ For defaults, source precedence, environment variables, TOML file sinks, and
 Rust APIs, refer to
 [Operational Logging](/reference/operational-logging).
 
+### Runtime Diagnostics
+
+Enable in-memory diagnostics with `[diagnostics]` in your configuration file.
+Use `--diagnostics=true` to enable collection at startup. Add
+`--diagnostics-http=true` to allow inspection with the gateway's private credentials.
+A running gateway keeps its settings until it restarts.
+
+Use `nemo-relay diagnostics --capabilities` to check the running owner's settings.
+This command does not start or recover a gateway. To inspect an existing local
+daemon, use `--daemon-url URL`. Add `--worker UUID` to read one authorized cached
+worker page. Daemon collection requires
+`[daemon.diagnostics].collect_workers = true`. Each worker must also enable reads.
+
+For configuration, read access, storage limits, and final command views, refer to
+[CLI and Daemon Diagnostics](/reference/diagnostics/cli#cli-startup-and-inspection).
+
 ## Add Model Pricing for Cost Estimates
 
 Model pricing is configured with the same `plugins.toml` discovery path as

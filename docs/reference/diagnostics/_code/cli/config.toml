@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[diagnostics]
+enabled = true
+http_read = true
+
+[diagnostics.limits]
+max_events = 256
+max_queries = 4
+max_snapshot_bytes = 131072

@@ -178,6 +178,9 @@ navigation:
       - page: "Package Discoverable Plugins"
         path: ./build-plugins/package-discoverable-plugins.mdx
         slug: package-discoverable-plugins
+      - page: "Plugin Diagnostics"
+        path: ./build-plugins/diagnostics.mdx
+        slug: diagnostics
       - section: "Native Dynamic Plugins"
         slug: native
         contents:
@@ -199,6 +202,9 @@ navigation:
           - page: "Runtime Events and Scopes"
             path: ./build-plugins/native/runtime-events-and-scopes.mdx
             slug: runtime-events-and-scopes
+          - page: "Diagnostics"
+            path: ./build-plugins/native/diagnostics.mdx
+            slug: diagnostics
           - page: "Native ABI Reference"
             path: ./build-plugins/native/native-abi-reference.mdx
             slug: native-abi-reference
