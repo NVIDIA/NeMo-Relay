@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Carry ADK tool calls through the managed tool pipeline in Relay's shared tool-result format."""
+"""Carry ADK tool calls through managed tool pipeline in Relay's shared tool-result format."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import base64
 import dataclasses
 import functools
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from enum import Enum
 from typing import TYPE_CHECKING, Annotated, Any, Final, NamedTuple, TypeVar
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from nemo_relay import Json, JsonObject
 
 _T = TypeVar("_T")
-_K = TypeVar("_K")
+_K = TypeVar("_K", bound=Hashable)
 _CODE_ONLY: Final = "NeMo Relay intercepts can change only the code of an ADK code execution"
 _JSON_CONTENT: Final = "The content of an ADK tool result without text of its own is its JSON text"
 _JSON_STATUS: Final = (
@@ -68,7 +68,7 @@ def _type_name(cls: type[object]) -> str:
 _KNOWN_TYPES: Final[
     Annotated[
         Mapping[str, type[object]],
-        "This mapping holds the genai model and enum types and ADK's code execution result types by qualified name.",
+        "Genai model and enum types, plus ADK's code execution result types, by qualified name.",
     ]
 ] = {
     _type_name(cls): cls
@@ -113,9 +113,9 @@ def _round_trip_dump(value: object) -> object:
 
 
 class _IteratorScan:
-    """Find whether a result holds an iterator anywhere.
+    """Whether a result holds an iterator anywhere.
 
-    Scan the result only when an object in it first needs the answer.
+    Scans result only when an object in it first needs the answer.
     """
 
     def __init__(self, result: object) -> None:
@@ -135,9 +135,9 @@ def _is_block_list(value: object) -> TypeIs[list[JsonObject]]:
 
 
 def _mcp_result(value: dict[str, object]) -> tuple[list[JsonObject], bool] | None:
-    """Return the content blocks and failure flag of a result in the shape of an ADK MCP tool dump.
+    """Return content blocks and failure flag of a result shaped like an ADK MCP tool dump.
 
-    Return None for any other result.
+    None for any other result.
     """
     content, is_error = value.get("content"), value.get("isError", False)
     if _is_block_list(content) and isinstance(is_error, bool):
@@ -148,8 +148,7 @@ def _mcp_result(value: dict[str, object]) -> tuple[list[JsonObject], bool] | Non
 def _has_own_text(value: dict[str, object]) -> bool:
     """Return whether a result object holds its own text.
 
-    A result object holds its own text when its `error` is non-empty text, or when its `result` is text and its `error`
-    is not truthy.
+    True when its `error` is non-empty text, or its `result` is text and its `error` is falsy.
     """
     error = value.get("error")
     return (isinstance(error, str) and bool(error)) or (not error and isinstance(value.get("result"), str))
@@ -158,8 +157,8 @@ def _has_own_text(value: dict[str, object]) -> bool:
 def _fails(value: object) -> bool:
     """Return whether a result is a failure.
 
-    An MCP result fails when its `isError` is true, and any other object fails when its `error` is truthy. A value that
-    is not an object does not fail.
+    MCP result fails when its `isError` is true. Any other object fails when its `error` is truthy. A non-object never
+    fails.
     """
     if not _is_str_dict(value):
         return False
@@ -168,14 +167,14 @@ def _fails(value: object) -> bool:
 
 
 def _content_json(value: object) -> str:
-    """Return the JSON text that the model reads for a result without its own text."""
+    """Return JSON text the model reads for a result without its own text."""
     return json.dumps(wire_json(value), ensure_ascii=False, sort_keys=True)
 
 
 def _projection(value: object) -> tuple[Json, bool]:
-    """Return the content that the model reads and whether the result is a failure.
+    """Return content the model reads, and whether result is a failure.
 
-    Follow ADK's conventions for each result type.
+    Follow ADK's convention for each result type.
     """
     if isinstance(value, CodeExecutionResult):
         return value.stderr or value.stdout, bool(value.stderr)
@@ -187,7 +186,8 @@ def _projection(value: object) -> tuple[Json, bool]:
         return value, False
     if _is_str_dict(value):
         if (mcp := _mcp_result(value)) is not None:
-            return mcp
+            blocks, failed = mcp
+            return [*blocks], failed
         error, result = value.get("error"), value.get("result")
         if isinstance(error, str) and error:
             return error, True
@@ -200,21 +200,21 @@ def _content_text(content: Json) -> str:
     if content is None:
         return ""
     if not isinstance(content, str):
-        raise ValueError("NeMo Relay can write only text content back to an ADK tool result")
+        raise TypeError("NeMo Relay can write only text content back to an ADK tool result")
     return content
 
 
 def _error_text(content: Json, existing: object = None) -> str:
-    """Return the intercept's content as the failure text, or the result's existing error text when the content is None.
+    """Return intercept's `content` as failure text, or `existing` error text when `content` is None.
 
-    Raise `ValueError` for content that is not text, and when no error text exists.
+    Raise `TypeError` for non-text content, `ValueError` when no error text exists.
     """
     if isinstance(content, str) and content:
         return content
     if content is None and isinstance(existing, str) and existing:
         return existing
     if content is not None and not isinstance(content, str):
-        raise ValueError("NeMo Relay can write only text content back to an ADK tool result")
+        raise TypeError("NeMo Relay can write only text content back to an ADK tool result")
     raise ValueError("A failed ADK tool result needs error text")
 
 
@@ -224,7 +224,7 @@ def _blocks(content: Json) -> list[JsonObject]:
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
     if not isinstance(content, list):
-        raise ValueError("NeMo Relay can write only text or content blocks back to an MCP tool result")
+        raise TypeError("NeMo Relay can write only text or content blocks back to an MCP tool result")
     blocks: list[JsonObject] = []
     for item in content:
         if isinstance(item, str):
@@ -232,12 +232,12 @@ def _blocks(content: Json) -> list[JsonObject]:
         elif _is_block(item):
             blocks.append(item)
         else:
-            raise ValueError("NeMo Relay can write only text or content blocks back to an MCP tool result")
+            raise TypeError("NeMo Relay can write only text or content blocks back to an MCP tool result")
     return blocks
 
 
 def _projected_object(result: dict[str, object], content: Json, is_error: bool) -> dict[str, object]:
-    """Return the result object with the content and failure status written in by ADK's conventions."""
+    """Return result object with content and failure status written in per ADK's conventions."""
     if _mcp_result(result) is not None:
         return {**result, "content": _blocks(content), "isError": is_error}
     rest = {key: item for key, item in result.items() if key not in ("error", "result")}
@@ -249,13 +249,13 @@ def _projected_object(result: dict[str, object], content: Json, is_error: bool) 
 
 
 def _projected_value(result: object, content: Json, is_error: bool) -> object:
-    """Rebuild a result without its own text from content that holds the result's new JSON text.
+    """Rebuild a result without its own text from content holding its new JSON text.
 
-    Raise `ValueError` when the content is not JSON text, or when the rebuilt result's failure state differs from
-    `is_error`.
+    Raise `TypeError` when content is not text. Raise `ValueError` when text is not JSON, or rebuilt result's failure
+    state differs from `is_error`.
     """
     if not isinstance(content, str):
-        raise ValueError(_JSON_CONTENT)
+        raise TypeError(_JSON_CONTENT)
     try:
         written: Json = json.loads(content)
     except json.JSONDecodeError as error:
@@ -267,7 +267,7 @@ def _projected_value(result: object, content: Json, is_error: bool) -> object:
 
 
 def _projected(result: object, content: Json, is_error: bool) -> object:
-    """Return the result with an intercept's content and failure status written back into it."""
+    """Return result with intercept's content and failure status written back in."""
     if isinstance(result, CodeExecutionResult):
         text = _content_text(content)
         if not is_error:
@@ -296,9 +296,9 @@ def _projected(result: object, content: Json, is_error: bool) -> object:
 
 
 class _Recorded(NamedTuple):
-    """Hold one part of a recorded result.
+    """One part of a recorded result.
 
-    The record holds the tool's own value, its encoding, and the parts it holds besides JSON values.
+    Holds tool's own value, its encoding, and its parts other than JSON values.
     """
 
     value: object
@@ -312,9 +312,9 @@ def _recorded_leaf(value: object, encoded: JsonObject) -> _Recorded:
 
 
 class _Produced(NamedTuple):
-    """Hold one result that the tool produced.
+    """One result the tool produced.
 
-    The entry holds the result's record, the key of its encoding, and the content and status sent with it.
+    Holds result's record, its encoding key, and content and status sent with it.
     """
 
     key: str
@@ -324,9 +324,9 @@ class _Produced(NamedTuple):
 
 
 class ProducedResults:
-    """Keep one ADK tool call's results for that call alone.
+    """Results of one ADK tool call, kept for that call alone.
 
-    Hand back the tool's own objects where the pipeline left them unchanged.
+    Hand back tool's own objects where pipeline left them unchanged.
     """
 
     def __init__(self) -> None:
@@ -336,18 +336,18 @@ class ProducedResults:
         self._unserializable: dict[str, object] = {}
 
     def add(self, result: object) -> JsonObject:
-        """Return the result in Relay's shared tool-result format, and remember each part that the result holds."""
+        """Return result in Relay's shared tool-result format, and remember each part it holds."""
         content, is_error = _projection(result)
         recorded = self._recorded(result, _IteratorScan(result))
         self._produced.append(_Produced(canonical(recorded.encoded), recorded, content, is_error))
         return {"schema": TOOL_RESULT_SCHEMA, "content": content, "is_error": is_error, "result": recorded.encoded}
 
     def restore(self, data: Json, result_type: type[_T]) -> _T:
-        """Return the result that ADK receives for the pipeline's tool result.
+        """Return result ADK receives for pipeline's tool result.
 
-        Start from the latest produced result with the same encoding, or rebuild the result from its encoding over the
-        latest produced one. Write the tool result's content and failure status in when they differ from what the call
-        sent. Raise `ValueError` for a malformed tool result and `TypeError` when the restored value is not a
+        Start from latest produced result with same encoding, or rebuild result from its encoding over latest produced
+        one. Write tool result's content and failure status in when they differ from what call sent. Raise `ValueError`
+        for malformed tool result, `TypeError` for a value of wrong type in it or a restored value that is not a
         `result_type`.
         """
         projected = projected_tool_result(data)
@@ -376,7 +376,7 @@ class ProducedResults:
         return restored
 
     def _part(self, value: object, scan: _IteratorScan) -> tuple[JsonObject, _Recorded | None]:
-        """Return a part's encoding and record, with None as the record for a JSON scalar."""
+        """Return part's encoding and record. Record is None for a JSON scalar."""
         if _is_primitive(value):
             return {"kind": "json", "value": value}, None
         recorded = self._recorded(value, scan)
@@ -385,7 +385,7 @@ class ProducedResults:
     def _recorded(self, value: object, scan: _IteratorScan) -> _Recorded:
         """Record a value by walking its standard data types and dataclasses.
 
-        Encode any other object as pydantic dumps it for a rebuild.
+        Encode any other object as pydantic dumps it for rebuild.
         """
         if _is_primitive(value):
             return _recorded_leaf(value, {"kind": "json", "value": value})
@@ -409,9 +409,9 @@ class ProducedResults:
         return _recorded_leaf(value, self._object(value, name, scan))
 
     def _object(self, value: object, name: str, scan: _IteratorScan) -> JsonObject:
-        """Return pydantic's round-trip JSON for an object.
+        """Return pydantic round-trip JSON for an object.
 
-        Return a per-call reference to the object instead when part of it has no JSON form or holds an iterator.
+        Return per-call reference to object instead when part of it has no JSON form or holds an iterator.
         """
         if not (scan.found and holds_iterator(_round_trip_dump(value))):
             unknown: list[object] = []
@@ -440,10 +440,7 @@ class ProducedResults:
         return _Recorded(value, {**header, "value": encodings}, fields, ())
 
     def _decode(self, data: Json, recorded: _Recorded | None) -> object:
-        """Return the tool's own value when the pipeline left its encoding unchanged.
-
-        Rebuild the value from its encoding otherwise.
-        """
+        """Return tool's own value when pipeline left its encoding unchanged, else rebuild value from encoding."""
         if recorded is not None and same_json(data, recorded.encoded):
             return recorded.value
         return self._rebuilt(data, recorded)
@@ -451,14 +448,14 @@ class ProducedResults:
     def _rebuilt(self, data: Json, recorded: _Recorded | None) -> object:
         """Rebuild a changed value from its encoding.
 
-        Keep each part that the pipeline left unchanged as the tool's own object. Raise `ValueError` for an unknown or
-        malformed encoding.
+        Keep each part pipeline left unchanged as tool's own object. Raise `TypeError` for non-text kind, `ValueError`
+        for unknown or malformed encoding.
         """
         if not _is_json_object(data) or "value" not in data:
             raise ValueError("Expected an encoded ADK tool result value")
         kind, value = data.get("kind"), data["value"]
         if not isinstance(kind, str):
-            raise ValueError("An encoded ADK tool result value needs a kind")
+            raise TypeError("An encoded ADK tool result value needs a kind")
         if kind == "json" and _is_primitive(value):
             return value
         fields = recorded.fields if recorded is not None else {}
@@ -488,13 +485,13 @@ class ProducedResults:
         raise ValueError(f"Unsupported ADK tool result kind: {kind!r}")
 
     def _class(self, name: Json) -> type[object]:
-        """Return the one class that an encoded object names.
+        """Return the one class an encoded object names.
 
-        Look the name up among the genai types, ADK's types, and the classes that the call recorded. Raise `ValueError`
-        when the name matches no class or more than one class.
+        Look name up among genai types, ADK types, and classes the call recorded. Raise `TypeError` when name is not
+        text, `ValueError` when it matches no class or several.
         """
         if not isinstance(name, str):
-            raise ValueError(f"Unknown type in an ADK tool result: {name!r}")
+            raise TypeError(f"An encoded ADK tool result names its type with {name!r}, which is not text")
         found = set(self._classes.get(name, ()))
         if (known := _KNOWN_TYPES.get(name)) is not None:
             found.add(known)
@@ -506,9 +503,9 @@ class ProducedResults:
         return cls
 
     def _dataclass(self, cls: type[object], fields: JsonObject, recorded: Mapping[str, _Recorded]) -> object:
-        """Rebuild a dataclass from its recorded fields without running its constructor.
+        """Rebuild a dataclass from recorded fields without running its constructor.
 
-        Raise `ValueError` when the recorded fields differ from the dataclass fields.
+        Raise `ValueError` when recorded fields differ from dataclass fields.
         """
         if not is_plain_dataclass(cls):
             raise ValueError(f"{_type_name(cls)} is not a dataclass")
@@ -522,7 +519,7 @@ class ProducedResults:
 
 
 def tool_result_json(value: object) -> JsonObject:
-    """Return a result in Relay's shared tool-result format."""
+    """Return result in Relay's shared tool-result format."""
     return ProducedResults().add(value)
 
 
@@ -541,9 +538,9 @@ def _restored_object(
 
 
 def _restored(edited: Json, projected: Json, original: object, json_of: Callable[[object], Json]) -> object:
-    """Return the original when the edit leaves its JSON unchanged.
+    """Return `original` when `edited` leaves its JSON unchanged.
 
-    Otherwise, return the edit with each part that the edit left unchanged restored from the original.
+    Otherwise return `edited` with each unchanged part restored from `original`.
     """
     if same_json(edited, projected):
         return original
@@ -560,9 +557,9 @@ def _restored(edited: Json, projected: Json, original: object, json_of: Callable
 
 
 class AdkArgumentsCodec(Codec[dict[str, Any]]):
-    """Encode a tool's arguments as JSON.
+    """Encode tool arguments as JSON.
 
-    Pass each part that an intercept leaves unchanged to the tool as ADK passed it.
+    Pass each part an intercept leaves unchanged to the tool as ADK passed it.
     """
 
     def __init__(self, arguments: dict[str, Any]) -> None:
@@ -583,7 +580,7 @@ class AdkArgumentsCodec(Codec[dict[str, Any]]):
 
 
 class AdkCodeInputCodec(Codec[CodeExecutionInput]):
-    """Encode a code execution input as JSON, and accept intercept edits to the code only."""
+    """Encode code execution input as JSON. Accept intercept edits to code only."""
 
     def __init__(self, code_input: CodeExecutionInput) -> None:
         self._code_input = code_input

@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Any
 from google.adk.models.apigee_llm import ApigeeLlm
 
 from nemo_relay.integrations.google_adk._backends._attempt import CURRENT_ATTEMPT, Backend, record_cost, sent_headers
+from nemo_relay.integrations.google_adk._backends._chat_completions import CHAT_CODEC, CHAT_NATIVE_CODEC
 from nemo_relay.integrations.google_adk._backends._gemini import gemini_backend
-from nemo_relay.integrations.google_adk._serialization import CODECS, Api
+from nemo_relay.integrations.google_adk._serialization import RECORDED_ID_KEY
 from nemo_relay.integrations.google_adk._swap import swap_class
 
 if TYPE_CHECKING:
@@ -25,21 +26,22 @@ if TYPE_CHECKING:
 
 
 def apigee_backend(model: ApigeeLlm) -> Backend:
-    """Return the Gemini backend in GenAI mode, the `openai` Chat Completions backend in chat mode.
+    """Return Gemini backend in GenAI mode, `openai` Chat Completions backend in chat completions mode.
 
-    In chat mode, swap the proxy client's class to send the attempt's request headers and record each parsed response.
+    In chat completions mode, swap proxy client's class to send attempt's request headers and record each parsed
+    response.
     """
     if model._api_type is not ApigeeLlm.ApiType.CHAT_COMPLETIONS:
         return gemini_backend(model)
     swap_class(model._completions_http_client, _completions_methods)
-    return Backend("openai", CODECS[Api.OPENAI_CHAT], client_headers=True)
+    return Backend("openai", CHAT_CODEC, client_headers=True)
 
 
 def _completions_methods(cls: type[CompletionsHTTPClient]) -> Mapping[str, object]:
-    """Return `CompletionsHTTPClient` methods that send the attempt's request headers and record each parsed body.
+    """Return `CompletionsHTTPClient` methods that send attempt's request headers and record each parsed body.
 
-    An attempt header replaces the proxy's header of the same name. The parsed body carries the completion id and cost
-    `LlmResponse` drops.
+    Attempt header replaces proxy header of same name, ignoring case. Parsed body carries completion id and cost.
+    `LlmResponse` drops both.
     """
     post = cls._httpx_post_with_retry
     stream = cls._handle_streaming
@@ -89,6 +91,6 @@ def _record(completion: Mapping[str, Json]) -> None:
     if attempt is None:
         return
     if isinstance(identifier := completion.get("id"), str):
-        attempt.response_id = identifier
+        attempt.recorded[RECORDED_ID_KEY] = identifier
     if isinstance(usage := completion.get("usage"), dict):
-        record_cost(attempt, usage)
+        record_cost(attempt, usage, codec=CHAT_NATIVE_CODEC)

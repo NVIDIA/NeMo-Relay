@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve provider backend for an ADK model class, importing its provider module on first use."""
+"""Resolve provider backend for ADK model class. Imports provider module on first use."""
 
 from __future__ import annotations
 
@@ -11,15 +11,16 @@ from typing import TYPE_CHECKING
 from google.adk.models.apigee_llm import ApigeeLlm
 from google.adk.models.google_llm import Gemini
 
+from nemo_relay.integrations.google_adk._backends._apigee import apigee_backend
 from nemo_relay.integrations.google_adk._backends._attempt import Backend
-from nemo_relay.integrations.google_adk._serialization import CODECS, Api
+from nemo_relay.integrations.google_adk._backends._gemini import GEMINI_CODEC, gemini_backend
 
 if TYPE_CHECKING:
     from google.adk.models import BaseLlm
 
 
 def _defined_in(cls: type[BaseLlm], module: str) -> bool:
-    """Whether a class in the MRO is defined in `module` or a submodule of it."""
+    """Whether any class in `cls` MRO is defined in `module` or a submodule of it."""
     return any(base.__module__ == module or base.__module__.startswith(f"{module}.") for base in cls.__mro__)
 
 
@@ -34,21 +35,17 @@ def _unknown(cls: type[BaseLlm]) -> TypeError:
 
 
 async def backend_of(model: BaseLlm) -> Backend:
-    """Return provider, codec, and header channel for the model's class.
+    """Return provider, codec, and header channel for model's class.
 
-    Check ADK's Gemini family first, then classes behind each installed provider SDK. Swap the provider client's class
-    so it applies each attempt's edits, records response fields `LlmResponse` drops, or both. Raise `TypeError` for a
-    class ADK defines in one of those modules that NeMo Relay does not know. Any other class: class name as provider,
+    Check ADK's Gemini family first, then classes behind each installed provider SDK. Swap provider client's class so it
+    applies each attempt's edits, records response fields `LlmResponse` drops, or both. Raise `TypeError` for a class
+    from one of those ADK provider modules that NeMo Relay does not know. Any other class: class name as provider,
     Gemini codec.
     """
     cls = type(model)
     if isinstance(model, ApigeeLlm):
-        from nemo_relay.integrations.google_adk._backends._apigee import apigee_backend
-
         return apigee_backend(model)
     if isinstance(model, Gemini):
-        from nemo_relay.integrations.google_adk._backends._gemini import gemini_backend
-
         return gemini_backend(model)
     if _defined_in(cls, ApigeeLlm.__module__) or _defined_in(cls, Gemini.__module__):
         raise _unknown(cls)
@@ -72,4 +69,4 @@ async def backend_of(model: BaseLlm) -> Backend:
             return openai_responses_backend(model)
         if _defined_in(cls, _package(OpenAILlm)):
             raise _unknown(cls)
-    return Backend(cls.__name__, CODECS[Api.GEMINI_GENERATE_CONTENT], client_headers=False)
+    return Backend(cls.__name__, GEMINI_CODEC, client_headers=False)

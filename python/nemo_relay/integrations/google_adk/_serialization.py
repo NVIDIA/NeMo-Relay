@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Translate ADK's `LlmRequest` and `LlmResponse` dumps with `AdkCodec`, and project other values with `json_safe`."""
+"""Translate ADK `LlmRequest` and `LlmResponse` dumps with `AdkCodec`. Project other values with `json_safe`."""
 
 from __future__ import annotations
 
@@ -12,9 +12,8 @@ from collections import Counter, deque
 from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
-from enum import Enum
 from itertools import pairwise
-from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, TypeAlias, TypeVar, assert_never, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias, TypeVar, cast
 
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
@@ -25,13 +24,7 @@ from pydantic_core import to_jsonable_python
 from typing_extensions import TypeIs, override
 
 from nemo_relay import AnnotatedLLMRequest, AnnotatedLLMResponse, Json, JsonObject, LLMRequest
-from nemo_relay.codecs import (
-    AnthropicMessagesCodec,
-    LlmCodec,
-    LlmResponseCodec,
-    OpenAIChatCodec,
-    OpenAIResponsesCodec,
-)
+from nemo_relay.codecs import LlmCodec, LlmResponseCodec
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -50,50 +43,29 @@ _PARAMS: Final = (
 _MODELED_CONFIG_KEYS: Final = frozenset({"system_instruction", "tools", "tool_config", *(key for key, _ in _PARAMS)})
 _MODELED_REQUEST_KEYS: Final = frozenset({"model", "contents", "config"})
 _REQUEST_FIELDS: Final = frozenset(LlmRequest.model_fields)
+_USAGE_FIELDS: Final = frozenset(types.GenerateContentResponseUsageMetadata.model_fields)
 _API_SPECIFIC_REQUEST_KEYS: Final = _REQUEST_FIELDS - _MODELED_REQUEST_KEYS - {"tools_dict"}
-URL_CONTEXT_KEY: Final = "url_context_metadata"
-RESPONSE_ID_KEY: Final = "response_id"
-PROVIDER_COST_KEY: Final[
-    Annotated[str, "This payload key holds the cost fields that the provider client reports in its usage."]
-] = "provider_usage_cost"
-CACHE_WRITE_KEY: Final[
-    Annotated[str, "ADK sets this usage attribute for Anthropic cache writes outside the GenAI schema."]
-] = "cache_creation_input_tokens"
-_RECORDED_KEYS: Final = frozenset({URL_CONTEXT_KEY, RESPONSE_ID_KEY, PROVIDER_COST_KEY})
-_WIRE_METADATA: Final[tuple[tuple[str, str, type[BaseModel]], ...]] = (
-    ("grounding_metadata", "grounding_metadata", types.GroundingMetadata),
-    ("citation_metadata", "citation_metadata", types.CitationMetadata),
-    ("logprobs_result", "logprobsResult", types.LogprobsResult),
-    (URL_CONTEXT_KEY, "urlContextMetadata", types.UrlContextMetadata),
+RECORDED_KEY: Final[Annotated[str, "Dump key for fields provider client reports and `LlmResponse` drops."]] = (
+    "provider_reported"
 )
+RECORDED_ID_KEY: Final = "id"
+RECORDED_COST_KEY: Final[
+    Annotated[str, "Recorded key for cost the provider API's native codec reads from client usage."]
+] = "cost"
 _MODELED_RESPONSE_KEYS: Final = frozenset(
-    {"content", "finish_reason", "usage_metadata", "model_version", "interaction_id", URL_CONTEXT_KEY, RESPONSE_ID_KEY}
+    {"content", "finish_reason", "usage_metadata", "model_version", "interaction_id", RECORDED_KEY}
 )
-_GEMINI_RESPONSE_KEYS: Final = frozenset({"avg_logprobs", *(key for key, _, _ in _WIRE_METADATA)})
-_USAGE: Final = (
+BASE_USAGE: Final = (
     ("prompt_token_count", "prompt_tokens"),
     ("candidates_token_count", "completion_tokens"),
     ("total_token_count", "total_tokens"),
     ("cached_content_token_count", "cache_read_tokens"),
 )
-_GEMINI_USAGE: Final = (
+GENAI_USAGE: Final = (
     ("thoughts_token_count", "thoughts_tokens"),
     ("tool_use_prompt_token_count", "tool_use_prompt_tokens"),
 )
-_CACHE_WRITE: Final = ((CACHE_WRITE_KEY, "cache_write_tokens"),)
-_USAGE_KEYS: Final = frozenset(source for source, _ in _USAGE)
-_GEMINI_USAGE_KEYS: Final = _USAGE_KEYS | frozenset(source for source, _ in _GEMINI_USAGE)
-_ANTHROPIC_USAGE_KEYS: Final = _USAGE_KEYS | {CACHE_WRITE_KEY}
-_OPENAI_RESPONSES_USAGE_KEYS: Final = _USAGE_KEYS | {"thoughts_token_count"}
-
-
-class Api(Enum):
-    """Name the provider API whose usage semantics an ADK model class carries."""
-
-    GEMINI_GENERATE_CONTENT = "gemini_generate_content"
-    ANTHROPIC_MESSAGES = "anthropic_messages"
-    OPENAI_CHAT = "openai_chat"
-    OPENAI_RESPONSES = "openai_responses"
+BASE_USAGE_KEYS: Final = frozenset(source for source, _ in BASE_USAGE)
 
 
 _FinishReason: TypeAlias = Literal["complete", "length", "content_filter", "tool_use"]
@@ -139,7 +111,7 @@ _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 def unserializable(value: object) -> str:
-    """Return the stand-in text for a value that has no JSON form, or for an iterator that serializing would consume."""
+    """Return stand-in text for a value with no JSON form, or for an iterator serializing would consume."""
     if isinstance(value, Iterator):
         return "<unserializable iterator>"
     kind = type(value)
@@ -155,9 +127,9 @@ def is_plain_dataclass(cls: type[object]) -> TypeIs[type[DataclassInstance]]:
 
 
 def _stable(value: object) -> object:
-    """Return the value as Relay records it.
+    """Return value as Relay records it.
 
-    Replace each set with a list of its members sorted by JSON and each iterator with its stand-in text, and return each
+    Replace each set with its members as a list sorted by JSON, and each iterator with stand-in text. Return each
     unchanged part as the same object.
     """
     if type(value) in _SCALARS:
@@ -193,9 +165,9 @@ def _stable_model(model: _ModelT) -> _ModelT:
 
 
 def wire_json(value: object) -> Json:
-    """Return the value's JSON as ADK sends it to the model.
+    """Return value's JSON as ADK sends it to the model.
 
-    Encode bytes as base64, sort set members by JSON, and write stand-in text for each part that has no JSON form.
+    Encode bytes as base64, sort set members by JSON, and write stand-in text for each part with no JSON form.
     """
     return to_jsonable_python(_stable(value), bytes_mode="base64", exclude_none=True, fallback=unserializable)
 
@@ -203,7 +175,7 @@ def wire_json(value: object) -> Json:
 def _part_json(value: object, exclude: set[str] | None) -> Json:
     """Return one field value of an ADK request or response as JSON.
 
-    Dump each pydantic model by itself, as genai does before it sends the model.
+    Dump each pydantic model separately, as genai does before sending one.
     """
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json", exclude_none=True, exclude=exclude, fallback=unserializable)
@@ -213,9 +185,9 @@ def _part_json(value: object, exclude: set[str] | None) -> Json:
 
 
 def _framework_json(model: BaseModel, exclude: Mapping[str, set[str]]) -> JsonObject:
-    """Return the model's fields as JSON.
+    """Return model's fields as JSON.
 
-    Sort the members of each set, and write stand-in text for each iterator and for each object that holds one.
+    Sort each set's members. Write stand-in text for each iterator and each object holding one.
     """
     dumped = model.model_dump(mode="python", exclude_none=True, exclude=exclude)
     source = _stable_model(model) if holds_iterator_or_set(dumped) else model
@@ -227,26 +199,26 @@ def _framework_json(model: BaseModel, exclude: Mapping[str, set[str]]) -> JsonOb
 
 
 def request_payload(request: LlmRequest) -> JsonObject:
-    """Return the plain dump of ADK's request with the output schema as a JSON object.
+    """Return plain dump of ADK's request, with output schema as a JSON object.
 
-    Of the HTTP options, keep only the extra request body.
+    Keep only extra request body from HTTP options.
     """
     payload = _framework_json(request, _REQUEST_EXCLUDE)
-    config = _object(payload.get("config"), field="ADK config")
-    schema = response_schema_payload(request.config.response_schema)
-    if schema is not None:
-        config = {**config, "response_schema": schema}
+    config: JsonObject = dict(_object(payload.get("config"), field="ADK config"))
+    if (schema := response_schema_payload(request.config.response_schema)) is not None:
+        config["response_schema"] = schema
     options = request.config.http_options
     if options is not None and options.extra_body is not None:
-        config = {**config, "http_options": {"extra_body": wire_json(options.extra_body)}}
-    return {**payload, "config": config}
+        config["http_options"] = {"extra_body": wire_json(options.extra_body)}
+    payload["config"] = config
+    return payload
 
 
 def response_schema_payload(schema: types.SchemaUnion | None) -> Json | None:
-    """Return ADK's structured output schema as a JSON object, or None when ADK holds no schema.
+    """Return ADK's structured output schema as a JSON object, or None when ADK holds none.
 
-    Accept a `Schema`, a dict, or a type that pydantic renders as JSON Schema, and raise `TypeError` when pydantic
-    cannot render the type.
+    Accept `Schema`, dict, or a type pydantic renders as JSON Schema. Raise `TypeError` when pydantic cannot render the
+    type.
     """
     if schema is None:
         return None
@@ -260,29 +232,31 @@ def response_schema_payload(schema: types.SchemaUnion | None) -> Json | None:
         raise TypeError(f"NeMo Relay cannot render the structured output schema {schema!r} as JSON Schema") from error
 
 
-def _response_schema_of(payload: JsonObject) -> Json | None:
-    return _object(payload.get("config"), field="ADK config").get("response_schema")
-
-
 def response_payload(response: LlmResponse) -> JsonObject:
-    """Return the plain dump of ADK's response with the cache-write count that ADK attaches outside the GenAI schema.
+    """Return plain dump of ADK's response, plus usage counts ADK attaches outside GenAI schema.
 
-    Raise `TypeError` when that count is not an integer.
+    Raise `TypeError` when such a count is not an integer.
     """
     payload = _framework_json(response, {})
-    cache_write = getattr(response.usage_metadata, CACHE_WRITE_KEY, None)
-    if cache_write is not None:
-        if not isinstance(cache_write, int):
-            raise TypeError(f"ADK usage_metadata {CACHE_WRITE_KEY} must be an integer")
+    if response.usage_metadata is None:
+        return payload
+    attached: dict[str, int] = {}
+    for key, value in vars(response.usage_metadata).items():
+        if key in _USAGE_FIELDS:
+            continue
+        if not isinstance(value, int):
+            raise TypeError(f"ADK usage_metadata {key} must be an integer")
+        attached[key] = value
+    if attached:
         usage_metadata = _object(payload.get("usage_metadata"), field="ADK usage_metadata")
-        payload["usage_metadata"] = {**usage_metadata, CACHE_WRITE_KEY: cache_write}
+        payload["usage_metadata"] = {**usage_metadata, **attached}
     return payload
 
 
 def write_back_request(request: LlmRequest, *, payload: JsonObject, original_payload: JsonObject) -> bool:
-    """Write each field that differs from the original payload back onto ADK's request.
+    """Write each field differing from `original_payload` back onto ADK's request.
 
-    Return whether a request field or the extra request body changed.
+    Return whether a request field or extra request body changed.
     """
     payload, extra_body = _without_extra_body(payload)
     original_payload, original_extra_body = _without_extra_body(original_payload)
@@ -309,9 +283,9 @@ def write_back_request(request: LlmRequest, *, payload: JsonObject, original_pay
 
 
 def _without_extra_body(payload: JsonObject) -> tuple[JsonObject, Json]:
-    """Return the payload without its HTTP options, and the extra request body that those options held.
+    """Return payload without its HTTP options, plus extra request body those options held.
 
-    Raise `ValueError` when the HTTP options hold any key other than `extra_body`.
+    Raise `ValueError` when HTTP options hold any key besides `extra_body`.
     """
     config = _object(payload.get("config"), field="ADK config")
     if "http_options" not in config:
@@ -326,9 +300,9 @@ def _without_extra_body(payload: JsonObject) -> tuple[JsonObject, Json]:
 
 
 def _merged(edited: Json, projected: Json, original: object) -> object:
-    """Return the original when the edit leaves its JSON unchanged.
+    """Return `original` when `edited` leaves its JSON unchanged.
 
-    Otherwise, return the edit with each part that the edit left unchanged restored from the original.
+    Otherwise return `edited` with each unchanged part restored from `original`.
     """
     if same_json(edited, projected):
         return original
@@ -356,10 +330,10 @@ def _merged(edited: Json, projected: Json, original: object) -> object:
 
 
 def _merged_model(edited: JsonObject, projected: JsonObject, original: BaseModel) -> dict[str, object]:
-    """Return the field values that rebuild a changed model.
+    """Return field values that rebuild a changed model.
 
-    Keep each original field that the dump omitted and the edit does not set, and restore each unchanged part of an
-    edited field from the original.
+    Keep each original field the dump omitted and the edit does not set. Restore each unchanged part of an edited field
+    from `original`.
     """
     fields = type(original).model_fields
     merged: dict[str, object] = {
@@ -373,15 +347,15 @@ def _merged_model(edited: JsonObject, projected: JsonObject, original: BaseModel
 
 
 def http_headers(request: LlmRequest) -> dict[str, str]:
-    """Return the HTTP headers in the HTTP options of ADK's request, or no headers when the options hold none."""
+    """Return HTTP headers from ADK request's HTTP options, or empty headers when options hold none."""
     options = request.config.http_options
     return {} if options is None or options.headers is None else dict(options.headers)
 
 
 def header_text(headers: Mapping[str, Json]) -> dict[str, str]:
-    """Return request headers as the HTTP header text that Relay's gateway sends.
+    """Return request headers as HTTP header text Relay's gateway sends.
 
-    Write each non-text JSON value as its compact JSON.
+    Write each non-text JSON value as compact JSON.
     """
     return {
         key: value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
@@ -390,9 +364,9 @@ def header_text(headers: Mapping[str, Json]) -> dict[str, str]:
 
 
 def write_headers(request: LlmRequest, headers: dict[str, str]) -> None:
-    """Set the HTTP headers of ADK's request, and keep its other HTTP options.
+    """Set HTTP headers of ADK's request, keeping its other HTTP options.
 
-    Leave the request unchanged when it already carries those headers.
+    No change when request already carries those headers.
     """
     if http_headers(request) == headers:
         return
@@ -401,10 +375,9 @@ def write_headers(request: LlmRequest, headers: dict[str, str]) -> None:
 
 
 def response_from_payload(payload: Json) -> LlmResponse:
-    """Rebuild ADK's response from a dump, and attach the cache-write count as ADK does.
+    """Rebuild ADK's response from a dump, attaching usage counts outside GenAI schema as ADK does.
 
-    Drop the fields that the integration recorded from the provider client, and raise `TypeError` when the payload is
-    not an object.
+    Drop fields recorded from provider client. Raise `TypeError` when payload is not an object.
     """
     if not isinstance(payload, dict):
         raise TypeError("an LLM execution intercept must return an LlmResponse dump")
@@ -412,17 +385,19 @@ def response_from_payload(payload: Json) -> LlmResponse:
 
 
 def _response_from_fields(values: Mapping[str, object]) -> LlmResponse:
-    fields = {key: value for key, value in values.items() if key not in _RECORDED_KEYS}
-    usage_metadata = fields.get("usage_metadata")
-    cache_write = None
-    if _is_object(usage_metadata) and CACHE_WRITE_KEY in usage_metadata:
-        cache_write = usage_metadata[CACHE_WRITE_KEY]
-        fields["usage_metadata"] = {key: value for key, value in usage_metadata.items() if key != CACHE_WRITE_KEY}
+    fields = {key: value for key, value in values.items() if key != RECORDED_KEY}
+    attached: dict[str, int] = {}
+    if _is_object(usage_metadata := fields.get("usage_metadata")):
+        for key, value in usage_metadata.items():
+            if key in _USAGE_FIELDS:
+                continue
+            if not isinstance(value, int):
+                raise TypeError(f"ADK usage_metadata {key} must be an integer")
+            attached[key] = value
+        fields["usage_metadata"] = {key: value for key, value in usage_metadata.items() if key in _USAGE_FIELDS}
     response = LlmResponse.model_validate(fields)
-    if cache_write is not None:
-        if not isinstance(cache_write, int):
-            raise TypeError(f"ADK usage_metadata {CACHE_WRITE_KEY} must be an integer")
-        object.__setattr__(response.usage_metadata, CACHE_WRITE_KEY, cache_write)
+    for key, value in attached.items():
+        object.__setattr__(response.usage_metadata, key, value)
     return response
 
 
@@ -431,18 +406,18 @@ def canonical(value: _Content | _Message) -> str:
 
 
 def same_json(left: _Content | _Message, right: _Content | _Message) -> bool:
-    """Return whether two values have the same canonical JSON text.
+    """Return whether two values have identical canonical JSON text.
 
-    Unlike `==`, this comparison tells 1, 1.0, and true apart.
+    Unlike `==`, tells 1, 1.0, and true apart.
     """
     return canonical(left) == canonical(right)
 
 
 def paired_items(edited: Sequence[Json], projected: Sequence[Json]) -> list[int | None]:
-    """Return the position of the original item that each edited item pairs with, or None.
+    """Return, per edited item, position of original item it pairs with, or None.
 
-    Pair each item with the earliest equal original after the previous match. Pair each item without an equal original
-    with the original at the same offset in the gap between matches, when the gap has one.
+    Pair each item with earliest equal original after previous match. Pair an item with no equal original to the
+    original at same offset in the gap between matches, when gap has one.
     """
     positions: dict[str, list[int]] = {}
     for position, item in enumerate(projected):
@@ -483,9 +458,9 @@ def _is_exact_sequence(value: object) -> TypeIs[list[object] | tuple[object, ...
 
 
 def _holds(value: object, kinds: tuple[type[object], ...]) -> bool:
-    """Return whether a pydantic dump holds a value of one of the kinds.
+    """Return whether a pydantic dump holds a value of one of `kinds`.
 
-    Check the exact dict, list, and tuple types that a dump consists of before the `isinstance` checks.
+    Check exact dict, list, and tuple types a dump consists of before `isinstance` checks.
     """
     pending: list[object] = [value]
     while pending:
@@ -514,7 +489,7 @@ def holds_iterator_or_set(value: object) -> bool:
 
 
 def sorted_members(members: AbstractSet[object], json_of: Callable[[object], Json]) -> list[object]:
-    """Return a set's members ordered by their canonical JSON, as Relay records them."""
+    """Return set members ordered by canonical JSON, as Relay records them."""
     return sorted(members, key=lambda member: canonical(json_of(member)))
 
 
@@ -533,52 +508,40 @@ def by_json_key(source: Mapping[_K, object]) -> dict[str, object]:
 
 
 class ProducedResponses:
-    """Keep the responses that one ADK model call produced.
+    """Responses one ADK model call produced.
 
-    Hand back ADK's own response where the pipeline left it unchanged.
+    Hand back ADK's own response where pipeline left it unchanged.
     """
 
     def __init__(self) -> None:
         self._pending: list[tuple[str, JsonObject, LlmResponse]] = []
 
-    def add(
-        self,
-        response: LlmResponse,
-        *,
-        url_context: types.UrlContextMetadata | None,
-        response_id: str | None,
-        response_model: str | None,
-        provider_cost: JsonObject | None,
-    ) -> JsonObject:
-        """Return the response's dump with the recorded fields added, and remember the response under that dump.
+    def add(self, response: LlmResponse, *, recorded: Mapping[str, Json], response_model: str | None) -> JsonObject:
+        """Return response dump with `recorded` fields under `RECORDED_KEY`, and remember response under that dump.
 
-        Set `response_model` as `model_version` only when the dump has no `model_version`.
+        Set `response_model` as `model_version` only when dump has no `model_version`.
         """
         payload = response_payload(response)
-        if url_context is not None:
-            payload[URL_CONTEXT_KEY] = url_context.model_dump(mode="json", exclude_none=True)
-        if response_id is not None:
-            payload[RESPONSE_ID_KEY] = response_id
-        if provider_cost is not None:
-            payload[PROVIDER_COST_KEY] = provider_cost
+        if recorded:
+            payload[RECORDED_KEY] = dict(recorded)
         if response_model is not None and "model_version" not in payload:
             payload["model_version"] = response_model
         self._pending.append((canonical(payload), payload, response))
         return payload
 
     def restore_result(self, result: Json) -> LlmResponse:
-        """Return ADK's response for the pipeline's result.
+        """Return ADK's response for pipeline's result.
 
-        Return the latest produced response with the same dump. Otherwise, merge the result over the latest produced
-        response, or rebuild the result when the call produced no response.
+        Return latest produced response with same dump. Otherwise merge result over latest produced response, or rebuild
+        result when call produced none.
         """
         return self._restored(result, range(len(self._pending) - 1, -1, -1))
 
     def restore_chunk(self, chunk: Json) -> LlmResponse:
         """Return ADK's response for one streamed chunk.
 
-        Return the earliest pending response with the same dump. Otherwise, merge the chunk over the earliest pending
-        response, or rebuild the chunk when no response is pending.
+        Return earliest pending response with same dump. Otherwise merge chunk over earliest pending response, or
+        rebuild chunk when none is pending.
         """
         return self._restored(chunk, range(len(self._pending)))
 
@@ -607,9 +570,7 @@ def _is_field_map(value: object) -> TypeIs[dict[str, object]]:
 _LAST_SEEN_FIELDS: Final = (
     "usage_metadata",
     "grounding_metadata",
-    URL_CONTEXT_KEY,
-    RESPONSE_ID_KEY,
-    PROVIDER_COST_KEY,
+    RECORDED_KEY,
     "citation_metadata",
     "cache_metadata",
     "custom_metadata",
@@ -646,7 +607,7 @@ def _unescape_arg_path(text: str) -> str:
 
 
 def _arg_path(path: str) -> _ArgPath:
-    """Return the keys and indexes of a `partial_args` JSON path, parsed as ADK parses them."""
+    """Return keys and indexes of a `partial_args` JSON path, parsed as ADK parses them."""
     path = path.removeprefix("$.") if path.startswith("$.") else path.removeprefix("$")
     tokens: list[str | int] = []
     for match in _ARG_PATH_TOKEN.finditer(path):
@@ -710,9 +671,9 @@ def _set_arg(args: JsonObject, tokens: _ArgPath, value: Json) -> None:
 
 @dataclass(slots=True, kw_only=True)
 class _StreamedCall:
-    """Collect a function call whose arguments arrive as `partial_args` fragments.
+    """Function call whose arguments arrive as `partial_args` fragments.
 
-    Hold the call's slot in the parts until the call ends.
+    Holds call's slot in parts until call ends.
     """
 
     slot: int
@@ -775,13 +736,13 @@ def _starts_call(function: JsonObject) -> bool:
     return bool(function.get("partial_args")) or function.get("will_continue") is not None
 
 
-def _flush_call(parts: list[Json], active: _StreamedCall | None) -> None:
+def _flush_call(parts: list[JsonObject | None], active: _StreamedCall | None) -> None:
     if active is not None and "name" in active.call:
         parts[active.slot] = active.into_part()
 
 
 def _observe_fragment(
-    parts: list[Json], active: _StreamedCall | None, part: JsonObject, function: JsonObject
+    parts: list[JsonObject | None], active: _StreamedCall | None, part: JsonObject, function: JsonObject
 ) -> _StreamedCall | None:
     if active is None:
         active = _StreamedCall(slot=len(parts))
@@ -803,17 +764,17 @@ def _observe_fragment(
 
 
 class _TextRun(NamedTuple):
-    """Collect adjacent text parts of one thought kind for joining into the first part when the stream ends."""
+    """Adjacent text parts of one thought kind, joined into first part when stream ends."""
 
     part: JsonObject
     pieces: list[str]
 
 
 def final_response(chunks: Sequence[Json]) -> JsonObject:
-    """Return a stream's final `LlmResponse` dump.
+    """Return stream's final `LlmResponse` dump.
 
-    The last whole chunk, with the last value of each response-level field later chunks report. Aggregate partial chunks
-    when no whole chunk arrived.
+    Last whole chunk, plus last value of each response-level field later chunks report. Aggregate partial chunks when no
+    whole chunk arrived.
     """
     dumps = [_dump(chunk) for chunk in chunks]
     for index in range(len(dumps) - 1, -1, -1):
@@ -823,12 +784,12 @@ def final_response(chunks: Sequence[Json]) -> JsonObject:
 
 
 def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
-    """Aggregate partial `LlmResponse` dumps into one final dump as ADK does.
+    """Aggregate partial `LlmResponse` dumps into one final dump, as ADK does.
 
-    Join adjacent text of one thought kind, assemble streamed function call arguments, and keep the last value of each
+    Join adjacent text of one thought kind, assemble streamed function call arguments, and keep last value of each
     response-level field.
     """
-    parts: list[Json] = []
+    parts: list[JsonObject | None] = []
     runs: list[_TextRun] = []
     run: _TextRun | None = None
     call: _StreamedCall | None = None
@@ -862,8 +823,9 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
     for merged in runs:
         merged.part["text"] = "".join(merged.pieces)
     aggregate = _last_seen(dumps)
-    if parts := [part for part in parts if part is not None]:
-        aggregate["content"] = {"role": "model", "parts": parts}
+    kept: list[Json] = [part for part in parts if part is not None]
+    if kept:
+        aggregate["content"] = {"role": "model", "parts": kept}
     aggregate["partial"] = False
     return aggregate
 
@@ -941,8 +903,8 @@ def _function_parts(parts: Sequence[JsonObject], field: str) -> _Functions:
 def _function_ids(functions: _Functions) -> dict[int, str]:
     """Return an id for each function part.
 
-    Keep the id that a part carries. ADK leaves calls without ids, so give same-name parts without ids positional ids
-    such as `name#0`, and give any other part without an id its name.
+    Keep a part's own id. ADK leaves calls without ids, so give same-name parts without ids positional ids like
+    `name#0`, and any other id-less part its name.
     """
     ids: dict[int, str] = {}
     unidentified: list[tuple[int, str]] = []
@@ -1000,9 +962,9 @@ def _message_content(parts: Sequence[JsonObject]) -> Json:
 
 
 def _blocks_to_parts(content: _Content) -> list[JsonObject]:
-    """Convert message content to genai parts, and restore ADK provider-native parts verbatim.
+    """Convert message content to genai parts, restoring ADK provider-native parts verbatim.
 
-    Raise an error for content or parts that an ADK request cannot hold.
+    Raise `TypeError` for content or a part of a type an ADK request cannot hold, `ValueError` for an invalid part.
     """
     if content is None:
         return []
@@ -1047,7 +1009,7 @@ def _function_response_content(function_response: JsonObject) -> str | list[Json
 
 
 def _json_object(text: str, *, key: str) -> JsonObject:
-    """Return the object that a JSON text holds, or the text under `key` when the text holds no JSON object."""
+    """Return object a JSON text holds, or the text under `key` when it holds no JSON object."""
     try:
         parsed = json.loads(text)
     except ValueError:
@@ -1207,7 +1169,7 @@ def _result_id(message: _Message) -> str | None:
 
 
 def _call_ids(message: _Message) -> frozenset[str] | None:
-    """Return an assistant turn's call ids when each of its calls has a distinct id, or None otherwise."""
+    """Return assistant turn's call ids when each call has a distinct id, else None."""
     if message.get("role") != "assistant":
         return None
     ids = [
@@ -1224,7 +1186,7 @@ def _match_unique(
     baseline: Sequence[_Message],
     key: Callable[[_Message], _K | None],
 ) -> bool:
-    """Align unmatched edited messages to unused baseline messages by a key that is unique on both sides.
+    """Align unmatched edited messages to unused baseline messages by a key unique on both sides.
 
     Return whether any new match changed a message's position.
     """
@@ -1252,9 +1214,9 @@ def _match_unique(
 def _aligned(
     edited: Sequence[_Message], baseline: Sequence[_Message], edited_keys: Sequence[str], baseline_keys: Sequence[str]
 ) -> list[int | None]:
-    """Return the decoded message that each edited message aligns with, or None.
+    """Return, per edited message, decoded message it aligns with, or None.
 
-    Apply Relay's alignment first, and then match the remaining assistant turns by their call ids.
+    Apply Relay's alignment first, then match remaining assistant turns by call ids.
     """
     aligned: list[int | None] = [
         index if index < len(baseline_keys) and key == baseline_keys[index] else None
@@ -1284,9 +1246,9 @@ def _aligned(
 
 
 def _rebuilt_calls(parts: Sequence[JsonObject], message: _Message, names_by_id: dict[str, str]) -> list[JsonObject]:
-    """Rebuild the message's tool calls as parts.
+    """Rebuild message's tool calls as parts.
 
-    Merge each call over the earliest original part with the same call id that no earlier call took.
+    Merge each call over earliest original part with same call id not taken by an earlier call.
     """
     originals: dict[str, deque[JsonObject]] = {}
     for index, identifier in _function_ids(_function_parts(parts, "function_call")).items():
@@ -1313,9 +1275,9 @@ def _slot(part: JsonObject, *, blocks: bool) -> _Slot:
 
 
 def _patched_parts(parts: Sequence[JsonObject], message: _Message, names_by_id: dict[str, str]) -> list[JsonObject]:
-    """Return the original parts with the message's text and calls written into their slots.
+    """Return original parts with message's text and calls written into their slots.
 
-    Merge the parts as the core Gemini codec merges them.
+    Merge parts as core Gemini codec merges them.
     """
     content = message.get("content")
     blocks = isinstance(content, list)
@@ -1340,10 +1302,10 @@ def _patched_parts(parts: Sequence[JsonObject], message: _Message, names_by_id: 
 def _rebuilt_responses(
     parts: Sequence[JsonObject], run: Sequence[_Message], names_by_id: dict[str, str]
 ) -> list[JsonObject]:
-    """Rebuild the run's tool messages as function response parts.
+    """Rebuild run's tool messages as function response parts.
 
-    Merge each part over the earliest original part with the same call id. Raise `ValueError` when the run holds
-    anything other than tool messages with distinct call ids.
+    Merge each part over earliest original part with same call id. Raise `ValueError` when run holds anything besides
+    tool messages with distinct call ids.
     """
     originals: dict[str, JsonObject] = {}
     for index, identifier in _function_ids(_function_parts(parts, "function_response")).items():
@@ -1377,10 +1339,9 @@ def _patched_visible(parts: Sequence[JsonObject], message: _Message, names_by_id
 def _patched_responses(
     parts: Sequence[JsonObject], run: Sequence[_Message], names_by_id: dict[str, str]
 ) -> list[JsonObject]:
-    """Write the run's visible message over the visible slots, and its tool messages over the function response slots.
+    """Write run's visible message over visible slots, and its tool messages over function response slots.
 
-    Raise `ValueError` when the run holds more than one visible message, or a visible message that is not a user
-    message.
+    Raise `ValueError` when run holds more than one visible message, or a visible message that is not a user message.
     """
     visible = [message for message in run if message.get("role") != "tool"]
     tools = [message for message in run if message.get("role") == "tool"]
@@ -1428,10 +1389,9 @@ def _call_key(part: JsonObject) -> str | None:
 
 
 def _keep_call_fields(contents: Sequence[JsonObject], originals: Sequence[JsonObject]) -> None:
-    """Merge each call part over the original part with the same call key.
+    """Merge each call part over original part with same call key.
 
-    Merge only when the key is unique among both the edited and the original calls. A call's key is its id, or its name
-    when it has no id.
+    Merge only when key is unique among both edited and original calls. Call key: its id, or its name when it has no id.
     """
     found: dict[str, JsonObject | None] = {}
     for part in (part for content in originals for part in _objects(content.get("parts"), field="ADK content parts")):
@@ -1467,7 +1427,7 @@ def _message_count(content: JsonObject) -> int:
 def _patched_contents(
     edited: Sequence[_Message], baseline: Sequence[_Message], originals: Sequence[JsonObject]
 ) -> list[JsonObject]:
-    """Return ADK contents for the edited messages.
+    """Return ADK contents for edited messages.
 
     Keep each unchanged content whole, patch each edited content in place, and build new contents for added messages.
     """
@@ -1578,9 +1538,9 @@ _TOOLS_FIXED: Final = "NeMo Relay cannot add, remove, rename, or reorder ADK too
 def _tool_groups(
     edited: Sequence[Mapping[str, Json]] | None, original_groups: Sequence[JsonObject]
 ) -> list[Json] | None:
-    """Return ADK's tool groups with the edited definitions written in.
+    """Return ADK's tool groups with edited definitions written in.
 
-    Raise `ValueError` when the edit adds, removes, renames, or reorders tools.
+    Raise `ValueError` when edit adds, removes, renames, or reorders tools.
     """
     remaining = iter(edited or ())
     groups: list[Json] = []
@@ -1602,9 +1562,9 @@ def _tool_groups(
 
 
 def _declaration(original: JsonObject, edited: Mapping[str, Json] | None) -> JsonObject:
-    """Return a function declaration with the edited description, parameters, and provider fields.
+    """Return function declaration with edited description, parameters, and provider fields.
 
-    Raise `ValueError` when the edit is not a function tool or renames the function.
+    Raise `ValueError` when edit is not a function tool or renames the function.
     """
     if edited is None or edited.get("type") != "function":
         raise ValueError(_TOOLS_FIXED)
@@ -1629,9 +1589,9 @@ def _declaration(original: JsonObject, edited: Mapping[str, Json] | None) -> Jso
 
 
 def _native_tool(original: JsonObject, edited: Mapping[str, Json] | None) -> JsonObject:
-    """Return a native tool with its edited value.
+    """Return native tool with its edited value.
 
-    Raise `ValueError` when the edit changes the tool's kind.
+    Raise `ValueError` when edit changes tool's kind.
     """
     if edited is None or edited.get("type") != "provider_native":
         raise ValueError(_TOOLS_FIXED)
@@ -1715,9 +1675,9 @@ def _api_data(api_specific: Mapping[str, Json] | None) -> JsonObject:
 def _write_api_specific(
     payload: JsonObject, config: JsonObject, *, edited: Mapping[str, Json] | None, baseline: Mapping[str, Json] | None
 ) -> None:
-    """Write the edited ADK request fields and unmodeled config fields from `api_specific` back onto the payload.
+    """Write edited ADK request fields and unmodeled config fields from `api_specific` back onto payload.
 
-    Raise `ValueError` for a field that the normalized request models.
+    Raise `ValueError` for a field the normalized request models.
     """
     data, original = _api_data(edited), _api_data(baseline)
     for key in sorted(data.keys() | original.keys()):
@@ -1747,7 +1707,7 @@ def _write_api_specific(
         _set_or_pop(config, "tool_config", tool_config or None)
 
 
-def _token_counts(usage_metadata: JsonObject, fields: Sequence[tuple[str, str]]) -> dict[str, int]:
+def token_counts(usage_metadata: JsonObject, fields: Sequence[tuple[str, str]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for source, target in fields:
         value = usage_metadata.get(source)
@@ -1793,17 +1753,30 @@ def _decode(payload: JsonObject) -> AnnotatedLLMRequest:
     )
 
 
-def _wire(model: type[BaseModel], value: Json) -> Json:
-    return model.model_validate(value).model_dump(mode="json", by_alias=True, exclude_none=True)
+class Normalized(NamedTuple):
+    """Usage and `api_specific` an API variant reads from an ADK response dump, plus keys it consumed."""
+
+    usage: dict[str, int]
+    api_specific: JsonObject
+    usage_keys: Annotated[AbstractSet[str], "`usage_metadata` keys variant consumed."]
+    response_keys: Annotated[AbstractSet[str], "Response keys variant consumed beyond modeled ones."]
+    recorded_keys: Annotated[AbstractSet[str], "Recorded keys variant consumed beyond id and cost."]
+
+
+class ApiVariant(Protocol):
+    """Read an ADK response dump by one provider API's usage semantics."""
+
+    def __call__(self, response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject, /) -> Normalized: ...
 
 
 class AdkCodec(LlmCodec, LlmResponseCodec):
-    """Translate the plain dumps of ADK's `LlmRequest` and `LlmResponse` for intercepts and events."""
+    """Translate plain dumps of ADK's `LlmRequest` and `LlmResponse` for intercepts and events.
 
-    def __init__(self, api: Api) -> None:
-        self.api: Annotated[
-            Api, "This field holds the provider API whose usage semantics the decoded responses follow."
-        ] = api
+    `variant` reads each response by its provider API's usage semantics.
+    """
+
+    def __init__(self, variant: ApiVariant) -> None:
+        self._variant = variant
 
     @override
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
@@ -1858,100 +1831,37 @@ class AdkCodec(LlmCodec, LlmResponseCodec):
             for index, call in calls
         ]
         usage_metadata = _object(response.get("usage_metadata"), field="ADK usage_metadata")
-        normalized = _normalized_usage(self.api, usage_metadata)
-        api_specific = normalized.api_specific
-        modeled = _MODELED_RESPONSE_KEYS
-        if self.api is Api.GEMINI_GENERATE_CONTENT:
-            api_specific.update(
-                (target, _wire(model, value))
-                for source, target, model in _WIRE_METADATA
-                if (value := response.get(source)) is not None
-            )
-            avg_logprobs = response.get("avg_logprobs")
-            if avg_logprobs is not None:
-                if not isinstance(avg_logprobs, int | float):
-                    raise TypeError("ADK avg_logprobs must be a number")
-                api_specific["avgLogprobs"] = avg_logprobs
-            modeled = modeled | _GEMINI_RESPONSE_KEYS
-        usage: dict[str, Json] = dict(normalized.usage)
-        if (native := _COST_CODECS.get(self.api)) is not None:
-            modeled = modeled | {PROVIDER_COST_KEY}
-            if (reported := response.get(PROVIDER_COST_KEY)) is not None:
-                cost = _reported_cost(native, _object(reported, field="ADK provider_usage_cost"))
-                if cost is not None:
-                    usage["cost"] = cost
+        recorded = _object(response.get(RECORDED_KEY), field=f"ADK response {RECORDED_KEY}")
+        read = self._variant(response, recorded, usage_metadata)
+        usage: dict[str, Json] = dict(read.usage)
+        if (cost := recorded.get(RECORDED_COST_KEY)) is not None:
+            usage["cost"] = cost
+        modeled = _MODELED_RESPONSE_KEYS | read.response_keys
         extra = {key: value for key, value in response.items() if key not in modeled}
-        if usage_details := {key: value for key, value in usage_metadata.items() if key not in normalized.modeled}:
+        if usage_details := {key: value for key, value in usage_metadata.items() if key not in read.usage_keys}:
             extra["usage_metadata"] = usage_details
-        recorded = response.get(RESPONSE_ID_KEY)
+        consumed = {RECORDED_ID_KEY, RECORDED_COST_KEY} | read.recorded_keys
+        if unread := {key: value for key, value in recorded.items() if key not in consumed}:
+            extra[RECORDED_KEY] = unread
+        identifier = recorded.get(RECORDED_ID_KEY)
         return AnnotatedLLMResponse(
             id=_optional_text(
-                response.get("interaction_id") if recorded is None else recorded, field="ADK response id"
+                response.get("interaction_id") if identifier is None else identifier, field="ADK response id"
             ),
             model=_optional_text(response.get("model_version"), field="ADK model_version"),
             message=_message_content(parts),
             tool_calls=tool_calls or None,
             finish_reason=_finish_reason(response.get("finish_reason"), has_tool_calls=bool(tool_calls)),
             usage=usage or None,
-            api_specific=_emitted(self.api, api_specific),
+            api_specific=read.api_specific or None,
             extra=extra or None,
         )
 
 
-_COST_CODECS: Final[
-    Annotated[
-        Mapping[Api, LlmResponseCodec],
-        "This mapping holds the native codec that reads the reported cost of each provider API that reports one.",
-    ]
-] = {
-    Api.OPENAI_CHAT: OpenAIChatCodec(),
-    Api.OPENAI_RESPONSES: OpenAIResponsesCodec(),
-    Api.ANTHROPIC_MESSAGES: AnthropicMessagesCodec(),
-}
+def with_uncached(counts: Mapping[str, int]) -> dict[str, int]:
+    """Return counts plus explicit `uncached_input_tokens`, for a prompt count that includes cache reads.
 
-
-def _reported_cost(codec: LlmResponseCodec, usage: JsonObject) -> Json:
-    """Return the cost that the provider reported in its usage, or None when the usage reports no cost.
-
-    The provider API's native codec normalizes the cost.
-    """
-    decoded = codec.decode_response({"usage": usage}).usage
-    return None if decoded is None else decoded.get("cost")
-
-
-class _NormalizedUsage(NamedTuple):
-    usage: dict[str, int]
-    api_specific: JsonObject
-    modeled: Annotated[AbstractSet[str], "This set holds the `usage_metadata` keys that the normalization consumed."]
-
-
-def _normalized_usage(api: Api, usage_metadata: JsonObject) -> _NormalizedUsage:
-    """Normalize ADK's GenAI-shaped usage counts by the usage semantics of the provider API."""
-    counts = _token_counts(usage_metadata, _USAGE)
-    separate = _token_counts(usage_metadata, _GEMINI_USAGE)
-    writes = _token_counts(usage_metadata, _CACHE_WRITE)
-    match api:
-        case Api.GEMINI_GENERATE_CONTENT:
-            return _NormalizedUsage(_with_uncached(counts), {"api": api.value, **separate}, _GEMINI_USAGE_KEYS)
-        case Api.ANTHROPIC_MESSAGES:
-            return _anthropic_usage(counts, separate, writes)
-        case Api.OPENAI_CHAT:
-            return _NormalizedUsage(_with_uncached(counts), {"api": api.value}, _USAGE_KEYS)
-        case Api.OPENAI_RESPONSES:
-            api_specific: JsonObject = {"api": api.value}
-            if (cached := counts.get("cache_read_tokens")) is not None:
-                api_specific["input_tokens_details"] = {"cached_tokens": cached}
-            if (reasoning := separate.get("thoughts_tokens")) is not None:
-                api_specific["output_tokens_details"] = {"reasoning_tokens": reasoning}
-            return _NormalizedUsage(_with_uncached(counts), api_specific, _OPENAI_RESPONSES_USAGE_KEYS)
-        case _ as unreachable:
-            assert_never(unreachable)
-
-
-def _with_uncached(counts: Mapping[str, int]) -> dict[str, int]:
-    """Return the counts with an explicit `uncached_input_tokens` for a prompt count that includes the cache reads.
-
-    Leave out that count when the cache reads exceed the prompt.
+    Omit it when cache reads exceed prompt.
     """
     usage = dict(counts)
     prompt, cached = counts.get("prompt_tokens"), counts.get("cache_read_tokens")
@@ -1960,52 +1870,16 @@ def _with_uncached(counts: Mapping[str, int]) -> dict[str, int]:
     return usage
 
 
-def _anthropic_usage(
-    counts: Mapping[str, int], separate: Mapping[str, int], writes: Mapping[str, int]
-) -> _NormalizedUsage:
-    """Unfold Anthropic's own counts from the GenAI shape that ADK fits them to.
-
-    Raise `ValueError` when the prompt count is smaller than the cache tokens that ADK folds into it.
-    """
-    usage: dict[str, int] = {}
-    cached, written = counts.get("cache_read_tokens"), writes.get("cache_write_tokens")
-    if (prompt := counts.get("prompt_tokens")) is not None:
-        folded = (cached or 0) + (written or 0)
-        if folded > prompt:
-            raise ValueError("ADK prompt_token_count must include the Anthropic cache tokens it reports")
-        usage["prompt_tokens"] = usage["uncached_input_tokens"] = prompt - folded
-    if (candidates := counts.get("completion_tokens")) is not None:
-        usage["completion_tokens"] = candidates + separate.get("thoughts_tokens", 0)
-    if "prompt_tokens" in usage and "completion_tokens" in usage:
-        usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-    if cached is not None:
-        usage["cache_read_tokens"] = cached
-    if written is not None:
-        usage["cache_write_tokens"] = written
-    return _NormalizedUsage(usage, {"api": Api.ANTHROPIC_MESSAGES.value}, _ANTHROPIC_USAGE_KEYS)
-
-
-def _emitted(api: Api, api_specific: JsonObject) -> JsonObject | None:
-    """Return the `api_specific` variant, or None for a Gemini variant that holds only its API name."""
-    if api is Api.GEMINI_GENERATE_CONTENT and len(api_specific) == 1:
-        return None
-    return api_specific
-
-
-CODECS: Final[Mapping[Api, AdkCodec]] = {api: AdkCodec(api) for api in Api}
-CODEC: Final = CODECS[Api.GEMINI_GENERATE_CONTENT]
-
-
 def python_dump(value: object) -> object:
-    """Return the value as pydantic dumps it in Python mode, and keep each value that has no JSON form as it is."""
+    """Return value as pydantic dumps it in Python mode. Keep each value with no JSON form as is."""
     return _PYTHON_VALUES.dump_python(value, mode="python", by_alias=True, exclude_none=True, serialize_as_any=True)
 
 
 def json_safe(value: object) -> Json:
     """Project a value to JSON for observation.
 
-    Replace binary data with an object that holds its byte count under `bytes`, and sort set members by JSON. Replace
-    an iterator or a value without a JSON form with its stand-in text.
+    Replace binary data with an object holding its byte count under `bytes`, and sort set members by JSON. Replace an
+    iterator or a value with no JSON form with its stand-in text.
     """
     return _jsonable(_ordered_and_counted(python_dump(value)))
 

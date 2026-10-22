@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test the round trips, projections, and edits of the Google ADK tool codecs and result records."""
+"""Tests for Google ADK tool codec round trips, projections, edits, and result records."""
 
 from __future__ import annotations
 
@@ -597,9 +597,9 @@ def test_content_and_failure_edits_are_written_back_into_the_result(
     ("value", "edit", "error", "message"),
     [
         pytest.param("", {"is_error": True}, ValueError, "needs error text", id="text_failed_without_text"),
-        pytest.param("Sunny.", {"content": ["Foggy."]}, ValueError, "only text content", id="text_parts"),
+        pytest.param("Sunny.", {"content": ["Foggy."]}, TypeError, "only text content", id="text_parts"),
         pytest.param({"forecast": "sunny"}, {"content": "Foggy."}, ValueError, "is its JSON text", id="object_content"),
-        pytest.param({"forecast": "sunny"}, {"content": None}, ValueError, "is its JSON text", id="object_null"),
+        pytest.param({"forecast": "sunny"}, {"content": None}, TypeError, "is its JSON text", id="object_null"),
         pytest.param(
             {"forecast": "sunny"},
             {"content": "blocked", "is_error": True},
@@ -624,11 +624,11 @@ def test_content_and_failure_edits_are_written_back_into_the_result(
         pytest.param(
             {"content": [{"type": "text", "text": "hi"}], "isError": False},
             {"content": [1]},
-            ValueError,
+            TypeError,
             "only text or content blocks",
             id="mcp_blocks",
         ),
-        pytest.param({"error": "boom"}, {"content": ["x"]}, ValueError, "only text content", id="error_parts"),
+        pytest.param({"error": "boom"}, {"content": ["x"]}, TypeError, "only text content", id="error_parts"),
         pytest.param(
             {"result": "Sunny."},
             {"content": None, "is_error": True},
@@ -657,7 +657,7 @@ def test_content_and_failure_edits_are_written_back_into_the_result(
         pytest.param({}, {"result": {"kind": "json"}}, ValueError, "encoded ADK tool result value", id="no_value"),
         pytest.param({}, {"result": {"kind": "deque", "value": []}}, ValueError, "kind: 'deque'", id="kind"),
         pytest.param({}, {"result": {"kind": "json", "value": {}}}, ValueError, "kind: 'json'", id="json_value"),
-        pytest.param({}, {"result": {"value": 1}}, ValueError, "needs a kind", id="no_kind"),
+        pytest.param({}, {"result": {"value": 1}}, TypeError, "needs a kind", id="no_kind"),
         pytest.param({}, {"result": {"kind": "bytes", "value": "***"}}, ValueError, "base64", id="binary"),
         pytest.param(
             {},

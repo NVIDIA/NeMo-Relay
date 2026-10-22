@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run ADK's model calls through the managed LLM pipeline with swapped `BaseLlm` subclasses."""
+"""Run ADK model calls through managed LLM pipeline via swapped `BaseLlm` subclasses."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Protocol, TypeAlias
 from google.adk.models import FallbackModel, LLMRegistry
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
-from google.genai import types
 
 import nemo_relay
 from nemo_relay import Json, JsonObject, LLMAttributes, LLMRequest
@@ -33,6 +32,7 @@ if TYPE_CHECKING:
     from google.adk.agents import LlmAgent
     from google.adk.agents.readonly_context import ReadonlyContext
     from google.adk.models.llm_request import LlmRequest
+    from google.genai import types
 
 _Responses: TypeAlias = AsyncGenerator[LlmResponse, None]
 
@@ -42,11 +42,11 @@ class _Inner(Protocol):
 
 
 def wrap_agent_models(agent: LlmAgent) -> None:
-    """Swap the agent's class for a subclass that wraps each model the agent selects for a call.
+    """Swap agent's class for a subclass that wraps each model the agent selects for a call.
 
-    ADK selects the model of each call through `canonical_model_async`, which a subclass can override to choose another
-    model per invocation. The wrap leaves the model of a compositional function calling run unwrapped, as its live
-    connection bypasses the managed pipeline.
+    ADK selects each call's model through `canonical_model_async`, which a subclass can override to pick a model per
+    invocation. Compositional function calling runs keep their model unwrapped, since their live connection bypasses
+    managed pipeline.
     """
     swap_class(agent, _agent_methods)
 
@@ -65,10 +65,10 @@ def _agent_methods(cls: type[LlmAgent]) -> Mapping[str, object]:
 
 
 def wrap_model(model: BaseLlm) -> None:
-    """Swap the model's class for a subclass whose calls run through Relay.
+    """Swap model's class for a subclass whose calls run through Relay.
 
-    For a `FallbackModel`, wrap each delegate instead, and replace each delegate given by name with the model that
-    `LLMRegistry` builds for it.
+    For `FallbackModel`, wrap each delegate instead. Replace each delegate given by name with the model `LLMRegistry`
+    builds for it.
     """
     if isinstance(model, FallbackModel):
         for index, entry in enumerate(model.models):
@@ -98,7 +98,7 @@ def _methods(cls: type[BaseLlm]) -> Mapping[str, object]:
 
 
 async def _attempted(responses: _Responses, attempt: Attempt) -> _Responses:
-    """Yield ADK's responses, and set `attempt` as the current attempt while each response is awaited."""
+    """Yield ADK's responses, with `attempt` as current attempt while each is awaited."""
     try:
         while True:
             token = CURRENT_ATTEMPT.set(attempt)
@@ -113,16 +113,6 @@ async def _attempted(responses: _Responses, attempt: Attempt) -> _Responses:
         await responses.aclose()
 
 
-def _merged(urls: list[types.UrlContextMetadata]) -> types.UrlContextMetadata | None:
-    if not urls:
-        return None
-    merged: list[types.UrlMetadata] = []
-    for url in (url for metadata in urls for url in metadata.url_metadata or []):
-        if url not in merged:
-            merged.append(url)
-    return types.UrlContextMetadata(url_metadata=merged)
-
-
 def _function_calling_config(request: LlmRequest) -> types.FunctionCallingConfig | None:
     tool_config = request.config.tool_config
     return None if tool_config is None else tool_config.function_calling_config
@@ -131,7 +121,7 @@ def _function_calling_config(request: LlmRequest) -> types.FunctionCallingConfig
 def _tool_choice_edit(
     edited: LlmRequest, original: types.FunctionCallingConfig | None
 ) -> types.FunctionCallingConfig | None:
-    """Return the edited function calling config when that config differs from ADK's original, or None otherwise."""
+    """Return edited function calling config when it differs from `original`, else None."""
     config = _function_calling_config(edited)
     return None if config is None or config == original else config
 
@@ -141,7 +131,7 @@ async def _run(
 ) -> _Responses:
     """Run one ADK model call as one managed LLM call.
 
-    A non-streaming call yields one restored response, and a streaming call yields one restored response for each chunk.
+    Non-streaming call yields one restored response. Streaming call yields one restored response per chunk.
     """
     parent = parent_handle()
     with rejection_marked("adk.llm_request_rejected", parent, provider=backend.provider, model=model_name):
@@ -152,11 +142,10 @@ async def _run(
     in_flight = 0
 
     def target(request: LLMRequest) -> tuple[LlmRequest, Attempt]:
-        """Return ADK's request with the pipeline's edits, and a new attempt.
+        """Return ADK's request with pipeline's edits, plus a new attempt.
 
-        Edit ADK's request in place when no other attempt is in flight, and edit a copy otherwise. Put the request
-        headers on the attempt for a backend with client headers, and write them into the request's HTTP options
-        otherwise.
+        Edit ADK's request in place when no other attempt is in flight, else edit a copy. For a backend with client
+        headers, put request headers on attempt. Otherwise write them into request's HTTP options.
         """
         nonlocal current
         content = request.content
@@ -175,13 +164,7 @@ async def _run(
         return edited, Attempt(tool_choice=tool_choice, headers={})
 
     def added(response: LlmResponse, attempt: Attempt) -> JsonObject:
-        return produced.add(
-            response,
-            url_context=_merged(attempt.urls),
-            response_id=attempt.response_id,
-            response_model=attempt.response_model,
-            provider_cost=attempt.provider_cost,
-        )
+        return produced.add(response, recorded=attempt.recorded, response_model=attempt.response_model)
 
     async def call(request: LLMRequest) -> Json:
         nonlocal in_flight

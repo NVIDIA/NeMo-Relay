@@ -220,12 +220,13 @@ The integration captures:
   carries them as `id` and `model`. The Responses API's id arrives as ADK's
   `interaction_id`. ADK's `LlmResponse` also drops a cost the provider reports
   in its usage, such as OpenRouter's `cost` or a `cost_usd` field, so the
-  integration records those usage fields from the OpenAI and Anthropic clients
-  and from the Apigee proxy's chat completions client, including the last
-  streamed usage, as `provider_usage_cost` on the response dump. The
-  annotation carries them as the `provider_reported` cost that the provider
-  API's native codec reads from them, which stands over a model pricing
-  estimate.
+  integration records it from the usage of the OpenAI and Anthropic clients and
+  the Apigee proxy's chat completions client, including the last streamed
+  usage, as normalized by the provider API's native codec. The annotation
+  carries it as the `provider_reported` cost, which takes precedence over a
+  model pricing estimate. The response dump holds the recorded id and cost
+  under its `provider_reported` key, plus URL context metadata on the Gemini
+  route.
   ADK attaches the Anthropic cache-write count to its usage
   outside the GenAI schema, and the response dump and normalized usage carry
   it. With server-sent-event streaming the call runs the streaming pipeline,

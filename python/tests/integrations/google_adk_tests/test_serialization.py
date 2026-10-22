@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test the codec and payloads of the Google ADK serialization module."""
+"""Tests for Google ADK serialization codec and payloads."""
 
 from __future__ import annotations
 
@@ -26,13 +26,15 @@ from google.adk.tools import FunctionTool
 from google.genai import types
 
 import nemo_relay
+from nemo_relay.integrations.google_adk._backends._anthropic import ANTHROPIC_CODEC, CACHE_WRITE_KEY
+from nemo_relay.integrations.google_adk._backends._chat_completions import CHAT_CODEC
+from nemo_relay.integrations.google_adk._backends._gemini import GEMINI_CODEC, URL_CONTEXT_KEY
+from nemo_relay.integrations.google_adk._backends._openai import RESPONSES_CODEC
 from nemo_relay.integrations.google_adk._serialization import (
-    CACHE_WRITE_KEY,
-    CODEC,
-    CODECS,
-    RESPONSE_ID_KEY,
-    URL_CONTEXT_KEY,
-    Api,
+    RECORDED_COST_KEY,
+    RECORDED_ID_KEY,
+    RECORDED_KEY,
+    AdkCodec,
     ProducedResponses,
     aggregate_partials,
     final_response,
@@ -161,14 +163,14 @@ def test_write_back_keeps_a_function_responses_own_values_when_an_edit_changes_a
     ids, raw = {1, 9}, b"\x89PNG"
     request = _with_items({"raw": raw, "ids": ids})
     raw_request = _raw(request)
-    annotated = CODEC.decode(raw_request)
+    annotated = GEMINI_CODEC.decode(raw_request)
     messages = annotated.messages
     tool_message = messages[2]
     content = as_object(json.loads(str(tool_message["content"])))
     messages[2] = {**tool_message, "content": json.dumps({**content, "count": 4})}
     annotated.messages = messages
 
-    payload = CODEC.encode(annotated, raw_request).content
+    payload = GEMINI_CODEC.encode(annotated, raw_request).content
     assert write_back_request(request, payload=payload, original_payload=raw_request.content)
 
     response = present(present(present(request.contents[2].parts)[0].function_response).response)
@@ -184,12 +186,14 @@ def test_write_back_keeps_adks_own_objects_for_every_part_an_edit_left_unchanged
     request = _with_items(generator)
     originals = list(request.contents)
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     messages = annotated.messages
     messages[0] = {**messages[0], "content": "list them all"}
     annotated.messages = messages
 
-    assert write_back_request(request, payload=CODEC.encode(annotated, raw).content, original_payload=raw.content)
+    assert write_back_request(
+        request, payload=GEMINI_CODEC.encode(annotated, raw).content, original_payload=raw.content
+    )
 
     assert present(present(request.contents[0].parts)[0].text) == "list them all"
     assert request.contents[1] is originals[1]
@@ -206,13 +210,15 @@ def test_an_edited_response_keeps_the_parts_the_edit_left_unchanged() -> None:
     url_context = types.UrlContextMetadata(url_metadata=[types.UrlMetadata(retrieved_url="https://weather.example")])
     produced = ProducedResponses()
     payload = produced.add(
-        response, url_context=url_context, response_id="resp-1", response_model=None, provider_cost=None
+        response,
+        recorded={URL_CONTEXT_KEY: url_context.model_dump(mode="json", exclude_none=True), RECORDED_ID_KEY: "resp-1"},
+        response_model=None,
     )
     assert payload["custom_metadata"] == {"trace": "<unserializable builtins.object>", "ids": [1, 9], "raw": "iVBORw=="}
     edited: nemo_relay.JsonObject = {
         **payload,
         "content": {"role": "model", "parts": [{"text": "edited"}]},
-        URL_CONTEXT_KEY: {"url_metadata": []},
+        RECORDED_KEY: {URL_CONTEXT_KEY: {"url_metadata": []}},
     }
 
     rebuilt = produced.restore_result(json.loads(json.dumps(edited)))
@@ -370,13 +376,13 @@ def test_encode_writes_back_a_config_edit_between_equal_numbers_and_booleans() -
     config = types.GenerateContentConfig(response_json_schema={"type": "integer", "default": 1})
     request = LlmRequest(model="gemini-2.5-flash", config=config)
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     api_specific = as_object(annotated.api_specific)
     data = as_object(api_specific["data"])
     edited_config = {**as_object(data["config"]), "response_json_schema": {"type": "integer", "default": True}}
     annotated.api_specific = {**api_specific, "data": {**data, "config": edited_config}}
 
-    encoded = CODEC.encode(annotated, raw).content
+    encoded = GEMINI_CODEC.encode(annotated, raw).content
     assert write_back_request(request, payload=encoded, original_payload=raw.content)
     assert json.dumps(request.config.response_json_schema, sort_keys=True) == json.dumps(
         {"type": "integer", "default": True}, sort_keys=True
@@ -391,13 +397,13 @@ def test_encode_writes_back_a_tool_edit_between_equal_numbers_and_booleans() -> 
     tools: list[types.Tool | Callable[..., object]] = [types.Tool(function_declarations=[declaration])]
     request = LlmRequest(model="gemini-2.5-flash", config=types.GenerateContentConfig(tools=tools))
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     (function,) = annotated.tools or []
     annotated.tools = [
         {**function, "function": {**as_object(function["function"]), "parameters": schema(default=True)}}
     ]
 
-    encoded = CODEC.encode(annotated, raw).content
+    encoded = GEMINI_CODEC.encode(annotated, raw).content
     assert write_back_request(request, payload=encoded, original_payload=raw.content)
     (tool,) = request.config.tools or []
     (written,) = present(as_instance(tool, types.Tool).function_declarations)
@@ -407,7 +413,7 @@ def test_encode_writes_back_a_tool_edit_between_equal_numbers_and_booleans() -> 
 
 
 def test_decode_maps_messages_instructions_params_tools_and_tool_choice() -> None:
-    annotated = CODEC.decode(_raw(_request()))
+    annotated = GEMINI_CODEC.decode(_raw(_request()))
 
     assert annotated.model == "gemini-2.5-flash"
     assert annotated.instructions == "Be brief."
@@ -442,7 +448,7 @@ def test_decode_maps_messages_instructions_params_tools_and_tool_choice() -> Non
 def test_decode_keeps_a_single_id_less_call_on_its_name_and_provider_ids_unchanged() -> None:
     parts = [*_calls("Paris"), types.Part(function_call=types.FunctionCall(id="call-1", name="get_time", args={}))]
 
-    (assistant,) = CODEC.decode(_raw(LlmRequest(contents=[types.Content(role="model", parts=parts)]))).messages
+    (assistant,) = GEMINI_CODEC.decode(_raw(LlmRequest(contents=[types.Content(role="model", parts=parts)]))).messages
 
     tool_calls = as_list(assistant["tool_calls"])
     assert [call["id"] for call in tool_calls] == ["get_weather", "call-1"]
@@ -458,7 +464,7 @@ def test_decode_keeps_thoughts_and_binary_parts_as_provider_native() -> None:
         ],
     )
 
-    (message,) = CODEC.decode(_raw(LlmRequest(contents=[content]))).messages
+    (message,) = GEMINI_CODEC.decode(_raw(LlmRequest(contents=[content]))).messages
 
     thought, image, text = as_list(message["content"])
     assert thought["type"] == "provider_native"
@@ -473,7 +479,7 @@ def test_encode_writes_back_function_tool_edits_and_keeps_native_tools() -> None
     request = _request()
     request.config.tools = [*(request.config.tools or []), types.Tool(google_search=types.GoogleSearch())]
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     function, native = annotated.tools or []
     assert native == {
         "type": "provider_native",
@@ -495,7 +501,7 @@ def test_encode_writes_back_function_tool_edits_and_keeps_native_tools() -> None
     }
     annotated.tools = [{**function, "function": edited_definition}, native]
 
-    encoded = CODEC.encode(annotated, raw).content
+    encoded = GEMINI_CODEC.encode(annotated, raw).content
     assert write_back_request(request, payload=encoded, original_payload=raw.content)
 
     weather, search = request.config.tools or []
@@ -549,7 +555,7 @@ def _calling_request(mode: str, names: list[str] | None = None) -> LlmRequest:
 def test_decode_maps_function_calling_config_to_tool_choice(
     mode: str, names: list[str] | None, expected: nemo_relay.Json
 ) -> None:
-    assert CODEC.decode(_raw(_calling_request(mode, names))).tool_choice == expected
+    assert GEMINI_CODEC.decode(_raw(_calling_request(mode, names))).tool_choice == expected
 
 
 @pytest.mark.parametrize(
@@ -573,10 +579,12 @@ def test_encode_writes_a_tool_choice_back_as_function_calling_config(
 ) -> None:
     request = _calling_request("AUTO")
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     annotated.tool_choice = choice
 
-    assert write_back_request(request, payload=CODEC.encode(annotated, raw).content, original_payload=raw.content)
+    assert write_back_request(
+        request, payload=GEMINI_CODEC.encode(annotated, raw).content, original_payload=raw.content
+    )
 
     calling = present(present(request.config.tool_config).function_calling_config)
     assert calling.mode == types.FunctionCallingConfigMode(mode)
@@ -586,10 +594,12 @@ def test_encode_writes_a_tool_choice_back_as_function_calling_config(
 def test_encode_clears_a_removed_tool_choice() -> None:
     request = _calling_request("ANY", ["get_weather"])
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     annotated.tool_choice = None
 
-    assert write_back_request(request, payload=CODEC.encode(annotated, raw).content, original_payload=raw.content)
+    assert write_back_request(
+        request, payload=GEMINI_CODEC.encode(annotated, raw).content, original_payload=raw.content
+    )
 
     assert request.config.tool_config is None
 
@@ -611,12 +621,14 @@ def test_instruction_parts_decode_to_blocks_and_an_edit_writes_back_as_content(
         model="gemini-2.5-flash", config=types.GenerateContentConfig(system_instruction=system_instruction)
     )
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
 
     assert annotated.instructions == [{"type": "text", "text": "Be brief."}, {"type": "text", "text": "Use metric."}]
 
     annotated.instructions = [{"type": "text", "text": "Be terse."}, {"type": "text", "text": "Use imperial."}]
-    assert write_back_request(request, payload=CODEC.encode(annotated, raw).content, original_payload=raw.content)
+    assert write_back_request(
+        request, payload=GEMINI_CODEC.encode(annotated, raw).content, original_payload=raw.content
+    )
 
     assert request.config.system_instruction == types.Content(
         parts=[types.Part(text="Be terse."), types.Part(text="Use imperial.")]
@@ -628,12 +640,14 @@ def test_a_part_instruction_decodes_as_text_and_an_edit_writes_back() -> None:
         model="gemini-2.5-flash", config=types.GenerateContentConfig(system_instruction=types.Part(text="Be brief."))
     )
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
 
     assert annotated.instructions == "Be brief."
 
     annotated.instructions = "Be terse."
-    assert write_back_request(request, payload=CODEC.encode(annotated, raw).content, original_payload=raw.content)
+    assert write_back_request(
+        request, payload=GEMINI_CODEC.encode(annotated, raw).content, original_payload=raw.content
+    )
 
     assert request.config.system_instruction == "Be terse."
 
@@ -642,12 +656,14 @@ def test_a_file_instruction_decodes_as_a_native_block_and_round_trips() -> None:
     file = types.File(name="files/x", uri="gs://bucket/x", mime_type="text/plain")
     request = LlmRequest(model="gemini-2.5-flash", config=types.GenerateContentConfig(system_instruction=file))
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
 
     (block,) = as_list(annotated.instructions)
     assert as_object(block)["type"] == "provider_native"
     assert as_object(block)["value"] == _dumped_model(file)
-    assert not write_back_request(request, payload=CODEC.encode(annotated, raw).content, original_payload=raw.content)
+    assert not write_back_request(
+        request, payload=GEMINI_CODEC.encode(annotated, raw).content, original_payload=raw.content
+    )
 
 
 @pytest.mark.parametrize(
@@ -664,24 +680,24 @@ def test_encode_rejects_tool_edits_that_change_the_tool_set(
     edit: Callable[[list[nemo_relay.JsonObject]], list[nemo_relay.JsonObject]],
 ) -> None:
     raw = _raw(_request())
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     annotated.tools = edit(list(annotated.tools or []))
 
     with pytest.raises(ValueError, match="cannot add, remove, rename, or reorder"):
-        CODEC.encode(annotated, raw)
+        GEMINI_CODEC.encode(annotated, raw)
 
 
 def test_encode_returns_the_original_payload_when_nothing_changed() -> None:
     raw = _raw(_request())
 
-    assert CODEC.encode(CODEC.decode(raw), raw).content == raw.content
+    assert GEMINI_CODEC.encode(GEMINI_CODEC.decode(raw), raw).content == raw.content
 
 
 def test_encode_writes_back_edits_and_keeps_derived_ids_off_the_request() -> None:
     request = _request()
     http_options = request.config.http_options
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     messages = annotated.messages
     messages[0] = {**messages[0], "content": "REWRITTEN"}
     messages.append({"role": "user", "content": "and Berlin?"})
@@ -691,7 +707,7 @@ def test_encode_writes_back_edits_and_keeps_derived_ids_off_the_request() -> Non
     annotated.params = {**(annotated.params or {}), "temperature": 0.9}
     annotated.tool_choice = "auto"
 
-    encoded = CODEC.encode(annotated, raw).content
+    encoded = GEMINI_CODEC.encode(annotated, raw).content
     assert write_back_request(request, payload=encoded, original_payload=raw.content)
 
     assert request.model == "gemini-2.5-pro"
@@ -771,7 +787,7 @@ def test_decode_rejects_request_fields_of_the_wrong_shape(
     payload: nemo_relay.JsonObject, error: type[Exception], message: str
 ) -> None:
     with pytest.raises(error, match=message):
-        CODEC.decode(nemo_relay.LLMRequest({}, payload))
+        GEMINI_CODEC.decode(nemo_relay.LLMRequest({}, payload))
 
 
 @pytest.mark.parametrize(
@@ -793,7 +809,7 @@ def test_decode_response_rejects_fields_of_the_wrong_shape(
     payload: nemo_relay.JsonObject, error: type[Exception], message: str
 ) -> None:
     with pytest.raises(error, match=message):
-        CODEC.decode_response(payload)
+        GEMINI_CODEC.decode_response(payload)
 
 
 def test_encode_writes_an_emptied_turn_with_no_parts() -> None:
@@ -805,11 +821,11 @@ def test_encode_writes_an_emptied_turn_with_no_parts() -> None:
 
 def test_encode_rejects_content_it_cannot_write_back() -> None:
     raw = _raw(_request())
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     annotated.messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]
 
     with pytest.raises(ValueError, match="cannot write"):
-        CODEC.encode(annotated, raw)
+        GEMINI_CODEC.encode(annotated, raw)
 
 
 def test_write_back_is_a_no_op_for_an_unchanged_payload() -> None:
@@ -839,7 +855,7 @@ def test_decode_response_maps_message_tool_calls_finish_reason_usage_and_model()
         error_message="try later",
     )
 
-    annotated = CODEC.decode_response(response_payload(response))
+    annotated = GEMINI_CODEC.decode_response(response_payload(response))
 
     assert annotated.message == "hello"
     assert annotated.tool_calls == [{"id": "get_weather", "name": "get_weather", "arguments": {"location": "Rome"}}]
@@ -878,9 +894,9 @@ def test_decode_response_writes_candidate_metadata_in_the_gemini_wire_shape() ->
         ),
     )
     payload = response_payload(response)
-    payload[URL_CONTEXT_KEY] = {"url_metadata": [{"retrieved_url": "https://weather.example"}]}
+    payload[RECORDED_KEY] = {URL_CONTEXT_KEY: {"url_metadata": [{"retrieved_url": "https://weather.example"}]}}
 
-    annotated = CODEC.decode_response(payload)
+    annotated = GEMINI_CODEC.decode_response(payload)
 
     assert annotated.api_specific == {
         "api": "gemini_generate_content",
@@ -900,14 +916,17 @@ def test_url_context_rides_on_the_payload_and_is_dropped_from_a_rebuilt_response
     url_context = types.UrlContextMetadata(url_metadata=[types.UrlMetadata(retrieved_url="https://weather.example")])
 
     payload = produced.add(
-        response, url_context=url_context, response_id="resp-1", response_model=None, provider_cost=None
+        response,
+        recorded={URL_CONTEXT_KEY: url_context.model_dump(mode="json", exclude_none=True), RECORDED_ID_KEY: "resp-1"},
+        response_model=None,
     )
 
-    assert payload[URL_CONTEXT_KEY] == {"url_metadata": [{"retrieved_url": "https://weather.example"}]}
-    assert payload[RESPONSE_ID_KEY] == "resp-1"
+    assert payload[RECORDED_KEY] == {
+        URL_CONTEXT_KEY: {"url_metadata": [{"retrieved_url": "https://weather.example"}]},
+        RECORDED_ID_KEY: "resp-1",
+    }
     aggregated = aggregate_partials([{**payload, "partial": True}])
-    assert aggregated[URL_CONTEXT_KEY] == payload[URL_CONTEXT_KEY]
-    assert aggregated[RESPONSE_ID_KEY] == "resp-1"
+    assert aggregated[RECORDED_KEY] == payload[RECORDED_KEY]
     assert produced.restore_result(payload) is response
     edited: nemo_relay.JsonObject = {**payload, "content": {"role": "model", "parts": [{"text": "edited"}]}}
     assert response_from_payload(edited).content == types.Content(role="model", parts=[types.Part(text="edited")])
@@ -925,14 +944,16 @@ def test_url_context_rides_on_the_payload_and_is_dropped_from_a_rebuilt_response
     ],
 )
 def test_decode_response_maps_finish_reasons(raw: str, expected: str | None) -> None:
-    annotated = CODEC.decode_response({"content": {"role": "model", "parts": [{"text": "x"}]}, "finish_reason": raw})
+    annotated = GEMINI_CODEC.decode_response(
+        {"content": {"role": "model", "parts": [{"text": "x"}]}, "finish_reason": raw}
+    )
 
     assert annotated.finish_reason == expected
 
 
 def test_decode_response_maps_an_unspecified_finish_reason_with_calls_to_tool_use() -> None:
     parts = [{"function_call": {"name": "get_weather", "args": {}}}]
-    annotated = CODEC.decode_response(
+    annotated = GEMINI_CODEC.decode_response(
         {"content": {"role": "model", "parts": parts}, "finish_reason": "FINISH_REASON_UNSPECIFIED"}
     )
 
@@ -1102,7 +1123,7 @@ def test_aggregate_partials_merges_streamed_call_arguments_into_one_call() -> No
             {"text": "now."},
         ],
     }
-    response = CODEC.decode_response(aggregate)
+    response = GEMINI_CODEC.decode_response(aggregate)
     assert response.tool_calls == [{"id": "adk-1", "name": "get_weather", "arguments": args}]
     assert response.finish_reason == "tool_use"
     assert present(response_from_payload(aggregate).content).parts is not None
@@ -1391,14 +1412,17 @@ def test_final_response_keeps_the_last_whole_chunk_and_the_fields_later_chunks_r
         {"content": {"role": "model", "parts": [{"text": "ny."}]}, "partial": True},
         whole,
         {"usage_metadata": {"total_token_count": 5}, "model_version": "v2", "partial": True},
-        {"provider_usage_cost": {"cost": 0.1}, "partial": True},
+        {
+            RECORDED_KEY: {RECORDED_COST_KEY: {"currency": "USD", "source": "provider_reported", "total": 0.1}},
+            "partial": True,
+        },
     ]
 
     assert final_response(chunks) == {
         **whole,
         "usage_metadata": {"total_token_count": 5},
         "model_version": "v2",
-        "provider_usage_cost": {"cost": 0.1},
+        RECORDED_KEY: {RECORDED_COST_KEY: {"currency": "USD", "source": "provider_reported", "total": 0.1}},
     }
     assert final_response(chunks[:2]) == aggregate_partials(chunks[:2])
     with pytest.raises(TypeError, match="LlmResponse dumps"):
@@ -1412,9 +1436,9 @@ def _signed_call(name: str, location: str, signature: bytes) -> types.Part:
 
 
 def _history() -> LlmRequest:
-    """Return a request whose model turn holds a function call with a thought signature.
+    """Return request whose model turn holds a function call with a thought signature.
 
-    The calls and responses carry no ids, as ADK strips them before a request.
+    Calls and responses carry no ids, since ADK strips them before a request.
     """
     return LlmRequest(
         model="gemini-3-pro-preview",
@@ -1445,11 +1469,13 @@ def _history() -> LlmRequest:
 
 def _edited(request: LlmRequest, edit: Callable[[list[nemo_relay.JsonObject]], None]) -> LlmRequest:
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     messages = list(annotated.messages)
     edit(messages)
     annotated.messages = messages
-    assert write_back_request(request, payload=CODEC.encode(annotated, raw).content, original_payload=raw.content)
+    assert write_back_request(
+        request, payload=GEMINI_CODEC.encode(annotated, raw).content, original_payload=raw.content
+    )
     return request
 
 
@@ -1588,7 +1614,7 @@ def test_text_beside_a_function_response_is_a_user_message_and_edits_keep_the_sl
     )
     raw = _raw(request)
 
-    assert CODEC.decode(raw).messages[2:] == [
+    assert GEMINI_CODEC.decode(raw).messages[2:] == [
         {"role": "user", "content": "Note: be brief."},
         {"role": "tool", "tool_call_id": "get_weather", "content": '{"forecast":"sunny"}'},
     ]
@@ -1679,7 +1705,7 @@ def test_decode_keeps_tool_arguments_and_results_as_utf8_json() -> None:
         ],
     )
 
-    messages = CODEC.decode(_raw(request)).messages
+    messages = GEMINI_CODEC.decode(_raw(request)).messages
 
     assert as_object(as_object(as_list(messages[0]["tool_calls"])[0])["function"])["arguments"] == '{"city":"café"}'
     assert messages[1]["content"] == '{"note":"café"}'
@@ -1700,7 +1726,7 @@ def test_the_extra_request_body_reaches_api_specific_and_an_edit_there_comes_bac
     request = _request()
     request.config.http_options = types.HttpOptions(headers={"x-adk": "own"}, extra_body={"labels": {"team": "a"}})
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     api_specific = present(annotated.api_specific)
     data = as_object(api_specific["data"])
     config = as_object(data["config"])
@@ -1708,7 +1734,9 @@ def test_the_extra_request_body_reaches_api_specific_and_an_edit_there_comes_bac
     edited_config = {**config, "http_options": {"extra_body": {"labels": {"team": "b"}}}}
     annotated.api_specific = {**api_specific, "data": {**data, "config": edited_config}}
 
-    assert write_back_request(request, payload=CODEC.encode(annotated, raw).content, original_payload=raw.content)
+    assert write_back_request(
+        request, payload=GEMINI_CODEC.encode(annotated, raw).content, original_payload=raw.content
+    )
 
     options = present(request.config.http_options)
     assert options.extra_body == {"labels": {"team": "b"}}
@@ -1733,12 +1761,12 @@ def test_calls_sharing_an_id_keep_their_own_part_fields_in_order_when_their_turn
     raw = _raw(request)
     original_parts = as_list(as_object(as_list(raw.content["contents"])[1])["parts"])
     signatures = [as_object(part)["thought_signature"] for part in original_parts if "function_call" in as_object(part)]
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     messages = list(annotated.messages)
     messages[1] = {**messages[1], "content": "Checking twice."}
     annotated.messages = messages
 
-    encoded = CODEC.encode(annotated, raw).content
+    encoded = GEMINI_CODEC.encode(annotated, raw).content
 
     parts = as_list(as_object(as_list(encoded["contents"])[1])["parts"])
     kept = [as_object(part)["thought_signature"] for part in parts if "function_call" in as_object(part)]
@@ -1748,7 +1776,7 @@ def test_calls_sharing_an_id_keep_their_own_part_fields_in_order_when_their_turn
 def test_encode_writes_api_specific_edits_back_to_the_request() -> None:
     request = _request()
     raw = _raw(request)
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     api_specific = present(annotated.api_specific)
     data = as_object(api_specific["data"])
     config = as_object(data["config"])
@@ -1761,7 +1789,9 @@ def test_encode_writes_api_specific_edits_back_to_the_request() -> None:
         },
     }
 
-    assert write_back_request(request, payload=CODEC.encode(annotated, raw).content, original_payload=raw.content)
+    assert write_back_request(
+        request, payload=GEMINI_CODEC.encode(annotated, raw).content, original_payload=raw.content
+    )
 
     assert request.previous_interaction_id == "interaction-1"
     assert request.config.top_k == 9
@@ -1884,16 +1914,16 @@ def test_encode_rejects_edits_an_adk_request_cannot_hold(
     edit: Callable[[nemo_relay.AnnotatedLLMRequest], None], error: str
 ) -> None:
     raw = _raw(_request())
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     edit(annotated)
 
     with pytest.raises(ValueError, match=error):
-        CODEC.encode(annotated, raw)
+        GEMINI_CODEC.encode(annotated, raw)
 
 
 def test_encode_rejects_a_tool_message_whose_blocks_do_not_start_with_the_response_text() -> None:
     raw = _raw(_request())
-    annotated = CODEC.decode(raw)
+    annotated = GEMINI_CODEC.decode(raw)
     annotated.messages = [
         *annotated.messages[:2],
         {
@@ -1904,7 +1934,7 @@ def test_encode_rejects_a_tool_message_whose_blocks_do_not_start_with_the_respon
     ]
 
     with pytest.raises(TypeError, match="first block is the response text"):
-        CODEC.encode(annotated, raw)
+        GEMINI_CODEC.encode(annotated, raw)
 
 
 _USAGE_DUMP: Final[nemo_relay.JsonObject] = {
@@ -1918,10 +1948,10 @@ _USAGE_DUMP: Final[nemo_relay.JsonObject] = {
 
 
 @pytest.mark.parametrize(
-    ("api", "usage", "api_specific", "unmodeled"),
+    ("codec", "usage", "api_specific", "unmodeled"),
     [
         pytest.param(
-            Api.GEMINI_GENERATE_CONTENT,
+            GEMINI_CODEC,
             {
                 "prompt_tokens": 100,
                 "completion_tokens": 20,
@@ -1934,7 +1964,7 @@ _USAGE_DUMP: Final[nemo_relay.JsonObject] = {
             id="gemini",
         ),
         pytest.param(
-            Api.ANTHROPIC_MESSAGES,
+            ANTHROPIC_CODEC,
             {
                 "prompt_tokens": 50,
                 "uncached_input_tokens": 50,
@@ -1948,7 +1978,7 @@ _USAGE_DUMP: Final[nemo_relay.JsonObject] = {
             id="anthropic",
         ),
         pytest.param(
-            Api.OPENAI_CHAT,
+            CHAT_CODEC,
             {
                 "prompt_tokens": 100,
                 "completion_tokens": 20,
@@ -1961,7 +1991,7 @@ _USAGE_DUMP: Final[nemo_relay.JsonObject] = {
             id="openai_chat",
         ),
         pytest.param(
-            Api.OPENAI_RESPONSES,
+            RESPONSES_CODEC,
             {
                 "prompt_tokens": 100,
                 "completion_tokens": 20,
@@ -1980,9 +2010,9 @@ _USAGE_DUMP: Final[nemo_relay.JsonObject] = {
     ],
 )
 def test_decode_response_reads_usage_by_provider_api(
-    api: Api, usage: nemo_relay.JsonObject, api_specific: nemo_relay.JsonObject, unmodeled: nemo_relay.JsonObject
+    codec: AdkCodec, usage: nemo_relay.JsonObject, api_specific: nemo_relay.JsonObject, unmodeled: nemo_relay.JsonObject
 ) -> None:
-    annotated = CODECS[api].decode_response(
+    annotated = codec.decode_response(
         {"content": {"role": "model", "parts": [{"text": "x"}]}, "usage_metadata": _USAGE_DUMP}
     )
 
@@ -1992,13 +2022,26 @@ def test_decode_response_reads_usage_by_provider_api(
 
 
 def test_decode_response_takes_the_recorded_response_id_over_the_interaction_id() -> None:
-    assert CODEC.decode_response({"interaction_id": "int-1", RESPONSE_ID_KEY: "resp-1"}).id == "resp-1"
-    assert CODEC.decode_response({"interaction_id": "int-1"}).id == "int-1"
+    assert GEMINI_CODEC.decode_response({"interaction_id": "int-1", RECORDED_KEY: {RECORDED_ID_KEY: "resp-1"}}).id == (
+        "resp-1"
+    )
+    assert GEMINI_CODEC.decode_response({"interaction_id": "int-1"}).id == "int-1"
+
+
+def test_decode_response_keeps_recorded_fields_no_variant_reads_in_extra() -> None:
+    url_context: nemo_relay.JsonObject = {"url_metadata": [{"retrieved_url": "https://weather.example"}]}
+    recorded: nemo_relay.JsonObject = {RECORDED_ID_KEY: "chatcmpl-1", URL_CONTEXT_KEY: url_context}
+
+    annotated = CHAT_CODEC.decode_response({RECORDED_KEY: recorded})
+
+    assert annotated.id == "chatcmpl-1"
+    assert annotated.extra == {RECORDED_KEY: {URL_CONTEXT_KEY: url_context}}
+    assert GEMINI_CODEC.decode_response({RECORDED_KEY: recorded}).extra == {}
 
 
 def test_anthropic_usage_rejects_cache_tokens_beyond_the_prompt() -> None:
     with pytest.raises(ValueError, match="must include"):
-        CODECS[Api.ANTHROPIC_MESSAGES].decode_response(
+        ANTHROPIC_CODEC.decode_response(
             {"usage_metadata": {"prompt_token_count": 10, "cached_content_token_count": 20}}
         )
 
