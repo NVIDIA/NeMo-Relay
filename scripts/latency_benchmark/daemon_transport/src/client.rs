@@ -341,6 +341,7 @@ enum TransportStage {
     Request,
     Body,
     MissingContent,
+    Timeout,
 }
 
 impl TransportStage {
@@ -349,6 +350,7 @@ impl TransportStage {
             Self::Request => "request",
             Self::Body => "response_body",
             Self::MissingContent => "missing_content",
+            Self::Timeout => "timeout",
         }
     }
 }
@@ -636,7 +638,8 @@ async fn run_timed_phase(
             while Instant::now() < deadline {
                 let ordinal = request_sequence.fetch_add(1, Ordering::Relaxed);
                 let cancel = cancel_every > 0 && ordinal.is_multiple_of(cancel_every as u64);
-                accumulator.record(
+                let result = tokio::time::timeout(
+                    Duration::from_secs(30),
                     perform_request(
                         &client,
                         &target,
@@ -648,9 +651,31 @@ async fn run_timed_phase(
                         ordinal,
                         Arc::clone(&active),
                         Arc::clone(&max_active),
+                    ),
+                )
+                .await
+                .unwrap_or_else(|_| Err(anyhow!(TransportStage::Timeout)));
+                let failed = result
+                    .as_ref()
+                    .map_or(true, |observation| observation.integrity.error_count() > 0);
+                accumulator.record(result.map_err(|error| {
+                    error.context(format!(
+                        "request={ordinal} remaining_ms={}",
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .as_millis()
+                    ))
+                }));
+                if failed {
+                    // Keep failed runs observable without amplifying a broken connection
+                    // into an unpaced request storm. Never retry an individual request.
+                    tokio::time::sleep_until(
+                        (Instant::now() + Duration::from_millis(100))
+                            .min(deadline)
+                            .into(),
                     )
-                    .await,
-                );
+                    .await;
+                }
             }
             accumulator
         }));
@@ -710,6 +735,9 @@ async fn perform_request(
         .await
         .context(TransportStage::Request)?;
     let head = started.elapsed();
+    let status = response.status();
+    let version = response.version();
+    let mut response_prefix = Vec::with_capacity(512);
     let mut integrity = IntegrityRecord::default();
     if !response.status().is_success() {
         integrity.status_errors += 1;
@@ -734,9 +762,19 @@ async fn perform_request(
     let mut trailer_hash = None;
     let mut trailer_events = None;
     while let Some(frame) = body.frame().await {
-        let frame = frame.context(TransportStage::Body)?;
+        let frame = frame
+            .with_context(|| {
+                format!(
+                    "status={status} protocol={version:?} elapsed_ms={} body_prefix={:?}",
+                    started.elapsed().as_millis(),
+                    String::from_utf8_lossy(&response_prefix),
+                )
+            })
+            .context(TransportStage::Body)?;
         match frame.into_data() {
             Ok(data) => {
+                response_prefix
+                    .extend_from_slice(&data[..data.len().min(512 - response_prefix.len())]);
                 bytes += data.len();
                 hasher.update(&data);
                 let before = tracker.unique_events();
@@ -781,7 +819,14 @@ async fn perform_request(
     }
     Ok(Observation {
         head,
-        first: first.ok_or_else(|| anyhow!(TransportStage::MissingContent))?,
+        first: first.ok_or_else(|| {
+            anyhow!(
+                "status={status} protocol={version:?} elapsed_ms={} body_prefix={:?}",
+                started.elapsed().as_millis(),
+                String::from_utf8_lossy(&response_prefix),
+            )
+            .context(TransportStage::MissingContent)
+        })?,
         total: started.elapsed(),
         event_delays: tracker.event_delays,
         bytes,
@@ -983,6 +1028,66 @@ fn unix_time_nanos() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_responses_preserve_evidence_and_limit_request_rate() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = Target {
+            topology: Topology::Direct,
+            url: format!("http://{}", listener.local_addr().unwrap()),
+            headers: Vec::new(),
+        };
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            hyper::server::conn::http1::Builder::new()
+                .serve_connection(
+                    hyper_util::rt::TokioIo::new(stream),
+                    hyper::service::service_fn(
+                        |request: Request<hyper::body::Incoming>| async move {
+                            request.into_body().collect().await.unwrap();
+                            Ok::<_, std::convert::Infallible>(
+                                http::Response::builder()
+                                    .status(503)
+                                    .body(Full::new(Bytes::from(format!(
+                                        "unavailable{}",
+                                        "x".repeat(4096)
+                                    ))))
+                                    .unwrap(),
+                            )
+                        },
+                    ),
+                )
+                .await
+                .unwrap();
+        });
+        let client = BenchmarkClient::new(Protocol::Http1).unwrap();
+        let active = Arc::new(AtomicUsize::new(0));
+        let result = run_timed_phase(
+            &client,
+            &target,
+            Provider::Openai,
+            1024,
+            4,
+            1,
+            Duration::from_millis(250),
+            0,
+            0,
+            Arc::new(AtomicU64::new(0)),
+            Arc::clone(&active),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .await
+        .unwrap();
+        assert!(result.started > 0 && result.started <= 3);
+        assert_eq!(result.transport_errors, result.started);
+        assert_eq!(active.load(Ordering::Relaxed), 0);
+        let sample = &result.transport_error_samples[0];
+        assert!(sample.contains("status=503"), "{sample}");
+        assert!(sample.contains("unavailable"), "{sample}");
+        assert!(sample.contains("protocol=HTTP/1.1"), "{sample}");
+        assert!(sample.chars().count() <= 1024);
+        server.abort();
+    }
 
     #[test]
     fn transport_failures_keep_stage_totals_and_bounded_samples() {
