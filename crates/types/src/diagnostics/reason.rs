@@ -5,9 +5,11 @@
 
 /// Stable reasons shared by canonical snapshot adapters. These are operation
 /// results, never a source health classification or a producer failure code.
+/// Include a fallback arm when matching: future releases can add reasons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum DiagnosticReadReason {
     /// Collection was disabled at startup.
     Disabled,

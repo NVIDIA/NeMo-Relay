@@ -29,7 +29,3 @@ uuid = { workspace = true, features = ["v7", "serde"] }
 
 [dev-dependencies]
 regex = "1"
-
-[[example]]
-name = "diagnostics_schema"
-required-features = ["schema"]

@@ -278,11 +278,11 @@ type DiagnosticQuery struct {
 	Ownership ComponentOwnership `json:"ownership,omitempty"`
 	// Select later recent events; summary and code counters remain cumulative.
 	AfterSequence *DiagnosticNumber `json:"after_sequence,omitempty"`
-	// Requested component-instance row cap, further constrained by core limits.
+	// Requested component-instance row cap, rejected above core limits.
 	MaxComponents *uint32 `json:"max_components,omitempty"`
-	// Requested recent-event cap, further constrained by core limits.
+	// Requested recent-event cap, rejected above core limits.
 	MaxEvents *uint32 `json:"max_events,omitempty"`
-	// Requested encoded response cap, further constrained by core limits.
+	// Requested encoded response cap, rejected above core limits.
 	MaxResponseBytes *uint32 `json:"max_response_bytes,omitempty"`
 	// Resume a compatible bounded selection without granting additional scope.
 	Continuation *DiagnosticCursor `json:"continuation,omitempty"`
