@@ -152,6 +152,30 @@ that account for the bounded scan and serialization cost under your workload.
 
 ## Resource Context and Precision
 
+### Enable a Sampling Source
+
+Enabling memory inspection does not start resource sampling. Before expecting a
+resource sample in a memory page:
+
+1. Enable diagnostics and a nonzero query pool for the runtime you will inspect.
+2. Activate the `resource_metrics` component and keep its memory category enabled.
+   Follow [Enable the Component](/configure-plugins/resource-metrics#enable-the-component)
+   for a complete component configuration.
+3. Enable `components.config.polling.enabled` to collect periodically, or call
+   the existing [on-demand collection API](/configure-plugins/resource-metrics#collect-one-snapshot).
+   Polling is disabled by default; enabling the component alone does not start it.
+4. Keep `components.config.memory_inspection.enabled` enabled, then request the
+   diagnostic memory page after a collection completes.
+
+`awaiting_target` means the collector is waiting for a collection target;
+`not_yet_sampled` means there is no completed sample available yet. Check the
+configured [measurement scope](/configure-plugins/resource-metrics#measurement-scope)
+and sampling lifecycle before interpreting either status as a collection failure.
+Repeated inspection does not trigger sampling. An unavailable resource sample
+does not prevent inspection of the diagnostic service's own memory backing.
+
+### Configure the Memory Projection
+
 The resource manager retains one fixed memory-only projection from existing
 successful polling/on-demand collections. Inspection reads that projection; it
 never initializes the resource plugin, schedules collection, changes its target,
