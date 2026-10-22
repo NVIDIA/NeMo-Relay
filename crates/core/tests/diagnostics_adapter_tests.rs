@@ -773,27 +773,47 @@ fn diagnostic_reads_and_recording_do_not_feed_observability_subscribers() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("output.jsonl");
     let logger = file_logging(&service, path.clone());
-    for project in [true, false] {
+    for (project, message) in [
+        (true, "restricted-projected-payload"),
+        (false, "restricted-state-only-payload"),
+    ] {
         let observation = || {
-            internal("restricted-payload").with_correlation(DiagnosticCorrelation {
+            internal(message).with_correlation(DiagnosticCorrelation {
                 request_id: Some("restricted-request".into()),
                 session_id: Some("restricted-session".into()),
             })
         };
-        if project {
-            producer.record_lazy(observation).unwrap();
+        let outcome = if project {
+            producer.record_lazy(observation).unwrap()
         } else {
             producer
                 .record_without_projection_lazy(observation)
-                .unwrap();
-        }
+                .unwrap()
+        };
+        assert!(matches!(outcome, RecordOutcome::Recorded(_)));
     }
-    let page = service.snapshot(&DiagnosticQuery::default()).unwrap();
+    let page = service
+        .snapshot(&DiagnosticQuery {
+            component_key: Some("restricted.component".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let snapshot = page.to_snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .events
+            .iter()
+            .map(|event| event.message())
+            .collect::<Vec<_>>(),
+        [
+            Some("restricted-projected-payload"),
+            Some("restricted-state-only-payload")
+        ]
+    );
     let raw = std::str::from_utf8(page.as_bytes()).unwrap();
     for marker in [
         "restricted.component",
         "restricted-path",
-        "restricted-payload",
         "restricted-request",
         "restricted-session",
     ] {
@@ -812,9 +832,17 @@ fn diagnostic_reads_and_recording_do_not_feed_observability_subscribers() {
     deregister_subscriber("diagnostic-isolation").unwrap();
     logger.shutdown();
     assert_eq!(*observed.lock().unwrap(), ["application-mark"]);
-    assert!(
-        !std::fs::read_to_string(path)
-            .unwrap()
-            .contains("restricted")
-    );
+    let output = std::fs::read_to_string(path).unwrap();
+    let component_id = producer.identity().unwrap().instance_id.to_string();
+    let projected: Vec<Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|row: &Value| {
+            row["target"] == "nemo_relay.diagnostics"
+                && row["fields"]["diagnostic"]["component_instance_id"] == component_id
+        })
+        .collect();
+    assert_eq!(projected.len(), 1);
+    assert_eq!(projected[0]["event"], "plugin.internal");
+    assert!(!output.contains("restricted"));
 }
