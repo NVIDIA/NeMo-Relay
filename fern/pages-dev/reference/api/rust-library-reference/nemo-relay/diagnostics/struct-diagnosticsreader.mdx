@@ -2,7 +2,7 @@
 title: "Struct Diagnostics Reader"
 sidebar-title: "DiagnosticsReader"
 description: "Read capability for one context, without recording or lifecycle authority."
-position: 34
+position: 36
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -22,6 +22,12 @@ Clones keep the context alive. Materialization requires a bounded lease; disable
 ### `impl DiagnosticsReader`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-diagnosticsreader\">DiagnosticsReader</a>"}} /></pre>
+
+#### `discovery`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn discovery(&amp;self) -&gt; <a href=\"struct-diagnosticdiscovery\">DiagnosticDiscovery</a>"}} /></pre>
+
+Discover configured capabilities without a snapshot lease or state mutation.
 
 #### `memory_usage`
 

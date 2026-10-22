@@ -1,7 +1,7 @@
 ---
 title: "Struct Diagnostic Correlation"
 sidebar-title: "DiagnosticCorrelation"
-description: "Optional safe correlation identifiers, excluded from aggregation keys."
+description: "Optional caller correlation identifiers, excluded from aggregation keys."
 position: 7
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticCorrelation&lt;'a&gt; &#123;\n    pub session_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;&gt;,\n    pub request_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;&gt;,\n&#125;"}} /></pre>
 
-Optional safe correlation identifiers, excluded from aggregation keys.
+Optional caller correlation identifiers, excluded from aggregation keys.
 
 ## Fields
 

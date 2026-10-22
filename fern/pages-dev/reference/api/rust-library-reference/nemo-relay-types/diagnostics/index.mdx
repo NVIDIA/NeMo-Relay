@@ -23,17 +23,19 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 - [ComponentOwnership](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-componentownership): Bounded attribution for a component refresh or an originating observation.
 - [ComponentSnapshot](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-componentsnapshot): One retained row per component registration instance.
 - [DiagnosticCapability](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticcapability): Capability coverage, including explicitly deferred producer integrations.
-- [DiagnosticCorrelation](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticcorrelation): Optional safe correlation identifiers, excluded from aggregation keys.
+- [DiagnosticCorrelation](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticcorrelation): Optional caller correlation identifiers, excluded from aggregation keys.
 - [DiagnosticCount](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticcount): Magnitude of an occurrence or loss counter, including overflow visibility.
 - [DiagnosticCounter](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticcounter): Lifetime occurrences for one code in its containing component instance.
 - [DiagnosticCoverage](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticcoverage): Explicit evidence, retention, saturation, and producer integration coverage.
 - [DiagnosticCursor](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticcursor): Opaque continuation bound to source, capture revision, offsets, and scope.
-- [DiagnosticDetail](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticdetail): Safe optional recent evidence, independent of the accepted numeric summary.
+- [DiagnosticDetail](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticdetail): Restricted optional recent evidence, independent of the accepted numeric summary.
+- [DiagnosticDiscovery](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticdiscovery): Side-effect-free discovery, available even when snapshot queries are disabled.
 - [DiagnosticEvent](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticevent): One recent observation with its actual class and original configuration attribution.
 - [DiagnosticLifetimeSummary](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticlifetimesummary): Fixed lifetime totals and monotonic timing for a context or component instance.
 - [DiagnosticLoss](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticloss): Source loss state reserved independently of optional evidence capacity.
 - [DiagnosticNumber](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticnumber): Unsigned diagnostic integer serialized losslessly as a decimal string.
 - [DiagnosticOrigin](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticorigin): Original bounded configuration attribution carried by one observation.
+- [DiagnosticOutputSummary](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticoutputsummary): Allowlisted operational output, constructed independently of retained detail.
 - [DiagnosticQuery](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticquery): Portable bounded selection; consumers never reset or mutate evidence.
 - [DiagnosticRefreshSummary](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticrefreshsummary): One current resettable counting period, with no retained historical summary.
 - [DiagnosticRetention](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/struct-diagnosticretention): Boundaries of returned retained evidence, separate from cumulative counters.
@@ -50,6 +52,7 @@ Potentially growing integers use DiagnosticNumber, encoded as canonical unsigned
 ## Enums
 
 - [BuiltinDiagnosticCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-builtindiagnosticcode): Fixed-size canonical authoring value with one authoritative hierarchy.
+- [CliFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-clifailurecode): Failures at integrated CLI operation boundaries; causes come from producers.
 - [CommonPluginFailureCode](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-commonpluginfailurecode): Plugin failures supported by phase-one activation recording.
 - [DiagnosticAvailability](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticavailability): Availability of evidence, without applying deployment or application health.
 - [DiagnosticDomain](/reference/api/rust-library-reference/nemo-relay-types/diagnostics/enum-diagnosticdomain): Top-level owning subsystem, derived from its catalogue code.

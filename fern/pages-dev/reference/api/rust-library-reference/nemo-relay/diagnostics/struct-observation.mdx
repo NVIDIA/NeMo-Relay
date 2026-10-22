@@ -2,7 +2,7 @@
 title: "Struct Observation"
 sidebar-title: "Observation"
 description: "One observation. Its count is a positive input delta, never a cumulative total."
-position: 39
+position: 41
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -41,7 +41,7 @@ Explicit observed operation outcome for summaries and windows.
 
 ### `correlation: DiagnosticCorrelation<'a>`
 
-Borrowed safe correlation, never an aggregate key.
+Borrowed caller correlation, never an aggregate key.
 
 ### `context: PluginObservationContext`
 

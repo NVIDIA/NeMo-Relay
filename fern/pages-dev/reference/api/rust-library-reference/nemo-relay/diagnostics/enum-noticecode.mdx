@@ -2,7 +2,7 @@
 title: "Enum Notice Code"
 sidebar-title: "NoticeCode"
 description: "Bounded non-failure observations; they never acquire a failure class."
-position: 62
+position: 65
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,6 +11,9 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 ```rust
 #[non_exhaustive]pub enum NoticeCode {
+    CliNonzeroExit,
+    CliPolicyRejected,
+    CliChildExited,
     ConfigurationInherited,
 }
 ```
@@ -18,6 +21,24 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 Bounded non-failure observations; they never acquire a failure class.
 
 ## Variants (Non-exhaustive)
+
+### `CliNonzeroExit`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliNonzeroExit"}} /></pre>
+
+Observation identified by `cli.nonzero_exit`.
+
+### `CliPolicyRejected`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliPolicyRejected"}} /></pre>
+
+Observation identified by `cli.policy_rejected`.
+
+### `CliChildExited`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliChildExited"}} /></pre>
+
+Observation identified by `cli.child.exited`.
 
 ### `ConfigurationInherited`
 

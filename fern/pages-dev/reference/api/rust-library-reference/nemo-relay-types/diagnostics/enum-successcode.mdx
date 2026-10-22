@@ -2,7 +2,7 @@
 title: "Enum Success Code"
 sidebar-title: "SuccessCode"
 description: "Explicit successful operations; successes do not recover or clear failures."
-position: 45
+position: 48
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,6 +11,16 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 ```rust
 #[non_exhaustive]pub enum SuccessCode {
+Show 13 variants    CliUpstreamHeadersReceived,
+    CliUpstreamBodyCompleted,
+    CliChildCleaned,
+    CliCommandCompleted,
+    CliGatewayBound,
+    CliGatewayStopped,
+    CliAcquired,
+    CliChildSpawned,
+    CliChildWaited,
+    CliHookForwarded,
     LoggingInitialized,
     LoggingShutdownCompleted,
     SinkInitialized,
@@ -20,6 +30,66 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 Explicit successful operations; successes do not recover or clear failures.
 
 ## Variants (Non-exhaustive)
+
+### `CliUpstreamHeadersReceived`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliUpstreamHeadersReceived"}} /></pre>
+
+An upstream transport returned headers, independently of provider status.
+
+### `CliUpstreamBodyCompleted`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliUpstreamBodyCompleted"}} /></pre>
+
+An upstream response body was fully read, independently of provider status.
+
+### `CliChildCleaned`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliChildCleaned"}} /></pre>
+
+A supervised child tree was cleaned up.
+
+### `CliCommandCompleted`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliCommandCompleted"}} /></pre>
+
+Observation identified by `cli.command_completed`.
+
+### `CliGatewayBound`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliGatewayBound"}} /></pre>
+
+Observation identified by `cli.gateway.bound`.
+
+### `CliGatewayStopped`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliGatewayStopped"}} /></pre>
+
+Observation identified by `cli.gateway.stopped`.
+
+### `CliAcquired`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliAcquired"}} /></pre>
+
+Observation identified by `cli.acquired`.
+
+### `CliChildSpawned`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliChildSpawned"}} /></pre>
+
+Observation identified by `cli.child.spawned`.
+
+### `CliChildWaited`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliChildWaited"}} /></pre>
+
+Observation identified by `cli.child.waited`.
+
+### `CliHookForwarded`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CliHookForwarded"}} /></pre>
+
+Observation identified by `cli.hook.forwarded`.
 
 ### `LoggingInitialized`
 

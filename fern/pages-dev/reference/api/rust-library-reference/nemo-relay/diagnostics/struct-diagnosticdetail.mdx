@@ -1,7 +1,7 @@
 ---
 title: "Struct Diagnostic Detail"
 sidebar-title: "DiagnosticDetail"
-description: "Safe optional recent evidence, independent of the accepted numeric summary."
+description: "Restricted optional recent evidence, independent of the accepted numeric summary."
 position: 17
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,13 +11,13 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticDetail &#123;\n    pub message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub truncated: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n&#125;"}} /></pre>
 
-Safe optional recent evidence, independent of the accepted numeric summary.
+Restricted optional recent evidence, independent of the accepted numeric summary.
 
 ## Fields
 
 ### `message: String`
 
-Producer-approved text, copied only within admitted byte capacity.
+Text copied within admitted byte capacity; bounding does not sanitize it.
 
 ### `truncated: bool`
 

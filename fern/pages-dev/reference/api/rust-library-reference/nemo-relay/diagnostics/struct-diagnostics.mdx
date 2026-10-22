@@ -2,7 +2,7 @@
 title: "Struct Diagnostics"
 sidebar-title: "Diagnostics"
 description: "Independent diagnostics context with immutable startup enablement."
-position: 33
+position: 35
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -89,15 +89,15 @@ The owner can close or rotate this registration. Disabled mode issues inert hand
 
 #### `subscribe_projection`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscribe_projection(\n    &amp;self,\n    callback: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"struct-diagnosticevent\">DiagnosticEvent</a>) + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-projectionguard\">ProjectionGuard</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscribe_projection(\n    &amp;self,\n    callback: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"struct-diagnosticoutputsummary\">DiagnosticOutputSummary</a>) + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-projectionguard\">ProjectionGuard</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
 
-Attach a bounded synchronous subscriber to future accepted typed events.
+Attach a bounded subscriber to approved operational summaries. Restricted retained evidence is never supplied to projection callbacks.
 
 Callbacks run outside the store lock, may run concurrently, and have isolated panics. Disabled mode retains no callback and returns an inert guard. Arbitrary callback captures and retained copies remain caller-owned.
 
 #### `subscribe_fallible_projection`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscribe_fallible_projection(\n    &amp;self,\n    callback: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"struct-diagnosticevent\">DiagnosticEvent</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"enum-projectionerror\">ProjectionError</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-projectionguard\">ProjectionGuard</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscribe_fallible_projection(\n    &amp;self,\n    callback: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"struct-diagnosticoutputsummary\">DiagnosticOutputSummary</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"enum-projectionerror\">ProjectionError</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-projectionguard\">ProjectionGuard</a>, <a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt;"}} /></pre>
 
 Attach a subscriber that reports bounded conversion or delivery failure.
 

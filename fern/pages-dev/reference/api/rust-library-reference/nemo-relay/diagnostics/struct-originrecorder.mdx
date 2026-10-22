@@ -2,7 +2,7 @@
 title: "Struct Origin Recorder"
 sidebar-title: "OriginRecorder"
 description: "An operation's bounded original configuration attribution."
-position: 40
+position: 42
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -15,7 +15,7 @@ pub struct OriginRecorder { /* private fields */ }
 
 An operation's bounded original configuration attribution.
 
-A refresh never invalidates this recorder. Observations update lifetime and current since-refresh totals at recording time while preserving their origin on retained events and projections. Closing the registration remains explicit.
+A refresh never invalidates this recorder. Observations update lifetime and current since-refresh totals at recording time while preserving their origin on retained events. Closing the registration remains explicit.
 
 ## Implementations
 
