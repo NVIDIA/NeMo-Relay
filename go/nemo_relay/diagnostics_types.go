@@ -65,7 +65,7 @@ type ComponentOwnership struct {
 	Responsibility *string `json:"responsibility"`
 }
 
-// DiagnosticOrigin is the canonical diagnostic diagnostic origin view.
+// DiagnosticOrigin is the canonical diagnostic origin view.
 type DiagnosticOrigin struct {
 	// Refresh generation associated with the originating work or observation.
 	RefreshGeneration DiagnosticNumber `json:"refresh_generation"`
@@ -73,7 +73,7 @@ type DiagnosticOrigin struct {
 	Ownership ComponentOwnership `json:"ownership"`
 }
 
-// DiagnosticCorrelation is the canonical diagnostic diagnostic correlation view.
+// DiagnosticCorrelation is the canonical diagnostic correlation view.
 type DiagnosticCorrelation struct {
 	// Trajectory session associated with the observation, when known.
 	SessionID *string `json:"session_id"`
@@ -89,7 +89,7 @@ type Classification struct {
 	FailureClass *string `json:"failure_class"`
 }
 
-// DiagnosticDetail is the canonical diagnostic diagnostic detail view.
+// DiagnosticDetail is the canonical diagnostic detail view.
 type DiagnosticDetail struct {
 	// Text copied within admitted byte capacity; bounding does not sanitize it.
 	Message string `json:"message"`
@@ -97,7 +97,7 @@ type DiagnosticDetail struct {
 	Truncated bool `json:"truncated"`
 }
 
-// DiagnosticEvent is the canonical diagnostic diagnostic event view.
+// DiagnosticEvent is the canonical diagnostic event view.
 type DiagnosticEvent struct {
 	// Unique source-local update sequence; it is not an occurrence counter.
 	Sequence DiagnosticNumber `json:"sequence"`
@@ -141,7 +141,7 @@ type RemoteDiagnosticOrigin struct {
 	AcceptedElapsedMillis DiagnosticNumber `json:"accepted_elapsed_millis"`
 }
 
-// DiagnosticCount is the canonical diagnostic diagnostic count view.
+// DiagnosticCount is the canonical diagnostic count view.
 type DiagnosticCount struct {
 	// Exact count unless saturation has occurred.
 	Value DiagnosticNumber `json:"value"`
@@ -149,7 +149,7 @@ type DiagnosticCount struct {
 	Saturated bool `json:"saturated"`
 }
 
-// DiagnosticTotals is the canonical diagnostic diagnostic totals view.
+// DiagnosticTotals is the canonical diagnostic totals view.
 type DiagnosticTotals struct {
 	// Accepted recording calls, one per call regardless of occurrence delta.
 	RecordedEventsTotal DiagnosticCount `json:"recorded_events_total"`
@@ -165,7 +165,7 @@ type DiagnosticTotals struct {
 	UnspecifiedTotal DiagnosticCount `json:"unspecified_total"`
 }
 
-// DiagnosticLifetimeSummary is the canonical diagnostic diagnostic lifetime summary view.
+// DiagnosticLifetimeSummary is the canonical diagnostic lifetime summary view.
 type DiagnosticLifetimeSummary struct {
 	// Whole-context or whole-component-instance accounting, as named by the view.
 	Totals DiagnosticTotals `json:"totals"`
@@ -177,7 +177,7 @@ type DiagnosticLifetimeSummary struct {
 	SinceLastFailureMillis *DiagnosticNumber `json:"since_last_failure_millis"`
 }
 
-// DiagnosticRefreshSummary is the canonical diagnostic diagnostic refresh summary view.
+// DiagnosticRefreshSummary is the canonical diagnostic refresh summary view.
 type DiagnosticRefreshSummary struct {
 	// Component-local generation increased by a successful refresh.
 	Generation DiagnosticNumber `json:"generation"`
@@ -191,7 +191,7 @@ type DiagnosticRefreshSummary struct {
 	Totals DiagnosticTotals `json:"totals"`
 }
 
-// DiagnosticCounter is the canonical diagnostic diagnostic counter view.
+// DiagnosticCounter is the canonical diagnostic counter view.
 type DiagnosticCounter struct {
 	// Canonical code; the component instance comes from the containing row.
 	Code string `json:"code"`
@@ -201,7 +201,7 @@ type DiagnosticCounter struct {
 	LastObservedAt string `json:"last_observed_at"`
 }
 
-// DiagnosticWindowBucket is the canonical diagnostic diagnostic window bucket view.
+// DiagnosticWindowBucket is the canonical diagnostic window bucket view.
 type DiagnosticWindowBucket struct {
 	// Inclusive elapsed offset from the component's monotonic start.
 	StartElapsedMillis DiagnosticNumber `json:"start_elapsed_millis"`
@@ -215,7 +215,7 @@ type DiagnosticWindowBucket struct {
 	Unspecified DiagnosticCount `json:"unspecified"`
 }
 
-// DiagnosticWindowCoverage is the canonical diagnostic diagnostic window coverage view.
+// DiagnosticWindowCoverage is the canonical diagnostic window coverage view.
 type DiagnosticWindowCoverage struct {
 	// Availability of the admitted window series.
 	Availability string `json:"availability"`
@@ -231,7 +231,7 @@ type DiagnosticWindowCoverage struct {
 	Incomplete bool `json:"incomplete"`
 }
 
-// DiagnosticWindow is the canonical diagnostic diagnostic window view.
+// DiagnosticWindow is the canonical diagnostic window view.
 type DiagnosticWindow struct {
 	// Duration of each fixed bucket.
 	ResolutionMillis DiagnosticNumber `json:"resolution_millis"`
@@ -243,7 +243,7 @@ type DiagnosticWindow struct {
 	Coverage DiagnosticWindowCoverage `json:"coverage"`
 }
 
-// DiagnosticCursor is the canonical diagnostic diagnostic cursor view.
+// DiagnosticCursor is the canonical diagnostic cursor view.
 type DiagnosticCursor struct {
 	// Source incarnation whose retained state was selected.
 	SourceInstanceID string `json:"source_instance_id"`
@@ -257,7 +257,7 @@ type DiagnosticCursor struct {
 	Scope DiagnosticNumber `json:"scope"`
 }
 
-// DiagnosticQuery is the canonical diagnostic diagnostic query view.
+// DiagnosticQuery is the canonical diagnostic query view.
 type DiagnosticQuery struct {
 	// Select one logical component key across retained registrations.
 	ComponentKey *string `json:"component_key,omitempty"`
@@ -287,7 +287,7 @@ type DiagnosticQuery struct {
 	Continuation *DiagnosticCursor `json:"continuation,omitempty"`
 }
 
-// DiagnosticRetention is the canonical diagnostic diagnostic retention view.
+// DiagnosticRetention is the canonical diagnostic retention view.
 type DiagnosticRetention struct {
 	// Oldest sequence in the selected retained event history, if present.
 	OldestEventSequence *DiagnosticNumber `json:"oldest_event_sequence"`
@@ -301,7 +301,7 @@ type DiagnosticRetention struct {
 	QueryTruncated bool `json:"query_truncated"`
 }
 
-// DiagnosticLoss is the canonical diagnostic diagnostic loss view.
+// DiagnosticLoss is the canonical diagnostic loss view.
 type DiagnosticLoss struct {
 	// Previously retained events reclaimed from the circular history.
 	EventsEvicted DiagnosticCount `json:"events_evicted"`
@@ -343,7 +343,7 @@ type DiagnosticLoss struct {
 	SequenceSaturated bool `json:"sequence_saturated"`
 }
 
-// DiagnosticCapability is the canonical diagnostic diagnostic capability view.
+// DiagnosticCapability is the canonical diagnostic capability view.
 type DiagnosticCapability struct {
 	// Bounded capability name, such as `otel`.
 	Name string `json:"name"`
@@ -353,7 +353,7 @@ type DiagnosticCapability struct {
 	Reason *string `json:"reason"`
 }
 
-// DiagnosticCoverage is the canonical diagnostic diagnostic coverage view.
+// DiagnosticCoverage is the canonical diagnostic coverage view.
 type DiagnosticCoverage struct {
 	// Availability of this diagnostic source context.
 	Availability string `json:"availability"`
@@ -385,7 +385,7 @@ type ComponentSnapshot struct {
 	Windows []DiagnosticWindow `json:"windows"`
 }
 
-// DiagnosticSnapshot is the canonical diagnostic diagnostic snapshot view.
+// DiagnosticSnapshot is the canonical diagnostic snapshot view.
 type DiagnosticSnapshot struct {
 	// Supported envelope version, independent of the catalogue version.
 	SchemaVersion uint32 `json:"schema_version"`
