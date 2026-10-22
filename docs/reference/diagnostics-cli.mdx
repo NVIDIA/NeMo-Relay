@@ -224,6 +224,24 @@ and `snapshot` fields. The snapshot retains the worker's source identity and
 cumulative counters. Polling a failure total of five repeatedly leaves it at
 five; collection never replays those counts into the broker's local core.
 
+Freshness and completeness are independent. The broker polls one bounded page
+and does not follow its continuation. A fresh cached response can therefore omit
+worker components or events. Check `snapshot.coverage.retention.query_truncated`
+and `snapshot.continuation` before treating the response as complete. Context
+lifetime totals still cover the worker's whole diagnostic context; the returned
+component and event rows can be only a subset.
+
+The cached-worker route cannot apply filters or resume that continuation.
+Increasing the CLI's `--max-response-bytes` only enlarges the receive allowance;
+it does not ask the broker to collect more worker pages. For filtered or paginated
+evidence, use the worker's direct diagnostic reader through its existing
+authorized transport and current worker read grant, following the
+[query and pagination contract](/reference/diagnostics-api#continue-or-restart-a-read).
+A broker operator credential alone does not substitute for a worker read grant.
+The `--worker` CLI mode provides cached inspection, not a direct-worker pagination
+client; if direct authorized access is unavailable, treat the cached rows as
+partial evidence.
+
 A successful lookup can return a stale last-good page. Collection metadata
 reports the latest poll outcome, receipt time, monotonic receipt age, request
 ordinal, retained sources, and aggregate cache evictions. Freshness uses broker
