@@ -13,6 +13,50 @@ impl Drop for SystemConfigGuard {
     }
 }
 #[test]
+fn diagnostic_boolean_spellings_preserve_hook_parsing_and_cli_precedence() {
+    for (value, expected) in [
+        ("1", true),
+        ("yes", true),
+        ("on", true),
+        ("TRUE", true),
+        ("0", false),
+        ("no", false),
+        ("off", false),
+        ("FALSE", false),
+    ] {
+        let _env = EnvScope::set(&[
+            ("NEMO_RELAY_DIAGNOSTICS", Some(OsStr::new(value))),
+            ("NEMO_RELAY_DIAGNOSTICS_HTTP", Some(OsStr::new(value))),
+        ]);
+        let cli = Cli::try_parse_from(["nemo-relay", "hook-forward"]).unwrap();
+        assert_eq!(cli.diagnostics, Some(expected));
+        assert_eq!(cli.diagnostics_http, Some(expected));
+        let cli = Cli::try_parse_from([
+            "nemo-relay",
+            "--diagnostics=off",
+            "--diagnostics-http=on",
+            "hook-forward",
+        ])
+        .unwrap();
+        assert_eq!(cli.diagnostics, Some(false));
+        assert_eq!(cli.diagnostics_http, Some(true));
+        let cli = Cli::try_parse_from([
+            "nemo-relay",
+            "--diagnostics",
+            "--diagnostics-http",
+            "hook-forward",
+        ])
+        .unwrap();
+        assert_eq!(cli.diagnostics, Some(true));
+        assert_eq!(cli.diagnostics_http, Some(true));
+    }
+    let _env = EnvScope::set(&[
+        ("NEMO_RELAY_DIAGNOSTICS", Some(OsStr::new("maybe"))),
+        ("NEMO_RELAY_DIAGNOSTICS_HTTP", None),
+    ]);
+    assert!(Cli::try_parse_from(["nemo-relay", "hook-forward"]).is_err());
+}
+#[test]
 fn startup_uses_run_selection_then_system_then_explicit_diagnostic_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let explicit = temp.path().join("explicit.toml");
