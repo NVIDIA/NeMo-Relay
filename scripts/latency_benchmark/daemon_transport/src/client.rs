@@ -169,6 +169,8 @@ struct ScenarioRecord {
     total: HistogramRecord,
     integrity: IntegrityRecord,
     transport_errors: u64,
+    transport_error_stages: BTreeMap<&'static str, u64>,
+    transport_error_samples: Vec<String>,
     connections_opened_during_measurement: u64,
     estimated_pool_reuses: u64,
     reconnect_count: Option<u64>,
@@ -235,6 +237,8 @@ struct Accumulator {
     bytes: u64,
     integrity: IntegrityRecord,
     transport_errors: u64,
+    transport_error_stages: BTreeMap<&'static str, u64>,
+    transport_error_samples: Vec<String>,
 }
 
 impl Accumulator {
@@ -250,6 +254,8 @@ impl Accumulator {
             bytes: 0,
             integrity: IntegrityRecord::default(),
             transport_errors: 0,
+            transport_error_stages: BTreeMap::new(),
+            transport_error_samples: Vec::new(),
         }
     }
 
@@ -271,7 +277,17 @@ impl Accumulator {
                 self.bytes += observation.bytes as u64;
                 self.integrity.add(observation.integrity);
             }
-            Err(_) => self.transport_errors += 1,
+            Err(error) => {
+                self.transport_errors += 1;
+                let stage = error
+                    .downcast_ref::<TransportStage>()
+                    .map_or("other", |stage| stage.name());
+                *self.transport_error_stages.entry(stage).or_default() += 1;
+                if self.transport_error_samples.len() < 8 {
+                    self.transport_error_samples
+                        .push(format!("{error:#}").chars().take(1024).collect());
+                }
+            }
         }
     }
 
@@ -286,6 +302,12 @@ impl Accumulator {
         self.bytes += other.bytes;
         self.integrity.add(other.integrity);
         self.transport_errors += other.transport_errors;
+        for (stage, count) in other.transport_error_stages {
+            *self.transport_error_stages.entry(stage).or_default() += count;
+        }
+        let remaining = 8usize.saturating_sub(self.transport_error_samples.len());
+        self.transport_error_samples
+            .extend(other.transport_error_samples.into_iter().take(remaining));
         Ok(())
     }
 }
@@ -313,6 +335,31 @@ impl IntegrityRecord {
             + self.status_errors
     }
 }
+
+#[derive(Debug)]
+enum TransportStage {
+    Request,
+    Body,
+    MissingContent,
+}
+
+impl TransportStage {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Body => "response_body",
+            Self::MissingContent => "missing_content",
+        }
+    }
+}
+
+impl std::fmt::Display for TransportStage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.name())
+    }
+}
+
+impl std::error::Error for TransportStage {}
 
 struct Observation {
     head: Duration,
@@ -661,7 +708,7 @@ async fn perform_request(
         .client
         .request(request)
         .await
-        .context("request failed")?;
+        .context(TransportStage::Request)?;
     let head = started.elapsed();
     let mut integrity = IntegrityRecord::default();
     if !response.status().is_success() {
@@ -687,7 +734,7 @@ async fn perform_request(
     let mut trailer_hash = None;
     let mut trailer_events = None;
     while let Some(frame) = body.frame().await {
-        let frame = frame.context("response body failed")?;
+        let frame = frame.context(TransportStage::Body)?;
         match frame.into_data() {
             Ok(data) => {
                 bytes += data.len();
@@ -734,7 +781,7 @@ async fn perform_request(
     }
     Ok(Observation {
         head,
-        first: first.ok_or_else(|| anyhow!("response contained no content event"))?,
+        first: first.ok_or_else(|| anyhow!(TransportStage::MissingContent))?,
         total: started.elapsed(),
         event_delays: tracker.event_delays,
         bytes,
@@ -880,6 +927,8 @@ fn make_scenario(
         total: HistogramRecord::from_histogram(&accumulator.total),
         integrity: accumulator.integrity,
         transport_errors: accumulator.transport_errors,
+        transport_error_stages: accumulator.transport_error_stages,
+        transport_error_samples: accumulator.transport_error_samples,
         connections_opened_during_measurement: connections,
         estimated_pool_reuses: pool_reuses,
         reconnect_count: None,
@@ -929,4 +978,70 @@ fn unix_time_nanos() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transport_failures_keep_stage_totals_and_bounded_samples() {
+        let mut total = Accumulator::new();
+        for _ in 0..4 {
+            let mut worker = Accumulator::new();
+            for _ in 0..12 {
+                worker.record(Err(anyhow!("x".repeat(2048)).context(TransportStage::Body)));
+            }
+            total.add(worker).unwrap();
+        }
+        total.record(Err(anyhow!(TransportStage::MissingContent)));
+        assert_eq!(total.transport_errors, 49);
+        assert_eq!(total.transport_error_stages["response_body"], 48);
+        assert_eq!(total.transport_error_stages["missing_content"], 1);
+        assert_eq!(total.transport_error_samples.len(), 8);
+        assert!(
+            total
+                .transport_error_samples
+                .iter()
+                .all(|sample| sample.chars().count() <= 1024)
+        );
+    }
+
+    #[tokio::test]
+    async fn http2_provider_drains_request_body_before_responding() {
+        let (url, stop, task) = provider::spawn_ephemeral().await.unwrap();
+        let (release, pending) = tokio::sync::oneshot::channel();
+        let (started, body_started) = tokio::sync::oneshot::channel();
+        let body = http_body_util::StreamBody::new(async_stream::stream! {
+            let _ = started.send(());
+            yield Ok::<_, std::convert::Infallible>(hyper::body::Frame::data(Bytes::from_static(b"{")));
+            let _ = pending.await;
+            yield Ok(hyper::body::Frame::data(Bytes::from_static(b"}")));
+        }).boxed_unsync();
+        let mut builder = Client::builder(TokioExecutor::new());
+        builder.http2_only(true);
+        let client = builder.build_http();
+        let request = Request::post(format!("{url}/v1/responses"))
+            .body(body)
+            .unwrap();
+        let mut response = tokio::spawn(async move { client.request(request).await });
+        body_started.await.unwrap();
+        // The response must wait for the unfinished request body, rather than
+        // dropping it and resetting the still-active HTTP/2 stream.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut response)
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), response)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(response.status().is_success());
+        response.into_body().collect().await.unwrap();
+        let _ = stop.send(());
+        task.await.unwrap().unwrap();
+    }
 }
