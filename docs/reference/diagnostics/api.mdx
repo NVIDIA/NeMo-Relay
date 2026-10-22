@@ -91,6 +91,16 @@ For example, request up to ten recent events and omit component rows:
 nemo-relay diagnostics --query '{"max_components":0,"max_events":10}'
 ```
 
+This form works in Bash and PowerShell 7 with modern native argument passing.
+For Windows PowerShell 5.1, escape the embedded JSON quotes:
+
+```powershell
+nemo-relay diagnostics --query '{\"max_components\":0,\"max_events\":10}'
+```
+
+See [JSON Queries in Windows Shells](/reference/diagnostics/cli#json-queries-in-windows-shells)
+for PowerShell's legacy argument-passing mode.
+
 Use a `max_events` value within the limits returned by discovery. Add
 `--gateway-url http://127.0.0.1:4040` when selecting an existing gateway explicitly.
 The command uses Relay's authenticated, pinned TLS tunnel. That URL is not a

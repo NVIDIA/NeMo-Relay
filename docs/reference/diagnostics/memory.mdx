@@ -93,6 +93,16 @@ To inspect one entry without component rows from the CLI, run this command:
 nemo-relay diagnostics --memory --query '{"max_components":0,"max_events":1}'
 ```
 
+This form works in Bash and PowerShell 7 with modern native argument passing.
+For Windows PowerShell 5.1, escape the embedded JSON quotes:
+
+```powershell
+nemo-relay diagnostics --memory --query '{\"max_components\":0,\"max_events\":1}'
+```
+
+See [JSON Queries in Windows Shells](/reference/diagnostics/cli#json-queries-in-windows-shells)
+for PowerShell's legacy argument-passing mode.
+
 To make the same request from code, choose your binding below. These examples
 assume that the service is configured and the caller has read access. The Rust
 example uses a core `DiagnosticsReader`.

@@ -54,6 +54,10 @@ For an explicit local view after command completion and logging teardown, use
 `--diagnostics-final`. It writes one bounded canonical JSON page to stderr and
 does not change command stdout or exit codes. Restricted detail appears only
 because the caller requested inspection. Pre-context failures cannot be retained.
+The final page requires normal command teardown. On Windows, `gateway stop`
+force-terminates the gateway and bypasses this output, even when the gateway was
+started with `--diagnostics-final`. Capture any required evidence with
+`nemo-relay diagnostics` before stopping it.
 
 ### Start and Inspect a Gateway
 
@@ -85,7 +89,9 @@ Diagnostic settings are selected at startup. To change a persistent gateway:
    cannot restart it with the old settings during the change.
 2. Update the owner's `config.toml`. Managed integrations use user/system files.
    An explicit file in an unrelated terminal does not change their profile.
-3. Stop the gateway at its actual bind address. For the usual managed shared
+3. Capture any diagnostic evidence you need before stopping the gateway. On
+   Windows, `gateway stop` force-terminates it and cannot produce a final page.
+   Stop the gateway at its actual bind address. For the usual managed shared
    gateway address, run:
 
    ```bash
@@ -107,7 +113,6 @@ never performs this restart.
 ```bash
 nemo-relay diagnostics --capabilities
 nemo-relay diagnostics --gateway-url http://127.0.0.1:4040
-nemo-relay diagnostics --query '{"component_key":"cli.gateway","max_events":10}'
 ```
 
 Inspection connects to an existing local gateway over its pinned TLS tunnel.
@@ -149,6 +154,26 @@ inspector's receive cap, independently of the server's response budget. It accep
 worker wrappers. Increase it explicitly when inspecting a server configured for
 larger responses. Reads with `--worker` cannot also use `--query`, `--capabilities`,
 or `--memory`.
+
+### JSON Queries in Windows Shells
+
+Use the following form in Bash or PowerShell 7 with modern native argument
+passing:
+
+```bash
+nemo-relay diagnostics --query '{"component_key":"cli.gateway","max_events":10}'
+```
+
+Windows PowerShell 5.1 strips embedded quotes when passing arguments to native
+executables. Escape the JSON quotes with backslashes in that shell:
+
+```powershell
+nemo-relay diagnostics --query '{\"component_key\":\"cli.gateway\",\"max_events\":10}'
+```
+
+The escaped form also applies when PowerShell 7 uses
+`$PSNativeCommandArgumentPassing = 'Legacy'`. Use the unescaped form with modern
+argument passing; otherwise the backslashes become part of the query.
 
 ### CLI Producer Ownership and Memory
 
