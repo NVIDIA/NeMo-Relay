@@ -113,6 +113,37 @@ def _decode(data: Any, opaque: dict[str, Any]) -> Any:
 ToolResultValue = ToolMessage | Command[Any] | list[Any]
 
 
+def _is_tool_message_dict(value: dict[str, Any]) -> bool:
+    """Recognize LangChain message dictionaries and LangGraph role shorthand."""
+    return value.get("role", value.get("type")) == "tool"
+
+
+def _rebind_tool_messages(value: Any, source_id: str | None, tool_call_id: str, *, messages: bool = False) -> Any:
+    """Give replayed framework messages the current invocation's identity."""
+    if isinstance(value, ToolMessage) and value.tool_call_id == source_id:
+        return value.model_copy(update={"tool_call_id": tool_call_id, "id": None})
+    if isinstance(value, Command):
+        return replace(
+            value,
+            update=_rebind_tool_messages(value.update, source_id, tool_call_id, messages=True),
+            resume=_rebind_tool_messages(value.resume, source_id, tool_call_id),
+            goto=_rebind_tool_messages(value.goto, source_id, tool_call_id),
+        )
+    if isinstance(value, Send):
+        return Send(value.node, _rebind_tool_messages(value.arg, source_id, tool_call_id))
+    if isinstance(value, dict):
+        if messages and _is_tool_message_dict(value) and value.get("tool_call_id") == source_id:
+            return {**value, "tool_call_id": tool_call_id, "id": None}
+        return {
+            key: _rebind_tool_messages(item, source_id, tool_call_id, messages=key == "messages")
+            for key, item in value.items()
+        }
+    if isinstance(value, list | tuple):
+        items = [_rebind_tool_messages(item, source_id, tool_call_id, messages=messages) for item in value]
+        return tuple(items) if isinstance(value, tuple) else items
+    return value
+
+
 class LangChainToolResultCodec(Codec[ToolResultValue]):
     """Encode tool content and status without losing messages or graph updates.
 
@@ -127,6 +158,7 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
         self._opaque: dict[str, Any] = {}
 
     def _candidates(self, value: ToolResultValue) -> list[ToolMessage]:
+        """Collect tool messages from results and command updates, including dictionary messages."""
         if isinstance(value, list):
             return [message for item in value for message in self._candidates(item)]
         if isinstance(value, ToolMessage):
@@ -137,16 +169,17 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
             candidates = []
             if isinstance(messages, list | tuple):
                 for message in messages:
-                    if isinstance(message, dict) and message.get("type") == "tool":
+                    if isinstance(message, dict) and _is_tool_message_dict(message):
                         message = ToolMessage.model_validate(message)
                     if isinstance(message, ToolMessage):
                         candidates.append(message)
         return candidates
 
-    def _message(self, value: ToolResultValue) -> ToolMessage | None:
+    def _message(self, value: ToolResultValue, tool_call_id: str | None) -> ToolMessage | None:
+        """Select the message for the requested call, or the sole unambiguous candidate."""
         candidates = self._candidates(value)
-        if self._tool_call_id is not None:
-            return next((message for message in candidates if message.tool_call_id == self._tool_call_id), None)
+        if tool_call_id is not None:
+            return next((message for message in candidates if message.tool_call_id == tool_call_id), None)
         return candidates[0] if len(candidates) == 1 else None
 
     def _validate(self, value: object) -> None:
@@ -157,19 +190,28 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
             raise TypeError("Expected a ToolMessage, Command, or a list of those values")
 
     def to_json(self, value: ToolResultValue) -> dict[str, Json]:
+        """Encode the result with display content, failure status, and cache replay metadata."""
         self._validate(value)
-        message = self._message(value)
+        message = self._message(value, self._tool_call_id)
         content = message.content if message is not None else None
         if isinstance(content, list):
             content = [{"type": "text", "text": part} if isinstance(part, str) else part for part in content]
+        opaque: dict[str, Any] = {}
+        result = _encode(value, opaque)
+        self._opaque.update(opaque)
         return {
             "schema": TOOL_RESULT_SCHEMA,
             "content": cast(Json, content),
             "is_error": message is not None and message.status == "error",
-            "result": _encode(value, self._opaque),
+            "result": result,
+            "cache": {
+                "replayable": not opaque and self._tool_call_id is not None,
+                "tool_call_id": self._tool_call_id,
+            },
         }
 
     def from_json(self, data: Json) -> ToolResultValue:
+        """Restore a result, apply projection edits, and rebind messages to the current call."""
         if not isinstance(data, dict) or data.get("schema") != TOOL_RESULT_SCHEMA:
             raise ValueError("Expected a versioned Relay tool result")
         content, is_error = data.get("content"), data.get("is_error")
@@ -182,10 +224,20 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
             raise ValueError("Invalid tool result content or error status")
         result = _decode(data.get("result"), self._opaque)
         self._validate(result)
-        message = self._message(result)
+        source_id = self._tool_call_id
+        cache = data.get("cache")
+        if isinstance(cache, dict) and "tool_call_id" in cache:
+            cached_id = cache["tool_call_id"]
+            if cached_id is not None and not isinstance(cached_id, str):
+                raise ValueError("Invalid cached tool call ID")
+            source_id = cached_id
+        replayed = self._tool_call_id is not None and source_id != self._tool_call_id
+        message = self._message(result, source_id)
         if message is None:
             if content is not None or is_error:
                 raise ValueError("Cannot project content or status without a matching ToolMessage")
+            if replayed and self._tool_call_id is not None:
+                return _rebind_tool_messages(result, source_id, self._tool_call_id)
             return result
         # Keep native content blocks (including string parts) on an unchanged round trip.
         original_content = message.content
@@ -193,19 +245,25 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
             original_content = [
                 {"type": "text", "text": part} if isinstance(part, str) else part for part in original_content
             ]
-        if original_content == content and (message.status == "error") == is_error:
-            return result
-        updated = message.model_copy(
-            update={"content": content if content is not None else "", "status": "error" if is_error else "success"}
-        )
-        return self._replace_message(result, message, updated)
+        changes: dict[str, Any] = {}
+        if original_content != content:
+            changes["content"] = content if content is not None else ""
+        if (message.status == "error") != is_error:
+            changes["status"] = "error" if is_error else "success"
+        if changes:
+            updated = message.model_copy(update=changes)
+            result = self._replace_message(result, message, updated)
+        if replayed and self._tool_call_id is not None:
+            return _rebind_tool_messages(result, source_id, self._tool_call_id)
+        return result
 
     def _replace_message(self, result: ToolResultValue, message: ToolMessage, updated: ToolMessage) -> ToolResultValue:
+        """Replace the matching tool message while preserving unrelated command updates."""
         if isinstance(result, list):
             return [self._replace_message(item, message, updated) for item in result]
         if isinstance(result, ToolMessage):
             return updated if result is message else result
-        match = self._message(result)
+        match = self._message(result, message.tool_call_id)
         if match is None or match.tool_call_id != message.tool_call_id:
             return result
         update = result.update
@@ -216,7 +274,7 @@ class LangChainToolResultCodec(Codec[ToolResultValue]):
             if item is message
             or (
                 isinstance(item, dict)
-                and item.get("type") == "tool"
+                and _is_tool_message_dict(item)
                 and item.get("tool_call_id") == message.tool_call_id
             )
             else item
