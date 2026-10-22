@@ -10,12 +10,15 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v16";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v27";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
   const eventSanitizerContext = new AsyncLocalStorage();
   const publicationStates = new Map();
+  const streamQueues = new WeakMap();
+  const streamCloses = new WeakMap();
+  const pinnedStreams = new Map();
   let nextPublicationContextId = 0;
 
   function callbackStore(
@@ -110,6 +113,94 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     return result;
   }
 
+  function failureEnvelope(error, fallbackMessage) {
+    let message = fallbackMessage;
+    let exceptionType = 'Error';
+    try {
+      if (typeof error === 'string') {
+        message = error;
+      } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
+        message = String(error);
+      } else {
+        const errorMessage = error.message;
+        if (typeof errorMessage === 'string' && errorMessage.length > 0) {
+          message = errorMessage;
+        }
+      }
+    } catch {}
+    try {
+      const errorName = error?.name;
+      if (typeof errorName === 'string' && errorName.length > 0) {
+        exceptionType = errorName;
+      }
+    } catch {}
+    return { ok: false, error: message, exceptionType };
+  }
+
+  function cleanupFailure(error, cleanup) {
+    const primary = failureEnvelope(error, 'unknown error');
+    const secondary = failureEnvelope(cleanup, 'unknown error');
+    const combined = new Error(`${primary.error}; stream cleanup also failed: ${secondary.error}`);
+    combined.name = primary.exceptionType;
+    return combined;
+  }
+
+  function isThenable(value) {
+    return (
+      value !== null
+      && (typeof value === 'object' || typeof value === 'function')
+      && typeof value.then === 'function'
+    );
+  }
+
+  // Return a synchronous callback's envelope to a direct caller so a chunk is delivered in
+  // the same poll.
+  function settleEnvelope(fn, encode, complete, fallbackMessage, direct) {
+    const envelopeFor = (value) => {
+      try {
+        return { ok: true, value: encode(value) };
+      } catch (error) {
+        return failureEnvelope(error, fallbackMessage);
+      }
+    };
+    let envelope;
+    try {
+      const value = fn();
+      if (isThenable(value)) {
+        Promise.resolve(value).then(
+          (resolved) => complete(envelopeFor(resolved)),
+          (error) => complete(failureEnvelope(error, fallbackMessage)),
+        );
+        return undefined;
+      }
+      envelope = envelopeFor(value);
+    } catch (error) {
+      envelope = failureEnvelope(error, fallbackMessage);
+    }
+    if (direct) {
+      return envelope;
+    }
+    complete(envelope);
+    return undefined;
+  }
+
+  async function driveStream(poll, close) {
+    for (;;) {
+      const step = poll(close);
+      if (!(step instanceof Promise)) {
+        return step;
+      }
+      const settled = await step;
+      if (settled === null) {
+        continue;
+      }
+      if (settled.error != null) {
+        throw new Error(settled.error);
+      }
+      return close ? undefined : null;
+    }
+  }
+
   function callPromise(
     fn,
     arg0,
@@ -129,6 +220,35 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   ) {
     const controller = new AbortController();
     registerAbort(() => controller.abort());
+    // Downstream streams from `next()`. A wrapper the intercept iterates reports
+    // the close itself. The rest are closed before this call settles.
+    const downstreams = new Map();
+    const closeDownstream = (downstream) => {
+      const state = downstreams.get(downstream);
+      state.closing ??= downstream.close();
+      return state.closing;
+    };
+    const settleDownstreams = async (failure) => {
+      for (const [downstream, state] of downstreams) {
+        if (state.reported) continue;
+        state.reported = true;
+        try {
+          await closeDownstream(downstream);
+        } catch (cleanup) {
+          failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
+        }
+      }
+      return failure;
+    };
+    controller.signal.addEventListener(
+      'abort',
+      () => {
+        for (const downstream of downstreams.keys()) {
+          closeDownstream(downstream).catch(() => {});
+        }
+      },
+      { once: true },
+    );
     let ownsPublicationState = false;
     let publicationState;
     if (publicationContextId !== undefined) {
@@ -173,6 +293,11 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         ? invokeNext
         : async (value) => {
         const downstream = await invokeNext(value);
+        const state = { closing: undefined, reported: false };
+        downstreams.set(downstream, state);
+        if (controller.signal.aborted) {
+          closeDownstream(downstream).catch(() => {});
+        }
         return {
           async *[Symbol.asyncIterator]() {
             try {
@@ -182,7 +307,8 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
                 yield chunk;
               }
             } finally {
-              await downstream.close();
+              state.reported = true;
+              await closeDownstream(downstream);
             }
           },
         };
@@ -199,50 +325,49 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           return;
         }
         if (value == null || typeof value[Symbol.asyncIterator] !== 'function') {
-          throw new TypeError('streaming execution intercept must return an AsyncIterable');
+          throw new TypeError('streaming callback must return an AsyncIterable');
         }
         resolve();
         const iterator = value[Symbol.asyncIterator]();
-        let exhausted = false;
+        // Like `for await`, a finished or failed `next()` leaves nothing for `return()` to clean up.
+        let finished = false;
+        let failure;
         try {
           while (!controller.signal.aborted) {
-            const item = await iterator.next();
+            let item;
+            try {
+              item = await iterator.next();
+            } catch (error) {
+              finished = true;
+              throw error;
+            }
             if (item.done) {
-              exhausted = true;
+              finished = true;
               break;
             }
             await streamPush(jsonValue(item.value === undefined ? null : item.value));
           }
-        } finally {
-          if (!exhausted && typeof iterator.return === 'function') {
+        } catch (error) {
+          failure = { error };
+        }
+        if (!finished && typeof iterator.return === 'function') {
+          try {
             await iterator.return();
+          } catch (cleanup) {
+            failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
           }
+        }
+        failure = await settleDownstreams(failure);
+        if (failure !== undefined) {
+          throw failure.error;
         }
         streamEnd();
         settlePublication();
-      }).catch((error) => {
+      }).catch(async (error) => {
+        const failure = await settleDownstreams({ error });
         settlePublication();
-        let message = 'unknown error';
-        let exceptionType = 'Error';
-        try {
-          if (typeof error === 'string') {
-            message = error;
-          } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
-            message = String(error);
-          } else if (error != null) {
-            const errorMessage = error.message;
-            if (typeof errorMessage === 'string') {
-              message = errorMessage;
-            }
-          }
-        } catch {}
-        try {
-          const errorName = error?.name;
-          if (typeof errorName === 'string' && errorName.length > 0) {
-            exceptionType = errorName;
-          }
-        } catch {}
-        reject(message, exceptionType);
+        const envelope = failureEnvelope(failure.error, 'unknown error');
+        reject(envelope.error, envelope.exceptionType);
       });
     };
     eventSanitizerContext.run(token, invoke);
@@ -255,22 +380,111 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           const value = fn(...args);
           return { ok: true, value: jsonValue(value === undefined ? null : value) };
         } catch (error) {
-          let message = 'JavaScript callback failed';
-          let exceptionType = 'Error';
-          try {
-            const errorMessage = error?.message;
-            if (typeof errorMessage === 'string') {
-              message = errorMessage;
-            }
-          } catch {}
-          try {
-            const errorName = error?.name;
-            if (typeof errorName === 'string' && errorName.length > 0) {
-              exceptionType = errorName;
-            }
-          } catch {}
-          return { ok: false, error: message, exceptionType };
+          return failureEnvelope(error, 'JavaScript callback failed');
         }
+      };
+    },
+
+    // Chaining through a resolved promise stores the queue tail before a poll runs, so a
+    // next() from inside a poll queues behind it.
+    streamNext(poll) {
+      const run = () => driveStream(poll, false);
+      const current = (streamQueues.get(poll) ?? Promise.resolve()).then(run, run);
+      streamQueues.set(poll, current);
+      return current;
+    },
+
+    streamClose(poll) {
+      const existing = streamCloses.get(poll);
+      if (existing !== undefined) {
+        return existing;
+      }
+      const closing = Promise.resolve().then(() => driveStream(poll, true));
+      streamCloses.set(poll, closing);
+      return closing;
+    },
+
+    // Keep a handle reachable while its next() or close() is pending so collection does
+    // not cut a read short.
+    pinStreamMethods(prototype) {
+      for (const name of ['next', 'close']) {
+        const native = prototype[name];
+        Object.defineProperty(prototype, name, {
+          configurable: true,
+          writable: true,
+          value: {
+            [name]() {
+              const promise = native.call(this);
+              pinnedStreams.set(this, (pinnedStreams.get(this) ?? 0) + 1);
+              const unpin = () => {
+                const left = pinnedStreams.get(this) - 1;
+                if (left > 0) {
+                  pinnedStreams.set(this, left);
+                } else {
+                  pinnedStreams.delete(this);
+                }
+              };
+              // Return a derived promise so an ignored rejection stays unhandled.
+              return promise.then(
+                (value) => {
+                  unpin();
+                  return value;
+                },
+                (error) => {
+                  unpin();
+                  throw error;
+                },
+              );
+            },
+          }[name],
+        });
+      }
+    },
+
+    collector(fn) {
+      return function __nemo_relay_collector_wrapper(chunk, complete, direct) {
+        // A direct call runs inside a consumer's context. Pin a bare store like the
+        // threadsafe path does.
+        const token = callbackStore({ active: false }, undefined, undefined, undefined, undefined);
+        const envelope = eventSanitizerContext.run(token, () =>
+          settleEnvelope(
+            () => fn(chunk),
+            () => null,
+            (settled) => {
+              expireCallbackStore(token);
+              complete(settled);
+            },
+            'JavaScript collector callback failed',
+            direct,
+          ),
+        );
+        if (envelope !== undefined) {
+          expireCallbackStore(token);
+        }
+        return envelope;
+      };
+    },
+
+    finalizer(fn) {
+      return function __nemo_relay_finalizer_wrapper(complete, direct) {
+        // The finalizer is part of the END publication, so a flush inside it is re-entrant.
+        const token = callbackStore({ active: true }, undefined, undefined, undefined, undefined);
+        const envelope = eventSanitizerContext.run(token, () =>
+          settleEnvelope(
+            fn,
+            (value) => jsonValue(value === undefined ? null : value),
+            (settled) => {
+              expireCallbackStore(token);
+              complete(settled);
+            },
+            'JavaScript finalizer callback failed',
+            direct,
+          ),
+        );
+        if (envelope !== undefined) {
+          expireCallbackStore(token);
+        }
+        return envelope;
       };
     },
 
@@ -293,19 +507,9 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         streamEnd,
       ) {
         if (error != null) {
-          let message = 'unknown error';
-          let exceptionType = 'Error';
-          try {
-            message = String(error?.message ?? error);
-          } catch {}
-          try {
-            const errorName = error?.name;
-            if (typeof errorName === 'string' && errorName.length > 0) {
-              exceptionType = errorName;
-            }
-          } catch {}
           if (typeof reject === 'function') {
-            reject(message, exceptionType);
+            const failure = failureEnvelope(error, 'unknown error');
+            reject(failure.error, failure.exceptionType);
           }
           return;
         }
@@ -326,25 +530,6 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           streamPush,
           streamEnd,
         );
-      };
-    },
-
-    scopedStream(fn) {
-      return function __nemo_relay_scoped_stream_wrapper(
-        arg,
-        scopeStack,
-        propagationParentUuid,
-        propagationContext,
-      ) {
-        const current = eventSanitizerContext.getStore();
-        const token = callbackStore(
-          current?.publicationState ?? { active: false },
-          current?.publicationContextId,
-          scopeStack,
-          propagationParentUuid,
-          propagationContext,
-        );
-        return eventSanitizerContext.run(token, () => fn(arg));
       };
     },
 
@@ -431,13 +616,6 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       return true;
     },
 
-    expireCallbackContext() {
-      const current = eventSanitizerContext.getStore();
-      if (current === undefined) {
-        return;
-      }
-      expireCallbackStore(current);
-    },
   };
 })()"#;
 
@@ -477,6 +655,28 @@ fn wrap_callback(env: &Env, func: &JsFunction, factory_name: &str) -> napi::Resu
     Ok(unsafe { wrapper.cast::<JsFunction>() })
 }
 
+fn drive_stream(env: &Env, helper: &str, poll: &JsFunction) -> napi::Result<JsObject> {
+    let factories = callback_factories(env)?;
+    let helper: JsFunction = factories.get_named_property(helper)?;
+    let promise = helper.call(None, &[as_unknown(env, poll)])?;
+    Ok(unsafe { promise.cast::<JsObject>() })
+}
+
+pub(crate) fn stream_next(env: &Env, poll: &JsFunction) -> napi::Result<JsObject> {
+    drive_stream(env, "streamNext", poll)
+}
+
+pub(crate) fn stream_close(env: &Env, poll: &JsFunction) -> napi::Result<JsObject> {
+    drive_stream(env, "streamClose", poll)
+}
+
+pub(crate) fn pin_stream_methods(env: &Env, prototype: &JsObject) -> napi::Result<()> {
+    let factories = callback_factories(env)?;
+    let helper: JsFunction = factories.get_named_property("pinStreamMethods")?;
+    helper.call(None, &[as_unknown(env, prototype)])?;
+    Ok(())
+}
+
 pub(crate) fn wrap_execution_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
     wrap_callback(env, func, "execution")
 }
@@ -485,11 +685,12 @@ pub(crate) fn wrap_promise_callback(env: &Env, func: &JsFunction) -> napi::Resul
     wrap_callback(env, func, "promise")
 }
 
-pub(crate) fn wrap_scoped_stream_callback(
-    env: &Env,
-    func: &JsFunction,
-) -> napi::Result<JsFunction> {
-    wrap_callback(env, func, "scopedStream")
+pub(crate) fn wrap_collector_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
+    wrap_callback(env, func, "collector")
+}
+
+pub(crate) fn wrap_finalizer_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
+    wrap_callback(env, func, "finalizer")
 }
 
 pub(crate) fn wrap_scoped_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
@@ -562,13 +763,6 @@ pub(crate) fn callback_propagation_context(
         <crate::api::PropagationContext as FromNapiValue>::from_napi_value(env.raw(), value.raw())
             .map(Some)
     }
-}
-
-pub(crate) fn expire_callback_context(env: &Env) -> napi::Result<()> {
-    let factories = callback_factories(env)?;
-    let expire: JsFunction = factories.get_named_property("expireCallbackContext")?;
-    expire.call::<JsUnknown>(None, &[])?;
-    Ok(())
 }
 
 pub(crate) fn with_callback_scope_stack(

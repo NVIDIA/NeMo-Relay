@@ -5,7 +5,7 @@ use super::native::{
     dispatch_sanitized_event_with_delivery, dispatcher_sender, enqueue_dispatch_message,
     flush_queued_subscribers, flush_subscribers, prepare_for_fork, register_async_publication,
     register_pending_publication, resume_after_fork_parent, sanitize_event_snapshot,
-    set_sanitizer_runtime_failure_for_test, spawn_background_publication,
+    set_sanitizer_runtime_failure_for_test, spawn_background_publication, with_pending_publication,
 };
 use super::{EventSubscriberFn, SubscriberDelivery, publication_context, with_publication_context};
 use crate::api::event::{BaseEvent, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent};
@@ -255,6 +255,52 @@ fn pending_publication_defers_flush_without_blocking_unrelated_delivery() {
     flush_rx
         .recv_timeout(std::time::Duration::from_secs(1))
         .expect("flush must complete after pending work");
+}
+
+#[test]
+fn pending_publication_flush_excludes_its_own_lineage() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    flush_subscribers().unwrap();
+    let pending = register_pending_publication().expect("pending publication");
+    let (flushed_tx, flushed_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(with_pending_publication(Some(pending), async move {
+                flush_subscribers().expect("flush inside the pending publication");
+                flushed_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            }));
+    });
+    flushed_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("a flush inside the pending publication must not wait on it");
+
+    let (flush_tx, flush_rx) = mpsc::channel();
+    dispatcher_sender()
+        .expect("dispatcher sender")
+        .send(DispatcherMessage::Flush {
+            done: flush_tx,
+            include_pending: true,
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            flush_rx.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "an unrelated flush must wait for the pending publication"
+    );
+
+    release_tx.send(()).unwrap();
+    worker.join().unwrap();
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("flush must complete after the pending publication drops");
 }
 
 #[test]
@@ -1020,6 +1066,113 @@ fn transforms_preserve_the_captured_propagation_root() {
     assert_eq!(published.propagation_root_uuid(), Some(root_uuid));
     assert_eq!(published.propagation_parent_uuid(), Some(parent_uuid));
     assert!(nested.is_empty());
+}
+
+#[test]
+fn middleware_stages_share_a_runtime_only_within_one_event() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let runtimes = Arc::new(Mutex::new(Vec::new()));
+    for context in ["first", "second"] {
+        let event = Event::Mark(MarkEvent::new(
+            BaseEvent::builder().name(context).build(),
+            None,
+            None,
+        ));
+        let (cancelled_tx, mut cancelled_rx) = tokio::sync::oneshot::channel::<()>();
+        let observed = Arc::clone(&runtimes);
+        let transform: super::EventTransformFn = Box::new(move |event| {
+            Box::pin(async move {
+                assert_eq!(publication_context::<String>().unwrap().as_str(), context);
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(tokio::runtime::Handle::current().id());
+                tokio::spawn(async move {
+                    let _cancelled_tx = cancelled_tx;
+                    std::future::pending::<()>().await;
+                });
+                event
+            })
+        });
+        let observed = Arc::clone(&runtimes);
+        let injector: EventMetadataInjectorFn = Arc::new(move |_| {
+            let observed = Arc::clone(&observed);
+            Box::pin(async move {
+                assert_eq!(publication_context::<String>().unwrap().as_str(), context);
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(tokio::runtime::Handle::current().id());
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                Ok(BTreeMap::from([(
+                    "nv.test.context".into(),
+                    serde_json::json!(context),
+                )]))
+            })
+        });
+        let observed = Arc::clone(&runtimes);
+        let sanitizer: EventSanitizeFn = Arc::new(move |event, fields| {
+            let observed = Arc::clone(&observed);
+            Box::pin(async move {
+                assert_eq!(publication_context::<String>().unwrap().as_str(), context);
+                assert_eq!(event.metadata().unwrap()["nv.test.context"], context);
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(tokio::runtime::Handle::current().id());
+                Ok(fields)
+            })
+        });
+        let (published, nested) = sanitize_event_snapshot(
+            event,
+            Some(transform),
+            vec![RegistryRecord::new("runtime-injector", 0, injector)],
+            vec![RegistryRecord::new("runtime-sanitizer", 0, sanitizer)],
+            Some(Arc::new(context.to_string())),
+        );
+        assert!(published.is_some());
+        assert!(nested.is_empty());
+        assert!(matches!(
+            cancelled_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+    }
+    let runtimes = runtimes.lock().unwrap();
+    assert_eq!(runtimes.len(), 6);
+    assert_eq!(runtimes[0], runtimes[1]);
+    assert_eq!(runtimes[1], runtimes[2]);
+    assert_eq!(runtimes[3], runtimes[4]);
+    assert_eq!(runtimes[4], runtimes[5]);
+    assert_ne!(runtimes[0], runtimes[3]);
+}
+
+#[test]
+fn panicking_transform_cancels_its_detached_tasks() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("panicking-transform").build(),
+        None,
+        None,
+    ));
+    let (cancelled_tx, mut cancelled_rx) = tokio::sync::oneshot::channel::<()>();
+    let transform: super::EventTransformFn = Box::new(move |_| {
+        Box::pin(async move {
+            tokio::spawn(async move {
+                let _cancelled_tx = cancelled_tx;
+                std::future::pending::<()>().await;
+            });
+            panic!("transform failed");
+        })
+    });
+    let (published, nested) =
+        sanitize_event_snapshot(event, Some(transform), Vec::new(), Vec::new(), None);
+    assert!(published.is_none());
+    assert!(nested.is_empty());
+    assert!(matches!(
+        cancelled_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+    ));
 }
 
 #[test]

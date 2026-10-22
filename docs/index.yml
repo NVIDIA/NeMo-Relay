@@ -23,6 +23,42 @@ navigation:
         slug: quick-start
         collapsed: open-by-default
         contents:
+          - section: "Agent Frameworks"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Deep Agents"
+                icon: fa-solid fa-layer-group
+                path: ./getting-started/quick-start/deep-agents.mdx
+                slug: deep-agents
+              - page: "LangChain"
+                icon: fa-solid fa-link
+                path: ./getting-started/quick-start/langchain.mdx
+                slug: langchain
+              - page: "LangGraph"
+                icon: fa-solid fa-diagram-project
+                path: ./getting-started/quick-start/langgraph.mdx
+                slug: langgraph
+          - section: "Agent Harnesses"
+            skip-slug: true
+            collapsed: open-by-default
+            contents:
+              - page: "Codex"
+                icon: fa-brands fa-openai
+                path: ./getting-started/quick-start/codex.mdx
+                slug: codex
+              - page: "Claude Code"
+                icon: fa-brands fa-claude
+                path: ./getting-started/quick-start/claude-code.mdx
+                slug: claude-code
+              - page: "Hermes Agent"
+                icon: fa-solid fa-terminal
+                path: ./getting-started/quick-start/hermes.mdx
+                slug: hermes
+              - page: "pi"
+                icon: fa-solid fa-pi
+                path: ./getting-started/quick-start/pi.mdx
+                slug: pi
           - section: "Application APIs"
             skip-slug: true
             collapsed: open-by-default
@@ -55,39 +91,50 @@ navigation:
     title: "Instrument Applications"
     slug: instrument-applications
     title-source: frontmatter
-  - section: "Configure Plugins"
+  - section: "Use Plugins"
     slug: configure-plugins
     contents:
       - page: "About"
         path: ./configure-plugins/about.mdx
         slug: about
-      - page: "Configure and Initialize Plugins"
-        path: ./configure-plugins/initialize-plugins.mdx
-        slug: initialize-plugins
-      - folder: ./configure-plugins/observability
-        title: "Observability"
-        title-source: frontmatter
-      - folder: ./configure-plugins/adaptive
-        title: "Adaptive"
-        title-source: frontmatter
-      - folder: ./configure-plugins/nemo-guardrails
-        title: "NeMo Guardrails (Deprecated)"
-        title-source: frontmatter
-      - folder: ./configure-plugins/pii-redaction
-        title: "PII Redaction"
-        title-source: frontmatter
-      - page: "Model Pricing"
-        path: ./configure-plugins/model-pricing.mdx
-        slug: model-pricing
-      - page: "Resource Metrics"
-        path: ./configure-plugins/resource-metrics.mdx
-        slug: resource-metrics
-      - page: "Configure Discoverable Plugins"
-        path: ./configure-plugins/discoverable-plugins.mdx
-        slug: discoverable-plugins
-      - page: "Plugin Configuration Files"
+      - page: "Configure"
         path: ./configure-plugins/plugin-configuration-files.mdx
         slug: plugin-configuration-files
+      - page: "Manage"
+        path: ./configure-plugins/discoverable-plugins.mdx
+        slug: discoverable-plugins
+      - page: "Initialize"
+        path: ./configure-plugins/initialize-plugins.mdx
+        slug: initialize-plugins
+      - section: "Built-in Plugins"
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - folder: ./configure-plugins/observability
+            title: "Observability"
+            title-source: frontmatter
+          - folder: ./configure-plugins/adaptive
+            title: "Adaptive Runtime"
+            title-source: frontmatter
+          - folder: ./configure-plugins/nemo-guardrails
+            title: "NeMo Guardrails (Deprecated)"
+            title-source: frontmatter
+          - folder: ./configure-plugins/pii-redaction
+            title: "PII Redaction"
+            title-source: frontmatter
+          - page: "Model Pricing"
+            path: ./configure-plugins/model-pricing.mdx
+            slug: model-pricing
+          - page: "Resource Metrics"
+            path: ./configure-plugins/resource-metrics.mdx
+            slug: resource-metrics
+      - section: "First Party Plugins"
+        skip-slug: true
+        collapsed: open-by-default
+        contents:
+          - page: "NeMo Switchyard"
+            path: ./configure-plugins/switchyard.mdx
+            slug: switchyard
   - folder: ./integrate-into-frameworks
     title: "Integrate into Frameworks"
     slug: integrate-into-frameworks

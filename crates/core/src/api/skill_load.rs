@@ -51,7 +51,10 @@ pub(crate) struct SkillLoad {
 
 pub(crate) fn detect(tool_name: &str, args: &Value) -> Vec<SkillLoad> {
     let normalized_tool = normalize_identifier(tool_name);
-    let source_and_names = if matches!(normalized_tool.as_str(), "skill" | "skillview") {
+    let source_and_names = if matches!(
+        normalized_tool.as_str(),
+        "skill" | "skillview" | "loadskill"
+    ) {
         (SkillLoadSource::SkillTool, skill_tool_names(args))
     } else if is_structured_reader(tool_name) && !has_partial_read_controls(args) {
         (

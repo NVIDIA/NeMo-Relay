@@ -4,7 +4,7 @@
 //! Authenticated health and shutdown transport for loopback sidecars.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{BufWriter, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -42,19 +42,33 @@ pub(crate) struct VerifiedHttpResponse {
 #[derive(Debug)]
 pub(crate) struct VerifiedHttpError {
     message: String,
+    readiness_failed: bool,
 }
 
 impl VerifiedHttpError {
     fn before_payload(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            readiness_failed: false,
         }
     }
 
     fn after_payload(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            readiness_failed: false,
         }
+    }
+
+    fn before_readiness(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            readiness_failed: true,
+        }
+    }
+
+    pub(crate) fn readiness_failed(&self) -> bool {
+        self.readiness_failed
     }
 
     pub(crate) fn missing_fingerprint() -> Self {
@@ -83,34 +97,183 @@ pub(crate) fn post_verified(
     timeout: Duration,
     max_response_bytes: usize,
 ) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
+    post_authenticated(
+        url,
+        bootstrap_fingerprint,
+        path,
+        headers,
+        body,
+        timeout,
+        max_response_bytes,
+        false,
+        None,
+        false,
+    )
+}
+
+/// Uses the health-probe timeout until the listener proves its identity, then the normal delivery
+/// timeout. Only failures before that authentication barrier may fall back to readiness polling.
+pub(crate) fn post_verified_preflight(
+    url: &str,
+    bootstrap_fingerprint: &str,
+    path: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    timeout: Duration,
+    max_response_bytes: usize,
+) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
+    // A gateway still starting may not have published its TLS pin yet. Fall back to the
+    // existing readiness check without opening an empty connection to that listener.
+    cached_tls_identity().map_err(|error| {
+        VerifiedHttpError::before_readiness(format!(
+            "failed to load pinned Relay TLS identity: {error}"
+        ))
+    })?;
+    post_authenticated(
+        url,
+        bootstrap_fingerprint,
+        path,
+        headers,
+        body,
+        timeout,
+        max_response_bytes,
+        false,
+        Some(HEALTHZ_TIMEOUT),
+        false,
+    )
+}
+
+pub(crate) fn post_daemon_verified(
+    url: &str,
+    path: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    timeout: Duration,
+    max_response_bytes: usize,
+) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
+    post_authenticated(
+        url,
+        "daemon",
+        path,
+        headers,
+        body,
+        timeout,
+        max_response_bytes,
+        true,
+        None,
+        false,
+    )
+}
+
+/// Inspect an existing listener over pinned TLS without health polling, acquisition,
+/// compatibility checks, or bootstrap-state creation.
+pub(crate) fn get_diagnostics(
+    url: &str,
+    path: &str,
+    max_bytes: usize,
+    daemon: bool,
+) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
+    let worker_route = daemon
+        && path
+            .strip_prefix("/_nemo_relay/v1/workers/")
+            .and_then(|s| s.strip_suffix("/diagnostics"))
+            .is_some_and(|s| s.parse::<uuid::Uuid>().is_ok());
+    if (!path.starts_with(crate::diagnostics_http::PREFIX) && !worker_route)
+        || path.bytes().any(|b| b == b'\r' || b == b'\n')
+    {
+        return Err(VerifiedHttpError::before_payload(
+            "invalid diagnostic route",
+        ));
+    }
+    post_authenticated(
+        url,
+        "diagnostics-read/v1",
+        path,
+        &[],
+        &[],
+        Duration::from_secs(5),
+        max_bytes,
+        daemon,
+        None,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn post_authenticated(
+    url: &str,
+    bootstrap_fingerprint: &str,
+    path: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    timeout: Duration,
+    max_response_bytes: usize,
+    daemon: bool,
+    readiness_timeout: Option<Duration>,
+    inspection: bool,
+) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
     let (host, port) = parse_loopback_url(url).map_err(VerifiedHttpError::after_payload)?;
     let addresses = (host.as_str(), port).to_socket_addrs().map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
+        VerifiedHttpError::before_readiness(format!(
             "failed to resolve verified gateway {url}: {error}"
         ))
     })?;
-    let mut stream = connect_loopback(addresses, timeout).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
+    let setup_timeout = readiness_timeout.unwrap_or(timeout);
+    let mut stream = connect_loopback(addresses, setup_timeout).map_err(|error| {
+        VerifiedHttpError::before_readiness(format!(
             "failed to connect to verified gateway {url}: {error}"
         ))
     })?;
-    stream.set_read_timeout(Some(timeout)).map_err(|error| {
+    stream.set_nodelay(true).map_err(|error| {
         VerifiedHttpError::before_payload(format!(
-            "failed to configure verified gateway read timeout: {error}"
+            "failed to configure verified gateway TCP_NODELAY: {error}"
         ))
     })?;
-    stream.set_write_timeout(Some(timeout)).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
-            "failed to configure verified gateway write timeout: {error}"
-        ))
-    })?;
+    let address = stream
+        .peer_addr()
+        .map_err(|error| VerifiedHttpError::before_payload(error.to_string()))?;
+    stream
+        .set_read_timeout(Some(setup_timeout))
+        .map_err(|error| {
+            VerifiedHttpError::before_payload(format!(
+                "failed to configure verified gateway read timeout: {error}"
+            ))
+        })?;
+    stream
+        .set_write_timeout(Some(setup_timeout))
+        .map_err(|error| {
+            VerifiedHttpError::before_payload(format!(
+                "failed to configure verified gateway write timeout: {error}"
+            ))
+        })?;
 
-    let key = cached_bootstrap_challenge_key().map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
-            "failed to load the Relay bootstrap challenge key: {error}"
-        ))
-    })?;
-    let tls_identity = cached_tls_identity().map_err(|error| {
+    // Daemon delivery needs no per-user key. Explicit diagnostics inspection additionally
+    // requires the operator key; it still authenticates the daemon using pinned TLS.
+    let key = if daemon && !inspection {
+        None
+    } else {
+        let key = if inspection {
+            BootstrapChallengeKey::load_existing()
+                .map_err(|error| error.to_string())
+                .and_then(|key| {
+                    key.map(Arc::new)
+                        .ok_or_else(|| "diagnostic credentials unavailable".to_owned())
+                })
+        } else {
+            cached_bootstrap_challenge_key()
+        };
+        Some(key.map_err(|_| {
+            VerifiedHttpError::before_payload("Relay bootstrap credentials unavailable")
+        })?)
+    };
+    // A daemon may run under another account and serve a certificate its administrator
+    // published; a gateway always runs as this user and serves this user's identity.
+    let client_config = if daemon {
+        crate::gateway::tls::daemon_client_config()
+    } else {
+        cached_tls_identity().and_then(|identity| identity.client_config())
+    }
+    .map_err(|error| {
         VerifiedHttpError::before_payload(format!(
             "failed to load pinned Relay TLS identity: {error}"
         ))
@@ -124,33 +287,54 @@ pub(crate) fn post_verified(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     let authority = loopback_authority(&host, port);
-    let client_token = key.client_token();
     let tunnel = format!(
-        "GET /bootstrap/tunnel HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\n{BOOTSTRAP_CLIENT_TOKEN_HEADER}: {client_token}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\n\r\n"
+        "GET /bootstrap/tunnel HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\n\r\n"
     );
     stream.write_all(tunnel.as_bytes()).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
+        VerifiedHttpError::before_readiness(format!(
             "failed to request the Relay TLS tunnel: {error}"
         ))
     })?;
     let (tunnel_headers, _) = read_http_message(&mut stream, 0).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
+        VerifiedHttpError::before_readiness(format!(
             "failed to read the Relay TLS tunnel response: {error}"
         ))
     })?;
-    let proof_valid = http_header(&tunnel_headers, "x-nemo-relay-bootstrap-proof")
-        .is_some_and(|proof| key.verify(bootstrap_fingerprint, &nonce, proof));
-    if http_status(&tunnel_headers) != Some(101)
-        || !proof_valid
+    let proof_valid = key.as_deref().is_some_and(|key| {
+        http_header(&tunnel_headers, "x-nemo-relay-bootstrap-proof").is_some_and(|proof| {
+            http_header(&tunnel_headers, "x-nemo-relay-instance-id").is_some_and(|instance| {
+                key.verify(
+                    &listener_fingerprint(bootstrap_fingerprint, address, instance),
+                    &nonce,
+                    proof,
+                )
+            })
+        })
+    });
+    if http_status(&tunnel_headers) != Some(101) {
+        return Err(VerifiedHttpError::before_readiness(
+            "gateway did not establish an authenticated Relay TLS tunnel",
+        ));
+    }
+    if (!daemon && !proof_valid)
         || http_header(&tunnel_headers, "upgrade") != Some("nemo-relay-tls")
     {
         return Err(VerifiedHttpError::before_payload(
             "gateway did not establish an authenticated Relay TLS tunnel",
         ));
     }
-    let client_config = tls_identity
-        .client_config()
-        .map_err(VerifiedHttpError::before_payload)?;
+    // Readiness fallback is forbidden beyond this point, even if TLS or the health exchange
+    // fails before payload transmission. Keep delivery's existing timeout after authentication.
+    if readiness_timeout.is_some() {
+        stream
+            .set_read_timeout(Some(timeout))
+            .and_then(|()| stream.set_write_timeout(Some(timeout)))
+            .map_err(|error| {
+                VerifiedHttpError::before_payload(format!(
+                    "failed to configure verified gateway delivery timeout: {error}"
+                ))
+            })?;
+    }
     let server_name = rustls::pki_types::ServerName::try_from("localhost").map_err(|error| {
         VerifiedHttpError::before_payload(format!("invalid Relay TLS server name: {error}"))
     })?;
@@ -160,49 +344,53 @@ pub(crate) fn post_verified(
         })?;
     let mut stream = rustls::StreamOwned::new(connection, stream);
 
-    let challenge = format!(
-        "GET /healthz HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nConnection: keep-alive\r\n\r\n"
-    );
-    stream.write_all(challenge.as_bytes()).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
-            "Relay TLS handshake or health request failed: {error}"
-        ))
-    })?;
-    let (health_headers, health_body) =
-        read_http_message(&mut stream, 16 * 1024).map_err(|error| {
+    // Only gateway delivery loads the challenge key, so this block never runs for a daemon.
+    if !inspection && let Some(key) = key.as_deref() {
+        let challenge = format!(
+            "GET /healthz HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nConnection: keep-alive\r\n\r\n"
+        );
+        stream.write_all(challenge.as_bytes()).map_err(|error| {
             VerifiedHttpError::before_payload(format!(
-                "failed to read health response through Relay TLS: {error}"
+                "Relay TLS handshake or health request failed: {error}"
             ))
         })?;
-    let (health, _) = classify_health_response(
-        &health_headers,
-        &health_body,
-        Some((bootstrap_fingerprint, nonce.as_str(), key.as_ref())),
-    );
-    match health {
-        RelayHealth::Compatible => {}
-        RelayHealth::Incompatible => {
-            return Err(VerifiedHttpError::after_payload(format!(
-                "an incompatible NeMo Relay gateway is listening at {url}"
-            )));
+        let (health_headers, health_body) =
+            read_http_message(&mut stream, 16 * 1024).map_err(|error| {
+                VerifiedHttpError::before_payload(format!(
+                    "failed to read health response through Relay TLS: {error}"
+                ))
+            })?;
+        let (health, _) = classify_health_response(
+            &health_headers,
+            &health_body,
+            Some((bootstrap_fingerprint, nonce.as_str(), key, address)),
+        );
+        match health {
+            RelayHealth::Compatible => {}
+            RelayHealth::Incompatible => {
+                return Err(VerifiedHttpError::after_payload(format!(
+                    "an incompatible NeMo Relay gateway is listening at {url}"
+                )));
+            }
+            RelayHealth::Foreign | RelayHealth::Unavailable => {
+                return Err(VerifiedHttpError::after_payload(format!(
+                    "a foreign process is listening at the shared Relay gateway URL {url}"
+                )));
+            }
         }
-        RelayHealth::Foreign | RelayHealth::Unavailable => {
-            return Err(VerifiedHttpError::after_payload(format!(
-                "a foreign process is listening at the shared Relay gateway URL {url}"
-            )));
+        if http_header(&health_headers, "connection")
+            .is_some_and(|value| value.eq_ignore_ascii_case("close"))
+        {
+            return Err(VerifiedHttpError::before_payload(
+                "verified Relay gateway closed the authenticated connection before request delivery",
+            ));
         }
-    }
-    if http_header(&health_headers, "connection")
-        .is_some_and(|value| value.eq_ignore_ascii_case("close"))
-    {
-        return Err(VerifiedHttpError::before_payload(
-            "verified Relay gateway closed the authenticated connection before request delivery",
-        ));
     }
 
-    let mut request = format!("POST {path} HTTP/1.1\r\nHost: {authority}\r\n");
+    let method = if inspection { "GET" } else { "POST" };
+    let mut request = format!("{method} {path} HTTP/1.1\r\nHost: {authority}\r\n");
     for (name, value) in headers {
-        if name.eq_ignore_ascii_case(BOOTSTRAP_CLIENT_TOKEN_HEADER) {
+        if !daemon && name.eq_ignore_ascii_case(BOOTSTRAP_CLIENT_TOKEN_HEADER) {
             continue;
         }
         request.push_str(name);
@@ -210,24 +398,42 @@ pub(crate) fn post_verified(
         request.push_str(value);
         request.push_str("\r\n");
     }
-    request.push_str(BOOTSTRAP_CLIENT_TOKEN_HEADER);
-    request.push_str(": ");
-    request.push_str(&key.client_token());
-    request.push_str("\r\n");
+    if let Some(key) = key.as_deref() {
+        request.push_str(if inspection {
+            crate::diagnostics_http::AUTH_HEADER
+        } else {
+            BOOTSTRAP_CLIENT_TOKEN_HEADER
+        });
+        request.push_str(": ");
+        request.push_str(&if inspection {
+            key.diagnostics_token()
+        } else {
+            key.client_token()
+        });
+        request.push_str("\r\n");
+    }
     request.push_str(&format!(
         "Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     ));
-    stream.write_all(request.as_bytes()).map_err(|error| {
-        VerifiedHttpError::before_payload(format!(
-            "failed to send verified gateway request headers: {error}"
-        ))
-    })?;
-    stream.write_all(body).map_err(|error| {
-        VerifiedHttpError::after_payload(format!(
-            "verified gateway payload delivery became indeterminate: {error}"
-        ))
-    })?;
+    {
+        // Coalesce small hooks into one TLS write without copying large payloads into a
+        // second, payload-sized allocation. Flush before waiting for the response.
+        let mut writer = BufWriter::new(&mut stream);
+        writer.write_all(request.as_bytes()).map_err(|error| {
+            VerifiedHttpError::before_payload(format!(
+                "failed to send verified gateway request headers: {error}"
+            ))
+        })?;
+        writer
+            .write_all(body)
+            .and_then(|()| writer.flush())
+            .map_err(|error| {
+                VerifiedHttpError::after_payload(format!(
+                    "verified gateway payload delivery became indeterminate: {error}"
+                ))
+            })?;
+    }
     let (response_headers, response_body) = read_http_message(&mut stream, max_response_bytes)
         .map_err(|error| {
             VerifiedHttpError::after_payload(format!(
@@ -292,6 +498,9 @@ pub(crate) fn probe_with_instance(
     let Some(mut stream) = stream else {
         return (RelayHealth::Unavailable, None);
     };
+    let Ok(address) = stream.peer_addr() else {
+        return (RelayHealth::Foreign, None);
+    };
     if stream.set_read_timeout(Some(HEALTHZ_TIMEOUT)).is_err()
         || stream.set_write_timeout(Some(HEALTHZ_TIMEOUT)).is_err()
     {
@@ -334,7 +543,7 @@ pub(crate) fn probe_with_instance(
         &body,
         challenge
             .as_ref()
-            .map(|(fingerprint, nonce, key)| (*fingerprint, nonce.as_str(), key.as_ref())),
+            .map(|(fingerprint, nonce, key)| (*fingerprint, nonce.as_str(), key.as_ref(), address)),
     )
 }
 
@@ -349,6 +558,7 @@ pub(crate) fn request_shutdown(
         .map_err(|error| format!("failed to resolve managed sidecar {url}: {error}"))?;
     let mut stream = connect_loopback(addresses, HEALTHZ_TIMEOUT)
         .map_err(|error| format!("failed to connect to managed sidecar {url}: {error}"))?;
+    let address = stream.peer_addr().map_err(|error| error.to_string())?;
     stream
         .set_read_timeout(Some(HEALTHZ_TIMEOUT))
         .map_err(|error| format!("failed to configure sidecar shutdown read timeout: {error}"))?;
@@ -377,7 +587,7 @@ pub(crate) fn request_shutdown(
     if classify_health_response(
         &health_headers,
         &health_body,
-        Some((bootstrap_fingerprint, nonce.as_str(), key.as_ref())),
+        Some((bootstrap_fingerprint, nonce.as_str(), key.as_ref(), address)),
     )
     .0 != RelayHealth::Compatible
     {
@@ -464,11 +674,25 @@ fn http_status(headers: &[u8]) -> Option<u16> {
 fn classify_health_response(
     headers: &[u8],
     body: &[u8],
-    challenge: Option<(&str, &str, &BootstrapChallengeKey)>,
+    challenge: Option<(&str, &str, &BootstrapChallengeKey, SocketAddr)>,
 ) -> (RelayHealth, Option<String>) {
     let Ok(body) = serde_json::from_slice::<Value>(body) else {
         return (RelayHealth::Foreign, None);
     };
+    // A complete health response from an older protocol needs an explicit restart.
+    if body.get("service").and_then(Value::as_str) == Some("nemo-relay")
+        && body.get("status").and_then(Value::as_str) == Some("ok")
+        && body
+            .get("instance_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty())
+        && body
+            .get("bootstrap_protocol")
+            .and_then(Value::as_u64)
+            .is_some_and(|protocol| protocol != BOOTSTRAP_PROTOCOL_VERSION)
+    {
+        return (RelayHealth::Incompatible, None);
+    }
     if body.get("service").and_then(Value::as_str) != Some("nemo-relay")
         || body.get("bootstrap_protocol").and_then(Value::as_u64)
             != Some(BOOTSTRAP_PROTOCOL_VERSION)
@@ -482,11 +706,18 @@ fn classify_health_response(
     {
         return (RelayHealth::Foreign, None);
     }
-    if let Some((fingerprint, nonce, key)) = challenge {
+    if let Some((fingerprint, nonce, key, address)) = challenge {
         let Some(proof) = http_header(headers, "x-nemo-relay-bootstrap-proof") else {
             return (RelayHealth::Foreign, None);
         };
-        if !key.verify(fingerprint, nonce, proof) {
+        let Some(instance) = body.get("instance_id").and_then(Value::as_str) else {
+            return (RelayHealth::Foreign, None);
+        };
+        if !key.verify(
+            &listener_fingerprint(fingerprint, address, instance),
+            nonce,
+            proof,
+        ) {
             return (RelayHealth::Foreign, None);
         }
     }
@@ -627,8 +858,10 @@ pub(crate) fn parse_loopback_url(url: &str) -> Result<(String, u16), String> {
             "shared gateway recovery only supports loopback gateway URLs: {url}"
         ));
     }
+    // URL normalization drops an explicitly written default port, including daemon :80.
     let port = parsed
         .port()
+        .or_else(|| url.parse::<http::Uri>().ok()?.authority()?.port_u16())
         .ok_or_else(|| format!("missing port in gateway URL: {url}"))?;
     Ok((host.to_string(), port))
 }
@@ -650,6 +883,15 @@ pub(crate) fn loopback_authority(host: &str, port: u16) -> String {
     } else {
         format!("{host}:{port}")
     }
+}
+
+/// A proof from another listener or instance must never authenticate this connection.
+pub(crate) fn listener_fingerprint(
+    fingerprint: &str,
+    address: SocketAddr,
+    instance: &str,
+) -> String {
+    format!("nemo-relay/listener/v2\0{fingerprint}\0{address}\0{instance}")
 }
 
 #[cfg(test)]

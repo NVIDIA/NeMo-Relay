@@ -723,6 +723,32 @@ fn test_layer_config_preserves_signal_endpoint_option_semantics() {
 }
 
 #[test]
+fn test_layer_config_lets_higher_precedence_replace_insecure_http_hosts() {
+    let layer = |hosts: Option<Json>| {
+        let mut config = json!({"version": 4});
+        if let Some(hosts) = hosts {
+            config["insecure_http_hosts"] = hosts;
+        }
+        json!({"components": [{"kind": "observability", "config": config}]})
+    };
+    for (higher, expected) in [
+        (
+            Some(json!(["managed-collector"])),
+            json!(["managed-collector"]),
+        ),
+        (Some(json!([])), json!([])),
+        (None, json!(["user-collector"])),
+    ] {
+        let mut merged = layer(Some(json!(["user-collector"])));
+        layer_config(&mut merged, layer(higher));
+        assert_eq!(
+            merged["components"][0]["config"]["insecure_http_hosts"],
+            expected
+        );
+    }
+}
+
+#[test]
 fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins() {
     let mut merged = json!({
         "components": [{
@@ -969,7 +995,7 @@ fn test_plugin_configuration_registers_event_metadata_injector() {
     let callback = {
         let context = global_context();
         let state = context.read().unwrap();
-        let injectors = state.event_metadata_injectors.sorted_values();
+        let injectors: Vec<_> = state.event_metadata_injectors.sorted_values().collect();
         assert_eq!(injectors.len(), 1);
         Arc::clone(&injectors[0].payload)
     };
@@ -991,7 +1017,8 @@ fn test_plugin_configuration_registers_event_metadata_injector() {
             .unwrap()
             .event_metadata_injectors
             .sorted_values()
-            .is_empty()
+            .next()
+            .is_none()
     );
     assert!(deregister_plugin("event-metadata.plugin"));
     reset_global();
@@ -1229,7 +1256,10 @@ fn test_plugin_component_effective_names_escape_and_discover_fields() {
     reset_global();
 
     let namespace = component_namespace("analytics/plugin:π%", 1);
-    let mut plugin_context = PluginRegistrationContext::with_plugin_component_namespace(namespace);
+    let mut plugin_context = PluginRegistrationContext::with_plugin_component_namespace(
+        namespace,
+        Diagnostics::process_default(),
+    );
     let mut global_registration_context = PluginRegistrationContext::new();
     plugin_context
         .register_subscriber("cache/value:π%", Arc::new(|_| {}))
@@ -1657,8 +1687,11 @@ fn test_pending_rollbacks_ignore_delivery_only_errors() {
         )]);
     }
     {
-        let mut pending =
-            PendingPluginRegistrationContext::new("fixture.".into(), Some(Arc::clone(&failures)));
+        let mut pending = PendingPluginRegistrationContext::new(
+            "fixture.".into(),
+            Some(Arc::clone(&failures)),
+            Diagnostics::process_default(),
+        );
         pending
             .context
             .add_registration(PluginRegistration::new_with_outcome(
@@ -1883,6 +1916,94 @@ fn dynamic_plugin_runtime_diagnostics_snapshot_is_bounded() {
             .all(|diagnostic| diagnostic.code != "diagnostic.32")
     );
 
+    clear_plugin_configuration_inner();
+    reset_global();
+}
+
+#[test]
+fn legacy_runtime_diagnostic_before_activation_does_not_initialize_canonical_collection() {
+    const CHILD: &str = "NEMO_RELAY_TEST_LEGACY_PLUGIN_DIAGNOSTICS_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let current = std::thread::current();
+        let name = current.name().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    // The child has no competing tests and has never looked up the process context.
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+        code: "plugin.bootstrap_failed".into(),
+        component: "bootstrap".into(),
+        field: None,
+        message: "Plugin bootstrap failed".into(),
+        session_id: None,
+        count: 2,
+    });
+    assert!(active_runtime_diagnostics_snapshot().is_empty());
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let service = Diagnostics::install_process_default(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .expect("legacy reporting must not implicitly consume the process default");
+    let page = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert!(page.components.is_empty());
+    assert!(page.events.is_empty());
+}
+
+#[test]
+fn legacy_plugin_diagnostic_fields_preserve_separate_report_entries() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+    let component = format!("field-test-{}", uuid::Uuid::now_v7());
+    for (field, count) in [("storage[0]", 2), ("storage[1]", 3)] {
+        record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+            code: "plugin.export_failed".into(),
+            component: component.clone(),
+            field: Some(field.into()),
+            message: "Storage export failed".into(),
+            session_id: None,
+            count,
+        });
+    }
+    let state = ACTIVE_PLUGIN_CONFIGURATION.lock().unwrap();
+    let report = &state.as_ref().unwrap().report.runtime_diagnostics;
+    assert_eq!(report.len(), 2);
+    for (field, count) in [("storage[0]", 2), ("storage[1]", 3)] {
+        let entry = report
+            .iter()
+            .find(|entry| entry.field.as_deref() == Some(field))
+            .unwrap();
+        assert_eq!(entry.component, component);
+        assert_eq!(entry.count, count);
+    }
+    drop(state);
+    assert_eq!(
+        active_runtime_diagnostics_snapshot()
+            .iter()
+            .find(|entry| entry.code == "plugin.export_failed")
+            .unwrap()
+            .count,
+        5
+    );
     clear_plugin_configuration_inner();
     reset_global();
 }
@@ -2949,6 +3070,7 @@ fn test_resolved_plugin_config_reports_every_contributing_file() {
             (user.clone(), json!({"version": 1})),
             (system.clone(), json!({"version": 1})),
         ],
+        None,
     )
     .unwrap();
 
@@ -2956,6 +3078,197 @@ fn test_resolved_plugin_config_reports_every_contributing_file() {
         resolved.config_paths,
         vec![user.display().to_string(), system.display().to_string(),]
     );
+}
+
+#[test]
+fn configuration_inheritance_records_once_per_ambient_source_in_selected_context() {
+    use crate::diagnostics::{DiagnosticQuery, DiagnosticSeverity, DiagnosticsSettings};
+
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let projected = Arc::new(AtomicUsize::new(0));
+    let deliveries = Arc::clone(&projected);
+    let _projection = service
+        .subscribe_projection(move |_| {
+            deliveries.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let explicit = PathBuf::from("explicit/plugins.toml");
+    let resolved = resolve_plugin_config_documents(
+        PluginConfig::default(),
+        Some(&explicit),
+        vec![
+            (
+                PathBuf::from("first/private-path.toml"),
+                json!({"version": 1}),
+            ),
+            (explicit.clone(), json!({"version": 1})),
+            (
+                PathBuf::from("second/private-path.toml"),
+                json!({"version": 1}),
+            ),
+        ],
+        Some(&service),
+    )
+    .unwrap();
+    assert_eq!(resolved.config_paths.len(), 3);
+    assert_eq!(resolved.diagnostics.len(), 2);
+    let view = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.source, *service.source());
+    assert_eq!(view.components.len(), 1);
+    assert_eq!(view.components[0].identity.key, "plugin.configuration");
+    assert!(view.components[0].closed_at.is_some());
+    assert_eq!(view.components[0].counters[0].occurrences.value.get(), 2);
+    assert_eq!(view.lifetime.totals.recorded_events_total.value.get(), 2);
+    assert_eq!(view.lifetime.totals.unspecified_total.value.get(), 2);
+    assert_eq!(view.events.len(), 2);
+    assert!(view.events.iter().all(|event| {
+        event.code() == "plugin.configuration_inherited"
+            && event.severity == DiagnosticSeverity::Warning
+            && event.classification.failure_class().is_none()
+    }));
+    assert!(
+        !serde_json::to_string(&view)
+            .unwrap()
+            .contains("private-path")
+    );
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .all(|notice| notice.message.contains("private-path"))
+    );
+    assert_eq!(projected.load(Ordering::Relaxed), 0);
+    let _report_copy = resolved.diagnostics.clone();
+    let reread = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(reread.sequence, view.sequence);
+    assert_eq!(reread.lifetime.totals, view.lifetime.totals);
+}
+
+#[test]
+fn configuration_inheritance_recording_is_best_effort_and_preserves_legacy_results() {
+    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings};
+
+    let blocked = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_components: 1,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let _occupied = blocked
+        .register_component(ComponentRegistration::new("occupied", &[]))
+        .unwrap();
+    let documents = vec![(PathBuf::from("ambient/plugins.toml"), json!({"version": 1}))];
+    let baseline =
+        resolve_plugin_config_documents(PluginConfig::default(), None, documents.clone(), None)
+            .unwrap();
+    for service in [Diagnostics::default(), blocked.clone()] {
+        let resolved = resolve_plugin_config_documents(
+            PluginConfig::default(),
+            None,
+            documents.clone(),
+            Some(&service),
+        )
+        .unwrap();
+        assert_eq!(resolved.resolved_config, baseline.resolved_config);
+        assert_eq!(resolved.config_paths, baseline.config_paths);
+        assert_eq!(
+            serde_json::to_value(resolved.diagnostics).unwrap(),
+            serde_json::to_value(&baseline.diagnostics).unwrap(),
+        );
+        assert_eq!(service.memory_usage().events, 0);
+    }
+    let view = blocked
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.coverage.loss.components_rejected.value.get(), 1);
+    assert_eq!(view.lifetime.totals.recorded_events_total.value.get(), 0);
+}
+
+#[test]
+fn configuration_inheritance_and_activation_use_the_same_selected_context() {
+    use crate::diagnostics::{DiagnosticQuery, DiagnosticsSettings};
+
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(PartialFailPlugin)).unwrap();
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let resolved = resolve_plugin_config_documents(
+        PluginConfig {
+            components: vec![PluginComponentSpec::new("partial.fail.plugin")],
+            ..Default::default()
+        },
+        None,
+        vec![(PathBuf::from("ambient/plugins.toml"), json!({"version": 1}))],
+        Some(&service),
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(initialize_plugins_exact_inner(
+            resolved.config,
+            None,
+            resolved.diagnostics,
+            &service,
+        ))
+        .unwrap_err();
+    assert!(matches!(error, PluginError::RegistrationFailed(_)));
+    let view = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.source, *service.source());
+    assert_eq!(view.lifetime.totals.recorded_events_total.value.get(), 2);
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(
+        view.events
+            .iter()
+            .map(|event| event.code())
+            .collect::<Vec<_>>(),
+        vec![
+            "plugin.configuration_inherited",
+            "plugin.registration_failed"
+        ],
+    );
+    assert!(
+        view.components
+            .iter()
+            .all(|component| component.closed_at.is_some())
+    );
+    assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 1);
+    reset_global();
 }
 
 #[test]
@@ -3095,6 +3408,7 @@ fn replacing_plugin_configuration_removes_old_callbacks_and_installs_new_ones() 
             original.clone(),
             None,
             vec![],
+            Diagnostics::process_default(),
         ))
         .unwrap();
     let before = list_runtime_registrations(None).unwrap();
@@ -3109,6 +3423,7 @@ fn replacing_plugin_configuration_removes_old_callbacks_and_installs_new_ones() 
             PluginConfig::default(),
             None,
             vec![],
+            Diagnostics::process_default(),
         ))
         .unwrap();
     assert!(plugin_configuration_is_active().unwrap());
@@ -3120,7 +3435,12 @@ fn replacing_plugin_configuration_removes_old_callbacks_and_installs_new_ones() 
     );
 
     runtime
-        .block_on(initialize_plugins_exact_inner(original, None, vec![]))
+        .block_on(initialize_plugins_exact_inner(
+            original,
+            None,
+            vec![],
+            Diagnostics::process_default(),
+        ))
         .unwrap();
     assert_eq!(list_runtime_registrations(None).unwrap(), before);
     clear_plugin_configuration_inner().result.unwrap();
@@ -3158,7 +3478,12 @@ fn failed_plugin_replacement_restores_callbacks_and_runtime_diagnostics() {
         .components
         .push(PluginComponentSpec::new("test.plugin"));
     let initial_report = runtime
-        .block_on(initialize_plugins_exact_inner(original, None, vec![]))
+        .block_on(initialize_plugins_exact_inner(
+            original,
+            None,
+            vec![],
+            Diagnostics::process_default(),
+        ))
         .unwrap();
     assert!(
         initial_report
@@ -3194,6 +3519,7 @@ fn failed_plugin_replacement_restores_callbacks_and_runtime_diagnostics() {
             },
             Some(failures.clone()),
             vec![],
+            Diagnostics::process_default(),
         ))
         .unwrap_err();
     assert!(
@@ -3248,7 +3574,12 @@ fn failed_plugin_replacement_reports_failure_to_restore_the_previous_configurati
         .build()
         .unwrap();
     let error = runtime
-        .block_on(initialize_plugins_exact_inner(config, None, vec![]))
+        .block_on(initialize_plugins_exact_inner(
+            config,
+            None,
+            vec![],
+            Diagnostics::process_default(),
+        ))
         .unwrap_err();
     assert!(matches!(error, PluginError::RegistrationFailed(_)));
     assert!(
@@ -3295,6 +3626,7 @@ fn replacement_teardown_failure_preserves_diagnostics_and_records_unremoved_call
             PluginConfig::default(),
             Some(failures.clone()),
             vec![],
+            Diagnostics::process_default(),
         ))
         .unwrap_err();
     assert!(
@@ -3391,4 +3723,218 @@ fn plugin_host_lease_rejects_an_active_static_configuration() {
     let lease = acquire_plugin_host_lease().unwrap();
     drop(lease);
     reset_global();
+}
+
+#[test]
+fn typed_activation_failure_records_once_through_its_scoped_context() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let context = PluginRegistrationContext::with_diagnostics(&service);
+    let identity = context
+        .diagnostic_recorder
+        .as_ref()
+        .unwrap()
+        .identity()
+        .unwrap()
+        .clone();
+    let projected = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&projected);
+    let _guard = service
+        .subscribe_projection(move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let error = PluginError::RegistrationFailed("private operation detail".into());
+    context.record_activation_failure(&error);
+    expect_registration_failed(Err(error), "private operation detail");
+    drop(context);
+    let page = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0].component, identity);
+    assert_eq!(page.events[0].code(), "plugin.registration_failed");
+    assert_eq!(
+        page.events[0].context.phase,
+        Some(PluginPhase::Activation.into())
+    );
+    assert!(page.events[0].context.execution.is_none());
+    assert_eq!(
+        page.events[0].classification.failure_class(),
+        Some("unknown")
+    );
+    let row = page
+        .components
+        .iter()
+        .find(|row| row.identity == identity)
+        .unwrap();
+    assert!(row.closed_at.is_some());
+    assert_eq!(row.lifetime.totals.recorded_events_total.value.get(), 1);
+    assert_eq!(row.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(projected.load(Ordering::Relaxed), 0);
+    assert!(
+        !serde_json::to_string(&page)
+            .unwrap()
+            .contains("private operation detail")
+    );
+}
+
+#[test]
+fn activation_unwind_is_recorded_before_scoped_rollback_and_closure() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let context = PluginRegistrationContext::with_diagnostics(&service);
+    let identity = context
+        .diagnostic_recorder
+        .as_ref()
+        .unwrap()
+        .identity()
+        .unwrap()
+        .clone();
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _pending = PendingPluginRegistrationContext {
+            context,
+            rollback_failures: None,
+        };
+        panic!("private panic payload");
+    }));
+    assert!(unwind.is_err());
+    let page = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0].component, identity);
+    assert_eq!(page.events[0].code(), "plugin.internal");
+    assert_eq!(
+        page.events[0].context.phase,
+        Some(PluginPhase::Activation.into())
+    );
+    assert!(page.events[0].context.execution.is_none());
+    assert_eq!(
+        page.events[0].classification.failure_class(),
+        Some("internal")
+    );
+    assert!(page.components[0].closed_at.is_some());
+    assert_eq!(
+        page.components[0]
+            .lifetime
+            .totals
+            .recorded_events_total
+            .value
+            .get(),
+        1
+    );
+    assert!(
+        !serde_json::to_string(&page)
+            .unwrap()
+            .contains("private panic payload")
+    );
+}
+
+#[cfg(feature = "__skip-implicit-config")]
+#[test]
+fn plugin_attribution_uses_selected_context_limit_through_public_initialization() {
+    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let _guard = lock_runtime_owner();
+    let _config = TestConfigEnvironment::set(Some(OsStr::new("1")));
+    reset_global();
+    register_plugin(Arc::new(PartialFailPlugin)).unwrap();
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_identity_bytes: 32,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = runtime.block_on(dynamic::initialize_with_diagnostics(
+        PluginConfig {
+            components: vec![PluginComponentSpec::new("partial.fail.plugin")],
+            ..Default::default()
+        },
+        None,
+        &service,
+    ));
+    match result {
+        Err(PluginError::RegistrationFailed(message)) => {
+            assert!(message.contains("partial.fail.plugin refused to finish initialization"));
+        }
+        _ => panic!("expected the original registration failure"),
+    }
+    let snapshot = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let event = snapshot
+        .events
+        .iter()
+        .find(|event| event.code() == "plugin.registration_failed")
+        .unwrap();
+    assert_eq!(
+        event.origin.ownership.responsibility.as_deref(),
+        Some(&component_namespace("partial.fail.plugin", 1)[..32])
+    );
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(snapshot.coverage.loss.metadata_rejected.value.get(), 0);
+    assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 1);
+    assert!(test_plugin_host_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn plugin_attribution_truncation_preserves_utf8_boundaries() {
+    use crate::diagnostics::{DiagnosticLimits, DiagnosticQuery, Diagnostics, DiagnosticsSettings};
+    let service = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_identity_bytes: 31,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let context = PluginRegistrationContext::in_diagnostic_context(
+        &service,
+        Some(PluginRegistrationNamespace::Plain("é".repeat(20))),
+    );
+    context.record_activation_failure(&PluginError::RegistrationFailed("original".into()));
+    let snapshot = service
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(
+        snapshot.events[0].origin.ownership.responsibility,
+        Some("é".repeat(15))
+    );
+    assert_eq!(snapshot.coverage.loss.metadata_rejected.value.get(), 0);
 }

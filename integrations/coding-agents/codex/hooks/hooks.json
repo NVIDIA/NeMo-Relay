@@ -47,18 +47,6 @@
         ]
       }
     ],
-    "PermissionRequest": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only --fail-closed",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
     "SubagentStart": [
       {
         "hooks": [

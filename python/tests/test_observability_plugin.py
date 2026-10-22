@@ -225,6 +225,38 @@ class TestObservabilityConfigHelpers:
             "https://example.com/v1/logs", header_file={"authorization": path}
         ).to_dict()["header_file"] == {"authorization": path}
 
+    def test_insecure_http_hosts_serialize_at_top_level_and_pass_strict_validation(self) -> None:
+        hosts = ["host.docker.internal", "collector.ns.svc.cluster.local"]
+        section = OpenTelemetrySectionConfig(
+            enabled=True,
+            endpoints=[OpenTelemetryEndpointConfig("gen_ai", "http://host.docker.internal:8082/v1/traces")],
+        )
+        config = ObservabilityConfig(
+            opentelemetry=section, policy=ConfigPolicy(unknown_field="error"), insecure_http_hosts=hosts
+        )
+        assert config.to_dict()["insecure_http_hosts"] == hosts
+        assert "insecure_http_hosts" not in ObservabilityConfig().to_dict()
+        assert ObservabilityConfig(insecure_http_hosts=[]).to_dict()["insecure_http_hosts"] == []
+
+        report = validate_plugin_config(plugin.PluginConfig(components=[ComponentSpec(config)]))
+        assert report["diagnostics"] == []
+
+    async def test_insecure_http_hosts_activate_a_listed_plain_http_trace_endpoint(self) -> None:
+        def config(hosts: list[str] | None) -> plugin.PluginConfig:
+            section = OpenTelemetrySectionConfig(
+                enabled=True,
+                endpoints=[OpenTelemetryEndpointConfig("gen_ai", "http://collector.invalid:4318/v1/traces")],
+            )
+            return plugin.PluginConfig(
+                components=[ComponentSpec(ObservabilityConfig(opentelemetry=section, insecure_http_hosts=hosts))]
+            )
+
+        with pytest.raises(ValueError, match="insecure_http_hosts"):
+            await plugin.initialize(config(None))
+        activation = await plugin.initialize(config(["collector.invalid"]))
+        assert activation.is_active
+        await activation.close()
+
     def test_defaults_and_component_wrapper(self) -> None:
         assert AtofConfig().to_dict() == {"enabled": False}
         assert AtifConfig().to_dict() == {
@@ -799,3 +831,36 @@ class TestObservabilityConfigHelpers:
         assert "python-second-agent" in second_payload
         assert "python-first-agent" not in second_payload
         assert "python-nested-agent" not in second_payload
+
+
+def test_otlp_tls_helpers_and_direct_configs_share_schema():
+    from nemo_relay import (
+        OpenTelemetryConfig,
+        OpenTelemetryLogConfig,
+        OpenTelemetryLogSubscriber,
+        OpenTelemetryMetricConfig,
+        OpenTelemetryMetricSubscriber,
+        OpenTelemetrySubscriber,
+        OpenTelemetryTlsConfig,
+    )
+
+    tls = OpenTelemetryTlsConfig(certificate="ca.pem", client_certificate="client.pem", private_key="key.pem")
+    expected = {"certificate": "ca.pem", "client_certificate": "client.pem", "private_key": "key.pem"}
+    trace = OpenTelemetryEndpointConfig(type="full", endpoint="https://collector.example", tls=tls)
+    signal = OpenTelemetrySignalEndpointConfig(endpoint="https://collector.example", tls=tls)
+    assert trace.to_dict()["tls"] == expected
+    assert signal.to_dict()["tls"] == expected
+    assert "tls" not in OpenTelemetrySignalEndpointConfig(endpoint="https://collector.example").to_dict()
+    for config, subscriber in [
+        (OpenTelemetryConfig("full", "http://127.0.0.1:4318"), OpenTelemetrySubscriber),
+        (OpenTelemetryLogConfig("http://127.0.0.1:4318"), OpenTelemetryLogSubscriber),
+        (OpenTelemetryMetricConfig("http://127.0.0.1:4318"), OpenTelemetryMetricSubscriber),
+    ]:
+        assert config.tls is None
+        config.tls = tls
+        assert config.tls.private_key == "key.pem"
+        with pytest.raises(Exception, match="TLS settings require an HTTPS endpoint"):
+            subscriber(config)
+        config.tls = OpenTelemetryTlsConfig(client_certificate="client.pem")
+        with pytest.raises(Exception, match="must be supplied together"):
+            subscriber(config)

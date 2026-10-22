@@ -12,7 +12,20 @@ pub(super) struct ProcessTree {
 pub(super) async fn spawn(
     command: &mut tokio::process::Command,
 ) -> std::io::Result<(tokio::process::Child, ProcessTree)> {
-    let job = AgentJob::create()?;
+    spawn_owned(command, true).await
+}
+
+pub(super) async fn spawn_helper(
+    command: &mut tokio::process::Command,
+) -> std::io::Result<(tokio::process::Child, ProcessTree)> {
+    spawn_owned(command, false).await
+}
+
+async fn spawn_owned(
+    command: &mut tokio::process::Command,
+    allow_breakaway: bool,
+) -> std::io::Result<(tokio::process::Child, ProcessTree)> {
+    let job = AgentJob::create(allow_breakaway)?;
     command.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
     let mut child = command.spawn()?;
     if let Err(error) = job.assign(&child) {
@@ -63,7 +76,7 @@ unsafe impl Send for AgentJob {}
 unsafe impl Sync for AgentJob {}
 
 impl AgentJob {
-    fn create() -> std::io::Result<Self> {
+    fn create(allow_breakaway: bool) -> std::io::Result<Self> {
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::JobObjects::{
             CreateJobObjectW, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -78,9 +91,13 @@ impl AgentJob {
             ));
         }
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        // Descendants remain owned unless they explicitly request breakaway (daemon workers).
-        limits.BasicLimitInformation.LimitFlags = WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_CLOSE
-            | windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        limits.BasicLimitInformation.LimitFlags = WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_CLOSE;
+        // Agent launchers can start independent daemon workers. Credential helpers must keep
+        // every descendant in the request-owned job, including across cancellation.
+        if allow_breakaway {
+            limits.BasicLimitInformation.LimitFlags |=
+                windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        }
         // SAFETY: `handle` is live and `limits` is correctly sized for the requested class.
         let configured = unsafe {
             SetInformationJobObject(

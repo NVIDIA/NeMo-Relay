@@ -23,7 +23,7 @@ use serde_json::Value as Json;
 #[cfg(feature = "atof-streaming")]
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
-use super::header_file::HeaderFiles;
+use super::header_file::{HeaderFiles, PlaintextPolicy};
 #[cfg(feature = "atof-streaming")]
 use super::header_file::{
     has_configured_headers, resolve_header_files, validate_header_files,
@@ -196,6 +196,9 @@ pub struct AtofStreamSinkConfig {
     /// Field name transformation policy applied before sending events.
     #[serde(default)]
     pub field_name_policy: AtofEndpointFieldNamePolicy,
+    /// Allow `http://` or `ws://` to any host; events and configured headers travel unencrypted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_insecure: bool,
 }
 
 impl AtofStreamSinkConfig {
@@ -209,7 +212,14 @@ impl AtofStreamSinkConfig {
             header_file: HashMap::new(),
             timeout_millis: default_endpoint_timeout_millis(),
             field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+            allow_insecure: false,
         }
+    }
+
+    /// Allow `http://` or `ws://` to any host; events and configured headers travel unencrypted.
+    pub fn with_allow_insecure(mut self, allow_insecure: bool) -> Self {
+        self.allow_insecure = allow_insecure;
+        self
     }
 
     /// Add a header to this endpoint config.
@@ -394,6 +404,13 @@ pub struct AtofExporter {
 impl AtofExporter {
     /// Create a new exporter from config and open its output file.
     pub fn new(config: AtofExporterConfig) -> Result<Self> {
+        Self::new_with_plaintext_policy(config, &PlaintextPolicy::LoopbackOnly)
+    }
+
+    pub(crate) fn new_with_plaintext_policy(
+        config: AtofExporterConfig,
+        plaintext: &PlaintextPolicy,
+    ) -> Result<Self> {
         let (path, writer, endpoints) = match config.sink {
             AtofSinkConfig::File(file_sink) => {
                 let path = file_sink.path();
@@ -416,7 +433,7 @@ impl AtofExporter {
                 (Some(path), Some(BufWriter::new(file)), Vec::new())
             }
             AtofSinkConfig::Stream(stream_sink) => {
-                let workers = start_endpoint_workers(&[stream_sink])?;
+                let workers = start_endpoint_workers(&[stream_sink], plaintext)?;
                 (None, None, workers)
             }
         };
@@ -711,10 +728,13 @@ impl AtofEndpointWorker {
 }
 
 #[cfg(feature = "atof-streaming")]
-fn start_endpoint_workers(configs: &[AtofStreamSinkConfig]) -> Result<Vec<AtofEndpointWorker>> {
+fn start_endpoint_workers(
+    configs: &[AtofStreamSinkConfig],
+    plaintext: &PlaintextPolicy,
+) -> Result<Vec<AtofEndpointWorker>> {
     let mut workers = Vec::with_capacity(configs.len());
     for (index, config) in configs.iter().enumerate() {
-        match start_endpoint_worker(index, config.clone()) {
+        match start_endpoint_worker(index, config.clone(), plaintext) {
             Ok(worker) => workers.push(worker),
             Err(error) => {
                 return Err(AtofExporterError::InvalidEndpoint(format!(
@@ -727,7 +747,10 @@ fn start_endpoint_workers(configs: &[AtofStreamSinkConfig]) -> Result<Vec<AtofEn
 }
 
 #[cfg(not(feature = "atof-streaming"))]
-fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndpointWorker>> {
+fn start_endpoint_workers(
+    configs: &[AtofEndpointConfig],
+    _plaintext: &PlaintextPolicy,
+) -> Result<Vec<AtofEndpointWorker>> {
     if configs.is_empty() {
         return Ok(Vec::new());
     }
@@ -736,8 +759,12 @@ fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndp
 }
 
 #[cfg(feature = "atof-streaming")]
-fn start_endpoint_worker(index: usize, config: AtofEndpointConfig) -> Result<AtofEndpointWorker> {
-    let endpoint = validate_endpoint_config(config)?;
+fn start_endpoint_worker(
+    index: usize,
+    config: AtofEndpointConfig,
+    plaintext: &PlaintextPolicy,
+) -> Result<AtofEndpointWorker> {
+    let endpoint = validate_endpoint_config(config, plaintext)?;
     let timeout = Duration::from_millis(endpoint.config.timeout_millis);
     let transport = endpoint.config.transport;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -771,7 +798,10 @@ fn start_endpoint_worker(index: usize, config: AtofEndpointConfig) -> Result<Ato
 }
 
 #[cfg(feature = "atof-streaming")]
-fn validate_endpoint_config(config: AtofEndpointConfig) -> Result<ActivatedAtofEndpoint> {
+fn validate_endpoint_config(
+    config: AtofEndpointConfig,
+    plaintext: &PlaintextPolicy,
+) -> Result<ActivatedAtofEndpoint> {
     if config.url.trim().is_empty() {
         return Err(AtofExporterError::InvalidEndpoint(
             "endpoint url must be non-empty".to_string(),
@@ -799,12 +829,19 @@ fn validate_endpoint_config(config: AtofEndpointConfig) -> Result<ActivatedAtofE
     }
     validate_header_files(&config.headers, &config.header_env, &config.header_file)
         .map_err(AtofExporterError::InvalidEndpoint)?;
+    let plaintext = if config.allow_insecure {
+        &PlaintextPolicy::AnyHost
+    } else {
+        plaintext
+    };
     if has_configured_headers(&config.headers, &config.header_env, &config.header_file) {
         let validation = match config.transport {
             AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => {
-                validate_header_http_endpoint(&config.url)
+                validate_header_http_endpoint(&config.url, plaintext)
             }
-            AtofEndpointTransport::Websocket => validate_header_websocket_endpoint(&config.url),
+            AtofEndpointTransport::Websocket => {
+                validate_header_websocket_endpoint(&config.url, plaintext)
+            }
         };
         validation.map_err(AtofExporterError::InvalidEndpoint)?;
     }

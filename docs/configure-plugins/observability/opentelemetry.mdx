@@ -128,10 +128,10 @@ behavior; it does not inherit the setting.
 | `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`, `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT`, `OTEL_SPAN_EVENT_COUNT_LIMIT`, `OTEL_SPAN_LINK_COUNT_LIMIT` | No | Relay preserves its trace payload and lifecycle contract. |
 | `OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT`, `OTEL_LINK_ATTRIBUTE_COUNT_LIMIT` | No | Relay preserves its trace payload and lifecycle contract. |
 | `OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`, `OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT` | No | Relay preserves its log payload contract. |
-| `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` | No | No OTLP certificate or client-key environment configuration is added. |
-| `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`, `OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY` | No | No trace-specific certificate or client-key environment configuration is added. |
-| `OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY` | No | No log-specific certificate or client-key environment configuration is added. |
-| `OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE`, `OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY` | No | No metric-specific certificate or client-key environment configuration is added. |
+| `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` | Automatic exporters | Paths to PEM files for the trusted certificate authorities, client certificate, and private key. Refer to [TLS and Mutual TLS](#tls-and-mutual-tls). |
+| `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`, `OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY` | Automatic exporters | TLS files for traces. Nonempty values take priority over the shared TLS variables. |
+| `OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY` | Automatic exporters | TLS files for logs. Nonempty values take priority over the shared TLS variables. |
+| `OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE`, `OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY` | Automatic exporters | TLS files for metrics. Nonempty values take priority over the shared TLS variables. |
 
 </StickySearchableTable>
 
@@ -141,9 +141,13 @@ Process-global OTLP headers belong only to the automatic exporter; Relay never
 copies them to independently configured endpoints.
 
 Remote automatic trace endpoints must use HTTPS; plaintext HTTP is allowed
-only for localhost or a loopback IP address. Automatic log and metric headers
-have the same transport requirement, preventing credentials from being sent to
-remote plaintext endpoints.
+only for localhost, a loopback IP address, or a host listed in the
+not-recommended
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts)
+setting. Automatic log and metric headers have the same transport requirement,
+so credentials reach a remote plaintext endpoint only when you list its host.
+An endpoint environment variable that the OTLP exporter cannot parse fails
+activation instead of falling back to `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 Automatic OTLP/HTTP exporters never follow redirects. This applies to traces,
 logs, and metrics, including when no headers are configured, so an endpoint
@@ -299,7 +303,13 @@ All trace projections (`full`, `gen_ai`, and `openinference`) require HTTPS for
 remote collectors, with either HTTP or gRPC transport. HTTP is permitted only
 for `localhost` and loopback IP addresses such as `127.0.0.1` and `[::1]`.
 Redaction does not disable this requirement. Existing remote plaintext trace
-endpoints must migrate to HTTPS or use a loopback collector.
+endpoints must migrate to HTTPS or use a loopback collector. As a
+not-recommended exception, the observability component's top-level
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts) list allows plain HTTP to specific hosts.
+
+When activation fails because no OpenTelemetry endpoint is usable, the error
+lists each skipped endpoint by signal and index, its scheme, host, and port,
+and the reason it was skipped.
 
 Relay-configured OTLP/HTTP exporters do not follow redirects, even to another
 HTTPS endpoint. This keeps an export from bypassing transport checks or sending
@@ -312,6 +322,7 @@ are configured. gRPC does not use HTTP redirects.
 | `type` | Required | `full`, `gen_ai`, or `openinference`. |
 | `endpoint` | Required | Nonblank OTLP endpoint. For OTLP/HTTP, Relay appends `/v1/traces` when the endpoint contains only a scheme, host, and optional port with no explicit path. Add a trailing `/` to export traces to the root path. Any other explicit path is preserved. gRPC endpoints are always preserved. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
+| `tls` | Omitted | Certificate and private key files for this endpoint. Refer to [TLS and Mutual TLS](#tls-and-mutual-tls). |
 | `service_name` | `unknown_service` | `service.name` resource attribute. |
 | `service_namespace` | Omitted | Optional `service.namespace`. |
 | `service_version` | Omitted | Optional `service.version`. |
@@ -330,6 +341,107 @@ are configured. gRPC does not use HTTP redirects.
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 | `promote_resource_metadata_prefixes` | `[]` | Literal prefixes that select root Scope-start metadata to copy to OTLP resource attributes. Each unique effective resource retains an exporter pipeline for the subscriber lifetime. |
+
+## TLS and Mutual TLS
+
+Transport Layer Security (TLS) encrypts the connection to a collector.
+Relay checks the server's certificate and hostname. Mutual TLS (mTLS) also lets
+the collector check Relay's client certificate.
+
+Each trace, log, or metric endpoint accepts an optional `tls` object.
+It works with HTTP/protobuf and gRPC. All three trace types support it:
+`full`, `gen_ai`, and `openinference`.
+
+A certificate authority (CA) signs certificates. A CA bundle lists the
+CAs that Relay trusts. PEM is a text format for certificates and keys.
+The `tls` object supports these fields.
+
+| TLS Field | Default | Meaning |
+|---|---|---|
+| `certificate` | Omitted | Path to a PEM CA bundle. This bundle replaces the system's trusted CAs for this endpoint. |
+| `client_certificate` | Omitted | Path to a PEM client certificate chain. Also set `private_key`. |
+| `private_key` | Omitted | Path to the client's PEM private key. Also set `client_certificate`. |
+
+Omit `tls`, or use an empty object, to keep the system's trusted CAs.
+Relay then sends no client certificate. Set only `certificate` to use a
+custom CA bundle. To enable mTLS, set both `client_certificate` and
+`private_key`. You can use mTLS with the system's CAs or a custom bundle.
+Relay still checks the server's certificate and hostname.
+
+If you set any TLS file path, the endpoint must use `https://`.
+This rule also applies to gRPC and local endpoints.
+The following example sends traces to a collector that requires mTLS.
+
+```toml
+[[components.config.opentelemetry.traces]]
+type = "full"
+endpoint = "https://collector.example:4317"
+transport = "grpc"
+
+[components.config.opentelemetry.traces.tls]
+certificate = "/run/secrets/collector-ca.pem"
+client_certificate = "/run/secrets/relay-client-chain.pem"
+private_key = "/run/secrets/relay-client-key.pem"
+```
+
+You can also use `endpoints` as an alias for `traces` in this example.
+Set TLS files for log and metric endpoints in
+`opentelemetry.logs.endpoints[].tls` and
+`opentelemetry.metrics.endpoints[].tls`.
+
+When Relay creates log or metric endpoints from a trace endpoint, it copies
+all TLS settings from that trace endpoint. If you list log or metric endpoints
+yourself, set TLS on each one. They use their own settings even if they share
+a collector with traces.
+
+Use absolute file paths or paths relative to the process working directory.
+Relay reads the PEM files when it creates the exporter. Recreate the exporter
+after you replace certificates or keys.
+
+Relay rejects blank paths and files that it cannot read or parse.
+It also rejects a client certificate without a matching private key, or a key
+without a certificate.
+The plugin reports the failed endpoint and keeps valid endpoints active.
+TLS settings apply only to network endpoints.
+
+Use `OpenTelemetryTlsConfig` with Python plugin helpers or direct subscribers.
+The following example configures both types.
+
+```python
+from nemo_relay import OpenTelemetryConfig, OpenTelemetryTlsConfig
+from nemo_relay.observability import OpenTelemetryEndpointConfig
+
+tls = OpenTelemetryTlsConfig(
+    certificate="/run/secrets/collector-ca.pem",
+    client_certificate="/run/secrets/relay-client-chain.pem",
+    private_key="/run/secrets/relay-client-key.pem",
+)
+endpoint = OpenTelemetryEndpointConfig(
+    type="full", endpoint="https://collector.example:4317", transport="grpc", tls=tls
+)
+config = OpenTelemetryConfig("full", "https://collector.example:4317")
+config.transport = "grpc"
+config.tls = tls
+```
+
+Other languages use these APIs for the same file paths.
+
+- In Rust, call `with_tls` with an `OpenTelemetryTlsConfig` value.
+- In Node.js, set `tls` on a direct subscriber config. Use `certificate`,
+  `clientCertificate`, and `privateKey` inside this object. Plugin configs use
+  `client_certificate` and `private_key`.
+- In Go, set `TLS` to an `OpenTelemetryTLSConfig` pointer.
+
+Automatic exporters read `OTEL_EXPORTER_OTLP_CERTIFICATE`,
+`OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, and `OTEL_EXPORTER_OTLP_CLIENT_KEY`.
+For one signal, insert `TRACES_`, `LOGS_`, or `METRICS_` after `OTLP_`.
+A nonempty setting for one signal takes priority over the shared setting.
+These variables also work with automatic HTTP/JSON export.
+
+Relay does not use these variables for endpoints that you configure in plugins
+or code. Set `tls` on those endpoints.
+To enable automatic export, also set `OTEL_EXPORTER_OTLP_ENDPOINT` or a
+signal-specific endpoint variable.
 
 ## Trace File Sinks
 
@@ -544,7 +656,7 @@ service_name = "agent-service"
 enabled = true
 ```
 
-The signal endpoint fields are `endpoint`, `transport`, `headers`,
+The signal endpoint fields are `endpoint`, `transport`, `tls`, `headers`,
 `header_env`, `header_file`, `resource_attributes`,
 `promote_resource_metadata_prefixes`, `service_name`, `service_namespace`,
 `service_version`, `instrumentation_scope`, and `timeout_millis`. Their defaults
@@ -580,24 +692,34 @@ batch sizes count spans, not bytes.
 
 ## Completed Scope Lineage Retention
 
-Trace endpoints retain a completed scope's trace and parent span context for
-`completed_span_context_ttl_millis` after its scope-end event. A late mark in
-that window remains attached to the original trace and parent span. When the
-TTL expires, Relay emits subsequent marks as orphan spans and records the
-`otel.completed_span_context_expired` runtime diagnostic when it purges expired
-contexts.
+Trace endpoints keep a closed scope's trace context in a cache. This context
+includes the IDs needed to link later events to the same trace and parent span.
+`completed_span_context_ttl_millis` sets how long Relay keeps this context after
+the scope ends. This is its time to live (TTL). Marks that arrive during this
+time stay linked to the original trace and parent span.
 
-Keep closed scope handles only for short deferred follow-up work. Prefer
-emitting an event before the scope closes, or create a new active scope for
-later work. Increasing the TTL retains more completed contexts: memory grows
-with the completed-scope rate, TTL, and number of configured trace endpoints.
+Relay checks the cache when it processes another event. It uses that event's
+timestamp to find entries older than the TTL. Entries at the exact TTL boundary
+stay in the cache. When Relay removes expired entries, it records the
+`otel.completed_span_context_expired` runtime diagnostic. Without a new event,
+Relay does not remove entries or report their expiry.
 
-OTLP logs use the same TTL-based completed-scope lineage behavior. Configure
-`opentelemetry.logs.completed_span_context_ttl_millis` independently when log
-export is enabled. Metrics retain completed resource routes for 60 seconds when
-resource promotion is enabled, but do not retain trace-correlation context. Do not
-rely on a closed scope handle for long-running follow-up work; emit the mark
-before closing the scope or use an active/new scope instead.
+This is normal cache cleanup. It does not delete completed or exported spans.
+
+Late marks and child scopes can still link to the original parent. Their events
+must include matching W3C trace context or Relay root and parent IDs. Without
+matching context, late marks become orphan spans. They have no link to the
+original parent.
+
+Keep closed scope handles only for short follow-up tasks. For later work, send
+events before the scope closes or create a new scope. A longer TTL uses more
+memory. Memory use also grows as more scopes close during that time or as you
+add trace endpoints.
+
+OTLP logs use the same cache rules. When you export logs, set their TTL separately
+with `opentelemetry.logs.completed_span_context_ttl_millis`. Metrics cache
+resource routes for 60 seconds after a scope closes when resource promotion is
+enabled. They do not cache the context used to link traces.
 
 If an endpoint's explicit batch settings are invalid, Relay skips that endpoint
 and records an `observability.invalid_otel_endpoint` configuration warning with
@@ -691,8 +813,10 @@ This applies to trace, log, and metric endpoints.
 
 Remote trace endpoints must use HTTPS. When you set any header source
 (`headers`, `header_env`, or `header_file`), remote log and metric endpoints
-must also use HTTPS. HTTP is allowed only for localhost and loopback IP
-addresses. OTLP/HTTP exporters never follow redirects.
+must also use HTTPS. HTTP is allowed only for localhost, loopback IP addresses,
+and hosts listed in the not-recommended
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts)
+setting. OTLP/HTTP exporters never follow redirects.
 For example, an OIDC token-file writer must write the complete value `Bearer
 eyJ...` to the file. Relay does not add the authentication
 scheme for you.
@@ -1091,6 +1215,20 @@ nonstandard uncached field: consumers can use the total
 cache-write counts. An omitted cache or uncached count means unavailable, not
 zero.
 
+The gateway checks streams with the built-in streaming codec for the OpenAI
+Responses API. Relay treats `response.completed`,
+`response.failed`, and `response.incomplete` as final response events.
+
+If the stream ends before a final response event, Relay returns a stream error
+and marks the span as an error. Relay logs `llm_stream_incomplete` with the reason
+`missing_terminal_response`. It keeps any output it has received. If token
+usage is missing, Relay leaves it out. It does not use zero or totals from
+other calls.
+
+After Relay gets the first final response, it keeps that snapshot. Later
+snapshots cannot replace it. Missing usage alone does not mean the stream
+ended early. Custom collectors keep their own completion rules.
+
 For managed streaming LLM calls, the end span also includes
 `gen_ai.response.time_to_first_chunk` in seconds. Relay measures from the
 start of managed stream execution until the first provider protocol chunk is
@@ -1158,6 +1296,19 @@ metadata. The server segment is a configured alias; Relay does not derive
 `server.address`, `mcp.session.id`, or connection status from it. Hook duration
 measures the harness tool scope, not necessarily MCP transport latency.
 
+When Relay receives a tool failure hook or an MCP hook result with `isError: true`,
+it sets the span status to `ERROR`. It sets `error.type = "tool_execution_failed"`.
+
+Codex can skip the end hook when an MCP call fails. Relay can still close the call
+if a later model request includes its result. That request does not say whether the tool succeeded,
+so Relay marks the outcome as unknown. The measured duration can be longer than
+the tool's actual run time.
+
+If Relay closes a call without an end hook or a result in a model request, it marks
+the call as incomplete. A timeout alone does not prove that the tool failed. Refer to
+[Codex captured events](/nemo-relay-cli/codex#captured-events) for the fields that
+Relay records and the limits of this recovery method.
+
 ### Error Type Mapping
 
 For managed LLM, tool, and stream failures, NeMo Relay maps structured
@@ -1191,10 +1342,6 @@ inherits the failed descendant's `error.type` and exception type. When no
 structured `FlowError` is available, such as a cancellation or dropped
 execution, the projection emits `_OTHER`. Caller-provided `error.type` and
 `exception.type` metadata take precedence over values derived from `FlowError`.
-An authenticated Claude Code or Codex permission rejection closes the matched
-active tool span with `error.type = "guardrail_rejected"`. The corresponding
-permission guardrail events carry the canonical `gen_ai.tool.call.id` in event
-metadata so subscribers can correlate the decision with that tool call.
 
 `FlowError` is an exhaustive Rust enum. Rust callers upgrading to this release
 must handle the new `CallbackException` variant in exhaustive matches. It maps
@@ -1244,6 +1391,10 @@ let subscriber = OpenTelemetrySubscriber::new(config)?;
 ```
 </Tab>
 </Tabs>
+
+Direct trace, log, and metric configs accept `allow_insecure` (`allowInsecure`
+in Node.js, `with_allow_insecure` in Rust), which allows plain HTTP to any host.
+It is not recommended. Refer to [Insecure HTTP Hosts](/configure-plugins/observability/configuration#insecure-http-hosts).
 
 Set each referenced environment variable before constructing the subscriber.
 Direct trace, log, and metric configs resolve `header_env` when the subscriber

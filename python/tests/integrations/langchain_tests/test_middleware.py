@@ -1306,7 +1306,9 @@ def test_wrap_tool_call_routes_through_tool_execute(
     assert kwargs["handle"] is parent_handle
     assert kwargs["tool_call_id"] == "call-1"
     assert isinstance(kwargs["args_codec"], nemo_relay.typed.JsonPassthrough)
-    assert isinstance(kwargs["result_codec"], nemo_relay.typed.BestEffortAnyCodec)
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    assert isinstance(kwargs["result_codec"], LangChainToolResultCodec)
 
 
 def test_awrap_tool_call_routes_through_tool_execute(
@@ -1334,7 +1336,9 @@ def test_awrap_tool_call_routes_through_tool_execute(
     assert kwargs["handle"] is parent_handle
     assert kwargs["tool_call_id"] == "call-1"
     assert isinstance(kwargs["args_codec"], nemo_relay.typed.JsonPassthrough)
-    assert isinstance(kwargs["result_codec"], nemo_relay.typed.BestEffortAnyCodec)
+    from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
+
+    assert isinstance(kwargs["result_codec"], LangChainToolResultCodec)
 
 
 def test_complete_skill_read_emits_mark_through_langchain_middleware(
@@ -1661,7 +1665,7 @@ def test_tool_arguments_remain_json(use_async: bool, tag: str) -> None:
     registered = codec.to_json(Payload("original"))
     args = {
         tag: registered["__nv_dataclass__"],
-        "__nv_runtime_type__": registered["__nv_runtime_type__"],
+        "__nv_runtime_type__": f"{Payload.__module__}.{Payload.__qualname__}:{id(Payload)}",
         "data": {"value": "model-controlled"},
     }
     request = ToolCallRequest(
@@ -1688,3 +1692,156 @@ def test_tool_arguments_remain_json(use_async: bool, tag: str) -> None:
     assert seen == [args]
     assert isinstance(result, ToolMessage)
     assert result.content == "done"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        "schema",
+        "auto",
+        "provider",
+        "tool",
+        "union",
+        "raw_union",
+        "auto_union",
+        "raw_typing_union",
+        "auto_typing_union",
+        "none",
+    ],
+)
+@pytest.mark.parametrize("answer_kind", ["first", "second"])
+def test_structured_response_uses_declared_schema(
+    use_async: bool, strategy: str, answer_kind: str, model_request: ModelRequest[Any]
+) -> None:
+    from typing import Union
+
+    from langchain.agents.middleware import ModelResponse
+    from langchain.agents.structured_output import AutoStrategy, ProviderStrategy, ToolStrategy
+    from langchain_core.messages import AIMessage
+    from pydantic import BaseModel, ValidationError
+
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
+
+    class Answer(BaseModel):
+        value: str
+
+    class OtherAnswer(BaseModel):
+        count: int
+
+    formats = {
+        "schema": Answer,
+        "auto": AutoStrategy(Answer),
+        "provider": ProviderStrategy(Answer),
+        "tool": ToolStrategy(Answer),
+        "union": ToolStrategy(Answer | OtherAnswer),
+        "raw_union": Answer | OtherAnswer,
+        "auto_union": AutoStrategy(Answer | OtherAnswer),
+        "raw_typing_union": Union[Answer, OtherAnswer],
+        "auto_typing_union": AutoStrategy(Union[Answer, OtherAnswer]),
+        "none": None,
+    }
+    request = model_request.override(response_format=formats[strategy])
+    answer = Answer(value="done") if answer_kind == "first" else OtherAnswer(count=1)
+
+    def handler(_request):
+        return ModelResponse(result=[AIMessage(content="done")], structured_response=answer)
+
+    async def ahandler(req):
+        return handler(req)
+
+    middleware = NemoRelayMiddleware()
+
+    def invoke():
+        return (
+            asyncio.run(middleware.awrap_model_call(request, ahandler))
+            if use_async
+            else middleware.wrap_model_call(request, handler)
+        )
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        if strategy == "none" or ("union" not in strategy and answer_kind == "second"):
+            with pytest.raises(ValidationError):
+                invoke()
+        else:
+            result = invoke()
+            assert isinstance(result.structured_response, type(answer))
+            assert result.structured_response == answer
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_declared_structured_response_decode_error_reaches_caller(use_async, model_request):
+    from langchain.agents.middleware import ModelResponse
+    from langchain_core.messages import AIMessage
+    from pydantic import BaseModel, ValidationError, field_serializer
+
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
+
+    class Answer(BaseModel):
+        value: int
+
+        @field_serializer("value")
+        def encode_value(self, _value):
+            return "invalid integer"
+
+    def handler(_request):
+        return ModelResponse(result=[AIMessage(content="done")], structured_response=Answer(value=42))
+
+    async def ahandler(request):
+        return handler(request)
+
+    request = model_request.override(response_format=Answer)
+    middleware = NemoRelayMiddleware()
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        with pytest.raises(ValidationError, match="valid integer"):
+            if use_async:
+                asyncio.run(middleware.awrap_model_call(request, ahandler))
+            else:
+                middleware.wrap_model_call(request, handler)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("kind", ["alias", "json", "distinct_aliases", "alias_path"])
+def test_structured_response_round_trip_serialization(use_async, kind, model_request):
+    from langchain.agents.middleware import ModelResponse
+    from langchain_core.messages import AIMessage
+    from pydantic import AliasPath, BaseModel, Field, Json, TypeAdapter
+
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
+
+    class AliasedAnswer(BaseModel):
+        value: int = Field(alias="answer")
+
+    class JsonAnswer(BaseModel):
+        items: Json[list[int]]
+
+    class DistinctAliasesAnswer(BaseModel):
+        value: int = Field(validation_alias="answer", serialization_alias="output")
+
+    class AliasPathAnswer(BaseModel):
+        value: int = Field(validation_alias=AliasPath("input", "answer"), serialization_alias="output")
+
+    schema, data = {
+        "alias": (AliasedAnswer, {"answer": 42}),
+        "json": (JsonAnswer, {"items": "[1,2]"}),
+        "distinct_aliases": (DistinctAliasesAnswer, {"answer": 42}),
+        "alias_path": (AliasPathAnswer, {"input": {"answer": 42}}),
+    }[kind]
+    answer = TypeAdapter(schema).validate_python(data)
+
+    def handler(_request):
+        return ModelResponse(result=[AIMessage(content="done")], structured_response=answer)
+
+    async def ahandler(request):
+        return handler(request)
+
+    request = model_request.override(response_format=schema)
+    middleware = NemoRelayMiddleware()
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        result = (
+            asyncio.run(middleware.awrap_model_call(request, ahandler))
+            if use_async
+            else middleware.wrap_model_call(request, handler)
+        )
+    assert type(result.structured_response) is schema
+    assert result.structured_response == answer

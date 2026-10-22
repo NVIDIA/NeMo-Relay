@@ -181,7 +181,9 @@ Relay selects exactly one tier from `prompt_tokens` and applies that tier to the
 full request. It does not price only the overflow tokens at the higher rate.
 This matches providers that publish "short context" and "long context" prices
 for the entire request/session. If `prompt_tokens` is missing for a thresholded
-entry, Relay omits the estimate instead of guessing.
+entry, Relay omits the estimate instead of guessing. Counts that the estimate
+folds in from `api_specific`, such as Gemini tool-use prompt tokens, are priced
+at the selected tier's rates.
 
 ```json
 {
@@ -378,12 +380,16 @@ Built-in codecs normalize provider field names as follows:
 |---|---|---|---|---|---|
 | `prompt_tokens` | `prompt_tokens` | `input_tokens` | `input_tokens` | `promptTokens` | `promptTokenCount` |
 | `completion_tokens` | `completion_tokens` | `output_tokens` | `output_tokens` | `completionTokens` | `candidatesTokenCount` |
-| `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokens` | `totalTokenCount` (or computed as prompt + candidates + thinking) |
+| `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokens` | `totalTokenCount`, or computed as prompt + candidates + tool-use prompt + thinking |
 | `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | `promptTokensDetails.cachedTokens` | `cachedContentTokenCount` |
 | `cache_write_tokens` | — | — | `cache_creation_input_tokens` | — | — |
 | `cost` | `cost_usd`, structured `cost`, or scalar `cost` (OpenRouter; USD provider-reported total) | `cost_usd` or structured `cost` | `cost_usd` or structured `cost` | — | — |
 
 Gemini `generateContent` thinking tokens (`thoughtsTokenCount`) are stored in `api_specific.thoughts_tokens` rather than `completion_tokens`, because Google bills them as output tokens but reports them separately. The cost estimate folds them into the effective output-token count so that the pricing table reflects the real billing cost.
+
+Gemini tool-use prompt tokens, reported as `toolUsePromptTokenCount`, are stored in `api_specific.tool_use_prompt_tokens` and counted in a computed `total_tokens`. Relay bills those tokens at the input rate for URL context, code execution, and File Search. Relay excludes them for Google Search, image search, and Google Maps grounding, which are billed per request. When the count is nonzero and the tool evidence is mixed, unrecognized, or missing, Relay leaves the cost estimate unset. Mixed evidence includes Search together with URL context or code execution. Unrecognized evidence includes `retrievedContext` without a non-empty `fileSearchStore`, such as Vertex AI Search. When the count is absent or `0`, the estimate is unaffected.
+
+Relay applies both rules to any response annotation that reports `thoughts_tokens` or `tool_use_prompt_tokens` through the `gemini_generate_content` `api_specific` variant, using `grounding_metadata`, `urlContextMetadata`, and Gemini code execution parts to identify tool usage.
 
 Built-in codecs preserve only modeled provider-specific usage details under
 `api_specific`; other usage fields are dropped. For example, OpenAI Responses
@@ -679,58 +685,41 @@ const frameworkResponseCodec: LlmResponseCodec = {
 
 In Rust, implement `LlmResponseCodec` directly:
 
-```rust
-use nemo_relay::codec::request::MessageContent;
-use nemo_relay::codec::response::{AnnotatedLlmResponse, FinishReason, Usage};
-use nemo_relay::codec::traits::LlmResponseCodec;
-use nemo_relay::error::{FlowError, Result};
-use serde::Deserialize;
-use serde_json::{Map, Value as Json};
-
-#[derive(Deserialize)]
-struct FrameworkResponse {
-    id: Option<String>,
-    model_name: Option<String>,
-    text: Option<String>,
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-}
-
-struct FrameworkResponseCodec;
-
-impl LlmResponseCodec for FrameworkResponseCodec {
-    fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        let raw: FrameworkResponse = serde_json::from_value(response.clone())
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let total_tokens = match (raw.input_tokens, raw.output_tokens) {
-            (Some(input), Some(output)) => Some(input + output),
-            _ => None,
-        };
-
-        Ok(AnnotatedLlmResponse {
-            id: raw.id,
-            model: raw.model_name,
-            message: raw.text.map(MessageContent::Text),
-            tool_calls: None,
-            finish_reason: Some(FinishReason::Complete),
-            usage: Some(Usage {
-                prompt_tokens: raw.input_tokens,
-                completion_tokens: raw.output_tokens,
-                total_tokens,
-                cache_read_tokens: None,
-                cache_write_tokens: None,
-                cost: None,
-            }),
-            api_specific: None,
-            extra: Map::new(),
-        })
-    }
-}
-```
+<Code src="_code/framework_response_codec.rs" language="rust" />
 
 ## Streaming Responses
 
 Streaming LLM wrappers decode the aggregated response produced by the stream finalizer. The response codec does not see each token or chunk. Use stream collectors for chunk-level behavior, and use response codecs for the final normalized end-event annotation.
+
+### Borrowing Stream Chunks in Rust
+
+Rust callers can use `LlmStreamCallExecuteParams::borrowed_collector` to read each
+JSON chunk without copying the whole chunk. Built-in streaming codecs provide
+this callback through `StreamingCodec::borrowed_collector()`:
+
+```rust
+use nemo_relay::api::llm::LlmStreamCallExecuteParams;
+use nemo_relay::codec::openai_chat::OpenAIChatStreamingCodec;
+use nemo_relay::codec::streaming::StreamingCodec;
+
+let streaming_codec = OpenAIChatStreamingCodec::new();
+let params = LlmStreamCallExecuteParams::builder()
+    .name("openai")
+    .request(request)
+    .func(provider_stream)
+    .collector(streaming_codec.collector())
+    .borrowed_collector_opt(streaming_codec.borrowed_collector())
+    .finalizer(streaming_codec.finalizer())
+    .build();
+```
+
+If you set a borrowed collector, the runtime calls it instead of the owned
+`collector`. Copy any fields you need after the callback returns. If the callback
+returns an error, the runtime stops the stream. It runs the same finalizer and
+cleanup steps as an owned collector.
+
+Custom codecs can keep the default `None` to use their existing owned callback.
+Python, Node.js, and FFI collectors still receive owned chunks.
 
 ## Validation Checklist
 

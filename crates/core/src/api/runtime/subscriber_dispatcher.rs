@@ -210,10 +210,7 @@ mod native {
 
     type DispatcherState = Option<std::result::Result<Sender<DispatcherMessage>, String>>;
     type SanitizerRuntimeState = Option<std::result::Result<tokio::runtime::Runtime, String>>;
-    type BackgroundPublication = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-    type BackgroundPublicationState = Option<
-        std::result::Result<tokio::sync::mpsc::UnboundedSender<BackgroundPublication>, String>,
-    >;
+    type BackgroundPublicationState = Option<std::result::Result<tokio::runtime::Runtime, String>>;
 
     /// Opaque routing handle for publications emitted on foreign callback threads.
     #[derive(Clone)]
@@ -295,12 +292,14 @@ mod native {
     static PROCESS_STATE: AtomicPtr<ProcessState> = AtomicPtr::new(std::ptr::null_mut());
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
+        static ON_PUBLICATION_EXECUTOR: Cell<bool> = const { Cell::new(false) };
         static PREPARED_FORK_STATE: Cell<*mut ProcessState> = const { Cell::new(std::ptr::null_mut()) };
         static THREAD_PUBLICATION_BUFFER: RefCell<Option<PublicationBuffer>> = const { RefCell::new(None) };
         static THREAD_PUBLICATION_LINEAGE: RefCell<Option<Arc<PublicationLineage>>> = const { RefCell::new(None) };
     }
     tokio::task_local! {
         static ASYNC_PUBLICATION_BUFFER: PublicationBuffer;
+        static TASK_PUBLICATION_LINEAGE: Arc<PublicationLineage>;
     }
 
     struct DispatchGuard;
@@ -389,6 +388,7 @@ mod native {
                         .and_then(|buffer| buffer.lineage.clone())
                 })
             })
+            .or_else(|| TASK_PUBLICATION_LINEAGE.try_with(Arc::clone).ok())
             .or_else(|| THREAD_PUBLICATION_LINEAGE.with(|lineage| lineage.borrow().clone()))
     }
 
@@ -471,24 +471,39 @@ mod native {
         build_sanitizer_runtime()
     }
 
+    /// Reuse drivers across one event's middleware stages, but never across events.
+    /// Shutting down without waiting cancels detached async tasks and lets detached
+    /// blocking work finish without stalling subscriber delivery.
+    #[derive(Default)]
+    struct EventMiddlewareRuntime(Option<std::result::Result<tokio::runtime::Runtime, String>>);
+
+    impl EventMiddlewareRuntime {
+        fn get(&mut self) -> std::result::Result<&tokio::runtime::Runtime, String> {
+            self.0
+                .get_or_insert_with(build_sanitizer_invocation_runtime)
+                .as_ref()
+                .map_err(Clone::clone)
+        }
+    }
+
+    impl Drop for EventMiddlewareRuntime {
+        fn drop(&mut self) {
+            if let Some(Ok(runtime)) = self.0.take() {
+                runtime.shutdown_background();
+            }
+        }
+    }
+
     fn start_background_publication_executor()
-    -> std::result::Result<tokio::sync::mpsc::UnboundedSender<BackgroundPublication>, String> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+    -> std::result::Result<tokio::runtime::Runtime, String> {
+        // One worker keeps finalization serial while a blocking flush can hand it off.
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("nemo-relay-background-publication")
+            .on_thread_start(|| ON_PUBLICATION_EXECUTOR.with(|flag| flag.set(true)))
             .enable_all()
             .build()
-            .map_err(|error| error.to_string())?;
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        std::thread::Builder::new()
-            .name("nemo-relay-background-publication".into())
-            .spawn(move || {
-                runtime.block_on(async move {
-                    while let Some(publication) = receiver.recv().await {
-                        tokio::spawn(publication);
-                    }
-                });
-            })
-            .map_err(|error| error.to_string())?;
-        Ok(sender)
+            .map_err(|error| error.to_string())
     }
 
     pub(super) fn spawn_background_publication<F>(future: F) -> bool
@@ -496,24 +511,14 @@ mod native {
         F: Future<Output = ()> + Send + 'static,
     {
         let state = process_state();
-        let sender = {
-            let mut executor = state
-                .background_publications
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            executor
-                .get_or_insert_with(start_background_publication_executor)
-                .clone()
-        };
-        match sender {
-            Ok(sender) if sender.send(Box::pin(future)).is_ok() => true,
-            Ok(_) => {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "background_publication_executor_stopped";
-                    "Background publication executor stopped before accepting stream finalization"
-                );
-                false
+        let mut executor = state
+            .background_publications
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match executor.get_or_insert_with(start_background_publication_executor) {
+            Ok(runtime) => {
+                runtime.spawn(future);
+                true
             }
             Err(error)
                 if !state
@@ -768,6 +773,21 @@ mod native {
         })
     }
 
+    pub(super) async fn with_pending_publication<F: Future>(
+        pending: Option<PendingPublication>,
+        future: F,
+    ) -> F::Output {
+        let Some(pending) = pending else {
+            return future.await;
+        };
+        let output = match pending.permit.as_ref().map(PublicationPermit::lineage) {
+            Some(lineage) => TASK_PUBLICATION_LINEAGE.scope(lineage, future).await,
+            None => future.await,
+        };
+        drop(pending);
+        output
+    }
+
     fn flush_subscribers_inner(include_pending: bool, started: Option<Sender<()>>) -> Result<()> {
         if in_dispatcher_callback() {
             return Ok(());
@@ -785,6 +805,9 @@ mod native {
                 .map_err(|error| FlowError::Internal(error.clone()))?
                 .clone()
         };
+        // A pending publication's own work must not wait on unfinished terminal publications.
+        let include_pending = include_pending
+            && !current_publication_lineage().is_some_and(|lineage| lineage.pending_terminal);
         let (done_tx, done_rx) = mpsc::channel();
         sender
             .send(DispatcherMessage::Flush {
@@ -797,8 +820,13 @@ mod native {
         if let Some(started) = started {
             let _ = started.send(());
         }
-        done_rx
-            .recv()
+        let acknowledged = if ON_PUBLICATION_EXECUTOR.with(Cell::get) {
+            // The publications this flush waits on may need the executor.
+            tokio::task::block_in_place(|| done_rx.recv())
+        } else {
+            done_rx.recv()
+        };
+        acknowledged
             .map_err(|error| FlowError::Internal(format!("subscriber flush failed: {error}")))?;
         Ok(())
     }
@@ -1166,13 +1194,14 @@ mod native {
         event: Event,
         injectors: Vec<EventMetadataInjector>,
         publication_context: Option<PublicationContext>,
+        middleware_runtime: &mut EventMiddlewareRuntime,
     ) -> (Event, Vec<DispatcherMessage>) {
         if injectors.is_empty() {
             return (event, Vec::new());
         }
 
         let state = process_state();
-        let runtime = match build_sanitizer_invocation_runtime() {
+        let runtime = match middleware_runtime.get() {
             Ok(runtime) => runtime,
             Err(error) => {
                 if !state
@@ -1196,11 +1225,10 @@ mod native {
 
         let fallback = event.clone();
         let (injected, nested_publications) = run_with_nested_publication_buffer(
-            &runtime,
+            runtime,
             publication_context,
             NemoRelayContextState::event_metadata_injection_snapshot_chain(event, &injectors),
         );
-        runtime.shutdown_background();
         match injected {
             Ok(event) => (event, nested_publications),
             Err(_) => {
@@ -1218,6 +1246,8 @@ mod native {
     /// thread. A transform failure drops the event because it may be responsible
     /// for inserting the sanitized payload. Injector failures preserve the
     /// original Event. A sanitizer failure clears mutable observability fields.
+    /// Stages share a lazy runtime whose shutdown cancels detached async work
+    /// before subscriber delivery or the next event.
     pub(super) fn sanitize_event_snapshot(
         event: Event,
         transform: Option<EventTransformFn>,
@@ -1226,13 +1256,14 @@ mod native {
         publication_context: Option<PublicationContext>,
     ) -> (Option<Event>, Vec<DispatcherMessage>) {
         let state = process_state();
+        let mut middleware_runtime = EventMiddlewareRuntime::default();
         let propagation_root_uuid = event.propagation_root_uuid();
         let propagation_parent_uuid = event.propagation_parent_uuid();
         let propagation_traceparent = event.propagation_traceparent().map(ToOwned::to_owned);
         let propagation_tracestate = event.propagation_tracestate().map(ToOwned::to_owned);
         let (mut transformed, mut nested_publications) = match transform {
             Some(transform) => {
-                let runtime = match build_sanitizer_invocation_runtime() {
+                let runtime = match middleware_runtime.get() {
                     Ok(runtime) => runtime,
                     Err(error) => {
                         if !state
@@ -1254,11 +1285,10 @@ mod native {
                     }
                 };
                 let (transformed, nested_publications) = run_with_nested_publication_buffer(
-                    &runtime,
+                    runtime,
                     publication_context.clone(),
                     async move { transform(event).await },
                 );
-                runtime.shutdown_background();
                 match transformed {
                     Ok(event) => (event, nested_publications),
                     Err(_) => {
@@ -1277,13 +1307,17 @@ mod native {
         transformed.set_propagation_parent_uuid(propagation_parent_uuid);
         transformed.set_propagation_traceparent(propagation_traceparent);
         transformed.set_propagation_tracestate(propagation_tracestate);
-        let (injected, injector_publications) =
-            inject_event_metadata_snapshot(transformed, injectors, publication_context.clone());
+        let (injected, injector_publications) = inject_event_metadata_snapshot(
+            transformed,
+            injectors,
+            publication_context.clone(),
+            &mut middleware_runtime,
+        );
         nested_publications.extend(injector_publications);
         if sanitizers.is_empty() {
             return (Some(injected), nested_publications);
         }
-        let runtime = match build_sanitizer_invocation_runtime() {
+        let runtime = match middleware_runtime.get() {
             Ok(runtime) => runtime,
             Err(error) => {
                 if !state
@@ -1308,11 +1342,10 @@ mod native {
         };
         let fallback = injected.clone();
         let (sanitized, sanitizer_publications) = run_with_nested_publication_buffer(
-            &runtime,
+            runtime,
             publication_context,
             NemoRelayContextState::event_sanitize_snapshot_chain(injected, &sanitizers),
         );
-        runtime.shutdown_background();
         nested_publications.extend(sanitizer_publications);
         let event = match sanitized {
             Ok(event) => Some(event),
@@ -1482,7 +1515,7 @@ pub(crate) fn register_async_publication() -> Option<native::AsyncPublication> {
     native::register_async_publication()
 }
 
-pub(crate) use native::PendingPublication;
+pub(crate) use native::{AsyncPublication, PendingPublication};
 
 /// Register pending asynchronous work that must finish before a later
 /// subscriber flush can complete.
@@ -1492,6 +1525,17 @@ pub(crate) use native::PendingPublication;
 /// after previously queued terminal publications have been delivered.
 pub(crate) fn register_pending_publication() -> Option<native::PendingPublication> {
     native::register_pending_publication()
+}
+
+/// Run asynchronous work as part of a registered pending publication and
+/// release it when the work completes or is dropped. A flush issued by the
+/// work waits for queued publications but not for unfinished terminal
+/// publications, including this one.
+pub(crate) async fn with_pending_publication<F: Future>(
+    pending: Option<PendingPublication>,
+    future: F,
+) -> F::Output {
+    native::with_pending_publication(pending, future).await
 }
 
 /// Run asynchronous middleware as part of an already-registered publication,
@@ -1508,7 +1552,7 @@ pub(crate) async fn with_async_publication_context<F: Future>(
 }
 
 /// Schedule detached stream-finalization publication on the process-local
-/// executor. The executor uses one shared OS thread and is reset after fork.
+/// executor. The executor uses one worker thread and is reset after fork.
 pub(crate) fn spawn_background_publication<F>(future: F) -> bool
 where
     F: Future<Output = ()> + Send + 'static,

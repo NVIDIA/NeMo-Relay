@@ -137,7 +137,9 @@ Relay does not log the value. A header can use only one of `headers`,
 When you set any header source (`headers`, `header_env`, or `header_file`),
 remote ATOF HTTP destinations must use HTTPS and remote WebSocket destinations
 must use WSS. HTTP or WS is allowed only for localhost and loopback IP
-addresses.
+addresses, unless the host is listed in the not-recommended
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts) setting. A stream sink passed directly to
+`AtofExporter` through the Manual API can instead set `allow_insecure`.
 
 ATOF HTTP clients do not follow redirects when headers are set. Use the final
 collector URL. If a server sends a redirect, that delivery fails and Relay does
@@ -229,7 +231,7 @@ loading plugin code or acquiring the activation lease. Use Python/Rust
 `validate_exact()`, Node.js `validateExact()`, or Go `ValidateExact()` when only
 the supplied static configuration should be checked. For complete
 layering rules, refer to
-[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+[Configure](/configure-plugins/plugin-configuration-files).
 
 <Tabs>
 <Tab title="Python" language="python">

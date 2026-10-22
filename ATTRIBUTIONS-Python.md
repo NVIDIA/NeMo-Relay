@@ -299,7 +299,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-## aiohttp (3.14.3)
+## aiohttp (3.14.4)
 
 ### Licenses
 License: `Apache-2.0 AND MIT`
@@ -1166,7 +1166,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## certifi (2026.2.25)
+## certifi (2026.10.19)
 
 ### Licenses
 License: `MPL-2.0`
@@ -1582,7 +1582,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## distlib (0.4.0)
+## distlib (0.4.4)
 
 ### Licenses
 License: `PSF-2.0`
@@ -5369,10 +5369,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## packaging (25.0)
+## packaging (26.3)
 
 ### Licenses
-License: `Apache Software License OR BSD License`
+License: `Apache-2.0 OR BSD-2-Clause`
 
   - `LICENSE`:
 ```
@@ -8079,7 +8079,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## uv (0.11.29)
+## uv (0.13.4)
 
 ### Licenses
 License: `MIT OR Apache-2.0`
@@ -8289,14 +8289,14 @@ Apache License
    limitations under the License.
 ```
 
-## virtualenv (21.7.13)
+## virtualenv (21.14.12)
 
 ### Licenses
 License: `MIT`
 
   - `LICENSE`:
 ```
-Copyright (c) 2020-202x The virtualenv developers
+Copyright (c) 2020-present The virtualenv developers
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
@@ -8448,7 +8448,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## yarl (1.23.0)
+## yarl (1.25.1)
 
 ### Licenses
 License: `Apache-2.0`

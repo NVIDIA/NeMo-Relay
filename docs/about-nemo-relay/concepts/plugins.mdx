@@ -44,7 +44,7 @@ Two similarly named files serve different purposes:
 | `plugins.toml` | Relay operator or application | Configures built-in components and records references to discoverable plugins. Relay discovers and layers this file. |
 | `relay-plugin.toml` | Discoverable plugin author | Describes one packaged native library or worker, including compatibility, capabilities, loading, and integrity. Relay reads it through a reference in `plugins.toml`. |
 
-Refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+Refer to [Configure](/configure-plugins/plugin-configuration-files)
 for runtime configuration and
 [Package Discoverable Plugins](/build-plugins/package-discoverable-plugins) for the package
 manifest.
@@ -257,7 +257,7 @@ responses with cost estimates. Configure catalog sources through
 [Model Pricing](/configure-plugins/model-pricing).
 
 For `plugins.toml` discovery, precedence, merge, and gateway editing rules,
-refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+refer to [Configure](/configure-plugins/plugin-configuration-files).
 
 ## Discoverable Plugins
 
@@ -272,7 +272,7 @@ The operator keeps the manifest reference and component configuration in
 manifest, optional static schema, host policy, compatibility, and trust
 evidence before enabling or running a dynamic plugin. During startup, Relay
 loads the enabled adapter and then validates the synthesized component. Refer
-to [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
+to [Manage](/configure-plugins/discoverable-plugins)
 for the operator workflow and [Package Discoverable Plugins](/build-plugins/package-discoverable-plugins)
 for the authoring workflow.
 

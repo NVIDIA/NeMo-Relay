@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+#[cfg(test)]
+use axum::http::header::AUTHORIZATION;
+use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::serve::ListenerExt;
 use axum::{Json, Router};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as ConnectionBuilder;
@@ -31,8 +32,8 @@ use super::super::common::identity::{MachineIdentity, TokenDigest};
 use super::super::common::logging::LogRateLimiter;
 use super::super::common::routes::{ProviderRoute, PublicRoute};
 use super::super::common::transport::{
-    PooledClient, RelayBody, box_body, hold_body, pooled_client, prepare_forward_request,
-    prepare_forward_response,
+    PooledClient, RelayBody, hold_body, pooled_client, prepare_forward_response,
+    prepare_provider_request,
 };
 use super::control::{self, Registration};
 use crate::configuration::GatewayConfig;
@@ -46,6 +47,9 @@ use super::managed::ManagedRuntime;
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+use crate::daemon::diagnostics as diag;
+use nemo_relay::diagnostics::{DaemonFailureCode, FailureClass};
 
 pub(super) struct RuntimeOptions {
     pub(super) daemon_origin: String,
@@ -69,6 +73,8 @@ struct AuthTokens {
 }
 
 struct WorkerState {
+    diagnostic_authority: diag::WorkerReadAuthority,
+    diagnostics_http: Option<crate::diagnostics_http::DiagnosticsHttp>,
     worker_id: String,
     config: GatewayConfig,
     upstream: PooledClient,
@@ -90,11 +96,25 @@ impl WorkerState {
         managed: Option<Arc<ManagedRuntime>>,
         registration: &Registration,
     ) -> Result<Self, CliError> {
+        let diagnostic_authority = diag::WorkerReadAuthority::default();
+        diagnostic_authority.replace(registration.diagnostics.clone());
+        let diagnostics_http = crate::runtime_diagnostics::runtime()
+            .filter(|r| r.http_read)
+            .and_then(|r| {
+                crate::diagnostics_http::DiagnosticsHttp::with_authority(
+                    r.context.reader(),
+                    crate::diagnostics_http::ReadAuthority::Worker(diagnostic_authority.clone()),
+                    r.coverage(),
+                )
+                .ok()
+            });
         let data_token = registration.data_token_digest();
         Ok(Self {
+            diagnostic_authority,
+            diagnostics_http,
             worker_id,
-            config,
             upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
+            config,
             managed,
             auth: RwLock::new(AuthTokens {
                 data: data_token,
@@ -220,10 +240,13 @@ impl WorkerState {
     }
 
     fn control_lost(&self) {
+        self.diagnostic_authority.replace(None);
         self.accepting.store(false, Ordering::Release);
     }
 
     fn control_restored(&self, registration: &Registration) {
+        self.diagnostic_authority
+            .replace(registration.diagnostics.clone());
         {
             let mut auth = write_lock(&self.auth);
             auth.data = registration.data_token_digest();
@@ -311,8 +334,15 @@ async fn initialize_managed_runtime(
     tokio::select! {
         result = ManagedRuntime::initialize(config, dynamic_plugins, fingerprint) => result.map(Arc::new),
         event = registration.next() => {
-            if let Ok(super::super::common::socket::Event::Drain { request_id, .. }) = event {
-                let _ = registration.acknowledge(request_id).await;
+            match event {
+                Ok(super::super::common::socket::Event::Drain { request_id, .. }) => {
+                    let _ = registration.acknowledge(request_id).await;
+                }
+                Ok(super::super::common::socket::Event::DiagnosticRevoked { request_id }) => {
+                    registration.diagnostics = None;
+                    let _ = registration.acknowledge(request_id).await;
+                }
+                _ => {}
             }
             Err(CliError::Launch("worker activation was interrupted during initialization".into()))
         }
@@ -331,13 +361,15 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         dynamic_plugins,
         mut registration,
     } = options;
-    let managed = initialize_managed_runtime(
+    let initialized = initialize_managed_runtime(
         config.clone(),
         dynamic_plugins,
         identity.fingerprint().to_string(),
         &mut registration,
     )
-    .await?;
+    .await;
+    diag::result(DaemonFailureCode::WorkerInitialize, &initialized);
+    let managed = initialized?;
     let state = Arc::new(WorkerState::new(
         worker_id.clone(),
         config,
@@ -348,14 +380,7 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
     let server = async move {
         match tls_config {
             Some(config) => serve_tls(listener, app, config).await,
-            None => axum::serve(
-                listener.tap_io(|stream| {
-                    let _ = stream.set_nodelay(true);
-                }),
-                app,
-            )
-            .await
-            .map_err(CliError::Io),
+            None => serve_plain(listener, app).await,
         }
     };
     tokio::pin!(server);
@@ -394,6 +419,7 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
     let (result, stop_reason) = tokio::select! {
         result = &mut server => {
             let reason = if result.is_ok() { "listener_stopped" } else { "listener_failed" };
+            diag::result(DaemonFailureCode::WorkerListener, &result);
             (result, reason)
         },
         _ = state.wait_until_stopped() => {
@@ -407,12 +433,20 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
             (Ok(()), reason)
         },
     };
+    state.diagnostic_authority.replace(None);
+    if let Some(adapter) = &state.diagnostics_http {
+        adapter.close();
+    }
     state.request_exit(stop_reason);
     let stop_reason = read_lock(&state.exit_reason).unwrap_or(stop_reason);
     control_task.abort();
     signal.abort();
     let result = match state.managed.as_ref() {
-        Some(managed) => result.and(managed.close().await),
+        Some(managed) => {
+            let teardown = managed.close().await;
+            diag::result(DaemonFailureCode::WorkerTeardown, &teardown);
+            result.and(teardown)
+        }
         None => result,
     };
     match &result {
@@ -435,6 +469,48 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         ),
     }
     result
+}
+
+// Keep HTTP/2 settings identical for loopback and TLS workers. The connection window
+// is shared by every request stream, so the default 1 MiB can stall concurrent large uploads.
+pub(crate) fn worker_connection_builder() -> ConnectionBuilder<TokioExecutor> {
+    crate::daemon::common::transport::data_plane_connection_builder()
+}
+
+async fn serve_plain(listener: TcpListener, app: Router) -> Result<(), CliError> {
+    let accept_failure_limiter = LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL);
+    let mut connections = tokio::task::JoinSet::new();
+    loop {
+        let (stream, _) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                if let Some(suppressed_since_last_emit) = accept_failure_limiter.record() {
+                    log::warn!(
+                        target: "nemo_relay.daemon.worker",
+                        event = "worker_listener_accept_failed",
+                        suppressed_since_last_emit = suppressed_since_last_emit;
+                        "Worker listener accept failed: {error}"
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+        let _ = stream.set_nodelay(true);
+        let service = app.clone();
+        connections.spawn(async move {
+            let mut builder = worker_connection_builder();
+            // Preserve axum::serve's HTTP/2 WebSocket support on the cleartext listener.
+            builder.http2().enable_connect_protocol();
+            let _ = builder
+                .serve_connection_with_upgrades(
+                    TokioIo::new(stream),
+                    TowerToHyperService::new(service),
+                )
+                .await;
+        });
+        while connections.try_join_next().is_some() {}
+    }
 }
 
 async fn serve_tls(
@@ -471,7 +547,7 @@ async fn serve_tls(
                 return;
             };
             drop(handshake_permit);
-            let builder = ConnectionBuilder::new(TokioExecutor::new());
+            let builder = worker_connection_builder();
             let _ = builder
                 .serve_connection_with_upgrades(
                     TokioIo::new(stream),
@@ -493,10 +569,11 @@ pub(crate) async fn test_serve_tls(
 }
 
 fn router(state: Arc<WorkerState>) -> Router {
+    let diagnostics = state.diagnostics_http.clone();
     let control = Router::new()
         .route(WORKER_PROBE_PATH, get(readiness_probe))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES));
-    Router::new()
+    let app = Router::new()
         .merge(control)
         .fallback(proxy)
         .method_not_allowed_fallback(|request: Request<Body>| async move {
@@ -511,7 +588,12 @@ fn router(state: Arc<WorkerState>) -> Router {
             Arc::clone(&state),
             authenticate_daemon_request,
         ))
-        .with_state(state)
+        .with_state(state);
+    // Separate route group: diagnostics never uses readiness/data-token admission.
+    match diagnostics {
+        Some(adapter) => app.merge(adapter.router()),
+        None => app,
+    }
 }
 
 #[cfg(test)]
@@ -558,6 +640,8 @@ pub(crate) fn test_router_with_control_tokens(
     control_token: &[u8],
 ) -> (Router, TestWorkerHandle) {
     let state = Arc::new(WorkerState {
+        diagnostic_authority: Default::default(),
+        diagnostics_http: None,
         worker_id: "test-worker".into(),
         config,
         upstream,
@@ -629,7 +713,7 @@ fn drain_timeout_ms(request: &WorkerDrainRequest) -> u64 {
 }
 
 async fn proxy(State(state): State<Arc<WorkerState>>, request: Request<Body>) -> Response<Body> {
-    let Some(route) = PublicRoute::from_path(request.uri().path()) else {
+    let Some(route) = PublicRoute::from_request(request.uri().path(), request.headers()) else {
         return crate::operational::unmatched_route(
             "worker",
             request.method(),
@@ -704,7 +788,12 @@ async fn proxy(State(state): State<Arc<WorkerState>>, request: Request<Body>) ->
                     }
                     Err(error) => {
                         if let Some(reason) = managed_upstream_failure_reason(&error) {
-                            log_worker_upstream_request_failed(&state, provider, reason);
+                            log_worker_upstream_request_failed(
+                                &state,
+                                provider,
+                                reason,
+                                diag::DaemonErrorClassifier::cause(&error),
+                            );
                         }
                         error.into_response()
                     }
@@ -730,8 +819,11 @@ async fn forward_to_provider(
     route: ProviderRoute,
     in_flight: InFlight,
 ) -> Response<Body> {
-    let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    let allow_environment_provider_auth = crate::gateway::daemon_allows_provider_auth(
+        request.headers(),
+        request.uri().path(),
+        &state.config,
+    );
     let path_and_query = request
         .uri()
         .path_and_query()
@@ -753,13 +845,25 @@ async fn forward_to_provider(
     ) {
         *request.headers_mut() = aligned;
     }
-    if allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, &state.config);
+    if let Err(error) = crate::upstream_auth::apply_for_destination(
+        request.headers_mut(),
+        &destination,
+        matches!(route, ProviderRoute::Anthropic),
+        allow_environment_provider_auth,
+        &state.config,
+    )
+    .await
+    {
+        return error.into_response();
     }
+    let helper_auth = allow_environment_provider_auth
+        && crate::upstream_auth::helper(&state.config, matches!(route, ProviderRoute::Anthropic))
+            .is_some();
     if crate::gateway::websocket::is_websocket(&request) {
         let shutdown_state = Arc::clone(&state);
         return match crate::gateway::websocket::forward_to_provider(
             client_named,
+            helper_auth,
             request,
             &destination,
             in_flight,
@@ -772,10 +876,20 @@ async fn forward_to_provider(
             Err(error) => message(StatusCode::BAD_GATEWAY, &error.to_string()),
         };
     }
+    let upstream =
+        match crate::daemon::common::transport::provider_client(&state.upstream, helper_auth) {
+            Ok(client) => client,
+            Err(error) => return CliError::Launch(error.to_string()).into_response(),
+        };
     let destination = match destination.parse::<Uri>() {
         Ok(destination) => destination,
         Err(_) => {
-            log_worker_upstream_request_failed(&state, route, "invalid_destination");
+            log_worker_upstream_request_failed(
+                &state,
+                route,
+                "invalid_destination",
+                FailureClass::InvalidInput,
+            );
             return message(StatusCode::BAD_GATEWAY, "invalid provider destination");
         }
     };
@@ -785,26 +899,34 @@ async fn forward_to_provider(
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
         HeaderName::from_static(crate::agents::pi::alignment::UPSTREAM_BASE_URL_HEADER),
     ];
-    let request = match prepare_forward_request(request, destination, &strip) {
-        Ok(request) => request.map(box_body),
-        Err(error) => return message(StatusCode::BAD_REQUEST, &error.to_string()),
-    };
-    let request = match super::super::common::transport::request_provider(
-        &state.upstream,
-        client_named,
-        request,
-    ) {
-        Ok(request) => request,
-        Err(error) => return message(StatusCode::BAD_GATEWAY, &error.to_string()),
-    };
+    let request =
+        match prepare_provider_request(request, destination, &strip, &state.config, client_named) {
+            Ok(request) => request,
+            Err(error) => return message(StatusCode::BAD_REQUEST, &error.to_string()),
+        };
+    let request =
+        match super::super::common::transport::request_provider(&upstream, client_named, request) {
+            Ok(request) => request,
+            Err(error) => return message(StatusCode::BAD_GATEWAY, &error.to_string()),
+        };
     let response = match state.config.wait_for_response(request).await {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
-            log_worker_upstream_request_failed(&state, route, "transport_error");
+            log_worker_upstream_request_failed(
+                &state,
+                route,
+                "transport_error",
+                FailureClass::Unknown,
+            );
             return message(StatusCode::BAD_GATEWAY, &error.to_string());
         }
         Err(_) => {
-            log_worker_upstream_request_failed(&state, route, "response_head_timeout");
+            log_worker_upstream_request_failed(
+                &state,
+                route,
+                "response_head_timeout",
+                FailureClass::Timeout,
+            );
             return message(
                 StatusCode::GATEWAY_TIMEOUT,
                 "provider response-head timeout",
@@ -814,7 +936,12 @@ async fn forward_to_provider(
     let response = match prepare_forward_response(response, &strip) {
         Ok(response) => response,
         Err(error) => {
-            log_worker_upstream_request_failed(&state, route, "invalid_response");
+            log_worker_upstream_request_failed(
+                &state,
+                route,
+                "invalid_response",
+                FailureClass::InvalidInput,
+            );
             return message(StatusCode::BAD_GATEWAY, &error.to_string());
         }
     };
@@ -825,7 +952,12 @@ async fn forward_to_provider(
 
 fn managed_upstream_failure_reason(error: &CliError) -> Option<&'static str> {
     match error {
-        CliError::Upstream(_) => Some("transport_error"),
+        CliError::Upstream(_) | CliError::UpstreamTransport(_) => Some("transport_error"),
+        CliError::ProviderFailure(failure) => match failure.class {
+            nemo_relay::error::UpstreamFailureClass::Timeout => Some("response_head_timeout"),
+            nemo_relay::error::UpstreamFailureClass::Connection => Some("transport_error"),
+            _ => None,
+        },
         CliError::Io(_) => Some("io_error"),
         CliError::Http(_) => Some("invalid_response"),
         CliError::Launch(message) if message.contains("response-head timeout") => {
@@ -840,7 +972,13 @@ fn log_worker_upstream_request_failed(
     state: &WorkerState,
     route: ProviderRoute,
     reason: &'static str,
+    cause: FailureClass,
 ) {
+    diag::record(
+        DaemonFailureCode::Forward,
+        cause,
+        "Worker forwarding operation failed",
+    );
     static LIMITER: OnceLock<LogRateLimiter> = OnceLock::new();
     let limiter = LIMITER.get_or_init(|| LogRateLimiter::new(UPSTREAM_FAILURE_LOG_INTERVAL));
     let Some(suppressed_since_last_emit) = limiter.record() else {
@@ -858,54 +996,16 @@ fn log_worker_upstream_request_failed(
     );
 }
 
-fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &GatewayConfig) {
-    if crate::provider_auth::has_provider_credential(headers) {
-        return;
-    }
-    let configured = match route {
-        ProviderRoute::OpenAi => config.openai_auth_header.as_deref(),
-        ProviderRoute::Anthropic => config.anthropic_auth_header.as_deref(),
-    };
-    if let Some(configured) = configured.and_then(header_value) {
-        headers.insert(AUTHORIZATION, configured);
-        return;
-    }
-    match route {
-        ProviderRoute::OpenAi => {
-            let Some(key) = nonempty_environment("OPENAI_API_KEY") else {
-                return;
-            };
-            if let Some(value) = header_value(&format!("Bearer {key}")) {
-                headers.insert(AUTHORIZATION, value);
-            }
-        }
-        ProviderRoute::Anthropic => {
-            let Some(key) = nonempty_environment("ANTHROPIC_API_KEY") else {
-                return;
-            };
-            if let Some(value) = header_value(&key) {
-                headers.insert(HeaderName::from_static("x-api-key"), value);
-            }
-        }
-    }
-}
-
-fn nonempty_environment(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
-fn header_value(value: &str) -> Option<HeaderValue> {
-    HeaderValue::from_str(value).ok()
-}
-
 fn begin_drain(state: &WorkerState, request: &WorkerDrainRequest) {
     // Retain the first deadline so duplicate delivery can never extend a drain.
     if !state.draining.load(Ordering::Acquire) {
         state.begin_drain(drain_timeout_ms(request));
     }
+}
+
+fn revoke_diagnostic_authority(state: &WorkerState, registration: &mut Registration) {
+    state.diagnostic_authority.replace(None);
+    registration.diagnostics = None;
 }
 
 async fn monitor_control(
@@ -929,6 +1029,12 @@ async fn monitor_control(
                     continue;
                 }
             }
+            Ok(crate::daemon::common::socket::Event::DiagnosticRevoked { request_id }) => {
+                revoke_diagnostic_authority(&state, &mut registration);
+                if registration.acknowledge(request_id).await.is_ok() {
+                    continue;
+                }
+            }
             Ok(_) => {
                 state.control_lost();
             }
@@ -936,9 +1042,15 @@ async fn monitor_control(
                 state.control_lost();
             }
         }
+        state.control_lost();
         if state.exiting.load(Ordering::Acquire) {
             return;
         }
+        diag::record(
+            DaemonFailureCode::ControlLost,
+            FailureClass::Unavailable,
+            "Worker observed broker control disconnect",
+        );
         log::warn!(target: "nemo_relay.daemon.worker", event = "worker_control_lost", worker_id = state.worker_id.as_str(); "Worker control disconnected; attempting recovery");
         let deadline = registration.recovery_deadline().await;
         let recovered = crate::daemon::common::socket::retry_until(deadline, || async {
@@ -951,18 +1063,28 @@ async fn monitor_control(
                 registration.generation_grant().clone(),
             )
             .await?;
-            if let Some(crate::daemon::common::socket::Event::Drain {
-                request_id,
-                request,
-            }) = next.pending_event().await
-            {
-                begin_drain(&state, &request);
-                next.acknowledge(request_id).await?;
+            match next.pending_event().await {
+                Some(crate::daemon::common::socket::Event::Drain {
+                    request_id,
+                    request,
+                }) => {
+                    begin_drain(&state, &request);
+                    next.acknowledge(request_id).await?;
+                }
+                Some(crate::daemon::common::socket::Event::DiagnosticRevoked { request_id }) => {
+                    next.diagnostics = None;
+                    next.acknowledge(request_id).await?;
+                }
+                _ => {}
             }
+            // Install read authority as soon as authenticated recovery completes; this
+            // is independent of readiness and remains available while draining.
+            state.diagnostic_authority.replace(next.diagnostics.clone());
             if !state.draining.load(Ordering::Acquire) {
                 state.stage_recovery_data_token(&next);
                 if let Err(error) = next.ready(&daemon_origin, &worker_id).await {
                     state.discard_recovery_data_token();
+                    state.diagnostic_authority.replace(None);
                     return Err(error);
                 }
                 state.control_restored(&next);
@@ -972,6 +1094,7 @@ async fn monitor_control(
         .await;
         match recovered {
             Ok(next) => {
+                state.diagnostic_authority.replace(next.diagnostics.clone());
                 registration = next;
                 log::info!(target: "nemo_relay.daemon.worker", event = "worker_control_restored", worker_id = state.worker_id.as_str(); "Worker control restored");
             }

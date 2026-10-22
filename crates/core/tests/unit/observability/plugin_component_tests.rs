@@ -168,6 +168,7 @@ fn signal_endpoint_configuration_reaches_exported_log_and_metric_resources() {
             endpoint(log_endpoint.replace("/v1/traces", "/v1/logs")),
             &serde_json::from_value(json!({"enabled": true})).unwrap(),
             LogSeverity::Info,
+            &PlaintextPolicy::default(),
         )
         .unwrap(),
     )
@@ -178,6 +179,7 @@ fn signal_endpoint_configuration_reaches_exported_log_and_metric_resources() {
             endpoint(metric_endpoint.replace("/v1/traces", "/v1/metrics")),
             &serde_json::from_value(json!({"enabled": true})).unwrap(),
             MetricTemporality::Cumulative,
+            &PlaintextPolicy::default(),
         )
         .unwrap(),
     )
@@ -492,12 +494,18 @@ fn automatic_otel_subscribers_accept_global_otlp_headers() {
         std::env::set_var(headers, "authorization=Bearer%20environment-token");
     }
 
-    let traces = OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin()
-        .expect("automatic trace exporter should accept global headers");
-    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin()
-        .expect("automatic log exporter should accept global headers");
-    let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin()
-        .expect("automatic metric exporter should accept global headers");
+    let traces = OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin(
+        PlaintextPolicy::default(),
+    )
+    .expect("automatic trace exporter should accept global headers");
+    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
+        PlaintextPolicy::default(),
+    )
+    .expect("automatic log exporter should accept global headers");
+    let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
+        PlaintextPolicy::default(),
+    )
+    .expect("automatic metric exporter should accept global headers");
     drop((traces, logs, metrics));
 }
 
@@ -514,9 +522,13 @@ fn automatic_otel_headers_require_protected_log_and_metric_endpoints() {
         std::env::set_var(headers, "authorization=Bearer%20environment-token");
     }
 
-    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin();
+    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
+        PlaintextPolicy::default(),
+    );
     assert!(logs.is_err());
-    let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin();
+    let metrics = OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
+        PlaintextPolicy::default(),
+    );
     assert!(metrics.is_err());
 }
 
@@ -670,15 +682,21 @@ fn automatic_otel_malformed_percent_headers_skip_exporters_without_disclosing_cr
             );
         }
         let errors = [
-            OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin()
-                .err()
-                .unwrap(),
-            OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin()
-                .err()
-                .unwrap(),
-            OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin()
-                .err()
-                .unwrap(),
+            OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin(
+                PlaintextPolicy::default(),
+            )
+            .err()
+            .unwrap(),
+            OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
+                PlaintextPolicy::default(),
+            )
+            .err()
+            .unwrap(),
+            OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
+                PlaintextPolicy::default(),
+            )
+            .err()
+            .unwrap(),
         ];
         for error in errors {
             let message = error.to_string();
@@ -748,9 +766,18 @@ fn automatic_otel_signal_headers_override_generic_headers() {
             }
         }
         let results = [
-            OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin().map(drop),
-            OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin().map(drop),
-            OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin().map(drop),
+            OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin(
+                PlaintextPolicy::default(),
+            )
+            .map(drop),
+            OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(
+                PlaintextPolicy::default(),
+            )
+            .map(drop),
+            OpenTelemetryMetricSubscriber::new_from_automatic_configuration_for_plugin(
+                PlaintextPolicy::default(),
+            )
+            .map(drop),
         ];
         for (variable, result) in signal_headers.into_iter().zip(results) {
             if accepted {
@@ -1101,6 +1128,13 @@ fn editor_schema_tracks_observability_config_types() {
             .kind,
         EditorFieldKind::Boolean
     );
+    assert_eq!(
+        schema
+            .field("insecure_http_hosts")
+            .expect("insecure HTTP hosts field")
+            .kind,
+        EditorFieldKind::List
+    );
     let atof = schema.field("atof").expect("atof section");
     assert_eq!(atof.label, "ATOF");
     assert_eq!(atof.kind, EditorFieldKind::Section);
@@ -1344,6 +1378,7 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
     );
 
     let custom = vec![OpenTelemetrySignalEndpointConfig {
+        tls: None,
         endpoint: "https://collector.example/custom/metric-intake".to_string(),
         transport: default_otlp_transport(),
         headers: HashMap::new(),
@@ -1401,6 +1436,7 @@ fn signal_endpoint_resolution_skips_ambiguous_trace_paths_and_preserves_indexes(
 #[test]
 fn signal_endpoint_resolution_rejects_explicit_wrong_signal_paths() {
     let mut explicit = OpenTelemetrySignalEndpointConfig {
+        tls: None,
         endpoint: "https://collector.example/v1/traces".to_string(),
         transport: default_otlp_transport(),
         headers: HashMap::new(),
@@ -1585,6 +1621,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
         enabled: true,
         file_sinks: Vec::new(),
         endpoints: vec![OpenTelemetryEndpointConfig {
+            tls: None,
             otel_type: OpenTelemetryType::Full,
             endpoint: "http://localhost:4318/v1/traces".to_string(),
             transport: default_otlp_transport(),
@@ -1781,6 +1818,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
     let config = build_otel_config(
         0,
         OpenTelemetryEndpointConfig {
+            tls: None,
             otel_type: OpenTelemetryType::GenAi,
             endpoint: "http://localhost:4318/v1/traces".to_string(),
             transport: default_otlp_transport(),
@@ -1803,6 +1841,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             promote_metadata_prefixes: Vec::new(),
             promote_resource_metadata_prefixes: Vec::new(),
         },
+        &PlaintextPolicy::default(),
     )
     .unwrap();
     unsafe { std::env::set_var(variable, "Bearer changed") };
@@ -1812,6 +1851,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
 
 fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
     OpenTelemetryEndpointConfig {
+        tls: None,
         otel_type: OpenTelemetryType::Full,
         endpoint: "http://localhost:4318/v1/traces".to_string(),
         transport: default_otlp_transport(),
@@ -1854,7 +1894,11 @@ fn all_trace_plugin_endpoints_reject_remote_plaintext() {
                 section.otel_type = otel_type;
                 section.transport = transport.to_string();
                 section.endpoint = endpoint.to_string();
-                assert_eq!(build_otel_config(0, section).is_ok(), allowed, "{endpoint}");
+                assert_eq!(
+                    build_otel_config(0, section, &PlaintextPolicy::default()).is_ok(),
+                    allowed,
+                    "{endpoint}"
+                );
             }
         }
     }
@@ -1864,7 +1908,7 @@ fn all_trace_plugin_endpoints_reject_remote_plaintext() {
 fn trace_endpoint_completed_context_ttl_is_applied_and_must_be_positive() {
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.completed_span_context_ttl_millis = Some(750);
-    let config = build_otel_config(0, endpoint).unwrap();
+    let config = build_otel_config(0, endpoint, &PlaintextPolicy::default()).unwrap();
     assert_eq!(
         config.completed_span_context_ttl(),
         Duration::from_millis(750)
@@ -1873,7 +1917,7 @@ fn trace_endpoint_completed_context_ttl_is_applied_and_must_be_positive() {
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.completed_span_context_ttl_millis = Some(0);
     assert!(
-        build_otel_config(0, endpoint)
+        build_otel_config(0, endpoint, &PlaintextPolicy::default())
             .unwrap_err()
             .to_string()
             .contains("completed_span_context_ttl_millis must be greater than 0")
@@ -1882,6 +1926,7 @@ fn trace_endpoint_completed_context_ttl_is_applied_and_must_be_positive() {
 
 fn test_signal_endpoint() -> OpenTelemetrySignalEndpointConfig {
     OpenTelemetrySignalEndpointConfig {
+        tls: None,
         endpoint: "http://localhost:4318/v1/logs".to_string(),
         transport: default_otlp_transport(),
         headers: HashMap::new(),
@@ -1922,18 +1967,18 @@ fn build_otel_config_rejects_each_activation_only_invalid_value() {
 
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.endpoint = "  ".to_string();
-    assert!(build_otel_config(0, endpoint).is_err());
+    assert!(build_otel_config(0, endpoint, &PlaintextPolicy::default()).is_err());
 
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.transport = "udp".to_string();
-    assert!(build_otel_config(0, endpoint).is_err());
+    assert!(build_otel_config(0, endpoint, &PlaintextPolicy::default()).is_err());
 
     for variable in ["", " PADDED_ENV "] {
         let mut endpoint = test_opentelemetry_endpoint();
         endpoint
             .header_env
             .insert("authorization".to_string(), variable.to_string());
-        assert!(build_otel_config(1, endpoint).is_err());
+        assert!(build_otel_config(1, endpoint, &PlaintextPolicy::default()).is_err());
     }
 
     let mut endpoint = test_opentelemetry_endpoint();
@@ -1943,7 +1988,7 @@ fn build_otel_config_rejects_each_activation_only_invalid_value() {
     endpoint
         .header_env
         .insert("authorization".to_string(), "TOKEN".to_string());
-    assert!(build_otel_config(2, endpoint).is_err());
+    assert!(build_otel_config(2, endpoint, &PlaintextPolicy::default()).is_err());
 
     let variable = "NEMO_RELAY_TEST_BLANK_OTEL_HEADER_ENV";
     unsafe { std::env::set_var(variable, "  ") };
@@ -1951,25 +1996,25 @@ fn build_otel_config_rejects_each_activation_only_invalid_value() {
     endpoint
         .header_env
         .insert("authorization".to_string(), variable.to_string());
-    assert!(build_otel_config(3, endpoint).is_err());
+    assert!(build_otel_config(3, endpoint, &PlaintextPolicy::default()).is_err());
     unsafe { std::env::remove_var(variable) };
 
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.max_queue_size = Some(0);
-    assert!(build_otel_config(4, endpoint).is_err());
+    assert!(build_otel_config(4, endpoint, &PlaintextPolicy::default()).is_err());
 
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.max_export_batch_size = Some(0);
-    assert!(build_otel_config(4, endpoint).is_err());
+    assert!(build_otel_config(4, endpoint, &PlaintextPolicy::default()).is_err());
 
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.scheduled_delay_millis = Some(0);
-    assert!(build_otel_config(4, endpoint).is_err());
+    assert!(build_otel_config(4, endpoint, &PlaintextPolicy::default()).is_err());
 
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.max_queue_size = Some(8);
     endpoint.max_export_batch_size = Some(9);
-    assert!(build_otel_config(4, endpoint).is_err());
+    assert!(build_otel_config(4, endpoint, &PlaintextPolicy::default()).is_err());
 }
 
 #[test]
@@ -1978,13 +2023,18 @@ fn build_otel_config_carries_endpoint_batch_overrides() {
     endpoint.max_queue_size = Some(4096);
     endpoint.max_export_batch_size = Some(256);
     endpoint.scheduled_delay_millis = Some(750);
-    let config = build_otel_config(0, endpoint).unwrap();
+    let config = build_otel_config(0, endpoint, &PlaintextPolicy::default()).unwrap();
     assert_eq!(
         config.batch_overrides(),
         (Some(4096), Some(256), Some(Duration::from_millis(750)))
     );
 
-    let config = build_otel_config(1, test_opentelemetry_endpoint()).unwrap();
+    let config = build_otel_config(
+        1,
+        test_opentelemetry_endpoint(),
+        &PlaintextPolicy::default(),
+    )
+    .unwrap();
     assert_eq!(config.batch_overrides(), (None, None, None));
 }
 
@@ -1993,7 +2043,7 @@ fn build_otel_config_carries_resource_metadata_promotion_prefixes() {
     let mut endpoint = test_opentelemetry_endpoint();
     endpoint.promote_resource_metadata_prefixes = vec!["deployment.".to_string()];
 
-    let config = build_otel_config(0, endpoint).unwrap();
+    let config = build_otel_config(0, endpoint, &PlaintextPolicy::default()).unwrap();
 
     assert_eq!(
         config.promote_resource_metadata_prefixes(),
@@ -2178,6 +2228,291 @@ fn all_invalid_trace_batch_configs_still_block_activation() {
 }
 
 #[test]
+fn plain_http_trace_endpoint_activates_only_when_host_is_listed() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = |insecure_http_hosts: Json| {
+        plugin_config(json!({
+            "version": 4,
+            "insecure_http_hosts": insecure_http_hosts,
+            "opentelemetry": {
+                "enabled": true,
+                "traces": [{
+                    "type": "gen_ai",
+                    "endpoint": "http://host.docker.internal:8082/v1/traces",
+                    "headers": {"authorization": "Bearer token"}
+                }]
+            }
+        }))
+    };
+
+    let listed = config(json!(["HOST.DOCKER.INTERNAL"]));
+    assert!(!test_validate_static_plugin_config(&listed).has_errors());
+    futures::executor::block_on(test_initialize_plugin_host_exact(listed)).unwrap();
+    test_close_plugin_host().unwrap();
+
+    reset_runtime();
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(config(json!([]))))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("requires at least one valid trace, log, or metric endpoint"),
+        "{error}"
+    );
+    assert!(
+        error.contains("traces[0] (http://host.docker.internal:8082)"),
+        "{error}"
+    );
+    assert!(
+        error.contains("OTLP trace endpoints require HTTPS"),
+        "{error}"
+    );
+    assert!(!error.contains("Bearer token"), "{error}");
+
+    reset_runtime();
+    let malformed = config(json!(["http://host.docker.internal"]));
+    let report = test_validate_static_plugin_config(&malformed);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "observability.invalid_insecure_http_hosts"),
+        "{:?}",
+        report.diagnostics
+    );
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(malformed))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("bare hostname or IP address"), "{error}");
+}
+
+#[test]
+fn insecure_http_hosts_is_a_top_level_field_only() {
+    let report = test_validate_static_plugin_config(&plugin_config(json!({
+        "version": 4,
+        "policy": {"unknown_field": "error"},
+        "opentelemetry": {
+            "enabled": true,
+            "traces": [{
+                "type": "gen_ai",
+                "endpoint": "https://collector.example/v1/traces",
+                "insecure_http_hosts": ["collector.example"]
+            }]
+        }
+    })));
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "observability.unknown_field"
+                && diagnostic
+                    .field
+                    .as_deref()
+                    .is_some_and(|field| field.ends_with("insecure_http_hosts"))
+        }),
+        "{:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn typed_insecure_http_hosts_serialize_an_explicit_empty_list() {
+    let omitted = serde_json::to_value(ObservabilityConfig::default()).unwrap();
+    assert!(omitted.get("insecure_http_hosts").is_none());
+    let cleared = serde_json::to_value(ObservabilityConfig {
+        insecure_http_hosts: Some(Vec::new()),
+        ..ObservabilityConfig::default()
+    })
+    .unwrap();
+    assert_eq!(cleared.get("insecure_http_hosts"), Some(&json!([])));
+}
+
+#[cfg(feature = "object-store")]
+#[test]
+fn atif_http_storage_headers_follow_the_plaintext_policy() {
+    let mut config = http_storage_config("http://release-api:8080/atif");
+    config
+        .headers
+        .insert("authorization".to_string(), "Bearer token".to_string());
+    assert!(HttpUploadConfig::resolve(0, &config, &PlaintextPolicy::LoopbackOnly).is_err());
+    let listed = PlaintextPolicy::from_hosts(&["release-api".to_string()]).unwrap();
+    assert!(HttpUploadConfig::resolve(0, &config, &listed).is_ok());
+}
+
+#[test]
+fn skipped_endpoint_reasons_never_echo_endpoint_userinfo() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "traces": [{
+                "type": "gen_ai",
+                "endpoint": "ftp://user:secret-token@collector.example/x"
+            }],
+            "logs": {"enabled": true}
+        }
+    }));
+    let error = futures::executor::block_on(test_initialize_plugin_host_exact(config))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("traces[0]"), "{error}");
+    assert!(error.contains("logs[0]"), "{error}");
+    assert!(!error.contains("secret-token"), "{error}");
+
+    for (endpoint, secret, logs) in [
+        (
+            "https://user:p^ss@collector.example/v1/traces",
+            "p^ss",
+            false,
+        ),
+        (
+            "https://collector.example/v1/traces?api_key=s3cret\n",
+            "s3cret",
+            false,
+        ),
+        (
+            "http://collector.internal:4318/t/SECRET-KEY/ingest",
+            "SECRET-KEY",
+            true,
+        ),
+    ] {
+        reset_runtime();
+        let config = plugin_config(json!({
+            "version": 4,
+            "opentelemetry": {
+                "enabled": true,
+                "traces": [{"type": "gen_ai", "endpoint": endpoint}],
+                "logs": {"enabled": logs}
+            }
+        }));
+        let error = futures::executor::block_on(test_initialize_plugin_host_exact(config))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("traces[0]"), "{error}");
+        assert!(!error.contains(secret), "{error}");
+    }
+}
+
+#[test]
+fn automatic_grpc_skips_tls_for_http_and_rejects_certificate_settings() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let signals = ["TRACES", "LOGS", "METRICS"];
+    let suffixes = [
+        "ENDPOINT",
+        "CERTIFICATE",
+        "CLIENT_CERTIFICATE",
+        "CLIENT_KEY",
+    ];
+    let variables: Vec<_> = std::iter::once(String::new())
+        .chain(signals.map(|signal| format!("{signal}_")))
+        .flat_map(|prefix| suffixes.map(|suffix| format!("OTEL_EXPORTER_OTLP_{prefix}{suffix}")))
+        .collect();
+    let _environment = EnvironmentGuard::capture(&variables);
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        for variable in &variables {
+            std::env::remove_var(variable);
+        }
+    }
+
+    for signal in signals {
+        let endpoint_variable = format!("OTEL_EXPORTER_OTLP_{signal}_ENDPOINT");
+        for (generic, specific) in [
+            (None, None),
+            (Some("http://127.0.0.1:4317"), None),
+            (
+                Some("https://collector.example:4317"),
+                Some("http://127.0.0.1:4317"),
+            ),
+        ] {
+            unsafe {
+                for (name, value) in [
+                    ("OTEL_EXPORTER_OTLP_ENDPOINT", generic),
+                    (endpoint_variable.as_str(), specific),
+                ] {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+            assert!(
+                crate::observability::otel_signal::automatic_otlp_grpc_tls(signal)
+                    .unwrap()
+                    .is_none(),
+                "{signal}: HTTP must not load trusted certificates"
+            );
+
+            for prefix in [String::new(), format!("{signal}_")] {
+                for fields in [
+                    &["CERTIFICATE"][..],
+                    &["CLIENT_CERTIFICATE", "CLIENT_KEY"][..],
+                ] {
+                    unsafe {
+                        for field in fields {
+                            std::env::set_var(
+                                format!("OTEL_EXPORTER_OTLP_{prefix}{field}"),
+                                "unused.pem",
+                            );
+                        }
+                    }
+                    let error = crate::observability::otel_signal::automatic_otlp_grpc_tls(signal)
+                        .unwrap_err()
+                        .to_string();
+                    unsafe {
+                        for field in fields {
+                            std::env::remove_var(format!("OTEL_EXPORTER_OTLP_{prefix}{field}"));
+                        }
+                    }
+                    assert!(
+                        error.contains("TLS settings require an HTTPS endpoint"),
+                        "{error}"
+                    );
+                }
+            }
+        }
+        unsafe {
+            std::env::remove_var(endpoint_variable);
+        }
+    }
+}
+
+#[test]
+fn automatic_otel_rejects_an_unparseable_signal_endpoint_instead_of_falling_back() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let variables = [
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+    ];
+    let _environment = EnvironmentGuard::capture(variables);
+
+    // SAFETY: the observability mutex serializes test-only environment changes.
+    unsafe {
+        std::env::set_var(variables[0], "http://host.docker.internal:4318/v1/traces ");
+        std::env::set_var(variables[1], "http://host.docker.internal:4318/v1/logs\n");
+        std::env::set_var(variables[2], "http://192.0.2.17:4318");
+        std::env::set_var(variables[3], "authorization=Bearer%20environment-token");
+    }
+
+    let listed = PlaintextPolicy::from_hosts(&["host.docker.internal".to_string()]).unwrap();
+    let traces =
+        OpenTelemetrySubscriber::new_from_automatic_configuration_for_plugin(listed.clone());
+    let error = traces.err().unwrap().to_string();
+    assert!(
+        error.contains("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT must be a valid URI"),
+        "{error}"
+    );
+    let logs = OpenTelemetryLogSubscriber::new_from_automatic_configuration_for_plugin(listed);
+    let error = logs.err().unwrap().to_string();
+    assert!(
+        error.contains("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT must be a valid URI"),
+        "{error}"
+    );
+}
+
+#[test]
 fn file_only_sink_directory_creation_failure_reports_the_file_error() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
@@ -2252,6 +2587,7 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
             logs: None,
             metrics: None,
         },
+        &PlaintextPolicy::default(),
         &mut context,
         false,
     )
@@ -2426,7 +2762,9 @@ fn opentelemetry_header_env_non_unicode_errors_do_not_expose_values() {
         "header_env": {"authorization": variable}
     }))
     .unwrap();
-    let trace_error = build_otel_config(0, trace).unwrap_err().to_string();
+    let trace_error = build_otel_config(0, trace, &PlaintextPolicy::default())
+        .unwrap_err()
+        .to_string();
     assert!(trace_error.contains(variable));
     assert!(!trace_error.contains(secret));
 
@@ -2579,7 +2917,9 @@ fn skipped_trace_endpoint_preserves_configured_indexes() {
     invalid.max_queue_size = Some(0);
     let third = test_opentelemetry_endpoint();
 
-    let subscribers = build_opentelemetry_subscribers(vec![first, invalid, third]).unwrap();
+    let subscribers =
+        build_opentelemetry_subscribers(vec![first, invalid, third], &PlaintextPolicy::default())
+            .unwrap();
     assert_eq!(
         subscribers
             .iter()
@@ -3713,7 +4053,8 @@ fn atif_remote_storage_validates_s3_configuration_and_http_access_outcomes() {
         endpoint_url: Some("http://127.0.0.1:9".into()),
         allow_http: Some(true),
     });
-    let storage = build_atif_storage(3, &s3).expect("S3 client configuration should resolve");
+    let storage = build_atif_storage(3, &s3, &PlaintextPolicy::default())
+        .expect("S3 client configuration should resolve");
     drop(storage);
     // SAFETY: Cleanup of the test-only environment variable.
     unsafe { std::env::remove_var(&secret_var) };
@@ -3729,6 +4070,7 @@ fn atif_remote_storage_validates_s3_configuration_and_http_access_outcomes() {
                 header_file: std::collections::HashMap::new(),
                 timeout_millis: 5_000,
             }),
+            &PlaintextPolicy::default(),
         )
         .unwrap();
 
@@ -5366,7 +5708,10 @@ fn opentelemetry_delivery_continues_after_an_endpoint_panics() {
         },
         IndexedOpenTelemetryResource {
             index: 1,
-            value: OpenTelemetryResource::Skipped("invalid endpoint".to_string()),
+            value: OpenTelemetryResource::Skipped(SkippedResource::for_endpoint(
+                "",
+                "invalid endpoint",
+            )),
         },
         IndexedOpenTelemetryResource {
             index: 2,
@@ -6477,20 +6822,27 @@ fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     for endpoint in [" http://example.com", "://", "ftp://example.com"] {
-        assert!(HttpUploadConfig::resolve(2, &http_storage_config(endpoint)).is_err());
+        assert!(
+            HttpUploadConfig::resolve(
+                2,
+                &http_storage_config(endpoint),
+                &PlaintextPolicy::default()
+            )
+            .is_err()
+        );
     }
 
     let mut config = http_storage_config("https://example.com/atif");
     config.timeout_millis = 0;
-    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+    assert!(HttpUploadConfig::resolve(2, &config, &PlaintextPolicy::default()).is_err());
 
     config.timeout_millis = 1_000;
     config.headers.insert("bad header".into(), "value".into());
-    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+    assert!(HttpUploadConfig::resolve(2, &config, &PlaintextPolicy::default()).is_err());
 
     config.headers.clear();
     config.headers.insert("x-bad".into(), "bad\nvalue".into());
-    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+    assert!(HttpUploadConfig::resolve(2, &config, &PlaintextPolicy::default()).is_err());
 
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("token");
@@ -6499,19 +6851,23 @@ fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
     remote_file_header
         .header_file
         .insert("authorization".into(), path.to_string_lossy().into_owned());
-    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_err());
+    assert!(
+        HttpUploadConfig::resolve(2, &remote_file_header, &PlaintextPolicy::default()).is_err()
+    );
     remote_file_header.endpoint = "http://127.0.0.1:4318/atif".into();
-    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_ok());
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header, &PlaintextPolicy::default()).is_ok());
     remote_file_header.endpoint = "http://collector.example/atif".into();
     remote_file_header.header_file.clear();
-    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_ok());
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header, &PlaintextPolicy::default()).is_ok());
 
     remote_file_header
         .headers
         .insert("authorization".into(), "Bearer static".into());
-    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_err());
+    assert!(
+        HttpUploadConfig::resolve(2, &remote_file_header, &PlaintextPolicy::default()).is_err()
+    );
     remote_file_header.endpoint = "http://127.0.0.1:4318/atif".into();
-    assert!(HttpUploadConfig::resolve(2, &remote_file_header).is_ok());
+    assert!(HttpUploadConfig::resolve(2, &remote_file_header, &PlaintextPolicy::default()).is_ok());
     remote_file_header.headers.clear();
 
     let variable = "NEMO_RELAY_TEST_ATIF_HTTP_RESOLVE_ZZZZ";
@@ -6522,9 +6878,9 @@ fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
         .header_env
         .insert("authorization".into(), variable.into());
     config.endpoint = "http://collector.example/atif".into();
-    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+    assert!(HttpUploadConfig::resolve(2, &config, &PlaintextPolicy::default()).is_err());
     config.endpoint = "http://127.0.0.1:4318/atif".into();
-    let resolved = HttpUploadConfig::resolve(2, &config).unwrap();
+    let resolved = HttpUploadConfig::resolve(2, &config, &PlaintextPolicy::default()).unwrap();
     assert_eq!(
         resolved.headers.get("authorization").map(String::as_str),
         Some("Bearer resolved")
@@ -6536,7 +6892,12 @@ fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
 #[tokio::test]
 #[cfg(feature = "object-store")]
 async fn post_atif_http_reports_transport_failure() {
-    let config = HttpUploadConfig::resolve(0, &http_storage_config("http://127.0.0.1:1")).unwrap();
+    let config = HttpUploadConfig::resolve(
+        0,
+        &http_storage_config("http://127.0.0.1:1"),
+        &PlaintextPolicy::default(),
+    )
+    .unwrap();
     let client = reqwest::Client::builder()
         .timeout(config.timeout)
         .build()
@@ -6578,6 +6939,7 @@ fn s3_remote_storage_uploads_to_a_custom_http_endpoint() {
             endpoint_url: Some(endpoint),
             allow_http: Some(true),
         }),
+        &PlaintextPolicy::default(),
     )
     .unwrap();
     let result = storage.put("trajectory.json", "session", b"{}");
@@ -6954,6 +7316,7 @@ fn opentelemetry_registration_accepts_a_section_with_only_file_sinks() {
             logs: None,
             metrics: None,
         },
+        &PlaintextPolicy::default(),
         &mut context,
         false,
     )
@@ -6989,6 +7352,7 @@ fn a_failed_signal_leaves_an_overwrite_file_sink_untouched() {
             }),
             metrics: None,
         },
+        &PlaintextPolicy::default(),
         &mut context,
         false,
     )
@@ -7010,6 +7374,7 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_and_file_sink_list() {
             logs: None,
             metrics: None,
         },
+        &PlaintextPolicy::default(),
         &mut context,
         false,
     )
@@ -7283,6 +7648,7 @@ fn an_invalid_file_sink_is_skipped_while_the_others_register() {
             logs: None,
             metrics: None,
         },
+        &PlaintextPolicy::default(),
         &mut context,
         false,
     )
@@ -7322,6 +7688,7 @@ fn file_sinks_register_even_when_the_environment_configures_automatic_signals() 
                 logs: None,
                 metrics: None,
             },
+            &PlaintextPolicy::default(),
             &mut context,
             false,
         )
@@ -7407,7 +7774,10 @@ fn metric_delivery_continues_after_a_panicking_or_skipped_endpoint() {
     let callbacks: Vec<IndexedOpenTelemetryResource<MetricEventCallback>> = vec![
         IndexedOpenTelemetryResource {
             index: 0,
-            value: OpenTelemetryResource::Skipped("invalid endpoint".into()),
+            value: OpenTelemetryResource::Skipped(SkippedResource::for_endpoint(
+                "",
+                "invalid endpoint",
+            )),
         },
         IndexedOpenTelemetryResource {
             index: 1,

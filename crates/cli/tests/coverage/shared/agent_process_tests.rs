@@ -396,3 +396,93 @@ async fn windows_batch_version_probe_supports_forward_slash_paths() {
         }
     }
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_helper_jobs_terminate_descendants_on_completion_timeout_and_cancellation() {
+    for finish in ["completion", "timeout", "cancellation"] {
+        let temp = tempfile::tempdir().unwrap();
+        let descendant_pid_path = temp.path().join("descendant.pid");
+        let release_path = temp.path().join("release-wrapper");
+        let wrapper = temp.path().join("helper.ps1");
+        std::fs::write(
+            &wrapper,
+            r#"$ErrorActionPreference = 'Stop'
+$start = [System.Diagnostics.ProcessStartInfo]::new()
+$start.FileName = (Get-Process -Id $PID).Path
+$start.Arguments = '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 30"'
+$start.UseShellExecute = $false
+$start.CreateNoWindow = $true
+$start.RedirectStandardInput = $true
+$start.RedirectStandardOutput = $true
+$start.RedirectStandardError = $true
+$child = [System.Diagnostics.Process]::Start($start)
+Set-Content -LiteralPath $args[0] -Value $child.Id -Encoding ASCII -NoNewline
+while (-not (Test-Path -LiteralPath $args[1])) { Start-Sleep -Milliseconds 20 }
+"#,
+        )
+        .unwrap();
+        let mut command = tokio::process::Command::new("powershell.exe");
+        command
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(&wrapper)
+            .arg(&descendant_pid_path)
+            .arg(&release_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let (mut child, tree) = spawn_helper(&mut command).await.unwrap();
+        let pid = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            loop {
+                if let Some(pid) = read_windows_process_id(&descendant_pid_path) {
+                    break pid;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("helper should publish descendant PID");
+        let descendant = WindowsTestProcess::open(pid).unwrap();
+        match finish {
+            "completion" => {
+                std::fs::write(&release_path, b"ready").unwrap();
+                assert!(
+                    tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .success()
+                );
+            }
+            "timeout" => {
+                assert!(
+                    tokio::time::timeout(std::time::Duration::from_millis(20), child.wait())
+                        .await
+                        .is_err()
+                );
+                child.kill().await.unwrap();
+            }
+            _ => {}
+        }
+        drop(tree);
+        drop(child);
+        let exited = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while descendant.is_active().unwrap() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .is_ok();
+        if !exited {
+            descendant.terminate();
+        }
+        assert!(exited, "helper descendant survived {finish}");
+    }
+}

@@ -1,0 +1,458 @@
+---
+title: "Hermes Agent Quick Start"
+sidebar-title: "Hermes Agent"
+slug: getting-started/quick-start/hermes
+description: "Run one Hermes Agent turn with native NeMo Relay observability."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "hermes",
+  "mode": "live",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-hermes-quickstart",
+  "requires": {
+    "jq (bash only)": ">=1.6"
+  },
+  "setup": [
+    "Hermes Agent with native Relay integration and NeMo Relay Plugins diagnostics in hermes doctor",
+    "Dedicated quick-start gateway context that can be stopped without interrupting other work",
+    "Authenticated model provider with tool-use permissions"
+  ],
+  "inputs": {},
+  "fresh": [
+    "logs/events.jsonl",
+    "relay-check.txt"
+  ],
+  "checks": [
+    {
+      "kind": "file-equals",
+      "path": "relay-check.txt",
+      "value": "RELAY_QUICKSTART_TOOL_OK",
+      "trim": true
+    },
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent"
+        },
+        {
+          "category": "tool"
+        },
+        {
+          "category": "llm"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
+## Goal
+
+Run one Hermes Agent turn and write its session, model, and tool lifecycle to a
+local Agent Trajectory Observability Format (ATOF) file.
+
+Use a Hermes Agent installation with native NeMo Relay integration on a platform
+with a supported Relay native wheel. Do not install the former Hermes Agent Relay
+observability plugin or launch Hermes Agent through the `nemo-relay` CLI.
+
+This quick start configures local Relay event export. Hermes Agent shared-metrics
+collection and transmission to Nous have separate consent controls.
+
+Use the event relationships to follow model and tool work through a run and
+check where the expected activity occurred.
+
+## Prerequisites
+
+Before you start, make sure you have:
+
+- Linux, Apple Silicon macOS, or native Windows 10/11 on x64 or ARM64; Windows Subsystem for Linux 2 (WSL2) is also supported
+- Hermes Agent with native Relay support, plugin diagnostics in `hermes doctor`, and `chat --oneshot`
+- A configured Hermes Agent model with inference access: a provider API key or a supported authenticated session
+- Permission to install Hermes Agent in your user environment
+
+For the Unix-shell instructions, install `jq` 1.6 or newer and check your version
+with `jq --version`. PowerShell uses its built-in JSON parser.
+
+<Steps toc={true}>
+
+## Install
+
+Install Hermes Agent using the commands for your platform:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"install","role":"manual","cwd":".","shells":["bash"],"session":"main","reason":"Interactive Hermes Agent installation and provider authentication; pre-provision the declared host for unattended tests"} */}
+```bash
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"install","role":"manual","cwd":".","shells":["powershell"],"session":"main","reason":"Interactive Hermes Agent installation and provider authentication; pre-provision the declared host for unattended tests"} */}
+```powershell
+iex (irm https://hermes-agent.nousresearch.com/install.ps1)
+```
+</Tab>
+</Tabs>
+
+On Windows, open a new PowerShell terminal after installation if `hermes` is not
+found. Hermes Agent uses Git Bash internally for its terminal tool; WSL2 is
+optional. Refer to the [Hermes Agent native Windows guide](https://hermes-agent.nousresearch.com/docs/user-guide/windows-native)
+for installation and tool prerequisites. These instructions run Hermes Agent from
+the command line in the shell where you select the Relay configuration.
+
+Complete the setup prompts and confirm that `hermes` can use your model
+provider before continuing. Check that `hermes chat --help` lists `--oneshot`;
+older builds can lack support for this recipe.
+
+If Hermes Agent does not yet have a working provider and model, configure one
+with `hermes model`. For example, select the NVIDIA provider, supply an
+[NVIDIA API key](https://build.nvidia.com/settings/api-keys), and choose an
+available [build.nvidia.com model](https://build.nvidia.com/explore/discover).
+
+<Note icon="circle-info">
+Relay does not choose the model. If Hermes Agent already has a working provider and
+model, keep that configuration. Hermes Agent manages its supported Relay dependency
+version.
+</Note>
+
+<details>
+<summary>Use an NVIDIA Endpoint (Optional)</summary>
+
+Any working Hermes Agent provider and model can complete this quick start on
+Windows or Unix. If you have access to another NVIDIA-compatible endpoint, set
+`NVIDIA_API_KEY` using your usual credential mechanism and set `NVIDIA_BASE_URL`
+in the same shell before continuing to **Configure**.
+
+The following example uses `https://inference-api.nvidia.com/v1` and model
+`nvidia/nvidia/Nemotron-3-Nano-30B-A3B`. Use these values only if your account can
+access that endpoint and model; otherwise use the values for your deployment.
+The base URL ends in `/v1`; do not append `/chat/completions`.
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"nvidia-endpoint","role":"manual","cwd":".","shells":["bash"],"session":"main","reason":"Optional provider override; requires credentials and access to the example endpoint and model"} */}
+```bash
+export NVIDIA_BASE_URL='https://inference-api.nvidia.com/v1'
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"nvidia-endpoint","role":"manual","cwd":".","shells":["powershell"],"session":"main","reason":"Optional provider override; requires credentials and access to the example endpoint and model"} */}
+```powershell
+$env:NVIDIA_BASE_URL = 'https://inference-api.nvidia.com/v1'
+```
+</Tab>
+</Tabs>
+
+In the **Run** step, keep the cleanup commands and replace only the
+`hermes chat` command with the following command, which works in either shell.
+Keep the PowerShell exit-code check immediately after it:
+
+{/* quickstart-block {"id":"nvidia-run","role":"manual","cwd":"relay-hermes-quickstart","shells":["bash","powershell"],"session":"main","reason":"Optional alternative to the provider-neutral run command; requires access to the selected NVIDIA endpoint and model"} */}
+```bash
+hermes chat --oneshot --provider nvidia --model 'nvidia/nvidia/Nemotron-3-Nano-30B-A3B' -q 'Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK.'
+```
+
+The explicit provider keeps Hermes Agent from inferring a different provider
+from the model name. Preserve the model ID exactly as your endpoint expects it.
+
+</details>
+
+## Configure
+
+Create a disposable working directory and make sure the agent can write files there:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"workspace","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+mkdir relay-hermes-quickstart
+cd relay-hermes-quickstart
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"workspace","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+New-Item -ItemType Directory -Path .\relay-hermes-quickstart -ErrorAction Stop | Out-Null
+Set-Location .\relay-hermes-quickstart
+```
+</Tab>
+</Tabs>
+
+Save the following files and run the remaining commands from this directory.
+
+Save the following configuration as `plugins.toml` in the directory where you
+will start Hermes Agent. Use UTF-8 encoding without a byte order mark:
+
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-hermes-quickstart","path":"plugins.toml"} */}
+<Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
+
+Select that file and change its file sink to an absolute project logs directory.
+An absolute configuration path does not anchor a relative output path: Hermes
+Agent can run its gateway from its own installation directory. These commands
+adapt the saved template so events stay in this project's `logs` directory:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"environment","role":"run","cwd":"relay-hermes-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+jq -Rsr --arg directory "$(pwd -P)/logs" '
+  "output_directory = \"logs\"" as $needle |
+  if contains($needle) then
+    split($needle) | join("output_directory = " + ($directory | tojson))
+  else error("Expected the shared quick-start TOML template") end
+' plugins.toml > plugins.toml.tmp &&
+mv -- plugins.toml.tmp plugins.toml &&
+export HERMES_NEMO_RELAY_PLUGINS_TOML="$PWD/plugins.toml"
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"environment","role":"run","cwd":"relay-hermes-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+$env:HERMES_NEMO_RELAY_PLUGINS_TOML = (Resolve-Path -LiteralPath '.\plugins.toml' -ErrorAction Stop).Path
+$logDirectory = (Join-Path $PWD.Path 'logs').Replace('\', '/')
+$configPath = $env:HERMES_NEMO_RELAY_PLUGINS_TOML
+$config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 -ErrorAction Stop
+$needle = 'output_directory = "logs"'
+if (-not $config.Contains($needle)) { throw 'Expected the shared quick-start TOML template' }
+$config = $config.Replace($needle, ('output_directory = "' + $logDirectory + '"'))
+[IO.File]::WriteAllText($configPath, $config, (New-Object Text.UTF8Encoding $false))
+```
+</Tab>
+</Tabs>
+
+If you repeat these configuration commands, save a fresh copy of the template
+first; they expect its original `output_directory = "logs"` setting.
+
+Hermes Agent can reuse a gateway that remains alive after a one-shot command.
+An existing gateway retains its Relay configuration. In a dedicated quick-start
+installation or context, stop its existing gateway after changing the
+configuration, so the next run starts a process with the selected file:
+
+{/* quickstart-block {"id":"gateway-stop","role":"manual","cwd":"relay-hermes-quickstart","shells":["bash","powershell"],"session":"main","reason":"Stop only the gateway owned by the disposable quick-start installation/context; do not interrupt unrelated work or stop all gateways"} */}
+```bash
+hermes gateway stop
+```
+
+Run this command only for a gateway dedicated to this quick start. If your
+gateway serves other work, use a separate Hermes Agent installation or dedicated
+gateway for the trial. Do not use `hermes gateway stop --all`.
+
+Run the diagnostic in that same shell:
+
+{/* quickstart-block {"id":"doctor","role":"manual","cwd":"relay-hermes-quickstart","shells":["bash","powershell"],"session":"main","reason":"Hermes Agent doctor checks unrelated optional services and can exit nonzero despite a valid Relay configuration; inspect its Relay section"} */}
+```bash
+hermes doctor
+```
+
+In the **NeMo Relay Plugins** section, confirm that the selected file is listed,
+plugins are enabled, and no Relay configuration problems are reported. If the
+section is missing, update Hermes Agent before continuing. Resolve problems in
+**NeMo Relay Plugins** and your selected inference provider. If the diagnostic
+says NeMo Relay is unavailable on this platform, the installation cannot capture
+the events required by this quick start; check the supported installation for
+your operating system and architecture.
+
+<Note icon="circle-info">
+`hermes doctor` checks configuration without loading plugin code. It also checks
+optional services unrelated to Relay and can exit nonzero when they are
+unconfigured; those warnings do not require enabling the services for this quick
+start.
+</Note>
+
+<Note icon="circle-info">
+Hermes Agent does not discover repository-local configuration automatically. The
+explicit path replaces the user configuration file; system configuration still
+applies. Relay plugins affect every profile hosted in the same Hermes Agent process.
+Use separate processes when profiles require different plugin policies.
+</Note>
+
+<Warning>
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Working-directory paths can reveal usernames and repository names.
+Protect `logs/events.jsonl` even when full payload export is disabled.
+</Warning>
+
+## Run
+
+From the same directory, run a one-shot turn with the common validation prompt:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-hermes-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+rm -f -- relay-check.txt logs/events.jsonl &&
+hermes chat --oneshot -q "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-hermes-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+foreach ($path in @('relay-check.txt', 'logs/events.jsonl')) {
+  if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+}
+hermes chat --oneshot -q "Use a file-writing tool to create relay-check.txt in the current working directory containing exactly RELAY_QUICKSTART_TOOL_OK. Then reply with RELAY_QUICKSTART_RESPONSE_OK."
+if ($LASTEXITCODE -ne 0) { throw 'Hermes Agent failed; resolve the reported error before verifying events' }
+```
+</Tab>
+</Tabs>
+
+<Note icon="circle-info">
+The one-shot command completes its Relay session before exiting, allowing the
+required lifecycle records to finish writing. Its gateway can remain running;
+repeat the configuration and gateway steps before another run if you change
+`plugins.toml` or its selection.
+</Note>
+
+## Verify
+
+The tool marker proves that the agent created the requested file. The event
+marker proves that Relay recorded matching start/end records for the required
+turn or agent, tool, and model work. The response marker is the agent's reply;
+it is checked separately from the captured lifecycle.
+
+The verification command prints `RELAY_QUICKSTART_TOOL_OK` and `RELAY_QUICKSTART_EVENTS_OK`.
+
+<details>
+<summary>Run the verification checks</summary>
+
+Run these checks after Hermes Agent exits:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-hermes-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+jq -eRs 'gsub("^\\s+|\\s+$"; "") == "RELAY_QUICKSTART_TOOL_OK"' relay-check.txt > /dev/null &&
+jq -se '
+  . as $events |
+  def closed($category):
+    any($events[]; . as $end_event |
+      .kind == "scope" and .scope_category == "end" and
+      .category == $category and
+      any($events[]; .kind == "scope" and .scope_category == "start" and
+        .uuid == $end_event.uuid and .name == $end_event.name and
+        .category == $end_event.category and .parent_uuid == $end_event.parent_uuid));
+  length > 0 and
+  all(.[]; .atof_version == "0.1" and (.kind == "scope" or .kind == "mark")) and
+  closed("agent") and closed("tool") and closed("llm")
+' logs/events.jsonl > /dev/null &&
+printf 'RELAY_QUICKSTART_TOOL_OK\nRELAY_QUICKSTART_EVENTS_OK\n'
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"verify","role":"run","cwd":"relay-hermes-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+$ErrorActionPreference = 'Stop'
+if ((Get-Content -LiteralPath '.\relay-check.txt' -Raw).Trim() -cne 'RELAY_QUICKSTART_TOOL_OK') {
+    throw 'Tool file marker did not match'
+}
+$events = @(Get-Content -LiteralPath '.\logs\events.jsonl' -Encoding UTF8 |
+    Where-Object { $_.Trim() } |
+    ForEach-Object { $_ | ConvertFrom-Json })
+if ($events.Count -eq 0) { throw 'No Relay events' }
+foreach ($event in $events) {
+    if ($event.atof_version -cne '0.1' -or $event.kind -cnotin @('scope', 'mark')) {
+        throw 'Invalid ATOF version or event kind'
+    }
+}
+$starts = @{}
+foreach ($event in $events) {
+    if ($event.kind -ceq 'scope' -and $event.scope_category -ceq 'start') {
+        $starts[$event.uuid] = $event
+    }
+}
+$closed = @()
+foreach ($event in $events) {
+    if ($event.kind -cne 'scope' -or $event.scope_category -cne 'end') { continue }
+    $start = $starts[$event.uuid]
+    if ($null -ne $start -and $start.name -ceq $event.name -and
+        $start.category -ceq $event.category -and $start.parent_uuid -ceq $event.parent_uuid) {
+        $closed += $event
+    }
+}
+foreach ($category in @('agent', 'tool', 'llm')) {
+    if (@($closed | Where-Object { $_.category -ceq $category }).Count -eq 0) {
+        throw "No matching start/end pair for $category"
+    }
+}
+'RELAY_QUICKSTART_TOOL_OK'
+'RELAY_QUICKSTART_EVENTS_OK'
+```
+</Tab>
+</Tabs>
+
+The verification command prints the following output when its checks pass:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-hermes-quickstart","from":"verify","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+</details>
+
+The agent's final reply should include `RELAY_QUICKSTART_RESPONSE_OK`; its
+surrounding wording can vary.
+
+<Note icon="circle-info">
+These markers confirm the tool-created file and matching start/end records for
+agent, tool, and LLM work.
+</Note>
+
+### Inspect the Recorded Activity
+
+Read the completed model calls from the same event file:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"inspect","role":"run","cwd":"relay-hermes-quickstart","shells":["bash"],"session":"main","timeout_seconds":180} */}
+```bash
+jq 'select(.kind == "scope" and .scope_category == "end" and .category == "llm") |
+  {name, category, category_profile, uuid, parent_uuid, timestamp, metadata}' logs/events.jsonl
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"inspect","role":"run","cwd":"relay-hermes-quickstart","shells":["powershell"],"session":"main","timeout_seconds":180} */}
+```powershell
+Get-Content -LiteralPath '.\logs\events.jsonl' -Encoding UTF8 |
+    ForEach-Object { $_ | ConvertFrom-Json } |
+    Where-Object { $_.kind -ceq 'scope' -and $_.scope_category -ceq 'end' -and $_.category -ceq 'llm' } |
+    Select-Object name, category, category_profile, uuid, parent_uuid, timestamp, metadata
+```
+</Tab>
+</Tabs>
+
+`category` and `name` identify the recorded work. The same `uuid` pairs its
+start and end records; `parent_uuid` connects it to its enclosing scope.
+`timestamp` records when this event occurred. For model calls, `category_profile`
+and `metadata` can include the model identity and completion status, depending
+on the integration. These fields let you follow a call through the run without
+requiring full prompt or response capture.
+
+</Steps>
+
+## For More Details
+
+For more details, refer to:
+
+- [Hermes Agent Relay integration and shared metrics](https://hermes-agent.nousresearch.com/docs/developer-guide/relay-shared-metrics)
+- [ATOF exporter](/configure-plugins/observability/atof)

@@ -360,6 +360,9 @@ pub enum ApiSpecificResponse {
         /// Tokens consumed by the model's internal reasoning (Gemini generateContent thinking).
         #[serde(skip_serializing_if = "Option::is_none")]
         thoughts_tokens: Option<u64>,
+        /// Tokens of tool results provided back to the model as input.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_use_prompt_tokens: Option<u64>,
         /// Candidate-level safety ratings from the Gemini generateContent response.
         #[serde(skip_serializing_if = "Option::is_none")]
         safety_ratings: Option<Json>,

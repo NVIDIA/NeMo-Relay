@@ -43,11 +43,11 @@ import io
 import json
 import pickle
 import typing
-import weakref
-from typing import AsyncIterator, Awaitable, Callable, Generic, Protocol, TypeVar, cast, overload
+from typing import AsyncIterator, Awaitable, Callable, Generic, Iterable, Protocol, TypeVar, cast, overload
 
 from nemo_relay import Json, llm, tools
 from nemo_relay._native import LLMAttributes, LLMRequest, LlmStream, ScopeHandle, ToolAttributes, ToolExecutionResult
+from nemo_relay._tool_result import TOOL_RESULT_SCHEMA, projected_tool_result
 from nemo_relay.codecs import LlmCodec, LlmResponseCodec
 
 T = TypeVar("T")
@@ -71,7 +71,6 @@ class _SupportsModelValidate(Protocol[T]):
     def model_validate(cls, data: Json) -> T: ...
 
 
-_RUNTIME_TYPE_REGISTRY: weakref.WeakValueDictionary[str, type[object]] = weakref.WeakValueDictionary()
 _NO_RECONSTRUCTION = object()
 
 
@@ -113,20 +112,6 @@ def _serialize_value(value: object) -> Json:
         except Exception:
             pass  # Intentional: fall through to the default string encoding
     return cast(Json, value)
-
-
-def _register_runtime_type(type_obj: type[object]) -> str:
-    token = f"{type_obj.__module__}.{type_obj.__qualname__}:{id(type_obj)}"
-    _RUNTIME_TYPE_REGISTRY[token] = type_obj
-    return token
-
-
-def _resolve_runtime_type(token: object) -> type[object] | None:
-    if not isinstance(token, str):
-        return None
-
-    resolved = _RUNTIME_TYPE_REGISTRY.get(token)
-    return resolved if isinstance(resolved, type) else None
 
 
 # ---------------------------------------------------------------------------
@@ -276,39 +261,105 @@ class DataclassCodec(Codec[T]):
 class BestEffortAnyCodec(Codec[object]):
     """Best-effort codec for arbitrary Python values.
 
-    It prefers JSON-native encodings, then dataclass or Pydantic-style model
-    support, and finally falls back to pickle or string encoding when needed.
-    Pickle decoding is restricted to a small allowlist of builtin containers;
-    arbitrary classes and callable globals are never reconstructed. Dataclass
-    and Pydantic tags reconstruct only types registered by ``to_json()`` in
-    this process; unregistered tags remain JSON dictionaries.
+    It tries JSON, dataclasses, and Pydantic models first. It falls back to
+    pickle or strings when needed. Pickle decoding allows only a small set of
+    Python built-in containers. It never restores arbitrary classes or calls
+    other globals through pickle.
+
+    Dataclass and Pydantic tags remain JSON dictionaries by default. To restore
+    objects, list their classes in ``allowed_types``. Each codec has its own
+    list. Encoding a value does not add its type to the list.
+
+    Set ``tool_result=True`` to wrap the encoded value in Relay's tool-result
+    JSON format. The wrapper includes display text or content parts when
+    available. It does not guess whether the tool failed. Both settings can
+    decode wrappers and older values.
+
+    Args:
+        allowed_types: Class objects that this codec can restore from dataclass
+            or Pydantic tags. Decoding never imports modules to find a class.
+            Allowed constructors and validators run on the input data. Choose
+            classes that can safely handle the data you expect.
+        tool_result: Wrap encoded values in the tool-result JSON format.
 
     Notes:
-        This codec favors resilience over strictness. If it cannot preserve the
-        original type exactly, it degrades to a string instead of raising.
+        Encoding falls back to a string if other methods fail. If decoding
+        cannot restore an object, it returns the object's JSON value.
     """
 
+    def __init__(self, *, allowed_types: Iterable[type[object]] = (), tool_result: bool = False) -> None:
+        self._tool_result = tool_result
+        self._allowed_types: dict[str, type[object]] = {}
+        for cls in allowed_types:
+            if not isinstance(cls, type):
+                raise TypeError("allowed_types must contain class objects")
+            name = f"{cls.__module__}.{cls.__qualname__}"
+            if name in self._allowed_types and self._allowed_types[name] is not cls:
+                raise ValueError(f"allowed_types contains distinct classes named {name!r}")
+            self._allowed_types[name] = cls
+
     def to_json(self, value: object) -> Json:
-        """Serialize an arbitrary Python value to a JSON-serializable form.
+        """Convert a Python value to JSON.
 
         Args:
-            value: Arbitrary Python object to serialize.
+            value: Python value to encode.
 
         Returns:
-            Json: Tagged JSON-compatible value that ``from_json()`` can
-            reconstruct on a best-effort basis.
+            Json: Encoded value, with a tool-result wrapper if
+            ``tool_result=True``.
 
-        Tries, in order: Pydantic ``model_dump()``, ``dataclasses.asdict()``,
-        native JSON encoding, pickle fallback, and finally ``str()`` as a last
-        resort.  Each encoding is tagged with a ``__nv_*__`` key so that
-        ``from_json`` can reconstruct the original type.
+        The codec first tries Pydantic ``model_dump()``, then dataclass fields.
+        For other values, it tries JSON, then pickle, then ``str()``. Dataclass,
+        Pydantic, pickle, and string fallback values use ``__nv_*__`` tags.
+        Plain JSON values stay untagged.
+
+        With ``tool_result=True``, the codec places the encoded value in the
+        wrapper's ``result`` field. Replay is enabled for JSON values, allowed
+        dataclass and Pydantic types, and supported builtin pickle values.
+        Tagged values must restore with the same type and compare equal to
+        the original. Unsupported or changed values and string fallbacks are
+        marked non-replayable so the cache runs the tool again.
         """
+        encoded = self._encode_value(value)
+        if not self._tool_result or projected_tool_result(encoded) is not None:
+            return encoded
+        content: Json = None
+        if isinstance(encoded, str):
+            content = encoded
+        elif isinstance(encoded, list) and all(
+            isinstance(part, str) or (isinstance(part, dict) and part.get("type") in ("text", "image"))
+            for part in encoded
+        ):
+            content = [{"type": "text", "text": part} if isinstance(part, str) else part for part in encoded]
+        return {
+            "schema": TOOL_RESULT_SCHEMA,
+            "content": content,
+            "is_error": False,
+            "result": encoded,
+            "cache": {"replayable": self._is_replayable_value(value, encoded)},
+        }
+
+    def _is_replayable_value(self, value: object, encoded: Json) -> bool:
+        """Require tagged values to round-trip with their original type and value."""
+        if not isinstance(encoded, dict) or "data" not in encoded:
+            return True
+        if any(tag in encoded for tag in ("__nv_pydantic__", "__nv_dataclass__", "__nv_pickle__")):
+            try:
+                restored = self.from_json(encoded)
+                return type(restored) is type(value) and bool(restored == value)
+            except Exception:
+                # Reconstruction and equality are application-owned operations.
+                # An uncertain replay must not make best-effort encoding fail.
+                return False
+        return "__nv_fallback_str__" not in encoded
+
+    def _encode_value(self, value: object) -> Json:
+        """Encode the value before adding any tool-result wrapper."""
         try:
             if hasattr(value, "model_dump"):
                 dumped = cast(_SupportsModelDump, value).model_dump(mode="json")
                 return {
                     "__nv_pydantic__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
-                    "__nv_runtime_type__": _register_runtime_type(value.__class__),
                     "data": dumped,
                 }
         except Exception:
@@ -318,7 +369,6 @@ class BestEffortAnyCodec(Codec[object]):
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
             return {
                 "__nv_dataclass__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
-                "__nv_runtime_type__": _register_runtime_type(value.__class__),
                 "data": _serialize_dataclass_instance(cast(DataclassInstance, value)),
             }
 
@@ -341,9 +391,9 @@ class BestEffortAnyCodec(Codec[object]):
                     "data": str(value),
                 }
 
-    @staticmethod
-    def _resolve_tagged_type(data: dict[str, Json], tag: str) -> type[object] | None:
-        return _resolve_runtime_type(data.get("__nv_runtime_type__"))
+    def _resolve_tagged_type(self, data: dict[str, Json], tag: str) -> type[object] | None:
+        name = data.get(tag)
+        return self._allowed_types.get(name) if isinstance(name, str) else None
 
     @staticmethod
     def _mapping_payload(data: dict[str, Json]) -> dict[str, object] | None:
@@ -406,21 +456,29 @@ class BestEffortAnyCodec(Codec[object]):
         return _NO_RECONSTRUCTION
 
     def from_json(self, data: Json) -> object:
-        """Reconstruct a Python value from its tagged JSON representation.
+        """Restore a Python value from JSON.
 
         Args:
-            data: Tagged JSON-compatible value produced by ``to_json()`` or a
-                plain JSON-compatible value.
+            data: Encoded value or plain JSON value.
 
         Returns:
-            object: Best-effort reconstruction of the original Python value.
+            object: The restored value, or its JSON value if decoding fails.
 
-        Recognises the ``__nv_pydantic__``, ``__nv_dataclass__``,
-        ``__nv_pickle__``, and ``__nv_fallback_str__`` tags produced by
-        ``to_json`` and dispatches to the appropriate reconstruction strategy.
-        Pickle tags are decoded only for allowlisted builtin containers.
-        Falls through to returning the raw data if no tag is recognised.
+        The codec reads the ``__nv_pydantic__``, ``__nv_dataclass__``,
+        ``__nv_pickle__``, and ``__nv_fallback_str__`` tags to choose how to
+        restore a value. Dataclass and Pydantic types must be in
+        ``allowed_types``. The codec ignores old runtime type tokens. Pickle
+        decoding allows only a small set of Python built-in containers.
+
+        For a valid tool-result wrapper, the codec reads ``result`` and uses
+        the same rules. Content and failure fields do not allow new classes.
+        Wrappers with unknown versions or invalid fields stay as JSON.
+        Values without recognized tags also stay as JSON.
         """
+        if isinstance(data, dict) and data.get("schema") == TOOL_RESULT_SCHEMA:
+            if projected_tool_result(data) is None:
+                return data
+            data = data["result"]
         if isinstance(data, dict) and "data" in data:
             for reconstructor in (
                 self._reconstruct_pydantic,

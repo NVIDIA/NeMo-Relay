@@ -22,6 +22,7 @@ use http_body_util::combinators::UnsyncBoxBody;
 use hyper::body::Body;
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::Connect;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
 use thiserror::Error;
@@ -48,6 +49,10 @@ pub(crate) type PooledHttpClient = Client<HttpConnector, RelayBody>;
 
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const MAX_IDLE_CONNECTIONS_PER_HOST: usize = 256;
+// Larger DATA frames reduce framing and wakeup overhead for large provider bodies without
+// changing the pull-driven body adapter or its backpressure.
+pub(crate) const HTTP2_MAX_FRAME_BYTES: u32 = 64 * 1024;
+pub(crate) const DATA_PLANE_HTTP2_CONNECTION_WINDOW_BYTES: u32 = 8 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub(crate) enum TransportError {
@@ -55,6 +60,10 @@ pub(crate) enum TransportError {
     UnsupportedTunnel,
     #[error("forward destination must contain an HTTP or HTTPS scheme and an authority")]
     InvalidDestination,
+    #[error("plain HTTP upstreams are allowed only for loopback hosts; use https")]
+    InsecureDestination,
+    #[error("remote HTTP model forwarding requires an explicitly trusted configured upstream")]
+    UntrustedHttpModelDestination,
     #[error("invalid Connection header value")]
     InvalidConnectionHeader,
     #[error("forward destination authority is not a valid Host header")]
@@ -153,9 +162,96 @@ pub(crate) fn strip_hop_by_hop_headers(headers: &mut HeaderMap) -> Result<(), Tr
 /// `destination` is the complete URI selected by the router, including its path and query. Names
 /// in `additional_strip` are routing or authentication fields consumed by the current hop.
 pub(crate) fn prepare_forward_request<B>(
+    request: Request<B>,
+    destination: Uri,
+    additional_strip: &[HeaderName],
+) -> Result<Request<B>, TransportError> {
+    prepare_forward_request_inner(request, destination, additional_strip, false)
+}
+
+/// Apply configured model trust only on the provider hop, never on worker or caller-named hops.
+/// The body remains pull-driven; credential fields in trailer frames are filtered as well.
+pub(crate) fn prepare_provider_request<B>(
     mut request: Request<B>,
     destination: Uri,
     additional_strip: &[HeaderName],
+    config: &crate::configuration::GatewayConfig,
+    client_named: bool,
+) -> Result<Request<RelayBody>, crate::error::CliError>
+where
+    B: Body<Data = Bytes> + Send + 'static,
+    B::Error: Into<BoxError>,
+{
+    if request.method() == Method::CONNECT || request.headers().contains_key(UPGRADE) {
+        return Err(crate::error::CliError::UpstreamTransport(
+            TransportError::UnsupportedTunnel,
+        ));
+    }
+    let url = reqwest::Url::parse(&destination.to_string()).map_err(|_| {
+        crate::error::CliError::UpstreamTransport(TransportError::InvalidDestination)
+    })?;
+    let remote_http = crate::configuration::remote_http(&url);
+    if remote_http && client_named {
+        return Err(crate::error::CliError::UpstreamTransport(
+            TransportError::InsecureDestination,
+        ));
+    }
+    // Consume connection-scoped fields before retaining the model header allowlist.
+    strip_hop_by_hop_headers(request.headers_mut())
+        .map_err(crate::error::CliError::UpstreamTransport)?;
+    crate::upstream_auth::prepare_http_model_request(request.headers_mut(), &url, config)?;
+    let request =
+        prepare_forward_request_inner(request, destination, additional_strip, remote_http)
+            .map_err(crate::error::CliError::UpstreamTransport)?;
+    Ok(request.map(|body| {
+        let inner = box_body(body);
+        if remote_http {
+            box_body(HttpModelBody { inner })
+        } else {
+            inner
+        }
+    }))
+}
+
+/// Filter trailer fields without changing data frames, demand, or the body's size hint.
+struct HttpModelBody {
+    inner: RelayBody,
+}
+
+impl Body for HttpModelBody {
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        Pin::new(&mut self.inner).poll_frame(cx).map(|frame| {
+            frame.map(|result| {
+                result.map(|mut frame| {
+                    if let Some(trailers) = frame.trailers_mut() {
+                        crate::upstream_auth::retain_http_model_forward_headers(trailers);
+                    }
+                    frame
+                })
+            })
+        })
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+fn prepare_forward_request_inner<B>(
+    mut request: Request<B>,
+    destination: Uri,
+    additional_strip: &[HeaderName],
+    allow_remote_http: bool,
 ) -> Result<Request<B>, TransportError> {
     if request.method() == Method::CONNECT || request.headers().contains_key(UPGRADE) {
         return Err(TransportError::UnsupportedTunnel);
@@ -170,6 +266,7 @@ pub(crate) fn prepare_forward_request<B>(
     }
     let authority = authority.expect("authority was checked above");
     if scheme == Some("http")
+        && !allow_remote_http
         && !authority.host().eq_ignore_ascii_case("localhost")
         && !authority
             .host()
@@ -177,7 +274,7 @@ pub(crate) fn prepare_forward_request<B>(
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback())
     {
-        return Err(TransportError::InvalidDestination);
+        return Err(TransportError::InsecureDestination);
     }
     let host = HeaderValue::from_str(authority.as_str()).map_err(TransportError::InvalidHost)?;
 
@@ -228,6 +325,42 @@ pub(crate) fn pooled_client() -> Result<PooledClient, TransportError> {
     let connector = pooled_connector(false)?;
     let builder = pooled_builder();
     Ok(builder.build(connector))
+}
+
+/// Use a separate pool only for requests whose helper credential was resolved at dispatch.
+pub(crate) fn provider_client(
+    upstream: &PooledClient,
+    helper_auth: bool,
+) -> Result<PooledClient, TransportError> {
+    if !helper_auth {
+        return Ok(upstream.clone());
+    }
+    helper_provider_client(false)
+}
+
+/// HTTP/1-only helper handshakes cannot retry with an already-resolved credential.
+pub(crate) fn helper_websocket_client() -> Result<PooledClient, TransportError> {
+    helper_provider_client(true)
+}
+
+fn helper_provider_client(http1_only: bool) -> Result<PooledClient, TransportError> {
+    static HTTP: OnceLock<PooledClient> = OnceLock::new();
+    static WEBSOCKET: OnceLock<PooledClient> = OnceLock::new();
+    static INITIALIZE: Mutex<()> = Mutex::new(());
+    let cell = if http1_only { &WEBSOCKET } else { &HTTP };
+    if let Some(client) = cell.get() {
+        return Ok(client.clone());
+    }
+    let _initializing = INITIALIZE.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(client) = cell.get() {
+        return Ok(client.clone());
+    }
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut builder = pooled_builder();
+    builder.retry_canceled_requests(false);
+    let client = builder.build(pooled_connector(http1_only)?);
+    let _ = cell.set(client.clone());
+    Ok(client)
 }
 
 /// Builds a pooled cleartext HTTP/1.1 client with persistent connections and `TCP_NODELAY`.
@@ -294,13 +427,23 @@ pub(crate) fn named_upstream_client() -> Result<NamedUpstreamClient, TransportEr
 
 /// Sends a provider request through `configured`, or through the client-named upstream pool
 /// when the caller chose the destination.
-pub(crate) fn request_provider(
-    configured: &PooledClient,
+pub(crate) fn request_provider<C>(
+    configured: &Client<C, RelayBody>,
     client_named: bool,
     request: Request<RelayBody>,
-) -> Result<hyper_util::client::legacy::ResponseFuture, TransportError> {
+) -> Result<hyper_util::client::legacy::ResponseFuture, TransportError>
+where
+    C: Connect + Clone + Send + Sync + 'static,
+{
     Ok(if client_named {
         named_upstream_client()?.request(request)
+    } else if request.uri().scheme_str() == Some("http")
+        && reqwest::Url::parse(&request.uri().to_string())
+            .is_ok_and(|url| crate::configuration::remote_http(&url))
+    {
+        // Hyper neither follows redirects nor consults proxy environment variables. Reuse the
+        // non-retrying pool so plaintext model content is never replayed automatically.
+        helper_provider_client(false)?.request(request)
     } else {
         configured.request(request)
     })
@@ -355,11 +498,23 @@ fn pooled_connector_with<R>(
     })
 }
 
+/// Use the same bounded HTTP/2 receive settings on both daemon data-plane hops.
+pub(crate) fn data_plane_connection_builder()
+-> hyper_util::server::conn::auto::Builder<TokioExecutor> {
+    let mut builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+    builder
+        .http2()
+        .initial_connection_window_size(DATA_PLANE_HTTP2_CONNECTION_WINDOW_BYTES)
+        .max_frame_size(HTTP2_MAX_FRAME_BYTES);
+    builder
+}
+
 pub(crate) fn pooled_builder() -> hyper_util::client::legacy::Builder {
     let mut builder = Client::builder(TokioExecutor::new());
     builder.timer(TokioTimer::new());
     builder.pool_idle_timeout(Duration::from_secs(120));
     builder.pool_max_idle_per_host(MAX_IDLE_CONNECTIONS_PER_HOST);
+    builder.http2_max_frame_size(HTTP2_MAX_FRAME_BYTES);
     builder.http2_keep_alive_interval(Duration::from_secs(15));
     builder.http2_keep_alive_timeout(Duration::from_secs(5));
     builder.http2_keep_alive_while_idle(true);

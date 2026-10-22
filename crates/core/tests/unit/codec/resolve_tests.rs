@@ -654,6 +654,64 @@ fn streaming_codec_round_trips_through_its_response_codec() {
 }
 
 #[test]
+fn borrowed_streaming_collectors_match_owned_collectors_for_every_surface() {
+    let cases = [
+        (
+            ProviderSurface::OpenAIChat,
+            json!({
+                "id": "chat-1", "model": "test", "choices": [{"index": 0,
+                    "delta": {"content": "hello"}, "finish_reason": "stop"}]
+            }),
+        ),
+        (
+            ProviderSurface::OpenAIResponses,
+            json!({
+                "type": "response.completed", "response": {"id": "resp-1", "status": "completed",
+                    "output": [{"type": "message", "content": [{"type": "output_text", "text": "hello"}]}]}
+            }),
+        ),
+        (
+            ProviderSurface::AnthropicMessages,
+            json!({
+                "type": "message_start", "message": {"id": "msg-1", "model": "test",
+                    "role": "assistant", "content": [{"type": "text", "text": "hello"}]}
+            }),
+        ),
+        (
+            ProviderSurface::GeminiGenerateContent,
+            json!({
+                "modelVersion": "test", "candidates": [{"index": 0,
+                    "content": {"role": "model", "parts": [{"text": "hello"}]}, "finishReason": "STOP"}]
+            }),
+        ),
+        (
+            ProviderSurface::OCIGenAI,
+            json!({
+                "apiFormat": "COHERE", "text": "hello", "finishReason": "COMPLETE", "isFinished": true
+            }),
+        ),
+    ];
+    for (surface, event) in cases {
+        let owned = streaming_codec(surface);
+        let borrowed = streaming_codec(surface);
+        owned.collector()(event.clone()).unwrap();
+        borrowed
+            .borrowed_collector()
+            .expect("built-in borrowed collector")(&event)
+        .unwrap();
+        let owned_response = owned.finalizer()();
+        let borrowed_response = borrowed.finalizer()();
+        assert_eq!(borrowed_response, owned_response, "{surface:?}");
+        assert!(
+            response_codec(surface)
+                .decode_response(&borrowed_response)
+                .is_ok(),
+            "{surface:?}"
+        );
+    }
+}
+
+#[test]
 fn streaming_codec_constructs_a_usable_codec_for_every_surface() {
     for surface in ALL_SURFACES {
         let assembled = streaming_codec(surface).finalizer()();

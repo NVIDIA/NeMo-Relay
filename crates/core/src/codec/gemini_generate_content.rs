@@ -20,14 +20,17 @@ use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
+use super::model_pricing::{
+    GeminiBilling, SeparateUsageCounts, ToolUsePromptBilling, billed_usage,
+    estimate_billed_cost_for_provider,
+};
 use super::request::{
     AnnotatedLlmRequest, ContentPart, FunctionCall, FunctionDefinition, GenerationParams, Message,
     MessageContent, ToolCall, ToolDefinition,
 };
 use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
 use super::response::{
-    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage, estimate_cost_for_provider,
-    infer_model_provider,
+    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage, infer_model_provider,
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
 
@@ -95,6 +98,8 @@ struct RawUsageMetadata {
     cached_content_token_count: Option<u64>,
     #[serde(rename = "thoughtsTokenCount")]
     thoughts_token_count: Option<u64>,
+    #[serde(rename = "toolUsePromptTokenCount")]
+    tool_use_prompt_token_count: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -487,51 +492,44 @@ fn extract_parts_tool_calls(parts: &[Json]) -> Result<Option<Vec<ResponseToolCal
     Ok(if calls.is_empty() { None } else { Some(calls) })
 }
 
-/// Map Gemini `usageMetadata` to a normalized [`Usage`] and the raw thinking-token count.
-///
-/// Returns `(usage, thoughts_token_count)`. The thoughts token count is kept
-/// separate because it belongs in `ApiSpecificResponse::GeminiGenerateContent`, not in the
-/// provider-neutral `Usage` struct.
-fn map_usage(meta: Option<RawUsageMetadata>, model: Option<&str>) -> (Option<Usage>, Option<u64>) {
+/// Map Gemini `usageMetadata` to a normalized [`Usage`] and the counts kept in
+/// `ApiSpecificResponse::GeminiGenerateContent`.
+fn map_usage(
+    meta: Option<RawUsageMetadata>,
+    model: Option<&str>,
+    tool_use_billing: ToolUsePromptBilling,
+) -> (Option<Usage>, SeparateUsageCounts) {
     let model_provider = infer_model_provider("google", model);
     let Some(m) = meta else {
-        return (None, None);
+        return (None, SeparateUsageCounts::default());
     };
-    let thoughts_token_count = m.thoughts_token_count;
+    let separate = SeparateUsageCounts {
+        thoughts_tokens: m.thoughts_token_count,
+        tool_use_prompt_tokens: m.tool_use_prompt_token_count,
+    };
     let prompt = m.prompt_token_count;
     let completion = m.candidates_token_count;
     // When totalTokenCount is absent, compute a fallback from every count that is
     // available.  Thinking tokens count as billable output and must be included even
     // when candidatesTokenCount is missing (e.g. thinking-only partial responses).
     let total = m.total_token_count.or_else(|| {
-        let has_any = prompt.is_some() || completion.is_some() || thoughts_token_count.is_some();
-        has_any.then(|| {
-            prompt.unwrap_or(0) + completion.unwrap_or(0) + thoughts_token_count.unwrap_or(0)
-        })
+        let counts = [
+            prompt,
+            completion,
+            separate.thoughts_tokens,
+            separate.tool_use_prompt_tokens,
+        ];
+        if counts.iter().all(Option::is_none) {
+            return None;
+        }
+        counts
+            .into_iter()
+            .flatten()
+            .try_fold(0_u64, u64::checked_add)
     });
-    // For cost estimation: treat thinking tokens as additional completion tokens
-    // so the pricing table applies the output-token rate to them even when
-    // candidatesTokenCount is absent.
-    let completion_for_cost = match (completion, thoughts_token_count) {
-        (Some(c), Some(t)) => Some(c + t),
-        (Some(c), None) => Some(c),
-        (None, Some(t)) => Some(t),
-        (None, None) => None,
-    };
     let uncached_input_tokens = prompt
         .zip(m.cached_content_token_count)
         .and_then(|(total, cached)| total.checked_sub(cached));
-    let usage_for_cost = Usage {
-        prompt_tokens: prompt,
-        completion_tokens: completion_for_cost,
-        total_tokens: total,
-        cache_read_tokens: m.cached_content_token_count,
-        cache_write_tokens: None,
-        uncached_input_tokens,
-        cost: None,
-    };
-    let cost = model
-        .and_then(|m| estimate_cost_for_provider(model_provider.as_deref(), m, &usage_for_cost));
     let usage = Usage {
         prompt_tokens: prompt,
         completion_tokens: completion,
@@ -539,9 +537,20 @@ fn map_usage(meta: Option<RawUsageMetadata>, model: Option<&str>) -> (Option<Usa
         cache_read_tokens: m.cached_content_token_count,
         cache_write_tokens: None,
         uncached_input_tokens,
-        cost,
+        cost: None,
     };
-    (Some(usage), thoughts_token_count)
+    let cost = model.and_then(|m| {
+        let billed = billed_usage(
+            &usage,
+            Some(GeminiBilling {
+                separate,
+                tool_use_billing,
+            }),
+        )
+        .ok()?;
+        estimate_billed_cost_for_provider(model_provider.as_deref(), m, &billed)
+    });
+    (Some(Usage { cost, ..usage }), separate)
 }
 
 /// Validate the shape of a Gemini `systemInstruction` value.
@@ -746,37 +755,34 @@ fn validate_gemini_content_roles(role: &str, responses: &[&Json], calls: &[&Json
 }
 
 fn gemini_function_response_messages(parts: &[Json], responses: &[&Json]) -> Result<Vec<Message>> {
-    if parts.iter().any(|part| {
-        part.get("functionResponse").is_none()
-            && part.get("thought").and_then(Json::as_bool) != Some(true)
-    }) {
-        return Err(FlowError::InvalidArgument(
-            "Gemini contents item must not mix functionResponse with visible/native parts".into(),
-        ));
+    let mut messages = Vec::with_capacity(responses.len() + 1);
+    if let Some(content) = gemini_parts_to_message_content(parts, "request")? {
+        messages.push(Message::User {
+            content,
+            name: None,
+        });
     }
     let mut seen_ids = HashSet::new();
-    responses
-        .iter()
-        .map(|part| {
-            let response = part
-                .get("functionResponse")
-                .and_then(Json::as_object)
-                .unwrap();
-            let name = response
-                .get("name")
-                .and_then(Json::as_str)
-                .unwrap()
-                .to_string();
-            let id = parse_optional_id(response, "functionResponse")?.unwrap_or(name);
-            ensure_unique_gemini_function_id(&mut seen_ids, &id, "functionResponse")?;
-            Ok(Message::Tool {
-                content: gemini_function_response_to_message_content(
-                    part.get("functionResponse").unwrap(),
-                )?,
-                tool_call_id: id,
-            })
-        })
-        .collect()
+    for part in responses {
+        let response = part
+            .get("functionResponse")
+            .and_then(Json::as_object)
+            .unwrap();
+        let name = response
+            .get("name")
+            .and_then(Json::as_str)
+            .unwrap()
+            .to_string();
+        let id = parse_optional_id(response, "functionResponse")?.unwrap_or(name);
+        ensure_unique_gemini_function_id(&mut seen_ids, &id, "functionResponse")?;
+        messages.push(Message::Tool {
+            content: gemini_function_response_to_message_content(
+                part.get("functionResponse").unwrap(),
+            )?,
+            tool_call_id: id,
+        });
+    }
+    Ok(messages)
 }
 
 fn gemini_function_call_messages(
@@ -1328,12 +1334,12 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        let raw: RawGeminiGenerateContentResponse = serde_json::from_value(response.clone())
+        let raw = RawGeminiGenerateContentResponse::deserialize(response)
             .map_err(|e| FlowError::Internal(format!("Gemini response decode: {e}")))?;
 
-        let candidate = raw.candidates.as_ref().and_then(|c| c.first());
+        let candidate = raw.candidates.and_then(|c| c.into_iter().next());
 
-        let (message, tool_calls, has_tool_calls) = if let Some(c) = candidate {
+        let (message, tool_calls, has_tool_calls) = if let Some(c) = candidate.as_ref() {
             let parts = c.content.as_ref().and_then(|ct| ct.parts.as_deref());
             let msg = parts
                 .map(extract_parts_message_content)
@@ -1348,36 +1354,44 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
 
         let prompt_block_reason = prompt_feedback_block_reason(&raw.extra)?;
         let finish_reason = candidate
+            .as_ref()
             .and_then(|c| map_finish_reason(c.finish_reason.as_deref(), has_tool_calls))
             .or_else(|| map_prompt_block_reason(prompt_block_reason));
 
-        let model = raw.model_version.clone();
-        let (usage, thoughts_tokens) = map_usage(raw.usage_metadata, model.as_deref());
+        let model = raw.model_version;
 
         // Capture candidate-level metadata (safetyRatings, groundingMetadata,
         // citationMetadata, thinking token count, …) that cannot be normalized
         // across providers.  thoughts_tokens lives here, not in shared Usage.
-        let api_specific = {
-            let mut extra = candidate.map(|c| c.extra.clone()).unwrap_or_default();
-            extra.remove("api");
-            let has_candidate_data = !extra.is_empty() || thoughts_tokens.is_some();
-            if !has_candidate_data {
-                None
-            } else {
-                let safety_ratings = extra.remove("safetyRatings");
-                let grounding_metadata = extra.remove("groundingMetadata");
-                let citation_metadata = extra.remove("citationMetadata");
-                Some(
-                    super::response::ApiSpecificResponse::GeminiGenerateContent {
-                        thoughts_tokens,
-                        safety_ratings,
-                        grounding_metadata,
-                        citation_metadata,
-                        extra,
-                    },
-                )
-            }
-        };
+        let mut extra = candidate.map(|c| c.extra).unwrap_or_default();
+        extra.remove("api");
+        let safety_ratings = extra.remove("safetyRatings");
+        let grounding_metadata = extra.remove("groundingMetadata");
+        let citation_metadata = extra.remove("citationMetadata");
+        let (usage, separate) = map_usage(
+            raw.usage_metadata,
+            model.as_deref(),
+            ToolUsePromptBilling::from_tool_evidence(
+                grounding_metadata.as_ref(),
+                &extra,
+                message.as_ref(),
+            ),
+        );
+        let has_candidate_data = !extra.is_empty()
+            || safety_ratings.is_some()
+            || grounding_metadata.is_some()
+            || citation_metadata.is_some()
+            || separate != SeparateUsageCounts::default();
+        let api_specific = has_candidate_data.then_some(
+            super::response::ApiSpecificResponse::GeminiGenerateContent {
+                thoughts_tokens: separate.thoughts_tokens,
+                tool_use_prompt_tokens: separate.tool_use_prompt_tokens,
+                safety_ratings,
+                grounding_metadata,
+                citation_metadata,
+                extra,
+            },
+        );
 
         Ok(AnnotatedLlmResponse {
             id: raw.response_id,
@@ -1449,7 +1463,16 @@ impl LlmCodec for GeminiGenerateContentCodec {
 
     fn encode(&self, annotated: &AnnotatedLlmRequest, original: &LlmRequest) -> Result<LlmRequest> {
         let baseline = self.decode(original)?;
-        validate_gemini_supported_fields(annotated, &baseline)?;
+        self.encode_with_baseline(annotated, original, &baseline)
+    }
+
+    fn encode_with_baseline(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+        baseline: &AnnotatedLlmRequest,
+    ) -> Result<LlmRequest> {
+        validate_gemini_supported_fields(annotated, baseline)?;
         let mut content = original.content.clone();
         let obj = content
             .as_object_mut()
@@ -2070,7 +2093,10 @@ fn patch_changed_gemini_content(
         }
     };
 
-    let patched = if ann_role == "tool" {
+    let has_responses = orig_parts
+        .iter()
+        .any(|part| part.get("functionResponse").is_some());
+    let patched = if has_responses {
         patch_gemini_tool_response_content(orig_parts, ann_msgs, call_id_to_name)?
     } else {
         patch_gemini_visible_content(orig_parts, msg_obj, gemini_role)?
@@ -2137,7 +2163,33 @@ fn patch_gemini_tool_response_content(
     ann_msgs: &[&Json],
     call_id_to_name: &HashMap<String, String>,
 ) -> Result<Option<Json>> {
-    let (mut updates, update_order) = gemini_function_response_updates(ann_msgs)?;
+    let (visible_msgs, tool_msgs): (Vec<&Json>, Vec<&Json>) = ann_msgs
+        .iter()
+        .copied()
+        .partition(|message| message.get("role").and_then(Json::as_str) != Some("tool"));
+    let parts = match visible_msgs.as_slice() {
+        [] => orig_parts
+            .iter()
+            .filter(|part| !is_gemini_visible_part(part))
+            .cloned()
+            .collect(),
+        [message] if message.get("role").and_then(Json::as_str) == Some("user") => {
+            patched_gemini_visible_parts(orig_parts, message)?
+        }
+        [message] => {
+            return Err(FlowError::InvalidArgument(format!(
+                "Gemini encoder: a functionResponse turn carries a {} message beside its responses; only a user message can share the turn",
+                message["role"]
+            )));
+        }
+        _ => {
+            return Err(FlowError::InvalidArgument(
+                "Gemini encoder: a functionResponse turn carries more than one visible message"
+                    .into(),
+            ));
+        }
+    };
+    let (mut updates, update_order) = gemini_function_response_updates(&tool_msgs)?;
     let mut new_parts = Vec::new();
     for call_id in update_order {
         let Some(payload) = updates.remove(call_id) else {
@@ -2163,23 +2215,41 @@ fn patch_gemini_tool_response_content(
         new_parts.push(Json::Object(part));
     }
 
-    // Keep non-response parts in their original slots while response slots
-    // follow the edited call order. Removed responses consume no new value.
     let mut responses = new_parts.into_iter();
-    let mut new_parts = Vec::new();
-    for part in orig_parts {
+    let mut new_parts = Vec::with_capacity(parts.len());
+    for part in parts {
         if part.get("functionResponse").is_some() {
-            if let Some(response) = responses.next() {
-                new_parts.push(response);
-            }
+            new_parts.extend(responses.next());
         } else {
-            new_parts.push(part.clone());
+            new_parts.push(part);
         }
     }
     new_parts.extend(responses);
 
     Ok(Some(
         serde_json::json!({"role": "user", "parts": new_parts}),
+    ))
+}
+
+fn is_gemini_visible_part(part: &Json) -> bool {
+    part.get("functionResponse").is_none()
+        && part.get("functionCall").is_none()
+        && part.get("thought").and_then(Json::as_bool) != Some(true)
+}
+
+fn patched_gemini_visible_parts(orig_parts: &[Json], message: &Json) -> Result<Vec<Json>> {
+    let content = message.get("content").unwrap_or(&Json::Null);
+    let baseline = serde_json::to_value(gemini_parts_to_message_content(orig_parts, "request")?)
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    if baseline == *content {
+        return Ok(orig_parts.to_vec());
+    }
+    let (new_content_parts, content_is_parts_form) = gemini_content_parts_from_normalized(content)?;
+    Ok(merge_gemini_visible_parts(
+        orig_parts,
+        new_content_parts,
+        Vec::new(),
+        content_is_parts_form,
     ))
 }
 
@@ -2260,19 +2330,33 @@ fn replacement_content_part(
     replacement: Json,
     content_is_parts_form: bool,
 ) -> Json {
-    if !content_is_parts_form
-        && orig_part.get("text").is_some()
-        && replacement.get("text").is_some()
-    {
-        let mut obj = orig_part.as_object().cloned().unwrap_or_default();
-        obj.insert("text".into(), replacement.get("text").unwrap().clone());
-        Json::Object(obj)
-    } else {
-        replacement
+    if content_is_parts_form {
+        return replacement;
     }
+    let mut part = orig_part.as_object().cloned().unwrap_or_default();
+    part.extend(replacement.as_object().cloned().unwrap_or_default());
+    Json::Object(part)
 }
 
 fn merge_gemini_original_parts(
+    orig_parts: &[Json],
+    new_content_parts: Vec<Json>,
+    rebuilt_fn_calls: Vec<Json>,
+    content_is_parts_form: bool,
+) -> Vec<Json> {
+    let mut parts = merge_gemini_visible_parts(
+        orig_parts,
+        new_content_parts,
+        rebuilt_fn_calls,
+        content_is_parts_form,
+    );
+    if parts.is_empty() {
+        parts.push(serde_json::json!({"text": ""}));
+    }
+    parts
+}
+
+fn merge_gemini_visible_parts(
     orig_parts: &[Json],
     new_content_parts: Vec<Json>,
     rebuilt_fn_calls: Vec<Json>,
@@ -2293,18 +2377,12 @@ fn merge_gemini_original_parts(
         );
     }
 
-    let remaining_content_parts: Vec<Json> = new_content_parts.collect();
-    if !content_emitted && !remaining_content_parts.is_empty() {
-        for part in remaining_content_parts.into_iter().rev() {
-            parts.insert(0, part);
-        }
+    if content_emitted {
+        parts.extend(new_content_parts);
     } else {
-        parts.extend(remaining_content_parts);
+        parts.splice(0..0, new_content_parts);
     }
     parts.extend(rebuilt_fn_calls);
-    if parts.is_empty() {
-        parts.push(serde_json::json!({"text": ""}));
-    }
     parts
 }
 
@@ -2322,7 +2400,9 @@ fn merge_gemini_original_part(
         return false;
     }
     let is_thought = orig_part.get("thought").and_then(Json::as_bool) == Some(true);
-    let is_content_part = !is_thought && orig_part.get("functionResponse").is_none();
+    let is_content_part = !is_thought
+        && orig_part.get("functionResponse").is_none()
+        && (content_is_parts_form || orig_part.get("text").is_some());
     if !is_content_part {
         parts.push(orig_part.clone());
         return false;
@@ -2334,12 +2414,6 @@ fn merge_gemini_original_part(
             content_is_parts_form,
         ));
         return true;
-    }
-    if !content_is_parts_form
-        && (orig_part.get("text").is_none()
-            || (orig_part.get("text").is_some() && orig_part.get("thoughtSignature").is_some()))
-    {
-        parts.push(orig_part.clone());
     }
     false
 }
@@ -2867,6 +2941,17 @@ impl super::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
         })
     }
 
+    fn borrowed_collector(&self) -> Option<crate::api::runtime::LlmBorrowedCollectorFn> {
+        let state = std::sync::Arc::clone(&self.state);
+        Some(Box::new(move |event: &Json| -> Result<()> {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.observe(event)?;
+            Ok(())
+        }))
+    }
+
     fn finalizer(&self) -> crate::api::runtime::LlmFinalizerFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move || -> Json {
@@ -2881,6 +2966,7 @@ impl super::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
 #[derive(Debug, Default)]
 struct GeminiGenerateContentStreamingState {
     parts: Vec<Json>,
+    active_call: Option<GeminiStreamingFunctionCall>,
     candidate_index: Option<u64>,
     finish_reason: Option<String>,
     usage_metadata: Option<Json>,
@@ -3042,9 +3128,71 @@ impl GeminiGenerateContentStreamingState {
                     "Gemini streaming response parts must not contain functionResponse".into(),
                 ));
             }
+            Some("functionCall") => self.observe_function_call_part(part, part_obj)?,
             _ => self.parts.push(part.clone()),
         }
         Ok(())
+    }
+
+    fn observe_function_call_part(
+        &mut self,
+        part: &Json,
+        part_obj: &serde_json::Map<String, Json>,
+    ) -> Result<()> {
+        let call =
+            RawStreamedFunctionCall::deserialize(&part_obj["functionCall"]).map_err(|error| {
+                FlowError::InvalidArgument(format!("Gemini streaming functionCall: {error}"))
+            })?;
+        let joins_active = self.active_call.as_ref().is_some_and(|active| {
+            !gemini_streamed_call_differs(active.name.as_deref(), call.name.as_deref())
+                && !gemini_streamed_call_differs(active.id.as_deref(), call.id.as_deref())
+        });
+        if !joins_active {
+            self.flush_function_call();
+            if call.partial_args.is_empty() && call.will_continue.is_none() {
+                self.parts.push(part.clone());
+                return Ok(());
+            }
+        }
+        let active = match &mut self.active_call {
+            Some(active) => active,
+            None => {
+                self.parts.push(Json::Null);
+                self.active_call
+                    .insert(GeminiStreamingFunctionCall::new(self.parts.len() - 1))
+            }
+        };
+        if active.name.is_none() {
+            active.name = call.name;
+        }
+        if active.id.is_none() {
+            active.id = call.id;
+        }
+        for (key, value) in part_obj {
+            if key != "functionCall" && !active.part.contains_key(key) {
+                active.part.insert(key.clone(), value.clone());
+            }
+        }
+        for (key, value) in call.args {
+            active.set_arg(key, value);
+        }
+        for partial in &call.partial_args {
+            active.apply_partial_arg(partial)?;
+        }
+        if call.will_continue != Some(true) {
+            self.flush_function_call();
+        }
+        Ok(())
+    }
+
+    fn flush_function_call(&mut self) {
+        let Some(active) = self.active_call.take() else {
+            return;
+        };
+        let slot = active.slot;
+        if let Some(part) = active.into_part() {
+            self.parts[slot] = part;
+        }
     }
 
     fn observe_finish_reason(&mut self, candidate: &Json) -> Result<()> {
@@ -3063,7 +3211,9 @@ impl GeminiGenerateContentStreamingState {
         Ok(())
     }
 
-    fn finalize(self) -> Json {
+    fn finalize(mut self) -> Json {
+        self.flush_function_call();
+        self.parts.retain(|part| !part.is_null());
         let mut candidate_obj = serde_json::Map::new();
         candidate_obj.insert(
             "content".into(),
@@ -3095,6 +3245,359 @@ impl GeminiGenerateContentStreamingState {
             output.insert("responseId".to_string(), Json::String(rid));
         }
         Json::Object(output)
+    }
+}
+
+fn gemini_streamed_call_differs(active: Option<&str>, fragment: Option<&str>) -> bool {
+    active
+        .zip(fragment)
+        .is_some_and(|(active, fragment)| active != fragment)
+}
+
+const GEMINI_STREAMED_ARG_MAX_INDEX: usize = 10_000;
+const GEMINI_STREAMED_ARG_MAX_DEPTH: usize = 128;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawStreamedFunctionCall {
+    name: Option<String>,
+    id: Option<String>,
+    #[serde(default)]
+    args: serde_json::Map<String, Json>,
+    #[serde(default)]
+    partial_args: Vec<RawPartialArg>,
+    will_continue: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawPartialArg {
+    json_path: Option<String>,
+    string_value: Option<String>,
+    number_value: Option<serde_json::Number>,
+    bool_value: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_gemini_null_value")]
+    null_value: bool,
+}
+
+fn deserialize_gemini_null_value<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Json::deserialize(deserializer)? {
+        Json::Null => Ok(true),
+        Json::String(name) if name == "NULL_VALUE" => Ok(true),
+        other => Err(serde::de::Error::custom(format!(
+            "nullValue must be null or \"NULL_VALUE\", got {other}"
+        ))),
+    }
+}
+
+#[derive(Debug)]
+struct GeminiStreamingFunctionCall {
+    slot: usize,
+    part: serde_json::Map<String, Json>,
+    name: Option<String>,
+    id: Option<String>,
+    args: Json,
+    chunks: Vec<(Vec<GeminiArgPathToken>, Vec<String>)>,
+}
+
+impl GeminiStreamingFunctionCall {
+    fn new(slot: usize) -> Self {
+        Self {
+            slot,
+            part: serde_json::Map::new(),
+            name: None,
+            id: None,
+            args: Json::Object(serde_json::Map::new()),
+            chunks: Vec::new(),
+        }
+    }
+
+    fn set_arg(&mut self, key: String, value: Json) {
+        self.write_arg(&[GeminiArgPathToken::Key(key)], value);
+    }
+
+    fn write_arg(&mut self, tokens: &[GeminiArgPathToken], value: Json) {
+        self.chunks
+            .retain(|(chunked, _)| !chunked.starts_with(tokens));
+        set_gemini_arg(&mut self.args, tokens, value);
+    }
+
+    fn apply_partial_arg(&mut self, partial: &RawPartialArg) -> Result<()> {
+        let Some(path) = partial.json_path.as_deref().filter(|path| !path.is_empty()) else {
+            return Ok(());
+        };
+        let tokens = streamed_gemini_arg_path(path)?;
+        if let Some(chunk) = &partial.string_value {
+            if let Some((_, chunks)) = self
+                .chunks
+                .iter_mut()
+                .find(|(chunked, _)| *chunked == tokens)
+            {
+                chunks.push(chunk.clone());
+                return Ok(());
+            }
+            let mut chunks: Vec<String> = get_gemini_arg(&self.args, &tokens)
+                .and_then(Json::as_str)
+                .map(str::to_string)
+                .into_iter()
+                .collect();
+            set_gemini_arg(&mut self.args, &tokens, Json::String(String::new()));
+            chunks.push(chunk.clone());
+            self.chunks.push((tokens, chunks));
+            return Ok(());
+        }
+        let value = if let Some(number) = &partial.number_value {
+            Json::Number(number.clone())
+        } else if let Some(flag) = partial.bool_value {
+            Json::Bool(flag)
+        } else if partial.null_value {
+            Json::Null
+        } else {
+            return Ok(());
+        };
+        self.write_arg(&tokens, value);
+        Ok(())
+    }
+
+    fn into_part(self) -> Option<Json> {
+        let Self {
+            mut part,
+            name,
+            id,
+            mut args,
+            chunks,
+            ..
+        } = self;
+        let name = name?;
+        for (tokens, pieces) in chunks {
+            set_gemini_arg(&mut args, &tokens, Json::String(pieces.concat()));
+        }
+        let mut call = serde_json::Map::new();
+        call.insert("name".into(), Json::String(name));
+        if let Some(id) = id {
+            call.insert("id".into(), Json::String(id));
+        }
+        call.insert("args".into(), args);
+        part.insert("functionCall".into(), Json::Object(call));
+        Some(Json::Object(part))
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum GeminiArgPathToken {
+    Key(String),
+    Index(usize),
+}
+
+fn streamed_gemini_arg_path(path: &str) -> Result<Vec<GeminiArgPathToken>> {
+    let tokens = parse_gemini_arg_path(path);
+    if tokens.is_empty() {
+        return Err(FlowError::InvalidArgument(format!(
+            "Gemini streaming partialArgs jsonPath '{path}' does not address an argument"
+        )));
+    }
+    if tokens.len() > GEMINI_STREAMED_ARG_MAX_DEPTH {
+        return Err(FlowError::InvalidArgument(format!(
+            "Gemini streaming partialArgs jsonPath '{path}' nests deeper than {GEMINI_STREAMED_ARG_MAX_DEPTH} levels"
+        )));
+    }
+    if tokens.iter().any(|token| {
+        matches!(token, GeminiArgPathToken::Index(index) if *index > GEMINI_STREAMED_ARG_MAX_INDEX)
+    }) {
+        return Err(FlowError::InvalidArgument(format!(
+            "Gemini streaming partialArgs jsonPath '{path}' indexes past {GEMINI_STREAMED_ARG_MAX_INDEX}"
+        )));
+    }
+    Ok(tokens)
+}
+
+fn parse_gemini_arg_path(path: &str) -> Vec<GeminiArgPathToken> {
+    let path = path
+        .strip_prefix("$.")
+        .or_else(|| path.strip_prefix('$'))
+        .unwrap_or(path);
+    let chars: Vec<char> = path.chars().collect();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '[' => match gemini_arg_path_bracket_token(&chars, i) {
+                Some((token, end)) => {
+                    tokens.push(token);
+                    i = end;
+                }
+                None => i += 1,
+            },
+            '.' | ']' => i += 1,
+            _ => {
+                let (key, end) = gemini_arg_path_bare_key(&chars, i);
+                if end == i {
+                    i += 1;
+                } else {
+                    tokens.push(GeminiArgPathToken::Key(key));
+                    i = end;
+                }
+            }
+        }
+    }
+    tokens
+}
+
+fn gemini_arg_path_bracket_token(
+    chars: &[char],
+    open: usize,
+) -> Option<(GeminiArgPathToken, usize)> {
+    match chars.get(open + 1) {
+        Some(&quote @ ('\'' | '"')) => gemini_arg_path_quoted_key(chars, open + 1, quote)
+            .map(|(key, end)| (GeminiArgPathToken::Key(key), end)),
+        _ => {
+            let close = open + 1 + chars[open + 1..].iter().position(|c| *c == ']')?;
+            let inner = &chars[open + 1..close];
+            let start = inner.iter().position(|c| !c.is_whitespace())?;
+            let end = inner.iter().rposition(|c| !c.is_whitespace())? + 1;
+            let digits = &inner[start..end];
+            digits.iter().all(char::is_ascii_digit).then(|| {
+                let index = digits
+                    .iter()
+                    .collect::<String>()
+                    .parse()
+                    .unwrap_or(usize::MAX);
+                (GeminiArgPathToken::Index(index), close + 1)
+            })
+        }
+    }
+}
+
+fn gemini_arg_path_quoted_key(chars: &[char], open: usize, quote: char) -> Option<(String, usize)> {
+    let mut key = String::new();
+    let mut i = open + 1;
+    while i < chars.len() && chars[i] != quote {
+        if chars[i] == '\\' {
+            i = gemini_arg_path_escape(chars, i, &mut key)?;
+        } else {
+            key.push(chars[i]);
+            i += 1;
+        }
+    }
+    (i < chars.len() && chars.get(i + 1) == Some(&']')).then_some((key, i + 2))
+}
+
+fn gemini_arg_path_bare_key(chars: &[char], start: usize) -> (String, usize) {
+    let mut key = String::new();
+    let mut i = start;
+    while i < chars.len() {
+        match chars[i] {
+            '.' | '[' | ']' => break,
+            '\\' => match gemini_arg_path_escape(chars, i, &mut key) {
+                Some(end) => i = end,
+                None => break,
+            },
+            c => {
+                key.push(c);
+                i += 1;
+            }
+        }
+    }
+    (key, i)
+}
+
+fn gemini_arg_path_escape(chars: &[char], backslash: usize, out: &mut String) -> Option<usize> {
+    let escaped = *chars.get(backslash + 1)?;
+    if escaped == 'u'
+        && let Some(high) = gemini_arg_path_hex4(chars, backslash + 2)
+    {
+        let mut end = backslash + 6;
+        let mut units = vec![high];
+        if (0xD800..=0xDBFF).contains(&high)
+            && chars.get(end..end + 2) == Some(['\\', 'u'].as_slice())
+            && let Some(low) = gemini_arg_path_hex4(chars, end + 2)
+            && (0xDC00..=0xDFFF).contains(&low)
+        {
+            units.push(low);
+            end += 6;
+        }
+        out.extend(
+            char::decode_utf16(units).map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER)),
+        );
+        return Some(end);
+    }
+    out.push(match escaped {
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
+        'b' => '\u{8}',
+        'f' => '\u{c}',
+        other => other,
+    });
+    Some(backslash + 2)
+}
+
+fn gemini_arg_path_hex4(chars: &[char], start: usize) -> Option<u16> {
+    let hex = chars.get(start..start + 4)?;
+    hex.iter().all(char::is_ascii_hexdigit).then(|| {
+        hex.iter()
+            .filter_map(|digit| digit.to_digit(16))
+            .fold(0, |code, digit| code * 16 + digit as u16)
+    })
+}
+
+fn get_gemini_arg<'a>(target: &'a Json, tokens: &[GeminiArgPathToken]) -> Option<&'a Json> {
+    tokens
+        .iter()
+        .try_fold(target, |current, token| match token {
+            GeminiArgPathToken::Key(key) => current.as_object()?.get(key),
+            GeminiArgPathToken::Index(index) => current.as_array()?.get(*index),
+        })
+}
+
+fn set_gemini_arg(target: &mut Json, tokens: &[GeminiArgPathToken], value: Json) {
+    let Some((last, head)) = tokens.split_last() else {
+        return;
+    };
+    let mut current = target;
+    for (position, token) in head.iter().enumerate() {
+        let container = || match tokens[position + 1] {
+            GeminiArgPathToken::Index(_) => Json::Array(Vec::new()),
+            GeminiArgPathToken::Key(_) => Json::Object(serde_json::Map::new()),
+        };
+        current = match token {
+            GeminiArgPathToken::Key(key) => {
+                let Some(object) = current.as_object_mut() else {
+                    return;
+                };
+                object.entry(key.clone()).or_insert_with(container)
+            }
+            GeminiArgPathToken::Index(index) => {
+                let Some(array) = current.as_array_mut() else {
+                    return;
+                };
+                while array.len() <= *index {
+                    array.push(Json::Null);
+                }
+                if array[*index].is_null() {
+                    array[*index] = container();
+                }
+                &mut array[*index]
+            }
+        };
+    }
+    match last {
+        GeminiArgPathToken::Key(key) => {
+            if let Some(object) = current.as_object_mut() {
+                object.insert(key.clone(), value);
+            }
+        }
+        GeminiArgPathToken::Index(index) => {
+            if let Some(array) = current.as_array_mut() {
+                while array.len() <= *index {
+                    array.push(Json::Null);
+                }
+                array[*index] = value;
+            }
+        }
     }
 }
 

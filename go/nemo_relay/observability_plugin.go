@@ -17,6 +17,9 @@ type ObservabilityConfig struct {
 	Policy        *ConfigPolicy                     `json:"policy,omitempty"`
 	// EnableFullPayloads retains complete sanitized request data on every LLM start event.
 	EnableFullPayloads bool `json:"enable_full_payloads,omitempty"`
+	// InsecureHTTPHosts lists non-loopback hosts allowed unencrypted HTTP or WebSocket exports, including headers.
+	// Nil keeps a lower-precedence list; a pointer to an empty slice clears it.
+	InsecureHTTPHosts *[]string `json:"insecure_http_hosts,omitempty"`
 }
 
 // ObservabilityOpenTelemetryConfig configures multiple typed OTLP endpoints.
@@ -56,17 +59,18 @@ type ObservabilityOpenTelemetryFileSinkConfig struct {
 
 // ObservabilityOpenTelemetrySignalEndpointConfig configures one log or metric OTLP destination.
 type ObservabilityOpenTelemetrySignalEndpointConfig struct {
-	Endpoint             string            `json:"endpoint"`
-	Transport            string            `json:"transport,omitempty"`
-	Headers              map[string]string `json:"headers,omitempty"`
-	HeaderEnv            map[string]string `json:"header_env,omitempty"`
-	HeaderFile           map[string]string `json:"header_file,omitempty"`
-	ResourceAttributes   map[string]string `json:"resource_attributes,omitempty"`
-	ServiceName          string            `json:"service_name,omitempty"`
-	ServiceNamespace     string            `json:"service_namespace,omitempty"`
-	ServiceVersion       string            `json:"service_version,omitempty"`
-	InstrumentationScope string            `json:"instrumentation_scope,omitempty"`
-	TimeoutMillis        uint64            `json:"timeout_millis,omitempty"`
+	TLS                  *OpenTelemetryTLSConfig `json:"tls,omitempty"`
+	Endpoint             string                  `json:"endpoint"`
+	Transport            string                  `json:"transport,omitempty"`
+	Headers              map[string]string       `json:"headers,omitempty"`
+	HeaderEnv            map[string]string       `json:"header_env,omitempty"`
+	HeaderFile           map[string]string       `json:"header_file,omitempty"`
+	ResourceAttributes   map[string]string       `json:"resource_attributes,omitempty"`
+	ServiceName          string                  `json:"service_name,omitempty"`
+	ServiceNamespace     string                  `json:"service_namespace,omitempty"`
+	ServiceVersion       string                  `json:"service_version,omitempty"`
+	InstrumentationScope string                  `json:"instrumentation_scope,omitempty"`
+	TimeoutMillis        uint64                  `json:"timeout_millis,omitempty"`
 	// PromoteResourceMetadataPrefixes selects root-scope metadata for resource attributes.
 	PromoteResourceMetadataPrefixes []string `json:"promote_resource_metadata_prefixes,omitempty"`
 }
@@ -94,28 +98,36 @@ type ObservabilityOpenTelemetryMetricConfig struct {
 	CardinalityLimit     uint64                                            `json:"cardinality_limit,omitempty"`
 }
 
+// OpenTelemetryTLSConfig holds PEM certificate and private key file paths for one OTLP endpoint.
+type OpenTelemetryTLSConfig struct {
+	Certificate       string `json:"certificate,omitempty"`
+	ClientCertificate string `json:"client_certificate,omitempty"`
+	PrivateKey        string `json:"private_key,omitempty"`
+}
+
 // ObservabilityOpenTelemetryEndpointConfig configures one typed OTLP destination.
 type ObservabilityOpenTelemetryEndpointConfig struct {
-	Type                          OpenTelemetryType      `json:"type"`
-	Endpoint                      string                 `json:"endpoint"`
-	MarkProjection                string                 `json:"mark_projection,omitempty"`
-	MarkExcludeNames              []string               `json:"mark_exclude_names,omitempty"`
-	AttributeMappings             []OtlpAttributeMapping `json:"attribute_mappings,omitempty"`
-	PromoteMetadataPrefixes       []string               `json:"promote_metadata_prefixes,omitempty"`
-	Transport                     string                 `json:"transport,omitempty"`
-	Headers                       map[string]string      `json:"headers,omitempty"`
-	HeaderEnv                     map[string]string      `json:"header_env,omitempty"`
-	HeaderFile                    map[string]string      `json:"header_file,omitempty"`
-	ResourceAttributes            map[string]string      `json:"resource_attributes,omitempty"`
-	ServiceName                   string                 `json:"service_name,omitempty"`
-	ServiceNamespace              string                 `json:"service_namespace,omitempty"`
-	ServiceVersion                string                 `json:"service_version,omitempty"`
-	InstrumentationScope          string                 `json:"instrumentation_scope,omitempty"`
-	TimeoutMillis                 uint64                 `json:"timeout_millis,omitempty"`
-	MaxQueueSize                  *uint64                `json:"max_queue_size,omitempty"`
-	MaxExportBatchSize            *uint64                `json:"max_export_batch_size,omitempty"`
-	ScheduledDelayMillis          *uint64                `json:"scheduled_delay_millis,omitempty"`
-	CompletedSpanContextTTLMillis *uint64                `json:"completed_span_context_ttl_millis,omitempty"`
+	TLS                           *OpenTelemetryTLSConfig `json:"tls,omitempty"`
+	Type                          OpenTelemetryType       `json:"type"`
+	Endpoint                      string                  `json:"endpoint"`
+	MarkProjection                string                  `json:"mark_projection,omitempty"`
+	MarkExcludeNames              []string                `json:"mark_exclude_names,omitempty"`
+	AttributeMappings             []OtlpAttributeMapping  `json:"attribute_mappings,omitempty"`
+	PromoteMetadataPrefixes       []string                `json:"promote_metadata_prefixes,omitempty"`
+	Transport                     string                  `json:"transport,omitempty"`
+	Headers                       map[string]string       `json:"headers,omitempty"`
+	HeaderEnv                     map[string]string       `json:"header_env,omitempty"`
+	HeaderFile                    map[string]string       `json:"header_file,omitempty"`
+	ResourceAttributes            map[string]string       `json:"resource_attributes,omitempty"`
+	ServiceName                   string                  `json:"service_name,omitempty"`
+	ServiceNamespace              string                  `json:"service_namespace,omitempty"`
+	ServiceVersion                string                  `json:"service_version,omitempty"`
+	InstrumentationScope          string                  `json:"instrumentation_scope,omitempty"`
+	TimeoutMillis                 uint64                  `json:"timeout_millis,omitempty"`
+	MaxQueueSize                  *uint64                 `json:"max_queue_size,omitempty"`
+	MaxExportBatchSize            *uint64                 `json:"max_export_batch_size,omitempty"`
+	ScheduledDelayMillis          *uint64                 `json:"scheduled_delay_millis,omitempty"`
+	CompletedSpanContextTTLMillis *uint64                 `json:"completed_span_context_ttl_millis,omitempty"`
 	// PromoteResourceMetadataPrefixes selects root-scope metadata for trace resources and derived signals.
 	PromoteResourceMetadataPrefixes []string `json:"promote_resource_metadata_prefixes,omitempty"`
 }

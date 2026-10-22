@@ -3,7 +3,7 @@
 
 //! Managed worker execution with raw forwarding or JSON middleware delivery.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::error::Error as _;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -13,22 +13,22 @@ use std::time::Duration;
 
 use axum::Json;
 use axum::body::{Body, Bytes};
-use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
+#[cfg(test)]
+use axum::http::header::AUTHORIZATION;
+use axum::http::header::{ACCEPT, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use axum::response::IntoResponse;
 use http_body_util::LengthLimitError;
 use hyper::body::{Body as HttpBody, Frame, Incoming, SizeHint};
 use nemo_relay::api::llm::{
     LlmCallEndParams, LlmCallParams, LlmRequest, llm_call, llm_call_end, llm_conditional_execution,
-    llm_request_intercepts,
+    llm_request_intercepts_with_source,
 };
-use nemo_relay::api::registry::{
-    RuntimeRegistrationIdentity, RuntimeRegistrationKind, list_runtime_registrations,
-};
+use nemo_relay::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
 use nemo_relay::api::runtime::TASK_SCOPE_STACK;
 use nemo_relay::codec::resolve::{ProviderSurface, request_codec, response_codec, streaming_codec};
 use nemo_relay::codec::streaming::SseEventDecoder;
-use nemo_relay::error::FlowError;
+use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
 
@@ -37,8 +37,8 @@ use super::super::common::control::{
 };
 use super::super::common::routes::{HookRoute, ProviderRoute};
 use super::super::common::transport::{
-    BoxError, PooledClient, RelayBody, box_body, prepare_forward_request, prepare_forward_response,
-    request_provider,
+    BoxError, PooledClient, RelayBody, TransportError, box_body, prepare_forward_response,
+    prepare_provider_request, request_provider,
 };
 use crate::agents::shared::adapters::{claude_code, codex, pi};
 use crate::configuration::GatewayConfig;
@@ -236,12 +236,6 @@ impl ManagedRuntime {
                     );
                     return Err(error);
                 }
-                if let Some(permission) = outcome.permission
-                    && let Err(error) = self.authorize_permission(permission).await
-                {
-                    operational::hook_completed(&operational, "managed_worker_hook", "denied");
-                    return Ok(codex::permission_denial(permission_denial_reason(error)));
-                }
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(outcome.response)
             }
@@ -265,37 +259,6 @@ impl ManagedRuntime {
                         true,
                     );
                     return Err(error);
-                }
-                if let Some(permission) = outcome.permission {
-                    let result = self.authorize_permission(permission).await;
-                    operational::hook_completed(
-                        &operational,
-                        "managed_worker_hook",
-                        if result.is_ok() {
-                            "completed"
-                        } else {
-                            "denied"
-                        },
-                    );
-                    return Ok(match result {
-                        Ok(()) => json!({
-                            "continue": true,
-                            "hookSpecificOutput": {
-                                "hookEventName": "PermissionRequest",
-                                "decision": { "behavior": "allow" },
-                            },
-                        }),
-                        Err(error) => json!({
-                            "continue": true,
-                            "hookSpecificOutput": {
-                                "hookEventName": "PermissionRequest",
-                                "decision": {
-                                    "behavior": "deny",
-                                    "message": permission_denial_reason(error),
-                                },
-                            },
-                        }),
-                    });
                 }
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(outcome.response)
@@ -331,20 +294,6 @@ impl ManagedRuntime {
                 operational::hook_completed(&operational, "managed_worker_hook", "completed");
                 Ok(pi::response_with_effects(outcome.response, &effects))
             }
-        }
-    }
-
-    async fn authorize_permission(
-        &self,
-        permission: Result<crate::events::ToolEvent, String>,
-    ) -> Result<(), CliError> {
-        match permission {
-            Ok(permission) => {
-                self.sessions
-                    .authorize_tool_permission(&permission, &self.owner)
-                    .await
-            }
-            Err(reason) => Err(CliError::InvalidPayload(reason)),
         }
     }
 
@@ -402,11 +351,14 @@ impl ManagedRuntime {
                 .proxy_unbuffered(upstream, request, route, surface, prep, operational)
                 .await;
         }
-        let prepared = PreparedProviderRequest::read(request, &self.config).await?;
+        let mut prepared = PreparedProviderRequest::read(request, &self.config).await?;
         let start = crate::gateway::daemon_gateway_start(
             &prepared.headers,
             &prepared.path,
-            prepared.request_json.clone(),
+            prepared
+                .request_json
+                .take()
+                .expect("decoded request content"),
             prepared.streaming,
         )
         .ok_or_else(|| CliError::InvalidPayload("unsupported provider path".into()))?;
@@ -441,6 +393,7 @@ impl ManagedRuntime {
             .await
     }
 
+    /// Forward an undecoded request and observe its response for telemetry.
     async fn proxy_unbuffered(
         &self,
         upstream: PooledClient,
@@ -476,6 +429,7 @@ impl ManagedRuntime {
                     LlmCallParams::builder()
                         .name(&provider_name)
                         .request(&request_for_event)
+                        .codec(request_codec(surface))
                         .parent_opt(parent.as_ref())
                         .attributes(attributes)
                         .metadata(metadata.clone())
@@ -510,10 +464,9 @@ impl ManagedRuntime {
         };
         let sessions = self.sessions.clone();
         tokio::spawn(async move {
-            let observed = observation
+            let mut observed = observation
                 .finish(surface, response_streaming || streaming_hint)
                 .await;
-            let response_value = observed.value.clone().unwrap_or(Value::Null);
             let mut end_metadata = merge_object(metadata, observed.metadata());
             insert_metadata(
                 &mut end_metadata,
@@ -526,12 +479,23 @@ impl ManagedRuntime {
                 insert_metadata(&mut end_metadata, "otel.status_code", json!("ERROR"));
                 insert_metadata(&mut end_metadata, "otel.status_description", json!(failure));
             }
+            // Finish correlation while borrowing the payload, then move it into LLM publication.
+            if let Some(value) = observed.value.as_ref() {
+                sessions
+                    .record_gateway_response_hints(
+                        &session_id,
+                        owner_subagent_id,
+                        std::borrow::Cow::Borrowed(value),
+                    )
+                    .await;
+            }
+            let response_codec = observed.value.as_ref().map(|_| response_codec(surface));
             if let Err(error) = llm_call_end(
                 LlmCallEndParams::builder()
                     .handle(&handle)
-                    .response(response_value)
+                    .response(observed.value.take().unwrap_or(Value::Null))
                     .metadata(end_metadata)
-                    .response_codec_opt(observed.value.as_ref().map(|_| response_codec(surface)))
+                    .response_codec_opt(response_codec)
                     .build(),
             ) {
                 log::warn!(
@@ -541,20 +505,16 @@ impl ManagedRuntime {
                     "Daemon worker failed to close an observed LLM lifecycle: {error}"
                 );
             }
-            if let Some(value) = observed.value {
-                sessions
-                    .record_gateway_response_hints(&session_id, owner_subagent_id, value)
-                    .await;
-            }
             cleanup.finish().await;
         });
         Ok(response)
     }
 
+    /// Forward a decoded request after request middleware runs, then observe its response.
     async fn proxy_managed(
         &self,
         upstream: PooledClient,
-        prepared: PreparedProviderRequest,
+        mut prepared: PreparedProviderRequest,
         route: ProviderRoute,
         surface: ProviderSurface,
         prep: GatewayCallPrep,
@@ -578,14 +538,16 @@ impl ManagedRuntime {
         let middleware = TASK_SCOPE_STACK
             .scope(scope_stack.clone(), async {
                 llm_conditional_execution(&request).await?;
-                let mut outcome = llm_request_intercepts(&provider_name, request).await?;
+                let (mut outcome, source) =
+                    llm_request_intercepts_with_source(&provider_name, request).await?;
+                prepared.request_json = source;
                 if let Some(annotated) = outcome.annotated_request.as_ref() {
                     outcome.request = codec.encode(annotated, &outcome.request)?;
                 }
                 Ok::<_, FlowError>(outcome)
             })
             .await;
-        let outcome = match middleware {
+        let mut outcome = match middleware {
             Ok(outcome) => outcome,
             Err(error) => {
                 cleanup.finish().await;
@@ -598,14 +560,15 @@ impl ManagedRuntime {
                 STREAM_MODE_MUTATION_ERROR.into(),
             )));
         }
-        let annotated_request = outcome.annotated_request.clone().map(Arc::new);
-        let request_for_event = outcome.request.clone();
+        let annotated_request = outcome.annotated_request.take().map(Arc::new);
+        let streaming = prepared_streaming(&outcome.request);
         let handle = TASK_SCOPE_STACK
             .scope(scope_stack, async {
                 llm_call(
                     LlmCallParams::builder()
                         .name(&provider_name)
-                        .request(&request_for_event)
+                        .request(&outcome.request)
+                        .codec(codec)
                         .parent_opt(parent.as_ref())
                         .attributes(attributes)
                         .metadata(metadata.clone())
@@ -654,10 +617,7 @@ impl ManagedRuntime {
         };
         let sessions = self.sessions.clone();
         tokio::spawn(async move {
-            let observed = observation
-                .finish(surface, prepared_streaming(&request_for_event))
-                .await;
-            let response_value = observed.value.clone().unwrap_or(Value::Null);
+            let mut observed = observation.finish(surface, streaming).await;
             let mut end_metadata = merge_object(metadata, observed.metadata());
             if observed.failure.is_none() {
                 insert_metadata(&mut end_metadata, "otel.status_code", json!("OK"));
@@ -665,12 +625,23 @@ impl ManagedRuntime {
                 insert_metadata(&mut end_metadata, "otel.status_code", json!("ERROR"));
                 insert_metadata(&mut end_metadata, "otel.status_description", json!(failure));
             }
+            // Finish correlation while borrowing the payload, then move it into LLM publication.
+            if let Some(value) = observed.value.as_ref() {
+                sessions
+                    .record_gateway_response_hints(
+                        &session_id,
+                        owner_subagent_id,
+                        std::borrow::Cow::Borrowed(value),
+                    )
+                    .await;
+            }
+            let response_codec = observed.value.as_ref().map(|_| response_codec(surface));
             if let Err(error) = llm_call_end(
                 LlmCallEndParams::builder()
                     .handle(&handle)
-                    .response(response_value)
+                    .response(observed.value.take().unwrap_or(Value::Null))
                     .metadata(end_metadata)
-                    .response_codec_opt(observed.value.as_ref().map(|_| response_codec(surface)))
+                    .response_codec_opt(response_codec)
                     .build(),
             ) {
                 log::warn!(
@@ -679,11 +650,6 @@ impl ManagedRuntime {
                     error_kind = "runtime";
                     "Daemon worker failed to close an observed LLM lifecycle: {error}"
                 );
-            }
-            if let Some(value) = observed.value {
-                sessions
-                    .record_gateway_response_hints(&session_id, owner_subagent_id, value)
-                    .await;
             }
             cleanup.finish().await;
         });
@@ -705,8 +671,11 @@ async fn dispatch_unmanaged(
     route: ProviderRoute,
     config: &GatewayConfig,
 ) -> Result<Response<RelayBody>, CliError> {
-    let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    let allow_environment_provider_auth = crate::gateway::daemon_allows_provider_auth(
+        request.headers(),
+        request.uri().path(),
+        config,
+    );
     strip_worker_headers(request.headers_mut());
     strip_untrusted_dispatch_headers(request.headers_mut());
     let path_and_query = request
@@ -718,7 +687,7 @@ async fn dispatch_unmanaged(
         crate::gateway::daemon_provider_upstream_url(request.headers(), &path_and_query, config)?
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
             .parse::<Uri>()
-            .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))?;
+            .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))?;
     if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
         request.headers(),
         request.uri().path(),
@@ -727,24 +696,41 @@ async fn dispatch_unmanaged(
         *request.headers_mut() = aligned;
     }
     strip_internal_headers(request.headers_mut());
-    if allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, config);
-    }
+    crate::upstream_auth::apply_for_destination(
+        request.headers_mut(),
+        &destination.to_string(),
+        matches!(route, ProviderRoute::Anthropic),
+        allow_environment_provider_auth,
+        config,
+    )
+    .await?;
+    let upstream = crate::daemon::common::transport::provider_client(
+        &upstream,
+        allow_environment_provider_auth
+            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
+                .is_some(),
+    )
+    .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
-    let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
-        .map(box_body);
-    let request = request_provider(&upstream, client_named, request)
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+    let request = prepare_provider_request(request, destination, &strip, config, client_named)?;
+    let request =
+        request_provider(&upstream, client_named, request).map_err(CliError::UpstreamTransport)?;
     let response = config
         .wait_for_response(request)
         .await
-        .map_err(|_| CliError::Launch("provider response-head timeout".into()))?
-        .map_err(|error| CliError::Launch(error.to_string()))?;
+        .map_err(|_| {
+            provider_transport_failure(
+                UpstreamFailureClass::Timeout,
+                "provider response-head timeout",
+            )
+        })?
+        .map_err(|error| {
+            provider_transport_failure(UpstreamFailureClass::Connection, error.to_string())
+        })?;
     let response = prepare_forward_response(response, &strip)
         .map_err(|error| CliError::Launch(error.to_string()))?;
     let (parts, body) = response.into_parts();
@@ -759,8 +745,11 @@ async fn dispatch_unbuffered_observed(
     capture_limit: usize,
     operational: OperationalContext,
 ) -> Result<(Response<RelayBody>, ObservationReceiver, bool), CliError> {
-    let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(request.headers());
+    let allow_environment_provider_auth = crate::gateway::daemon_allows_provider_auth(
+        request.headers(),
+        request.uri().path(),
+        config,
+    );
     strip_worker_headers(request.headers_mut());
     strip_untrusted_dispatch_headers(request.headers_mut());
     let path_and_query = request
@@ -772,7 +761,7 @@ async fn dispatch_unbuffered_observed(
         crate::gateway::daemon_provider_upstream_url(request.headers(), &path_and_query, config)?
             .unwrap_or_else(|| route.upstream_url(config, &path_and_query))
             .parse::<Uri>()
-            .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))?;
+            .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))?;
     if let Some(aligned) = crate::gateway::daemon_provider_forward_headers(
         request.headers(),
         request.uri().path(),
@@ -781,18 +770,28 @@ async fn dispatch_unbuffered_observed(
         *request.headers_mut() = aligned;
     }
     strip_internal_headers(request.headers_mut());
-    if allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, config);
-    }
+    crate::upstream_auth::apply_for_destination(
+        request.headers_mut(),
+        &destination.to_string(),
+        matches!(route, ProviderRoute::Anthropic),
+        allow_environment_provider_auth,
+        config,
+    )
+    .await?;
+    let upstream = crate::daemon::common::transport::provider_client(
+        &upstream,
+        allow_environment_provider_auth
+            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
+                .is_some(),
+    )
+    .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
     let streaming = request_streaming_hint(request.headers());
-    let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
-        .map(box_body);
+    let request = prepare_provider_request(request, destination, &strip, config, client_named)?;
     let response = request_worker_upstream(
         upstream,
         client_named,
@@ -833,7 +832,9 @@ struct PreparedProviderRequest {
     path: String,
     path_and_query: String,
     body: Bytes,
-    request_json: Value,
+    // `None` after interception proves that no callback could change the body.
+    // `Some` retains a comparison baseline, including a parsed JSON null.
+    request_json: Option<Value>,
     streaming: bool,
 }
 
@@ -865,7 +866,7 @@ impl PreparedProviderRequest {
             path,
             path_and_query,
             body: bytes,
-            request_json,
+            request_json: Some(request_json),
             streaming,
         })
     }
@@ -881,7 +882,7 @@ async fn dispatch_observed(
     operational: OperationalContext,
 ) -> Result<(Response<RelayBody>, ObservationReceiver), CliError> {
     let allow_environment_provider_auth =
-        crate::gateway::daemon_allows_environment_provider_auth(&prepared.headers);
+        crate::gateway::daemon_allows_provider_auth(&prepared.headers, &prepared.path, config);
     let destination = effective_destination(&prepared, route, effective, config)?;
     // An intercept's dispatch override is trusted plugin code, not the caller naming a host.
     let client_named = dispatch_override(effective).is_none()
@@ -899,17 +900,28 @@ async fn dispatch_observed(
         .uri(destination.clone())
         .body(Body::from(body))?;
     *request.headers_mut() = headers;
-    if !explicit_target && allow_environment_provider_auth {
-        inject_provider_auth(request.headers_mut(), route, config);
-    }
+    crate::upstream_auth::apply_for_destination(
+        request.headers_mut(),
+        &destination.to_string(),
+        matches!(route, ProviderRoute::Anthropic),
+        !explicit_target && allow_environment_provider_auth,
+        config,
+    )
+    .await?;
+    let upstream = crate::daemon::common::transport::provider_client(
+        &upstream,
+        !explicit_target
+            && allow_environment_provider_auth
+            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
+                .is_some(),
+    )
+    .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
         HeaderName::from_static(CLIENT_TOKEN_HEADER),
         HeaderName::from_static(WORKER_TOKEN_HEADER),
         HeaderName::from_static(WORKER_ROUTE_FAILURE_HEADER),
     ];
-    let request = prepare_forward_request(request, destination, &strip)
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?
-        .map(box_body);
+    let request = prepare_provider_request(request, destination, &strip, config, client_named)?;
     let response = request_worker_upstream(
         upstream,
         client_named,
@@ -942,7 +954,7 @@ async fn request_worker_upstream(
     operational::upstream_started(operational, streaming);
     let request = request_provider(&upstream, client_named, request).map_err(|error| {
         operational::upstream_failed(operational, "transport");
-        CliError::Launch(error.to_string())
+        CliError::UpstreamTransport(error)
     })?;
     let request = config.wait_for_response(request);
     tokio::pin!(request);
@@ -967,13 +979,29 @@ async fn request_worker_upstream(
         }
         Ok(Err(error)) => {
             operational::upstream_failed(operational, "transport");
-            Err(CliError::Launch(error.to_string()))
+            Err(provider_transport_failure(
+                UpstreamFailureClass::Connection,
+                error.to_string(),
+            ))
         }
         Err(_) => {
             operational::upstream_failed(operational, "transport");
-            Err(CliError::Launch("provider response-head timeout".into()))
+            Err(provider_transport_failure(
+                UpstreamFailureClass::Timeout,
+                "provider response-head timeout",
+            ))
         }
     }
+}
+
+/// Classifies a provider failure that occurred before receiving an HTTP response head.
+fn provider_transport_failure(class: UpstreamFailureClass, message: impl Into<String>) -> CliError {
+    CliError::ProviderFailure(UpstreamFailure {
+        status: None,
+        body: message.into(),
+        headers: BTreeMap::new(),
+        class,
+    })
 }
 
 /// The destination a request intercept set through the internal dispatch header, if any.
@@ -1006,7 +1034,7 @@ fn effective_destination(
     };
     destination
         .parse::<Uri>()
-        .map_err(|_| CliError::InvalidPayload("invalid provider destination".into()))
+        .map_err(|_| CliError::UpstreamTransport(TransportError::InvalidDestination))
 }
 
 fn effective_request(
@@ -1055,7 +1083,11 @@ fn effective_request(
     }
     strip_internal_headers(&mut headers);
     headers.remove(CONTENT_LENGTH);
-    if effective.content == prepared.request_json || effective.content.is_null() {
+    if prepared
+        .request_json
+        .as_ref()
+        .is_none_or(|source| effective.content == *source)
+    {
         return Ok((headers, prepared.body.clone(), explicit_target));
     }
     let body = serde_json::to_vec(&effective.content)
@@ -1111,45 +1143,6 @@ fn body_read_error(error: axum::Error) -> CliError {
     } else {
         CliError::InvalidPayload(error.to_string())
     }
-}
-
-fn inject_provider_auth(headers: &mut HeaderMap, route: ProviderRoute, config: &GatewayConfig) {
-    if crate::provider_auth::has_provider_credential(headers) {
-        return;
-    }
-    if let Some(configured) = match route {
-        ProviderRoute::OpenAi => config.openai_auth_header.as_deref(),
-        ProviderRoute::Anthropic => config.anthropic_auth_header.as_deref(),
-    }
-    .and_then(|value| HeaderValue::from_str(value).ok())
-    {
-        headers.insert(AUTHORIZATION, configured);
-        return;
-    }
-    let (name, value) = match route {
-        ProviderRoute::OpenAi => {
-            let Some(key) = environment_value("OPENAI_API_KEY") else {
-                return;
-            };
-            (AUTHORIZATION, format!("Bearer {key}"))
-        }
-        ProviderRoute::Anthropic => {
-            let Some(key) = environment_value("ANTHROPIC_API_KEY") else {
-                return;
-            };
-            (HeaderName::from_static("x-api-key"), key)
-        }
-    };
-    if let Ok(value) = HeaderValue::from_str(&value) {
-        headers.insert(name, value);
-    }
-}
-
-fn environment_value(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 fn observation_capture_limit_from_environment() -> Result<usize, CliError> {
@@ -1230,18 +1223,17 @@ fn prepared_streaming(request: &LlmRequest) -> bool {
 }
 
 fn provider_middleware_requirements() -> Result<ProviderMiddlewareRequirements, CliError> {
-    let kinds = BTreeSet::from([
+    let [sanitize, conditional, request, execution, streaming] = runtime_registration_presence([
         RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
         RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
         RuntimeRegistrationKind::LlmRequestIntercept,
         RuntimeRegistrationKind::LlmExecutionIntercept,
         RuntimeRegistrationKind::LlmStreamExecutionIntercept,
-    ]);
-    let registrations = list_runtime_registrations(Some(&kinds)).map_err(CliError::from)?;
-    let managed_execution_required = registrations.iter().any(registration_requires_execution);
+    ])
+    .map_err(CliError::from)?;
+    let managed_execution_required = conditional || request || execution || streaming;
     Ok(ProviderMiddlewareRequirements {
-        request_body_decode_required: managed_execution_required
-            || registrations.iter().any(registration_reads_request_body),
+        request_body_decode_required: managed_execution_required || sanitize,
         managed_execution_required,
     })
 }
@@ -1249,25 +1241,6 @@ fn provider_middleware_requirements() -> Result<ProviderMiddlewareRequirements, 
 #[cfg(test)]
 fn request_body_decode_required() -> Result<bool, CliError> {
     provider_middleware_requirements().map(|requirements| requirements.request_body_decode_required)
-}
-
-fn registration_reads_request_body(registration: &RuntimeRegistrationIdentity) -> bool {
-    matches!(
-        registration.kind,
-        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail
-            | RuntimeRegistrationKind::LlmConditionalExecutionGuardrail
-            | RuntimeRegistrationKind::LlmRequestIntercept
-    )
-}
-
-fn registration_requires_execution(registration: &RuntimeRegistrationIdentity) -> bool {
-    matches!(
-        registration.kind,
-        RuntimeRegistrationKind::LlmRequestIntercept
-            | RuntimeRegistrationKind::LlmConditionalExecutionGuardrail
-            | RuntimeRegistrationKind::LlmExecutionIntercept
-            | RuntimeRegistrationKind::LlmStreamExecutionIntercept
-    )
 }
 
 fn finish_llm_after_dispatch_failure(
@@ -1289,13 +1262,6 @@ fn finish_llm_after_dispatch_failure(
             .metadata(metadata)
             .build(),
     );
-}
-
-fn permission_denial_reason(error: CliError) -> String {
-    error
-        .guardrail_rejection_reason()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| error.to_string())
 }
 
 fn merge_object(mut base: Value, extra: Value) -> Value {

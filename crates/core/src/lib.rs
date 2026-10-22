@@ -58,6 +58,7 @@ pub mod api;
 pub mod codec;
 pub mod config_editor;
 mod context;
+pub mod diagnostics;
 pub mod error;
 pub mod json;
 pub mod logging;

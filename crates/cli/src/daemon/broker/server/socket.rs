@@ -136,7 +136,9 @@ impl Hub {
     fn emit(peer: &mut Peer, event: Event) {
         let Some(sender) = &peer.sender else { return };
         let request_id = match &event {
-            Event::Directive { request_id, .. } | Event::Drain { request_id, .. } => request_id,
+            Event::Directive { request_id, .. }
+            | Event::Drain { request_id, .. }
+            | Event::DiagnosticRevoked { request_id } => request_id,
             Event::Reply { .. } => return,
         };
         if peer.acknowledgments.len() >= QUEUE_CAPACITY {
@@ -188,6 +190,20 @@ impl Hub {
             );
         }
         self.changed.notify_waiters();
+    }
+
+    pub(super) fn revoke_diagnostics(&self, worker_id: &str, negotiated: bool) {
+        if !negotiated {
+            return;
+        }
+        if let Some(peer) = lock(&self.peers).get_mut(&key(ComponentRole::Worker, worker_id)) {
+            Self::emit(
+                peer,
+                Event::DiagnosticRevoked {
+                    request_id: uuid::Uuid::now_v7().to_string(),
+                },
+            );
+        }
     }
 }
 
@@ -652,6 +668,13 @@ async fn register_worker_command(
         return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
     }
     let response = register_worker(State(state.clone()), Json(request)).await;
+    if !response.status().is_success() {
+        diag::record(
+            DaemonFailureCode::Registration,
+            FailureClass::Unknown,
+            "Worker registration operation rejected",
+        );
+    }
     if response.status().is_success() {
         *id = Some(worker_id.clone());
         reset_worker(state, &worker_id);
@@ -715,6 +738,7 @@ fn expired(state: &DaemonState, role: ComponentRole, id: &str) -> bool {
 }
 fn reset_worker(state: &DaemonState, id: &str) {
     if let Some(session) = lock(&state.worker_sessions).get_mut(id) {
+        session.diagnostic_connected = true;
         session.last_sequence = 0;
         session.last_request_id.clear();
         session.pending_target.set_control_available(false);
@@ -743,8 +767,10 @@ async fn disconnected(
         *peer.disconnected.get_or_insert(now) + GRACE
     };
     if role == ComponentRole::Worker
-        && let Some(session) = lock(&state.worker_sessions).get(&id)
+        && let Some(session) = lock(&state.worker_sessions).get_mut(&id)
     {
+        session.diagnostic_connected = false;
+        session.diagnostic_grant = None;
         session.pending_target.set_control_available(false);
     }
     if role == ComponentRole::Mcp {
@@ -782,6 +808,13 @@ async fn disconnected(
                 nominate_relaunch(&state, fingerprint, session_id);
             }
         }
+    }
+    if role == ComponentRole::Worker {
+        diag::record(
+            DaemonFailureCode::ControlLost,
+            FailureClass::Unavailable,
+            "Broker observed worker control disconnect; process exit is unknown",
+        );
     }
     log_control_disconnected(role, &id, reason);
     state.sockets.changed.notify_waiters();
@@ -954,11 +987,13 @@ fn worker_failure_action_name(action: &WorkerFailureAction) -> &'static str {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub(super) struct SocketInfo {
     peer: SocketAddr,
     local: SocketAddr,
 }
+#[cfg(test)]
 impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, TcpListener>>
     for SocketInfo
 {
@@ -973,6 +1008,7 @@ impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, TcpL
         }
     }
 }
+#[cfg(test)]
 pub(super) async fn connection_info(mut request: Request<Body>, next: Next) -> Response<Body> {
     if let Some(ConnectInfo(info)) = request
         .extensions()

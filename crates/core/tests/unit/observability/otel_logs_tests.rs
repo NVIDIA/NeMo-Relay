@@ -9,11 +9,17 @@ use crate::api::event::{
     METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent,
 };
 use crate::api::scope::ScopeType;
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::common::v1::any_value;
 use opentelemetry_sdk::error::OTelSdkError;
 use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
+use prost::Message;
 use serde_json::json;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
+use std::thread;
 use std::time::Duration;
 
 fn mark(
@@ -252,6 +258,34 @@ fn log_configured_headers_require_https_except_for_loopback() {
     }
     assert!(
         OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+            .validate()
+            .is_ok()
+    );
+}
+
+#[test]
+fn log_configured_headers_allow_plain_http_only_to_listed_insecure_hosts() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let config = |endpoint: &str| {
+        OpenTelemetryLogConfig::new(endpoint)
+            .with_header("authorization", "Bearer static")
+            .with_plaintext_policy(
+                PlaintextPolicy::from_hosts(&["release-api".to_string()]).unwrap(),
+            )
+    };
+    assert!(config("http://release-api:4318/v1/logs").validate().is_ok());
+    let error = config("http://collector.example/v1/logs")
+        .validate()
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("hosts listed in insecure_http_hosts"),
+        "{error}"
+    );
+    assert!(
+        OpenTelemetryLogConfig::new("http://collector.example/v1/logs")
+            .with_header("authorization", "Bearer static")
+            .with_allow_insecure(true)
             .validate()
             .is_ok()
     );
@@ -939,4 +973,85 @@ fn otlp_timestamp_range_drops_invalid_logs_and_preserves_boundaries() {
         logs[1].record.timestamp(),
         Some(std::time::UNIX_EPOCH + Duration::from_nanos(u64::MAX))
     );
+}
+
+/// Serves one OTLP/HTTP request on `listener` and hands back body.
+fn capture_one_request(listener: TcpListener) -> mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        let (header_end, content_length) = loop {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0, "collector closed before request headers");
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                let header_end = offset + 4;
+                let content_length = String::from_utf8_lossy(&bytes[..header_end])
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                break (header_end, content_length);
+            }
+        };
+        while bytes.len() < header_end + content_length {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0, "collector closed before request body");
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        sender
+            .send(bytes[header_end..header_end + content_length].to_vec())
+            .unwrap();
+    });
+    receiver
+}
+
+#[test]
+fn provider_build_drains_the_startup_resource_message_before_the_first_record() {
+    use opentelemetry::logs::{LogRecord as _, Logger as _, LoggerProvider as _};
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _runtime_guard = runtime.enter();
+    let _held_worker = runtime.spawn(async { thread::sleep(Duration::from_millis(250)) });
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/logs", listener.local_addr().unwrap());
+    let receiver = capture_one_request(listener);
+    let config = OpenTelemetryLogConfig::new(endpoint.clone())
+        .with_max_queue_size(1)
+        .with_max_export_batch_size(1);
+    let diagnostics = Arc::new(LogDeliveryDiagnostics::new(
+        endpoint,
+        SignalRuntimeDiagnostics::new(None),
+    ));
+    let provider = build_log_provider(&config, Arc::clone(&diagnostics), None).unwrap();
+    let logger = provider.logger("drain-test");
+    let mut record = logger.create_log_record();
+    record.set_body(AnyValue::String("first".into()));
+    logger.emit(record);
+    provider.force_flush().unwrap();
+
+    let body = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    let request = ExportLogsServiceRequest::decode(body.as_slice()).unwrap();
+    let bodies = request
+        .resource_logs
+        .iter()
+        .flat_map(|resource| resource.scope_logs.iter())
+        .flat_map(|scope| scope.log_records.iter())
+        .map(|record| record.body.clone().unwrap().value.unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(bodies, [any_value::Value::StringValue("first".to_string())]);
+    assert_eq!(diagnostics.record_queue_drops(), 0);
+    provider.shutdown().unwrap();
 }

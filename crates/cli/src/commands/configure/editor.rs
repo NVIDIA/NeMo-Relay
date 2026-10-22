@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Interactive editor for the non-agent sections of Relay's `config.toml`.
+//! Interactive editor for Relay's `config.toml` settings.
 
 use std::path::{Path, PathBuf};
 
 use nemo_relay::logging::MAX_FILE_SINK_QUEUE_ENTRIES;
-use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value, value};
+use toml_edit::{
+    Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value, value,
+};
 
 use super::ConfigEditCommand;
 use crate::error::CliError;
@@ -68,6 +70,7 @@ fn ensure_tty_with(stdin_is_terminal: bool) -> Result<(), CliError> {
 struct ConfigDocument {
     path: PathBuf,
     document: DocumentMut,
+    logging_section: &'static str,
 }
 
 impl ConfigDocument {
@@ -79,7 +82,11 @@ impl ConfigDocument {
         } else {
             DocumentMut::new()
         };
-        Ok(Self { path, document })
+        Ok(Self {
+            path,
+            document,
+            logging_section: "logging",
+        })
     }
 
     fn path(&self) -> &Path {
@@ -88,13 +95,18 @@ impl ConfigDocument {
 
     fn write(&self, scope: TargetScope) -> Result<(), CliError> {
         let contents = self.document.to_string();
+        // Reject credentials in system-readable files before validating their contents.
+        if scope == TargetScope::Global && self.has_auth_headers() {
+            return Err(CliError::Config(
+                "global config cannot include upstream authorization headers or API keys; configure credentials in a user config".into(),
+            ));
+        }
+        let parsed = toml::from_str::<toml::Value>(&contents).map_err(|_| {
+            CliError::Config("configuration must be valid TOML before saving".into())
+        })?;
+        crate::configuration::validate_config_document(parsed)?;
         match scope {
             TargetScope::Global => {
-                if self.has_auth_headers() {
-                    return Err(CliError::Config(
-                        "global config cannot include upstream authorization headers; configure credentials in a user config".into(),
-                    ));
-                }
                 crate::filesystem::atomic_write_system_readable(&self.path, contents.as_bytes())
             }
             TargetScope::User => {
@@ -105,15 +117,27 @@ impl ConfigDocument {
     }
 
     fn has_auth_headers(&self) -> bool {
-        ["openai_auth_header", "anthropic_auth_header"]
-            .into_iter()
-            .any(|key| self.has_key("upstream", key))
+        [
+            "openai_auth_header",
+            "anthropic_auth_header",
+            "openai_api_key",
+            "anthropic_api_key",
+        ]
+        .into_iter()
+        .any(|key| self.has_key("upstream", key))
     }
 
     fn preview(&self) -> String {
         let mut document = self.document.clone();
         if let Some(upstream) = document.get_mut("upstream") {
-            for key in ["openai_auth_header", "anthropic_auth_header"] {
+            for key in [
+                "openai_auth_header",
+                "anthropic_auth_header",
+                "openai_api_key",
+                "anthropic_api_key",
+                "openai_api_key_helper",
+                "anthropic_api_key_helper",
+            ] {
                 if let Some(table) = upstream.as_table_mut() {
                     if table.contains_key(key) {
                         table[key] = value("<redacted>");
@@ -129,48 +153,60 @@ impl ConfigDocument {
         document.to_string()
     }
 
+    fn section(&self, section: &str) -> Option<&dyn toml_edit::TableLike> {
+        let mut table: &dyn toml_edit::TableLike = self.document.as_table();
+        for part in section.split('.') {
+            table = table.get(part)?.as_table_like()?;
+        }
+        Some(table)
+    }
+
+    fn section_mut(&mut self, section: &str) -> Result<&mut dyn toml_edit::TableLike, CliError> {
+        let mut table: &mut dyn toml_edit::TableLike = self.document.as_table_mut();
+        for part in section.split('.') {
+            if !table.contains_key(part) {
+                table.insert(part, Item::Table(Table::new()));
+            }
+            table = table
+                .get_mut(part)
+                .and_then(Item::as_table_like_mut)
+                .ok_or_else(|| {
+                    CliError::Config(format!(
+                        "[{section}] must be a TOML table before it can be edited"
+                    ))
+                })?;
+        }
+        Ok(table)
+    }
+
     fn item(&self, section: &str, key: &str) -> Option<&Item> {
-        self.document.get(section)?.as_table()?.get(key)
+        self.section(section)?.get(key)
     }
 
     fn has_key(&self, section: &str, key: &str) -> bool {
         self.item(section, key).is_some()
-            || self
-                .document
-                .get(section)
-                .and_then(Item::as_value)
-                .and_then(Value::as_inline_table)
-                .is_some_and(|table| table.contains_key(key))
     }
 
     fn string(&self, section: &str, key: &str) -> Option<String> {
-        self.item(section, key)
-            .and_then(Item::as_value)
-            .and_then(Value::as_str)
-            .or_else(|| {
-                self.document
-                    .get(section)
-                    .and_then(Item::as_value)
-                    .and_then(Value::as_inline_table)
-                    .and_then(|table| table.get(key))
-                    .and_then(Value::as_str)
-            })
-            .map(str::to_owned)
+        self.item(section, key)?.as_str().map(str::to_owned)
     }
 
     fn integer(&self, section: &str, key: &str) -> Option<u64> {
-        self.item(section, key)
-            .and_then(Item::as_value)
-            .and_then(Value::as_integer)
-            .or_else(|| {
-                self.document
-                    .get(section)
-                    .and_then(Item::as_value)
-                    .and_then(Value::as_inline_table)
-                    .and_then(|table| table.get(key))
-                    .and_then(Value::as_integer)
-            })
+        self.item(section, key)?
+            .as_integer()
             .and_then(|value| u64::try_from(value).ok())
+    }
+
+    fn boolean(&self, section: &str, key: &str) -> Option<bool> {
+        self.item(section, key)?.as_bool()
+    }
+
+    fn boolean_summary(&self, section: &str, key: &str) -> String {
+        match (self.has_key(section, key), self.boolean(section, key)) {
+            (false, _) => "unset".into(),
+            (true, Some(value)) => value.to_string(),
+            (true, None) => "invalid".into(),
+        }
     }
 
     fn string_summary(&self, section: &str, key: &str) -> String {
@@ -223,19 +259,28 @@ impl ConfigDocument {
         }
     }
 
-    fn table_mut(&mut self, section: &str) -> Result<&mut Table, CliError> {
-        if self.document.get(section).is_none() {
-            self.document[section] = Item::Table(Table::new());
-        }
-        self.document[section].as_table_mut().ok_or_else(|| {
-            CliError::Config(format!(
-                "[{section}] must be a TOML table before it can be edited"
-            ))
-        })
-    }
-
     fn set_string(&mut self, section: &str, key: &str, new_value: String) -> Result<(), CliError> {
         self.set_value(section, key, Value::from(new_value))
+    }
+
+    fn http_model_hosts(&self) -> Result<Vec<String>, CliError> {
+        let Some(item) = self.item("upstream", "insecure_http_model_hosts") else {
+            return Ok(Vec::new());
+        };
+        let invalid = || {
+            CliError::Config("upstream.insecure_http_model_hosts must be a list of strings".into())
+        };
+        item.as_array()
+            .ok_or_else(invalid)?
+            .iter()
+            .map(|value| value.as_str().map(str::to_owned).ok_or_else(invalid))
+            .collect()
+    }
+
+    fn set_http_model_hosts(&mut self, hosts: Vec<String>) -> Result<(), CliError> {
+        crate::configuration::HttpModelHosts::parse(hosts.clone())?;
+        let array = hosts.into_iter().collect::<toml_edit::Array>();
+        self.set_value("upstream", "insecure_http_model_hosts", Value::Array(array))
     }
 
     fn set_integer(&mut self, section: &str, key: &str, new_value: u64) -> Result<(), CliError> {
@@ -283,107 +328,185 @@ impl ConfigDocument {
         axum::http::HeaderValue::from_str(value).map_err(|_| {
             CliError::Config(format!("upstream.{key} must be a valid HTTP header value"))
         })?;
-        self.set_string("upstream", key, value.into())
+        self.set_credential(key, Value::from(value))
+    }
+
+    fn set_api_key(&mut self, key: &str, new_value: String) -> Result<(), CliError> {
+        let token = crate::upstream_auth::validate_api_key(&format!("upstream.{key}"), new_value)?;
+        self.set_credential(key, Value::from(token))
+    }
+
+    fn set_api_key_helper(
+        &mut self,
+        provider: &str,
+        helper: crate::upstream_auth::ApiKeyHelper,
+    ) -> Result<(), CliError> {
+        let mut config = crate::configuration::GatewayConfig::default();
+        match provider {
+            "openai" => config.openai_api_key_helper = Some(helper.clone()),
+            "anthropic" => config.anthropic_api_key_helper = Some(helper.clone()),
+            _ => return Err(CliError::Config("unknown credential provider".into())),
+        }
+        crate::upstream_auth::validate_config(&config)?;
+        let mut table = InlineTable::new();
+        table.insert("command", Value::from(helper.command));
+        table.insert(
+            "args",
+            Value::Array(helper.args.into_iter().collect::<Array>()),
+        );
+        let timeout = i64::try_from(helper.timeout_ms)
+            .map_err(|_| CliError::Config("helper timeout_ms is too large".into()))?;
+        table.insert("timeout_ms", Value::from(timeout));
+        if let Some(scheme) = helper.auth_scheme {
+            table.insert(
+                "auth_scheme",
+                Value::from(match scheme {
+                    crate::upstream_auth::AuthScheme::Bearer => "bearer",
+                    crate::upstream_auth::AuthScheme::ApiKey => "api_key",
+                }),
+            );
+        }
+        self.set_credential(
+            &format!("{provider}_api_key_helper"),
+            Value::InlineTable(table),
+        )
+    }
+
+    fn set_credential(&mut self, key: &str, new_value: Value) -> Result<(), CliError> {
+        let provider = key.split('_').next().unwrap_or_default();
+        let upstream = self.section_mut("upstream")?;
+        for suffix in ["auth_header", "api_key", "api_key_helper"] {
+            let other = format!("{provider}_{suffix}");
+            if other != key {
+                upstream.remove(&other);
+            }
+        }
+        upstream.insert(key, Item::Value(new_value));
+        Ok(())
     }
 
     fn clear_key(&mut self, section: &str, key: &str) -> Result<(), CliError> {
-        let empty = match self.document.get_mut(section) {
-            Some(item) => {
-                if let Some(table) = item.as_table_mut() {
-                    table.remove(key);
-                    table.is_empty()
-                } else if let Some(table) = item.as_value_mut().and_then(Value::as_inline_table_mut)
-                {
-                    table.remove(key);
-                    table.is_empty()
-                } else {
-                    return Err(CliError::Config(format!(
-                        "[{section}] must be a TOML table before it can be edited"
-                    )));
+        if self.section(section).is_none() {
+            // Missing sections are already clear; malformed sections still report an error.
+            let mut table = self.document.as_item();
+            for part in section.split('.') {
+                match table.get(part) {
+                    Some(item) => table = item,
+                    None => return Ok(()),
                 }
             }
-            None => false,
-        };
-        if empty {
-            self.document.remove(section);
+        }
+        let table = self.section_mut(section)?;
+        table.remove(key);
+        if table.is_empty() {
+            if let Some((parent, child)) = section.rsplit_once('.') {
+                self.clear_key(parent, child)?;
+            } else {
+                self.document.remove(section);
+            }
         }
         Ok(())
     }
 
-    fn sinks(&self) -> Option<&ArrayOfTables> {
-        self.document
-            .get("logging")?
-            .as_table()?
-            .get("sinks")?
-            .as_array_of_tables()
+    fn sinks(&self) -> Option<&Item> {
+        self.section(self.logging_section)?.get("sinks")
     }
 
-    fn sinks_mut(&mut self) -> Result<&mut ArrayOfTables, CliError> {
-        let logging = self.table_mut("logging")?;
+    fn sinks_mut(&mut self) -> Result<&mut Item, CliError> {
+        let section = self.logging_section;
+        let logging = self.section_mut(section)?;
         if logging.get("sinks").is_none() {
-            logging["sinks"] = Item::ArrayOfTables(ArrayOfTables::new());
+            logging.insert("sinks", Item::ArrayOfTables(ArrayOfTables::new()));
         }
-        logging["sinks"].as_array_of_tables_mut().ok_or_else(|| {
-            CliError::Config(
-                "logging.sinks must be an array of tables before it can be edited".into(),
-            )
-        })
+        let sinks = logging.get_mut("sinks").expect("sinks initialized above");
+        if sinks.is_array_of_tables()
+            || sinks
+                .as_array()
+                .is_some_and(|array| array.iter().all(Value::is_inline_table))
+        {
+            Ok(sinks)
+        } else {
+            Err(CliError::Config(format!(
+                "{section}.sinks must be an array of tables before it can be edited"
+            )))
+        }
     }
 
     fn sink_count(&self) -> usize {
-        self.sinks().map_or(0, ArrayOfTables::len)
+        match self.sinks() {
+            Some(Item::ArrayOfTables(sinks)) => sinks.len(),
+            Some(Item::Value(Value::Array(sinks))) => sinks.len(),
+            _ => 0,
+        }
     }
 
     fn sink_labels(&self) -> Vec<String> {
-        self.sinks()
-            .map(|sinks| {
-                sinks
-                    .iter()
-                    .enumerate()
-                    .map(|(index, sink)| {
-                        let path = sink
-                            .get("path")
-                            .and_then(Item::as_value)
-                            .and_then(Value::as_str)
-                            .unwrap_or("invalid path");
-                        format!("sink {} ({path})", index + 1)
-                    })
-                    .collect()
+        (0..self.sink_count())
+            .map(|index| {
+                let path = self
+                    .sink_string(index, "path")
+                    .unwrap_or_else(|| "invalid path".into());
+                format!("sink {} ({path})", index + 1)
             })
-            .unwrap_or_default()
+            .collect()
     }
 
-    fn sink(&self, index: usize) -> Option<&Table> {
-        self.sinks()?.get(index)
+    fn sink(&self, index: usize) -> Option<&dyn TableLike> {
+        match self.sinks()? {
+            Item::ArrayOfTables(sinks) => sinks.get(index).map(|sink| sink as &dyn TableLike),
+            Item::Value(Value::Array(sinks)) => sinks
+                .get(index)?
+                .as_inline_table()
+                .map(|sink| sink as &dyn TableLike),
+            _ => None,
+        }
     }
 
-    fn sink_mut(&mut self, index: usize) -> Result<&mut Table, CliError> {
-        self.sinks_mut()?
-            .get_mut(index)
-            .ok_or_else(|| CliError::Config(format!("logging sink {} does not exist", index + 1)))
+    fn sink_mut(&mut self, index: usize) -> Result<&mut dyn TableLike, CliError> {
+        let sink: Option<&mut dyn TableLike> = match self.sinks_mut()? {
+            Item::ArrayOfTables(sinks) => {
+                sinks.get_mut(index).map(|sink| sink as &mut dyn TableLike)
+            }
+            Item::Value(Value::Array(sinks)) => sinks
+                .get_mut(index)
+                .and_then(Value::as_inline_table_mut)
+                .map(|sink| sink as &mut dyn TableLike),
+            _ => unreachable!("sinks_mut checks the array shape"),
+        };
+        sink.ok_or_else(|| CliError::Config(format!("logging sink {} does not exist", index + 1)))
     }
 
     fn add_sink(&mut self, path: String) -> Result<(), CliError> {
         let mut sink = Table::new();
         sink["path"] = value(path);
-        self.sinks_mut()?.push(sink);
+        match self.sinks_mut()? {
+            Item::ArrayOfTables(sinks) => sinks.push(sink),
+            Item::Value(Value::Array(sinks)) => sinks.push(sink.into_inline_table()),
+            _ => unreachable!("sinks_mut checks the array shape"),
+        }
         Ok(())
     }
 
     fn remove_sink(&mut self, index: usize) -> Result<(), CliError> {
-        let empty = {
-            let sinks = self.sinks_mut()?;
-            if index >= sinks.len() {
-                return Err(CliError::Config(format!(
-                    "logging sink {} does not exist",
-                    index + 1
-                )));
+        if index >= self.sink_count() {
+            return Err(CliError::Config(format!(
+                "logging sink {} does not exist",
+                index + 1
+            )));
+        }
+        let empty = match self.sinks_mut()? {
+            Item::ArrayOfTables(sinks) => {
+                sinks.remove(index);
+                sinks.is_empty()
             }
-            sinks.remove(index);
-            sinks.is_empty()
+            Item::Value(Value::Array(sinks)) => {
+                sinks.remove(index);
+                sinks.is_empty()
+            }
+            _ => unreachable!("sinks_mut checks the array shape"),
         };
         if empty {
-            self.clear_key("logging", "sinks")?;
+            self.clear_key(self.logging_section, "sinks")?;
         }
         Ok(())
     }
@@ -450,7 +573,7 @@ impl ConfigDocument {
         key: &str,
         new_value: String,
     ) -> Result<(), CliError> {
-        self.sink_mut(index)?[key] = value(new_value);
+        self.sink_mut(index)?.insert(key, value(new_value));
         Ok(())
     }
 
@@ -482,7 +605,8 @@ impl ConfigDocument {
         }
         let capacity = i64::try_from(capacity)
             .map_err(|_| CliError::Config("logging sink queue_capacity is too large".into()))?;
-        self.sink_mut(index)?["queue_capacity"] = value(capacity);
+        self.sink_mut(index)?
+            .insert("queue_capacity", value(capacity));
         Ok(())
     }
 
@@ -502,8 +626,8 @@ impl ConfigDocument {
         nemo_relay::logging::FileLogRotationConfig::new(max_size as u64, retained)
             .map_err(|error| CliError::Config(error.to_string()))?;
         let sink = self.sink_mut(index)?;
-        sink["max_file_size_bytes"] = value(max_size);
-        sink["retained_files"] = value(retained_i64);
+        sink.insert("max_file_size_bytes", value(max_size));
+        sink.insert("retained_files", value(retained_i64));
         Ok(())
     }
 
@@ -520,21 +644,9 @@ impl ConfigDocument {
     }
 
     fn set_value(&mut self, section: &str, key: &str, new_value: Value) -> Result<(), CliError> {
-        if self.document.get(section).is_none() {
-            self.document[section] = Item::Table(Table::new());
-        }
-        let item = &mut self.document[section];
-        if let Some(table) = item.as_table_mut() {
-            table[key] = Item::Value(new_value);
-            Ok(())
-        } else if let Some(table) = item.as_value_mut().and_then(Value::as_inline_table_mut) {
-            table.insert(key, new_value);
-            Ok(())
-        } else {
-            Err(CliError::Config(format!(
-                "[{section}] must be a TOML table before it can be edited"
-            )))
-        }
+        self.section_mut(section)?
+            .insert(key, Item::Value(new_value));
+        Ok(())
     }
 }
 

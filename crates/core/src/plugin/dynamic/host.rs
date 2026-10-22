@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
+use crate::diagnostics::Diagnostics;
 use crate::plugin::{
     ConfigReport, PluginComponentSpec, PluginConfig, PluginHostLease, Result,
     acquire_plugin_host_lease, clear_plugin_configuration_for_host,
@@ -36,6 +37,26 @@ use super::worker::prepare_worker_plugins_with_trust;
 #[cfg(feature = "worker-grpc")]
 use super::{WorkerPluginActivation, WorkerPluginLoadSpec};
 
+/// Embedded startup configuration. Service settings are not plugin component
+/// configuration and never enter plugin fingerprints or legacy reports.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginHostConfig {
+    /// Existing plugin configuration overlay.
+    #[serde(flatten)]
+    pub plugins: PluginConfig,
+    /// Highest-precedence complete service settings; omitted uses file layers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<crate::diagnostics::DiagnosticsSettings>,
+}
+impl From<PluginConfig> for PluginHostConfig {
+    fn from(plugins: PluginConfig) -> Self {
+        Self {
+            plugins,
+            diagnostics: None,
+        }
+    }
+}
+
 /// Initializes the process-wide static and dynamic plugin host.
 ///
 /// The returned handle must remain alive while any plugin-provided callback can
@@ -45,10 +66,49 @@ use super::{WorkerPluginActivation, WorkerPluginLoadSpec};
 /// Their `Register` RPC runs when the worker component activates, after earlier
 /// static components have installed their runtime registrations.
 pub async fn initialize(
-    config: PluginConfig,
+    config: impl Into<PluginHostConfig>,
     additional_plugins_toml: Option<PathBuf>,
 ) -> Result<PluginHostActivation> {
-    let resolved = resolve_plugin_host_config(config, additional_plugins_toml.as_deref())?;
+    let config = config.into();
+    let prepared =
+        super::configuration::PreparedPluginHostConfig::load(additional_plugins_toml.as_deref())?;
+    let settings = prepared.diagnostic_settings(config.diagnostics)?;
+    let context = crate::diagnostics::embedded::start(settings).map_err(|error| {
+        crate::plugin::PluginError::InvalidConfig(format!("diagnostics: {}", error.reason()))
+    })?;
+    let resolved = prepared.resolve(
+        config.plugins,
+        additional_plugins_toml.as_deref(),
+        true,
+        Some(context),
+    )?;
+    activate_resolved(resolved, context).await
+}
+
+/// Initializes the plugin host using an explicitly selected diagnostic context.
+///
+/// Configuration inheritance and common component activation use this same
+/// context. Discovery and validation APIs do not consume the process default.
+/// Diagnostic admission is best-effort and never changes plugin execution or
+/// legacy report results. Native and worker producers receive this context
+/// through the owned activation lifecycle.
+pub async fn initialize_with_diagnostics(
+    config: PluginConfig,
+    additional_plugins_toml: Option<PathBuf>,
+    diagnostic_context: &Diagnostics,
+) -> Result<PluginHostActivation> {
+    let resolved = resolve_plugin_host_config(
+        config,
+        additional_plugins_toml.as_deref(),
+        Some(diagnostic_context),
+    )?;
+    activate_resolved(resolved, diagnostic_context).await
+}
+
+async fn activate_resolved(
+    resolved: super::configuration::ResolvedPluginHostConfig,
+    diagnostic_context: &Diagnostics,
+) -> Result<PluginHostActivation> {
     let mut dynamic_reports: Vec<_> = resolved
         .dynamic_reports
         .into_iter()
@@ -62,6 +122,7 @@ pub async fn initialize(
         resolved.diagnostics,
         resolved.load_trust,
         resolved.native_artifacts,
+        diagnostic_context.clone(),
     )
     .await?;
     for skipped in activation.report.dynamic_plugins.drain(..) {
@@ -124,9 +185,15 @@ impl PluginHostActivation {
     #[doc(hidden)]
     pub async fn initialize_exact(config: PluginConfig) -> Result<Self> {
         let resolved_config = super::sanitized_plugin_config(&config);
-        let (mut activation, report) =
-            Self::activate_validated(config, Vec::new(), Vec::new(), HashMap::new(), Vec::new())
-                .await?;
+        let (mut activation, report) = Self::activate_validated(
+            config,
+            Vec::new(),
+            Vec::new(),
+            HashMap::new(),
+            Vec::new(),
+            Diagnostics::process_default().clone(),
+        )
+        .await?;
         activation.report = PluginHostReport {
             config: report,
             dynamic_plugins: Vec::new(),
@@ -158,6 +225,7 @@ impl PluginHostActivation {
             Vec::new(),
             HashMap::new(),
             Vec::new(),
+            Diagnostics::process_default().clone(),
         )
         .await?;
         activation.report = PluginHostReport {
@@ -175,6 +243,7 @@ impl PluginHostActivation {
         diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
         load_trust: HashMap<String, DynamicPluginLoadTrust>,
         native_artifacts: Vec<super::native::PreparedNativePlugin>,
+        diagnostic_context: Diagnostics,
     ) -> Result<(Self, ConfigReport)> {
         run_owned_plugin_mutation("dynamic plugin activation", move || async move {
             Self::activate_inner(
@@ -183,6 +252,7 @@ impl PluginHostActivation {
                 diagnostics,
                 load_trust,
                 native_artifacts,
+                diagnostic_context,
             )
             .await
         })
@@ -195,6 +265,7 @@ impl PluginHostActivation {
         diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
         load_trust: HashMap<String, DynamicPluginLoadTrust>,
         native_artifacts: Vec<super::native::PreparedNativePlugin>,
+        diagnostic_context: Diagnostics,
     ) -> Result<(Self, ConfigReport)> {
         let dynamic_plugin_count = dynamic_plugins.len();
         log::info!(
@@ -237,6 +308,7 @@ impl PluginHostActivation {
                     &load_trust,
                     &mut skipped,
                     native_artifacts,
+                    &diagnostic_context,
                 )
                 .map_err(|error| plugin_error_context("native plugin load failed", error))
             })
@@ -258,8 +330,13 @@ impl PluginHostActivation {
                 .collect::<Vec<_>>();
             (!worker_specs.is_empty())
                 .then(|| {
-                    prepare_worker_plugins_with_trust(worker_specs, &load_trust, &mut skipped)
-                        .map_err(|error| plugin_error_context("worker plugin load failed", error))
+                    prepare_worker_plugins_with_trust(
+                        worker_specs,
+                        &load_trust,
+                        &mut skipped,
+                        &diagnostic_context,
+                    )
+                    .map_err(|error| plugin_error_context("worker plugin load failed", error))
                 })
                 .transpose()?
         };
@@ -285,6 +362,7 @@ impl PluginHostActivation {
             owner_id,
             Arc::clone(&rollback_failures),
             diagnostics,
+            diagnostic_context,
         ))
         .await
         .map_err(|error| {

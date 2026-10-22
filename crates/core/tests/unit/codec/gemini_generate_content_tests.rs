@@ -6,8 +6,12 @@
 use super::*;
 use serde_json::json;
 
+use super::super::model_pricing::pricing_test_mutex;
 use super::super::request::{ContentPart, Message, MessageContent, ToolDefinition};
-use super::super::response::FinishReason;
+use super::super::response::{
+    FinishReason, PricingCatalog, PricingResolver, reset_active_pricing_resolver,
+    set_active_pricing_resolver,
+};
 use super::super::streaming::StreamingCodec;
 
 use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
@@ -22,6 +26,32 @@ fn make_request(content: Json) -> LlmRequest {
         headers: serde_json::Map::new(),
         content,
     }
+}
+
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
+
+fn gemini_test_catalog() -> PricingCatalog {
+    PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [{
+                "provider": "google",
+                "model_id": "gemini-test",
+                "pricing_as_of": "2026-10-20",
+                "pricing_source": "test",
+                "rates": {"input_per_million": 1.0, "output_per_million": 2.0},
+                "prompt_cache": {"read_accounting": "included_in_prompt_tokens"}
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap()
 }
 
 // ===================================================================
@@ -658,14 +688,36 @@ fn test_gemini_changed_content_patching_preserves_native_parts_and_updates_tool_
         {"text": "keep"},
         {"functionResponse": {"id": "call-1", "name": "weather", "response": {"old": true}}}
     ]});
+    let user = json!({"role": "user", "content": "kept"});
     let tool = json!({"role": "tool", "tool_call_id": "call-1", "content": "{\"new\":true}"});
+    assert!(
+        patch_changed_gemini_content(
+            &original_tool,
+            &[&assistant, &tool],
+            &std::collections::HashMap::new()
+        )
+        .is_err(),
+        "an assistant message cannot share a functionResponse turn"
+    );
+    assert_eq!(
+        patch_changed_gemini_content(
+            &original_tool,
+            &[&user, &tool],
+            &std::collections::HashMap::new()
+        )
+        .unwrap(),
+        Some(json!({"role": "user", "parts": [
+            {"text": "kept"},
+            {"functionResponse": {"id": "call-1", "name": "weather", "response": {"new": true}}}
+        ]}))
+    );
     assert_eq!(
         patch_changed_gemini_content(&original_tool, &[&tool], &std::collections::HashMap::new())
             .unwrap(),
         Some(json!({"role": "user", "parts": [
-            {"text": "keep"},
             {"functionResponse": {"id": "call-1", "name": "weather", "response": {"new": true}}}
-        ]}))
+        ]})),
+        "a run without the user message drops the visible parts it stood for"
     );
 }
 
@@ -750,6 +802,21 @@ fn test_gemini_function_part_validators_and_tool_call_encoder_cover_invalid_shap
 }
 
 #[test]
+fn test_gemini_function_response_messages_put_visible_parts_in_a_user_message() {
+    let response_part =
+        json!({"functionResponse": {"id": "call-1", "name": "weather", "response": {}}});
+    let messages = gemini_function_response_messages(
+        &[json!({"text": "mixed"}), response_part.clone()],
+        &[&response_part],
+    )
+    .unwrap();
+    assert!(
+        matches!(&messages[0], Message::User { content: MessageContent::Text(text), .. } if text == "mixed")
+    );
+    assert!(matches!(&messages[1], Message::Tool { tool_call_id, .. } if tool_call_id == "call-1"));
+}
+
+#[test]
 fn test_gemini_function_message_converters_cover_role_mixing_and_plain_messages() {
     let response_part =
         json!({"functionResponse": {"id": "call-1", "name": "weather", "response": {"ok": true}}});
@@ -762,13 +829,6 @@ fn test_gemini_function_message_converters_cover_role_mixing_and_plain_messages(
         gemini_function_response_messages(std::slice::from_ref(&response_part), &[&response_part])
             .unwrap();
     assert!(matches!(&messages[0], Message::Tool { tool_call_id, .. } if tool_call_id == "call-1"));
-    assert!(
-        gemini_function_response_messages(
-            &[json!({"text": "mixed"}), response_part.clone()],
-            &[&response_part]
-        )
-        .is_err()
-    );
     let messages =
         gemini_function_call_messages(Some(MessageContent::Text("before".into())), &[&call_part])
             .unwrap();
@@ -948,7 +1008,6 @@ fn test_gemini_tool_response_patching_handles_new_and_duplicate_call_ids() {
         )
         .unwrap(),
         Some(json!({"role": "user", "parts": [
-            {"text": "keep"},
             {"functionResponse": {"id": "new-id", "name": "new_fn", "response": {"ok": true}}}
         ]}))
     );
@@ -1103,38 +1162,45 @@ fn test_gemini_remaining_message_and_generation_parameter_branches() {
 
 #[test]
 fn test_gemini_usage_mapping_handles_absent_and_partial_metadata() {
-    assert_eq!(map_usage(None, None), (None, None));
-    let (usage, thoughts) = map_usage(
+    assert_eq!(
+        map_usage(None, None, ToolUsePromptBilling::InputTokens),
+        (None, SeparateUsageCounts::default())
+    );
+    let (usage, separate) = map_usage(
         Some(RawUsageMetadata {
             prompt_token_count: Some(3),
             candidates_token_count: None,
             total_token_count: None,
             cached_content_token_count: Some(2),
             thoughts_token_count: Some(5),
+            tool_use_prompt_token_count: None,
         }),
         None,
+        ToolUsePromptBilling::InputTokens,
     );
     let usage = usage.unwrap();
     assert_eq!(usage.prompt_tokens, Some(3));
     assert_eq!(usage.completion_tokens, None);
     assert_eq!(usage.total_tokens, Some(8));
     assert_eq!(usage.cache_read_tokens, Some(2));
-    assert_eq!(thoughts, Some(5));
+    assert_eq!(separate.thoughts_tokens, Some(5));
 
-    let (usage, thoughts) = map_usage(
+    let (usage, separate) = map_usage(
         Some(RawUsageMetadata {
             prompt_token_count: None,
             candidates_token_count: Some(4),
             total_token_count: Some(10),
             cached_content_token_count: None,
             thoughts_token_count: None,
+            tool_use_prompt_token_count: None,
         }),
         Some("unknown-model"),
+        ToolUsePromptBilling::InputTokens,
     );
     let usage = usage.unwrap();
     assert_eq!(usage.completion_tokens, Some(4));
     assert_eq!(usage.total_tokens, Some(10));
-    assert_eq!(thoughts, None);
+    assert_eq!(separate, SeparateUsageCounts::default());
 }
 
 #[test]
@@ -2092,6 +2158,231 @@ fn test_encode_system_instruction_edit() {
 // ===================================================================
 
 #[test]
+fn test_streaming_merges_partial_function_call_arguments_into_one_call() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    for chunk in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [{"text": "Checking "}]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "thoughtSignature": "sig",
+            "functionCall": {
+                "name": "get_weather", "id": "call-1", "willContinue": true,
+                "partialArgs": [{"jsonPath": "$.city", "stringValue": "Pa", "willContinue": true}]
+            }
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {
+                "willContinue": false,
+                "partialArgs": [
+                    {"jsonPath": "$['city']", "stringValue": "ris"},
+                    {"jsonPath": "$.days", "numberValue": 3},
+                    {"jsonPath": "$.units['temp']", "stringValue": "C"},
+                    {"jsonPath": "$.tags[1]", "boolValue": true},
+                    {"jsonPath": "$.note", "nullValue": "NULL_VALUE"},
+                    {"jsonPath": "$.gap", "nullValue": null}
+                ]
+            }
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{"text": "now."}]}, "finishReason": "STOP"}]}),
+    ] {
+        collector(chunk).unwrap();
+    }
+
+    let assembled = finalizer();
+
+    assert_eq!(
+        assembled["candidates"][0]["content"]["parts"],
+        json!([
+            {"text": "Checking "},
+            {"thoughtSignature": "sig", "functionCall": {
+                "name": "get_weather", "id": "call-1",
+                "args": {"city": "Paris", "days": 3, "units": {"temp": "C"}, "tags": [null, true], "note": null, "gap": null}
+            }},
+            {"text": "now."}
+        ])
+    );
+    let decoded = GeminiGenerateContentCodec
+        .decode_response(&assembled)
+        .unwrap();
+    assert_eq!(decoded.tool_calls.map(|calls| calls.len()), Some(1));
+    assert_eq!(decoded.finish_reason, Some(FinishReason::ToolUse));
+}
+
+#[test]
+fn test_streaming_keeps_whole_calls_and_drops_a_streamed_call_that_never_names_itself() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    for chunk in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "first", "willContinue": true, "partialArgs": [{"jsonPath": "$.a", "stringValue": "x"}]}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "second", "args": {"b": 1}}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"willContinue": true, "partialArgs": [{"jsonPath": "$.c", "stringValue": "y"}]}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{"text": "done"}]}, "finishReason": "STOP"}]}),
+    ] {
+        collector(chunk).unwrap();
+    }
+
+    assert_eq!(
+        finalizer()["candidates"][0]["content"]["parts"],
+        json!([
+            {"functionCall": {"name": "first", "args": {"a": "x"}}},
+            {"functionCall": {"name": "second", "args": {"b": 1}}},
+            {"text": "done"}
+        ]),
+        "a whole call flushes the streamed one before it; a nameless streamed call is dropped"
+    );
+}
+
+#[test]
+fn test_streaming_starts_a_new_call_when_a_fragment_carries_a_different_id() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    for chunk in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "get_weather", "id": "c1", "willContinue": true, "partialArgs": [{"jsonPath": "$.city", "stringValue": "Paris"}]}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "get_weather", "id": "c2", "willContinue": true, "partialArgs": [{"jsonPath": "$.city", "stringValue": "Rome"}]}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"willContinue": false, "partialArgs": [{"jsonPath": "$.days", "numberValue": 2}]}
+        }]}}], "finishReason": "STOP"}),
+    ] {
+        collector(chunk).unwrap();
+    }
+
+    assert_eq!(
+        finalizer()["candidates"][0]["content"]["parts"],
+        json!([
+            {"functionCall": {"name": "get_weather", "id": "c1", "args": {"city": "Paris"}}},
+            {"functionCall": {"name": "get_weather", "id": "c2", "args": {"city": "Rome", "days": 2}}}
+        ])
+    );
+}
+
+#[test]
+fn test_streaming_treats_empty_partial_args_as_a_whole_call_and_empty_args_as_a_fragment() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    for chunk in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "first", "willContinue": true, "partialArgs": [{"jsonPath": "$.q", "stringValue": "x"}]}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "first", "args": {}}
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"name": "second", "args": {"k": 1}, "partialArgs": []}
+        }]}}], "finishReason": "STOP"}),
+    ] {
+        collector(chunk).unwrap();
+    }
+
+    assert_eq!(
+        finalizer()["candidates"][0]["content"]["parts"],
+        json!([
+            {"functionCall": {"name": "first", "args": {"q": "x"}}},
+            {"functionCall": {"name": "second", "args": {"k": 1}, "partialArgs": []}}
+        ])
+    );
+}
+
+#[test]
+fn test_streaming_merges_args_carried_by_a_fragment_and_rejects_a_malformed_fragment() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    for chunk in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {
+                "name": "f", "willContinue": true, "args": {"city": "Pa", "days": 2},
+                "partialArgs": [
+                    {"jsonPath": "$.city", "stringValue": "ris"},
+                    {"jsonPath": "$.address.city", "stringValue": "Paris"},
+                    {"jsonPath": "$.tags[0].name", "stringValue": "x"},
+                    {"jsonPath": "$.tags[0]", "nullValue": "NULL_VALUE"}
+                ]
+            }
+        }]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{
+            "functionCall": {"args": {"days": 3, "address": {"city": "London"}}}
+        }]}}]}),
+    ] {
+        collector(chunk).unwrap();
+    }
+    let deep = format!("$.{}", vec!["d"; 129].join("."));
+    for partial_args in [
+        json!("nope"),
+        json!([{"jsonPath": "$.x", "nullValue": "null"}]),
+        json!([{"jsonPath": "$", "numberValue": 1}]),
+        json!([{"jsonPath": "$.big[10001]", "stringValue": "x"}]),
+        json!([{"jsonPath": deep, "numberValue": 1}]),
+    ] {
+        let mut collector = GeminiGenerateContentStreamingCodec::new().collector();
+        assert!(
+            collector(json!({"candidates": [{"index": 0, "content": {"parts": [{
+                "functionCall": {"name": "g", "partialArgs": partial_args}
+            }]}}]}))
+            .is_err()
+        );
+    }
+
+    assert_eq!(
+        finalizer()["candidates"][0]["content"]["parts"],
+        json!([{"functionCall": {
+            "name": "f",
+            "args": {"city": "Paris", "days": 3, "address": {"city": "London"}, "tags": [null]}
+        }}])
+    );
+}
+
+#[test]
+fn test_streaming_reads_function_call_argument_paths_like_adk() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    collector(json!({"candidates": [{"index": 0, "content": {"parts": [{
+        "functionCall": {
+            "name": "paths",
+            "partialArgs": [
+                {"jsonPath": "$['a.b']", "stringValue": "dotted"},
+                {"jsonPath": "$[\"q\\u0041\"]", "numberValue": 1},
+                {"jsonPath": "$['\\u12']", "numberValue": 2},
+                {"jsonPath": "$.x\\.y", "boolValue": true},
+                {"jsonPath": "$.list[ 1 ]", "stringValue": "one"},
+                {"jsonPath": "$.k\\", "stringValue": "trail"},
+                {"jsonPath": "$['\\uD83D\\uDE00']", "stringValue": "pair"},
+                {"jsonPath": "$['\\uD83Dx']", "stringValue": "lone"}
+            ]
+        }
+    }]}}]}))
+    .unwrap();
+
+    assert_eq!(
+        finalizer()["candidates"][0]["content"]["parts"][0]["functionCall"]["args"],
+        json!({
+            "a.b": "dotted",
+            "qA": 1,
+            "u12": 2,
+            "x.y": true,
+            "list": [null, "one"],
+            "k": "trail",
+            "\u{1F600}": "pair",
+            "\u{FFFD}x": "lone"
+        })
+    );
+}
+
+#[test]
 fn test_streaming_two_chunks_accumulated() {
     let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
@@ -2853,6 +3144,76 @@ fn test_encode_inline_data_preserved_when_text_changes() {
             .get("data")
             .and_then(Json::as_str),
         Some(image_data)
+    );
+}
+
+#[test]
+fn test_encode_leading_inline_data_preserved_when_text_changes() {
+    let codec = GeminiGenerateContentCodec;
+    let image_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ==";
+    let original = make_request(json!({
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"inlineData": {"mimeType": "image/png", "data": image_data}},
+                {"text": "what is in this image?"}
+            ]
+        }]
+    }));
+
+    let mut annotated = codec.decode(&original).unwrap();
+
+    if let Message::User { content, .. } = &mut annotated.messages[0] {
+        *content = MessageContent::Text("Please describe this image in detail.".into());
+    }
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let parts = encoded.content.get("contents").unwrap().as_array().unwrap()[0]
+        .get("parts")
+        .unwrap()
+        .as_array()
+        .unwrap();
+
+    assert_eq!(
+        parts,
+        &vec![
+            json!({"inlineData": {"mimeType": "image/png", "data": image_data}}),
+            json!({"text": "Please describe this image in detail."}),
+        ],
+        "a leading inlineData part must keep its slot when only the text changes"
+    );
+}
+
+#[test]
+fn test_encode_string_edit_drops_a_signed_last_text_part_that_lost_its_slot() {
+    let codec = GeminiGenerateContentCodec;
+    let original = make_request(json!({
+        "contents": [
+            {"role": "user", "parts": [{"text": "hi"}]},
+            {
+                "role": "model",
+                "parts": [{"text": "One."}, {"text": "Two.", "thoughtSignature": "sig-last"}]
+            }
+        ]
+    }));
+
+    let mut annotated = codec.decode(&original).unwrap();
+
+    if let Message::Assistant { content, .. } = &mut annotated.messages[1] {
+        *content = Some(MessageContent::Text("Edited.".into()));
+    }
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let parts = encoded.content.get("contents").unwrap().as_array().unwrap()[1]
+        .get("parts")
+        .unwrap()
+        .as_array()
+        .unwrap();
+
+    assert_eq!(
+        parts,
+        &vec![json!({"text": "Edited."})],
+        "a string edit replaces the turn's text; a signed text part without a slot is dropped"
     );
 }
 
@@ -4140,7 +4501,7 @@ fn test_decode_multiple_function_responses_in_one_turn() {
 }
 
 #[test]
-fn test_decode_function_response_with_native_sibling_errors() {
+fn test_decode_function_response_with_native_sibling_yields_a_user_message_first() {
     let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{
@@ -4152,10 +4513,131 @@ fn test_decode_function_response_with_native_sibling_errors() {
         }]
     }));
 
+    let messages = codec.decode(&request).unwrap().messages;
+
+    assert_eq!(messages.len(), 2);
     assert!(
-        codec.decode(&request).is_err(),
-        "native sibling content beside functionResponse would be hidden by Message::Tool decode"
+        matches!(&messages[0], Message::User { content: MessageContent::Parts(parts), .. } if parts.len() == 1),
+        "the sibling part must be visible as a user message, not hidden by the tool decode"
     );
+    assert!(matches!(&messages[1], Message::Tool { tool_call_id, .. } if tool_call_id == "c1"));
+}
+
+#[test]
+fn test_encode_keeps_a_visible_message_moved_after_its_function_response() {
+    let codec = GeminiGenerateContentCodec;
+    let original = make_request(json!({
+        "contents": [
+            {"role": "user", "parts": [{"text": "weather?"}]},
+            {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"location": "Paris"}}}]},
+            {"role": "user", "parts": [
+                {"text": "Note: be brief."},
+                {"functionResponse": {"name": "get_weather", "response": {"forecast": "sunny"}}}
+            ]}
+        ]
+    }));
+
+    let mut annotated = codec.decode(&original).unwrap();
+    assert_eq!(annotated.messages.len(), 4);
+    annotated.messages.swap(2, 3);
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(
+        encoded.content["contents"][2]["parts"],
+        json!([
+            {"text": "Note: be brief."},
+            {"functionResponse": {"id": "get_weather", "name": "get_weather", "response": {"forecast": "sunny"}}}
+        ])
+    );
+    assert_eq!(encoded.content["contents"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn test_encode_tool_output_edit_keeps_unchanged_visible_parts_in_their_slots() {
+    let codec = GeminiGenerateContentCodec;
+    let image = json!({"inlineData": {"mimeType": "image/png", "data": "aGk="}});
+    let response =
+        json!({"functionResponse": {"name": "get_weather", "response": {"forecast": "sunny"}}});
+    for parts in [
+        vec![image.clone(), response.clone(), json!({"text": "two"})],
+        vec![
+            json!({"text": "one"}),
+            response.clone(),
+            json!({"text": "two"}),
+        ],
+    ] {
+        let original = make_request(json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "weather?"}]},
+                {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"location": "Paris"}}}]},
+                {"role": "user", "parts": parts}
+            ]
+        }));
+
+        let mut annotated = codec.decode(&original).unwrap();
+        if let Message::Tool { content, .. } = &mut annotated.messages[3] {
+            *content = MessageContent::Text("{\"forecast\":\"rain\"}".into());
+        } else {
+            panic!("expected the function response as a tool message");
+        }
+
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        let mut expected = parts.clone();
+        expected[1] = json!({"functionResponse": {"id": "get_weather", "name": "get_weather", "response": {"forecast": "rain"}}});
+        assert_eq!(
+            encoded.content["contents"][2]["parts"],
+            Json::Array(expected)
+        );
+    }
+}
+
+#[test]
+fn test_encode_edits_text_beside_a_function_response_in_place() {
+    let codec = GeminiGenerateContentCodec;
+    for text_first in [true, false] {
+        let note = json!({"text": "Note: be brief."});
+        let response =
+            json!({"functionResponse": {"name": "get_weather", "response": {"forecast": "sunny"}}});
+        let parts = if text_first {
+            vec![note.clone(), response.clone()]
+        } else {
+            vec![response.clone(), note.clone()]
+        };
+        let original = make_request(json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "weather?"}]},
+                {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"location": "Paris"}}}]},
+                {"role": "user", "parts": parts}
+            ]
+        }));
+
+        let mut annotated = codec.decode(&original).unwrap();
+        assert_eq!(annotated.messages.len(), 4);
+        if let Message::User { content, .. } = &mut annotated.messages[2] {
+            *content = MessageContent::Text("Note: be terse.".into());
+        } else {
+            panic!("expected the visible text as a user message");
+        }
+        if let Message::Tool { content, .. } = &mut annotated.messages[3] {
+            *content = MessageContent::Text("{\"forecast\":\"rain\"}".into());
+        } else {
+            panic!("expected the function response as a tool message");
+        }
+
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        let edited = json!({"text": "Note: be terse."});
+        let rained = json!({"functionResponse": {"id": "get_weather", "name": "get_weather", "response": {"forecast": "rain"}}});
+        let expected = if text_first {
+            vec![edited, rained]
+        } else {
+            vec![rained, edited]
+        };
+        assert_eq!(
+            encoded.content["contents"][2]["parts"],
+            Json::Array(expected),
+            "text_first={text_first}"
+        );
+    }
 }
 
 #[test]
@@ -4865,6 +5347,361 @@ fn test_decode_response_thoughts_only_usage_computes_fallback_total() {
         Some(40),
         "fallback total must be prompt(10) + thoughts(30) = 40 even without candidatesTokenCount"
     );
+}
+
+#[test]
+fn test_decode_response_fallback_total_includes_tool_use_prompt_tokens() {
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 33,
+            "candidatesTokenCount": 106,
+            "thoughtsTokenCount": 106,
+            "toolUsePromptTokenCount": 39
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.total_tokens, Some(284));
+}
+
+#[test]
+fn test_decode_response_reports_tool_use_prompt_tokens_in_api_specific() {
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 33,
+            "candidatesTokenCount": 106,
+            "toolUsePromptTokenCount": 39,
+            "totalTokenCount": 178
+        }
+    });
+
+    let api_specific = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .api_specific;
+
+    assert_eq!(
+        serde_json::to_value(api_specific).unwrap(),
+        json!({"api": "gemini_generate_content", "tool_use_prompt_tokens": 39})
+    );
+}
+
+#[test]
+fn test_decode_response_bills_tool_use_prompt_tokens_at_the_input_rate() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP",
+            "urlContextMetadata": {"urlMetadata": [{"retrievedUrl": "https://example.test"}]}
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "toolUsePromptTokenCount": 30,
+            "totalTokenCount": 45
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.prompt_tokens, Some(10));
+    let cost = usage.cost.unwrap();
+    assert!((cost.input.unwrap() - 0.00004).abs() < 1e-12, "{cost:?}");
+    assert!((cost.total.unwrap() - 0.00005).abs() < 1e-12, "{cost:?}");
+}
+
+#[test]
+fn test_decode_response_leaves_search_grounded_tool_use_prompt_tokens_unbilled() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP",
+            "groundingMetadata": {
+                "webSearchQueries": ["weather in Rome"],
+                "groundingChunks": [{"web": {"uri": "https://example.test", "title": "Rome"}}]
+            }
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "toolUsePromptTokenCount": 30,
+            "totalTokenCount": 45
+        }
+    });
+
+    let decoded = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap();
+
+    let cost = decoded.usage.unwrap().cost.unwrap();
+    assert!((cost.input.unwrap() - 0.00001).abs() < 1e-12, "{cost:?}");
+    assert!((cost.total.unwrap() - 0.00002).abs() < 1e-12, "{cost:?}");
+    assert_eq!(
+        serde_json::to_value(decoded.api_specific).unwrap()["tool_use_prompt_tokens"],
+        30
+    );
+}
+
+#[test]
+fn test_decode_response_bills_tool_use_prompt_tokens_by_tool_evidence() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let text = json!({"text": "Hi"});
+    let code = json!({"executableCode": {"language": "PYTHON", "code": "print(1)"}});
+    let code_result = json!({"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "1"}});
+    let url_context = json!({"urlMetadata": [{"retrievedUrl": "https://example.test"}]});
+    let file_search_chunk = json!({"retrievedContext": {"fileSearchStore": "fileSearchStores/1"}});
+    let vertex_search_chunk = json!({"retrievedContext": {"uri": "gs://bucket/doc"}});
+    let unnamed_store_chunk = json!({"retrievedContext": {"fileSearchStore": ""}});
+
+    for (parts, candidate_fields, expected_total) in [
+        (json!([code, code_result]), json!({}), Some(0.00005)),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"groundingChunks": [file_search_chunk]}}),
+            Some(0.00005),
+        ),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"imageSearchQueries": ["Rome skyline"]}}),
+            Some(0.00002),
+        ),
+        (
+            json!([text]),
+            json!({
+                "groundingMetadata": {"webSearchQueries": ["weather in Rome"]},
+                "urlContextMetadata": url_context
+            }),
+            None,
+        ),
+        (
+            json!([code, code_result]),
+            json!({"groundingMetadata": {"webSearchQueries": ["weather in Rome"]}}),
+            None,
+        ),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"groundingChunks": [vertex_search_chunk]}}),
+            None,
+        ),
+        (
+            json!([text]),
+            json!({"groundingMetadata": {"groundingChunks": [unnamed_store_chunk]}}),
+            None,
+        ),
+        (
+            json!([text]),
+            json!({"urlContextMetadata": {"urlMetadata": []}}),
+            None,
+        ),
+        (json!([text]), json!({}), None),
+    ] {
+        let mut candidate = json!({
+            "content": {"role": "model", "parts": parts},
+            "finishReason": "STOP"
+        });
+        candidate
+            .as_object_mut()
+            .unwrap()
+            .extend(candidate_fields.as_object().unwrap().clone());
+        let response = json!({
+            "candidates": [candidate],
+            "modelVersion": "gemini-test",
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "toolUsePromptTokenCount": 30,
+                "totalTokenCount": 45
+            }
+        });
+
+        let usage = GeminiGenerateContentCodec
+            .decode_response(&response)
+            .unwrap()
+            .usage
+            .unwrap();
+
+        let total = usage.cost.map(|cost| cost.total.unwrap());
+        match (total, expected_total) {
+            (Some(total), Some(expected)) => {
+                assert!((total - expected).abs() < 1e-12, "{response}: {total}");
+            }
+            (total, expected) => assert_eq!(total, expected, "{response}"),
+        }
+    }
+}
+
+#[test]
+fn test_decode_response_prices_zero_tool_use_prompt_tokens_without_tool_evidence() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP"
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "toolUsePromptTokenCount": 0,
+            "totalTokenCount": 15
+        }
+    });
+
+    let cost = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap()
+        .cost
+        .unwrap();
+
+    assert!((cost.total.unwrap() - 0.00002).abs() < 1e-12, "{cost:?}");
+}
+
+#[test]
+fn test_decode_response_omits_cost_when_billed_input_tokens_overflow() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP",
+            "urlContextMetadata": {"urlMetadata": [{"retrievedUrl": "https://example.test"}]}
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": u64::MAX,
+            "candidatesTokenCount": 5,
+            "toolUsePromptTokenCount": 1,
+            "totalTokenCount": 20
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.prompt_tokens, Some(u64::MAX));
+    assert_eq!(usage.cost, None);
+}
+
+#[test]
+fn test_decode_response_bills_thoughts_only_usage_at_the_output_rate() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": []},
+            "finishReason": "STOP"
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "thoughtsTokenCount": 30
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.completion_tokens, None);
+    let total = usage.cost.unwrap().total.unwrap();
+    assert!((total - 0.00007).abs() < 1e-12, "{total}");
+}
+
+#[test]
+fn test_decode_response_omits_cost_when_billed_output_tokens_overflow() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![gemini_test_catalog()]))
+        .unwrap();
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "Hi"}]},
+            "finishReason": "STOP"
+        }],
+        "modelVersion": "gemini-test",
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": u64::MAX,
+            "thoughtsTokenCount": 1,
+            "totalTokenCount": 20
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.completion_tokens, Some(u64::MAX));
+    assert_eq!(usage.cost, None);
+}
+
+#[test]
+fn test_decode_response_omits_a_fallback_total_that_overflows() {
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": []},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": u64::MAX,
+            "thoughtsTokenCount": 1
+        }
+    });
+
+    let usage = GeminiGenerateContentCodec
+        .decode_response(&response)
+        .unwrap()
+        .usage
+        .unwrap();
+
+    assert_eq!(usage.prompt_tokens, Some(u64::MAX));
+    assert_eq!(usage.total_tokens, None);
 }
 
 // Decode validation: table-driven negative tests for malformed contents items.
@@ -5932,9 +6769,8 @@ fn test_decode_function_call_on_user_role_errors() {
     );
 }
 
-// functionResponse mixed with visible text parts must error.
 #[test]
-fn test_decode_function_response_mixed_with_text_errors() {
+fn test_decode_function_response_mixed_with_text_yields_user_then_tool() {
     let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{
@@ -5945,10 +6781,12 @@ fn test_decode_function_response_mixed_with_text_errors() {
             ]
         }]
     }));
+    let messages = codec.decode(&req).unwrap().messages;
+    assert_eq!(messages.len(), 2);
     assert!(
-        codec.decode(&req).is_err(),
-        "functionResponse mixed with visible text parts must error"
+        matches!(&messages[0], Message::User { content: MessageContent::Text(text), .. } if text == "visible text")
     );
+    assert!(matches!(&messages[1], Message::Tool { tool_call_id, .. } if tool_call_id == "fn"));
 }
 
 // Response decode: non-string text value must error.

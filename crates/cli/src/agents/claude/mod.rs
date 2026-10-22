@@ -27,7 +27,6 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "PreToolUse",
         "PostToolUse",
         "PostToolUseFailure",
-        "PermissionRequest",
         "SubagentStart",
         "SubagentStop",
         "Notification",

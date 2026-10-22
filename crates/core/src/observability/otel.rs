@@ -25,15 +25,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::OpenTelemetryTlsConfig;
 use super::header_file::{
-    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles,
-    validate_header_files,
+    HeaderFileHttpClient, HeaderFileInterceptor, HeaderFileResolver, HeaderFiles, PlaintextPolicy,
+    validate_header_files, validate_trace_transport,
 };
 use super::otel_file::{OtlpFileFormat, OtlpFileSpanExporter};
 use super::otel_signal::{
     MetricMarkClassification, SignalRuntimeDiagnostics, TELEMETRY_SDK_RESOURCE_ATTRIBUTE_KEYS,
     automatic_otlp_http_client, automatic_protocol_is_grpc, automatic_protocol_is_unset,
-    automatic_signal_endpoint, classify_metric_mark, resolve_header_env,
+    automatic_signal_endpoint, classify_metric_mark, drain_startup_queue, resolve_header_env,
     retry_batch_processor_channel_full, should_relog_runtime_diagnostic, telemetry_resource,
     validate_telemetry_sdk_resource_attributes,
 };
@@ -47,6 +48,7 @@ use super::{
     push_top_level_json_attributes, relay_span_id, relay_trace_id, validate_attribute_mappings,
     validate_metadata_promotion_prefixes,
 };
+
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::runtime::scope_stack::w3c_span_context;
@@ -223,7 +225,7 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
 /// userinfo, path, query, or fragment. HTTP(S) origins remain sufficient to
 /// distinguish independently configured collectors without exposing a token
 /// embedded in a URL.
-fn trace_endpoint_log_identity(endpoint: &str) -> String {
+pub(super) fn trace_endpoint_log_identity(endpoint: &str) -> String {
     if endpoint == AUTOMATIC_OTLP_ENDPOINT_MARKER {
         return "the environment-configured OTLP endpoint".to_string();
     }
@@ -248,24 +250,8 @@ fn trace_endpoint_log_identity(endpoint: &str) -> String {
 }
 
 /// Require protected transport for remote OTLP trace exports, regardless of projection.
-pub(super) fn validate_trace_endpoint(endpoint: &str) -> Result<()> {
-    let protected = reqwest::Url::parse(endpoint).is_ok_and(|url| {
-        let host = url.host_str().unwrap_or_default();
-        let loopback = host.eq_ignore_ascii_case("localhost")
-            || host
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback());
-        url.scheme() == "https" || (url.scheme() == "http" && loopback)
-    });
-    if !protected {
-        return Err(OpenTelemetryError::ExporterBuild(
-            "OTLP trace endpoints require HTTPS; HTTP is allowed only for localhost or loopback IP addresses"
-                .to_string(),
-        ));
-    }
-    Ok(())
+pub(super) fn validate_trace_endpoint(endpoint: &str, plaintext: &PlaintextPolicy) -> Result<()> {
+    validate_trace_transport(endpoint, plaintext).map_err(OpenTelemetryError::ExporterBuild)
 }
 
 /// Open mode used when a trace file sink creates its output file.
@@ -468,6 +454,8 @@ pub struct OpenTelemetryConfig {
     headers: HashMap<String, String>,
     header_env: HashMap<String, String>,
     header_file: HeaderFiles,
+    tls: Option<Box<OpenTelemetryTlsConfig>>,
+    plaintext: PlaintextPolicy,
     timeout: Duration,
 }
 
@@ -698,6 +686,8 @@ impl OpenTelemetryConfig {
             headers: HashMap::new(),
             header_env: HashMap::new(),
             header_file: HashMap::new(),
+            tls: None,
+            plaintext: PlaintextPolicy::LoopbackOnly,
             timeout: Duration::from_secs(3),
         }
     }
@@ -734,6 +724,12 @@ impl OpenTelemetryConfig {
         self
     }
 
+    /// Sets the certificate and private key file paths for this endpoint.
+    pub fn with_tls(mut self, tls: OpenTelemetryTlsConfig) -> Self {
+        self.tls = Some(Box::new(tls));
+        self
+    }
+
     /// Selects the OTLP transport.
     pub fn with_transport(mut self, transport: OtlpTransport) -> Self {
         self.transport = transport;
@@ -759,6 +755,17 @@ impl OpenTelemetryConfig {
         path: impl Into<String>,
     ) -> Self {
         self.header_file.insert(key.into(), path.into());
+        self
+    }
+
+    /// Allows plain HTTP to any host; data and configured headers travel unencrypted.
+    pub fn with_allow_insecure(mut self, allow_insecure: bool) -> Self {
+        self.plaintext = PlaintextPolicy::from_allow_insecure(allow_insecure);
+        self
+    }
+
+    pub(crate) fn with_plaintext_policy(mut self, plaintext: PlaintextPolicy) -> Self {
+        self.plaintext = plaintext;
         self
     }
 
@@ -907,12 +914,17 @@ impl OpenTelemetrySubscriber {
         )
     }
 
-    pub(crate) fn new_from_automatic_configuration_for_plugin() -> Result<Self> {
+    pub(crate) fn new_from_automatic_configuration_for_plugin(
+        plaintext: PlaintextPolicy,
+    ) -> Result<Self> {
         super::otel_signal::validate_automatic_header_environment(
             "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
         )?;
         Self::new_with_runtime_diagnostics(
-            TraceConfig::Endpoint(OpenTelemetryConfig::from_automatic_configuration()),
+            TraceConfig::Endpoint(
+                OpenTelemetryConfig::from_automatic_configuration()
+                    .with_plaintext_policy(plaintext),
+            ),
             Some("opentelemetry.automatic.traces".to_string()),
         )
     }
@@ -944,20 +956,21 @@ impl OpenTelemetrySubscriber {
         if let TraceConfig::Endpoint(endpoint) = &mut config {
             if endpoint.automatic {
                 let resolved = automatic_signal_endpoint("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+                    .map_err(OpenTelemetryError::ExporterBuild)?
                     .ok_or_else(|| {
                         OpenTelemetryError::ExporterBuild(
                             "automatic trace exporter requires a nonblank OTLP endpoint"
                                 .to_string(),
                         )
                     })?;
-                validate_trace_endpoint(&resolved)?;
+                validate_trace_endpoint(&resolved, &endpoint.plaintext)?;
             } else {
                 if endpoint.endpoint.trim().is_empty() {
                     return Err(OpenTelemetryError::ExporterBuild(
                         "endpoint must be a nonblank string".to_string(),
                     ));
                 }
-                validate_trace_endpoint(&endpoint.endpoint)?;
+                validate_trace_endpoint(&endpoint.endpoint, &endpoint.plaintext)?;
                 reject_global_header_environment()?;
                 validate_headers(&endpoint.headers)?;
                 validate_header_files(
@@ -1431,29 +1444,33 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
             builder
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_http_client(automatic_otlp_http_client()?)
+                .with_http_client(automatic_otlp_http_client("TRACES")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
         } else if automatic_protocol_is_grpc("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") {
+            let mut builder = builder.with_tonic();
+            if let Some(tls) = super::otel_signal::automatic_otlp_grpc_tls("TRACES")? {
+                builder = builder.with_tls_config(tls);
+            }
             builder
-                .with_tonic()
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
         } else {
             builder
                 .with_http()
-                .with_http_client(automatic_otlp_http_client()?)
+                .with_http_client(automatic_otlp_http_client("TRACES")?)
                 .build()
                 .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))
         };
     }
     match settings.transport {
         OtlpTransport::HttpBinary => {
-            let client = reqwest::Client::builder()
-                .timeout(settings.timeout)
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|error| OpenTelemetryError::ExporterBuild(error.to_string()))?;
+            let client = settings
+                .tls
+                .as_deref()
+                .cloned()
+                .unwrap_or_default()
+                .http_client(&settings.endpoint, Some(settings.timeout))?;
             let mut builder = OtlpSpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
@@ -1462,6 +1479,7 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
                 builder = builder.with_http_client(HeaderFileHttpClient::new(
                     client,
                     HeaderFileResolver::new(settings.header_file.clone()),
+                    settings.plaintext.clone(),
                 ));
             } else {
                 builder = builder.with_http_client(client);
@@ -1481,6 +1499,23 @@ fn otlp_span_exporter(settings: &OpenTelemetryConfig) -> Result<OtlpSpanExporter
                 .with_protocol(Protocol::Grpc)
                 .with_timeout(settings.timeout);
             builder = builder.with_endpoint(settings.endpoint.clone());
+            if settings
+                .endpoint
+                .trim()
+                .parse::<reqwest::Url>()
+                .is_ok_and(|url| url.scheme() == "https")
+            {
+                builder = builder.with_tls_config(
+                    settings
+                        .tls
+                        .as_deref()
+                        .cloned()
+                        .unwrap_or_default()
+                        .grpc_config(&settings.endpoint)?,
+                );
+            } else if let Some(tls) = &settings.tls {
+                tls.validate(&settings.endpoint)?;
+            }
             if !settings.headers.is_empty() {
                 builder = builder.with_metadata(build_grpc_metadata(&settings.headers)?);
             }
@@ -1532,7 +1567,9 @@ fn provider_with_exporter<E: SpanExporter + 'static>(
         batch_config.build(),
         config.channel_full_retry_budget(),
     );
-    Ok(builder.with_span_processor(processor).build())
+    let provider = builder.with_span_processor(processor).build();
+    drain_startup_queue(|| provider.force_flush())?;
+    Ok(provider)
 }
 
 fn configured_resource_attributes(config: &TraceConfig) -> Vec<KeyValue> {

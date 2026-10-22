@@ -28,7 +28,7 @@ __test-cli-port-override = []
 __skip-implicit-config = ["nemo-relay/__skip-implicit-config"]
 
 [dependencies]
-nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "worker-grpc"] }
+nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "worker-grpc", "__internal-gateway"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
 async-stream = "0.3"
@@ -74,7 +74,7 @@ toml_edit = "0.23"
 tower-service = "0.3"
 uuid = { workspace = true, features = ["serde", "v7"] }
 zstd = "0.13"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

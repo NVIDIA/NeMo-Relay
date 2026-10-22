@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import replace
 from typing import Any, cast
 
 from langchain_core.messages import ToolMessage
@@ -17,40 +16,26 @@ from langgraph.prebuilt.tool_node import ToolCallRequest, ToolInvocationError
 from langgraph.types import Command
 
 import nemo_relay
+from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec, ToolResultValue
 from nemo_relay.typed import Codec
 from nemo_relay.utils import run_sync
 
 
-class _ToolNodeResultCodec(nemo_relay.typed.BestEffortAnyCodec):
-    """Restore ToolMessages nested in LangGraph Command updates."""
+class _ToolNodeResultCodec(Codec[object]):
+    """Use the shared framework codec and keep graph interrupts separate."""
 
-    _LIST_TAG = "__nemo_relay_langgraph_list__"
+    def __init__(self, tool_call_id: str | None) -> None:
+        self._codec = LangChainToolResultCodec(tool_call_id)
 
     def to_json(self, value: object) -> nemo_relay.Json:
-        if isinstance(value, list):
-            return {self._LIST_TAG: [self.to_json(item) for item in value]}
-        return super().to_json(value)
+        if value == _GRAPH_BUBBLE_RESULT:
+            return _GRAPH_BUBBLE_RESULT
+        return self._codec.to_json(cast(ToolResultValue, value))
 
     def from_json(self, data: nemo_relay.Json) -> object:
-        if isinstance(data, dict) and isinstance(data.get(self._LIST_TAG), list):
-            return [self.from_json(item) for item in data[self._LIST_TAG]]
-
-        result = super().from_json(data)
-        if not isinstance(result, Command):
-            return result
-
-        if isinstance(result.update, dict):
-            messages = result.update.get("messages")
-            if isinstance(messages, list):
-                result.update["messages"] = _restore_tool_messages(messages)
-        elif isinstance(result.update, list):
-            return replace(result, update=_restore_tool_messages(result.update))
-        return result
-
-
-def _restore_tool_messages(messages: list[object]) -> list[object]:
-    """Reconstruct serialized ToolMessages in a LangGraph command update."""
-    return [ToolMessage.model_validate(message) if isinstance(message, dict) else message for message in messages]
+        if data == _GRAPH_BUBBLE_RESULT:
+            return _GRAPH_BUBBLE_RESULT
+        return self._codec.from_json(data)
 
 
 _DEFAULT_HANDLE_TOOL_ERRORS = object()
@@ -108,7 +93,7 @@ def wrap_tool_call(
     """
     parent, tool_name, tool_args, tool_call_id = _tool_details(request)
     args_codec = cast(Codec[dict[str, Any]], nemo_relay.typed.JsonPassthrough())
-    result_codec = cast(Codec[ToolMessage | Command[Any] | dict[str, bool]], _ToolNodeResultCodec())
+    result_codec = cast(Codec[ToolMessage | Command[Any] | dict[str, bool]], _ToolNodeResultCodec(tool_call_id))
     graph_bubble: GraphBubbleUp | None = None
 
     def _call(args: dict[str, Any]) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | dict[str, bool]]:
@@ -153,7 +138,7 @@ async def awrap_tool_call(
     """
     parent, tool_name, tool_args, tool_call_id = _tool_details(request)
     args_codec = cast(Codec[dict[str, Any]], nemo_relay.typed.JsonPassthrough())
-    result_codec = cast(Codec[ToolMessage | Command[Any] | dict[str, bool]], _ToolNodeResultCodec())
+    result_codec = cast(Codec[ToolMessage | Command[Any] | dict[str, bool]], _ToolNodeResultCodec(tool_call_id))
     graph_bubble: GraphBubbleUp | None = None
 
     async def _call(

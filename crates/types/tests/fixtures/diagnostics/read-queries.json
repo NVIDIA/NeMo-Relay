@@ -1,0 +1,71 @@
+[
+  {
+    "query": {},
+    "reason": null
+  },
+  {
+    "query": {
+      "schema_version": 1,
+      "ownership": {
+        "responsibility": "example"
+      }
+    },
+    "reason": null
+  },
+  {
+    "query": {
+      "after_sequence": "18446744073709551615"
+    },
+    "reason": null
+  },
+  {
+    "query": {
+      "schema_version": 2
+    },
+    "reason": "unsupported_schema"
+  },
+  {
+    "query": {
+      "schema_version": -1
+    },
+    "reason": "invalid_query"
+  },
+  {
+    "query": {
+      "unrecognized": "restricted-input"
+    },
+    "reason": "invalid_query"
+  },
+  {
+    "query": {
+      "ownership": {
+        "unknown": "restricted-input"
+      }
+    },
+    "reason": "invalid_query"
+  },
+  {
+    "query": {
+      "after_sequence": 9007199254740993
+    },
+    "reason": "invalid_query"
+  },
+  {
+    "query": {
+      "after_sequence": "01"
+    },
+    "reason": "invalid_query"
+  },
+  {
+    "query": {
+      "max_events": 4294967296
+    },
+    "reason": "invalid_query"
+  },
+  {
+    "query": {
+      "continuation": {}
+    },
+    "reason": "invalid_query"
+  }
+]

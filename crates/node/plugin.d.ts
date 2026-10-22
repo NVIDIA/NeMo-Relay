@@ -89,6 +89,8 @@ export interface PluginConfig {
     config?: Record<string, Json>;
   }>;
   policy?: ConfigPolicy;
+  /** Startup-only host service profile; omitted settings use file layers. */
+  diagnostics?: { enabled?: boolean; limits?: Record<string, number> };
 }
 
 /** Execution lane for a dynamically loaded Relay plugin. */
@@ -364,7 +366,8 @@ export declare function validate(config: PluginConfig, additionalPluginsToml?: s
  *
  * Unlike `validate`, this does not discover or merge `plugins.toml` files.
  * Use it for component-specific validation when `config` is the complete
- * document to check.
+ * document to check. Host-only `diagnostics` settings are rejected; use
+ * `validate` to validate those settings.
  *
  * @param config - Complete static plugin configuration.
  * @returns Static validation results with no dynamic plugins.

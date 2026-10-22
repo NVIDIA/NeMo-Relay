@@ -105,7 +105,9 @@ fn chatgpt_backend_override_accepts_oauth_jwt_without_replacement_key() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         "authorization",
-        axum::http::HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+        axum::http::HeaderValue::from_static(
+            "Bearer eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSJ9.signature",
+        ),
     );
 
     assert_eq!(
@@ -145,6 +147,10 @@ fn chatgpt_backend_override_accepts_codex_access_token() {
         "authorization",
         axum::http::HeaderValue::from_static("Bearer at-test-codex-access-token"),
     );
+    headers.insert(
+        "chatgpt-account-id",
+        axum::http::HeaderValue::from_static("test-account"),
+    );
 
     assert_eq!(
         chatgpt_upstream_url_if_needed(
@@ -183,10 +189,15 @@ fn chatgpt_auth_strip_allows_api_key_substitution_for_codex_access_token() {
         "authorization",
         axum::http::HeaderValue::from_static("Bearer at-test-codex-access-token"),
     );
+    headers.insert(
+        "chatgpt-account-id",
+        axum::http::HeaderValue::from_static("test-account"),
+    );
 
     let stripped =
         strip_chatgpt_auth_for_openai_route(&headers, GatewayRouteKind::OpenAiResponses, true);
     assert!(stripped.get("authorization").is_none());
+    assert!(stripped.get("chatgpt-account-id").is_none());
 
     let preserved =
         strip_chatgpt_auth_for_openai_route(&headers, GatewayRouteKind::OpenAiResponses, false);
@@ -201,7 +212,9 @@ fn chatgpt_auth_strip_preserves_provider_keys_and_non_openai_routes() {
     let mut jwt_headers = axum::http::HeaderMap::new();
     jwt_headers.insert(
         "authorization",
-        axum::http::HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+        axum::http::HeaderValue::from_static(
+            "Bearer eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSJ9.signature",
+        ),
     );
     let stripped =
         strip_chatgpt_auth_for_openai_route(&jwt_headers, GatewayRouteKind::OpenAiResponses, true);
@@ -361,4 +374,40 @@ fn owns_only_openai_responses_gateway_provider() {
     assert!(owns_gateway_provider("openai.responses"));
     assert!(!owns_gateway_provider("openai.chat_completions"));
     assert!(!owns_gateway_provider("anthropic.messages"));
+}
+
+#[test]
+fn unrelated_or_malformed_tokens_do_not_select_chatgpt_or_get_stripped() {
+    use base64::Engine;
+    let corporate_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(br#"{"iss":"https://login.corporate.example"}"#);
+    let tokens = [
+        format!("Bearer eyJhbGciOiJSUzI1NiJ9.{corporate_payload}.signature"),
+        "Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature".into(),
+        "Bearer eyJ.header-only".into(),
+        "Bearer at-unrelated-access-token".into(),
+    ];
+    for token in tokens {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::AUTHORIZATION, token.parse().unwrap());
+        for replacement in [false, true] {
+            assert_eq!(
+                chatgpt_upstream_url_if_needed(
+                    &headers,
+                    GatewayRouteKind::OpenAiResponses,
+                    "/v1/responses",
+                    replacement,
+                ),
+                None,
+            );
+            assert_eq!(
+                strip_chatgpt_auth_for_openai_route(
+                    &headers,
+                    GatewayRouteKind::OpenAiResponses,
+                    replacement,
+                )[http::header::AUTHORIZATION],
+                token,
+            );
+        }
+    }
 }

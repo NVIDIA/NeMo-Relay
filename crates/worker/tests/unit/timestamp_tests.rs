@@ -19,6 +19,7 @@ async fn historical_scope_rejects_timestamp_outside_wire_range_before_rpc() {
         auth_token: "token".into(),
         host_endpoint: "unsupported://host".into(),
         host_channel: Arc::new(OnceCell::new()),
+        diagnostics: Arc::new(OnceCell::new()),
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
 

@@ -441,15 +441,9 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
       subscriber.shutdown();
     }
 
-    const record = JSON.parse(
-      readFileSync(join(directory, 'projected.jsonl'), 'utf8').trim().split('\n')[0],
-    );
-    const resourceKeys = record.resourceSpans.flatMap((rs) =>
-      rs.resource.attributes.map((attribute) => attribute.key),
-    );
-    const spans = record.resourceSpans.flatMap((rs) =>
-      rs.scopeSpans.flatMap((ss) => ss.spans),
-    );
+    const record = JSON.parse(readFileSync(join(directory, 'projected.jsonl'), 'utf8').trim().split('\n')[0]);
+    const resourceKeys = record.resourceSpans.flatMap((rs) => rs.resource.attributes.map((attribute) => attribute.key));
+    const spans = record.resourceSpans.flatMap((rs) => rs.scopeSpans.flatMap((ss) => ss.spans));
     const spanKeys = new Set(spans.flatMap((span) => span.attributes.map((a) => a.key)));
 
     // Asserted per option: a setting parsed but never applied must fail here.
@@ -460,10 +454,7 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
       'promoteResourceMetadataPrefixes should copy onto the resource',
     );
     const spanNames = spans.map((span) => span.name);
-    assert.ok(
-      spanNames.includes('mark:kept.mark'),
-      `markProjection "tool" should emit a mark span: ${spanNames}`,
-    );
+    assert.ok(spanNames.includes('mark:kept.mark'), `markProjection "tool" should emit a mark span: ${spanNames}`);
     assert.ok(
       !spanNames.some((spanName) => spanName.includes('custom.mark')),
       `markExcludeNames should drop the excluded mark: ${spanNames}`,
@@ -490,4 +481,17 @@ describe('OpenTelemetrySubscriber.fileSink', () => {
       );
     }
   });
+});
+
+it('passes nested TLS identity settings to every direct OTLP subscriber', () => {
+  for (const Constructor of [OpenTelemetrySubscriber, OpenTelemetryLogSubscriber, OpenTelemetryMetricSubscriber]) {
+    const config = {
+      type: 'full',
+      endpoint: 'http://127.0.0.1:4318',
+      tls: { certificate: 'ca.pem', clientCertificate: 'client.pem', privateKey: 'key.pem' },
+    };
+    assert.throws(() => new Constructor(config), /TLS settings require an HTTPS endpoint/);
+    config.tls = { clientCertificate: 'client.pem' };
+    assert.throws(() => new Constructor(config), /must be supplied together/);
+  }
 });

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 from unittest import mock
+from uuid import UUID
 
 import pytest
 
@@ -3363,6 +3364,7 @@ async def test_serve_plugin_announces_endpoint_only_after_server_start(
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: FakeChannel())
     monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
@@ -3412,6 +3414,7 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: fake_channel)
     monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
@@ -3448,6 +3451,7 @@ async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatc
     monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target: fake_channel)
     monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda: fake_server)
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
@@ -3810,3 +3814,196 @@ def test_worker_cancellation_keeps_code_even_with_http_prefix() -> None:
     wire = _sdk_error_to_worker(WorkerSdkError("HTTP 403: denied"))
     wire.code = "worker.cancelled"
     assert str(_worker_error_to_sdk(wire)) == "worker.cancelled: HTTP 403: denied"
+
+
+async def test_scope_stack_snapshot_converts_types_and_reads_each_binding_fresh() -> None:
+    identifiers = [str(UUID(int=number)) for number in range(1, 14)]
+    snapshot = pb.ScopeStackSnapshot(
+        scopes=[
+            pb.ScopeStackEntry(scope_id=identifier, scope_type=category)
+            for identifier, category in zip(identifiers, list(range(1, 12)) + [0, 999], strict=True)
+        ]
+    )
+    snapshot_response = pb.GetCurrentScopeStackSnapshotResponse(snapshot=snapshot)
+    host = mock.Mock()
+    host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
+        side_effect=[
+            pb.GetCurrentScopeStackSnapshotResponse(),
+            snapshot_response,
+            pb.GetCurrentScopeStackSnapshotResponse(snapshot=pb.ScopeStackSnapshot(scopes=snapshot.scopes[:1])),
+            pb.GetCurrentScopeStackSnapshotResponse(),
+        ]
+    )
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
+    assert await runtime.current_scope_stack_snapshot() is None
+    with runtime.bind_scope_stack("first", parent_scope_id=identifiers[1]):
+        retained = await runtime.current_scope_stack_snapshot()
+        assert retained is not None
+        assert [entry.scope_id for entry in retained.scopes] == identifiers
+        assert [entry.scope_type for entry in retained.scopes] == list(ScopeType) + [ScopeType.UNKNOWN] * 2
+        retained.scopes.pop()
+        with runtime.bind_scope_stack("second", parent_scope_id=identifiers[0]):
+            current = await runtime.current_scope_stack_snapshot()
+            assert current is not None
+            assert len(current.scopes) == 1
+            current.scopes.clear()
+        assert [entry.scope_id for entry in retained.scopes] == identifiers[:-1]
+        assert [entry.scope_id for entry in snapshot_response.snapshot.scopes] == identifiers
+        assert [entry.scope_id for entry in snapshot.scopes] == identifiers
+    assert await runtime.current_scope_stack_snapshot() is None
+    requests = [call.args[0] for call in host.GetCurrentScopeStackSnapshot.await_args_list]
+    assert [request.scope.scope_stack_id for request in requests] == ["", "first", "second", ""]
+    assert [request.scope.parent_scope_id for request in requests] == ["", identifiers[1], identifiers[0], ""]
+    assert all(request.activation_id == ACTIVATION_ID and request.auth_token == AUTH_TOKEN for request in requests)
+
+
+async def test_scope_stack_snapshot_distinguishes_host_error_and_unsupported_rpc() -> None:
+    host = mock.Mock()
+    host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
+        return_value=pb.GetCurrentScopeStackSnapshotResponse(error=_worker_error("expired binding"))
+    )
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
+    with pytest.raises(WorkerSdkError, match="expired binding"):
+        await runtime.current_scope_stack_snapshot()
+    for status, message in [
+        (grpc.StatusCode.UNIMPLEMENTED, "grpc-v1 snapshot extension"),
+        (grpc.StatusCode.PERMISSION_DENIED, "GetCurrentScopeStackSnapshot failed: denied"),
+    ]:
+        host.GetCurrentScopeStackSnapshot.side_effect = grpc.aio.AioRpcError(
+            status, initial_metadata=(), trailing_metadata=(), details="denied"
+        )
+        with pytest.raises(WorkerSdkError, match=message):
+            await runtime.current_scope_stack_snapshot()
+
+
+async def test_scope_stack_snapshot_matches_shared_fixture() -> None:
+    fixture_path = Path(__file__).resolve().parents[3] / "crates/types/tests/fixtures/scope_stack_snapshot.json"
+    entries = json.loads(fixture_path.read_text())["scopes"]
+    host = mock.Mock()
+    host.GetCurrentScopeStackSnapshot = mock.AsyncMock(
+        return_value=pb.GetCurrentScopeStackSnapshotResponse(
+            snapshot=pb.ScopeStackSnapshot(
+                scopes=[
+                    pb.ScopeStackEntry(
+                        scope_id=entry["scope_id"], scope_type=plugin_api._proto_scope_type(entry["scope_type"])
+                    )
+                    for entry in entries
+                ]
+            )
+        )
+    )
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host)
+    snapshot = await runtime.current_scope_stack_snapshot()
+    assert snapshot is not None
+    assert [{"scope_id": entry.scope_id, "scope_type": entry.scope_type.value} for entry in snapshot.scopes] == entries
+
+
+@pytest.mark.parametrize("message", ["provider failed", "HTTP 503: provider unavailable"])
+def test_downstream_error_provenance_preserves_legacy_wire_semantics(message: str) -> None:
+    legacy = plugin_api._sdk_error_to_worker(
+        plugin_api._worker_error_to_sdk(pb.WorkerError(code="host.runtime_error", message=message))
+    )
+    wire = pb.WorkerError(code="host.runtime_error", message=message, downstream_continuation_id="next-owned")
+    wire = pb.WorkerError.FromString(wire.SerializeToString())
+    first = plugin_api._worker_error_to_sdk(wire)
+    second = plugin_api._worker_error_to_sdk(
+        pb.WorkerError(code="host.runtime_error", message="another call", downstream_continuation_id="next-other")
+    )
+    # A caught failure followed by success or another failure does not overwrite origin.
+    assert plugin_api._json_result_to_value(pb.JsonResult(value=_json_envelope(JSON_SCHEMA, None))) is None
+    for error, expected in [(second, "next-other"), (first, "next-owned")]:
+        assert isinstance(error, WorkerSdkError)
+        forwarded = plugin_api._sdk_error_to_worker(error)
+        assert forwarded.downstream_continuation_id == expected
+    forwarded = plugin_api._sdk_error_to_worker(first)
+    forwarded.ClearField("downstream_continuation_id")
+    assert forwarded == legacy
+    assert not plugin_api._sdk_error_to_worker(WorkerSdkError(str(first))).HasField("downstream_continuation_id")
+
+
+@pytest.mark.parametrize("surface", ["tool", "llm", "stream", "stream_setup"])
+@pytest.mark.parametrize("replace_error", [False, True])
+async def test_continuation_provenance_survives_worker_callbacks(surface: str, replace_error: bool) -> None:
+    class Host(RecordingHostStub):
+        def failure(self, request: Any) -> Any:
+            return pb.WorkerError(
+                code="host.runtime_error", message="provider failed", downstream_continuation_id=request.continuation_id
+            )
+
+        async def ToolNext(self, request: Any) -> Any:
+            return pb.ToolExecutionResultResponse(error=self.failure(request))
+
+        async def LlmNext(self, request: Any) -> Any:
+            return pb.JsonResult(error=self.failure(request))
+
+        async def LlmStreamNext(self, request: Any) -> AsyncIterator[Any]:
+            if surface == "stream_setup":
+                raise grpc.aio.AioRpcError(
+                    grpc.StatusCode.INTERNAL,
+                    grpc.aio.Metadata(),
+                    grpc.aio.Metadata((plugin_api._DOWNSTREAM_CONTINUATION_METADATA, request.continuation_id)),
+                    "provider failed",
+                )
+            yield pb.StreamChunk(error=self.failure(request))
+
+    class Plugin(WorkerPlugin):
+        plugin_id = "provenance"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            async def tool(context: Any, next_call: Any) -> Any:
+                try:
+                    return await next_call.call(context.args)
+                except WorkerSdkError:
+                    if replace_error:
+                        raise WorkerSdkError("independent plugin failure") from None
+                    raise
+
+            async def llm(name: str, request: Any, context: Any, next_call: Any) -> Any:
+                try:
+                    return await next_call.call(request)
+                except WorkerSdkError:
+                    if replace_error:
+                        raise WorkerSdkError("independent plugin failure") from None
+                    raise
+
+            async def stream(name: str, request: Any, context: Any, next_call: Any) -> Any:
+                try:
+                    async for value in next_call.call(request):
+                        yield value
+                except (WorkerSdkError, grpc.RpcError):
+                    if replace_error:
+                        raise WorkerSdkError("independent plugin failure") from None
+                    raise
+
+            ctx.register_tool_execution_intercept("tool", tool)
+            ctx.register_llm_execution_intercept("llm", llm)
+            ctx.register_llm_stream_execution_intercept("stream", stream)
+
+    service = _service(Plugin(), Host())
+    await _register(service)
+
+    async def invoke(index: int) -> Any:
+        if surface == "tool":
+            request = _tool_request("tool", pb.TOOL_EXECUTION_INTERCEPT, {})
+        else:
+            request = _invoke_request(
+                "llm" if surface == "llm" else "stream",
+                pb.LLM_EXECUTION_INTERCEPT if surface == "llm" else pb.LLM_STREAM_EXECUTION_INTERCEPT,
+                llm=_llm_payload(),
+            )
+        request.invocation_id = f"invoke-{index}"
+        request.continuation_id = f"next-{index}"
+        if surface.startswith("stream"):
+            chunks = [chunk async for chunk in service.InvokeStream(request, AbortContext())]
+            return chunks[0].error
+        return (await service.Invoke(request, AbortContext())).error
+
+    # Concurrent invocations retain independent provenance, without a shared last-error flag.
+    errors = await asyncio.gather(invoke(1), invoke(2))
+    for index, error in enumerate(errors, 1):
+        if replace_error:
+            assert not error.HasField("downstream_continuation_id")
+            assert error.message == "independent plugin failure"
+        else:
+            assert error.downstream_continuation_id == f"next-{index}"
+            assert "provider failed" in error.message

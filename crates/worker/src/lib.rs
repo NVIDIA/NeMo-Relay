@@ -18,6 +18,9 @@
 //! Rust-owned resources, but an accepted acknowledgment does not prove that
 //! arbitrary blocking work started by the callback has stopped.
 
+/// Negotiated, bounded plugin diagnostic submission and delivery controls.
+pub mod diagnostics;
+
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
@@ -45,7 +48,7 @@ pub use nemo_relay_types::api::registry::{
     RuntimeRegistrationIdentity, RuntimeRegistrationKind, RuntimeRegistrationOwner,
     RuntimeRegistrationOwnerKind,
 };
-pub use nemo_relay_types::api::scope::ScopeType;
+pub use nemo_relay_types::api::scope::{ScopeStackEntry, ScopeStackSnapshot, ScopeType};
 pub use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
@@ -77,7 +80,8 @@ use nemo_relay_worker_proto::v1::{
     WorkerError,
 };
 use nemo_relay_worker_proto::{
-    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
+    DOWNSTREAM_CONTINUATION_METADATA, WORKER_PROTOCOL_GRPC_V1, decode_json_envelope,
+    decode_json_value, json_envelope, json_value,
 };
 use serde_json::Map;
 use tokio::net::TcpListener;
@@ -163,6 +167,16 @@ pub enum WorkerSdkError {
     /// Worker transport failed.
     #[error("transport failed: {0}")]
     Transport(String),
+    /// An unchanged downstream continuation failure, preserving its original display.
+    /// Propagate this error to retain provenance; constructing a new error represents
+    /// a distinct plugin failure. The host checks the invocation's continuation ID.
+    #[error("{source}")]
+    Downstream {
+        /// Original SDK error, with unchanged execution/reporting semantics.
+        source: Box<WorkerSdkError>,
+        /// Host-issued continuation that returned the failure.
+        continuation_id: String,
+    },
     /// JSON serialization failed.
     #[error("serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -947,6 +961,7 @@ impl Default for PluginContext {
 /// Cloneable handle for calling the Relay host runtime from worker callbacks.
 #[derive(Clone)]
 pub struct PluginRuntime {
+    diagnostics: Arc<OnceCell<diagnostics::WorkerDiagnostics>>,
     activation_id: String,
     auth_token: String,
     host_endpoint: String,
@@ -955,6 +970,25 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
+    /// Negotiate once per activation. Disabled/unsupported facades skip lazy
+    /// diagnostic factories and leave execution and operational logging intact.
+    pub async fn diagnostics(&self) -> &diagnostics::WorkerDiagnostics {
+        self.diagnostics
+            .get_or_init(|| async {
+                let channel = self
+                    .host_channel
+                    .get_or_try_init(|| connect_host_endpoint(&self.host_endpoint))
+                    .await
+                    .cloned();
+                diagnostics::WorkerDiagnostics::connect(
+                    channel,
+                    self.activation_id.clone(),
+                    self.auth_token.clone(),
+                )
+                .await
+            })
+            .await
+    }
     /// Emits one operational log record through the Relay host's configured sinks.
     ///
     /// The host authenticates the activation and applies its own log-level filter.
@@ -1354,6 +1388,59 @@ impl PluginRuntime {
         ack_to_result(response.ok, response.error)
     }
 
+    /// Read owned root-to-top scope identities from the exact current binding.
+    /// Returns None without a binding, and an explicit error on older hosts or
+    /// invalid/expired bindings. Never caches an invocation-entry snapshot.
+    pub async fn current_scope_stack_snapshot(&self) -> Result<Option<ScopeStackSnapshot>> {
+        let scope = self.current_scope_context();
+        let mut client = self.host_client().await?;
+        let response = client
+            .get_current_scope_stack_snapshot(Request::new(
+                nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest {
+                    activation_id: self.activation_id.clone(),
+                    auth_token: self.auth_token.clone(),
+                    scope,
+                },
+            ))
+            .await
+            .map_err(|error| {
+                if error.code() == tonic::Code::Unimplemented {
+                    WorkerSdkError::Callback(
+                        "scope stack snapshots are unsupported by this host; \
+                         require the grpc-v1 snapshot extension"
+                            .into(),
+                    )
+                } else {
+                    WorkerSdkError::Transport(error.to_string())
+                }
+            })?
+            .into_inner();
+        if let Some(error) = response.error {
+            return Err(worker_error_to_sdk(error));
+        }
+        response
+            .snapshot
+            .map(|snapshot| {
+                let scopes = snapshot
+                    .scopes
+                    .into_iter()
+                    .map(|scope| {
+                        let scope_id = scope.scope_id.parse().map_err(|error| {
+                            WorkerSdkError::InvalidInput(format!(
+                                "invalid snapshot scope UUID: {error}"
+                            ))
+                        })?;
+                        Ok(ScopeStackEntry {
+                            scope_id,
+                            scope_type: snapshot_scope_type_from_proto(scope.scope_type),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ScopeStackSnapshot { scopes })
+            })
+            .transpose()
+    }
+
     /// Return a bounded snapshot of active host runtime diagnostics.
     pub async fn runtime_diagnostics(&self) -> Result<RuntimeDiagnostics> {
         let mut client = self.host_client().await?;
@@ -1689,7 +1776,7 @@ impl ToolNext {
                 scope: self.runtime.current_scope_context(),
             }))
             .await
-            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
+            .map_err(continuation_status_to_sdk)?
             .into_inner();
         tool_execution_result_to_sdk(response)
     }
@@ -1719,7 +1806,7 @@ impl LlmNext {
                 scope: self.runtime.current_scope_context(),
             }))
             .await
-            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
+            .map_err(continuation_status_to_sdk)?
             .into_inner();
         json_result_to_sdk(response)
     }
@@ -1751,10 +1838,10 @@ impl LlmStreamNext {
                 scope: scope.clone(),
             }))
             .await
-            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?;
+            .map_err(continuation_status_to_sdk)?;
         let stream = response.into_inner().map(|chunk| match chunk {
             Ok(chunk) => stream_chunk_to_json(chunk),
-            Err(err) => Err(WorkerSdkError::Transport(err.to_string())),
+            Err(err) => Err(continuation_status_to_sdk(err)),
         });
         Ok(Box::pin(ScopedJsonStream::new(Box::pin(stream), scope)))
     }
@@ -1810,6 +1897,7 @@ async fn serve_plugin_arc_with_endpoint_file(
     endpoint_file: Option<PathBuf>,
 ) -> Result<()> {
     let runtime = PluginRuntime {
+        diagnostics: Arc::new(OnceCell::new()),
         activation_id: config.activation_id,
         auth_token: config.auth_token,
         host_endpoint: config.host_endpoint,
@@ -2132,6 +2220,7 @@ impl PluginWorker for WorkerService {
                         code: "worker.error".into(),
                         message: format!("worker invocation task failed: {err}"),
                         retryable: false,
+                        downstream_continuation_id: None,
                     },
                 )),
             },
@@ -2213,7 +2302,7 @@ impl PluginWorker for WorkerService {
             Ok(Ok(stream)) => stream,
             Ok(Err(err)) => {
                 abort_on_drop.disarm();
-                return Err(Status::internal(err.to_string()));
+                return Err(status_from_sdk(err));
             }
             Err(err) if err.is_cancelled() => {
                 abort_on_drop.disarm();
@@ -2355,6 +2444,9 @@ impl PluginWorker for WorkerService {
     ) -> std::result::Result<Response<WorkerAck>, Status> {
         let request = request.into_inner();
         self.authorize(&request.activation_id, &request.auth_token)?;
+        if let Some(diagnostics) = self.runtime.diagnostics.get() {
+            let _ = diagnostics.close(std::time::Duration::from_secs(2)).await;
+        }
         Ok(Response::new(WorkerAck {
             accepted: false,
             message: "shutdown is not implemented by the Rust worker SDK yet".into(),
@@ -3355,6 +3447,15 @@ fn infallible_json_envelope<T: serde::Serialize>(schema: &str, value: &T) -> Jso
 }
 
 fn sdk_error_to_worker(error: WorkerSdkError) -> WorkerError {
+    if let WorkerSdkError::Downstream {
+        source,
+        continuation_id,
+    } = error
+    {
+        let mut wire = sdk_error_to_worker(*source);
+        wire.downstream_continuation_id = Some(continuation_id);
+        return wire;
+    }
     WorkerError {
         code: "worker.error".into(),
         message: match &error {
@@ -3366,6 +3467,7 @@ fn sdk_error_to_worker(error: WorkerSdkError) -> WorkerError {
             _ => error.to_string(),
         },
         retryable: false,
+        downstream_continuation_id: None,
     }
 }
 
@@ -3374,6 +3476,7 @@ fn cancelled_worker_error() -> WorkerError {
         code: "worker.cancelled".into(),
         message: "worker invocation was cancelled".into(),
         retryable: false,
+        downstream_continuation_id: None,
     }
 }
 
@@ -3441,17 +3544,53 @@ fn cancellation_aware_worker_stream(
 }
 
 fn worker_error_to_sdk(error: WorkerError) -> WorkerSdkError {
-    if error.code != "worker.cancelled"
+    let source = if error.code != "worker.cancelled"
         && nemo_relay_types::plugin::parse_http_error_message(&error.message).is_some()
     {
         WorkerSdkError::Callback(error.message)
     } else {
         WorkerSdkError::Callback(format!("{}: {}", error.code, error.message))
+    };
+    with_downstream_provenance(source, error.downstream_continuation_id)
+}
+
+fn with_downstream_provenance(
+    source: WorkerSdkError,
+    continuation_id: Option<String>,
+) -> WorkerSdkError {
+    match continuation_id.filter(|id| !id.is_empty()) {
+        Some(continuation_id) => WorkerSdkError::Downstream {
+            source: Box::new(source),
+            continuation_id,
+        },
+        None => source,
     }
 }
 
+fn continuation_status_to_sdk(error: Status) -> WorkerSdkError {
+    let continuation_id = error
+        .metadata()
+        .get(DOWNSTREAM_CONTINUATION_METADATA)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    with_downstream_provenance(
+        WorkerSdkError::Transport(error.to_string()),
+        continuation_id,
+    )
+}
+
 fn status_from_sdk(error: WorkerSdkError) -> Status {
-    Status::internal(error.to_string())
+    let mut status = Status::internal(error.to_string());
+    if let WorkerSdkError::Downstream {
+        continuation_id, ..
+    } = error
+        && let Ok(value) = continuation_id.parse()
+    {
+        status
+            .metadata_mut()
+            .insert(DOWNSTREAM_CONTINUATION_METADATA, value);
+    }
+    status
 }
 
 fn ack_to_result(ok: bool, error: Option<WorkerError>) -> Result<()> {
@@ -3633,6 +3772,23 @@ fn runtime_registration_kind(surface: RegistrationSurface) -> Result<RuntimeRegi
                 "surface is not a runtime registration kind".into(),
             ))
         }
+    }
+}
+
+fn snapshot_scope_type_from_proto(scope_type: i32) -> ScopeType {
+    use nemo_relay_worker_proto::v1::ScopeType as ProtoScopeType;
+    match ProtoScopeType::try_from(scope_type) {
+        Ok(ProtoScopeType::Agent) => ScopeType::Agent,
+        Ok(ProtoScopeType::Function) => ScopeType::Function,
+        Ok(ProtoScopeType::Tool) => ScopeType::Tool,
+        Ok(ProtoScopeType::Llm) => ScopeType::Llm,
+        Ok(ProtoScopeType::Retriever) => ScopeType::Retriever,
+        Ok(ProtoScopeType::Embedder) => ScopeType::Embedder,
+        Ok(ProtoScopeType::Reranker) => ScopeType::Reranker,
+        Ok(ProtoScopeType::Guardrail) => ScopeType::Guardrail,
+        Ok(ProtoScopeType::Evaluator) => ScopeType::Evaluator,
+        Ok(ProtoScopeType::Custom) => ScopeType::Custom,
+        _ => ScopeType::Unknown,
     }
 }
 
@@ -3818,6 +3974,9 @@ fn rustc_version_runtime() -> String {
 #[cfg(test)]
 #[path = "../tests/unit/codec_identity_tests.rs"]
 mod codec_identity_tests;
+#[cfg(test)]
+#[path = "../tests/unit/error_provenance_tests.rs"]
+mod error_provenance_tests;
 #[cfg(test)]
 #[path = "../tests/unit/execution_context_tests.rs"]
 mod execution_context_tests;

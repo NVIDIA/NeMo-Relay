@@ -26,7 +26,7 @@ fn automatic_http_client_does_not_follow_redirects() {
             .unwrap();
     });
 
-    let client = automatic_otlp_http_client().unwrap();
+    let client = automatic_otlp_http_client("TRACES").unwrap();
     let response = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(client.get(endpoint).send())

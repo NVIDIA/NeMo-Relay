@@ -72,6 +72,35 @@ fn request() -> LlmRequest {
     }
 }
 
+#[test]
+fn request_event_input_preserves_schema_and_moves_payload_storage() {
+    let request = LlmRequest {
+        headers: serde_json::Map::from_iter([("x-request-id".into(), json!("request-123"))]),
+        content: json!({"messages": [{"content": "large request body"}]}),
+    };
+    let expected = serde_json::to_value(&request).unwrap();
+    let content_ptr = request.content["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .as_ptr();
+    let header_ptr = request.headers["x-request-id"].as_str().unwrap().as_ptr();
+
+    let input = super::llm_request_event_input(request);
+
+    assert_eq!(input, expected);
+    assert_eq!(
+        input["content"]["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .as_ptr(),
+        content_ptr
+    );
+    assert_eq!(
+        input["headers"]["x-request-id"].as_str().unwrap().as_ptr(),
+        header_ptr
+    );
+}
+
 fn request_with_credential_headers() -> LlmRequest {
     let mut headers = serde_json::Map::new();
     for (name, value) in [
@@ -2434,6 +2463,88 @@ fn failed_managed_calls_sanitize_fallback_end_data() {
             && event.annotated_response().is_none()
             && !serde_json::to_string(event).unwrap().contains("SECRET")
     }));
+}
+
+#[test]
+fn manual_llm_call_end_preserves_explicit_error_metadata() {
+    let _guard = lock_global_runtime();
+    reset_global();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "manual-llm-error-status",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    let handle = llm_call(
+        LlmCallParams::builder()
+            .name("manual-error")
+            .request(&request())
+            .build(),
+    )
+    .unwrap();
+    let metadata = json!({
+        "otel.status_code": "ERROR",
+        "otel.status_description": "provider timed out",
+        "error.type": "TimeoutError",
+        "request_id": "request-123"
+    });
+    llm_call_end(
+        LlmCallEndParams::builder()
+            .handle(&handle)
+            .response(Json::Null)
+            .metadata(metadata.clone())
+            .build(),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+    deregister_subscriber("manual-llm-error-status").unwrap();
+
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 2);
+    let end = &events[1];
+    assert_eq!(end.scope_category(), Some(ScopeCategory::End));
+    assert_eq!(end.metadata(), Some(&metadata));
+}
+
+#[test]
+fn manual_llm_call_end_defaults_to_ok_without_an_error_status() {
+    let _guard = lock_global_runtime();
+    reset_global();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "manual-llm-default-status",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    let handle = llm_call(
+        LlmCallParams::builder()
+            .name("manual-ok")
+            .request(&request())
+            .build(),
+    )
+    .unwrap();
+    llm_call_end(
+        LlmCallEndParams::builder()
+            .handle(&handle)
+            .response(json!({"text": "hello"}))
+            .metadata(json!({"request_id": "request-123", "otel.status_description": "stale"}))
+            .build(),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+    deregister_subscriber("manual-llm-default-status").unwrap();
+
+    let events = events.lock().unwrap();
+    let end = events.last().unwrap();
+    assert_eq!(
+        end.metadata(),
+        Some(&json!({"request_id": "request-123", "otel.status_code": "OK"}))
+    );
+    assert_eq!(end.output(), Some(&json!({"text": "hello"})));
 }
 
 #[test]

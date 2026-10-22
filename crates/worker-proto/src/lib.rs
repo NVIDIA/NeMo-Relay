@@ -12,6 +12,14 @@
 /// Stable worker protocol identifier accepted by `compat.worker_protocol`.
 pub const WORKER_PROTOCOL_GRPC_V1: &str = "grpc-v1";
 
+/// Metadata set to `1` on a diagnostic admission rejection before execution.
+/// This certifies only that attempt; an earlier lost reply can still be uncertain.
+pub const DIAGNOSTIC_NOT_CONSUMED_METADATA: &str = "nemo-relay-diagnostic-not-consumed";
+
+/// Continuation provenance for an error returned as gRPC status metadata.
+/// Used for stream-opening failures, where no `WorkerError` envelope is returned.
+pub const DOWNSTREAM_CONTINUATION_METADATA: &str = "nemo-relay-downstream-continuation";
+
 /// Generated protobuf and gRPC service definitions.
 #[allow(missing_docs)]
 pub mod v1 {

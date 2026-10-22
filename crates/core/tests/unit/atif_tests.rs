@@ -666,6 +666,72 @@ fn test_exporter_omits_null_tool_observation_content() {
 }
 
 #[test]
+fn test_exporter_projects_versioned_tool_results_without_framework_knowledge() {
+    let exporter = AtifExporter::new("tool-results".to_string(), make_agent_info());
+    let outputs = [
+        json!({"schema": "nemo.relay.tool_result@1", "content": "answer", "is_error": false, "result": {"opaque": 1}}),
+        json!({"schema": "nemo.relay.tool_result@1", "content": [{"type": "text", "text": "failed"}], "is_error": true, "result": {"opaque": 2}}),
+        json!({"schema": "nemo.relay.tool_result@1", "content": null, "is_error": false, "result": {"opaque": 3}}),
+        // A lookalike application object and an unknown version remain opaque.
+        json!({"content": "do not infer", "is_error": true}),
+        json!({"schema": "nemo.relay.tool_result@2", "content": "unknown", "is_error": true, "result": null}),
+        json!({"schema": "nemo.relay.tool_result@1", "content": "malformed", "is_error": "true", "result": null}),
+    ];
+    {
+        let mut state = exporter.state.lock().unwrap();
+        for (index, output) in outputs.iter().enumerate() {
+            state.events.push(
+                event_builder(Uuid::now_v7(), EventType::End)
+                    .name(format!("tool-{index}"))
+                    .scope_type(ScopeType::Tool)
+                    .tool_call_id(format!("call-{index}"))
+                    .output(output.clone())
+                    .build(),
+            );
+        }
+        set_sequential_event_timestamps(
+            &mut state.events.iter_mut().collect::<Vec<_>>(),
+            base_timestamp(),
+            chrono::Duration::milliseconds(1),
+        );
+    }
+    let trajectory = exporter.export().unwrap();
+    let mut results: Vec<_> = trajectory
+        .steps
+        .iter()
+        .filter_map(|step| step.observation.as_ref())
+        .flat_map(|observation| &observation.results)
+        .collect();
+    results.sort_by_key(|result| {
+        result.extra.as_ref().unwrap()["event_name"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    });
+    assert_eq!(results.len(), outputs.len());
+    for (index, (result, output)) in results.iter().zip(&outputs).enumerate() {
+        assert_eq!(
+            result.content,
+            if index < 2 {
+                Some(output["content"].clone())
+            } else {
+                None
+            }
+        );
+        let extra = result.extra.as_ref().unwrap();
+        assert_eq!(
+            extra.get("is_error"),
+            if index == 1 {
+                Some(&Json::Bool(true))
+            } else {
+                None
+            }
+        );
+        assert_eq!(&extra["tool_result"], output);
+    }
+}
+
+#[test]
 fn test_exporter_preserves_annotation_when_tool_result_is_null() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let tool_uuid = Uuid::now_v7();

@@ -43,6 +43,8 @@ service PluginWorker {
 service RelayHostRuntime {
   rpc Log(LogRequest) returns (HostAck);
   rpc EmitMark(EmitMarkRequest) returns (HostAck);
+  rpc GetCurrentScopeStackSnapshot(GetCurrentScopeStackSnapshotRequest)
+      returns (GetCurrentScopeStackSnapshotResponse);
   rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest)
       returns (GetRuntimeDiagnosticsResponse);
   rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
@@ -280,6 +282,7 @@ capability IDs behind `resolve_codec()` proxies.
 |---|---|
 | `Log` | Emits an authenticated operational log record through Relay's configured sinks. |
 | `EmitMark` | Emits mark data and metadata under the supplied scope context. |
+| `GetCurrentScopeStackSnapshot` | Reads detached scope UUID/type entries from the exact authenticated binding. |
 | `GetRuntimeDiagnostics` | Returns the current bounded host-level diagnostic snapshot. |
 | `PushScope` | Opens a typed scope with name, data, metadata, input, and an optional historical start timestamp, returning the handle required for pop. |
 | `PopScope` | Closes the owned scope handle with output, metadata, and an optional historical end timestamp. |
@@ -298,6 +301,7 @@ The host-runtime request and response fields are complete in the following table
 |---|---|---|
 | `Log` | `activation_id`, `auth_token`, required `level`, optional `target`, `message`, and JSON-object `fields` | `HostAck.ok` or `HostAck.error` |
 | `EmitMark` | `activation_id`, `auth_token`, captured `scope`, `name`, optional `data`, `metadata`, `data_schema`, `severity`, and `category` | `HostAck.ok` or `HostAck.error` |
+| `GetCurrentScopeStackSnapshot` | `activation_id`, `auth_token`, and optional current `scope` | Optional `snapshot` with ordered `scopes`, or `error`; binding/authentication failures may return gRPC status. |
 | `GetRuntimeDiagnostics` | `activation_id` and `auth_token` | Ordered `RuntimeDiagnostic` entries with `code`, `message`, and `count` |
 | `PushScope` | `activation_id`, `auth_token`, captured `scope`, `name`, `scope_type`, and optional `data`, `metadata`, `input`, and `timestamp_unix_micros` | `scope_handle_id` or `error` |
 | `PopScope` | `activation_id`, `auth_token`, owned `scope_handle_id`, and optional `output`, `metadata`, and `timestamp_unix_micros` | `HostAck.ok` or `HostAck.error` |
@@ -427,3 +431,27 @@ Successful protocol verification covers authentication failures, envelope schema
 failures, every registration and result variant, repeated unary and incremental stream
 continuations, cancellation before and during callbacks, codec capability expiry, host
 runtime ownership errors, health, and orderly plus forced shutdown.
+
+
+## Scope Snapshot Extension
+
+`GetCurrentScopeStackSnapshot` is additive to `grpc-v1`. Existing enum numbers
+and RPCs remain unchanged. `ScopeStackEntry.scope_id` is a canonical UUID
+string; `scope_type` reuses the existing enum. `ScopeStackSnapshot.scopes`
+is ordered root to top and includes the implicit root. Snapshot decoders map
+UNSPECIFIED and future unknown numeric scope types to `Unknown`.
+
+A missing request `scope` returns response absence after authentication. A
+present context with an empty stack ID is invalid. Unknown, foreign, expired,
+cancelled, and dropped bindings return explicit errors. When supplied, a
+parent binding must be a live host-issued scope handle owned by the same stack.
+The getter reads that stack's visible entries. No ambient thread fallback or
+invocation-entry cache is used. Host cleanup and reads are ordered so the
+returned value is coherent and detached.
+
+Older hosts return gRPC `UNIMPLEMENTED`; SDKs surface an unsupported-operation
+error distinctly from absence. This operation uses RPC feature detection and
+requires no change to handshake registration-surface negotiation. Regenerate
+custom bindings to call it. See the
+[worker example](/build-plugins/workers/runtime-events-and-scopes#inspect-scope-identities)
+for nearest-Agent correlation and synthetic-root limitations.

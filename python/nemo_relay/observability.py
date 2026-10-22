@@ -10,6 +10,8 @@ from typing import Literal, Protocol, cast
 
 from nemo_relay import Json, JsonObject, UnsupportedBehavior
 
+from ._native import OpenTelemetryTlsConfig
+
 
 class _SupportsToDict(Protocol):
     def to_dict(self) -> JsonObject: ...
@@ -240,6 +242,7 @@ class OpenTelemetryEndpointConfig:
     promote_metadata_prefixes: list[str] = field(default_factory=list)
     promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
     header_file: dict[str, str] = field(default_factory=dict)
+    tls: OpenTelemetryTlsConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this endpoint to the canonical plugin shape."""
@@ -247,6 +250,7 @@ class OpenTelemetryEndpointConfig:
             {
                 "type": self.type,
                 "endpoint": self.endpoint,
+                "tls": _tls_dict(self.tls),
                 "mark_projection": self.mark_projection,
                 "mark_exclude_names": self.mark_exclude_names,
                 "attribute_mappings": self.attribute_mappings,
@@ -286,12 +290,14 @@ class OpenTelemetrySignalEndpointConfig:
     timeout_millis: int = 3000
     header_file: dict[str, str] = field(default_factory=dict)
     promote_resource_metadata_prefixes: list[str] = field(default_factory=list)
+    tls: OpenTelemetryTlsConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this signal endpoint to the canonical plugin shape."""
         return _normalize_object(
             {
                 "endpoint": self.endpoint,
+                "tls": _tls_dict(self.tls),
                 "transport": self.transport,
                 "headers": self.headers,
                 "header_env": self.header_env,
@@ -384,7 +390,8 @@ class ObservabilityConfig:
     """Canonical config document for the top-level observability component.
 
     ``enable_full_payloads`` retains complete sanitized request data on every
-    LLM start event.
+    LLM start event. ``insecure_http_hosts`` lists non-loopback hosts that may
+    receive exports and configured headers over unencrypted HTTP or WebSocket.
     """
 
     version: int = 4
@@ -393,6 +400,7 @@ class ObservabilityConfig:
     opentelemetry: OpenTelemetrySectionConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
     enable_full_payloads: bool = False
+    insecure_http_hosts: list[str] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this observability config to the canonical JSON object shape."""
@@ -404,6 +412,7 @@ class ObservabilityConfig:
                 "opentelemetry": self.opentelemetry,
                 "policy": self.policy,
                 "enable_full_payloads": self.enable_full_payloads,
+                "insecure_http_hosts": self.insecure_http_hosts,
             }
         )
 
@@ -436,6 +445,7 @@ __all__ = [
     "AtifConfig",
     "HttpStorageConfig",
     "S3StorageConfig",
+    "OpenTelemetryTlsConfig",
     "OpenTelemetryEndpointConfig",
     "OpenTelemetrySignalEndpointConfig",
     "OpenTelemetryLogSectionConfig",
@@ -445,3 +455,15 @@ __all__ = [
     "OBSERVABILITY_PLUGIN_KIND",
     "ComponentSpec",
 ]
+
+
+def _tls_dict(tls: OpenTelemetryTlsConfig | None) -> JsonObject | None:
+    if tls is None:
+        return None
+    return _normalize_object(
+        {
+            "certificate": tls.certificate,
+            "client_certificate": tls.client_certificate,
+            "private_key": tls.private_key,
+        }
+    )

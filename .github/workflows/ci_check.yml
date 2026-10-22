@@ -241,3 +241,7 @@ jobs:
             scripts.tests.test_package_cli_bin \
             scripts.tests.test_package_node_bin
           # SONAR_IGNORE_END
+
+      - name: Test docs version retention
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: uv run --no-sync python -m unittest scripts.tests.test_sync_fern_docs_branch

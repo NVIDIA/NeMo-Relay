@@ -34,7 +34,7 @@ use nemo_relay::observability::otel_metrics::{
 };
 use nemo_relay::plugin::dynamic::{
     DynamicPluginKind, PluginHostActivation, VerifiedDynamicPluginSpec, WorkerPluginActivation,
-    WorkerPluginLoadSpec, load_worker_plugins,
+    WorkerPluginLoadSpec, load_worker_plugins, load_worker_plugins_with_diagnostics,
 };
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig, list_plugin_kinds};
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
@@ -46,6 +46,82 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn enabled_worker_diagnostics() -> nemo_relay::diagnostics::Diagnostics {
+    use nemo_relay::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
+    Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+fn worker_diagnostic_snapshot(
+    context: &nemo_relay::diagnostics::Diagnostics,
+) -> nemo_relay::diagnostics::DiagnosticSnapshot {
+    context
+        .snapshot(&nemo_relay::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap()
+}
+
+fn assert_worker_stage_failure(
+    diagnostics: &nemo_relay::diagnostics::Diagnostics,
+    plugin_id: &str,
+    code: &str,
+    class: &str,
+    phase: &str,
+    failed_stage_success: &str,
+) {
+    let snapshot = worker_diagnostic_snapshot(diagnostics);
+    let failures = snapshot
+        .events
+        .iter()
+        .filter(|event| event.code() == code)
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1, "{code}");
+    let event = failures[0];
+    assert_eq!(event.count.get(), 1);
+    assert_eq!(event.classification.failure_class(), Some(class));
+    assert_eq!(event.context.phase.as_ref().unwrap().as_str(), phase);
+    assert_eq!(
+        event.context.execution.as_ref().unwrap().as_str(),
+        "worker_protocol"
+    );
+    let component = snapshot
+        .components
+        .iter()
+        .find(|component| component.identity.instance_id == event.component.instance_id)
+        .unwrap();
+    assert_eq!(
+        component.identity.key,
+        format!("plugin.worker_protocol.{plugin_id}")
+    );
+    let instance = event.origin.ownership.plugin_instance_id.unwrap();
+    assert_eq!(
+        component.since_refresh.ownership.plugin_instance_id,
+        Some(instance)
+    );
+    assert!(snapshot.events.iter().all(|event| {
+        event.origin.ownership.plugin_instance_id == Some(instance)
+            && event.code() != failed_stage_success
+    }));
+    assert!(
+        !std::env::temp_dir()
+            .join(format!("nmrw-{}", instance.simple()))
+            .exists(),
+        "failed activation must release its endpoint directory"
+    );
+}
 
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
@@ -119,6 +195,85 @@ fn worker_activation_with_no_specs_is_empty() {
         .expect("empty worker activation should succeed");
     assert!(activation.is_empty());
     activation.clear();
+}
+
+#[tokio::test]
+async fn worker_sdk_records_into_selected_host_context_and_survives_plugin_cleanup() {
+    use nemo_relay::diagnostics::*;
+    use nemo_relay::plugin::dynamic::load_worker_plugins_with_diagnostics;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let diagnostics = Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let projected = Arc::new(AtomicUsize::new(0));
+    let calls = projected.clone();
+    let _projection = diagnostics
+        .subscribe_projection(move |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let activation = load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("emit_internal_diagnostics".into(), json!(true))]),
+        }],
+        &diagnostics,
+    )
+    .unwrap();
+    let snapshot = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let remote = snapshot
+        .components
+        .iter()
+        .find(|component| component.identity.key == "fixture.internal")
+        .unwrap();
+    assert_eq!(remote.lifetime.totals.occurrences_total.value.get(), 5);
+    assert_eq!(remote.lifetime.totals.recorded_events_total.value.get(), 2);
+    assert_eq!(
+        snapshot
+            .events
+            .iter()
+            .filter(|event| event.remote.is_some())
+            .count(),
+        2
+    );
+    activation.clear();
+    assert_eq!(projected.load(Ordering::Relaxed), 0);
+    let after = diagnostics
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let remote = after
+        .components
+        .iter()
+        .find(|component| component.identity.key == "fixture.internal")
+        .unwrap();
+    assert!(remote.closed_at.is_some());
+    assert_eq!(remote.lifetime.totals.occurrences_total.value.get(), 5);
+    assert!(
+        diagnostics
+            .register_component(ComponentRegistration::new("after_cleanup", &[]))
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -588,6 +743,22 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
             let rewritten = tool_request_intercepts("demo_tool", json!({ "input": "value" }))
                 .await
                 .expect("worker request intercept should run");
+            let expected = serde_json::to_value(
+                nemo_relay::api::runtime::current_scope_stack_snapshot().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(rewritten["scope_stack_snapshot"], expected);
+            assert_eq!(rewritten["scope_stack_snapshot_after"], expected);
+            let retained = rewritten["scope_stack_snapshot"]["scopes"]
+                .as_array()
+                .unwrap();
+            let inside = rewritten["scope_stack_snapshot_inside"]["scopes"]
+                .as_array()
+                .unwrap();
+            assert_eq!(inside.len(), retained.len() + 1);
+            assert_eq!(&inside[..retained.len()], retained.as_slice());
+            assert_eq!(inside.last().unwrap()["scope_type"], "function");
+            assert_eq!(retained.last().unwrap()["scope_id"], outer_uuid.to_string());
             let tool_result = tool_call_execute(
                 ToolCallExecuteParams::builder()
                     .name("worker-fixture-tool")
@@ -1235,12 +1406,16 @@ async fn worker_validation_diagnostics_prevent_initialization() {
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
     let config = Map::from_iter([("reject".into(), json!(true))]);
 
-    let activation = load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: None,
-        config: config.clone(),
-    }])
+    let diagnostics = enabled_worker_diagnostics();
+    let activation = load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: config.clone(),
+        }],
+        &diagnostics,
+    )
     .expect("worker plugin should load with validation diagnostics");
 
     let mut plugin_config = PluginConfig::default();
@@ -1257,6 +1432,20 @@ async fn worker_validation_diagnostics_prevent_initialization() {
 
     test_close_plugin_host().expect("worker plugin config should clear");
     activation.clear();
+    let view = worker_diagnostic_snapshot(&diagnostics);
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 1);
+    let event = view
+        .events
+        .iter()
+        .find(|event| event.code() == "plugin.worker.validation_failed")
+        .unwrap();
+    assert_eq!(event.classification.failure_class(), Some("unknown"));
+    assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "validation");
+    assert!(
+        view.events
+            .iter()
+            .any(|event| event.code() == "plugin.worker.process_cleaned")
+    );
 }
 
 #[tokio::test]
@@ -1330,12 +1519,16 @@ async fn worker_registration_error_fails_activation() {
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
 
-    let error = match load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: None,
-        config: Map::from_iter([("register_error".into(), json!(true))]),
-    }]) {
+    let diagnostics = enabled_worker_diagnostics();
+    let error = match load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("register_error".into(), json!(true))]),
+        }],
+        &diagnostics,
+    ) {
         Ok(activation) => {
             activation.clear();
             panic!("worker registration error should fail activation");
@@ -1345,6 +1538,22 @@ async fn worker_registration_error_fails_activation() {
     assert!(
         error.contains("fixture registration error requested"),
         "{error}"
+    );
+    assert_worker_stage_failure(
+        &diagnostics,
+        "fixture_worker",
+        "plugin.worker.registration_failed",
+        "unknown",
+        "activation",
+        "plugin.worker.registered",
+    );
+    let snapshot = worker_diagnostic_snapshot(&diagnostics);
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert!(
+        snapshot
+            .events
+            .iter()
+            .any(|event| event.code() == "plugin.worker.process_cleaned")
     );
 }
 
@@ -1394,17 +1603,73 @@ async fn worker_handshake_plugin_id_mismatch_reports_config_error() {
 }
 
 #[tokio::test]
+async fn worker_handshake_response_mismatch_is_attributed_and_cleaned() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_worker_manifest(
+        "other_worker",
+        &supported_relay_requirement(),
+        "rust",
+        fixture.binary_path().to_string_lossy().as_ref(),
+    );
+    let diagnostics = enabled_worker_diagnostics();
+    let error = match load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "other_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
+        &diagnostics,
+    ) {
+        Ok(activation) => {
+            activation.clear();
+            panic!("worker handshake response mismatch should fail activation");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("worker plugin returned id 'fixture_worker' kind 'fixture_worker' but manifest id is 'other_worker'"),
+        "{error}"
+    );
+    assert_worker_stage_failure(
+        &diagnostics,
+        "other_worker",
+        "plugin.worker.handshake_failed",
+        "incompatible",
+        "activation",
+        "plugin.worker.handshake_completed",
+    );
+    let snapshot = worker_diagnostic_snapshot(&diagnostics);
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert!(
+        snapshot
+            .events
+            .iter()
+            .any(|event| event.code() == "plugin.worker.started")
+    );
+    assert!(!snapshot.events.iter().any(|event| matches!(
+        event.code(),
+        "plugin.worker.validated" | "plugin.worker.registered"
+    )));
+}
+
+#[tokio::test]
 async fn worker_validation_rpc_failure_reports_activation_error() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
 
-    let error = match load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: None,
-        config: Map::from_iter([("exit_in_validate".into(), json!(true))]),
-    }]) {
+    let diagnostics = enabled_worker_diagnostics();
+    let error = match load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("exit_in_validate".into(), json!(true))]),
+        }],
+        &diagnostics,
+    ) {
         Ok(activation) => {
             activation.clear();
             panic!("worker validation process exit should fail activation");
@@ -1412,6 +1677,18 @@ async fn worker_validation_rpc_failure_reports_activation_error() {
         Err(error) => error.to_string(),
     };
     assert!(error.contains("worker validation RPC failed"), "{error}");
+    let view = worker_diagnostic_snapshot(&diagnostics);
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 1);
+    let event = view
+        .events
+        .iter()
+        .find(|event| event.code() == "plugin.worker.validation_failed")
+        .unwrap();
+    assert_eq!(event.count.get(), 1);
+    assert_eq!(
+        event.context.execution.as_ref().unwrap().as_str(),
+        "worker_protocol"
+    );
 }
 
 #[tokio::test]
@@ -1420,12 +1697,16 @@ async fn worker_registration_rpc_failure_reports_activation_error() {
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
 
-    let error = match load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: None,
-        config: Map::from_iter([("exit_in_register".into(), json!(true))]),
-    }]) {
+    let diagnostics = enabled_worker_diagnostics();
+    let error = match load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("exit_in_register".into(), json!(true))]),
+        }],
+        &diagnostics,
+    ) {
         Ok(activation) => {
             activation.clear();
             panic!("worker registration process exit should fail activation");
@@ -1433,6 +1714,14 @@ async fn worker_registration_rpc_failure_reports_activation_error() {
         Err(error) => error.to_string(),
     };
     assert!(error.contains("worker registration RPC failed"), "{error}");
+    assert_worker_stage_failure(
+        &diagnostics,
+        "fixture_worker",
+        "plugin.worker.registration_failed",
+        "unknown",
+        "activation",
+        "plugin.worker.registered",
+    );
 }
 
 #[test]
@@ -1441,12 +1730,16 @@ fn missing_worker_executable_reports_startup_error() {
     let missing_binary = std::env::temp_dir().join(format!("missing-worker-{}", Uuid::now_v7()));
     let (_manifest_dir, manifest_ref) = write_manifest(&missing_binary);
 
-    let error = match load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: None,
-        config: Map::new(),
-    }]) {
+    let diagnostics = enabled_worker_diagnostics();
+    let error = match load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
+        &diagnostics,
+    ) {
         Ok(activation) => {
             activation.clear();
             panic!("missing worker executable should fail activation");
@@ -1454,6 +1747,18 @@ fn missing_worker_executable_reports_startup_error() {
         Err(error) => error.to_string(),
     };
     assert!(error.contains("failed to spawn"), "{error}");
+    let view = worker_diagnostic_snapshot(&diagnostics);
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 1);
+    let event = view
+        .events
+        .iter()
+        .find(|event| event.code() == "plugin.worker.launch_failed")
+        .unwrap();
+    assert_eq!(event.count.get(), 1);
+    assert_eq!(
+        event.context.execution.as_ref().unwrap().as_str(),
+        "worker_protocol"
+    );
 }
 
 #[test]
@@ -1884,55 +2189,83 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
             response_codec: Arc::new(RuntimeOpenAiChatCodec),
         },
     ] {
-        let provider_only = json!({"lane": case.name, "preserve": true});
-        let expected_provider_only = provider_only.clone();
-        let answer = case.answer;
-        let response = llm_call_execute(
-            LlmCallExecuteParams::builder()
-                .name(format!("python-worker-codec-context-{}", case.name))
-                .request(LlmRequest {
-                    headers: Map::new(),
-                    content: json!({
-                        "model": "caller-model",
-                        "messages": [{"role": "user", "content": "hello"}],
-                        "provider_only": provider_only,
-                    }),
-                })
-                .codec(case.request_codec)
-                .response_codec(case.response_codec)
-                .func(Arc::new(move |request| {
-                    let expected_provider_only = expected_provider_only.clone();
-                    Box::pin(async move {
-                        assert_eq!(request.content["model"], "worker-model");
-                        assert_eq!(request.content["provider_only"], expected_provider_only);
-                        Ok(json!({
-                            "id": "chatcmpl-codec-context",
-                            "object": "chat.completion",
-                            "model": "provider-model",
-                            "choices": [{
-                                "index": 0,
-                                "message": {"role": "assistant", "content": answer},
-                                "finish_reason": "stop",
-                            }],
+        TASK_SCOPE_STACK
+            .scope(create_scope_stack(), async {
+                let agent = push_scope(
+                    PushScopeParams::builder()
+                        .name(&format!("python-worker-snapshot-agent-{}", case.name))
+                        .scope_type(ScopeType::Agent)
+                        .build(),
+                )
+                .unwrap();
+                let expected_snapshot = serde_json::to_value(
+                    nemo_relay::api::runtime::current_scope_stack_snapshot().unwrap(),
+                )
+                .unwrap();
+                let provider_only = json!({"lane": case.name, "preserve": true});
+                let expected_provider_only = provider_only.clone();
+                let answer = case.answer;
+                let response = llm_call_execute(
+                    LlmCallExecuteParams::builder()
+                        .name(format!("python-worker-codec-context-{}", case.name))
+                        .request(LlmRequest {
+                            headers: Map::new(),
+                            content: json!({
+                                "model": "caller-model",
+                                "messages": [{"role": "user", "content": "hello"}],
+                                "provider_only": provider_only,
+                            }),
+                        })
+                        .codec(case.request_codec)
+                        .response_codec(case.response_codec)
+                        .func(Arc::new(move |request| {
+                            let expected_provider_only = expected_provider_only.clone();
+                            Box::pin(async move {
+                                assert_eq!(request.content["model"], "worker-model");
+                                assert_eq!(
+                                    request.content["provider_only"],
+                                    expected_provider_only
+                                );
+                                Ok(json!({
+                                    "id": "chatcmpl-codec-context",
+                                    "object": "chat.completion",
+                                    "model": "provider-model",
+                                    "choices": [{
+                                        "index": 0,
+                                        "message": {"role": "assistant", "content": answer},
+                                        "finish_reason": "stop",
+                                    }],
+                                }))
+                            })
                         }))
-                    })
-                }))
-                .build(),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{} codec-context call failed: {error}", case.name));
+                        .build(),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{} codec-context call failed: {error}", case.name));
 
-        assert_eq!(
-            response["_codec_context_probe"],
-            json!({
-                "request_kind": case.identity_kind,
-                "request_id": case.identity_id,
-                "response_kind": case.identity_kind,
-                "response_id": case.identity_id,
-                "decoded_model": "provider-model",
-                "decoded_message": case.answer,
+                assert_eq!(
+                    response["_codec_context_probe"],
+                    json!({
+                        "request_kind": case.identity_kind,
+                        "request_id": case.identity_id,
+                        "response_kind": case.identity_kind,
+                        "response_id": case.identity_id,
+                        "decoded_model": "provider-model",
+                        "decoded_message": case.answer,
+                    })
+                );
+                assert_eq!(response["_scope_stack_snapshot_probe"], expected_snapshot);
+                assert_eq!(
+                    response["_scope_stack_snapshot_probe"]["scopes"]
+                        .as_array()
+                        .unwrap()
+                        .last()
+                        .unwrap()["scope_id"],
+                    agent.uuid.to_string()
+                );
+                pop_scope(PopScopeParams::builder().handle_uuid(&agent.uuid).build()).unwrap();
             })
-        );
+            .await;
     }
 
     drop(cleanup);
@@ -2215,8 +2548,19 @@ class CodecContextProbe(WorkerPlugin):
             encoded = await request_codec.encode(annotated, request)
             response = await next_call.call(encoded)
             decoded = await response_codec.decode(response)
+            if ctx.runtime is None:
+                raise RuntimeError("host runtime is unavailable")
+            snapshot = await ctx.runtime.current_scope_stack_snapshot()
+            if snapshot is None:
+                raise RuntimeError("enclosing Agent snapshot is unavailable")
 
             result = dict(response)
+            result["_scope_stack_snapshot_probe"] = {
+                "scopes": [
+                    {"scope_id": entry.scope_id, "scope_type": entry.scope_type.value}
+                    for entry in snapshot.scopes
+                ]
+            }
             result["_codec_context_probe"] = {
                 "request_kind": context.request_codec.codec.kind,
                 "request_id": context.request_codec.codec.id,
@@ -2308,4 +2652,81 @@ fn assert_not_parent(
 ) {
     let event = find_event(events, name, scope_category);
     assert_ne!(event.parent_uuid(), Some(excluded_parent));
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scope_stack_snapshot_worker_correlates_parallel_agent_llm_and_tool_callbacks() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let loaded = load_and_initialize_fixture(Map::from_iter([(
+        "inspect_execution_snapshots".into(),
+        json!(true),
+    )]))
+    .await;
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let run_agent = |name: &'static str| {
+        let barrier = barrier.clone();
+        tokio::spawn(TASK_SCOPE_STACK.scope(create_scope_stack(), async move {
+            let agent = push_scope(
+                PushScopeParams::builder()
+                    .name(name)
+                    .scope_type(ScopeType::Agent)
+                    .build(),
+            )
+            .unwrap();
+            let expected = serde_json::to_value(
+                nemo_relay::api::runtime::current_scope_stack_snapshot().unwrap(),
+            )
+            .unwrap();
+            barrier.wait().await;
+            let llm = llm_call_execute(
+                LlmCallExecuteParams::builder()
+                    .name(name)
+                    .request(LlmRequest {
+                        headers: Map::new(),
+                        content: json!({"agent": name}),
+                    })
+                    .func(Arc::new(|_| {
+                        Box::pin(async { Ok(json!({"tool_call_id": "call_1"})) })
+                    }))
+                    .build(),
+            )
+            .await
+            .unwrap();
+            let tool = tool_call_execute(
+                ToolCallExecuteParams::builder()
+                    .name("snapshot-tool")
+                    .args(json!({"agent": name}))
+                    .tool_call_id("call_1")
+                    .func(Arc::new(|arguments| {
+                        Box::pin(async move { Ok(ToolExecutionResult::new(arguments)) })
+                    }))
+                    .build(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(llm["scope_stack_snapshot"], expected);
+            assert_eq!(tool.result["scope_stack_snapshot"], expected);
+            assert_eq!(tool.result["snapshot_tool_call_id"], "call_1");
+            assert_eq!(llm["tool_call_id"], "call_1");
+            let scopes = expected["scopes"].as_array().unwrap();
+            assert_eq!(scopes.last().unwrap()["scope_id"], agent.uuid.to_string());
+            assert_eq!(scopes.last().unwrap()["scope_type"], "agent");
+            pop_scope(PopScopeParams::builder().handle_uuid(&agent.uuid).build()).unwrap();
+            (
+                agent.uuid,
+                llm["scope_stack_snapshot"].clone(),
+                tool.result["scope_stack_snapshot"].clone(),
+            )
+        }))
+    };
+    let (first, second) = tokio::join!(
+        run_agent("snapshot-agent-first"),
+        run_agent("snapshot-agent-second")
+    );
+    let (first_agent, first_llm, first_tool) = first.unwrap();
+    let (second_agent, second_llm, second_tool) = second.unwrap();
+    assert_ne!(first_agent, second_agent);
+    assert_eq!(first_llm, first_tool);
+    assert_eq!(second_llm, second_tool);
+    assert_ne!(first_llm, second_llm);
+    loaded.clear();
 }

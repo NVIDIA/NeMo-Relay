@@ -587,6 +587,12 @@ async fn supervise_worker_launch(
         && activation_id == &bootstrap.activation_id
         && let Some(status) = child.child.try_wait().map_err(CliError::Io)?
     {
+        crate::runtime_diagnostics::record(
+            crate::runtime_diagnostics::Operation::Child,
+            nemo_relay::diagnostics::Classification::notice(
+                nemo_relay::diagnostics::NoticeCode::CliChildExited,
+            ),
+        );
         let error = CliError::Launch(format!(
             "activated worker exited before readiness with {status}"
         ));
@@ -706,6 +712,17 @@ async fn launch_worker(
             child,
             stdin: Some(tokio::fs::File::from_std(stdin)),
         });
+    match &spawn {
+        Ok(_) => crate::runtime_diagnostics::success(
+            crate::runtime_diagnostics::Operation::Child,
+            nemo_relay::diagnostics::SuccessCode::CliChildSpawned,
+        ),
+        Err(_) => crate::runtime_diagnostics::failure(
+            crate::runtime_diagnostics::Operation::Child,
+            nemo_relay::diagnostics::CliFailureCode::ChildSpawn,
+            nemo_relay::diagnostics::FailureClass::Io,
+        ),
+    }
     let child = spawn
         .map_err(|error| CliError::Launch(format!("failed to launch daemon worker: {error}")))
         .map_err(|error| {

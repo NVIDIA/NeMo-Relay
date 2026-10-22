@@ -195,6 +195,33 @@ also sets `x-nemo-relay-atif-filename` and
 `x-nemo-relay-atif-session-id` headers so receivers can keep the same object
 identity that local files and S3 uploads use.
 
+`timeout_millis` sets the time limit for each HTTP request. This time includes
+the upload and the wait for the receiver's response. Set it high enough for the
+receiver to process the whole trajectory. The default is `3000` milliseconds
+(3 seconds).
+
+Receivers such as NeMo Helix Intake can take tens of seconds or longer to
+process a trajectory. Measure how long your receiver takes to process large
+trajectories. Allow extra time for network delays and heavy load. For example,
+`timeout_millis = 60000` allows 60 seconds per request. Use a larger value if
+your receiver needs more time. Relay waits for uploads during subscriber flush
+and plugin teardown. A longer timeout can delay these steps if the receiver is
+slow or unavailable.
+
+When the timeout expires, Relay records `atif.remote_delivery_failed`. A
+timeout does not mean the receiver discarded the trajectory. The receiver can
+still store it after Relay stops waiting.
+
+If all remote destinations fail for that trajectory, Relay writes a local
+recovery copy under `output_directory`. Plugin teardown reports the delivery
+failure even if Relay saves this copy. `activation.close()` returns an error if
+the delivery failure is still pending.
+
+Relay sends later trajectories to the destination again. It does not
+automatically resend the failed trajectory. Before you resend a recovery copy,
+check the receiver for the `trajectory_id` to avoid storing the same trajectory
+twice.
+
 For an OIDC token-file flow, have the token writer produce the complete header
 value, such as `Bearer eyJ...`, at
 `/var/run/secrets/telemetry/token`; Relay does not add a `Bearer ` prefix.
@@ -213,11 +240,12 @@ The following table describes HTTP storage settings:
 | `headers` | `{}` | Static request headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `header_file` | `{}` | Maps header names to regular files read before each completed-trajectory upload. Files must exist at activation. Relay removes trailing whitespace. A header name cannot also appear in `headers` or `header_env`, even with different letter case. |
-| `timeout_millis` | `3000` | Per-request timeout in milliseconds. Must be positive. |
+| `timeout_millis` | `3000` | Time limit for each HTTP request, in milliseconds. Includes the upload and the wait for the receiver's response. Must be greater than zero. Allow enough time to process the whole trajectory. |
 
 When you set any header source (`headers`, `header_env`, or `header_file`),
 remote HTTP storage must use HTTPS. HTTP is allowed only for localhost and
-loopback IP addresses. Relay does not follow redirects when headers are set.
+loopback IP addresses, unless the host is listed in the not-recommended
+[`insecure_http_hosts`](/configure-plugins/observability/configuration#insecure-http-hosts) setting. Relay does not follow redirects when headers are set.
 Use the final destination URL. A redirect fails that upload and Relay does not
 send headers to the new destination.
 
@@ -351,6 +379,12 @@ When a successful tool result carries an opaque annotation, the corresponding
 ATIF observation result stores it at `extra.tool_result_annotation`. ATIF
 preserves the JSON value without interpreting application-defined keys.
 
+For integrations that use
+[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results),
+ATIF reads observation text and image parts from `content`. A failed tool result
+adds `extra.is_error: true`. Successful results omit this flag. The full JSON
+wrapper stays in `extra.tool_result`.
+
 ## Plugin Configuration
 
 Use plugin configuration when the application should let NeMo Relay own the ATIF
@@ -361,7 +395,7 @@ exporter through each supported language binding.
 loading plugin code or acquiring the activation lease. Use Python/Rust
 `validate_exact()`, Node.js `validateExact()`, or Go `ValidateExact()` when only
 the supplied static configuration should be checked. For complete
-layering rules, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+layering rules, refer to [Configure](/configure-plugins/plugin-configuration-files).
 
 <Tabs>
 <Tab title="Python" language="python">

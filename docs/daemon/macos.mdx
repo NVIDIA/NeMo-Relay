@@ -104,8 +104,21 @@ sudo dscl . -create /Users/_nemo-relay IsHidden 1
 sudo dscl . -create /Users/_nemo-relay Password '*'
 sudo install -d -o _nemo-relay -g _nemo-relay -m 0700 /var/lib/nemo-relay
 sudo install -d -o _nemo-relay -g _nemo-relay -m 0700 /var/lib/nemo-relay/.config
-sudo install -d -o _nemo-relay -g _nemo-relay -m 0700 /Library/Logs/NeMoRelay
+sudo install -d -o _nemo-relay -g _nemo-relay -m 0700 /var/lib/nemo-relay/logs
 ```
+
+Keep logs in the service account's private home directory to preserve them
+across macOS upgrades. The `_nemo-relay` account owns this directory. If someone
+removes the `logs` directory, launchd can create it again as `_nemo-relay`.
+The plist sets `Umask` to `63` (octal `077`). This setting keeps new directories
+and log files private.
+
+Avoid `/Library/Logs/NeMoRelay` for this non-root LaunchDaemon. macOS upgrades
+can remove custom directories under `/Library/Logs`. Root owns that parent
+directory. The `_nemo-relay` account lacks permission to create directories
+there, so launchd fails before Relay starts. It reports
+`Unable to create stdout directory ... Permission denied` and exit code `78`
+(`EX_CONFIG`).
 
 Save `/Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist`:
 
@@ -131,8 +144,8 @@ Save `/Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist`:
   <key>ThrottleInterval</key><integer>5</integer>
   <key>ExitTimeOut</key><integer>150</integer>
   <key>Umask</key><integer>63</integer>
-  <key>StandardOutPath</key><string>/Library/Logs/NeMoRelay/daemon.out.log</string>
-  <key>StandardErrorPath</key><string>/Library/Logs/NeMoRelay/daemon.err.log</string>
+  <key>StandardOutPath</key><string>/var/lib/nemo-relay/logs/daemon.out.log</string>
+  <key>StandardErrorPath</key><string>/var/lib/nemo-relay/logs/daemon.err.log</string>
 </dict>
 </plist>
 ```
@@ -145,8 +158,51 @@ sudo chmod 644 /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
 plutil -lint /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
 sudo launchctl bootstrap system /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
 sudo launchctl print system/com.nvidia.nemo-relay.daemon
-sudo tail -n 50 /Library/Logs/NeMoRelay/daemon.err.log
+sudo tail -n 50 /var/lib/nemo-relay/logs/daemon.err.log
 ```
+
+If your installation uses `/Library/Logs/NeMoRelay`, change the log paths with
+these steps:
+
+1. Close harness sessions.
+2. Unload the system job:
+
+   ```bash
+   sudo launchctl bootout system /Library/LaunchDaemons/com.nvidia.nemo-relay.daemon.plist
+   ```
+
+3. Create `/var/lib/nemo-relay/logs` with the `install` command above. It sets
+   `_nemo-relay` as the owner and group, with `0700` permissions.
+4. Optional: Copy any old logs you want to keep from `/Library/Logs/NeMoRelay`
+   to `/var/lib/nemo-relay/logs`. Set `_nemo-relay` as the owner and group of
+   each copied file, with `0600` permissions. Skip this step if the old logs
+   are gone.
+5. Update `StandardOutPath` and `StandardErrorPath` in the installed plist to
+   match the example above.
+6. Run the `plutil -lint`, `launchctl bootstrap`, `launchctl print`, and `tail`
+   commands above to check the plist, start the job, and check its status and logs.
+7. Update any log rotation settings to use the new paths. Configure the rotation
+   tool to create replacement log files with `_nemo-relay` as the owner and
+   group, with `0600` permissions. If root owns these files with `0600`
+   permissions, the daemon cannot open them at the next start.
+
+Hooks run as each user and check the daemon's TLS certificate before they send
+anything. They cannot read the service account's files, so publish the
+certificate, never the key, in the system configuration directory. Export it
+as the service account with the service's environment:
+
+```bash
+sudo install -d -o root -g wheel -m 0755 /etc/nemo-relay
+sudo -u _nemo-relay env HOME=/var/lib/nemo-relay XDG_CONFIG_HOME=/var/lib/nemo-relay/.config \
+  /opt/nvidia/bin/nemo-relay daemon tls-certificate \
+  | sudo tee /etc/nemo-relay/hook-tls-certificate.pem > /dev/null
+sudo chown root:wheel /etc/nemo-relay/hook-tls-certificate.pem
+sudo chmod 644 /etc/nemo-relay/hook-tls-certificate.pem
+```
+
+The certificate stays the same across restarts and upgrades. Publish it again
+only if the service identity under
+`/var/lib/nemo-relay/.config/nemo-relay/bootstrap` is removed.
 
 The service identity lives under `/var/lib/nemo-relay/.config/nemo-relay/daemon`.
 Keep it across upgrades. User workers still load `/etc/nemo-relay`, and their
