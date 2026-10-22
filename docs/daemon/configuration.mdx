@@ -147,9 +147,11 @@ Copy-Item .\config.toml, .\plugins.toml 'C:\ProgramData\nemo-relay\'
 ```
 
 For an existing installation, merge approved settings rather than replacing files
-or ACLs blindly. Managed workers ignore personal runtime configuration, plugin
-directories, and lifecycle state. Install required plugin binaries and dependencies
-in the administrator-managed locations referenced by the system manifest.
+or ACLs blindly. Local and remote-client workers load personal runtime
+configuration, plugin manifests, and dynamic plugins alongside the system layer.
+System settings take priority. Install required system plugin binaries and
+dependencies in the administrator-managed locations referenced by the system
+manifest.
 
 ## Provision Client Credentials
 
