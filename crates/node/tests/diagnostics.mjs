@@ -93,6 +93,17 @@ test('configured inspection survives plugin and Node environment cleanup', async
     () => reader.snapshot({ unknown: true }),
     (error) => error.reason === 'invalid_query',
   );
+  assert.equal(reader.info().discovery.maxQueryEvents, 256n);
+  assert(reader.info().discovery.producerSupport.some((p) => p.name === 'otel' && !p.supported));
+  assert.equal(reader.snapshot({ schemaVersion: 1 }).schemaVersion, 1);
+  for (const [query, reason] of [
+    [{ schemaVersion: 2 }, 'unsupported_schema'],
+    [{ maxEvents: 4294967295 }, 'invalid_query'],
+    [{ maxResponseBytes: 1 }, 'snapshot_capacity'],
+    [{ ownership: { unknown: 'restricted-input' } }, 'invalid_query'],
+  ]) {
+    assert.throws(() => reader.snapshot(query), (error) => error.reason === reason);
+  }
   await assert.rejects(plugin.initialize({ diagnostics: { enabled: false } }), /configuration_conflict/);
   assert.equal(reader.snapshot().source.instanceId, source);
 });

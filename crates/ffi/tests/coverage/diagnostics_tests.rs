@@ -88,6 +88,31 @@ async fn reader_owns_strings_and_survives_plugin_close() {
     unsafe {
         crate::convert::nemo_relay_string_free(out);
     }
+    for (query, status, reason) in [
+        (
+            r#"{"schema_version":2}"#,
+            NemoRelayStatus::InvalidArg,
+            "unsupported_schema",
+        ),
+        (
+            r#"{"max_response_bytes":1}"#,
+            NemoRelayStatus::Internal,
+            "snapshot_capacity",
+        ),
+    ] {
+        let input = CString::new(query).unwrap();
+        assert_eq!(
+            unsafe { nemo_relay_diagnostics_snapshot_json(reader, input.as_ptr(), &mut out) },
+            status
+        );
+        assert!(out.is_null());
+        assert_eq!(
+            unsafe { CStr::from_ptr(crate::error::nemo_relay_last_error()) }
+                .to_str()
+                .unwrap(),
+            reason
+        );
+    }
     let oversized = CString::new("x".repeat(4097)).unwrap();
     assert_eq!(
         unsafe { nemo_relay_diagnostics_snapshot_json(reader, oversized.as_ptr(), &mut out) },

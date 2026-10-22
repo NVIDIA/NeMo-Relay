@@ -136,6 +136,17 @@ async def main():
     else:
         raise AssertionError("startup-only settings changed")
     assert reader.snapshot()["source"] == first["source"]
+    assert type(reader.info()["discovery"]["max_query_events"]) is int
+    assert any(p["name"] == "otel" and not p["supported"] for p in reader.info()["discovery"]["producer_support"])
+    for query, expected in [({"schema_version": 2}, "unsupported_schema"),
+                            ({"max_events": 2**32 - 1}, "invalid_query"),
+                            ({"max_response_bytes": 1}, "snapshot_capacity")]:
+        try:
+            reader.snapshot(query)
+        except diagnostics.DiagnosticsError as error:
+            assert error.reason == expected
+        else:
+            raise AssertionError("invalid request accepted")
 asyncio.run(main())
 """
     result = subprocess.run(

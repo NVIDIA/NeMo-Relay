@@ -34,6 +34,10 @@ fn snapshot() -> DiagnosticSnapshot {
             value: u64::MAX.into(),
             saturated: true,
         },
+        failures_total: DiagnosticCount {
+            value: u64::MAX.into(),
+            saturated: true,
+        },
         history_evictions_total: DiagnosticCount {
             value: 3.into(),
             saturated: false,
@@ -109,6 +113,13 @@ fn snapshot() -> DiagnosticSnapshot {
             },
         }],
         coverage: DiagnosticCoverage {
+            loss: DiagnosticLoss {
+                events_evicted: DiagnosticCount {
+                    value: 3.into(),
+                    saturated: false,
+                },
+                ..Default::default()
+            },
             retention: DiagnosticRetention {
                 oldest_event_sequence: Some(u64::MAX.into()),
                 latest_event_sequence: Some(u64::MAX.into()),
@@ -1004,4 +1015,56 @@ fn distinct_context_names_keep_known_values_borrowed_and_future_names_opaque() {
     assert_eq!(phase.known(), None);
     assert_eq!(serde_json::to_value(execution).unwrap(), json!("future_vm"));
     assert_eq!(serde_json::to_value(phase).unwrap(), json!("future_stage"));
+}
+
+// Reviewed wire fixture: changing a model cannot silently regenerate expectations.
+#[test]
+fn versioned_fixture_matches_the_public_model_and_evolution_rules() {
+    let wire: Value = serde_json::from_str(include_str!(
+        "fixtures/diagnostics/diagnostic-snapshot-schema-1.json"
+    ))
+    .unwrap();
+    assert_eq!(serde_json::to_value(snapshot()).unwrap(), wire);
+    let actual: DiagnosticSnapshot = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(actual, snapshot());
+    let mut future = wire.clone();
+    future["catalogue_version"] = json!(99);
+    future["future_field"] = json!(true);
+    future["events"][0]["classification"] =
+        json!({"canonical_code":"future.failure", "failure_class":"future.cause"});
+    future["events"][0]["context"] = json!({"execution":"future_engine", "phase":"future_phase"});
+    let decoded: DiagnosticSnapshot = serde_json::from_value(future).unwrap();
+    assert_eq!(decoded.events[0].classification.code(), "future.failure");
+    assert_eq!(
+        decoded.events[0].context.phase.as_ref().unwrap().as_str(),
+        "future_phase"
+    );
+    for version in [0, 2, u32::MAX] {
+        let mut unsupported = wire.clone();
+        unsupported["schema_version"] = json!(version);
+        assert!(serde_json::from_value::<DiagnosticSnapshot>(unsupported).is_err());
+    }
+}
+
+#[test]
+fn read_reason_wire_names_match_language_error_spelling() {
+    use DiagnosticReadReason::*;
+    for reason in [
+        Disabled,
+        QueryDisabled,
+        UnsupportedSchema,
+        InvalidQuery,
+        InvalidCursor,
+        Busy,
+        SnapshotCapacity,
+        InvalidLimits,
+        AllocationFailed,
+        Internal,
+    ] {
+        assert_eq!(serde_json::to_value(reason).unwrap(), reason.as_str());
+        assert_eq!(
+            serde_json::from_value::<DiagnosticReadReason>(json!(reason.as_str())).unwrap(),
+            reason
+        );
+    }
 }

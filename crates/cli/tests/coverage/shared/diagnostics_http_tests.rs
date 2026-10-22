@@ -105,9 +105,10 @@ async fn discovery_distinguishes_disabled_collection_and_disabled_queries() {
             assert!(producers.iter().any(|value| value == family));
         }
         assert_eq!(
-            discovery["deferred"],
-            serde_json::json!(["otel", "bindings"])
+            discovery["producer_support"],
+            serde_json::to_value(context.reader().discovery().producer_support).unwrap()
         );
+        assert!(discovery.get("deferred").is_none());
         let response = router.oneshot(request(PREFIX, Some(&token))).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
@@ -231,7 +232,7 @@ async fn bounded_query_and_version_errors_are_safe() {
         (
             r#"{"max_events":99999}"#,
             StatusCode::BAD_REQUEST,
-            "invalid_page_limit",
+            "invalid_query",
         ),
         (
             r#"{"ownership":{"configuration_typo":"PRIVATE"}}"#,
@@ -305,4 +306,128 @@ fn bootstrap(adapter: &DiagnosticsHttp) -> &BootstrapChallengeKey {
         ReadAuthority::Bootstrap(key) => key,
         _ => panic!("expected bootstrap authority"),
     }
+}
+
+#[tokio::test]
+async fn shared_query_fixture_and_core_read_errors_have_canonical_http_reasons() {
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../types/tests/fixtures/diagnostics/read-queries.json"
+    ))
+    .unwrap();
+    let context = context(true, 1);
+    let adapter = adapter(&context);
+    let token = bootstrap(&adapter).diagnostics_token();
+    let router = adapter.router();
+    for case in cases.as_array().unwrap() {
+        let input = case["query"].to_string();
+        let path = format!(
+            "{PREFIX}?query={}",
+            percent_encoding::utf8_percent_encode(&input, percent_encoding::NON_ALPHANUMERIC)
+        );
+        let response = router
+            .clone()
+            .oneshot(request(&path, Some(&token)))
+            .await
+            .unwrap();
+        if let Some(reason) = case["reason"].as_str() {
+            let body = json(response).await;
+            assert_eq!(body["error"]["reason"], reason);
+            assert!(!body.to_string().contains("restricted-input"));
+            if reason == "unsupported_schema" {
+                assert_eq!(
+                    body["error"]["supported_schema_version"],
+                    DIAGNOSTIC_SCHEMA_VERSION
+                );
+            }
+        } else {
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    }
+    for (core, status, reason) in [
+        (
+            DiagnosticError::Disabled,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "disabled",
+        ),
+        (
+            DiagnosticError::QueryDisabled,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "query_disabled",
+        ),
+        (
+            DiagnosticError::QueryCapacity,
+            StatusCode::TOO_MANY_REQUESTS,
+            "busy",
+        ),
+        (
+            DiagnosticError::SnapshotCapacity,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "snapshot_capacity",
+        ),
+        (
+            DiagnosticError::InvalidCursor,
+            StatusCode::CONFLICT,
+            "invalid_cursor",
+        ),
+        (
+            DiagnosticError::InvalidQuery,
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+        ),
+    ] {
+        let response = reader_error(core);
+        assert_eq!(response.status(), status);
+        if reason == "busy" {
+            assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+        }
+        assert_eq!(json(response).await["error"]["reason"], reason);
+    }
+}
+
+#[tokio::test]
+async fn http_read_is_the_same_source_evidence_without_recounting() {
+    let context = context(true, 1);
+    let failure = BuiltinDiagnosticCode::Failure(FailureCode::Cli(CliFailureCode::Command));
+    let component = context
+        .register_component(ComponentRegistration::new("example", &[failure]))
+        .unwrap();
+    for count in [2, 3] {
+        component
+            .record_without_projection_lazy(|| {
+                Observation::new(
+                    Classification::failure(
+                        FailureCode::Cli(CliFailureCode::Command),
+                        FailureClass::Unknown,
+                    )
+                    .unwrap(),
+                    "restricted-fact",
+                    NonZeroU64::new(count).unwrap(),
+                )
+            })
+            .unwrap();
+    }
+    let direct = context
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let adapter = adapter(&context);
+    let token = bootstrap(&adapter).diagnostics_token();
+    let page: DiagnosticSnapshot = serde_json::from_value(
+        json(
+            adapter
+                .router()
+                .oneshot(request(PREFIX, Some(&token)))
+                .await
+                .unwrap(),
+        )
+        .await,
+    )
+    .unwrap();
+    assert_eq!(page.source, direct.source);
+    assert_eq!(page.sequence, direct.sequence);
+    assert_eq!(page.events, direct.events);
+    assert_eq!(page.lifetime.totals, direct.lifetime.totals);
+    assert_eq!(page.lifetime.totals.failures_total.value.get(), 5);
+    assert_eq!(page.lifetime.totals.recorded_events_total.value.get(), 2);
 }

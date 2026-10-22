@@ -5,6 +5,7 @@ import { reader, type DiagnosticQuery, type DiagnosticSnapshot } from '../diagno
 
 const query: DiagnosticQuery = {
   componentKey: 'logging',
+  schemaVersion: 1,
   afterSequence: 0n,
   ownership: { responsibility: 'embedded' },
 };
@@ -16,3 +17,7 @@ const portable: string = reader().snapshotJson(query);
 // @ts-expect-error Diagnostic u64 query values require bigint, including small values.
 const lossy: DiagnosticQuery = { afterSequence: 1 };
 void [failures, source, component, portable, lossy];
+
+const rowCap: bigint = reader().info().discovery.maxQueryEvents;
+const coverage: boolean = reader().info().discovery.producerSupport[0].supported;
+void [rowCap, coverage];

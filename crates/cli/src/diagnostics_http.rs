@@ -12,12 +12,11 @@ use axum::{
     routing::get,
 };
 use nemo_relay::diagnostics::*;
-use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
 pub(crate) const PREFIX: &str = "/_nemo_relay/v1/diagnostics";
 pub(crate) const AUTH_HEADER: &str = "x-nemo-relay-diagnostics-read";
-const MAX_QUERY_BYTES: usize = 4096;
+const MAX_QUERY_BYTES: usize = MAX_DIAGNOSTIC_QUERY_BYTES;
 const DISCOVERY_BYTES: usize = 8192;
 
 #[derive(Clone)]
@@ -147,10 +146,7 @@ impl DiagnosticsHttp {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .pop()
-            .ok_or(ReadError(
-                StatusCode::TOO_MANY_REQUESTS,
-                "response_capacity",
-            ))?;
+            .ok_or(ReadError(StatusCode::TOO_MANY_REQUESTS, "busy"))?;
         Ok(ResponseSlot {
             bytes,
             pool: self.pool.clone(),
@@ -212,7 +208,11 @@ impl IntoResponse for ReadError {
 pub(crate) fn error(status: StatusCode, reason: &'static str) -> Response {
     let mut response = (
         status,
-        axum::Json(serde_json::json!({"error": {"reason": reason}})),
+        axum::Json(if reason == "unsupported_schema" {
+            serde_json::json!({"error": {"reason": reason, "supported_schema_version": DIAGNOSTIC_SCHEMA_VERSION}})
+        } else {
+            serde_json::json!({"error": {"reason": reason}})
+        }),
     )
         .into_response();
     response
@@ -225,91 +225,39 @@ pub(crate) fn error(status: StatusCode, reason: &'static str) -> Response {
     }
     response
 }
-fn reader_error(value: DiagnosticError) -> Response {
-    let (status, reason) = match value {
-        DiagnosticError::Disabled => (StatusCode::SERVICE_UNAVAILABLE, "disabled"),
-        DiagnosticError::QueryDisabled => (StatusCode::SERVICE_UNAVAILABLE, "query_disabled"),
-        DiagnosticError::QueryCapacity => (StatusCode::TOO_MANY_REQUESTS, "query_capacity"),
-        DiagnosticError::InvalidQuery => (StatusCode::BAD_REQUEST, "invalid_query"),
-        DiagnosticError::InvalidCursor => (StatusCode::CONFLICT, "invalid_cursor"),
-        DiagnosticError::SnapshotCapacity => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "snapshot_capacity")
+fn read_status(reason: DiagnosticReadReason) -> StatusCode {
+    match reason {
+        DiagnosticReadReason::Disabled | DiagnosticReadReason::QueryDisabled => {
+            StatusCode::SERVICE_UNAVAILABLE
         }
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, "reader_failed"),
-    };
-    error(status, reason)
+        DiagnosticReadReason::UnsupportedSchema => StatusCode::NOT_ACCEPTABLE,
+        DiagnosticReadReason::InvalidQuery => StatusCode::BAD_REQUEST,
+        DiagnosticReadReason::InvalidCursor => StatusCode::CONFLICT,
+        DiagnosticReadReason::Busy => StatusCode::TOO_MANY_REQUESTS,
+        DiagnosticReadReason::SnapshotCapacity => StatusCode::UNPROCESSABLE_ENTITY,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct HttpQuery {
-    schema_version: Option<u32>,
-    component_key: Option<String>,
-    component_instance_id: Option<uuid::Uuid>,
-    code: Option<String>,
-    failure_class: Option<String>,
-    after_sequence: Option<DiagnosticNumber>,
-    max_components: Option<u32>,
-    max_events: Option<u32>,
-    max_response_bytes: Option<u32>,
-    continuation: Option<DiagnosticCursor>,
-    domain: Option<DiagnosticDomain>,
-    plugin_family: Option<PluginDiagnosticFamily>,
-    ownership: ComponentOwnership,
-    origin_generation: Option<DiagnosticNumber>,
+fn reader_error(value: DiagnosticError) -> Response {
+    let reason = value.read_reason();
+    error(read_status(reason), reason.as_str())
 }
 fn decode(uri: &http::Uri) -> Result<DiagnosticQuery, ReadError> {
-    // One percent-encoded JSON query avoids ambiguous duplicate-key/array URL encodings.
+    let invalid = || ReadError(StatusCode::BAD_REQUEST, "invalid_query");
     let raw = uri.query().unwrap_or("");
     if raw.len() > MAX_QUERY_BYTES {
-        return Err(ReadError(StatusCode::BAD_REQUEST, "query_too_large"));
+        return Err(invalid());
     }
     let decoded = if raw.is_empty() {
         std::borrow::Cow::Borrowed("{}")
     } else {
-        let raw = raw
-            .strip_prefix("query=")
-            .ok_or(ReadError(StatusCode::BAD_REQUEST, "invalid_query"))?;
+        let raw = raw.strip_prefix("query=").ok_or_else(invalid)?;
         percent_encoding::percent_decode_str(raw)
             .decode_utf8()
-            .map_err(|_| ReadError(StatusCode::BAD_REQUEST, "invalid_query"))?
+            .map_err(|_| invalid())?
     };
-    {
-        let fields: serde_json::Value = serde_json::from_str(&decoded)
-            .map_err(|_| ReadError(StatusCode::BAD_REQUEST, "invalid_query"))?;
-        embedded::validate_query_selector_fields(&fields)
-            .map_err(|_| ReadError(StatusCode::BAD_REQUEST, "invalid_query"))?;
-    }
-    let query: HttpQuery = serde_json::from_str(&decoded)
-        .map_err(|_| ReadError(StatusCode::BAD_REQUEST, "invalid_query"))?;
-    if query
-        .schema_version
-        .is_some_and(|v| v != DIAGNOSTIC_SCHEMA_VERSION)
-    {
-        return Err(ReadError(StatusCode::NOT_ACCEPTABLE, "unsupported_schema"));
-    }
-    for text in [&query.component_key, &query.code, &query.failure_class]
-        .into_iter()
-        .flatten()
-    {
-        if text.len() > 128 {
-            return Err(ReadError(StatusCode::BAD_REQUEST, "invalid_selector"));
-        }
-    }
-    Ok(DiagnosticQuery {
-        component_key: query.component_key,
-        component_instance_id: query.component_instance_id,
-        code: query.code,
-        failure_class: query.failure_class,
-        after_sequence: query.after_sequence,
-        max_components: query.max_components,
-        max_events: query.max_events,
-        max_response_bytes: query.max_response_bytes,
-        continuation: query.continuation,
-        domain: query.domain,
-        plugin_family: query.plugin_family,
-        ownership: query.ownership,
-        origin_generation: query.origin_generation,
-    })
+    decode_diagnostic_query(&decoded)
+        .map_err(|reason| ReadError(read_status(reason), reason.as_str()))
 }
 async fn snapshot(
     State(adapter): State<DiagnosticsHttp>,
@@ -332,19 +280,6 @@ async fn snapshot(
     }
     if uri.path().ends_with("/events") {
         query.max_components = Some(0);
-    }
-    let limits = adapter.reader.limits();
-    if query
-        .max_response_bytes
-        .is_some_and(|v| v as usize > limits.max_snapshot_bytes)
-        || query
-            .max_components
-            .is_some_and(|v| v as usize > limits.max_query_components)
-        || query
-            .max_events
-            .is_some_and(|v| v as usize > limits.max_query_events)
-    {
-        return error(StatusCode::BAD_REQUEST, "invalid_page_limit");
     }
     let page = match adapter.reader.snapshot(&query) {
         Ok(page) => page,
@@ -377,7 +312,6 @@ async fn discovery(
         #[serde(flatten)]
         core: DiagnosticDiscovery,
         producers: &'a [&'static str],
-        deferred: [&'static str; 2],
         inspection_policy: &'static str,
         #[serde(serialize_with = "serialize_limits")]
         limits: &'a DiagnosticLimits,
@@ -387,8 +321,10 @@ async fn discovery(
     let value = Capabilities {
         core: adapter.reader.discovery(),
         producers: &adapter.coverage,
-        deferred: ["otel", "bindings"],
-        inspection_policy: "whole_context_private_bootstrap",
+        inspection_policy: match &adapter.authority {
+            ReadAuthority::Bootstrap(_) => "whole_context_private_bootstrap",
+            ReadAuthority::Worker(_) => "whole_context_worker_session",
+        },
         limits: adapter.reader.limits(),
         response_slots: adapter.reader.limits().max_queries.max(1),
         response_bytes: adapter.capacity,

@@ -259,6 +259,7 @@ type DiagnosticCursor struct {
 
 // DiagnosticQuery is the canonical diagnostic query view.
 type DiagnosticQuery struct {
+	SchemaVersion *uint32 `json:"schema_version,omitempty"`
 	// Select one logical component key across retained registrations.
 	ComponentKey *string `json:"component_key,omitempty"`
 	// Select one registration incarnation.
@@ -277,11 +278,11 @@ type DiagnosticQuery struct {
 	Ownership ComponentOwnership `json:"ownership,omitempty"`
 	// Select later recent events; summary and code counters remain cumulative.
 	AfterSequence *DiagnosticNumber `json:"after_sequence,omitempty"`
-	// Requested component-instance row cap, further constrained by core limits.
+	// Requested component-instance row cap, rejected above core limits.
 	MaxComponents *uint32 `json:"max_components,omitempty"`
-	// Requested recent-event cap, further constrained by core limits.
+	// Requested recent-event cap, rejected above core limits.
 	MaxEvents *uint32 `json:"max_events,omitempty"`
-	// Requested encoded response cap, further constrained by core limits.
+	// Requested encoded response cap, rejected above core limits.
 	MaxResponseBytes *uint32 `json:"max_response_bytes,omitempty"`
 	// Resume a compatible bounded selection without granting additional scope.
 	Continuation *DiagnosticCursor `json:"continuation,omitempty"`
@@ -425,7 +426,7 @@ func (snapshot *DiagnosticSnapshot) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if value.SchemaVersion != 1 {
-		return fmt.Errorf("unsupported diagnostic snapshot schema")
+		return &DiagnosticsError{Reason: "unsupported_schema"}
 	}
 	*snapshot = DiagnosticSnapshot(value)
 	return nil
