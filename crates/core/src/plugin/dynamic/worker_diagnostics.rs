@@ -122,7 +122,7 @@ impl WorkerDiagnostics {
     }
 
     fn capabilities(&self) -> wire::DiagnosticCapabilities {
-        self.capabilities.clone()
+        self.capabilities
     }
 
     fn open(

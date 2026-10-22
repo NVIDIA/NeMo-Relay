@@ -155,7 +155,9 @@ def test_applies_host_delivery_policy_and_rejects_invalid_policy_inertly():
         host.capabilities.retry_timeout_millis = 25
         facade = await WorkerDiagnostics.connect(host, "activation", "token")
         assert facade.availability == "available"
-        assert facade._policy == facade._policy.__class__(1024, 4096, 2, 2, 0.025)
+        policy = facade._policy
+        assert policy is not None
+        assert policy == policy.__class__(1024, 4096, 2, 2, 0.025)
         assert facade._queue is not None and facade._queue.maxsize == 2
 
         component = await facade.component("internal", [])
@@ -205,16 +207,13 @@ def test_applies_host_delivery_policy_and_rejects_invalid_policy_inertly():
         old_component = await old.component("internal", [])
         old_component.try_record_lazy(lambda: pytest.fail("unsupported facade was not inert"))
 
-        changed_session_host = Host()
-        original_open = changed_session_host.OpenDiagnosticSession
+        class ChangedSessionHost(Host):
+            async def OpenDiagnosticSession(self, request, **kwargs):
+                opened = await super().OpenDiagnosticSession(request, **kwargs)
+                opened.capabilities.retry_attempts = 2
+                return opened
 
-        async def changed_session(request, **kwargs):
-            opened = await original_open(request, **kwargs)
-            opened.capabilities.retry_attempts = 2
-            return opened
-
-        changed_session_host.OpenDiagnosticSession = changed_session
-        changed = await WorkerDiagnostics.connect(changed_session_host, "activation", "token")
+        changed = await WorkerDiagnostics.connect(ChangedSessionHost(), "activation", "token")
         assert changed.availability == "unsupported"
 
     asyncio.run(run())

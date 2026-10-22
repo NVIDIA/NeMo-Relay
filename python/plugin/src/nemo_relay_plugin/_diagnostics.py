@@ -130,9 +130,7 @@ class WorkerDiagnostics:
             facade.availability = "unsupported"
             return facade
         try:
-            capability = await stub.GetDiagnosticCapabilities(
-                facade._credentials, timeout=_BOOTSTRAP_TIMEOUT
-            )
+            capability = await stub.GetDiagnosticCapabilities(facade._credentials, timeout=_BOOTSTRAP_TIMEOUT)
             if not capability.enabled:
                 facade.availability = "disabled"
                 return facade
@@ -292,17 +290,12 @@ class WorkerDiagnostics:
                 if policy is None or request.ByteSize() > policy.max_request_bytes:
                     self._increment("dropped")
                     error = DiagnosticDeliveryError("invalid")
-                    request = None
-                if request is None:
-                    pass
                 else:
                     acceptance_uncertain = False
                     try:
                         for _ in range(policy.retry_attempts):
                             try:
-                                result = await self._stub.SubmitDiagnostic(
-                                    request, timeout=policy.retry_timeout
-                                )
+                                result = await self._stub.SubmitDiagnostic(request, timeout=policy.retry_timeout)
                             except grpc.RpcError as failure:
                                 not_consumed = failure.code() == grpc.StatusCode.INVALID_ARGUMENT or (
                                     failure.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
@@ -353,6 +346,7 @@ class WorkerDiagnostics:
                     future.set_exception(error)
                 else:
                     future.set_result(result)
+
 
 class DiagnosticComponent:
     """Component-scoped producer; host assigns ownership and provenance."""

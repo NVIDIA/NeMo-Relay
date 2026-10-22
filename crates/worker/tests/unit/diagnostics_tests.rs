@@ -22,7 +22,7 @@ struct Host {
 }
 impl Host {
     fn capabilities(&self) -> wire::DiagnosticCapabilities {
-        let mut capabilities = self.policy.clone().unwrap_or(wire::DiagnosticCapabilities {
+        let mut capabilities = self.policy.unwrap_or(wire::DiagnosticCapabilities {
             protocol_version: 1,
             snapshot_version: 1,
             provenance_version: 1,
@@ -54,7 +54,7 @@ impl RelayDiagnostics for Host {
     ) -> Result<Response<wire::DiagnosticSession>, Status> {
         Ok(Response::new(wire::DiagnosticSession {
             session_id: vec![1; 16],
-            capabilities: Some(self.open_policy.clone().unwrap_or(self.capabilities())),
+            capabilities: Some(self.open_policy.unwrap_or(self.capabilities())),
         }))
     }
     async fn submit_diagnostic(
@@ -280,11 +280,12 @@ async fn applies_host_delivery_policy_and_rejects_invalid_policy_inertly() {
         facade.flush(Duration::from_secs(2)).await,
         Err(DiagnosticDeliveryError::Uncertain)
     );
-    let requests = host.requests.lock().unwrap();
-    assert!(requests[1].encoded_len() <= policy.max_request_bytes);
-    assert_eq!(requests[2], requests[3]);
-    assert_eq!(requests.len(), 4); // registration, record, and two bounded attempts
-    drop(requests);
+    {
+        let requests = host.requests.lock().unwrap();
+        assert!(requests[1].encoded_len() <= policy.max_request_bytes);
+        assert_eq!(requests[2], requests[3]);
+        assert_eq!(requests.len(), 4); // registration, record, and two bounded attempts
+    }
 
     let mut response_caps = Host::default().capabilities();
     response_caps.max_response_bytes = 4096;

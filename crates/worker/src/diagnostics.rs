@@ -49,10 +49,9 @@ impl DeliveryPolicy {
         let max_response_bytes = usize::try_from(capabilities.max_response_bytes).ok()?;
         let max_pending_submissions = usize::try_from(capabilities.max_pending_submissions).ok()?;
         let retry_timeout = Duration::from_millis(u64::from(capabilities.retry_timeout_millis));
-        if max_request_bytes < SUBMISSION_ENVELOPE_ALLOWANCE_BYTES + MIN_SUBMISSION_BYTES
-            || max_request_bytes > MAX_REQUEST_BYTES
-            || max_response_bytes < MIN_RESPONSE_BYTES
-            || max_response_bytes > MAX_RESPONSE_BYTES
+        if !(SUBMISSION_ENVELOPE_ALLOWANCE_BYTES + MIN_SUBMISSION_BYTES..=MAX_REQUEST_BYTES)
+            .contains(&max_request_bytes)
+            || !(MIN_RESPONSE_BYTES..=MAX_RESPONSE_BYTES).contains(&max_response_bytes)
             || max_pending_submissions == 0
             || max_pending_submissions > MAX_PENDING_SUBMISSIONS
             || capabilities.retry_attempts == 0
