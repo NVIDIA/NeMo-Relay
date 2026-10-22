@@ -2,7 +2,7 @@
 title: "nemo_relay.plugin"
 sidebar-title: "plugin"
 description: "Generic plugin configuration and registration helpers."
-position: 12
+position: 13
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -256,7 +256,7 @@ Canonical plugin configuration document.
 ##### `PluginConfig`
 
 ```python
-def PluginConfig(version: int = 1, components: list[PluginComponentSpec] = ..., policy: ConfigPolicy = ...) -> None
+def PluginConfig(version: int = 1, components: list[PluginComponentSpec] = ..., policy: ConfigPolicy = ..., diagnostics: JsonObject | None = None) -> None
 ```
 
 Create an instance.

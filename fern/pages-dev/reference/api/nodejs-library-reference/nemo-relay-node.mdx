@@ -938,6 +938,31 @@ export declare class PluginHostActivation {
 }
 ```
 
+### `DiagnosticsReader`
+
+Authority to inspect restricted diagnostic evidence in the current process.
+
+```ts
+export declare class DiagnosticsReader {
+  /** Return canonical snake_case JSON with decimal-string diagnostic integers. */
+  snapshotJson(queryJson?: string | undefined | null): string
+  /**
+   * Return a caller-owned camelCase object. Diagnostic u64 fields are always bigint.
+   * Use snapshotJson for portable serialization; JSON.stringify cannot encode bigint.
+   */
+  snapshot(queryJson?: string | undefined | null): object
+  /** Return canonical snake_case JSON with decimal-string diagnostic integers. */
+  inspectMemoryJson(queryJson?: string | undefined | null): string
+  /**
+   * Return a caller-owned camelCase object. Diagnostic u64 fields are always bigint.
+   * Use inspectMemoryJson for portable serialization; JSON.stringify cannot encode bigint.
+   */
+  inspectMemory(queryJson?: string | undefined | null): object
+  /** Return independent core/adapter budgets, occupancy, and logging coverage. */
+  info(): object
+}
+```
+
 ### `LlmStream`
 
 An async iterator over chunks from a streaming LLM response.
@@ -2505,6 +2530,14 @@ List registered plugin kinds.
 
 ```ts
 export declare function listPluginKinds(): Array<string>
+```
+
+### `diagnosticsReader`
+
+Inspect the configured service without starting it. Errors use a stable reason message.
+
+```ts
+export declare function diagnosticsReader(): DiagnosticsReader
 ```
 
 ## Type Aliases

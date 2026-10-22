@@ -1,0 +1,35 @@
+---
+title: "Module embedded"
+sidebar-title: "embedded"
+description: "Configuration-driven service and bounded copies for embedded language runtimes. Configuration-driven embedded service and bounded language-adapter copies."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Configuration-driven service and bounded copies for embedded language runtimes. Configuration-driven embedded service and bounded language-adapter copies.
+
+Readers are inspection authority. No automatic formatting or error path exposes retained detail, and no snapshot is connected to an event/exporter pipeline.
+
+## Structs
+
+- [EmbeddedDiagnosticInfo](/reference/api/rust-library-reference/nemo-relay/diagnostics/embedded/struct-embeddeddiagnosticinfo): Independent budgets and coverage of the binding adapter; excludes language object overhead and caller-retained copies, and is not an RSS measurement.
+- [EmbeddedDiagnosticPage](/reference/api/rust-library-reference/nemo-relay/diagnostics/embedded/struct-embeddeddiagnosticpage): Adapter-owned page payload. Its permit is returned deterministically on drop. Foreign results are caller-owned copies and must never retain this object.
+- [EmbeddedDiagnosticsReader](/reference/api/rust-library-reference/nemo-relay/diagnostics/embedded/struct-embeddeddiagnosticsreader): Read-only embedded capability. Clones share the service's copy admission pool. Debug output deliberately contains no snapshot, query, or restricted detail.
+
+## Enums
+
+- [EmbeddedDiagnosticError](/reference/api/rust-library-reference/nemo-relay/diagnostics/embedded/enum-embeddeddiagnosticerror): Stable service/reader failure. Messages never contain retained evidence or query input.
+
+## Constants
+
+- [BINDING_COPY_CONCURRENCY](/reference/api/rust-library-reference/nemo-relay/diagnostics/embedded/constant-binding-copy-concurrency): Independent simultaneous page-copy/foreign-conversion budget per service.
+- [DIAGNOSTIC_QUERY_INTEGER_FIELDS](/reference/api/rust-library-reference/nemo-relay/diagnostics/embedded/constant-diagnostic-query-integer-fields): Query fields whose canonical JSON value is a lossless unsigned integer. Binding adapters use this descriptor when accepting native integer inputs.
+- [MAX_BINDING_QUERY_BYTES](/reference/api/rust-library-reference/nemo-relay/diagnostics/embedded/constant-max-binding-query-bytes): Maximum encoded query accepted by an embedded reader, before JSON parsing.
+
+## Functions
+
+- [decode_query](/reference/api/rust-library-reference/nemo-relay/diagnostics/embedded/fn-decode-query): Decode bounded input without copying an unbounded foreign query graph.
+- [reader](/reference/api/rust-library-reference/nemo-relay/diagnostics/embedded/fn-reader): Obtain an inspection capability without initializing the service or logger. The service is selected by ordinary plugin-host initialization configuration.

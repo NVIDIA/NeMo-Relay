@@ -2,7 +2,7 @@
 title: "Function nemo_relay_plugin_validate_exact"
 sidebar-title: "nemo_relay_plugin_validate_exact"
 description: "Validate only the supplied static plugin configuration."
-position: 129
+position: 136
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -13,7 +13,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Validate only the supplied static plugin configuration.
 
-This entry point does not discover or merge `plugins.toml` layers. The returned host report therefore has no dynamic-plugin reports.
+This entry point does not discover or merge `plugins.toml` layers. The returned host report therefore has no dynamic-plugin reports. Host-only `diagnostics` settings are rejected; use `nemo_relay_plugin_validate` instead.
 
 ## Safety
 

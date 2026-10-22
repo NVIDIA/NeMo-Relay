@@ -2,18 +2,22 @@
 title: "Struct Diagnostic Query"
 sidebar-title: "DiagnosticQuery"
 description: "Portable bounded selection; consumers never reset or mutate evidence."
-position: 20
+position: 25
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticQuery &#123;Show 13 fields\n    pub component_key: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub component_instance_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>&gt;,\n    pub origin_generation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>&gt;,\n    pub code: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub domain: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-diagnosticdomain\">DiagnosticDomain</a>&gt;,\n    pub plugin_family: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-plugindiagnosticfamily\">PluginDiagnosticFamily</a>&gt;,\n    pub failure_class: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub ownership: <a href=\"struct-componentownership\">ComponentOwnership</a>,\n    pub after_sequence: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>&gt;,\n    pub max_components: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>&gt;,\n    pub max_events: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>&gt;,\n    pub max_response_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>&gt;,\n    pub continuation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticcursor\">DiagnosticCursor</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticQuery &#123;Show 14 fields\n    pub schema_version: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>&gt;,\n    pub component_key: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub component_instance_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>&gt;,\n    pub origin_generation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>&gt;,\n    pub code: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub domain: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-diagnosticdomain\">DiagnosticDomain</a>&gt;,\n    pub plugin_family: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-plugindiagnosticfamily\">PluginDiagnosticFamily</a>&gt;,\n    pub failure_class: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub ownership: <a href=\"struct-componentownership\">ComponentOwnership</a>,\n    pub after_sequence: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>&gt;,\n    pub max_components: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>&gt;,\n    pub max_events: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>&gt;,\n    pub max_response_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>&gt;,\n    pub continuation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticcursor\">DiagnosticCursor</a>&gt;,\n&#125;"}} /></pre>
 
 Portable bounded selection; consumers never reset or mutate evidence.
 
 ## Fields
+
+### `schema_version: Option<u32>`
+
+Optional required snapshot version; omission selects this runtime's version.
 
 ### `component_key: Option<String>`
 
@@ -53,15 +57,15 @@ Select later recent events; summary and code counters remain cumulative.
 
 ### `max_components: Option<u32>`
 
-Requested component-instance row cap, further constrained by core limits.
+Requested component-instance row cap, rejected above core limits.
 
 ### `max_events: Option<u32>`
 
-Requested recent-event cap, further constrained by core limits.
+Requested recent-event cap, rejected above core limits.
 
 ### `max_response_bytes: Option<u32>`
 
-Requested encoded response cap, further constrained by core limits.
+Requested encoded response cap, rejected above core limits.
 
 ### `continuation: Option<DiagnosticCursor>`
 
@@ -97,9 +101,9 @@ Resume a compatible bounded selection without granting additional scope.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-diagnosticquery\">DiagnosticQuery</a>"}} /></pre>
 
-### `impl<'de> Deserialize<'de> for DiagnosticQuery`
+### `impl<'de> Deserialize<'de> for DiagnosticQuerywhere DiagnosticQuery: Default,`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-diagnosticquery\">DiagnosticQuery</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-diagnosticquery\">DiagnosticQuery</a>where\n    <a href=\"struct-diagnosticquery\">DiagnosticQuery</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a>,"}} /></pre>
 
 #### `deserialize`
 

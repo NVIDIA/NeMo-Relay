@@ -2,7 +2,7 @@
 title: "Function initialize_with_diagnostics"
 sidebar-title: "initialize_with_diagnostics"
 description: "Initializes the plugin host using an explicitly selected diagnostic context."
-position: 59
+position: 60
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -13,4 +13,4 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Initializes the plugin host using an explicitly selected diagnostic context.
 
-Configuration inheritance and common component activation use this same context. Discovery and validation APIs do not consume the process default. Diagnostic admission is best-effort and never changes plugin execution or legacy report results. Native/worker producer integration remains separate.
+Configuration inheritance and common component activation use this same context. Discovery and validation APIs do not consume the process default. Diagnostic admission is best-effort and never changes plugin execution or legacy report results. Native and worker producers receive this context through the owned activation lifecycle.

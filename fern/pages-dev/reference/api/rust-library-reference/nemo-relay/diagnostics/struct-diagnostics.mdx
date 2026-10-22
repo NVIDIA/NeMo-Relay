@@ -2,7 +2,7 @@
 title: "Struct Diagnostics"
 sidebar-title: "Diagnostics"
 description: "Independent diagnostics context with immutable startup enablement."
-position: 35
+position: 42
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -30,6 +30,12 @@ Clones share this context only. State and budgets are independent of logger life
 Construct a context using the startup owner's selected mode and capacities.
 
 Enabled mode validates arithmetic and admits backend storage before use. The circular-history allocation uses the global allocation-error handler on allocation failure; fallible pool reservations return an error. Disabled mode retains lightweight source/settings state without registry, history, detail, query, or projection pools. Source role/version metadata is capped at 128 UTF-8 bytes; the supplied UUID is preserved.
+
+#### `selected_process_default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn selected_process_default() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;'static Self&gt;"}} /></pre>
+
+Inspect a selected context without consuming an uninitialized default.
 
 #### `install_process_default`
 

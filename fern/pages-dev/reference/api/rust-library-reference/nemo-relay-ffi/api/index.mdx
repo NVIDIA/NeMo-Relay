@@ -21,6 +21,7 @@ Each function clears the thread-local error before executing and returns an [`Ne
 
 ## Structs
 
+- [FfiDiagnosticsReader](/reference/api/rust-library-reference/nemo-relay-ffi/api/struct-ffidiagnosticsreader): Opaque inspection authority. Caller must not copy, free, or forge the allocation.
 - [FfiStream](/reference/api/rust-library-reference/nemo-relay-ffi/api/struct-ffistream): Opaque stream handle for consuming LLM streaming responses chunk by chunk. Use `nemo_relay_stream_next` to poll and `nemo_relay_stream_free` to release.
 
 ## Functions
@@ -72,6 +73,12 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_deregister_tool_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-request-intercept): Deregister a tool request intercept by name.
 - [nemo_relay_deregister_tool_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-sanitize-request-guardrail): Deregister a tool request sanitization guardrail by name.
 - [nemo_relay_deregister_tool_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-sanitize-response-guardrail): Deregister a tool response sanitization guardrail by name.
+- [nemo_relay_diagnostics_info_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-diagnostics-info-json): Inspect core and adapter capacities, occupancy, and logging coverage as JSON.
+- [nemo_relay_diagnostics_memory_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-diagnostics-memory-json): Inspect canonical diagnostic backing and independently copied resource memory. Free successful output with nemo_relay_string_free. Never initiates collection.
+- [nemo_relay_diagnostics_query_max_bytes](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-diagnostics-query-max-bytes): Return the core's maximum encoded embedded diagnostics query size.
+- [nemo_relay_diagnostics_reader](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-diagnostics-reader): Obtain an embedded reader without starting or enabling diagnostics. Errors set a stable machine-readable reason in nemo_relay_last_error.
+- [nemo_relay_diagnostics_reader_free](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-diagnostics-reader-free): Free a reader once and clear its slot. Null slots are harmless.
+- [nemo_relay_diagnostics_snapshot_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-diagnostics-snapshot-json): Capture a canonical page. Release successful output with nemo_relay_string_free. The optional query is bounded by the core's encoded query byte limit and uses canonical query fields. Failure always leaves `*out` null. A reader/filter does not restrict authority.
 - [nemo_relay_event](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-event): Emit a named lifecycle event.
 - [nemo_relay_event_v2](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-event-v2): Emit a named lifecycle event with optional data schema and log severity.
 - [nemo_relay_flush_subscribers](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-flush-subscribers): Wait for subscriber callbacks queued before this call and events emitted transitively by those callbacks to finish.

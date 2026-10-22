@@ -2,7 +2,7 @@
 title: "Enum Diagnostic Error"
 sidebar-title: "DiagnosticError"
 description: "Validation, admission, or availability failure, independent of operational logging."
-position: 59
+position: 78
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 ```rust
 pub enum DiagnosticError {
-Show 20 variants    Disabled,
+Show 22 variants    Disabled,
     InvalidLimits,
     Allocation,
     InvalidComponentKey,
@@ -26,9 +26,11 @@ Show 20 variants    Disabled,
     SequenceExhausted,
     QueryDisabled,
     QueryCapacity,
+    UnsupportedSchema,
     InvalidQuery,
     InvalidCursor,
     SnapshotCapacity,
+    InconsistentAccounting,
     ProjectionCapacity,
     AlreadyInitialized,
 }
@@ -128,6 +130,12 @@ Startup intentionally disabled query materialization with max_queries = 0.
 
 Every bounded query workspace is currently leased.
 
+### `UnsupportedSchema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "UnsupportedSchema"}} /></pre>
+
+The requested snapshot envelope version is unsupported.
+
 ### `InvalidQuery`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidQuery"}} /></pre>
@@ -146,6 +154,12 @@ Continuation has the wrong source/scope or its captured state changed.
 
 A selected atomic row or required envelope cannot fit the query budgets.
 
+### `InconsistentAccounting`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InconsistentAccounting"}} /></pre>
+
+Backing ownership could not be reconciled; no partial accounting is returned.
+
 ### `ProjectionCapacity`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ProjectionCapacity"}} /></pre>
@@ -157,6 +171,18 @@ Subscription slots or unique registration IDs are exhausted.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "AlreadyInitialized"}} /></pre>
 
 The process context was already installed or consumed, even while disabled.
+
+## Implementations
+
+### `impl DiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-diagnosticerror\">DiagnosticError</a>"}} /></pre>
+
+#### `read_reason`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn read_reason(self) -&gt; <a href=\"enum-diagnosticreadreason\">DiagnosticReadReason</a>"}} /></pre>
+
+Safe transport-neutral meaning for read/startup failures. Recording-only errors are internal here; they must never be mislabeled invalid input.
 
 ## Trait Implementations
 
@@ -207,6 +233,14 @@ The process context was already installed or consumed, even while disabled.
 #### `provide`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.provide\">provide</a>&lt;'a&gt;(&amp;'a self, request: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/error/struct.Request.html\">Request</a>&lt;'a&gt;)"}} /></pre>
+
+### `impl From<DiagnosticError> for EmbeddedDiagnosticError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-diagnosticerror\">DiagnosticError</a>&gt; for <a href=\"embedded/enum-embeddeddiagnosticerror\">EmbeddedDiagnosticError</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"enum-diagnosticerror\">DiagnosticError</a>) -&gt; Self"}} /></pre>
 
 ### `impl PartialEq for DiagnosticError`
 

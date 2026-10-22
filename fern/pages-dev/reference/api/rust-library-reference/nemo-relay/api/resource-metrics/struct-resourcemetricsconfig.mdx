@@ -10,7 +10,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ResourceMetricsConfig &#123;\n    pub measurement_scope: <a href=\"enum-resourcemetricsmeasurementscope\">ResourceMetricsMeasurementScope</a>,\n    pub polling: <a href=\"struct-resourcemetricspollingconfig\">ResourceMetricsPollingConfig</a>,\n    pub cpu: <a href=\"struct-resourcemetricscpuconfig\">ResourceMetricsCpuConfig</a>,\n    pub memory: <a href=\"struct-resourcemetricsmemoryconfig\">ResourceMetricsMemoryConfig</a>,\n    pub process: <a href=\"struct-resourcemetricsprocessconfig\">ResourceMetricsProcessConfig</a>,\n    pub disk: <a href=\"struct-resourcemetricsdiskconfig\">ResourceMetricsDiskConfig</a>,\n    pub gpu: <a href=\"struct-resourcemetricsgpuconfig\">ResourceMetricsGpuConfig</a>,\n    pub network: <a href=\"struct-resourcemetricsnetworkconfig\">ResourceMetricsNetworkConfig</a>,\n    pub units: <a href=\"struct-resourcemetricsunits\">ResourceMetricsUnits</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ResourceMetricsConfig &#123;\n    pub measurement_scope: <a href=\"enum-resourcemetricsmeasurementscope\">ResourceMetricsMeasurementScope</a>,\n    pub polling: <a href=\"struct-resourcemetricspollingconfig\">ResourceMetricsPollingConfig</a>,\n    pub memory_inspection: ResourceMemoryInspectionConfig,\n    pub cpu: <a href=\"struct-resourcemetricscpuconfig\">ResourceMetricsCpuConfig</a>,\n    pub memory: <a href=\"struct-resourcemetricsmemoryconfig\">ResourceMetricsMemoryConfig</a>,\n    pub process: <a href=\"struct-resourcemetricsprocessconfig\">ResourceMetricsProcessConfig</a>,\n    pub disk: <a href=\"struct-resourcemetricsdiskconfig\">ResourceMetricsDiskConfig</a>,\n    pub gpu: <a href=\"struct-resourcemetricsgpuconfig\">ResourceMetricsGpuConfig</a>,\n    pub network: <a href=\"struct-resourcemetricsnetworkconfig\">ResourceMetricsNetworkConfig</a>,\n    pub units: <a href=\"struct-resourcemetricsunits\">ResourceMetricsUnits</a>,\n&#125;"}} /></pre>
 
 Configuration for the built-in `resource_metrics` plugin component.
 
@@ -23,6 +23,10 @@ Resource boundary to collect. The runtime default is global in the CLI and the c
 ### `polling: ResourceMetricsPollingConfig`
 
 Periodic polling behavior.
+
+### `memory_inspection: ResourceMemoryInspectionConfig`
+
+Fixed latest-memory projection policy, independent of polling.
 
 ### `cpu: ResourceMetricsCpuConfig`
 

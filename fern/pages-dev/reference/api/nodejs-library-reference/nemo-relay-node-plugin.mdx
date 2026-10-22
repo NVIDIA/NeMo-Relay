@@ -91,6 +91,8 @@ export interface PluginConfig {
     config?: Record<string, Json>;
   }>;
   policy?: ConfigPolicy;
+  /** Startup-only host service profile; omitted settings use file layers. */
+  diagnostics?: { enabled?: boolean; limits?: Record<string, number> };
 }
 ```
 
@@ -425,7 +427,7 @@ export declare function validate(config: PluginConfig, additionalPluginsToml?: s
 
 Validate only the supplied static plugin configuration.
 
-Unlike `validate`, this does not discover or merge `plugins.toml` files. Use it for component-specific validation when `config` is the complete document to check.
+Unlike `validate`, this does not discover or merge `plugins.toml` files. Use it for component-specific validation when `config` is the complete document to check. Host-only `diagnostics` settings are rejected; use `validate` to validate those settings.
 
 **Parameters**
 

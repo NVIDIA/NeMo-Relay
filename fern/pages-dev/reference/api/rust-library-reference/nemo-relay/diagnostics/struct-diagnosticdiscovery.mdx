@@ -2,14 +2,14 @@
 title: "Struct Diagnostic Discovery"
 sidebar-title: "DiagnosticDiscovery"
 description: "Side-effect-free discovery, available even when snapshot queries are disabled."
-position: 18
+position: 23
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticDiscovery &#123;Show 14 fields\n    pub discovery_version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub snapshot_version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub catalogue_version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub source: <a href=\"struct-sourceidentity\">SourceIdentity</a>,\n    pub collection_enabled: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub queries_enabled: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub max_components: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub max_events: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub detail_pool_bytes: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub max_queries: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub max_snapshot_bytes: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub max_owned_bytes: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub memory_inspection: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub restricted_detail: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DiagnosticDiscovery &#123;Show 19 fields\n    pub discovery_version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub snapshot_version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub catalogue_version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub source: <a href=\"struct-sourceidentity\">SourceIdentity</a>,\n    pub collection_enabled: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub queries_enabled: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub max_components: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub max_events: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub detail_pool_bytes: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub max_queries: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub max_snapshot_bytes: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub max_owned_bytes: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub memory_inspection: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub restricted_detail: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub producer_support: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-diagnosticproducersupport\">DiagnosticProducerSupport</a>&gt;,\n    pub max_query_components: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub max_query_events: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub detailed_memory_inspection: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub resource_correlation: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n&#125;"}} /></pre>
 
 Side-effect-free discovery, available even when snapshot queries are disabled.
 
@@ -70,6 +70,26 @@ Aggregate backing-memory inspection is implemented.
 ### `restricted_detail: bool`
 
 Detailed retained evidence requires explicit inspection authority.
+
+### `producer_support: Vec<DiagnosticProducerSupport>`
+
+Compiled producer integrations, not proof of registration or observations. Owners supply a finite inventory; names describe operations, not instances.
+
+### `max_query_components: DiagnosticNumber`
+
+Maximum component rows accepted by one read request.
+
+### `max_query_events: DiagnosticNumber`
+
+Maximum event rows accepted by one read request.
+
+### `detailed_memory_inspection: bool`
+
+Per-entry/per-component memory inspection is implemented.
+
+### `resource_correlation: bool`
+
+Resource-sample identity correlation is implemented.
 
 ## Trait Implementations
 

@@ -1,0 +1,130 @@
+---
+title: "Struct Resource Memory Sample"
+sidebar-title: "ResourceMemorySample"
+description: "Collection identity and memory values, copied without an unbounded retained graph."
+position: 43
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ResourceMemorySample &#123;Show 14 fields\n    pub collector_instance_id: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    pub runtime_generation: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub target_generation: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub stream: <a href=\"enum-resourcesamplestream\">ResourceSampleStream</a>,\n    pub ordinal: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub started_at: <a href=\"type-observationtime\">ObservationTime</a>,\n    pub completed_at: <a href=\"type-observationtime\">ObservationTime</a>,\n    pub collection_millis: <a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>,\n    pub operating_system: <a href=\"../api/resource_metrics/enum-resourceoperatingsystem\">ResourceOperatingSystem</a>,\n    pub measurement_scope: <a href=\"../api/resource_metrics/enum-resourcemeasurementscope\">ResourceMeasurementScope</a>,\n    pub root: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourceprocessidentity\">ResourceProcessIdentity</a>&gt;,\n    pub visible_processes: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>&gt;,\n    pub sampled_processes: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-diagnosticnumber\">DiagnosticNumber</a>&gt;,\n    pub memory: <a href=\"struct-resourcememorymetrics\">ResourceMemoryMetrics</a>,\n&#125;"}} /></pre>
+
+Collection identity and memory values, copied without an unbounded retained graph.
+
+## Fields
+
+### `collector_instance_id: Uuid`
+
+Collector incarnation; multiple diagnostic sources may share this sample.
+
+### `runtime_generation: DiagnosticNumber`
+
+Active plugin runtime generation.
+
+### `target_generation: DiagnosticNumber`
+
+Collection target generation.
+
+### `stream: ResourceSampleStream`
+
+Independent sampling baseline stream.
+
+### `ordinal: DiagnosticNumber`
+
+Shared collection-start order across both streams.
+
+### `started_at: ObservationTime`
+
+Collection start on the collector's wall clock.
+
+### `completed_at: ObservationTime`
+
+Collection completion on the collector's wall clock.
+
+### `collection_millis: DiagnosticNumber`
+
+Collection duration measured monotonically.
+
+### `operating_system: ResourceOperatingSystem`
+
+Collector operating system.
+
+### `measurement_scope: ResourceMeasurementScope`
+
+Selected measurement boundary, independent of individual system fields.
+
+### `root: Option<ResourceProcessIdentity>`
+
+Root verified during this collection, or absent for system/unverified context.
+
+### `visible_processes: Option<DiagnosticNumber>`
+
+Processes visible at sampling start, when known.
+
+### `sampled_processes: Option<DiagnosticNumber>`
+
+Successfully sampled base process queries, when known.
+
+### `memory: ResourceMemoryMetrics`
+
+Memory-only values; existing resource APIs retain their serialization.
+
+## Trait Implementations
+
+### `impl Clone for ResourceMemorySample`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for ResourceMemorySample`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for ResourceMemorySample`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl PartialEq for ResourceMemorySample`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-resourcememorysample\">ResourceMemorySample</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for ResourceMemorySample`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl Copy for ResourceMemorySample`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
+
+### `impl StructuralPartialEq for ResourceMemorySample`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
