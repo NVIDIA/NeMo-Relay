@@ -73,6 +73,17 @@ fn embedded_query_is_bounded_and_rejects_unknown_fields() {
 }
 
 #[test]
+fn core_query_descriptor_matches_shared_contract_fixture() {
+    let fixture: Json =
+        serde_json::from_str(include_str!("../fixtures/diagnostics_query_contract.json")).unwrap();
+    assert_eq!(fixture["max_query_bytes"], MAX_BINDING_QUERY_BYTES);
+    assert_eq!(
+        fixture["numeric_query_fields"],
+        serde_json::json!(DIAGNOSTIC_QUERY_INTEGER_FIELDS)
+    );
+}
+
+#[test]
 fn disabled_copies_have_no_payload_and_fork_checks_precede_locks() {
     let mut service = EmbeddedService::new(Diagnostics::default()).unwrap();
     assert_eq!(service.reader.info().unwrap().binding_reserved_bytes, 0);

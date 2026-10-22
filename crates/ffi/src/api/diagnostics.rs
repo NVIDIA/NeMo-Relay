@@ -8,6 +8,13 @@ use std::ffi::{CString, c_char};
 
 /// Opaque inspection authority. Caller must not copy, free, or forge the allocation.
 pub struct FfiDiagnosticsReader(EmbeddedDiagnosticsReader);
+
+/// Return the core's maximum encoded embedded diagnostics query size.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_diagnostics_query_max_bytes() -> u32 {
+    embedded::MAX_BINDING_QUERY_BYTES as u32
+}
+
 fn failure(error: EmbeddedDiagnosticError) -> NemoRelayStatus {
     set_last_error(error.reason());
     match error.reason() {
@@ -64,7 +71,8 @@ pub unsafe extern "C" fn nemo_relay_diagnostics_reader_free(
 }
 
 /// Capture a canonical page. Release successful output with nemo_relay_string_free.
-/// The optional query is at most 4096 UTF-8 bytes, using canonical query fields.
+/// The optional query is bounded by the core's encoded query byte limit and
+/// uses canonical query fields.
 /// Failure always leaves `*out` null. A reader/filter does not restrict authority.
 /// # Safety
 /// Reader must be live; out must be writable and non-aliasing. Query must be null

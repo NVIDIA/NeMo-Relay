@@ -11,6 +11,7 @@ extern int32_t nemo_relay_diagnostics_reader(FfiDiagnosticsReader** out);
 extern void nemo_relay_diagnostics_reader_free(FfiDiagnosticsReader** reader);
 extern int32_t nemo_relay_diagnostics_snapshot_json(const FfiDiagnosticsReader* reader, const char* query, char** out);
 extern int32_t nemo_relay_diagnostics_info_json(const FfiDiagnosticsReader* reader, char** out);
+extern uint32_t nemo_relay_diagnostics_query_max_bytes(void);
 extern const char* nemo_relay_last_error(void);
 extern void nemo_relay_string_free(char* value);
 */
@@ -21,6 +22,10 @@ import (
 	"sync"
 	"unsafe"
 )
+
+func maxDiagnosticsQueryBytes() int {
+	return int(C.nemo_relay_diagnostics_query_max_bytes())
+}
 
 // DiagnosticsSettings is a startup-only host service profile. A supplied profile
 // overrides file settings; nil inherits the resolved file profile.
@@ -77,7 +82,7 @@ func (reader *DiagnosticsReader) read(query string, info bool) (string, error) {
 	if reader == nil || reader.state == nil {
 		return "", &DiagnosticsError{Reason: "closed"}
 	}
-	if len(query) > 4096 {
+	if len(query) > maxDiagnosticsQueryBytes() {
 		return "", &DiagnosticsError{Reason: "invalid_query"}
 	}
 	state := reader.state
@@ -114,11 +119,11 @@ func (reader *DiagnosticsReader) SnapshotJSON(query DiagnosticQuery) (string, er
 		query.Ownership.Responsibility, query.Ownership.PluginInstanceID,
 		query.Ownership.SubscriberInstanceID,
 	} {
-		if text != nil && len(*text) > 4096 {
+		if text != nil && len(*text) > maxDiagnosticsQueryBytes() {
 			return "", &DiagnosticsError{Reason: "invalid_query"}
 		}
 	}
-	if query.Continuation != nil && len(query.Continuation.SourceInstanceID) > 4096 {
+	if query.Continuation != nil && len(query.Continuation.SourceInstanceID) > maxDiagnosticsQueryBytes() {
 		return "", &DiagnosticsError{Reason: "invalid_query"}
 	}
 	payload, err := json.Marshal(query)

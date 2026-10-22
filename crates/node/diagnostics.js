@@ -3,6 +3,7 @@
 
 'use strict';
 const lib = require('./index.js');
+const queryContract = require('./diagnostics_query_contract.js');
 
 /** Reader failure with a stable machine-readable reason. */
 class DiagnosticsError extends Error {
@@ -35,41 +36,39 @@ function call(operation) {
   }
 }
 function queryJson(query = {}) {
-  const numeric = new Set([
-    'origin_generation',
-    'after_sequence',
-    'sequence',
-    'component_offset',
-    'event_offset',
-    'scope',
-  ]);
   let size = 0;
   let nodes = 0;
   function normalize(value, key = '', depth = 0) {
-    if (++nodes > 64 || depth > 4) throw new DiagnosticsError('invalid_query');
+    if (++nodes > queryContract.MAX_QUERY_NODES || depth > queryContract.MAX_QUERY_DEPTH)
+      throw new DiagnosticsError('invalid_query');
     if (value !== null && typeof value === 'object') {
       if (Array.isArray(value)) throw new DiagnosticsError('invalid_query');
       const out = Object.create(null);
       let fields = 0;
       for (const field in value) {
         if (!Object.hasOwn(value, field)) continue;
-        if (++fields > 20 || field.length > 128) throw new DiagnosticsError('invalid_query');
+        if (
+          ++fields > queryContract.MAX_QUERY_OBJECT_FIELDS ||
+          Buffer.byteLength(field) > queryContract.MAX_QUERY_FIELD_NAME_BYTES
+        )
+          throw new DiagnosticsError('invalid_query');
         size += Buffer.byteLength(field);
-        if (size > 4096) throw new DiagnosticsError('invalid_query');
+        if (size > queryContract.MAX_QUERY_BYTES) throw new DiagnosticsError('invalid_query');
         const wire = field.replace(/[A-Z]/g, (letter) => '_' + letter.toLowerCase());
         if (Object.hasOwn(out, wire)) throw new DiagnosticsError('invalid_query');
         out[wire] = normalize(value[field], wire, depth + 1);
       }
       return out;
     }
-    if (numeric.has(key) && typeof value === 'bigint') {
+    if (queryContract.NUMERIC_QUERY_FIELDS.has(key) && typeof value === 'bigint') {
       if (value < 0n || value > 18446744073709551615n) throw new DiagnosticsError('invalid_query');
       return value.toString();
     }
-    if (numeric.has(key) && typeof value === 'number') throw new DiagnosticsError('invalid_query');
+    if (queryContract.NUMERIC_QUERY_FIELDS.has(key) && typeof value === 'number')
+      throw new DiagnosticsError('invalid_query');
     if (typeof value === 'string') {
       size += Buffer.byteLength(value);
-      if (size > 4096) throw new DiagnosticsError('invalid_query');
+      if (size > queryContract.MAX_QUERY_BYTES) throw new DiagnosticsError('invalid_query');
     } else if (
       value !== null &&
       typeof value !== 'boolean' &&
@@ -79,7 +78,7 @@ function queryJson(query = {}) {
     return value;
   }
   const encoded = JSON.stringify(normalize(query));
-  if (Buffer.byteLength(encoded) > 4096) throw new DiagnosticsError('invalid_query');
+  if (Buffer.byteLength(encoded) > queryContract.MAX_QUERY_BYTES) throw new DiagnosticsError('invalid_query');
   return encoded;
 }
 

@@ -19,6 +19,16 @@ use super::{
 
 /// Maximum encoded query accepted by an embedded reader, before JSON parsing.
 pub const MAX_BINDING_QUERY_BYTES: usize = 4096;
+/// Query fields whose canonical JSON value is a lossless unsigned integer.
+/// Binding adapters use this descriptor when accepting native integer inputs.
+pub const DIAGNOSTIC_QUERY_INTEGER_FIELDS: &[&str] = &[
+    "origin_generation",
+    "after_sequence",
+    "sequence",
+    "component_offset",
+    "event_offset",
+    "scope",
+];
 /// Independent simultaneous page-copy/foreign-conversion budget per service.
 pub const BINDING_COPY_CONCURRENCY: usize = 2;
 
@@ -346,6 +356,16 @@ pub fn is_diagnostic_number_field(field: &str) -> bool {
             | "max_snapshot_bytes"
             | "max_owned_bytes"
     )
+}
+
+/// Return the binding query contract as JSON for the language wrappers.
+#[doc(hidden)]
+pub fn binding_query_contract_json() -> String {
+    serde_json::json!({
+        "max_query_bytes": MAX_BINDING_QUERY_BYTES,
+        "numeric_query_fields": DIAGNOSTIC_QUERY_INTEGER_FIELDS,
+    })
+    .to_string()
 }
 
 #[cfg(test)]

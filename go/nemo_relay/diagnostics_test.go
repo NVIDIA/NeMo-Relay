@@ -9,8 +9,26 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
+
+func TestQueryByteLimitMatchesSharedContractFixture(t *testing.T) {
+	fixturePath := filepath.Join("..", "..", "crates", "core", "tests", "fixtures", "diagnostics_query_contract.json")
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		MaxQueryBytes uint32 `json:"max_query_bytes"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if actual := uint32(maxDiagnosticsQueryBytes()); actual != fixture.MaxQueryBytes {
+		t.Fatalf("query byte limit: got %d, want %d", actual, fixture.MaxQueryBytes)
+	}
+}
 
 func TestDiagnosticNumberLossless(t *testing.T) {
 	for _, input := range []string{`"9007199254740993"`, `"18446744073709551615"`} {

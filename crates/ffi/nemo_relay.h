@@ -996,6 +996,11 @@ NemoRelayStatus nemo_relay_adaptive_build_cache_telemetry_event(const char *opti
 NemoRelayStatus nemo_relay_adaptive_set_latency_sensitivity(uint32_t value);
 
 /**
+ * Return the core's maximum encoded embedded diagnostics query size.
+ */
+uint32_t nemo_relay_diagnostics_query_max_bytes(void);
+
+/**
  * Obtain an embedded reader without starting or enabling diagnostics.
  * Errors set a stable machine-readable reason in nemo_relay_last_error.
  * # Safety
@@ -1013,7 +1018,8 @@ void nemo_relay_diagnostics_reader_free(struct FfiDiagnosticsReader **reader);
 
 /**
  * Capture a canonical page. Release successful output with nemo_relay_string_free.
- * The optional query is at most 4096 UTF-8 bytes, using canonical query fields.
+ * The optional query is bounded by the core's encoded query byte limit and
+ * uses canonical query fields.
  * Failure always leaves `*out` null. A reader/filter does not restrict authority.
  * # Safety
  * Reader must be live; out must be writable and non-aliasing. Query must be null

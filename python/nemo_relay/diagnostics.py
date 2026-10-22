@@ -13,6 +13,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from nemo_relay._diagnostics_query_contract import (
+    MAX_QUERY_BYTES,
+    MAX_QUERY_DEPTH,
+    MAX_QUERY_FIELD_NAME_BYTES,
+    MAX_QUERY_NODES,
+    MAX_QUERY_OBJECT_FIELDS,
+    NUMERIC_QUERY_FIELDS,
+)
 from nemo_relay._native import DiagnosticsReader as _NativeReader
 from nemo_relay._native import diagnostics_reader as _reader
 
@@ -30,29 +38,28 @@ def _query_json(query: dict[str, Any] | None) -> str:
         return "{}"
     # Canonical queries encode u64 values as strings. Accept native Python ints
     # at these named positions without converting caller text or small row caps.
-    numeric = {"origin_generation", "after_sequence", "sequence", "component_offset", "event_offset", "scope"}
     admitted_bytes = 0
     nodes = 0
 
     def normalize(value: Any, key: str = "", depth: int = 0) -> Any:
         nonlocal admitted_bytes, nodes
         nodes += 1
-        if not isinstance(key, str) or len(key) > 128:
+        if not isinstance(key, str) or len(key.encode("utf-8")) > MAX_QUERY_FIELD_NAME_BYTES:
             raise DiagnosticsError("invalid_query")
         admitted_bytes += len(key.encode("utf-8"))
         if isinstance(value, str):
-            if len(value) > 4096:
-                raise DiagnosticsError("invalid_query")
             admitted_bytes += len(value.encode("utf-8"))
-        if nodes > 64 or admitted_bytes > 4096 or depth > 4:
+        if (
+            nodes > MAX_QUERY_NODES
+            or admitted_bytes > MAX_QUERY_BYTES
+            or depth > MAX_QUERY_DEPTH
+        ):
             raise DiagnosticsError("invalid_query")
         if isinstance(value, dict):
-            if len(value) > 20:
+            if len(value) > MAX_QUERY_OBJECT_FIELDS:
                 raise DiagnosticsError("invalid_query")
             return {k: normalize(v, k, depth + 1) for k, v in value.items()}
-        if isinstance(value, str) and len(value) > 4096:
-            raise DiagnosticsError("invalid_query")
-        if key in numeric and type(value) is int:
+        if key in NUMERIC_QUERY_FIELDS and type(value) is int:
             if not 0 <= value <= 2**64 - 1:
                 raise DiagnosticsError("invalid_query")
             return str(value)
@@ -64,7 +71,7 @@ def _query_json(query: dict[str, Any] | None) -> str:
     size = 0
     for chunk in json.JSONEncoder(ensure_ascii=False, separators=(",", ":")).iterencode(normalize(query)):
         size += len(chunk.encode("utf-8"))
-        if size > 4096:
+        if size > MAX_QUERY_BYTES:
             raise DiagnosticsError("invalid_query")
         chunks.append(chunk)
     return "".join(chunks)

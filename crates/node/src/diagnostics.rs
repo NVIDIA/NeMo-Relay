@@ -107,3 +107,9 @@ pub fn diagnostics_reader() -> napi::Result<DiagnosticsReader> {
         .map(|inner| DiagnosticsReader { inner })
         .map_err(error)
 }
+
+/// Internal descriptor consumed by the JavaScript query adapter.
+#[napi(js_name = "_diagnosticsQueryContract")]
+pub fn diagnostics_query_contract() -> String {
+    embedded::binding_query_contract_json()
+}

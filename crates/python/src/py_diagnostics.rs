@@ -80,9 +80,17 @@ fn diagnostics_reader(py: Python<'_>) -> PyResult<PyDiagnosticsReader> {
         .map(|inner| PyDiagnosticsReader { inner })
         .map_err(|e| error(py, e))
 }
+
+/// Internal descriptor consumed by the pure-Python query adapter.
+#[pyfunction(name = "_diagnostics_query_contract")]
+fn diagnostics_query_contract() -> String {
+    embedded::binding_query_contract_json()
+}
+
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDiagnosticsReader>()?;
     module.add_function(wrap_pyfunction!(diagnostics_reader, module)?)?;
+    module.add_function(wrap_pyfunction!(diagnostics_query_contract, module)?)?;
     Ok(())
 }
 

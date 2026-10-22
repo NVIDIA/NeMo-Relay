@@ -2,12 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { test } from 'node:test';
 import { createRequire } from 'node:module';
 import { Worker } from 'node:worker_threads';
 const require = createRequire(import.meta.url);
 const diagnostics = require('../diagnostics.js');
 const plugin = require('../plugin.js');
+const queryContract = require('../diagnostics_query_contract.js');
+
+test('query adapter matches the shared cross-binding contract fixture', () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(new URL('../../core/tests/fixtures/diagnostics_query_contract.json', import.meta.url), 'utf8'),
+  );
+  assert.equal(queryContract.MAX_QUERY_BYTES, fixture.max_query_bytes);
+  assert.equal(queryContract.MAX_QUERY_NODES, fixture.adapter_limits.max_query_nodes);
+  assert.equal(queryContract.MAX_QUERY_DEPTH, fixture.adapter_limits.max_query_depth);
+  assert.equal(queryContract.MAX_QUERY_OBJECT_FIELDS, fixture.adapter_limits.max_query_object_fields);
+  assert.equal(queryContract.MAX_QUERY_FIELD_NAME_BYTES, fixture.adapter_limits.max_query_field_name_bytes);
+  assert.deepEqual([...queryContract.NUMERIC_QUERY_FIELDS], fixture.numeric_query_fields);
+});
 
 test('configured inspection survives plugin and Node environment cleanup', async () => {
   assert.throws(

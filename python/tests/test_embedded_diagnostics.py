@@ -3,10 +3,35 @@
 
 """Generic configured-service and inspection contracts, isolated from other runtimes."""
 
+import json
 import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
+
+from nemo_relay._diagnostics_query_contract import (
+    MAX_QUERY_BYTES,
+    MAX_QUERY_DEPTH,
+    MAX_QUERY_FIELD_NAME_BYTES,
+    MAX_QUERY_NODES,
+    MAX_QUERY_OBJECT_FIELDS,
+    NUMERIC_QUERY_FIELDS,
+)
+
+
+def test_python_query_adapter_matches_shared_contract_fixture():
+    fixture_path = (
+        Path(__file__).resolve().parents[2]
+        / "crates/core/tests/fixtures/diagnostics_query_contract.json"
+    )
+    fixture = json.loads(fixture_path.read_text())
+    assert MAX_QUERY_BYTES == fixture["max_query_bytes"]
+    assert MAX_QUERY_NODES == fixture["adapter_limits"]["max_query_nodes"]
+    assert MAX_QUERY_DEPTH == fixture["adapter_limits"]["max_query_depth"]
+    assert MAX_QUERY_OBJECT_FIELDS == fixture["adapter_limits"]["max_query_object_fields"]
+    assert MAX_QUERY_FIELD_NAME_BYTES == fixture["adapter_limits"]["max_query_field_name_bytes"]
+    assert NUMERIC_QUERY_FIELDS == frozenset(fixture["numeric_query_fields"])
 
 
 def test_configured_diagnostics_outlives_plugins(tmp_path):

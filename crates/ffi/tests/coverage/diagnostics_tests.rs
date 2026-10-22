@@ -7,6 +7,14 @@ use nemo_relay::diagnostics::DiagnosticsSettings;
 use nemo_relay::plugin::dynamic::{PluginHostConfig, initialize};
 use std::ffi::{CStr, CString};
 
+#[test]
+fn query_byte_limit_matches_core_contract() {
+    assert_eq!(
+        nemo_relay_diagnostics_query_max_bytes(),
+        nemo_relay::diagnostics::embedded::MAX_BINDING_QUERY_BYTES as u32
+    );
+}
+
 #[tokio::test]
 async fn reader_owns_strings_and_survives_plugin_close() {
     let mut reader = std::ptr::null_mut();
