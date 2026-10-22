@@ -27,7 +27,7 @@ pub(crate) struct InspectCommand {
     /// Inspect retained-entry/component backing and existing resource context.
     #[arg(long, conflicts_with = "capabilities")]
     memory: bool,
-    /// Bounded JSON selection, including any opaque continuation from the previous page.
+    /// JSON selection with continuation; at most 4096 URI-encoded bytes including query=.
     #[arg(long, conflicts_with = "capabilities")]
     query: Option<String>,
     /// Maximum response bytes accepted by this inspector, independent of the server.
@@ -57,16 +57,8 @@ pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliErro
         path.push_str("/capabilities");
     }
     if let Some(query) = command.query {
-        if query.len() > 1024 {
-            return Err(CliError::Config(
-                "diagnostic query exceeds inspector limit".into(),
-            ));
-        }
-        path.push_str("?query=");
-        path.push_str(
-            &percent_encoding::utf8_percent_encode(&query, percent_encoding::NON_ALPHANUMERIC)
-                .to_string(),
-        );
+        path.push('?');
+        path.push_str(&encode_query(&query)?);
     }
     let response = tokio::task::spawn_blocking(move || crate::gateway::client::get_diagnostics(
         &url, &path, max_bytes as usize, daemon)).await
@@ -90,6 +82,26 @@ pub(crate) async fn inspect(command: InspectCommand) -> Result<ExitCode, CliErro
     } else {
         ExitCode::FAILURE
     })
+}
+
+// Include the parameter name and URI escaping in the HTTP adapter's budget.
+fn encode_query(query: &str) -> Result<String, CliError> {
+    let limit = crate::diagnostics_http::MAX_QUERY_BYTES;
+    if query.len() > limit {
+        return Err(CliError::Config(
+            "diagnostic query exceeds HTTP query limit".into(),
+        ));
+    }
+    let encoded = format!(
+        "query={}",
+        percent_encoding::utf8_percent_encode(query, percent_encoding::NON_ALPHANUMERIC)
+    );
+    if encoded.len() > limit {
+        return Err(CliError::Config(
+            "encoded diagnostic query exceeds HTTP query limit".into(),
+        ));
+    }
+    Ok(encoded)
 }
 
 #[cfg(test)]
