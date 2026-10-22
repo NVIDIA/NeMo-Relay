@@ -256,6 +256,7 @@ fn worker_sdk_cancellation_keeps_its_code_even_with_http_prefix() {
         code: "worker.cancelled".into(),
         message: "HTTP 403: denied".into(),
         retryable: false,
+        downstream_continuation_id: None,
     };
     let returned = sdk_error_to_worker(worker_error_to_sdk(wire));
     assert!(

@@ -582,6 +582,11 @@ message WorkerError {
   string code = 1;
   string message = 2;
   bool retryable = 3;
+  // Host-issued continuation whose downstream failure is being propagated.
+  // SDKs preserve this on the same error, never on a newly created callback error.
+  // The host suppresses callback attribution only for the current invocation's
+  // nonempty continuation ID. Absent/unknown provenance retains legacy behavior.
+  optional string downstream_continuation_id = 4;
 }
 
 // Owned root-to-top identities; never opaque binding or invocation IDs.

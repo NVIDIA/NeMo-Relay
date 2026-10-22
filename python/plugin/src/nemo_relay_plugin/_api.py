@@ -465,6 +465,19 @@ class WorkerSdkError(Exception):
     """
 
 
+# The host validates this marker against the current invocation's continuation.
+_DOWNSTREAM_CONTINUATION_METADATA = "nemo-relay-downstream-continuation"
+
+
+class _DownstreamError(WorkerSdkError):
+    """Preserve origin when an unchanged continuation error is re-raised."""
+
+    def __init__(self, original: WorkerSdkError, continuation_id: str) -> None:
+        super().__init__(str(original))
+        self.original = original
+        self.continuation_id = continuation_id
+
+
 def _optimization_object(value: Json, field_name: str) -> Mapping[str, Json]:
     if not isinstance(value, Mapping):
         raise WorkerSdkError(f"optimization contribution {field_name} must be a JSON object")
@@ -3116,15 +3129,28 @@ def _stream_chunk_to_value(chunk: Any) -> Json:
 
 def _worker_error_to_sdk(error: Any) -> WorkerSdkError:
     if error.code != "worker.cancelled" and _is_http_error_message(error.message):
-        return WorkerSdkError(error.message)
-    return WorkerSdkError(f"{error.code}: {error.message}")
+        original = WorkerSdkError(error.message)
+    else:
+        original = WorkerSdkError(f"{error.code}: {error.message}")
+    if error.downstream_continuation_id:
+        return _DownstreamError(original, error.downstream_continuation_id)
+    return original
 
 
 def _sdk_error_to_worker(error: BaseException) -> Any:
+    continuation_id = None
+    if isinstance(error, _DownstreamError):
+        continuation_id = error.continuation_id
+        error = error.original
+    elif isinstance(error, grpc.aio.AioRpcError):
+        continuation_id = dict(error.trailing_metadata() or ()).get(_DOWNSTREAM_CONTINUATION_METADATA)
     code = "worker.error"
     if isinstance(error, WorkerSdkError):
         code = "worker.sdk_error"
-    return pb.WorkerError(code=code, message=str(error), retryable=False)
+    result = pb.WorkerError(code=code, message=str(error), retryable=False)
+    if isinstance(continuation_id, str) and continuation_id:
+        result.downstream_continuation_id = continuation_id
+    return result
 
 
 def _cancelled_worker_error(reason: str) -> Any:

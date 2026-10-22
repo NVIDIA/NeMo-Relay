@@ -20,6 +20,7 @@ use crate::diagnostics::{
 };
 use chrono::{DateTime, Utc};
 use futures_util::FutureExt;
+use nemo_relay_worker_proto::DOWNSTREAM_CONTINUATION_METADATA;
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
     RelayHostRuntime, RelayHostRuntimeServer,
@@ -2383,7 +2384,7 @@ impl WorkerPluginCallback {
                         let result = match item {
                             Ok(chunk) => {
                                 if let Some(stream_chunk_item::Item::Error(error)) = &chunk.item
-                                    && error.code != "worker.cancelled"
+                                    && is_worker_callback_failure(error, &guard.continuation_id)
                                 {
                                     observer.failure(DiagnosticOperation::WorkerCallback, DiagnosticFailureClass::Unknown, DiagnosticPhase::Runtime);
                                 }
@@ -2391,7 +2392,9 @@ impl WorkerPluginCallback {
                                     .map_err(|error| super::http_error::reported_by(error, &plugin_id, "worker"))
                             }
                             Err(err) => {
-                                observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
+                                if !is_downstream_status(&err, &guard.continuation_id) {
+                                    observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
+                                }
                                 Err(FlowError::Internal(format!("worker stream transport failed: {err}")))
                             }
                         };
@@ -2406,7 +2409,9 @@ impl WorkerPluginCallback {
                     }
                 }
                 Err(err) => {
-                    observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
+                    if !is_downstream_status(&err, &guard.continuation_id) {
+                        observer.rpc_failure(DiagnosticOperation::WorkerTransport, &err, DiagnosticPhase::Runtime);
+                    }
                     let reason = if err.code() == tonic::Code::DeadlineExceeded {
                         "worker stream invocation timed out"
                     } else {
@@ -2614,8 +2619,8 @@ impl WorkerPluginCallback {
             .map(|response| {
                 let response = response.into_inner();
                 let failed = match &response.result {
-                    Some(invoke_response_result::Result::Error(error)) => error.code != "worker.cancelled",
-                    Some(invoke_response_result::Result::Json(result)) => result.error.as_ref().is_some_and(|error| error.code != "worker.cancelled"),
+                    Some(invoke_response_result::Result::Error(error)) => is_worker_callback_failure(error, &guard.continuation_id),
+                    Some(invoke_response_result::Result::Json(result)) => result.error.as_ref().is_some_and(|error| is_worker_callback_failure(error, &guard.continuation_id)),
                     _ => false,
                 };
                 if failed { self.host_state.observer.failure(DiagnosticOperation::WorkerCallback, DiagnosticFailureClass::Unknown, DiagnosticPhase::Runtime); }
@@ -3975,7 +3980,12 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 panic_payload_message(payload.as_ref())
             )))
         });
-        Ok(Response::new(tool_execution_result_response(result)))
+        let downstream_failed = result.is_err();
+        let mut response = tool_execution_result_response(result);
+        if downstream_failed && let Some(error) = &mut response.error {
+            error.downstream_continuation_id = Some(request.continuation_id);
+        }
+        Ok(Response::new(response))
     }
 
     /// Run an LLM call and drop its future if the worker invocation ends.
@@ -3993,6 +4003,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             ));
         };
         let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
+        let continuation_id = request.continuation_id;
         let request =
             required_envelope(request.request, "llm next request").map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request)
@@ -4008,7 +4019,11 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 panic_payload_message(payload.as_ref())
             )))
         });
-        Ok(Response::new(json_result(result)))
+        let mut response = json_result(result);
+        if let Some(error) = &mut response.error {
+            error.downstream_continuation_id = Some(continuation_id);
+        }
+        Ok(Response::new(response))
     }
 
     type LlmStreamNextStream =
@@ -4029,6 +4044,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             ));
         };
         let context = self.isolated_continuation_context(&context, request.scope.as_ref())?;
+        let continuation_id = request.continuation_id;
         let request = required_envelope(request.request, "llm stream next request")
             .map_err(status_from_flow)?;
         let request = decode_json_envelope::<LlmRequest>(&request).map_err(|err| {
@@ -4040,12 +4056,15 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         )
         .await?
         .map_err(|payload| {
-            Status::internal(format!(
-                "worker stream continuation panicked: {}",
-                panic_payload_message(payload.as_ref())
-            ))
+            downstream_status(
+                Status::internal(format!(
+                    "worker stream continuation panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                )),
+                &continuation_id,
+            )
         })?
-        .map_err(status_from_flow)?;
+        .map_err(|error| downstream_status(status_from_flow(error), &continuation_id))?;
         let (tx, rx) = mpsc::channel(16);
         tokio::spawn(async move {
             context
@@ -4085,16 +4104,20 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                 })
                 .await;
         });
-        let mapped = tokio_stream::wrappers::ReceiverStream::new(rx).map(|item| match item {
+        let mapped = tokio_stream::wrappers::ReceiverStream::new(rx).map(move |item| match item {
             Ok(value) => Ok(StreamChunk {
                 item: Some(stream_chunk_item::Item::Value(json_envelope_infallible(
                     JSON_SCHEMA,
                     &value,
                 ))),
             }),
-            Err(err) => Ok(StreamChunk {
-                item: Some(stream_chunk_item::Item::Error(flow_error_to_worker(err))),
-            }),
+            Err(err) => {
+                let mut error = flow_error_to_worker(err);
+                error.downstream_continuation_id = Some(continuation_id.clone());
+                Ok(StreamChunk {
+                    item: Some(stream_chunk_item::Item::Error(error)),
+                })
+            }
         });
         Ok(Response::new(Box::pin(mapped)))
     }
@@ -4578,6 +4601,7 @@ fn flow_error_to_worker(err: FlowError) -> WorkerError {
         code: "host.runtime_error".into(),
         message: super::http_error::to_message(&err),
         retryable: false,
+        downstream_continuation_id: None,
     }
 }
 
@@ -4751,6 +4775,37 @@ fn unix_endpoint_display(path: &Path) -> String {
 #[cfg(test)]
 #[path = "../../../tests/unit/dynamic_worker_tests.rs"]
 mod tests;
+
+// Attribution follows the returned error, never a mutable "last next failed" flag.
+// Existing continuation IDs are bounded host-issued identities; no error ledger is retained.
+fn is_propagated_continuation(origin: Option<&str>, continuation_id: &str) -> bool {
+    !continuation_id.is_empty() && origin == Some(continuation_id)
+}
+
+fn is_worker_callback_failure(error: &WorkerError, continuation_id: &str) -> bool {
+    error.code != "worker.cancelled"
+        && !is_propagated_continuation(error.downstream_continuation_id.as_deref(), continuation_id)
+}
+
+fn is_downstream_status(status: &Status, continuation_id: &str) -> bool {
+    is_propagated_continuation(
+        status
+            .metadata()
+            .get(DOWNSTREAM_CONTINUATION_METADATA)
+            .and_then(|value| value.to_str().ok()),
+        continuation_id,
+    )
+}
+
+fn downstream_status(mut status: Status, continuation_id: &str) -> Status {
+    // IDs originate in insert_continuation and are ASCII, including the UUID.
+    if let Ok(value) = continuation_id.parse() {
+        status
+            .metadata_mut()
+            .insert(DOWNSTREAM_CONTINUATION_METADATA, value);
+    }
+    status
+}
 
 fn report_worker_response(mut response: InvokeResponse, plugin_id: &str) -> InvokeResponse {
     let error = match response.result.as_mut() {

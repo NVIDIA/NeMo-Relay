@@ -675,6 +675,7 @@ fn test_worker_error() -> WorkerError {
         code: "worker.failed".into(),
         message: "boom".into(),
         retryable: false,
+        downstream_continuation_id: None,
     }
 }
 
@@ -873,6 +874,7 @@ fn response_helpers_cover_stream_optional_and_cancellation_errors() {
             code: "worker.cancelled".into(),
             message: "cancelled by caller".into(),
             retryable: false,
+            downstream_continuation_id: None,
         })
         .to_string()
         .contains("worker invocation cancelled")
@@ -916,6 +918,7 @@ fn envelope_and_error_helpers_cover_failure_paths() {
             code: "worker.empty".into(),
             message: String::new(),
             retryable: false,
+            downstream_continuation_id: None,
         },
         "fallback message",
     );
@@ -1113,6 +1116,7 @@ async fn callback_helpers_cover_worker_response_edges() {
         code: "worker.failed".into(),
         message: "boom".into(),
         retryable: false,
+        downstream_continuation_id: None,
     };
     let (callback, _shutdown) = fake_callback_service({
         let worker_error = worker_error.clone();
@@ -1546,6 +1550,7 @@ async fn llm_worker_codec_capabilities_are_active_only_during_sanitizer_invocati
                             code: "worker.failed".into(),
                             message: "boom".into(),
                             retryable: false,
+                            downstream_continuation_id: None,
                         },
                     )),
                 }
@@ -2946,6 +2951,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
             code: "worker.failed".into(),
             message: "callback unavailable".into(),
             retryable: false,
+            downstream_continuation_id: None,
         })),
     })
     .await;
@@ -5023,7 +5029,8 @@ fn worker_http_error_prefix_preserves_status_through_continuations() {
             worker_error_to_flow(WorkerError {
                 code: "worker.error".into(),
                 message: message.into(),
-                retryable: true
+                retryable: true,
+                downstream_continuation_id: None,
             }),
             FlowError::Internal(_)
         ));
@@ -5032,7 +5039,8 @@ fn worker_http_error_prefix_preserves_status_through_continuations() {
         worker_error_to_flow(WorkerError {
             code: "worker.cancelled".into(),
             message: "HTTP 403: denied".into(),
-            retryable: false
+            retryable: false,
+            downstream_continuation_id: None,
         }),
         FlowError::Internal(_)
     ));
@@ -5045,6 +5053,7 @@ fn worker_http_errors_include_the_verified_reporting_plugin() {
             code: "worker.error".into(),
             message: "HTTP 403: denied".into(),
             retryable: false,
+            downstream_continuation_id: None,
         })),
     };
     let response = report_worker_response(response, "verified.worker");
@@ -5058,6 +5067,7 @@ fn worker_http_errors_include_the_verified_reporting_plugin() {
             code: "worker.cancelled".into(),
             message: "HTTP 403: denied".into(),
             retryable: false,
+            downstream_continuation_id: None,
         })),
     };
     assert!(matches!(
@@ -5597,4 +5607,249 @@ async fn short_callbacks_keep_their_rpc_deadline() {
         .unwrap()
         .unwrap();
     assert_eq!(cancellation.invocation_id, invocation_id);
+}
+
+fn enable_provenance_test_diagnostics(
+    callback: &mut WorkerPluginCallback,
+) -> crate::diagnostics::Diagnostics {
+    use crate::diagnostics::{Diagnostics, DiagnosticsSettings, PluginExecution, SourceIdentity};
+    let diagnostics = Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    Arc::get_mut(&mut callback.host_state).unwrap().observer =
+        super::super::diagnostics::PluginDiagnostics::new(
+            &diagnostics,
+            "fixture_worker",
+            PluginExecution::WorkerProtocol,
+            Uuid::now_v7(),
+        );
+    diagnostics
+}
+
+fn provenance_failure_total(diagnostics: &crate::diagnostics::Diagnostics) -> u64 {
+    diagnostics
+        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap()
+        .lifetime
+        .totals
+        .failures_total
+        .value
+        .get()
+}
+
+#[tokio::test]
+async fn worker_callback_counts_follow_error_provenance() {
+    let (mut callback, _shutdown) = fake_callback_service(|request| {
+        let mut error = flow_error_to_worker(FlowError::Internal("provider failed".into()));
+        match request.registration_name.as_str() {
+            "forwarded" => error.downstream_continuation_id = Some(request.continuation_id),
+            "foreign" => error.downstream_continuation_id = Some("next-other".into()),
+            "cancelled" => error.code = "worker.cancelled".into(),
+            _ => {}
+        }
+        let result = if request.invocation_id.ends_with('0') {
+            InvokeResult::Json(JsonResult {
+                value: None,
+                error: Some(error),
+            })
+        } else {
+            InvokeResult::Error(error)
+        };
+        InvokeResponse {
+            result: Some(result),
+        }
+    })
+    .await;
+    let diagnostics = enable_provenance_test_diagnostics(&mut callback);
+    // Three forwarding boundaries add no plugin failure. A later, distinct local
+    // error and foreign/absent invocation provenance remain countable.
+    for (index, (name, continuation, expected)) in [
+        ("forwarded", "next-1", 0),
+        ("forwarded", "next-2", 0),
+        ("forwarded", "next-3", 0),
+        ("local", "next-4", 1),
+        ("foreign", "next-5", 2),
+        ("forwarded", "", 3),
+        ("cancelled", "next-6", 3),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request = callback
+            .base_request(
+                name,
+                RegistrationSurface::LlmExecutionIntercept,
+                Some(continuation.into()),
+                None,
+            )
+            .unwrap();
+        request.invocation_id = format!("invoke-{}", index % 2);
+        let response = callback.invoke_async(request).await.unwrap();
+        assert!(json_from_invoke_response(response).is_err());
+        assert_eq!(provenance_failure_total(&diagnostics), expected, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn worker_stream_counts_follow_error_provenance() {
+    let (mut callback, _shutdown) = fake_callback_service_with_stream(
+        |_| InvokeResponse::default(),
+        |request| {
+            let mut error =
+                flow_error_to_worker(FlowError::Internal("provider stream failed".into()));
+            if request.registration_name != "local" {
+                error.downstream_continuation_id = Some(request.continuation_id.clone());
+            }
+            let item = if request.registration_name == "status" {
+                Err(downstream_status(
+                    Status::internal("provider stream failed"),
+                    &request.continuation_id,
+                ))
+            } else {
+                Ok(StreamChunk {
+                    item: Some(StreamItem::Error(error)),
+                })
+            };
+            Box::pin(tokio_stream::once(item))
+        },
+    )
+    .await;
+    let diagnostics = enable_provenance_test_diagnostics(&mut callback);
+    for (name, expected) in [("forwarded", 0), ("status", 0), ("local", 1)] {
+        let mut stream = callback
+            .invoke_llm_stream_execution(
+                name,
+                "model",
+                valid_llm_request(),
+                LlmExecutionContext::default(),
+                Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+            )
+            .await
+            .unwrap();
+        assert!(stream.next().await.unwrap().is_err());
+        assert_eq!(provenance_failure_total(&diagnostics), expected, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn host_continuation_errors_carry_provenance_only_after_downstream_execution() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let llm_id = state
+        .insert_continuation(Continuation::llm(Arc::new(|_| {
+            Box::pin(async { Err(FlowError::Internal("provider failed".into())) })
+        })))
+        .unwrap();
+    let request = LlmNextRequest {
+        activation_id: ACTIVATION_ID.into(),
+        auth_token: AUTH_TOKEN.into(),
+        continuation_id: llm_id.clone(),
+        request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
+        scope: None,
+    };
+    let (a, b) = tokio::join!(
+        service.llm_next(Request::new(request.clone())),
+        service.llm_next(Request::new(request.clone()))
+    );
+    for response in [a, b] {
+        let error = response.unwrap().into_inner().error.unwrap();
+        assert_eq!(
+            error.downstream_continuation_id.as_deref(),
+            Some(llm_id.as_str())
+        );
+        assert_eq!(error.code, "host.runtime_error");
+        assert!(!is_worker_callback_failure(&error, &llm_id));
+    }
+    let invalid = service
+        .llm_next(Request::new(LlmNextRequest {
+            request: None,
+            ..request
+        }))
+        .await
+        .unwrap_err();
+    assert!(!is_downstream_status(&invalid, &llm_id));
+    let tool_id = state
+        .insert_continuation(Continuation::tool(Arc::new(|_| {
+            Box::pin(async { Err(FlowError::Internal("tool failed".into())) })
+        })))
+        .unwrap();
+    let error = service
+        .tool_next(Request::new(ToolNextRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            continuation_id: tool_id.clone(),
+            value: Some(json_envelope(JSON_SCHEMA, &json!({})).unwrap()),
+            scope: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .error
+        .unwrap();
+    assert_eq!(
+        error.downstream_continuation_id.as_deref(),
+        Some(tool_id.as_str())
+    );
+    // Opening and polling a downstream stream preserve their existing wire/error shapes.
+    for opening in [true, false] {
+        let id = state
+            .insert_continuation(Continuation::llm_stream(Arc::new(move |_| {
+                Box::pin(async move {
+                    if opening {
+                        Err(FlowError::Internal("stream open failed".into()))
+                    } else {
+                        Ok(LlmJsonStream::new(tokio_stream::once(Err(
+                            FlowError::Internal("stream item failed".into()),
+                        ))))
+                    }
+                })
+            })))
+            .unwrap();
+        let response = service
+            .llm_stream_next(Request::new(LlmStreamNextRequest {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                continuation_id: id.clone(),
+                request: Some(json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).unwrap()),
+                scope: None,
+            }))
+            .await;
+        if opening {
+            let error = response.err().unwrap();
+            assert_eq!(error.code(), tonic::Code::Internal);
+            assert!(is_downstream_status(&error, &id));
+        } else {
+            let chunk = response
+                .unwrap()
+                .into_inner()
+                .next()
+                .await
+                .unwrap()
+                .unwrap();
+            let Some(StreamItem::Error(error)) = chunk.item else {
+                panic!("expected stream error")
+            };
+            assert_eq!(
+                error.downstream_continuation_id.as_deref(),
+                Some(id.as_str())
+            );
+        }
+    }
 }
