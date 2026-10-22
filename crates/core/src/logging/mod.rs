@@ -128,8 +128,13 @@ impl LoggingRuntime {
     /// Explicit file sinks fail initialization if they cannot be
     /// opened. Dropping the returned runtime flushes sinks and detaches its logger from the
     /// process-global `log` proxy when it is still installed.
+    /// Reuses an already selected diagnostics context. Otherwise, logging uses an inert context
+    /// without selecting the process default, leaving diagnostics enablement to runtime startup.
     pub fn configure(config: LoggingConfig) -> Result<Self> {
-        Self::configure_with_diagnostics(config, Diagnostics::process_default())
+        Self::configure_with_diagnostics(
+            config,
+            Diagnostics::selected_process_default().unwrap_or(&Diagnostics::default()),
+        )
     }
 
     /// Installs operational logging with diagnostics owned by an independent diagnostic context.

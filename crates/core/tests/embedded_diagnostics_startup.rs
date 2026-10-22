@@ -3,9 +3,49 @@
 
 //! Public embedded startup contract. Each test requires process isolation (nextest).
 use nemo_relay::{
-    diagnostics::embedded,
+    diagnostics::{DiagnosticSnapshot, Diagnostics, embedded},
+    logging::{LoggingConfig, LoggingRuntime},
     plugin::dynamic::{PluginHostConfig, initialize, validate},
 };
+
+#[tokio::test]
+async fn explicit_logging_does_not_select_embedded_diagnostics() {
+    let logging_config = LoggingConfig {
+        stderr_enabled: false,
+        ..Default::default()
+    };
+    let logging = LoggingRuntime::configure(logging_config.clone()).unwrap();
+    assert!(Diagnostics::selected_process_default().is_none());
+    assert_eq!(embedded::reader().unwrap_err().reason(), "not_initialized");
+
+    let config = PluginHostConfig {
+        diagnostics: Some(nemo_relay::diagnostics::DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut activation = initialize(config, None).await.unwrap();
+    let reader = embedded::reader().unwrap();
+    assert!(reader.snapshot_json("{}").is_ok());
+    drop(logging);
+
+    let logging = LoggingRuntime::configure(logging_config).unwrap();
+    let page = reader.snapshot_json("{}").unwrap();
+    let snapshot: DiagnosticSnapshot = serde_json::from_str(page.as_str()).unwrap();
+    assert_eq!(
+        logging.root_relay_id(),
+        snapshot.source.instance_id.to_string()
+    );
+    assert!(
+        snapshot
+            .components
+            .iter()
+            .any(|component| component.identity.key == "logging")
+    );
+    activation.close().unwrap();
+    drop(logging);
+}
 
 #[tokio::test]
 async fn file_settings_are_reused_and_absent_from_plugin_reports() {
