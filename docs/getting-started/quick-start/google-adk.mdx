@@ -1,0 +1,204 @@
+---
+title: "Google ADK Quick Start"
+sidebar-title: "Google ADK"
+slug: getting-started/quick-start/google-adk
+description: "Record one Google ADK agent run with NeMo Relay."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+{/* quickstart-scenario
+{
+  "schema": 1,
+  "id": "google-adk",
+  "mode": "live",
+  "shells": [
+    "bash",
+    "powershell"
+  ],
+  "cwd": "relay-google-adk-quickstart",
+  "requires": {
+    "python": ">=3.11",
+    "uv": "available"
+  },
+  "setup": [],
+  "inputs": {
+    "GOOGLE_API_KEY": {
+      "kind": "env",
+      "secret": true
+    }
+  },
+  "fresh": [
+    "logs/events.jsonl"
+  ],
+  "checks": [
+    {
+      "kind": "atof",
+      "path": "logs/events.jsonl",
+      "version": "0.1",
+      "paired_scopes": [
+        {
+          "category": "agent",
+          "name": "adk-request"
+        },
+        {
+          "category": "tool",
+          "name": "emit_marker"
+        },
+        {
+          "category": "llm"
+        }
+      ],
+      "marks": []
+    }
+  ]
+}
+*/}
+
+## Goal
+
+Run one Google ADK agent. Write start and end events for its model and tool
+calls to a local ATOF file.
+
+Follow `parent_uuid` links to place each model and tool call in the run.
+
+## Prerequisites
+
+You need:
+
+- Python 3.11 or newer
+- `uv`
+- Model credentials: [Gemini API key](https://aistudio.google.com/apikey) for this example, or your provider's credentials
+
+<Steps toc={true}>
+
+## Install
+
+Create a project. Install NeMo Relay with its Google ADK extra.
+Existing `uv` project: run only `uv add`, from its directory.
+
+{/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash","powershell"],"session":"main","timeout_seconds":600} */}
+```bash
+mkdir relay-google-adk-quickstart
+cd relay-google-adk-quickstart
+uv init
+uv add "nemo-relay[google-adk]==0.11.0"
+```
+
+Set Gemini API key for current shell:
+
+<Tabs>
+<Tab title="Unix shell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-google-adk-quickstart","shells":["bash"],"session":"main","env":"GOOGLE_API_KEY"} */}
+```bash
+export GOOGLE_API_KEY="your-api-key"
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+{/* quickstart-block {"id":"credentials","role":"input","cwd":"relay-google-adk-quickstart","shells":["powershell"],"session":"main","env":"GOOGLE_API_KEY"} */}
+```powershell
+$env:GOOGLE_API_KEY = "your-api-key"
+```
+</Tab>
+</Tabs>
+
+<Note icon="circle-info">
+Relay works with any model. This example uses
+[`gemini-3.5-flash`](https://ai.google.dev/gemini-api/docs/models) through
+Gemini API. For another model or provider, replace `LlmAgent`'s `model`
+argument and set that provider's credentials. ADK resolves a `gemini-*` model
+string to its `Gemini` model class, and Gemini API client reads
+`GOOGLE_API_KEY`.
+</Note>
+
+## Configure
+
+`plugins.toml` turns on Relay's ATOF file export to `logs/events.jsonl`. Use
+same configuration with integration code below in your own project. Marker
+tool and success checks only validate this quick start.
+
+Save this configuration as `plugins.toml` in project directory:
+
+{/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-google-adk-quickstart","path":"plugins.toml"} */}
+<Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
+
+<Warning>
+ATOF output can contain sensitive prompts, responses, tool arguments, and tool
+results. Protect `logs/events.jsonl`, even with `enable_full_payloads = false`.
+</Warning>
+
+## Run
+
+Example creates a Google ADK agent with one marker tool. `require_marker_tool`
+model callback forces a tool call before final answer. Your agent does not need
+it. `NemoRelayPlugin` records each ADK invocation, agent run, model call, and
+tool call. `nemo_relay.plugin.activate` loads `plugins.toml`. `adk-request`
+scope wraps whole request. Exiting `async with Runner(...)` closes
+`NemoRelayPlugin`. `flush_async` writes queued events to file before checks.
+
+In your own agent, keep `NemoRelayPlugin`, `nemo_relay.plugin.activate`, outer
+scope, and `flush_async` call. Replace marker tool and prompt with your own
+tools and prompt. Skip `check_*` functions.
+
+Save as `quickstart.py` beside `plugins.toml`:
+
+{/* quickstart-block {"id":"program","role":"file","cwd":"relay-google-adk-quickstart","path":"quickstart.py"} */}
+<Code src="_code/google-adk/quickstart.py" language="python" title="quickstart.py" />
+
+Run from project directory:
+
+{/* quickstart-block {"id":"run","role":"run","cwd":"relay-google-adk-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+uv run python quickstart.py
+```
+
+## Verify
+
+Program checks tool result, final assistant response, and matching start and
+end ATOF records for `adk-request`, `emit_marker`, and an LLM call. Successful
+run prints these markers in order:
+
+{/* quickstart-block {"id":"expected","role":"expected","cwd":"relay-google-adk-quickstart","from":"run","match":"exact-lines"} */}
+```text
+RELAY_QUICKSTART_TOOL_OK
+RELAY_QUICKSTART_RESPONSE_OK
+RELAY_QUICKSTART_EVENTS_OK
+```
+
+<Note icon="circle-info">
+Model wording around response marker can vary. Checks confirm a live model
+call, not exact output.
+</Note>
+
+### Inspect the Recorded Activity
+
+Print one completed model call from event file:
+
+{/* quickstart-block {"id":"inspect","role":"run","cwd":"relay-google-adk-quickstart","shells":["bash","powershell"],"session":"main","timeout_seconds":180} */}
+```bash
+uv run python -c "
+import json
+from pathlib import Path
+events = [json.loads(line) for line in Path('logs/events.jsonl').read_text().splitlines()]
+call = next(event for event in events if event.get('scope_category') == 'end' and event.get('category') == 'llm')
+fields = ('name', 'category', 'category_profile', 'uuid', 'parent_uuid', 'timestamp', 'metadata')
+print(json.dumps({key: call.get(key) for key in fields}, indent=2))
+"
+```
+
+`category` and `name` identify the call. Start and end records share one
+`uuid`. `parent_uuid` links to enclosing scope. `timestamp` records event time.
+For model calls, `category_profile` and `metadata` can include model name,
+finish reason, and status, depending on integration. These fields trace a call
+without full prompt or response capture.
+
+</Steps>
+
+## For More Details
+
+Refer to:
+
+- [Google ADK integration guide](/supported-integrations/google-adk)
+- [ATOF exporter](/configure-plugins/observability/atof)

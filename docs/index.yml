@@ -31,6 +31,10 @@ navigation:
                 icon: fa-solid fa-layer-group
                 path: ./getting-started/quick-start/deep-agents.mdx
                 slug: deep-agents
+              - page: "Google ADK"
+                icon: fa-brands fa-google
+                path: ./getting-started/quick-start/google-adk.mdx
+                slug: google-adk
               - page: "LangChain"
                 icon: fa-solid fa-link
                 path: ./getting-started/quick-start/langchain.mdx
