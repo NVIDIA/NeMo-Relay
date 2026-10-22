@@ -79,8 +79,6 @@ test = [
 # Provider SDKs behind the ADK model classes the integration tests drive, at ADK's floors.
 google-adk-test = [
     "anthropic>=0.78",
-    # De Morgan form: exclude only when the platform is both Windows and ARM64.
-    "litellm>=1.84; sys_platform != 'win32' or (platform_machine != 'ARM64' and platform_machine != 'arm64' and platform_machine != 'aarch64')",
     "openai>=2.20,<3",
 ]
 
@@ -169,7 +167,7 @@ omit = [
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
 # LangChain, LangGraph, Deep Agents, and Google ADK are optional integration
 # dependencies which aren't installed by default.
-allowed-unresolved-imports = ["anthropic.**", "deepagents.**", "google.**", "grpc", "langchain.**", "langchain_*.**", "langgraph.**", "litellm.**", "nemo_relay._native", "openai.**", "pytest"]
+allowed-unresolved-imports = ["anthropic.**", "deepagents.**", "google.**", "grpc", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "openai.**", "pytest"]
 
 [[tool.ty.overrides]]
 include = ["python/tests/**"]
@@ -220,6 +218,5 @@ safe_licenses = [
 unsafe_packages = [
     "certifi", # Mozilla Public License 2.0 (MPL 2.0)
     "matplotlib-inline", # unknown derived
-    "tiktoken", # MIT, with the license text in place of the name in its metadata
     "tqdm", # MPL-2.0 AND MIT
 ]

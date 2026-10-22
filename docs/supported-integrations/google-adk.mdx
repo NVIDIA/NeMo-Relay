@@ -25,9 +25,8 @@ and its `isinstance` relations, so ADK's own checks on it hold.
 
 Install the Google ADK integration extra in your application environment. ADK's
 model classes for other providers need their own SDKs, which the extra does not
-install: `google-adk[openai]` for `OpenAILlm` and `OpenAIResponsesLlm`,
-`anthropic` for `AnthropicLlm` and `Claude`, and `google-adk[extensions]` for
-`LiteLlm`.
+install: `google-adk[openai]` for `OpenAILlm` and `OpenAIResponsesLlm`, and
+`anthropic` for `AnthropicLlm` and `Claude`.
 
 <Tabs>
 <Tab title="uv">
@@ -181,11 +180,11 @@ The integration captures:
   closes when the transfer happens and the target agent runs as a sibling under
   the invocation scope.
 - One LLM scope per model call, named by the provider the model class and its
-  client reach, by its LiteLLM name, with the ADK model string as `model_name`
-  and the model class as `adk_model_type` metadata. ADK's `Gemini` family,
-  including `ApigeeLlm` in its GenAI mode, is `vertex_ai` when its client
-  targets Vertex AI and `gemini` otherwise, whatever the model string, so a
-  tuned model or a Vertex AI endpoint is named the same way. ADK's
+  client reach, with the ADK model string as `model_name` and the model class
+  as `adk_model_type` metadata. ADK's `Gemini` family, including `ApigeeLlm`
+  in its GenAI mode, is `vertex_ai` when its client targets Vertex AI and
+  `gemini` otherwise, whatever the model string, so a tuned model or a Vertex
+  AI endpoint is named the same way. ADK's
   `AnthropicLlm` and `Claude` are `vertex_ai` with an `AsyncAnthropicVertex`
   client, `azure_ai` with an `AsyncAnthropicFoundry` client, and `anthropic`
   with any other Anthropic client, including those for its AWS and Google
@@ -193,10 +192,8 @@ The integration captures:
   an `AsyncAzureOpenAI` client or as `AzureOpenAIResponsesLlm`, `bedrock` with
   the OpenAI SDK's Bedrock client, and `openai` otherwise, which includes an
   OpenAI-compatible server behind a `base_url`. `ApigeeLlm` in its chat
-  completions mode is `openai`. ADK's `LiteLlm` is the provider LiteLLM routes
-  the model to, from the model string and the `custom_llm_provider` and
-  `api_base` arguments it passes LiteLLM. Any other `BaseLlm` is named after
-  its class, except a class from ADK's OpenAI integration that NeMo Relay does
+  completions mode is `openai`. Any other `BaseLlm` is named after its class,
+  except a class from one of ADK's provider model modules that NeMo Relay does
   not recognize, whose call fails instead. The request is normalized by a codec
   over ADK's own `LlmRequest` shape. The response is normalized by the usage
   semantics of the provider API behind the model class, so a call through ADK
@@ -209,9 +206,9 @@ The integration captures:
   and `Claude` carry Anthropic Messages under the `anthropic_messages` variant:
   the prompt count is unfolded to the uncached input tokens, the thinking
   tokens are folded back into the completion, and the cache-read and
-  cache-write counts stand beside them. ADK's `OpenAILlm` and `LiteLlm`, and
-  `ApigeeLlm` in its chat completions mode, carry
-  OpenAI Chat Completions under the `openai_chat` variant, whose completion
+  cache-write counts stand beside them. ADK's `OpenAILlm`, and `ApigeeLlm` in
+  its chat completions mode, carry OpenAI Chat Completions under the
+  `openai_chat` variant, whose completion
   count already includes any reasoning tokens, and ADK's `OpenAIResponsesLlm`
   carries OpenAI Responses under the `openai_responses` variant, with the
   cached and reasoning counts under `input_tokens_details` and
@@ -223,19 +220,20 @@ The integration captures:
   carries them as `id` and `model`. The Responses API's id arrives as ADK's
   `interaction_id`. ADK's `LlmResponse` also drops a cost the provider reports
   in its usage, such as OpenRouter's `cost` or a `cost_usd` field, so the
-  integration records those usage fields from the OpenAI, Anthropic, and
-  LiteLLM clients, including the last streamed usage, as `provider_usage_cost`
-  on the response dump. The annotation carries them as the `provider_reported`
-  cost that the provider API's native codec reads from them, which stands over
-  a model pricing estimate. The Apigee proxy's chat completions client hands
-  ADK only the parsed response, so a call through it records none of these.
+  integration records those usage fields from the OpenAI and Anthropic clients
+  and from the Apigee proxy's chat completions client, including the last
+  streamed usage, as `provider_usage_cost` on the response dump. The
+  annotation carries them as the `provider_reported` cost that the provider
+  API's native codec reads from them, which stands over a model pricing
+  estimate.
   ADK attaches the Anthropic cache-write count to its usage
   outside the GenAI schema, and the response dump and normalized usage carry
   it. With server-sent-event streaming the call runs the streaming pipeline,
   carries the `streaming` attribute, and records each chunk as an `llm.chunk`
   mark under the scope, with the model's final response as the scope's
-  response, or the partials merged into one response, streamed function-call
-  arguments included, when the stream stops before it.
+  response, carrying the usage a stream reports after it, or the partials
+  merged into one response, streamed function-call arguments included, when
+  the stream stops before it.
 - Each model a `FallbackModel` tries as its own LLM scope, named and normalized
   for that model, so a primary that fails records a failed scope and the backup
   that answers records its own. The plugin resolves a model the `FallbackModel`
@@ -479,16 +477,15 @@ are. Any other `http_options` field in an edit fails the call, and request
 headers travel as the request's headers.
 
 The request headers intercepts see are those ADK's request sends. For ADK's
-`Gemini` family, `LiteLlm`, and any other `BaseLlm`, they are
+`Gemini` family and any other `BaseLlm`, they are
 `config.http_options.headers`, and the headers the pipeline produces,
 including Dynamo session lineage and trace context, replace them on the
-request ADK sends, which the Gemini SDK sends as HTTP headers and LiteLLM as
-`extra_headers`. ADK's Anthropic and OpenAI model classes, and `ApigeeLlm` in
-its chat completions mode, send no headers from the request, so intercepts see
-none, and the headers the pipeline produces go out as the provider client's
-extra headers for that call, each in place of a same-named header the model
-class adds. A retry or hedge made by an execution intercept carries the
-headers of its own call only.
+request ADK sends, which the Gemini SDK sends as HTTP headers. ADK's Anthropic
+and OpenAI model classes, and `ApigeeLlm` in its chat completions mode, send
+no headers from the request, so intercepts see none, and the headers the
+pipeline produces go out as the provider client's extra headers for that call,
+each in place of a same-named header the model class adds. A retry or hedge
+made by an execution intercept carries the headers of its own call only.
 
 A `tool_choice` edit reaches every model class. ADK's Anthropic classes build
 their request without the function calling config, so the integration carries

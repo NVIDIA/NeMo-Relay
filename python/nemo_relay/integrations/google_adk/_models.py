@@ -16,18 +16,11 @@ from google.genai import types
 
 import nemo_relay
 from nemo_relay import Json, JsonObject, LLMAttributes, LLMRequest
-from nemo_relay.integrations.google_adk._backends import (
-    CURRENT_ATTEMPT,
-    Attempt,
-    Backend,
-    anthropic_kwargs_methods,
-    anthropic_llm_class,
-    backend_of,
-)
+from nemo_relay.integrations.google_adk._backends import CURRENT_ATTEMPT, Attempt, Backend, backend_of
 from nemo_relay.integrations.google_adk._context import integration_metadata, parent_handle, rejection_marked
 from nemo_relay.integrations.google_adk._serialization import (
     ProducedResponses,
-    aggregate_partials,
+    final_response,
     header_text,
     http_headers,
     request_payload,
@@ -101,11 +94,7 @@ def _methods(cls: type[BaseLlm]) -> Mapping[str, object]:
             async for response in responses:
                 yield response
 
-    methods: dict[str, object] = {"generate_content_async": generate_content_async}
-    anthropic_llm = anthropic_llm_class()
-    if anthropic_llm is not None and issubclass(cls, anthropic_llm):
-        methods.update(anthropic_kwargs_methods(cls))
-    return methods
+    return {"generate_content_async": generate_content_async}
 
 
 async def _attempted(responses: _Responses, attempt: Attempt) -> _Responses:
@@ -147,10 +136,6 @@ def _tool_choice_edit(
     return None if config is None or config == original else config
 
 
-def _is_final(chunk: Json) -> bool:
-    return isinstance(chunk, dict) and not chunk.get("partial")
-
-
 async def _run(
     llm_request: LlmRequest, inner: _Inner, *, backend: Backend, model_name: str, model_type: str, stream: bool
 ) -> _Responses:
@@ -185,9 +170,9 @@ async def _run(
         headers = header_text(request.headers)
         tool_choice = _tool_choice_edit(edited, adk_tool_choice)
         if backend.client_headers:
-            return edited, Attempt(tool_choice, headers)
+            return edited, Attempt(tool_choice=tool_choice, headers=headers)
         write_headers(edited, headers)
-        return edited, Attempt(tool_choice, {})
+        return edited, Attempt(tool_choice=tool_choice, headers={})
 
     def added(response: LlmResponse, attempt: Attempt) -> JsonObject:
         return produced.add(
@@ -225,12 +210,7 @@ async def _run(
     collected: list[Json] = []
 
     def finalize() -> Json:
-        """Return the last whole chunk of the stream.
-
-        Aggregate the partial chunks when the stream closed before a whole chunk arrived.
-        """
-        whole = next((chunk for chunk in reversed(collected) if _is_final(chunk)), None)
-        return whole if whole is not None else aggregate_partials(collected)
+        return final_response(collected)
 
     request = LLMRequest({} if backend.client_headers else http_headers(llm_request), payload)
     metadata = integration_metadata(adk_model_type=model_type)

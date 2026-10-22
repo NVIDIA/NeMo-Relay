@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import functools
 import json
-import sys
-from typing import TYPE_CHECKING, Any, Final, cast
+import re
+from typing import TYPE_CHECKING, Final
 from unittest import mock
 
 import httpx
@@ -45,17 +45,14 @@ from nemo_relay.model_pricing import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+    from collections.abc import AsyncGenerator, Callable, Sequence
 
     from anthropic import AsyncAnthropic
     from google.adk.models import BaseLlm
     from google.adk.models.google_llm import Gemini
-    from google.adk.models.lite_llm import LiteLLMClient
     from google.adk.models.llm_request import LlmRequest
     from google.adk.models.llm_response import LlmResponse
     from google.genai import types
-    from litellm import CustomStreamWrapper
-    from litellm.types.utils import ModelResponse, ModelResponseStream
     from openai import AsyncOpenAI
 
 _CLAUDE: Final = "claude-sonnet-4-5-20250929"
@@ -265,46 +262,6 @@ def _openai_pricing(model_id: str) -> PricingConfig:
         provider="openai", model_id=model_id, pricing_as_of="2026-01-01", pricing_source="test", rates=rates
     )
     return PricingConfig(sources=[InlineSource(PricingCatalog(entries=[entry]))])
-
-
-def _lite_llm_reply(text: str, *, response_id: str) -> ModelResponse:
-    from litellm.types.utils import ModelResponse
-
-    return ModelResponse(
-        id=response_id,
-        model=_GPT,
-        object="chat.completion",
-        choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": text}}],
-        usage={**_OPENAI_USAGE, "cache_creation_input_tokens": 10},
-    )
-
-
-async def _lite_llm_chunks(pieces: Sequence[str], *, response_id: str) -> AsyncIterator[ModelResponseStream]:
-    from litellm.types.utils import ModelResponseStream
-
-    for piece in pieces:
-        yield ModelResponseStream(
-            id=response_id,
-            model=_GPT,
-            choices=[{"index": 0, "delta": {"role": "assistant", "content": piece}, "finish_reason": None}],
-        )
-    yield ModelResponseStream(id=response_id, model=_GPT, choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}])
-    yield ModelResponseStream(id=response_id, model=_GPT, choices=[], usage=_STREAM_USAGE)
-
-
-def _lite_llm_client(replies: Sequence[ModelResponse | AsyncIterator[ModelResponseStream]]) -> LiteLLMClient:
-    from google.adk.models.lite_llm import LiteLLMClient
-
-    pending = list(replies)
-
-    class Canned(LiteLLMClient):
-        @override
-        async def acompletion(
-            self, model: Any, messages: Any, tools: Any, **kwargs: Any
-        ) -> ModelResponse | CustomStreamWrapper:
-            return cast("ModelResponse | CustomStreamWrapper", pending.pop(0))
-
-    return Canned()
 
 
 def _gemini(response: types.GenerateContentResponse, monkeypatch: pytest.MonkeyPatch, *, model: str) -> Gemini:
@@ -595,77 +552,32 @@ async def test_openai_responses_model_is_read_as_openai_responses(subscribed_eve
     assert_balanced(subscribed_events)
 
 
-async def test_an_openai_model_class_relay_cannot_place_fails_the_call(
-    monkeypatch: pytest.MonkeyPatch, subscribed_events: list[nemo_relay.Event]
+@pytest.mark.parametrize(
+    "module",
+    ["google.adk.integrations.openai._future_llm", "google.adk.models.anthropic_llm"],
+    ids=["openai_integration", "anthropic_module"],
+)
+async def test_a_class_from_an_adk_provider_module_relay_cannot_place_fails_the_call(
+    module: str, subscribed_events: list[nemo_relay.Event]
 ) -> None:
     from google.adk.agents import LlmAgent
+    from google.adk.models import BaseLlm
 
-    model = _openai_chat_model(_Canned([_chat_reply()]))
-    monkeypatch.delitem(sys.modules, "google.adk.integrations.openai._openai_llm")
+    class FutureLlm(BaseLlm):
+        __module__ = module
+        __qualname__ = "FutureLlm"
+        model: str = "future"
 
-    with pytest.raises(TypeError, match=r"_openai_llm\.OpenAILlm"):
-        await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
+        @override
+        async def generate_content_async(
+            self, llm_request: LlmRequest, stream: bool = False
+        ) -> AsyncGenerator[LlmResponse, None]:
+            yield model_answer("From the future.")
+
+    with pytest.raises(TypeError, match=re.escape(f"{module}.FutureLlm")):
+        await run_recorded(LlmAgent(name="weather_agent", model=FutureLlm(), instruction="Be brief."))
 
     assert starts(subscribed_events, "llm") == []
-    assert_balanced(subscribed_events)
-
-
-@pytest.mark.parametrize(
-    ("model_name", "provider"), [("openai/gpt-4o", "openai"), (f"anthropic/{_CLAUDE}", "anthropic")]
-)
-async def test_lite_llm_model_is_read_as_openai_chat(
-    model_name: str, provider: str, subscribed_events: list[nemo_relay.Event]
-) -> None:
-    from google.adk.agents import LlmAgent
-    from google.adk.models.lite_llm import LiteLlm
-
-    model = LiteLlm(
-        model=model_name, llm_client=_lite_llm_client([_lite_llm_reply("Sunny.", response_id="chatcmpl-lite")])
-    )
-
-    adk_events = await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
-
-    assert final_text(adk_events) == "Sunny."
-    (start,) = starts(subscribed_events, "llm")
-    assert start.name == provider
-    assert metadata_of(start)["adk_model_type"] == "LiteLlm"
-    (end,) = ends(subscribed_events, "llm")
-    response = response_of(end)
-    assert response.id == "chatcmpl-lite"
-    assert response.api_specific == {"api": "openai_chat"}
-    assert response.extra == {
-        "partial": False,
-        "usage_metadata": {"thoughts_token_count": 5, "cache_creation_input_tokens": 10},
-    }
-    assert response.usage == {
-        "prompt_tokens": 100,
-        "completion_tokens": 20,
-        "total_tokens": 120,
-        "cache_read_tokens": 40,
-        "uncached_input_tokens": 60,
-    }
-    assert_balanced(subscribed_events)
-
-
-async def test_lite_llm_stream_records_the_response_id(subscribed_events: list[nemo_relay.Event]) -> None:
-    from google.adk.agents import LlmAgent, RunConfig
-    from google.adk.agents.run_config import StreamingMode
-    from google.adk.models.lite_llm import LiteLlm
-
-    chunks = _lite_llm_chunks(["Sunny ", "streamed."], response_id="chatcmpl-lite-s")
-    model = LiteLlm(model="openai/gpt-4o", llm_client=_lite_llm_client([chunks]))
-
-    adk_events = await run_recorded(
-        LlmAgent(name="stream_agent", model=model, instruction="Be brief."),
-        run_config=RunConfig(streaming_mode=StreamingMode.SSE),
-    )
-
-    assert partial_texts(adk_events) == ["Sunny ", "streamed."]
-    assert final_text(adk_events) == "Sunny streamed."
-    (end,) = ends(subscribed_events, "llm")
-    response = response_of(end)
-    assert response.id == "chatcmpl-lite-s"
-    assert response.api_specific == {"api": "openai_chat"}
     assert_balanced(subscribed_events)
 
 
@@ -902,24 +814,6 @@ async def test_a_tuned_gemini_model_is_named_after_the_gemini_api(
     assert present(start.category_profile)["model_name"] == "tunedModels/weather-123"
 
 
-async def test_a_lite_llm_model_is_named_after_the_provider_litellm_routes_it_to(
-    subscribed_events: list[nemo_relay.Event],
-) -> None:
-    from google.adk.agents import LlmAgent
-    from google.adk.models.lite_llm import LiteLlm
-
-    model = LiteLlm(
-        model="relay-model",
-        custom_llm_provider="openai",
-        llm_client=_lite_llm_client([_lite_llm_reply("Sunny.", response_id="chatcmpl-lite")]),
-    )
-
-    await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
-
-    (start,) = starts(subscribed_events, "llm")
-    assert start.name == "openai"
-
-
 def _usd(total: float) -> nemo_relay.JsonObject:
     return {"currency": "USD", "source": "provider_reported", "total": total}
 
@@ -1021,23 +915,41 @@ async def test_a_cost_reported_at_the_end_of_a_stream_reaches_the_annotation(
     assert present(response_of(claude_end).usage)["cost"] == _usd(0.0021)
 
 
-async def test_a_cost_litellm_reports_in_its_usage_reaches_the_annotation(
+async def test_apigee_chat_records_the_completion_id_and_cost(subscribed_events: list[nemo_relay.Event]) -> None:
+    from google.adk.agents import LlmAgent
+
+    model = _apigee_chat_model(_Canned([_chat_reply_reporting_cost()]))
+
+    adk_events = await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
+
+    assert final_text(adk_events) == "Sunny."
+    (end,) = ends(subscribed_events, "llm")
+    response = response_of(end)
+    assert response.id == "chatcmpl-1"
+    assert response.model == _GPT
+    assert present(response.usage)["cost"] == _usd(0.0042)
+    assert_balanced(subscribed_events)
+
+
+async def test_apigee_chat_stream_records_the_completion_id_and_cost(
     subscribed_events: list[nemo_relay.Event],
 ) -> None:
-    from google.adk.agents import LlmAgent
-    from google.adk.models.lite_llm import LiteLlm
-    from litellm.types.utils import ModelResponse
+    from google.adk.agents import LlmAgent, RunConfig
+    from google.adk.agents.run_config import StreamingMode
 
-    reply = ModelResponse(
-        id="chatcmpl-lite",
-        model=_GPT,
-        object="chat.completion",
-        choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Sunny."}}],
-        usage={**_OPENAI_USAGE, "cost": 0.003},
+    usage: nemo_relay.JsonObject = {**_STREAM_USAGE, "cost": 0.0042}
+    canned = _Canned([_completion_stream(["Sunny ", "streamed."], completion_id="chatcmpl-a", usage=usage)])
+    model = _apigee_chat_model(canned)
+
+    adk_events = await run_recorded(
+        LlmAgent(name="stream_agent", model=model, instruction="Be brief."),
+        run_config=RunConfig(streaming_mode=StreamingMode.SSE),
     )
-    model = LiteLlm(model="openai/gpt-4o", llm_client=_lite_llm_client([reply]))
 
-    await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
-
+    assert partial_texts(adk_events) == ["Sunny ", "streamed."]
+    assert final_text(adk_events) == "Sunny streamed."
     (end,) = ends(subscribed_events, "llm")
-    assert present(response_of(end).usage)["cost"] == _usd(0.003)
+    response = response_of(end)
+    assert response.id == "chatcmpl-a"
+    assert response.usage == {"prompt_tokens": 50, "completion_tokens": 7, "total_tokens": 57, "cost": _usd(0.0042)}
+    assert_balanced(subscribed_events)

@@ -9,7 +9,7 @@ import json
 import re
 from bisect import bisect_left
 from collections import Counter, deque
-from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from enum import Enum
@@ -604,7 +604,7 @@ def _is_field_map(value: object) -> TypeIs[dict[str, object]]:
     return isinstance(value, dict) and all(isinstance(key, str) for key in value)
 
 
-_AGGREGATE_LAST_SEEN: Final = (
+_LAST_SEEN_FIELDS: Final = (
     "usage_metadata",
     "grounding_metadata",
     URL_CONTEXT_KEY,
@@ -809,6 +809,19 @@ class _TextRun(NamedTuple):
     pieces: list[str]
 
 
+def final_response(chunks: Sequence[Json]) -> JsonObject:
+    """Return a stream's final `LlmResponse` dump.
+
+    The last whole chunk, with the last value of each response-level field later chunks report. Aggregate partial chunks
+    when no whole chunk arrived.
+    """
+    dumps = [_dump(chunk) for chunk in chunks]
+    for index in range(len(dumps) - 1, -1, -1):
+        if not dumps[index].get("partial"):
+            return {**dumps[index], **_last_seen(dumps[index + 1 :])}
+    return aggregate_partials(dumps)
+
+
 def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
     """Aggregate partial `LlmResponse` dumps into one final dump as ADK does.
 
@@ -819,10 +832,8 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
     runs: list[_TextRun] = []
     run: _TextRun | None = None
     call: _StreamedCall | None = None
-    aggregate: JsonObject = {}
-    for chunk in chunks:
-        if not _is_object(chunk):
-            raise TypeError("a stream execution intercept must yield LlmResponse dumps")
+    dumps = [_dump(chunk) for chunk in chunks]
+    for chunk in dumps:
         for part in _parts_of(chunk):
             text = part.get("text")
             function = part.get("function_call")
@@ -847,16 +858,29 @@ def aggregate_partials(chunks: Sequence[Json]) -> JsonObject:
                     call = _observe_fragment(parts, call, part, function)
                     continue
             parts.append(part)
-        for key in _AGGREGATE_LAST_SEEN:
-            if chunk.get(key) is not None:
-                aggregate[key] = chunk[key]
     _flush_call(parts, call)
     for merged in runs:
         merged.part["text"] = "".join(merged.pieces)
+    aggregate = _last_seen(dumps)
     if parts := [part for part in parts if part is not None]:
         aggregate["content"] = {"role": "model", "parts": parts}
     aggregate["partial"] = False
     return aggregate
+
+
+def _dump(chunk: Json) -> JsonObject:
+    if not _is_object(chunk):
+        raise TypeError("a stream execution intercept must yield LlmResponse dumps")
+    return chunk
+
+
+def _last_seen(dumps: Iterable[JsonObject]) -> JsonObject:
+    seen: JsonObject = {}
+    for dump in dumps:
+        for key in _LAST_SEEN_FIELDS:
+            if dump.get(key) is not None:
+                seen[key] = dump[key]
+    return seen
 
 
 def _parts_of(chunk: JsonObject) -> list[JsonObject]:

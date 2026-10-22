@@ -35,6 +35,7 @@ from nemo_relay.integrations.google_adk._serialization import (
     Api,
     ProducedResponses,
     aggregate_partials,
+    final_response,
     header_text,
     http_headers,
     json_safe,
@@ -1376,6 +1377,32 @@ def test_aggregate_partials_merges_text_runs_and_keeps_calls_and_the_last_metada
     }
     with pytest.raises(TypeError, match="LlmResponse dumps"):
         aggregate_partials(["not a dump"])
+
+
+def test_final_response_keeps_the_last_whole_chunk_and_the_fields_later_chunks_report() -> None:
+    whole: nemo_relay.JsonObject = {
+        "content": {"role": "model", "parts": [{"text": "Sunny."}]},
+        "finish_reason": "STOP",
+        "model_version": "v1",
+        "partial": False,
+    }
+    chunks: list[nemo_relay.Json] = [
+        {"content": {"role": "model", "parts": [{"text": "Sun"}]}, "partial": True},
+        {"content": {"role": "model", "parts": [{"text": "ny."}]}, "partial": True},
+        whole,
+        {"usage_metadata": {"total_token_count": 5}, "model_version": "v2", "partial": True},
+        {"provider_usage_cost": {"cost": 0.1}, "partial": True},
+    ]
+
+    assert final_response(chunks) == {
+        **whole,
+        "usage_metadata": {"total_token_count": 5},
+        "model_version": "v2",
+        "provider_usage_cost": {"cost": 0.1},
+    }
+    assert final_response(chunks[:2]) == aggregate_partials(chunks[:2])
+    with pytest.raises(TypeError, match="LlmResponse dumps"):
+        final_response(["not a dump"])
 
 
 def _signed_call(name: str, location: str, signature: bytes) -> types.Part:
