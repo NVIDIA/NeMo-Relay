@@ -91,6 +91,7 @@ pub(crate) enum PluginHostValidationTarget {
 }
 
 /// Typed request for standalone, non-activating dynamic-plugin validation.
+#[cfg(test)]
 #[derive(Debug, Clone, serde::Serialize, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct PluginHostValidationRequest {
@@ -105,6 +106,7 @@ pub(crate) struct PluginHostValidationRequest {
     pub target: PluginHostValidationTarget,
 }
 
+#[cfg(test)]
 impl<'de> serde::Deserialize<'de> for PluginHostValidationRequest {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -238,14 +240,19 @@ pub(crate) fn resolve_plugin_host_config(
 /// This resolves the same configuration layers as [`super::initialize`] but
 /// does not acquire the activation lease or load any dynamic code.
 pub fn validate(
-    config: PluginConfig,
+    config: impl Into<super::PluginHostConfig>,
     additional_plugins_toml: Option<PathBuf>,
 ) -> Result<PluginHostReport> {
-    validate_request(PluginHostValidationRequest {
-        config,
-        additional_plugins_toml,
-        target: PluginHostValidationTarget::All,
-    })
+    let config = config.into();
+    let prepared = PreparedPluginHostConfig::load(additional_plugins_toml.as_deref())?;
+    prepared.diagnostic_settings(config.diagnostics)?;
+    let resolved = prepared.resolve(
+        config.plugins,
+        additional_plugins_toml.as_deref(),
+        false,
+        None,
+    )?;
+    validation_report(resolved, PluginHostValidationTarget::All)
 }
 
 /// Validates only the supplied static plugin configuration.
@@ -263,6 +270,7 @@ pub fn validate_exact(config: PluginConfig) -> PluginHostReport {
 }
 
 /// Validates a targeted dynamic-plugin request for internal diagnostics.
+#[cfg(test)]
 pub(crate) fn validate_request(request: PluginHostValidationRequest) -> Result<PluginHostReport> {
     let resolved = resolve_plugin_host_config_inner(
         request.config,
@@ -270,11 +278,18 @@ pub(crate) fn validate_request(request: PluginHostValidationRequest) -> Result<P
         false,
         None,
     )?;
+    validation_report(resolved, request.target)
+}
+
+fn validation_report(
+    resolved: ResolvedPluginHostConfig,
+    target: PluginHostValidationTarget,
+) -> Result<PluginHostReport> {
     let mut config_report = crate::plugin::validate_static_plugin_config(&resolved.config);
     config_report
         .diagnostics
         .splice(0..0, resolved.diagnostics.iter().cloned());
-    let dynamic_plugins = match request.target {
+    let dynamic_plugins = match target {
         PluginHostValidationTarget::All => resolved
             .dynamic_reports
             .into_iter()
@@ -321,97 +336,154 @@ fn resolve_plugin_host_config_inner(
     reject_required_failures: bool,
     diagnostic_context: Option<&Diagnostics>,
 ) -> Result<ResolvedPluginHostConfig> {
-    let paths = plugin_config_paths(explicit_path, crate::plugin::user_config_dir());
-    let (files, mut diagnostics) = read_plugin_files(&paths, explicit_path)?;
-    let resolved = resolve_plugin_config_documents(
+    PreparedPluginHostConfig::load(explicit_path)?.resolve(
         programmatic,
         explicit_path,
-        files
-            .iter()
-            .map(|document| (document.source.clone(), document.value.clone()))
-            .collect(),
+        reject_required_failures,
         diagnostic_context,
-    )?;
-    diagnostics.extend(resolved.diagnostics.iter().cloned());
-    let (mut policy, declarations) = resolve_dynamic_plugin_declarations(files)?;
-    let mut active = Vec::new();
-    let mut native_artifacts = Vec::new();
-    let mut load_trust = HashMap::new();
-    let mut reports = Vec::new();
+    )
+}
 
-    policy.apply_secure_defaults();
-    for ResolvedDynamicPluginDeclaration {
-        source,
-        declared,
-        manifest,
-        manifest_ref,
-    } in declarations
-    {
-        let plugin_id = manifest.plugin.id.trim().to_owned();
-        let state = state_for_plugin(&source, &manifest_ref, &plugin_id)?;
-        let selected = state.as_ref().map(|state| state.selected).unwrap_or(true);
-        let evaluated_policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
-        let (report, artifact_bytes) = validate_declaration_with_artifact(
-            &manifest,
-            manifest_ref.clone(),
-            selected,
-            &declared.config,
-            &evaluated_policy,
-            diagnostic_context,
-        );
-        let valid = report.failure.is_none();
-        let effective_selected = report.selected;
-        let failure = report.failure.clone();
-        reports.push(ResolvedDynamicPluginReport {
-            requested: selected,
-            report,
-        });
-        if selected
-            && !valid
-            && reject_required_failures
-            && evaluated_policy.startup_class == DynamicPluginStartupClass::Required
-        {
-            return Err(PluginError::InvalidConfig(
-                failure
-                    .map(|failure| failure.message)
-                    .unwrap_or_else(|| format!("dynamic plugin '{plugin_id}' failed validation")),
-            ));
-        }
-        if effective_selected {
-            if reject_required_failures && manifest.plugin.kind == DynamicPluginKind::RustDynamic {
-                native_artifacts.push(super::native::PreparedNativePlugin::new(
-                    manifest.clone(),
-                    manifest_ref.clone(),
-                    artifact_bytes,
-                )?);
-            }
-            load_trust.insert(
-                plugin_id.clone(),
-                DynamicPluginLoadTrust {
-                    manifest: manifest.clone(),
-                    policy: evaluated_policy,
-                },
-            );
-            active.push(super::VerifiedDynamicPluginSpec {
-                plugin_id,
-                kind: manifest.plugin.kind,
-                manifest_ref,
-                environment_ref: state.and_then(|state| state.environment_ref),
-                config: declared.config,
-            });
-        }
+pub(super) struct PreparedPluginHostConfig {
+    files: Vec<PluginFileDocument>,
+    diagnostics: Vec<crate::plugin::ConfigDiagnostic>,
+}
+impl PreparedPluginHostConfig {
+    pub(super) fn load(explicit_path: Option<&Path>) -> Result<Self> {
+        let paths = plugin_config_paths(explicit_path, crate::plugin::user_config_dir());
+        let (files, diagnostics) = read_plugin_files(&paths, explicit_path)?;
+        Ok(Self { files, diagnostics })
     }
-    Ok(ResolvedPluginHostConfig {
-        config_paths: resolved.config_paths,
-        resolved_config: sanitize_resolved_config(resolved.resolved_config),
-        config: resolved.config,
-        policy,
-        dynamic_plugins: active,
-        native_artifacts,
-        load_trust,
-        dynamic_reports: reports,
-        diagnostics,
-    })
+    pub(super) fn diagnostic_settings(
+        &self,
+        programmatic: Option<crate::diagnostics::DiagnosticsSettings>,
+    ) -> Result<crate::diagnostics::DiagnosticsSettings> {
+        // The existing resolver owns file order. Merge service fields independently
+        // so they never enter plugin config reports, fingerprints, or callbacks.
+        let mut merged = Json::Object(Map::new());
+        for file in &self.files {
+            if let Some(value) = file.value.get("diagnostics") {
+                crate::plugin::merge_json_value(&mut merged, value.clone());
+            }
+        }
+        let settings: crate::diagnostics::DiagnosticsSettings = serde_json::from_value(merged)
+            .map_err(|_| PluginError::InvalidConfig("diagnostics: invalid_settings".into()))?;
+        let settings = programmatic.unwrap_or(settings);
+        settings
+            .limits
+            .validate()
+            .map_err(|_| PluginError::InvalidConfig("diagnostics: invalid_limits".into()))?;
+        Ok(settings)
+    }
+    pub(super) fn resolve(
+        self,
+        programmatic: PluginConfig,
+        explicit_path: Option<&Path>,
+        reject_required_failures: bool,
+        diagnostic_context: Option<&Diagnostics>,
+    ) -> Result<ResolvedPluginHostConfig> {
+        let Self {
+            files,
+            mut diagnostics,
+        } = self;
+        let resolved = resolve_plugin_config_documents(
+            programmatic,
+            explicit_path,
+            files
+                .iter()
+                .map(|document| {
+                    let mut value = document.value.clone();
+                    if let Some(root) = value.as_object_mut() {
+                        root.remove("diagnostics");
+                    }
+                    (document.source.clone(), value)
+                })
+                .collect(),
+            diagnostic_context,
+        )?;
+        diagnostics.extend(resolved.diagnostics.iter().cloned());
+        let (mut policy, declarations) = resolve_dynamic_plugin_declarations(files)?;
+        let mut active = Vec::new();
+        let mut native_artifacts = Vec::new();
+        let mut load_trust = HashMap::new();
+        let mut reports = Vec::new();
+
+        policy.apply_secure_defaults();
+        for ResolvedDynamicPluginDeclaration {
+            source,
+            declared,
+            manifest,
+            manifest_ref,
+        } in declarations
+        {
+            let plugin_id = manifest.plugin.id.trim().to_owned();
+            let state = state_for_plugin(&source, &manifest_ref, &plugin_id)?;
+            let selected = state.as_ref().map(|state| state.selected).unwrap_or(true);
+            let evaluated_policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
+            let (report, artifact_bytes) = validate_declaration_with_artifact(
+                &manifest,
+                manifest_ref.clone(),
+                selected,
+                &declared.config,
+                &evaluated_policy,
+                diagnostic_context,
+            );
+            let valid = report.failure.is_none();
+            let effective_selected = report.selected;
+            let failure = report.failure.clone();
+            reports.push(ResolvedDynamicPluginReport {
+                requested: selected,
+                report,
+            });
+            if selected
+                && !valid
+                && reject_required_failures
+                && evaluated_policy.startup_class == DynamicPluginStartupClass::Required
+            {
+                return Err(PluginError::InvalidConfig(
+                    failure.map(|failure| failure.message).unwrap_or_else(|| {
+                        format!("dynamic plugin '{plugin_id}' failed validation")
+                    }),
+                ));
+            }
+            if effective_selected {
+                if reject_required_failures
+                    && manifest.plugin.kind == DynamicPluginKind::RustDynamic
+                {
+                    native_artifacts.push(super::native::PreparedNativePlugin::new(
+                        manifest.clone(),
+                        manifest_ref.clone(),
+                        artifact_bytes,
+                    )?);
+                }
+                load_trust.insert(
+                    plugin_id.clone(),
+                    DynamicPluginLoadTrust {
+                        manifest: manifest.clone(),
+                        policy: evaluated_policy,
+                    },
+                );
+                active.push(super::VerifiedDynamicPluginSpec {
+                    plugin_id,
+                    kind: manifest.plugin.kind,
+                    manifest_ref,
+                    environment_ref: state.and_then(|state| state.environment_ref),
+                    config: declared.config,
+                });
+            }
+        }
+        Ok(ResolvedPluginHostConfig {
+            config_paths: resolved.config_paths,
+            resolved_config: sanitize_resolved_config(resolved.resolved_config),
+            config: resolved.config,
+            policy,
+            dynamic_plugins: active,
+            native_artifacts,
+            load_trust,
+            dynamic_reports: reports,
+            diagnostics,
+        })
+    }
 }
 
 fn resolve_dynamic_plugin_declarations(

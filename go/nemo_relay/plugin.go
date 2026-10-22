@@ -250,9 +250,11 @@ type PluginComponentSpec struct {
 
 // PluginConfig is the canonical plugin configuration document.
 type PluginConfig struct {
-	Version    uint32                `json:"version,omitempty"`
-	Components []PluginComponentSpec `json:"components,omitempty"`
-	Policy     *ConfigPolicy         `json:"policy,omitempty"`
+	// Diagnostics selects startup-only host settings, independent of plugin lifetime.
+	Diagnostics *DiagnosticsSettings  `json:"diagnostics,omitempty"`
+	Version     uint32                `json:"version,omitempty"`
+	Components  []PluginComponentSpec `json:"components,omitempty"`
+	Policy      *ConfigPolicy         `json:"policy,omitempty"`
 }
 
 // DynamicPluginKind identifies the runtime lane used by a dynamic plugin.
@@ -397,9 +399,10 @@ func marshalPluginHostActivationConfig(config PluginConfig) ([]byte, error) {
 		Config  map[string]any `json:"config,omitempty"`
 	}
 	type configJSON struct {
-		Version    uint32          `json:"version,omitempty"`
-		Components []componentJSON `json:"components,omitempty"`
-		Policy     *ConfigPolicy   `json:"policy,omitempty"`
+		Diagnostics *DiagnosticsSettings `json:"diagnostics,omitempty"`
+		Version     uint32               `json:"version,omitempty"`
+		Components  []componentJSON      `json:"components,omitempty"`
+		Policy      *ConfigPolicy        `json:"policy,omitempty"`
 	}
 
 	components := make([]componentJSON, len(config.Components))
@@ -411,9 +414,10 @@ func marshalPluginHostActivationConfig(config PluginConfig) ([]byte, error) {
 		}
 	}
 	return jsonMarshal(configJSON{
-		Version:    config.Version,
-		Components: components,
-		Policy:     config.Policy,
+		Diagnostics: config.Diagnostics,
+		Version:     config.Version,
+		Components:  components,
+		Policy:      config.Policy,
 	})
 }
 

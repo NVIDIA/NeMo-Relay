@@ -89,6 +89,8 @@ export interface PluginConfig {
     config?: Record<string, Json>;
   }>;
   policy?: ConfigPolicy;
+  /** Startup-only host service profile; omitted settings use file layers. */
+  diagnostics?: { enabled?: boolean; limits?: Record<string, number> };
 }
 
 /** Execution lane for a dynamically loaded Relay plugin. */

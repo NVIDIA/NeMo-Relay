@@ -1049,8 +1049,9 @@ fn validate_py(
     config: &Bound<'_, PyAny>,
     additional_plugins_toml: Option<String>,
 ) -> PyResult<Py<PyAny>> {
-    let config: PluginConfig = serde_json::from_value(py_to_json(config)?)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    let config: nemo_relay::plugin::dynamic::PluginHostConfig =
+        serde_json::from_value(py_to_json(config)?)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     let report = py
         .detach(|| validate(config, additional_plugins_toml.map(Into::into)))
         .map_err(plugin_error_to_py_err)?;
@@ -1078,8 +1079,9 @@ fn initialize_py<'py>(
     config: &Bound<'_, PyAny>,
     additional_plugins_toml: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let config: PluginConfig = serde_json::from_value(py_to_json(config)?)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    let config: nemo_relay::plugin::dynamic::PluginHostConfig =
+        serde_json::from_value(py_to_json(config)?)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let activation = initialize(config, additional_plugins_toml.map(Into::into))
             .await

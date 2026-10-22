@@ -134,9 +134,9 @@ fn ensure_pii_redaction_component_registered() -> std::result::Result<(), NemoRe
     register_pii_redaction_component().map_err(|err| status_from_plugin_error(&err))
 }
 
-fn parse_plugin_config(
+fn parse_plugin_config<T: serde::de::DeserializeOwned>(
     config_json: *const c_char,
-) -> std::result::Result<PluginConfig, NemoRelayStatus> {
+) -> std::result::Result<T, NemoRelayStatus> {
     let value = c_str_to_json(config_json).ok_or(NemoRelayStatus::InvalidJson)?;
     serde_json::from_value(value).map_err(|error| {
         set_last_error(&format!("invalid plugin config: {error}"));
@@ -198,7 +198,16 @@ pub unsafe extern "C" fn nemo_relay_plugin_initialize(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    let config = match parse_plugin_config(config_json) {
+    let config = match c_str_to_json(config_json)
+        .ok_or(NemoRelayStatus::InvalidJson)
+        .and_then(|value| {
+            serde_json::from_value::<nemo_relay::plugin::dynamic::PluginHostConfig>(value).map_err(
+                |_| {
+                    set_last_error("invalid plugin host configuration");
+                    NemoRelayStatus::InvalidJson
+                },
+            )
+        }) {
         Ok(config) => config,
         Err(status) => return status,
     };
@@ -337,10 +346,11 @@ pub unsafe extern "C" fn nemo_relay_plugin_validate(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    let config = match parse_plugin_config(config_json) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
+    let config =
+        match parse_plugin_config::<nemo_relay::plugin::dynamic::PluginHostConfig>(config_json) {
+            Ok(config) => config,
+            Err(status) => return status,
+        };
     let additional_plugins_toml = if additional_plugins_toml.is_null() {
         None
     } else {
@@ -390,7 +400,7 @@ pub unsafe extern "C" fn nemo_relay_plugin_validate_exact(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    let config = match parse_plugin_config(config_json) {
+    let config = match parse_plugin_config::<PluginConfig>(config_json) {
         Ok(config) => config,
         Err(status) => return status,
     };

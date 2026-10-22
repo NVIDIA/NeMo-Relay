@@ -6816,7 +6816,7 @@ pub async fn initialize(
     config: Json,
     additional_plugins_toml: Option<String>,
 ) -> napi::Result<PluginHostActivation> {
-    let config: PluginConfig = serde_json::from_value(config)
+    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let activation = initialize_impl(config, additional_plugins_toml.map(Into::into))
         .await
@@ -6829,7 +6829,7 @@ pub async fn initialize(
 /// Validate dynamic plugins without loading any plugin code.
 #[napi]
 pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> napi::Result<Json> {
-    let config: PluginConfig = serde_json::from_value(config)
+    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let report = validate_impl(config, additional_plugins_toml.map(Into::into))
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;

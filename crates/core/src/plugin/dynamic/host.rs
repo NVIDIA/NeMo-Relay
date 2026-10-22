@@ -37,6 +37,26 @@ use super::worker::prepare_worker_plugins_with_trust;
 #[cfg(feature = "worker-grpc")]
 use super::{WorkerPluginActivation, WorkerPluginLoadSpec};
 
+/// Embedded startup configuration. Service settings are not plugin component
+/// configuration and never enter plugin fingerprints or legacy reports.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginHostConfig {
+    /// Existing plugin configuration overlay.
+    #[serde(flatten)]
+    pub plugins: PluginConfig,
+    /// Highest-precedence complete service settings; omitted uses file layers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<crate::diagnostics::DiagnosticsSettings>,
+}
+impl From<PluginConfig> for PluginHostConfig {
+    fn from(plugins: PluginConfig) -> Self {
+        Self {
+            plugins,
+            diagnostics: None,
+        }
+    }
+}
+
 /// Initializes the process-wide static and dynamic plugin host.
 ///
 /// The returned handle must remain alive while any plugin-provided callback can
@@ -46,15 +66,23 @@ use super::{WorkerPluginActivation, WorkerPluginLoadSpec};
 /// Their `Register` RPC runs when the worker component activates, after earlier
 /// static components have installed their runtime registrations.
 pub async fn initialize(
-    config: PluginConfig,
+    config: impl Into<PluginHostConfig>,
     additional_plugins_toml: Option<PathBuf>,
 ) -> Result<PluginHostActivation> {
-    initialize_with_diagnostics(
-        config,
-        additional_plugins_toml,
-        Diagnostics::process_default(),
-    )
-    .await
+    let config = config.into();
+    let prepared =
+        super::configuration::PreparedPluginHostConfig::load(additional_plugins_toml.as_deref())?;
+    let settings = prepared.diagnostic_settings(config.diagnostics)?;
+    let context = crate::diagnostics::embedded::start(settings).map_err(|error| {
+        crate::plugin::PluginError::InvalidConfig(format!("diagnostics: {}", error.reason()))
+    })?;
+    let resolved = prepared.resolve(
+        config.plugins,
+        additional_plugins_toml.as_deref(),
+        true,
+        Some(context),
+    )?;
+    activate_resolved(resolved, context).await
 }
 
 /// Initializes the plugin host using an explicitly selected diagnostic context.
@@ -62,7 +90,8 @@ pub async fn initialize(
 /// Configuration inheritance and common component activation use this same
 /// context. Discovery and validation APIs do not consume the process default.
 /// Diagnostic admission is best-effort and never changes plugin execution or
-/// legacy report results. Native/worker producer integration remains separate.
+/// legacy report results. Native and worker producers receive this context
+/// through the owned activation lifecycle.
 pub async fn initialize_with_diagnostics(
     config: PluginConfig,
     additional_plugins_toml: Option<PathBuf>,
@@ -73,6 +102,13 @@ pub async fn initialize_with_diagnostics(
         additional_plugins_toml.as_deref(),
         Some(diagnostic_context),
     )?;
+    activate_resolved(resolved, diagnostic_context).await
+}
+
+async fn activate_resolved(
+    resolved: super::configuration::ResolvedPluginHostConfig,
+    diagnostic_context: &Diagnostics,
+) -> Result<PluginHostActivation> {
     let mut dynamic_reports: Vec<_> = resolved
         .dynamic_reports
         .into_iter()

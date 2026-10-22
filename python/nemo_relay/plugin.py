@@ -380,6 +380,8 @@ class PluginConfig:
         components: Ordered list of top-level components. This may mix
             `plugin.ComponentSpec(...)` and `adaptive.ComponentSpec(...)`.
         policy: Plugin-level unsupported-config policy.
+        diagnostics: Optional startup-only host service settings. Omission uses
+            file layers; supplying settings overrides the complete service profile.
 
     Behavior:
         Component order is preserved during initialization.
@@ -388,6 +390,7 @@ class PluginConfig:
     version: int = 1
     components: list[object] = field(default_factory=list)
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
+    diagnostics: JsonObject | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this config to the canonical JSON document shape."""
@@ -395,6 +398,7 @@ class PluginConfig:
             "version": self.version,
             "components": [_normalize(component) for component in self.components],
             "policy": self.policy.to_dict(),
+            **({"diagnostics": self.diagnostics} if self.diagnostics is not None else {}),
         }
 
 
