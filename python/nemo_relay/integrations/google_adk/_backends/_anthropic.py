@@ -17,7 +17,7 @@ from nemo_relay.integrations.google_adk._backends._attempt import (
     CURRENT_ATTEMPT,
     Attempt,
     Backend,
-    record_cost,
+    record_usage,
     usage_fields,
     with_extra_headers,
 )
@@ -26,8 +26,10 @@ from nemo_relay.integrations.google_adk._serialization import (
     BASE_USAGE_KEYS,
     GENAI_USAGE,
     RECORDED_ID_KEY,
+    RECORDED_USAGE_KEY,
     AdkCodec,
     Normalized,
+    reported_cost,
     token_counts,
 )
 from nemo_relay.integrations.google_adk._swap import swap_class
@@ -50,6 +52,7 @@ CACHE_WRITE_KEY: Final[Annotated[str, "Usage attribute ADK sets for cache writes
 )
 _CACHE_WRITE: Final = ((CACHE_WRITE_KEY, "cache_write_tokens"),)
 _USAGE_KEYS: Final = BASE_USAGE_KEYS | {CACHE_WRITE_KEY}
+_RECORDED_KEYS: Final = frozenset({RECORDED_USAGE_KEY})
 _NATIVE_CODEC: Final = AnthropicMessagesCodec()
 _ANY: Final = types.FunctionCallingConfigMode.ANY
 _FORCED: Final[Mapping[types.FunctionCallingConfigMode, ToolChoiceParam]] = {
@@ -82,7 +85,14 @@ def _read(response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject
         usage["cache_read_tokens"] = cached
     if written is not None:
         usage["cache_write_tokens"] = written
-    return Normalized(usage, {"api": _API}, _USAGE_KEYS, frozenset(), frozenset())
+    return Normalized(
+        usage=usage,
+        cost=reported_cost(recorded, codec=_NATIVE_CODEC),
+        api_specific={"api": _API},
+        usage_keys=_USAGE_KEYS,
+        response_keys=frozenset(),
+        recorded_keys=_RECORDED_KEYS,
+    )
 
 
 ANTHROPIC_CODEC: Final = AdkCodec(_read)
@@ -114,8 +124,8 @@ class _Create(Protocol):
 def _messages_methods(cls: type[AsyncMessages]) -> Mapping[str, object]:
     """Return `AsyncMessages` methods that apply attempt's tool choice edit and request headers.
 
-    ADK builds Anthropic request without function calling config. Methods also record message id and cost on attempt.
-    `LlmResponse` drops both.
+    ADK builds Anthropic request without function calling config. Methods also record message id and usage on attempt.
+    `LlmResponse` drops id and usage cost.
     """
     original = cast("_Create", cls.create)
 
@@ -130,7 +140,7 @@ def _messages_methods(cls: type[AsyncMessages]) -> Mapping[str, object]:
             return result
         if isinstance(result, Message):
             attempt.recorded[RECORDED_ID_KEY] = result.id
-            record_cost(attempt, usage_fields(result.usage), codec=_NATIVE_CODEC)
+            record_usage(attempt, result.usage)
             return result
         return _recorded_messages(result, attempt)
 
@@ -138,13 +148,16 @@ def _messages_methods(cls: type[AsyncMessages]) -> Mapping[str, object]:
 
 
 async def _recorded_messages(stream: _Stream, attempt: Attempt) -> AsyncIterator[RawMessageStreamEvent]:
+    usage: JsonObject = {}
     try:
         async for event in stream:
             if isinstance(event, RawMessageStartEvent):
                 attempt.recorded[RECORDED_ID_KEY] = event.message.id
-                record_cost(attempt, usage_fields(event.message.usage), codec=_NATIVE_CODEC)
+                usage = usage_fields(event.message.usage)
+                attempt.recorded[RECORDED_USAGE_KEY] = usage
             elif isinstance(event, RawMessageDeltaEvent):
-                record_cost(attempt, usage_fields(event.usage), codec=_NATIVE_CODEC)
+                usage = {**usage, **usage_fields(event.usage)}
+                attempt.recorded[RECORDED_USAGE_KEY] = usage
             yield event
     finally:
         await stream.close()

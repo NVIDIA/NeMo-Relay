@@ -10,25 +10,26 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 import openai
 from google.adk.integrations.openai import AzureOpenAIResponsesLlm
 from openai.types.chat import ChatCompletion
-from openai.types.responses import Response, ResponseCompletedEvent
+from openai.types.responses import Response, ResponseCompletedEvent, ResponseIncompleteEvent
 
 from nemo_relay.codecs import OpenAIResponsesCodec
 from nemo_relay.integrations.google_adk._backends._attempt import (
     CURRENT_ATTEMPT,
     Attempt,
     Backend,
-    record_cost,
-    usage_fields,
+    record_usage,
     with_extra_headers,
 )
-from nemo_relay.integrations.google_adk._backends._chat_completions import CHAT_CODEC, CHAT_NATIVE_CODEC
+from nemo_relay.integrations.google_adk._backends._chat_completions import CHAT_CODEC
 from nemo_relay.integrations.google_adk._serialization import (
     BASE_USAGE,
     BASE_USAGE_KEYS,
     GENAI_USAGE,
     RECORDED_ID_KEY,
+    RECORDED_USAGE_KEY,
     AdkCodec,
     Normalized,
+    reported_cost,
     token_counts,
     with_uncached,
 )
@@ -51,6 +52,7 @@ _ChatStream: TypeAlias = "AsyncStream[ChatCompletionChunk]"
 _ResponsesStream: TypeAlias = "AsyncStream[ResponseStreamEvent]"
 _RESPONSES_API: Final = "openai_responses"
 _RESPONSES_USAGE_KEYS: Final = BASE_USAGE_KEYS | {"thoughts_token_count"}
+_RESPONSES_RECORDED_KEYS: Final = frozenset({RECORDED_USAGE_KEY})
 _RESPONSES_NATIVE_CODEC: Final = OpenAIResponsesCodec()
 
 
@@ -63,7 +65,14 @@ def _read_responses(response: JsonObject, recorded: JsonObject, usage_metadata: 
         api_specific["input_tokens_details"] = {"cached_tokens": cached}
     if (reasoning := separate.get("thoughts_tokens")) is not None:
         api_specific["output_tokens_details"] = {"reasoning_tokens": reasoning}
-    return Normalized(with_uncached(counts), api_specific, _RESPONSES_USAGE_KEYS, frozenset(), frozenset())
+    return Normalized(
+        usage=with_uncached(counts),
+        cost=reported_cost(recorded, codec=_RESPONSES_NATIVE_CODEC),
+        api_specific=api_specific,
+        usage_keys=_RESPONSES_USAGE_KEYS,
+        response_keys=frozenset(),
+        recorded_keys=_RESPONSES_RECORDED_KEYS,
+    )
 
 
 RESPONSES_CODEC: Final = AdkCodec(_read_responses)
@@ -107,7 +116,7 @@ class _Complete(Protocol):
 def _completions_methods(cls: type[AsyncCompletions]) -> Mapping[str, object]:
     """Return `AsyncCompletions` methods that send attempt's request headers.
 
-    Methods also record completion id, model, and cost on attempt. `LlmResponse` drops all three.
+    Methods also record completion id, model, and usage on attempt. `LlmResponse` drops id, model, and usage cost.
     """
     original = cast("_Complete", cls.create)
 
@@ -119,7 +128,7 @@ def _completions_methods(cls: type[AsyncCompletions]) -> Mapping[str, object]:
         if isinstance(result, ChatCompletion):
             attempt.recorded[RECORDED_ID_KEY] = result.id
             attempt.response_model = result.model
-            record_cost(attempt, usage_fields(result.usage), codec=CHAT_NATIVE_CODEC)
+            record_usage(attempt, result.usage)
             return result
         return _recorded_completions(result, attempt)
 
@@ -131,7 +140,7 @@ async def _recorded_completions(stream: _ChatStream, attempt: Attempt) -> AsyncI
         async for chunk in stream:
             attempt.recorded[RECORDED_ID_KEY] = chunk.id
             attempt.response_model = chunk.model
-            record_cost(attempt, usage_fields(chunk.usage), codec=CHAT_NATIVE_CODEC)
+            record_usage(attempt, chunk.usage)
             yield chunk
     finally:
         await stream.close()
@@ -144,7 +153,7 @@ class _Respond(Protocol):
 def _responses_methods(cls: type[AsyncResponses]) -> Mapping[str, object]:
     """Return `AsyncResponses` methods that send attempt's request headers.
 
-    Methods also record cost on attempt. `LlmResponse` drops it.
+    Methods also record usage on attempt. `LlmResponse` drops usage cost.
     """
     original = cast("_Respond", cls.create)
 
@@ -154,7 +163,7 @@ def _responses_methods(cls: type[AsyncResponses]) -> Mapping[str, object]:
         if attempt is None:
             return result
         if isinstance(result, Response):
-            record_cost(attempt, usage_fields(result.usage), codec=_RESPONSES_NATIVE_CODEC)
+            record_usage(attempt, result.usage)
             return result
         return _recorded_responses(result, attempt)
 
@@ -164,8 +173,8 @@ def _responses_methods(cls: type[AsyncResponses]) -> Mapping[str, object]:
 async def _recorded_responses(stream: _ResponsesStream, attempt: Attempt) -> AsyncIterator[ResponseStreamEvent]:
     try:
         async for event in stream:
-            if isinstance(event, ResponseCompletedEvent):
-                record_cost(attempt, usage_fields(event.response.usage), codec=_RESPONSES_NATIVE_CODEC)
+            if isinstance(event, ResponseCompletedEvent | ResponseIncompleteEvent):
+                record_usage(attempt, event.response.usage)
             yield event
     finally:
         await stream.close()

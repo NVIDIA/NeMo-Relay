@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any
 
 from google.adk.models.apigee_llm import ApigeeLlm
 
-from nemo_relay.integrations.google_adk._backends._attempt import CURRENT_ATTEMPT, Backend, record_cost, sent_headers
-from nemo_relay.integrations.google_adk._backends._chat_completions import CHAT_CODEC, CHAT_NATIVE_CODEC
+from nemo_relay.integrations.google_adk._backends._attempt import CURRENT_ATTEMPT, Backend, sent_headers
+from nemo_relay.integrations.google_adk._backends._chat_completions import CHAT_CODEC
 from nemo_relay.integrations.google_adk._backends._gemini import gemini_backend
-from nemo_relay.integrations.google_adk._serialization import RECORDED_ID_KEY
+from nemo_relay.integrations.google_adk._serialization import RECORDED_ID_KEY, RECORDED_USAGE_KEY
 from nemo_relay.integrations.google_adk._swap import swap_class
 
 if TYPE_CHECKING:
@@ -40,8 +40,8 @@ def apigee_backend(model: ApigeeLlm) -> Backend:
 def _completions_methods(cls: type[CompletionsHTTPClient]) -> Mapping[str, object]:
     """Return `CompletionsHTTPClient` methods that send attempt's request headers and record each parsed body.
 
-    Attempt header replaces proxy header of same name, ignoring case. Parsed body carries completion id and cost.
-    `LlmResponse` drops both.
+    Attempt header replaces proxy header of same name, ignoring case. Parsed body carries completion id and usage.
+    `LlmResponse` drops id and usage cost.
     """
     post = cls._httpx_post_with_retry
     stream = cls._handle_streaming
@@ -93,4 +93,4 @@ def _record(completion: Mapping[str, Json]) -> None:
     if isinstance(identifier := completion.get("id"), str):
         attempt.recorded[RECORDED_ID_KEY] = identifier
     if isinstance(usage := completion.get("usage"), dict):
-        record_cost(attempt, usage, codec=CHAT_NATIVE_CODEC)
+        attempt.recorded[RECORDED_USAGE_KEY] = usage

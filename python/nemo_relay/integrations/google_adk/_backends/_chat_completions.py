@@ -11,8 +11,10 @@ from nemo_relay.codecs import OpenAIChatCodec
 from nemo_relay.integrations.google_adk._serialization import (
     BASE_USAGE,
     BASE_USAGE_KEYS,
+    RECORDED_USAGE_KEY,
     AdkCodec,
     Normalized,
+    reported_cost,
     token_counts,
     with_uncached,
 )
@@ -21,13 +23,20 @@ if TYPE_CHECKING:
     from nemo_relay import JsonObject
 
 _API: Final = "openai_chat"
-CHAT_NATIVE_CODEC: Final = OpenAIChatCodec()
+_RECORDED_KEYS: Final = frozenset({RECORDED_USAGE_KEY})
+_NATIVE_CODEC: Final = OpenAIChatCodec()
 
 
 def _read(response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject) -> Normalized:
     """Read Chat Completions usage. Completion count already includes any reasoning tokens."""
-    counts = token_counts(usage_metadata, BASE_USAGE)
-    return Normalized(with_uncached(counts), {"api": _API}, BASE_USAGE_KEYS, frozenset(), frozenset())
+    return Normalized(
+        usage=with_uncached(token_counts(usage_metadata, BASE_USAGE)),
+        cost=reported_cost(recorded, codec=_NATIVE_CODEC),
+        api_specific={"api": _API},
+        usage_keys=BASE_USAGE_KEYS,
+        response_keys=frozenset(),
+        recorded_keys=_RECORDED_KEYS,
+    )
 
 
 CHAT_CODEC: Final = AdkCodec(_read)

@@ -17,6 +17,7 @@ from _helpers import (
     as_list,
     as_object,
     assert_balanced,
+    data_of,
     ends,
     final_text,
     get_weather,
@@ -552,15 +553,7 @@ async def test_openai_responses_model_is_read_as_openai_responses(subscribed_eve
     assert_balanced(subscribed_events)
 
 
-@pytest.mark.parametrize(
-    "module",
-    ["google.adk.integrations.openai._future_llm", "google.adk.models.anthropic_llm"],
-    ids=["openai_integration", "anthropic_module"],
-)
-async def test_a_class_from_an_adk_provider_module_relay_cannot_place_fails_the_call(
-    module: str, subscribed_events: list[nemo_relay.Event]
-) -> None:
-    from google.adk.agents import LlmAgent
+def _future_llm(module: str) -> BaseLlm:
     from google.adk.models import BaseLlm
 
     class FutureLlm(BaseLlm):
@@ -574,10 +567,43 @@ async def test_a_class_from_an_adk_provider_module_relay_cannot_place_fails_the_
         ) -> AsyncGenerator[LlmResponse, None]:
             yield model_answer("From the future.")
 
+    return FutureLlm()
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "google.adk.integrations.openai._future_llm",
+        "google.adk.models.anthropic_llm",
+        "google.adk.models._future_llm",
+        "google.adk.integrations.future",
+    ],
+    ids=["openai_integration", "anthropic_module", "models_package", "integrations_package"],
+)
+async def test_a_class_from_an_adk_provider_package_relay_does_not_model_fails_the_call(
+    module: str, subscribed_events: list[nemo_relay.Event]
+) -> None:
+    from google.adk.agents import LlmAgent
+
     with pytest.raises(TypeError, match=re.escape(f"{module}.FutureLlm")):
-        await run_recorded(LlmAgent(name="weather_agent", model=FutureLlm(), instruction="Be brief."))
+        await run_recorded(LlmAgent(name="weather_agent", model=_future_llm(module), instruction="Be brief."))
 
     assert starts(subscribed_events, "llm") == []
+    assert_balanced(subscribed_events)
+
+
+async def test_an_adk_class_outside_its_provider_packages_is_named_after_its_class(
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from google.adk.agents import LlmAgent
+
+    model = _future_llm("google.adk.evaluation.simulation._future_llm")
+
+    adk_events = await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
+
+    assert final_text(adk_events) == "From the future."
+    (start,) = starts(subscribed_events, "llm")
+    assert start.name == "FutureLlm"
     assert_balanced(subscribed_events)
 
 
@@ -913,6 +939,109 @@ async def test_a_cost_reported_at_the_end_of_a_stream_reaches_the_annotation(
     chat_end, claude_end = ends(subscribed_events, "llm")
     assert present(response_of(chat_end).usage)["cost"] == _usd(0.0042)
     assert present(response_of(claude_end).usage)["cost"] == _usd(0.0021)
+    assert data_of(claude_end)["provider_reported"] == {
+        "id": "m",
+        "usage": {"input_tokens": 50, "output_tokens": 7, "cost_usd": 0.0021},
+    }
+
+
+def _responses_stream(pieces: Sequence[str], *, finish: str, usage: nemo_relay.JsonObject) -> httpx.Response:
+    response: nemo_relay.JsonObject = {
+        "id": "resp_s",
+        "object": "response",
+        "created_at": 1,
+        "model": "gpt-5",
+        "status": "in_progress",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+    }
+    events: list[tuple[str, nemo_relay.JsonObject]] = [
+        ("response.created", {"type": "response.created", "sequence_number": 0, "response": response})
+    ]
+    events.extend(
+        (
+            "response.output_text.delta",
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": number,
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": piece,
+                "logprobs": [],
+            },
+        )
+        for number, piece in enumerate(pieces, start=1)
+    )
+    message: nemo_relay.JsonObject = {
+        "id": "msg_1",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "".join(pieces), "annotations": []}],
+    }
+    done: nemo_relay.JsonObject = {
+        **response,
+        "status": finish.removeprefix("response."),
+        "output": [message],
+        "usage": usage,
+    }
+    events.append((finish, {"type": finish, "sequence_number": len(events), "response": done}))
+    return _events(events)
+
+
+@pytest.mark.parametrize("finish", ["response.completed", "response.incomplete"])
+async def test_a_cost_a_finished_responses_stream_reports_reaches_the_annotation(
+    finish: str, subscribed_events: list[nemo_relay.Event]
+) -> None:
+    from google.adk.agents import LlmAgent, RunConfig
+    from google.adk.agents.run_config import StreamingMode
+
+    usage: nemo_relay.JsonObject = {
+        "input_tokens": 50,
+        "output_tokens": 7,
+        "total_tokens": 57,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "cost_usd": 0.0042,
+    }
+    model = _openai_responses_model(_Canned([_responses_stream(["Sunny ", "streamed."], finish=finish, usage=usage)]))
+
+    adk_events = await run_recorded(
+        LlmAgent(name="stream_agent", model=model, instruction="Be brief."),
+        run_config=RunConfig(streaming_mode=StreamingMode.SSE),
+    )
+
+    assert final_text(adk_events) == "Sunny streamed."
+    (end,) = ends(subscribed_events, "llm")
+    assert present(response_of(end).usage)["cost"] == _usd(0.0042)
+    assert_balanced(subscribed_events)
+
+
+async def test_a_usage_the_native_codec_cannot_read_leaves_the_call_unannotated(
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from google.adk.agents import LlmAgent
+
+    completion: nemo_relay.JsonObject = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": _GPT,
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Sunny."}}],
+        "usage": {**_OPENAI_USAGE, "cost": "0.0042"},
+    }
+    model = _openai_chat_model(_Canned([httpx.Response(200, json=completion)]))
+
+    adk_events = await run_recorded(LlmAgent(name="weather_agent", model=model, instruction="Be brief."))
+
+    assert final_text(adk_events) == "Sunny."
+    (end,) = ends(subscribed_events, "llm")
+    assert status_of(end) == "OK"
+    assert end.annotated_response is None
+    assert_balanced(subscribed_events)
 
 
 async def test_apigee_chat_records_the_completion_id_and_cost(subscribed_events: list[nemo_relay.Event]) -> None:

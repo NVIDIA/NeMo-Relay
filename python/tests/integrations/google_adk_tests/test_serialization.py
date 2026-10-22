@@ -31,9 +31,9 @@ from nemo_relay.integrations.google_adk._backends._chat_completions import CHAT_
 from nemo_relay.integrations.google_adk._backends._gemini import GEMINI_CODEC, URL_CONTEXT_KEY
 from nemo_relay.integrations.google_adk._backends._openai import RESPONSES_CODEC
 from nemo_relay.integrations.google_adk._serialization import (
-    RECORDED_COST_KEY,
     RECORDED_ID_KEY,
     RECORDED_KEY,
+    RECORDED_USAGE_KEY,
     AdkCodec,
     ProducedResponses,
     aggregate_partials,
@@ -1412,17 +1412,14 @@ def test_final_response_keeps_the_last_whole_chunk_and_the_fields_later_chunks_r
         {"content": {"role": "model", "parts": [{"text": "ny."}]}, "partial": True},
         whole,
         {"usage_metadata": {"total_token_count": 5}, "model_version": "v2", "partial": True},
-        {
-            RECORDED_KEY: {RECORDED_COST_KEY: {"currency": "USD", "source": "provider_reported", "total": 0.1}},
-            "partial": True,
-        },
+        {RECORDED_KEY: {RECORDED_USAGE_KEY: {"prompt_tokens": 5, "cost": 0.1}}, "partial": True},
     ]
 
     assert final_response(chunks) == {
         **whole,
         "usage_metadata": {"total_token_count": 5},
         "model_version": "v2",
-        RECORDED_KEY: {RECORDED_COST_KEY: {"currency": "USD", "source": "provider_reported", "total": 0.1}},
+        RECORDED_KEY: {RECORDED_USAGE_KEY: {"prompt_tokens": 5, "cost": 0.1}},
     }
     assert final_response(chunks[:2]) == aggregate_partials(chunks[:2])
     with pytest.raises(TypeError, match="LlmResponse dumps"):
@@ -2030,13 +2027,35 @@ def test_decode_response_takes_the_recorded_response_id_over_the_interaction_id(
 
 def test_decode_response_keeps_recorded_fields_no_variant_reads_in_extra() -> None:
     url_context: nemo_relay.JsonObject = {"url_metadata": [{"retrieved_url": "https://weather.example"}]}
-    recorded: nemo_relay.JsonObject = {RECORDED_ID_KEY: "chatcmpl-1", URL_CONTEXT_KEY: url_context}
+    usage: nemo_relay.JsonObject = {"prompt_tokens": 5}
+    recorded: nemo_relay.JsonObject = {
+        RECORDED_ID_KEY: "chatcmpl-1",
+        URL_CONTEXT_KEY: url_context,
+        RECORDED_USAGE_KEY: usage,
+    }
 
     annotated = CHAT_CODEC.decode_response({RECORDED_KEY: recorded})
 
     assert annotated.id == "chatcmpl-1"
     assert annotated.extra == {RECORDED_KEY: {URL_CONTEXT_KEY: url_context}}
-    assert GEMINI_CODEC.decode_response({RECORDED_KEY: recorded}).extra == {}
+    assert GEMINI_CODEC.decode_response({RECORDED_KEY: recorded}).extra == {RECORDED_KEY: {RECORDED_USAGE_KEY: usage}}
+
+
+@pytest.mark.parametrize(
+    ("codec", "usage"),
+    [
+        pytest.param(ANTHROPIC_CODEC, {"input_tokens": 5, "cost_usd": 0.1}, id="anthropic"),
+        pytest.param(CHAT_CODEC, {"prompt_tokens": 5, "cost": 0.1}, id="openai_chat"),
+        pytest.param(RESPONSES_CODEC, {"input_tokens": 5, "cost_usd": 0.1}, id="openai_responses"),
+    ],
+)
+def test_decode_response_reads_the_cost_of_the_recorded_usage(codec: AdkCodec, usage: nemo_relay.JsonObject) -> None:
+    annotated = codec.decode_response(
+        {"usage_metadata": {"prompt_token_count": 5}, RECORDED_KEY: {RECORDED_USAGE_KEY: usage}}
+    )
+
+    assert present(annotated.usage)["cost"] == {"currency": "USD", "source": "provider_reported", "total": 0.1}
+    assert annotated.extra == {}
 
 
 def test_anthropic_usage_rejects_cache_tokens_beyond_the_prompt() -> None:
@@ -2056,3 +2075,12 @@ def test_cache_write_rides_on_the_usage_dump_and_returns_to_a_rebuilt_response()
     rebuilt = response_from_payload(payload)
     assert present(rebuilt.usage_metadata).prompt_token_count == 10
     assert getattr(rebuilt.usage_metadata, CACHE_WRITE_KEY) == 3
+
+
+def test_a_camel_case_usage_key_rebuilds_as_its_field() -> None:
+    rebuilt = response_from_payload({"usage_metadata": {"promptTokenCount": 5, CACHE_WRITE_KEY: 3}})
+
+    usage = present(rebuilt.usage_metadata)
+    assert usage.prompt_token_count == 5
+    assert "promptTokenCount" not in vars(usage)
+    assert getattr(usage, CACHE_WRITE_KEY) == 3

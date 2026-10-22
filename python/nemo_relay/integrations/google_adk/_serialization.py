@@ -43,15 +43,18 @@ _PARAMS: Final = (
 _MODELED_CONFIG_KEYS: Final = frozenset({"system_instruction", "tools", "tool_config", *(key for key, _ in _PARAMS)})
 _MODELED_REQUEST_KEYS: Final = frozenset({"model", "contents", "config"})
 _REQUEST_FIELDS: Final = frozenset(LlmRequest.model_fields)
-_USAGE_FIELDS: Final = frozenset(types.GenerateContentResponseUsageMetadata.model_fields)
+_USAGE_FIELDS: Final[Annotated[frozenset[str], "Usage field names, plus camelCase aliases genai accepts."]] = frozenset(
+    key
+    for name, info in types.GenerateContentResponseUsageMetadata.model_fields.items()
+    for key in (name, info.alias)
+    if key is not None
+)
 _API_SPECIFIC_REQUEST_KEYS: Final = _REQUEST_FIELDS - _MODELED_REQUEST_KEYS - {"tools_dict"}
 RECORDED_KEY: Final[Annotated[str, "Dump key for fields provider client reports and `LlmResponse` drops."]] = (
     "provider_reported"
 )
 RECORDED_ID_KEY: Final = "id"
-RECORDED_COST_KEY: Final[
-    Annotated[str, "Recorded key for cost the provider API's native codec reads from client usage."]
-] = "cost"
+RECORDED_USAGE_KEY: Final[Annotated[str, "Recorded key for usage provider client reports."]] = "usage"
 _MODELED_RESPONSE_KEYS: Final = frozenset(
     {"content", "finish_reason", "usage_metadata", "model_version", "interaction_id", RECORDED_KEY}
 )
@@ -1753,14 +1756,16 @@ def _decode(payload: JsonObject) -> AnnotatedLLMRequest:
     )
 
 
-class Normalized(NamedTuple):
-    """Usage and `api_specific` an API variant reads from an ADK response dump, plus keys it consumed."""
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Normalized:
+    """Usage, cost, and `api_specific` an API variant reads from an ADK response dump, plus keys it consumed."""
 
     usage: dict[str, int]
+    cost: Annotated[Json, "Cost provider reported, or None."]
     api_specific: JsonObject
     usage_keys: Annotated[AbstractSet[str], "`usage_metadata` keys variant consumed."]
     response_keys: Annotated[AbstractSet[str], "Response keys variant consumed beyond modeled ones."]
-    recorded_keys: Annotated[AbstractSet[str], "Recorded keys variant consumed beyond id and cost."]
+    recorded_keys: Annotated[AbstractSet[str], "Recorded keys variant consumed beyond id."]
 
 
 class ApiVariant(Protocol):
@@ -1834,13 +1839,13 @@ class AdkCodec(LlmCodec, LlmResponseCodec):
         recorded = _object(response.get(RECORDED_KEY), field=f"ADK response {RECORDED_KEY}")
         read = self._variant(response, recorded, usage_metadata)
         usage: dict[str, Json] = dict(read.usage)
-        if (cost := recorded.get(RECORDED_COST_KEY)) is not None:
-            usage["cost"] = cost
+        if read.cost is not None:
+            usage["cost"] = read.cost
         modeled = _MODELED_RESPONSE_KEYS | read.response_keys
         extra = {key: value for key, value in response.items() if key not in modeled}
         if usage_details := {key: value for key, value in usage_metadata.items() if key not in read.usage_keys}:
             extra["usage_metadata"] = usage_details
-        consumed = {RECORDED_ID_KEY, RECORDED_COST_KEY} | read.recorded_keys
+        consumed = {RECORDED_ID_KEY} | read.recorded_keys
         if unread := {key: value for key, value in recorded.items() if key not in consumed}:
             extra[RECORDED_KEY] = unread
         identifier = recorded.get(RECORDED_ID_KEY)
@@ -1868,6 +1873,18 @@ def with_uncached(counts: Mapping[str, int]) -> dict[str, int]:
     if prompt is not None and cached is not None and cached <= prompt:
         usage["uncached_input_tokens"] = prompt - cached
     return usage
+
+
+def reported_cost(recorded: JsonObject, *, codec: LlmResponseCodec) -> Json:
+    """Return cost `codec` reads from recorded provider usage.
+
+    None when no usage is recorded or usage reports no cost.
+    """
+    usage = recorded.get(RECORDED_USAGE_KEY)
+    if usage is None:
+        return None
+    decoded = codec.decode_response({"usage": usage}).usage
+    return None if decoded is None else decoded.get("cost")
 
 
 def python_dump(value: object) -> object:

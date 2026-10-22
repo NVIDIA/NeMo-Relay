@@ -69,8 +69,14 @@ def _read(response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject
         if not isinstance(avg_logprobs, int | float):
             raise TypeError("ADK avg_logprobs must be a number")
         api_specific["avgLogprobs"] = avg_logprobs
-    variant = api_specific if len(api_specific) > 1 else {}
-    return Normalized(with_uncached(counts), variant, _USAGE_KEYS, _RESPONSE_KEYS, _RECORDED_KEYS)
+    return Normalized(
+        usage=with_uncached(counts),
+        cost=None,
+        api_specific=api_specific if len(api_specific) > 1 else {},
+        usage_keys=_USAGE_KEYS,
+        response_keys=_RESPONSE_KEYS,
+        recorded_keys=_RECORDED_KEYS,
+    )
 
 
 def _wire(model: type[BaseModel], value: Json) -> Json:

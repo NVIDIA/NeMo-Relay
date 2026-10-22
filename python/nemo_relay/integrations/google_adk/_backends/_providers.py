@@ -6,26 +6,29 @@
 from __future__ import annotations
 
 from importlib.util import find_spec
-from typing import TYPE_CHECKING
+from typing import Annotated, Final
 
+from google.adk import integrations as adk_integrations
+from google.adk import models as adk_models
+from google.adk.integrations import openai as adk_openai
 from google.adk.models.apigee_llm import ApigeeLlm
+from google.adk.models.base_llm import BaseLlm
 from google.adk.models.google_llm import Gemini
 
 from nemo_relay.integrations.google_adk._backends._apigee import apigee_backend
 from nemo_relay.integrations.google_adk._backends._attempt import Backend
 from nemo_relay.integrations.google_adk._backends._gemini import GEMINI_CODEC, gemini_backend
 
-if TYPE_CHECKING:
-    from google.adk.models import BaseLlm
+_PROVIDER_PACKAGES: Final[Annotated[tuple[str, ...], "ADK packages defining provider model classes."]] = (
+    adk_models.__name__,
+    adk_integrations.__name__,
+)
 
 
-def _defined_in(cls: type[BaseLlm], module: str) -> bool:
-    """Whether any class in `cls` MRO is defined in `module` or a submodule of it."""
-    return any(base.__module__ == module or base.__module__.startswith(f"{module}.") for base in cls.__mro__)
-
-
-def _package(cls: type[BaseLlm]) -> str:
-    return cls.__module__.rpartition(".")[0]
+def _defined_in(cls: type[BaseLlm], package: str) -> bool:
+    """Whether a class in `cls` MRO below `BaseLlm` is defined in `package` or a submodule of it."""
+    below = cls.__mro__[: cls.__mro__.index(BaseLlm)]
+    return any(base.__module__ == package or base.__module__.startswith(f"{package}.") for base in below)
 
 
 def _unknown(cls: type[BaseLlm]) -> TypeError:
@@ -37,28 +40,18 @@ def _unknown(cls: type[BaseLlm]) -> TypeError:
 async def backend_of(model: BaseLlm) -> Backend:
     """Return provider, codec, and header channel for model's class.
 
-    Check ADK's Gemini family first, then classes behind each installed provider SDK. Swap provider client's class so it
-    applies each attempt's edits, records response fields `LlmResponse` drops, or both. Raise `TypeError` for a class
-    from one of those ADK provider modules that NeMo Relay does not know. Any other class: class name as provider,
-    Gemini codec.
+    Swap provider client's class so it applies each attempt's edits, records response fields `LlmResponse` drops, or
+    both. Raise `TypeError` for a class from ADK's `models` or `integrations` package that NeMo Relay does not model.
+    Any other class: class name as provider, Gemini codec.
     """
     cls = type(model)
     if isinstance(model, ApigeeLlm):
         return apigee_backend(model)
     if isinstance(model, Gemini):
         return gemini_backend(model)
-    if _defined_in(cls, ApigeeLlm.__module__) or _defined_in(cls, Gemini.__module__):
-        raise _unknown(cls)
-    if find_spec("anthropic") is not None:
-        from google.adk.models.anthropic_llm import AnthropicLlm
-
-        from nemo_relay.integrations.google_adk._backends._anthropic import anthropic_backend
-
-        if isinstance(model, AnthropicLlm):
-            return await anthropic_backend(model)
-        if _defined_in(cls, AnthropicLlm.__module__):
-            raise _unknown(cls)
-    if find_spec("openai") is not None:
+    if not any(_defined_in(cls, package) for package in _PROVIDER_PACKAGES):
+        return Backend(cls.__name__, GEMINI_CODEC, client_headers=False)
+    if _defined_in(cls, adk_openai.__name__):
         from google.adk.integrations.openai import OpenAILlm, OpenAIResponsesLlm
 
         from nemo_relay.integrations.google_adk._backends._openai import openai_chat_backend, openai_responses_backend
@@ -67,6 +60,11 @@ async def backend_of(model: BaseLlm) -> Backend:
             return openai_chat_backend(model)
         if isinstance(model, OpenAIResponsesLlm):
             return openai_responses_backend(model)
-        if _defined_in(cls, _package(OpenAILlm)):
-            raise _unknown(cls)
-    return Backend(cls.__name__, GEMINI_CODEC, client_headers=False)
+    elif find_spec("anthropic") is not None:
+        from google.adk.models.anthropic_llm import AnthropicLlm
+
+        from nemo_relay.integrations.google_adk._backends._anthropic import anthropic_backend
+
+        if isinstance(model, AnthropicLlm):
+            return await anthropic_backend(model)
+    raise _unknown(cls)

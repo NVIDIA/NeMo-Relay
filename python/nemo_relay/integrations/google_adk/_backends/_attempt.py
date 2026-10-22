@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, TypeVar, cast
 
-from nemo_relay.integrations.google_adk._serialization import RECORDED_COST_KEY
+from nemo_relay.integrations.google_adk._serialization import RECORDED_USAGE_KEY
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -17,8 +17,7 @@ if TYPE_CHECKING:
     from google.genai import types
     from pydantic import BaseModel
 
-    from nemo_relay import Json, JsonObject
-    from nemo_relay.codecs import LlmResponseCodec
+    from nemo_relay import JsonObject
     from nemo_relay.integrations.google_adk._serialization import AdkCodec
 
 _V = TypeVar("_V")
@@ -54,20 +53,14 @@ class Backend(NamedTuple):
     ]
 
 
-def usage_fields(usage: BaseModel | None) -> JsonObject | None:
-    return None if usage is None else usage.model_dump(mode="json", exclude_none=True)
+def usage_fields(usage: BaseModel) -> JsonObject:
+    return usage.model_dump(mode="json", exclude_none=True)
 
 
-def record_cost(attempt: Attempt, usage: Mapping[str, Json] | None, *, codec: LlmResponseCodec) -> None:
-    """Record on attempt cost that `codec` reads from provider usage.
-
-    No change when usage is missing or `codec` reads no cost.
-    """
-    if usage is None:
-        return
-    decoded = codec.decode_response({"usage": dict(usage)}).usage
-    if decoded is not None and (cost := decoded.get("cost")) is not None:
-        attempt.recorded[RECORDED_COST_KEY] = cost
+def record_usage(attempt: Attempt, usage: BaseModel | None) -> None:
+    """Record provider usage on attempt. No change when `usage` is None."""
+    if usage is not None:
+        attempt.recorded[RECORDED_USAGE_KEY] = usage_fields(usage)
 
 
 def sent_headers(held: Mapping[str, _V]) -> dict[str, _V | str]:

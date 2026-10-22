@@ -79,7 +79,7 @@ def get_weather(location: str) -> dict[str, str]:
 
 root_agent = LlmAgent(
     name="weather_agent",
-    model="gemini-2.5-flash",
+    model="gemini-3.5-flash",
     instruction="Use tools when they are relevant. Keep the final answer brief.",
     tools=[get_weather],
 )
@@ -139,7 +139,7 @@ def get_weather(location: str) -> dict[str, str]:
     return {"location": location, "forecast": "sunny and 72 degrees"}
 
 
-root_agent = LlmAgent(name="weather_agent", model="gemini-2.5-flash", tools=[get_weather])
+root_agent = LlmAgent(name="weather_agent", model="gemini-3.5-flash", tools=[get_weather])
 app = App(name="weather_agent", root_agent=root_agent, plugins=[NemoRelayPlugin()])
 ```
 
@@ -192,12 +192,14 @@ The integration captures:
   an `AsyncAzureOpenAI` client or as `AzureOpenAIResponsesLlm`, `bedrock` with
   the OpenAI SDK's Bedrock client, and `openai` otherwise, which includes an
   OpenAI-compatible server behind a `base_url`. `ApigeeLlm` in its chat
-  completions mode is `openai`. Any other `BaseLlm` is named after its class,
-  except a class from one of ADK's provider model modules that NeMo Relay does
-  not recognize, whose call fails instead. The request is normalized by a codec
-  over ADK's own `LlmRequest` shape. The response is normalized by the usage
-  semantics of the provider API behind the model class, so a call through ADK
-  reads as the same provider's native call does. ADK's `Gemini` family, and any
+  completions mode is `openai`. A class from ADK's `google.adk.models` or
+  `google.adk.integrations` package that NeMo Relay does not model fails the
+  call. Any other `BaseLlm` is named after its class.
+  The request is normalized by a codec over ADK's own `LlmRequest` shape. The
+  response is normalized by the usage semantics of the provider API behind the
+  model class,
+  so a call through ADK reads as the same provider's native call does. ADK's
+  `Gemini` family, and any
   other `BaseLlm`, carries the GenAI shape: the `gemini_generate_content`
   `api_specific` variant keeps the thinking and tool-use prompt token counts,
   Gemini's candidate fields, and the URL context metadata that ADK's
@@ -220,13 +222,14 @@ The integration captures:
   carries them as `id` and `model`. The Responses API's id arrives as ADK's
   `interaction_id`. ADK's `LlmResponse` also drops a cost the provider reports
   in its usage, such as OpenRouter's `cost` or a `cost_usd` field, so the
-  integration records it from the usage of the OpenAI and Anthropic clients and
-  the Apigee proxy's chat completions client, including the last streamed
-  usage, as normalized by the provider API's native codec. The annotation
-  carries it as the `provider_reported` cost, which takes precedence over a
-  model pricing estimate. The response dump holds the recorded id and cost
-  under its `provider_reported` key, plus URL context metadata on the Gemini
-  route.
+  integration records the usage of the OpenAI and Anthropic clients and the
+  Apigee proxy's chat completions client, including the last streamed usage.
+  The provider API's native codec reads the cost from that usage, and the
+  annotation carries it as the `provider_reported` cost, which takes precedence
+  over a model pricing estimate. A usage the native codec cannot read leaves
+  the call without an annotation, as it does for a native call. The response
+  dump holds the recorded id and usage under its `provider_reported` key, plus
+  URL context metadata on the Gemini route.
   ADK attaches the Anthropic cache-write count to its usage
   outside the GenAI schema, and the response dump and normalized usage carry
   it. With server-sent-event streaming the call runs the streaming pipeline,
