@@ -360,15 +360,18 @@ impl PreparedPluginHostConfig {
     ) -> Result<crate::diagnostics::DiagnosticsSettings> {
         // The existing resolver owns file order. Merge service fields independently
         // so they never enter plugin config reports, fingerprints, or callbacks.
-        let mut merged = Json::Object(Map::new());
-        for file in &self.files {
-            if let Some(value) = file.value.get("diagnostics") {
-                crate::plugin::merge_json_value(&mut merged, value.clone());
+        let settings = if let Some(settings) = programmatic {
+            settings
+        } else {
+            let mut merged = Json::Object(Map::new());
+            for file in &self.files {
+                if let Some(value) = file.value.get("diagnostics") {
+                    crate::plugin::merge_json_value(&mut merged, value.clone());
+                }
             }
-        }
-        let settings: crate::diagnostics::DiagnosticsSettings = serde_json::from_value(merged)
-            .map_err(|_| PluginError::InvalidConfig("diagnostics: invalid_settings".into()))?;
-        let settings = programmatic.unwrap_or(settings);
+            serde_json::from_value(merged)
+                .map_err(|_| PluginError::InvalidConfig("diagnostics: invalid_settings".into()))?
+        };
         settings
             .limits
             .validate()

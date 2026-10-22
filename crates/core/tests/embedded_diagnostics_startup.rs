@@ -46,6 +46,48 @@ async fn file_settings_are_reused_and_absent_from_plugin_reports() {
     assert!(reader.snapshot_json("{}").is_ok());
 }
 
+#[tokio::test]
+async fn programmatic_service_profile_replaces_invalid_file_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("plugins.toml");
+    std::fs::write(&path, "[diagnostics]\nenabled = 'true'\n").unwrap();
+    assert!(validate(PluginHostConfig::default(), Some(path.clone())).is_err());
+    assert!(
+        initialize(PluginHostConfig::default(), Some(path.clone()))
+            .await
+            .is_err()
+    );
+
+    let mut settings = nemo_relay::diagnostics::DiagnosticsSettings {
+        enabled: true,
+        ..Default::default()
+    };
+    settings.limits.max_events = 3;
+    let config = PluginHostConfig {
+        diagnostics: Some(settings),
+        ..Default::default()
+    };
+    let report = validate(config.clone(), Some(path.clone())).unwrap();
+    assert!(report.resolved_config.get("diagnostics").is_none());
+
+    let mut invalid = config.clone();
+    invalid.diagnostics.as_mut().unwrap().limits.max_owned_bytes = 1;
+    assert!(validate(invalid.clone(), Some(path.clone())).is_err());
+    assert!(initialize(invalid, Some(path.clone())).await.is_err());
+
+    let mut activation = initialize(config, Some(path)).await.unwrap();
+    assert_eq!(
+        embedded::reader()
+            .unwrap()
+            .info()
+            .unwrap()
+            .limits
+            .max_events,
+        3
+    );
+    activation.close().unwrap();
+}
+
 #[test]
 fn invalid_service_settings_do_not_select_a_default() {
     let directory = tempfile::tempdir().unwrap();
