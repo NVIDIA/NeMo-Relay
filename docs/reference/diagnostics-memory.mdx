@@ -127,8 +127,8 @@ sampled during that capture.
 Memory and snapshot reads share `max_queries`, row/text budgets, and the encoded
 `max_snapshot_bytes` ceiling. Each admitted query workspace adds a numeric array
 indexed by `max_components`, capped component/entry rows, and fixed capture
-metadata. Startup includes these allocations in `max_owned_bytes`; profiles sized
-exactly to the previous implementation may need a larger ceiling. Zero-query
+metadata. Startup includes these allocations in `max_owned_bytes`; a tightly sized
+`max_owned_bytes` profile must leave room for them. Zero-query
 contexts allocate no query scratch. Recording adds no size ledger or resource read.
 
 The accounting scan visits admitted components, counters, windows/extension
