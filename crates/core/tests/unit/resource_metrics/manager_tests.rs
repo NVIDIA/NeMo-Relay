@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::api::resource_metrics::{CpuMetrics, DataUnit, DurationUnit};
+use crate::diagnostics::{DiagnosticMemoryPage, DiagnosticQuery, Diagnostics};
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn isolated_resource_manager_test() -> bool {
@@ -101,7 +102,7 @@ fn manager_installation_reconciles_inherited_inspection_ownership() {
 
 #[test]
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
-fn resource_memory_pages_preserve_budgets_samples_and_inspection_policy() {
+fn resource_memory_pages_preserve_budgets_and_samples() {
     use crate::diagnostics::*;
     if !isolated_resource_manager_test() {
         return;
@@ -149,7 +150,7 @@ fn resource_memory_pages_preserve_budgets_samples_and_inspection_policy() {
         .unwrap();
     let manager = global_manager().unwrap();
     let target = current_process_target(ResourceMeasurementScope::ApplicationProcess).unwrap();
-    let mut config = ResourceMetricsConfig {
+    let config = ResourceMetricsConfig {
         measurement_scope: ResourceMetricsMeasurementScope::ApplicationProcess,
         ..Default::default()
     };
@@ -174,34 +175,7 @@ fn resource_memory_pages_preserve_budgets_samples_and_inspection_policy() {
     let budget = baseline_bytes + 128;
     assert!(full.as_bytes().len() > budget);
     drop(full);
-    let limited = diagnostics
-        .reader()
-        .inspect_memory(&DiagnosticQuery {
-            max_response_bytes: Some(budget as u32),
-            ..query.clone()
-        })
-        .unwrap();
-    assert!(limited.as_bytes().len() <= budget);
-    let page = limited.to_memory_page().unwrap();
-    assert_eq!(
-        page.resource.availability,
-        ResourceMemoryAvailability::CapacityUnavailable
-    );
-    assert!(page.resource.sample.is_none());
-    assert_eq!(
-        page.aggregate.reserved_bytes,
-        full_page.aggregate.reserved_bytes
-    );
-    assert_eq!(page.aggregate.events, 1);
-    assert_eq!(
-        page.component_occupied_bytes,
-        full_page.component_occupied_bytes
-    );
-    assert_eq!(
-        page.component_occupied_bytes.get() + page.shared_or_unassigned_reserved_bytes.get(),
-        page.aggregate.reserved_bytes as u64
-    );
-    drop(limited);
+    assert_bounded_memory_page(&diagnostics, &query, budget, &full_page);
     assert_eq!(diagnostics.memory_usage().query_workspaces, 0);
     assert_eq!(
         latest_memory_view(Some(std::process::id())).sample,
@@ -240,6 +214,68 @@ fn resource_memory_pages_preserve_budgets_samples_and_inspection_policy() {
         latest_memory_view(Some(std::process::id())).availability,
         ResourceMemoryAvailability::Disabled
     );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn assert_bounded_memory_page(
+    diagnostics: &Diagnostics,
+    query: &DiagnosticQuery,
+    budget: usize,
+    full_page: &DiagnosticMemoryPage,
+) {
+    use crate::diagnostics::ResourceMemoryAvailability;
+    let limited = diagnostics
+        .reader()
+        .inspect_memory(&DiagnosticQuery {
+            max_response_bytes: Some(budget as u32),
+            ..query.clone()
+        })
+        .unwrap();
+    assert!(limited.as_bytes().len() <= budget);
+    let page = limited.to_memory_page().unwrap();
+    assert_eq!(
+        page.resource.availability,
+        ResourceMemoryAvailability::CapacityUnavailable
+    );
+    assert!(page.resource.sample.is_none());
+    assert_eq!(
+        page.aggregate.reserved_bytes,
+        full_page.aggregate.reserved_bytes
+    );
+    assert_eq!(page.aggregate.events, 1);
+    assert_eq!(
+        page.component_occupied_bytes,
+        full_page.component_occupied_bytes
+    );
+    assert_eq!(
+        page.component_occupied_bytes.get() + page.shared_or_unassigned_reserved_bytes.get(),
+        page.aggregate.reserved_bytes as u64
+    );
+    drop(limited);
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn resource_memory_pages_respect_inspection_policy_and_pending_targets() {
+    use crate::diagnostics::*;
+    if !isolated_resource_manager_test() {
+        return;
+    }
+    let diagnostics = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let query = DiagnosticQuery::default();
+    let manager = global_manager().unwrap();
+    let target = current_process_target(ResourceMeasurementScope::ApplicationProcess).unwrap();
+    let mut config = ResourceMetricsConfig {
+        measurement_scope: ResourceMetricsMeasurementScope::ApplicationProcess,
+        ..Default::default()
+    };
     for disable_collection in [false, true] {
         config.memory_inspection.enabled = disable_collection;
         config.memory.enabled = !disable_collection;
