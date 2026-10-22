@@ -236,3 +236,169 @@ fn trust_classification_does_not_guess_io_or_authentication_from_messages() {
         assert_eq!(value.failure_class(), Some(expected.as_str()));
     }
 }
+
+fn plugin_diagnostic_context(settings: DiagnosticsSettings) -> Diagnostics {
+    Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        settings,
+    )
+    .unwrap()
+}
+
+#[test]
+fn plugin_observers_remain_inert_when_collection_or_registration_is_unavailable() {
+    for mode in ["disabled", "components", "counters"] {
+        let mut settings = DiagnosticsSettings {
+            enabled: mode != "disabled",
+            ..Default::default()
+        };
+        match mode {
+            "components" => settings.limits.max_components = 1,
+            "counters" => settings.limits.max_counters = 1,
+            _ => {}
+        }
+        let context = plugin_diagnostic_context(settings);
+        // Keep the occupied registration alive: it cannot be reclaimed for a plugin.
+        let _unrelated = (mode != "disabled").then(|| {
+            context
+                .register_component(ComponentRegistration::new(
+                    "application.untouched",
+                    &[BuiltinDiagnosticCode::Success(
+                        SuccessCode::LoggingInitialized,
+                    )],
+                ))
+                .unwrap()
+        });
+        let before = context.memory_usage();
+        for (execution, operation, success) in [
+            (
+                PluginExecution::NativeAbi,
+                Operation::NativeCallback,
+                SuccessCode::PluginNativeLoaded,
+            ),
+            (
+                PluginExecution::WorkerProtocol,
+                Operation::WorkerCallback,
+                SuccessCode::PluginWorkerStarted,
+            ),
+        ] {
+            let observer = PluginDiagnostics::new(&context, "example", execution, Uuid::now_v7());
+            observer.failure(operation, FailureClass::Unknown, PluginPhase::Runtime);
+            observer.success(success, PluginPhase::Activation);
+        }
+        let after = context.memory_usage();
+        assert_eq!(after.reserved_bytes, before.reserved_bytes, "{mode}");
+        assert_eq!(after.components, before.components, "{mode}");
+        assert_eq!(after.counters, before.counters, "{mode}");
+        if mode == "disabled" {
+            assert!(matches!(
+                context.snapshot(&DiagnosticQuery::default()),
+                Err(crate::diagnostics::DiagnosticError::Disabled)
+            ));
+            assert_eq!(after.reserved_bytes, 0);
+            continue;
+        }
+        let view = context
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert_eq!(view.components.len(), 1);
+        assert_eq!(view.components[0].identity.key, "application.untouched");
+        assert_eq!(view.lifetime.totals.failures_total.value.get(), 0);
+        assert_eq!(view.lifetime.totals.successes_total.value.get(), 0);
+        assert!(view.events.is_empty());
+        assert_eq!(view.coverage.loss.components_rejected.value.get(), 2);
+        assert_eq!(
+            view.coverage.loss.keys_rejected.value.get(),
+            if mode == "counters" { 2 } else { 0 }
+        );
+        assert_eq!(view.coverage.loss.observations_rejected.value.get(), 0);
+    }
+}
+
+#[test]
+fn replacement_plugin_observers_preserve_separate_instance_attribution() {
+    for (execution, operation, success) in [
+        (
+            PluginExecution::NativeAbi,
+            Operation::NativeCallback,
+            SuccessCode::PluginNativeLoaded,
+        ),
+        (
+            PluginExecution::WorkerProtocol,
+            Operation::WorkerCallback,
+            SuccessCode::PluginWorkerStarted,
+        ),
+    ] {
+        let context = plugin_diagnostic_context(DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        });
+        let old_instance = Uuid::now_v7();
+        let new_instance = Uuid::now_v7();
+        let old = PluginDiagnostics::new(&context, "same.plugin", execution, old_instance);
+        let in_flight = old.clone();
+        old.failure(operation, FailureClass::Unknown, PluginPhase::Runtime);
+        let replacement = PluginDiagnostics::new(&context, "same.plugin", execution, new_instance);
+        replacement.success(success, PluginPhase::Activation);
+        // Work already in flight retains the old owner's identity after replacement.
+        in_flight.failure(operation, FailureClass::Unknown, PluginPhase::Runtime);
+        replacement.failure(operation, FailureClass::Unknown, PluginPhase::Runtime);
+        drop(old);
+        drop(in_flight);
+        replacement.failure(operation, FailureClass::Unknown, PluginPhase::Runtime);
+        let view = context
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert_eq!(view.components.len(), 2);
+        let component_for = |instance| {
+            view.components
+                .iter()
+                .find(|row| row.since_refresh.ownership.plugin_instance_id == Some(instance))
+                .unwrap()
+        };
+        let old_component = component_for(old_instance);
+        let new_component = component_for(new_instance);
+        assert_eq!(old_component.identity.key, new_component.identity.key);
+        assert_ne!(old_component.identity, new_component.identity);
+        assert_eq!(old_component.lifetime.totals.failures_total.value.get(), 2);
+        assert_eq!(old_component.lifetime.totals.successes_total.value.get(), 0);
+        assert_eq!(new_component.lifetime.totals.failures_total.value.get(), 2);
+        assert_eq!(new_component.lifetime.totals.successes_total.value.get(), 1);
+        assert_eq!(view.lifetime.totals.failures_total.value.get(), 4);
+        assert_eq!(view.lifetime.totals.successes_total.value.get(), 1);
+        assert_eq!(view.events.len(), 5);
+        for event in &view.events {
+            let expected_owner = if event.component == old_component.identity {
+                old_instance
+            } else {
+                assert_eq!(event.component, new_component.identity);
+                new_instance
+            };
+            assert_eq!(
+                event.origin.ownership.plugin_instance_id,
+                Some(expected_owner)
+            );
+            assert_eq!(
+                event.context.execution.as_ref().unwrap().as_str(),
+                execution.as_str()
+            );
+            assert_eq!(
+                event.context.phase.as_ref().unwrap().as_str(),
+                if event.code() == success.canonical_name() {
+                    "activation"
+                } else {
+                    "runtime"
+                }
+            );
+        }
+    }
+}

@@ -2017,7 +2017,7 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
     enable_operational_logs();
     let (started_tx, started_rx) = oneshot::channel();
     let started_tx = Arc::new(Mutex::new(Some(started_tx)));
-    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+    let (mut callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
         {
             let started_tx = started_tx.clone();
             move |_| {
@@ -2033,6 +2033,7 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
         |_| Box::pin(tokio_stream::empty()),
     )
     .await;
+    let diagnostics = enable_test_diagnostics(&mut callback.host_state);
     let request = callback
         .base_request(
             "timeout",
@@ -2071,6 +2072,25 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
     assert!(error.contains("worker RPC timed out after 10ms"), "{error}");
     assert_eq!(cancellation.invocation_id, invocation_id);
     assert!(cancellation.reason.contains("timed out"));
+    assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+    assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+    assert!(callback.host_state.codecs.lock().unwrap().is_empty());
+    let snapshot = diagnostics
+        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(snapshot.events.len(), 1);
+    let event = &snapshot.events[0];
+    assert_eq!(event.code(), "plugin.worker.transport_failed");
+    assert_eq!(event.classification.failure_class(), Some("timeout"));
+    assert_eq!(event.count.get(), 1);
+    assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "runtime");
+    assert_eq!(
+        event.context.execution.as_ref().unwrap().as_str(),
+        "worker_protocol"
+    );
 }
 
 /// Checks that execution callbacks ignore short deadlines and honor caller cancellation.
@@ -2240,7 +2260,7 @@ async fn streaming_execution_can_wait_for_slow_response_headers() {
                     Box::pin(async move {
                         started.notify_one();
                         release.notified().await;
-                        Box::pin(tokio_stream::empty()) as FakeInvokeStream
+                        Ok(Box::pin(tokio_stream::empty()) as FakeInvokeStream)
                     })
                 }
             },
@@ -4576,7 +4596,7 @@ async fn fake_worker_client_with_handlers(
     let invoke_stream = Arc::new(invoke_stream);
     fake_worker_client_with_async_handlers(invoke, move |request| {
         let invoke_stream = Arc::clone(&invoke_stream);
-        Box::pin(async move { invoke_stream(request) })
+        Box::pin(async move { Ok(invoke_stream(request)) })
     })
     .await
 }
@@ -4584,6 +4604,19 @@ async fn fake_worker_client_with_handlers(
 async fn fake_worker_client_with_async_handlers(
     invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
     invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync + 'static,
+) -> (
+    PluginWorkerClient<Channel>,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+    Arc<AtomicUsize>,
+) {
+    fake_worker_client_with_cancel_error(invoke, invoke_stream, None).await
+}
+
+async fn fake_worker_client_with_cancel_error(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync + 'static,
+    cancel_error: Option<Status>,
 ) -> (
     PluginWorkerClient<Channel>,
     oneshot::Sender<()>,
@@ -4605,6 +4638,7 @@ async fn fake_worker_client_with_async_handlers(
                 invoke: Arc::new(invoke),
                 invoke_stream: Arc::new(invoke_stream),
                 cancel_tx,
+                cancel_error,
                 register_calls: register_calls.clone(),
             }))
             .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
@@ -4641,13 +4675,15 @@ struct FakePluginWorker {
     invoke: Arc<dyn Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync>,
     invoke_stream: Arc<dyn Fn(InvokeRequest) -> FakeInvokeStreamFuture + Send + Sync>,
     cancel_tx: mpsc::UnboundedSender<CancelInvocationRequest>,
+    cancel_error: Option<Status>,
     register_calls: Arc<AtomicUsize>,
 }
 
 type FakeInvokeFuture = Pin<Box<dyn Future<Output = InvokeResponse> + Send>>;
 type FakeInvokeStream =
     Pin<Box<dyn tokio_stream::Stream<Item = std::result::Result<StreamChunk, Status>> + Send>>;
-type FakeInvokeStreamFuture = Pin<Box<dyn Future<Output = FakeInvokeStream> + Send>>;
+type FakeInvokeStreamFuture =
+    Pin<Box<dyn Future<Output = std::result::Result<FakeInvokeStream, Status>> + Send>>;
 
 struct WorkerStreamLifecycleFixture {
     callback: WorkerPluginCallback,
@@ -4916,9 +4952,9 @@ impl PluginWorker for FakePluginWorker {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<tonic::Response<Self::InvokeStreamStream>, tonic::Status> {
-        Ok(tonic::Response::new(
-            (self.invoke_stream)(request.into_inner()).await,
-        ))
+        (self.invoke_stream)(request.into_inner())
+            .await
+            .map(tonic::Response::new)
     }
 
     async fn cancel_invocation(
@@ -4926,6 +4962,9 @@ impl PluginWorker for FakePluginWorker {
         request: Request<CancelInvocationRequest>,
     ) -> std::result::Result<tonic::Response<WorkerAck>, tonic::Status> {
         let _ = self.cancel_tx.send(request.into_inner());
+        if let Some(error) = &self.cancel_error {
+            return Err(error.clone());
+        }
         Ok(tonic::Response::new(WorkerAck {
             accepted: true,
             message: "cancelled".into(),
@@ -5779,6 +5818,79 @@ async fn worker_stream_counts_follow_error_provenance() {
 }
 
 #[tokio::test]
+async fn worker_stream_opening_failures_preserve_provenance_and_release_invocation_state() {
+    for origin in ["matching", "absent", "foreign"] {
+        let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+        let (client, shutdown, mut cancel_rx, _) = fake_worker_client_with_async_handlers(
+            |_| Box::pin(async { InvokeResponse::default() }),
+            move |request| {
+                let mut error = Status::unavailable("stream opening failed");
+                match origin {
+                    "matching" => error = downstream_status(error, &request.continuation_id),
+                    "foreign" => error = downstream_status(error, "next-other"),
+                    _ => {}
+                }
+                observed_tx.send(request).unwrap();
+                Box::pin(async move { Err(error) })
+            },
+        )
+        .await;
+        let (mut callback, _shutdown) = callback_for_client(client, shutdown);
+        let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+        let mut stream = callback
+            .invoke_llm_stream_execution(
+                "stream_open_failure",
+                "model",
+                valid_llm_request(),
+                openai_stream_execution_codec_context(),
+                Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
+            )
+            .await
+            .unwrap();
+        let error = stream.next().await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("stream opening failed"), "{origin}: {error}");
+        assert!(stream.next().await.is_none());
+        stream.close().await.unwrap();
+        let request = observed_rx.recv().await.unwrap();
+        let cancellation = cancel_rx
+            .try_recv()
+            .expect("opening failure sends cancellation");
+        assert_eq!(cancellation.invocation_id, request.invocation_id);
+        assert!(
+            cancel_rx.try_recv().is_err(),
+            "cancellation must be sent once"
+        );
+        let (request_codec, _, invocation_id) = execution_codec_capabilities(request);
+        assert_request_codec_expired(&callback.host_state, &request_codec, &invocation_id);
+        assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+        assert!(callback.host_state.scope_stacks.lock().unwrap().is_empty());
+        assert!(callback.host_state.codecs.lock().unwrap().is_empty());
+        let snapshot = diagnostics
+            .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        let expected = u64::from(origin != "matching");
+        assert_eq!(
+            snapshot.lifetime.totals.failures_total.value.get(),
+            expected,
+            "{origin}"
+        );
+        assert_eq!(snapshot.events.len() as u64, expected, "{origin}");
+        if let Some(event) = snapshot.events.first() {
+            assert_eq!(event.code(), "plugin.worker.transport_failed");
+            assert_eq!(event.classification.failure_class(), Some("unavailable"));
+            assert_eq!(event.count.get(), 1);
+            assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "runtime");
+            assert_eq!(
+                event.context.execution.as_ref().unwrap().as_str(),
+                "worker_protocol"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn host_continuation_errors_carry_provenance_only_after_downstream_execution() {
     let state = Arc::new(WorkerHostRuntimeState::new(
         ACTIVATION_ID.into(),
@@ -5892,19 +6004,16 @@ async fn host_continuation_errors_carry_provenance_only_after_downstream_executi
 #[tokio::test]
 async fn cancellation_rpc_failure_is_observed_without_preventing_cleanup() {
     for wait in [false, true] {
-        let (mut callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
-            result: Some(InvokeResult::Empty(EmptyResult {})),
-        })
+        // Return the failure from an established gRPC connection. Refusing a
+        // connection to a closed port can take longer than this test on Windows.
+        let (client, shutdown, mut cancel_rx, _) = fake_worker_client_with_cancel_error(
+            |_| Box::pin(async { InvokeResponse::default() }),
+            |_| Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as FakeInvokeStream) }),
+            Some(Status::unavailable("fixture cancellation failure")),
+        )
         .await;
+        let (mut callback, _shutdown) = callback_for_client(client, shutdown);
         let diagnostics = enable_test_diagnostics(&mut callback.host_state);
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
-        callback.client = PluginWorkerClient::new(
-            tonic::transport::Endpoint::from_shared(format!("http://{address}"))
-                .unwrap()
-                .connect_lazy(),
-        );
         let request = InvokeRequest {
             activation_id: ACTIVATION_ID.into(),
             auth_token: AUTH_TOKEN.into(),
@@ -5941,6 +6050,11 @@ async fn cancellation_rpc_failure_is_observed_without_preventing_cleanup() {
             view.events[0].context.phase.as_ref().unwrap().as_str(),
             "runtime"
         );
+        assert_eq!(
+            cancel_rx.try_recv().unwrap().invocation_id,
+            request.invocation_id
+        );
+        assert!(cancel_rx.try_recv().is_err(), "cancellation is sent once");
         assert!(guard.cancellation("already finished").is_none());
     }
 }

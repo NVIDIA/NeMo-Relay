@@ -837,14 +837,75 @@ manifest = "relay-plugin.toml"
                     code,
                     "{kind}/{startup}/{failure}"
                 );
-                match resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml), None)
-                {
-                    Ok(resolved) => {
+                let baseline =
+                    resolve_plugin_host_config(PluginConfig::default(), Some(&plugins_toml), None);
+                let context = configuration_diagnostic_context();
+                let observed = resolve_plugin_host_config(
+                    PluginConfig::default(),
+                    Some(&plugins_toml),
+                    Some(&context),
+                );
+                match (baseline, observed) {
+                    (Ok(baseline), Ok(observed)) => {
                         assert_eq!(startup, "optional");
-                        assert!(resolved.dynamic_plugins.is_empty());
+                        assert!(baseline.dynamic_plugins.is_empty());
+                        assert!(observed.dynamic_plugins.is_empty());
+                        assert_eq!(observed.dynamic_reports.len(), 1);
+                        assert_eq!(
+                            serde_json::to_value(&observed.dynamic_reports[0].report).unwrap(),
+                            serde_json::to_value(&baseline.dynamic_reports[0].report).unwrap(),
+                        );
+                        assert_eq!(
+                            serde_json::to_value(&observed.dynamic_reports[0].report).unwrap(),
+                            serde_json::to_value(dynamic).unwrap(),
+                        );
                     }
-                    Err(_) => assert_eq!(startup, "required"),
+                    (Err(baseline), Err(observed)) => {
+                        assert_eq!(startup, "required");
+                        assert_eq!(observed.to_string(), baseline.to_string());
+                    }
+                    _ => panic!("diagnostics changed resolution for {kind}/{startup}/{failure}"),
                 }
+                // Required failures return early, but their evidence must survive
+                // in the process-owned context just as optional exclusions do.
+                let snapshot = context
+                    .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+                    .unwrap()
+                    .to_snapshot()
+                    .unwrap();
+                assert_eq!(snapshot.events.len(), 1, "{kind}/{startup}/{failure}");
+                assert_eq!(snapshot.components.len(), 1);
+                assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+                assert_eq!(snapshot.lifetime.totals.successes_total.value.get(), 0);
+                let event = &snapshot.events[0];
+                assert_eq!(event.code(), "plugin.artifact_verification_failed");
+                assert_eq!(event.count.get(), 1);
+                assert_eq!(
+                    event.classification.failure_class(),
+                    Some(match failure {
+                        "digest_mismatch" => "authentication",
+                        "invalid_signature" => "unknown",
+                        _ => "invalid_input",
+                    }),
+                );
+                assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "validation");
+                assert_eq!(
+                    event.context.execution.as_ref().unwrap().as_str(),
+                    if kind == "rust_dynamic" {
+                        "native_abi"
+                    } else {
+                        "worker_protocol"
+                    },
+                );
+                assert_eq!(event.component, snapshot.components[0].identity);
+                let instance = event.origin.ownership.plugin_instance_id.unwrap();
+                assert_eq!(
+                    snapshot.components[0]
+                        .since_refresh
+                        .ownership
+                        .plugin_instance_id,
+                    Some(instance),
+                );
             }
         }
     }
@@ -960,5 +1021,130 @@ fn configuration_observations_preserve_validation_reports_and_isolate_projection
             assert!(view.events.is_empty());
         }
         assert_eq!(projected.load(Ordering::Relaxed), 0);
+    }
+}
+
+fn configuration_diagnostic_context() -> crate::diagnostics::Diagnostics {
+    use crate::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
+
+    Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: uuid::Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn multiple_validation_failures_preserve_report_precedence_and_skipped_checks() {
+    use crate::diagnostics::DiagnosticQuery;
+    use crate::plugin::dynamic::{DynamicPluginManifestIntegrity, DynamicPluginManifestSource};
+
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(temp.path().join("artifact.bin"), b"fixture").unwrap();
+    let manifest_ref = temp
+        .path()
+        .join("relay-plugin.toml")
+        .to_string_lossy()
+        .into_owned();
+    for policy_blocks in [true, false] {
+        let context = configuration_diagnostic_context();
+        let mut manifest = worker_manifest("fixture.multiple", Some("missing.schema.json"));
+        manifest.source = Some(DynamicPluginManifestSource {
+            artifact: Some("artifact.bin".into()),
+            ..Default::default()
+        });
+        manifest.integrity = Some(DynamicPluginManifestIntegrity {
+            sha256: Some(format!("sha256:{}", "00".repeat(32))),
+            ..Default::default()
+        });
+        let mut policy = DynamicPluginHostPolicy::default();
+        policy.defaults.allowed = Some(!policy_blocks);
+        let policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
+        let baseline =
+            validate_declaration(&manifest, manifest_ref.clone(), true, &Map::new(), &policy);
+        let (report, artifact) = validate_declaration_with_artifact(
+            &manifest,
+            manifest_ref.clone(),
+            true,
+            &Map::new(),
+            &policy,
+            Some(&context),
+        );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap(),
+            serde_json::to_value(&baseline).unwrap(),
+        );
+        assert!(!report.selected);
+        assert!(artifact.is_none());
+        assert_eq!(report.status.manifest, DynamicPluginCheckState::Invalid);
+        assert_eq!(
+            report.failure.as_ref().unwrap().code,
+            if policy_blocks {
+                "policy_blocked"
+            } else {
+                "integrity_failed"
+            },
+        );
+        let snapshot = context
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert_eq!(snapshot.events.len(), 2);
+        assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 2);
+        assert_eq!(snapshot.lifetime.totals.successes_total.value.get(), 0);
+        let expected = if policy_blocks {
+            // Trust verification is skipped after policy refusal. Only the
+            // independently executed schema check supplies another failure.
+            assert_eq!(report.status.integrity, DynamicPluginCheckState::Unknown);
+            assert!(
+                !snapshot
+                    .events
+                    .iter()
+                    .any(|event| { event.code() == "plugin.artifact_verification_failed" })
+            );
+            [
+                ("plugin.policy_failed", "policy_rejected", "policy"),
+                ("plugin.schema_validation_failed", "unknown", "validation"),
+            ]
+        } else {
+            assert_eq!(report.status.integrity, DynamicPluginCheckState::Invalid);
+            [
+                (
+                    "plugin.artifact_verification_failed",
+                    "authentication",
+                    "validation",
+                ),
+                ("plugin.schema_validation_failed", "unknown", "validation"),
+            ]
+        };
+        let instance = snapshot.events[0]
+            .origin
+            .ownership
+            .plugin_instance_id
+            .unwrap();
+        for (code, class, phase) in expected {
+            let event = snapshot
+                .events
+                .iter()
+                .find(|event| event.code() == code)
+                .unwrap();
+            assert_eq!(event.classification.failure_class(), Some(class));
+            assert_eq!(event.context.phase.as_ref().unwrap().as_str(), phase);
+            assert_eq!(
+                event.context.execution.as_ref().unwrap().as_str(),
+                "worker_protocol"
+            );
+            assert_eq!(event.count.get(), 1);
+            assert_eq!(event.origin.ownership.plugin_instance_id, Some(instance));
+        }
     }
 }

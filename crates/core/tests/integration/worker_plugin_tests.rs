@@ -74,6 +74,55 @@ fn worker_diagnostic_snapshot(
         .unwrap()
 }
 
+fn assert_worker_stage_failure(
+    diagnostics: &nemo_relay::diagnostics::Diagnostics,
+    plugin_id: &str,
+    code: &str,
+    class: &str,
+    phase: &str,
+    failed_stage_success: &str,
+) {
+    let snapshot = worker_diagnostic_snapshot(diagnostics);
+    let failures = snapshot
+        .events
+        .iter()
+        .filter(|event| event.code() == code)
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1, "{code}");
+    let event = failures[0];
+    assert_eq!(event.count.get(), 1);
+    assert_eq!(event.classification.failure_class(), Some(class));
+    assert_eq!(event.context.phase.as_ref().unwrap().as_str(), phase);
+    assert_eq!(
+        event.context.execution.as_ref().unwrap().as_str(),
+        "worker_protocol"
+    );
+    let component = snapshot
+        .components
+        .iter()
+        .find(|component| component.identity.instance_id == event.component.instance_id)
+        .unwrap();
+    assert_eq!(
+        component.identity.key,
+        format!("plugin.worker_protocol.{plugin_id}")
+    );
+    let instance = event.origin.ownership.plugin_instance_id.unwrap();
+    assert_eq!(
+        component.since_refresh.ownership.plugin_instance_id,
+        Some(instance)
+    );
+    assert!(snapshot.events.iter().all(|event| {
+        event.origin.ownership.plugin_instance_id == Some(instance)
+            && event.code() != failed_stage_success
+    }));
+    assert!(
+        !std::env::temp_dir()
+            .join(format!("nmrw-{}", instance.simple()))
+            .exists(),
+        "failed activation must release its endpoint directory"
+    );
+}
+
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
@@ -1470,12 +1519,16 @@ async fn worker_registration_error_fails_activation() {
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
 
-    let error = match load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: None,
-        config: Map::from_iter([("register_error".into(), json!(true))]),
-    }]) {
+    let diagnostics = enabled_worker_diagnostics();
+    let error = match load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("register_error".into(), json!(true))]),
+        }],
+        &diagnostics,
+    ) {
         Ok(activation) => {
             activation.clear();
             panic!("worker registration error should fail activation");
@@ -1485,6 +1538,22 @@ async fn worker_registration_error_fails_activation() {
     assert!(
         error.contains("fixture registration error requested"),
         "{error}"
+    );
+    assert_worker_stage_failure(
+        &diagnostics,
+        "fixture_worker",
+        "plugin.worker.registration_failed",
+        "unknown",
+        "activation",
+        "plugin.worker.registered",
+    );
+    let snapshot = worker_diagnostic_snapshot(&diagnostics);
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert!(
+        snapshot
+            .events
+            .iter()
+            .any(|event| event.code() == "plugin.worker.process_cleaned")
     );
 }
 
@@ -1534,6 +1603,58 @@ async fn worker_handshake_plugin_id_mismatch_reports_config_error() {
 }
 
 #[tokio::test]
+async fn worker_handshake_response_mismatch_is_attributed_and_cleaned() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_worker_manifest(
+        "other_worker",
+        &supported_relay_requirement(),
+        "rust",
+        fixture.binary_path().to_string_lossy().as_ref(),
+    );
+    let diagnostics = enabled_worker_diagnostics();
+    let error = match load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "other_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
+        &diagnostics,
+    ) {
+        Ok(activation) => {
+            activation.clear();
+            panic!("worker handshake response mismatch should fail activation");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("worker plugin returned id 'fixture_worker' kind 'fixture_worker' but manifest id is 'other_worker'"),
+        "{error}"
+    );
+    assert_worker_stage_failure(
+        &diagnostics,
+        "other_worker",
+        "plugin.worker.handshake_failed",
+        "incompatible",
+        "activation",
+        "plugin.worker.handshake_completed",
+    );
+    let snapshot = worker_diagnostic_snapshot(&diagnostics);
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    assert!(
+        snapshot
+            .events
+            .iter()
+            .any(|event| event.code() == "plugin.worker.started")
+    );
+    assert!(!snapshot.events.iter().any(|event| matches!(
+        event.code(),
+        "plugin.worker.validated" | "plugin.worker.registered"
+    )));
+}
+
+#[tokio::test]
 async fn worker_validation_rpc_failure_reports_activation_error() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
@@ -1576,12 +1697,16 @@ async fn worker_registration_rpc_failure_reports_activation_error() {
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
 
-    let error = match load_worker_plugins([WorkerPluginLoadSpec {
-        plugin_id: "fixture_worker".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-        environment_ref: None,
-        config: Map::from_iter([("exit_in_register".into(), json!(true))]),
-    }]) {
+    let diagnostics = enabled_worker_diagnostics();
+    let error = match load_worker_plugins_with_diagnostics(
+        [WorkerPluginLoadSpec {
+            plugin_id: "fixture_worker".into(),
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("exit_in_register".into(), json!(true))]),
+        }],
+        &diagnostics,
+    ) {
         Ok(activation) => {
             activation.clear();
             panic!("worker registration process exit should fail activation");
@@ -1589,6 +1714,14 @@ async fn worker_registration_rpc_failure_reports_activation_error() {
         Err(error) => error.to_string(),
     };
     assert!(error.contains("worker registration RPC failed"), "{error}");
+    assert_worker_stage_failure(
+        &diagnostics,
+        "fixture_worker",
+        "plugin.worker.registration_failed",
+        "unknown",
+        "activation",
+        "plugin.worker.registered",
+    );
 }
 
 #[test]

@@ -543,3 +543,78 @@ def test_component_close_is_ordered_and_delivery_failure_cannot_fail_runtime_shu
         await runtime._close_diagnostics()
 
     asyncio.run(run())
+
+
+def test_hydrated_frame_limit_drops_without_transmission_or_sequence_consumption():
+    async def run():
+        host = Host()
+        host.capabilities.max_request_bytes = 1024
+        facade = await WorkerDiagnostics.connect(host, "activation", "t" * 900)
+        assert facade.availability == "available"
+        component = await facade.component("internal", [])
+
+        # The payload fits admission; credentials and session framing make the
+        # complete submission exceed the host's negotiated request limit.
+        oversized_frame = observation()
+        oversized_frame.detail = "x" * 200
+        component.try_record_lazy(lambda: oversized_frame)
+        await facade.flush()
+        assert len(host.requests) == 1
+        assert facade.delivery_stats().dropped == 1
+        assert facade.delivery_stats().rejected == 0
+        assert facade.delivery_stats().uncertain == 0
+
+        smaller = observation()
+        smaller.count = 3
+        component.try_record_lazy(lambda: smaller)
+        await facade.flush()
+        assert len(host.requests) == 2
+        submitted = pb.DiagnosticSubmission.FromString(host.requests[-1])
+        assert submitted.sequence == 2
+        assert submitted.record.count == 3
+        assert submitted.ByteSize() <= host.capabilities.max_request_bytes
+        assert facade.delivery_stats().dropped == 1
+        assert facade.delivery_stats().rejected == 0
+        assert facade.delivery_stats().uncertain == 0
+        await facade.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.UNAUTHENTICATED,
+        grpc.StatusCode.FAILED_PRECONDITION,
+        grpc.StatusCode.OUT_OF_RANGE,
+        grpc.StatusCode.ALREADY_EXISTS,
+    ],
+)
+def test_terminal_authorization_and_session_errors_fence_without_retrying(code):
+    class TerminalHost(Host):
+        async def SubmitDiagnostic(self, request, **kwargs):
+            if request.WhichOneof("operation") == "record":
+                self.requests.append(request.SerializeToString())
+                raise RpcFailure(code)
+            return await super().SubmitDiagnostic(request, **kwargs)
+
+    async def run():
+        host = TerminalHost()
+        facade = await WorkerDiagnostics.connect(host, "activation", "token")
+        component = await facade.component("internal", [])
+        component.try_record_lazy(observation)
+        with pytest.raises(DiagnosticDeliveryError, match="uncertain"):
+            await facade.flush()
+        assert facade.delivery_stats().uncertain == 1
+        assert facade.delivery_stats().rejected == 0
+        assert facade.delivery_stats().dropped == 0
+        with pytest.raises(DiagnosticDeliveryError, match="closed"):
+            component.try_record_lazy(lambda: pytest.fail("fenced producer ran"))
+        # One registration and one failed record; terminal errors are not retried.
+        assert len(host.requests) == 2
+        with pytest.raises(DiagnosticDeliveryError, match="uncertain"):
+            await facade.close()
+        assert facade._task is not None and facade._task.done()
+
+    asyncio.run(run())

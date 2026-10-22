@@ -9411,3 +9411,355 @@ async fn synchronous_sanitizer_wrappers_record_once_without_projecting_details()
     }
     assert_eq!(projected.load(Ordering::Relaxed), 0);
 }
+
+#[cfg(unix)]
+fn enabled_native_diagnostics_fixture(
+    plugin: NemoRelayNativePluginV1,
+) -> (crate::diagnostics::Diagnostics, Arc<NativePluginInstance>) {
+    use crate::diagnostics::{Diagnostics, DiagnosticsSettings, SourceIdentity};
+
+    let context = Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let instance = Arc::new(NativePluginInstance {
+        diagnostics: super::super::diagnostics::PluginDiagnostics::new(
+            &context,
+            "test.native.accounting",
+            crate::diagnostics::PluginExecution::NativeAbi,
+            Uuid::now_v7(),
+        ),
+        plugin_kind: "test.native.accounting".into(),
+        relay_compat: "^0.8".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(plugin),
+        _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
+    });
+    (context, instance)
+}
+
+#[cfg(unix)]
+fn assert_native_diagnostic_observations(
+    context: &crate::diagnostics::Diagnostics,
+    expected: &[(&str, Option<&str>, &str)],
+) {
+    let snapshot = context
+        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let totals = snapshot.lifetime.totals;
+    let failures = expected
+        .iter()
+        .filter(|(_, class, _)| class.is_some())
+        .count() as u64;
+    assert_eq!(snapshot.events.len(), expected.len());
+    assert_eq!(
+        totals.recorded_events_total.value.get(),
+        expected.len() as u64
+    );
+    assert_eq!(totals.occurrences_total.value.get(), expected.len() as u64);
+    assert_eq!(totals.failures_total.value.get(), failures);
+    assert_eq!(
+        totals.successes_total.value.get(),
+        expected.len() as u64 - failures
+    );
+    for (code, class, phase) in expected {
+        let event = snapshot
+            .events
+            .iter()
+            .find(|event| event.code() == *code)
+            .unwrap();
+        assert_eq!(event.classification.failure_class(), *class);
+        assert_eq!(
+            event.context.execution.as_ref().unwrap().as_str(),
+            "native_abi"
+        );
+        assert_eq!(event.context.phase.as_ref().unwrap().as_str(), *phase);
+        assert_eq!(event.count.get(), 1);
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_validation_and_registration_observations_preserve_legacy_results() {
+    for scenario in ["success", "status_error", "invalid_json"] {
+        let validate = match scenario {
+            "status_error" => native_test_validate_error as NemoRelayNativePluginValidateFn,
+            "invalid_json" => native_test_validate_invalid_json,
+            _ => native_test_validate_empty,
+        };
+        let register = if scenario == "status_error" {
+            native_test_register_error as NemoRelayNativePluginRegisterFn
+        } else {
+            native_test_register_ok
+        };
+        let (context, instance) = enabled_native_diagnostics_fixture(NemoRelayNativePluginV1 {
+            validate: Some(validate),
+            register: Some(register),
+            ..Default::default()
+        });
+        let adapter = NativePluginAdapter {
+            plugin_kind: instance.plugin_kind.clone(),
+            allows_multiple_components: false,
+            instance,
+        };
+        let legacy = adapter.validate(&Map::new());
+        match scenario {
+            "success" => assert!(legacy.is_empty()),
+            _ => {
+                assert_eq!(legacy.len(), 1);
+                assert_eq!(legacy[0].level, DiagnosticLevel::Error);
+                assert_eq!(legacy[0].code, "plugin.native_validate_failed");
+                assert_eq!(
+                    legacy[0].component.as_deref(),
+                    Some("test.native.accounting")
+                );
+                assert_eq!(legacy[0].field, None);
+                assert_eq!(
+                    legacy[0].message,
+                    if scenario == "status_error" {
+                        "validation callback failed"
+                    } else {
+                        "native validate callback returned invalid diagnostics JSON"
+                    }
+                );
+            }
+        }
+        let mut registration = PluginRegistrationContext::new();
+        let result = adapter.register(&Map::new(), &mut registration).await;
+        if scenario == "status_error" {
+            assert!(
+                matches!(result, Err(PluginError::RegistrationFailed(message)) if message == "registration callback failed")
+            );
+            assert_native_diagnostic_observations(
+                &context,
+                &[
+                    (
+                        "plugin.native.validation_failed",
+                        Some("invalid_input"),
+                        "validation",
+                    ),
+                    (
+                        "plugin.native.registration_failed",
+                        Some("invalid_input"),
+                        "activation",
+                    ),
+                ],
+            );
+        } else {
+            assert!(result.is_ok());
+            let validation = if scenario == "invalid_json" {
+                (
+                    "plugin.native.validation_failed",
+                    Some("unknown"),
+                    "validation",
+                )
+            } else {
+                ("plugin.native.validated", None, "validation")
+            };
+            assert_native_diagnostic_observations(
+                &context,
+                &[validation, ("plugin.native.registered", None, "activation")],
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_async_rejection_observations_exclude_duplicate_and_cancelled_settlement() {
+    for cancel_before_reject in [false, true] {
+        let (context, instance) =
+            enabled_native_diagnostics_fixture(NemoRelayNativePluginV1::default());
+        let user_data = Arc::new(NativeCallbackUserData {
+            ptr: ptr::null_mut(),
+            free_fn: None,
+            _instance: Some(instance),
+        });
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let completion = Arc::new(NativeAsyncCompletion {
+            sender: Mutex::new(Some(sender)),
+            cancelled: AtomicBool::new(false),
+            next_invoked: AtomicBool::new(false),
+            next_abort: Mutex::new(None),
+            continuation_aborts: Mutex::new(HashMap::new()),
+            request_codec: None,
+            response_codec: None,
+            before_settlement_lock: None,
+            _callback_user_data: Some(user_data),
+        });
+        let mut wait = NativeAsyncWait {
+            completion: completion.clone(),
+            receiver,
+            completed: false,
+        };
+        let message = native_string("HTTP 404: missing model");
+        if cancel_before_reject {
+            drop(wait);
+            assert!(completion.cancelled.load(Ordering::Acquire));
+            assert_eq!(
+                unsafe { native_async_completion_reject(Arc::as_ptr(&completion).cast(), message) },
+                NemoRelayStatus::InvalidArg,
+            );
+        } else {
+            assert_eq!(
+                unsafe { native_async_completion_reject(Arc::as_ptr(&completion).cast(), message) },
+                NemoRelayStatus::Ok,
+            );
+            let error = wait.receive().await.unwrap_err();
+            assert!(
+                matches!(error, FlowError::Upstream(failure) if failure.status == Some(404) && failure.body == "missing model" && !failure.is_retryable())
+            );
+            drop(wait);
+            assert!(!completion.cancelled.load(Ordering::Acquire));
+        }
+        assert_eq!(
+            unsafe { native_async_completion_reject(Arc::as_ptr(&completion).cast(), message) },
+            NemoRelayStatus::InvalidArg,
+        );
+        unsafe { native_string_free(message) };
+        drop(completion);
+        assert_native_diagnostic_observations(
+            &context,
+            if cancel_before_reject {
+                &[]
+            } else {
+                &[("plugin.native.callback_failed", Some("unknown"), "runtime")]
+            },
+        );
+    }
+
+    for cancel_before_reject in [false, true] {
+        let (context, instance) =
+            enabled_native_diagnostics_fixture(NemoRelayNativePluginV1::default());
+        let user_data = Arc::new(NativeCallbackUserData {
+            ptr: ptr::null_mut(),
+            free_fn: None,
+            _instance: Some(instance),
+        });
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let stream = Arc::new(NativeAsyncStream {
+            sender: Mutex::new(Some(sender)),
+            cancelled: AtomicBool::new(false),
+            settled: AtomicBool::new(false),
+            backpressured: AtomicBool::new(false),
+            downstream_aborts: Mutex::new(HashMap::new()),
+            settlement: Mutex::new(()),
+            request_codec: None,
+            before_settlement_lock: None,
+            _callback_user_data: Some(user_data),
+        });
+        let mut receiver = NativeAsyncStreamReceiver {
+            receiver,
+            stream: stream.clone(),
+        };
+        let message = native_string("HTTP 503: unavailable");
+        if cancel_before_reject {
+            drop(receiver);
+            assert!(stream.cancelled.load(Ordering::Acquire));
+            assert_eq!(
+                unsafe { native_async_stream_reject(Arc::as_ptr(&stream).cast(), message) },
+                NemoRelayStatus::InvalidArg,
+            );
+        } else {
+            assert_eq!(
+                unsafe { native_async_stream_reject(Arc::as_ptr(&stream).cast(), message) },
+                NemoRelayStatus::Ok,
+            );
+            let error = receiver.next().await.unwrap().unwrap_err();
+            assert!(
+                matches!(error, FlowError::Upstream(failure) if failure.status == Some(503) && failure.body == "unavailable" && !failure.is_retryable())
+            );
+            assert!(receiver.next().await.is_none());
+            assert_eq!(
+                unsafe { native_async_stream_reject(Arc::as_ptr(&stream).cast(), message) },
+                NemoRelayStatus::InvalidArg,
+            );
+            drop(receiver);
+        }
+        assert_eq!(
+            unsafe { native_async_stream_reject(Arc::as_ptr(&stream).cast(), message) },
+            NemoRelayStatus::InvalidArg,
+        );
+        unsafe { native_string_free(message) };
+        drop(stream);
+        assert_native_diagnostic_observations(
+            &context,
+            if cancel_before_reject {
+                &[]
+            } else {
+                &[("plugin.native.callback_failed", Some("unknown"), "runtime")]
+            },
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn native_pull_stream_observations_count_malformed_output_once_and_ignore_completion() {
+    for item in [NativeStreamItem::Null, NativeStreamItem::InvalidJson] {
+        let (context, instance) =
+            enabled_native_diagnostics_fixture(NemoRelayNativePluginV1::default());
+        let user_data = Arc::new(NativeCallbackUserData {
+            ptr: ptr::null_mut(),
+            free_fn: None,
+            _instance: Some(instance),
+        });
+        let (raw, cancel_count, drop_count) = test_native_stream([
+            item,
+            NativeStreamItem::Json(json!({"must_not_be_delivered": true})),
+        ]);
+        let mut stream = native_stream_to_relay_stream(raw, None, Some(user_data), None).unwrap();
+        assert!(stream.next().await.unwrap().is_err());
+        assert!(stream.next().await.is_none());
+        assert!(stream.next().await.is_none());
+        assert_native_diagnostic_observations(
+            &context,
+            &[("plugin.native.callback_failed", Some("unknown"), "runtime")],
+        );
+        drop(stream);
+        assert_eq!(cancel_count.load(Ordering::SeqCst), 0);
+        assert_eq!(drop_count.load(Ordering::SeqCst), 1);
+        assert_native_diagnostic_observations(
+            &context,
+            &[("plugin.native.callback_failed", Some("unknown"), "runtime")],
+        );
+    }
+    for consume_to_end in [false, true] {
+        let (context, instance) =
+            enabled_native_diagnostics_fixture(NemoRelayNativePluginV1::default());
+        let user_data = Arc::new(NativeCallbackUserData {
+            ptr: ptr::null_mut(),
+            free_fn: None,
+            _instance: Some(instance),
+        });
+        let (raw, cancel_count, drop_count) = test_native_stream([
+            NativeStreamItem::Json(json!({"chunk": 1})),
+            NativeStreamItem::End,
+        ]);
+        let mut stream = native_stream_to_relay_stream(raw, None, Some(user_data), None).unwrap();
+        if consume_to_end {
+            assert_eq!(stream.next().await.unwrap().unwrap(), json!({"chunk": 1}));
+            assert!(stream.next().await.is_none());
+            assert!(stream.next().await.is_none());
+        }
+        drop(stream);
+        assert_eq!(
+            cancel_count.load(Ordering::SeqCst),
+            usize::from(!consume_to_end)
+        );
+        assert_eq!(drop_count.load(Ordering::SeqCst), 1);
+        assert_native_diagnostic_observations(&context, &[]);
+    }
+}

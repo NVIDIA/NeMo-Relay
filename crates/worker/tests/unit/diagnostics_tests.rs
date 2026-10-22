@@ -795,3 +795,99 @@ async fn runtime_initializes_one_shared_diagnostic_session_under_concurrency() {
     assert_eq!(host.open_calls.load(Ordering::Relaxed), 1);
     first.close(Duration::from_secs(2)).await.unwrap();
 }
+
+#[tokio::test]
+async fn hydrated_frame_limit_drops_without_transmission_or_sequence_consumption() {
+    let mut policy = Host::default().capabilities();
+    policy.max_request_bytes = 1024;
+    let host = Host {
+        policy: Some(policy),
+        ..Default::default()
+    };
+    let (channel, _server) = start_host(host.clone()).await;
+    let facade =
+        WorkerDiagnostics::connect(Ok(channel), "activation".into(), "t".repeat(900)).await;
+    assert_eq!(facade.availability(), DiagnosticAvailability::Available);
+    let component = facade.component("internal", vec![]).await.unwrap();
+
+    // This payload passes local admission, but its credentials and session
+    // envelope bring the complete submission above the negotiated frame cap.
+    let mut oversized_frame = observation();
+    oversized_frame.detail = Some("x".repeat(200));
+    component.try_record_lazy(|| oversized_frame).unwrap();
+    facade.flush(Duration::from_secs(2)).await.unwrap();
+    assert_eq!(host.requests.lock().unwrap().len(), 1);
+    assert_eq!(
+        facade.delivery_stats(),
+        DiagnosticDeliveryStats {
+            dropped: 1,
+            ..Default::default()
+        }
+    );
+
+    let mut smaller = observation();
+    smaller.count = 3;
+    component.try_record_lazy(|| smaller).unwrap();
+    facade.flush(Duration::from_secs(2)).await.unwrap();
+    {
+        let requests = host.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].sequence, 2);
+        assert!(requests[1].encoded_len() <= policy.max_request_bytes as usize);
+        assert!(matches!(
+            &requests[1].operation,
+            Some(wire::diagnostic_submission::Operation::Record(record)) if record.count == 3
+        ));
+    }
+    assert_eq!(
+        facade.delivery_stats(),
+        DiagnosticDeliveryStats {
+            dropped: 1,
+            ..Default::default()
+        }
+    );
+    facade.close(Duration::from_secs(2)).await.unwrap();
+}
+
+#[tokio::test]
+async fn terminal_authorization_and_session_errors_fence_without_retrying() {
+    for code in [
+        Code::PermissionDenied,
+        Code::Unauthenticated,
+        Code::FailedPrecondition,
+        Code::OutOfRange,
+        Code::AlreadyExists,
+    ] {
+        let host = Host::default();
+        host.record_errors
+            .lock()
+            .unwrap()
+            .push_back(Status::new(code, "terminal session failure"));
+        let (facade, _server) = connect(host.clone()).await;
+        let component = facade.component("internal", vec![]).await.unwrap();
+        component.try_record_lazy(observation).unwrap();
+        assert_eq!(
+            facade.flush(Duration::from_secs(2)).await,
+            Err(DiagnosticDeliveryError::Uncertain),
+            "{code:?}"
+        );
+        assert_eq!(
+            facade.delivery_stats(),
+            DiagnosticDeliveryStats {
+                uncertain: 1,
+                ..Default::default()
+            },
+            "{code:?}"
+        );
+        assert_eq!(
+            component.try_record_lazy(|| panic!("fenced producer ran")),
+            Err(DiagnosticDeliveryError::Closed)
+        );
+        // One registration and one failed record: a terminal error is never retried.
+        assert_eq!(host.requests.lock().unwrap().len(), 2, "{code:?}");
+        assert_eq!(
+            facade.close(Duration::from_secs(2)).await,
+            Err(DiagnosticDeliveryError::Uncertain)
+        );
+    }
+}
