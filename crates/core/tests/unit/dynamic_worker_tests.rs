@@ -4977,6 +4977,7 @@ async fn worker_shutdown_reports_closed_host_channel_and_failed_directory_cleanu
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn worker_shutdown_reports_rpc_failure_and_reaps_an_exited_process() {
     let (mut instance, _worker_shutdown) = fake_worker_instance(Vec::new()).await;
+    let diagnostics = enable_test_diagnostics(&mut instance.host_state);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
@@ -5003,6 +5004,41 @@ async fn worker_shutdown_reports_rpc_failure_and_reaps_an_exited_process() {
     assert!(
         !directory.exists(),
         "a disconnected worker must still release its activation directory"
+    );
+    let view = diagnostics
+        .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 1);
+    assert_eq!(
+        view.events
+            .iter()
+            .filter(|event| event.code() == "plugin.worker.shutdown_failed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        view.events
+            .iter()
+            .filter(|event| event.code() == "plugin.worker.process_cleaned")
+            .count(),
+        1
+    );
+    let recorded = view.lifetime.totals.recorded_events_total.value.get();
+    assert!(instance.shutdown_checked().errors.is_empty());
+    assert_eq!(
+        diagnostics
+            .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap()
+            .lifetime
+            .totals
+            .recorded_events_total
+            .value
+            .get(),
+        recorded
     );
 }
 
@@ -5609,8 +5645,8 @@ async fn short_callbacks_keep_their_rpc_deadline() {
     assert_eq!(cancellation.invocation_id, invocation_id);
 }
 
-fn enable_provenance_test_diagnostics(
-    callback: &mut WorkerPluginCallback,
+fn enable_test_diagnostics(
+    state: &mut Arc<WorkerHostRuntimeState>,
 ) -> crate::diagnostics::Diagnostics {
     use crate::diagnostics::{Diagnostics, DiagnosticsSettings, PluginExecution, SourceIdentity};
     let diagnostics = Diagnostics::from_settings(
@@ -5626,13 +5662,12 @@ fn enable_provenance_test_diagnostics(
         },
     )
     .unwrap();
-    Arc::get_mut(&mut callback.host_state).unwrap().observer =
-        super::super::diagnostics::PluginDiagnostics::new(
-            &diagnostics,
-            "fixture_worker",
-            PluginExecution::WorkerProtocol,
-            Uuid::now_v7(),
-        );
+    Arc::get_mut(state).unwrap().observer = super::super::diagnostics::PluginDiagnostics::new(
+        &diagnostics,
+        "fixture_worker",
+        PluginExecution::WorkerProtocol,
+        Uuid::now_v7(),
+    );
     diagnostics
 }
 
@@ -5672,7 +5707,7 @@ async fn worker_callback_counts_follow_error_provenance() {
         }
     })
     .await;
-    let diagnostics = enable_provenance_test_diagnostics(&mut callback);
+    let diagnostics = enable_test_diagnostics(&mut callback.host_state);
     // Three forwarding boundaries add no plugin failure. A later, distinct local
     // error and foreign/absent invocation provenance remain countable.
     for (index, (name, continuation, expected)) in [
@@ -5726,7 +5761,7 @@ async fn worker_stream_counts_follow_error_provenance() {
         },
     )
     .await;
-    let diagnostics = enable_provenance_test_diagnostics(&mut callback);
+    let diagnostics = enable_test_diagnostics(&mut callback.host_state);
     for (name, expected) in [("forwarded", 0), ("status", 0), ("local", 1)] {
         let mut stream = callback
             .invoke_llm_stream_execution(
@@ -5851,5 +5886,61 @@ async fn host_continuation_errors_carry_provenance_only_after_downstream_executi
                 Some(id.as_str())
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn cancellation_rpc_failure_is_observed_without_preventing_cleanup() {
+    for wait in [false, true] {
+        let (mut callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
+            result: Some(InvokeResult::Empty(EmptyResult {})),
+        })
+        .await;
+        let diagnostics = enable_test_diagnostics(&mut callback.host_state);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        callback.client = PluginWorkerClient::new(
+            tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+                .unwrap()
+                .connect_lazy(),
+        );
+        let request = InvokeRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            invocation_id: Uuid::now_v7().to_string(),
+            ..Default::default()
+        };
+        let mut guard = WorkerInvocationGuard::new(&callback, &request);
+        if wait {
+            guard.cancel_and_wait("test cancellation").await;
+        } else {
+            guard.cancel("test cancellation");
+        }
+        guard.finish();
+        assert!(guard.cleaned);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while provenance_failure_total(&diagnostics) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let view = diagnostics
+            .snapshot(&crate::diagnostics::DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].code(), "plugin.worker.cancellation_failed");
+        assert_eq!(
+            view.events[0].classification.failure_class(),
+            Some("unavailable")
+        );
+        assert_eq!(
+            view.events[0].context.phase.as_ref().unwrap().as_str(),
+            "runtime"
+        );
+        assert!(guard.cancellation("already finished").is_none());
     }
 }

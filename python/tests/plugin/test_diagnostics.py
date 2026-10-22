@@ -373,3 +373,173 @@ def test_admission_rejections_preserve_acceptance_and_sequence(scenario, code):
             await facade.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "field,minimum,maximum",
+    [
+        ("max_request_bytes", 258, 16384),
+        ("max_response_bytes", 256, 131072),
+        ("max_pending_submissions", 1, 32),
+        ("retry_attempts", 1, 8),
+        ("retry_timeout_millis", 1, 10000),
+    ],
+)
+def test_policy_safety_boundaries(field, minimum, maximum):
+    async def run():
+        for value in (minimum - 1, minimum, maximum, maximum + 1):
+            host = Host()
+            setattr(host.capabilities, field, value)
+            facade = await WorkerDiagnostics.connect(host, "activation", "token")
+            accepted = minimum <= value <= maximum
+            assert facade.availability == ("available" if accepted else "unsupported")
+            assert host.open_calls == int(accepted)
+            if accepted:
+                # No delivery is needed to check initialization; cancel the
+                # task directly to avoid a 1 ms policy becoming a timing test.
+                assert facade._task is not None
+                facade._task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await facade._task
+            else:
+                component = await facade.component("internal", [])
+                component.try_record_lazy(lambda: pytest.fail("invalid policy ran producer"))
+                await facade.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "scenario,availability",
+    [
+        ("protocol_version", "unsupported"),
+        ("snapshot_version", "unsupported"),
+        ("provenance_version", "unsupported"),
+        ("missing_capabilities", "unsupported"),
+        ("disabled_session", "disabled"),
+        ("session_id", "unavailable"),
+        ("bootstrap_failure", "unavailable"),
+        ("open_failure", "unavailable"),
+    ],
+)
+def test_incompatible_sessions_are_inert(scenario, availability):
+    class IncompatibleHost(Host):
+        async def GetDiagnosticCapabilities(self, request, **kwargs):
+            if scenario == "bootstrap_failure":
+                raise RpcFailure(grpc.StatusCode.UNAVAILABLE)
+            return await super().GetDiagnosticCapabilities(request, **kwargs)
+
+        async def OpenDiagnosticSession(self, request, **kwargs):
+            if scenario == "open_failure":
+                raise RpcFailure(grpc.StatusCode.UNAVAILABLE)
+            session = await super().OpenDiagnosticSession(request, **kwargs)
+            if scenario == "missing_capabilities":
+                session.ClearField("capabilities")
+            elif scenario == "disabled_session":
+                session.capabilities.enabled = False
+            elif scenario == "session_id":
+                session.session_id = b"invalid"
+            return session
+
+    async def run():
+        host = IncompatibleHost()
+        if scenario.endswith("_version"):
+            setattr(host.capabilities, scenario, 2)
+        facade = await WorkerDiagnostics.connect(host, "activation", "token")
+        assert facade.availability == availability
+        component = await facade.component("internal", [])
+        component.try_record_lazy(lambda: pytest.fail("inert factory ran"))
+        await component.close()
+        await facade.flush()
+        await facade.close()
+        assert not host.requests
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("scenario", ["wrong_sequence", "unspecified_status", "unknown_status"])
+def test_malformed_receipts_fence_delivery(scenario):
+    class MalformedHost(Host):
+        async def SubmitDiagnostic(self, request, **kwargs):
+            response = await super().SubmitDiagnostic(request, **kwargs)
+            if request.WhichOneof("operation") == "record":
+                if scenario == "wrong_sequence":
+                    response.submission_sequence += 1
+                else:
+                    response.status = 0 if scenario == "unspecified_status" else 999
+            return response
+
+    async def run():
+        facade = await WorkerDiagnostics.connect(MalformedHost(), "activation", "token")
+        component = await facade.component("internal", [])
+        component.try_record_lazy(observation)
+        with pytest.raises(DiagnosticDeliveryError, match="uncertain"):
+            await facade.flush()
+        assert facade.delivery_stats().uncertain == 1
+        assert facade.delivery_stats().rejected == 0
+        with pytest.raises(DiagnosticDeliveryError, match="closed"):
+            component.try_record_lazy(lambda: pytest.fail("fenced factory ran"))
+        with pytest.raises(DiagnosticDeliveryError, match="uncertain"):
+            await facade.close()
+
+    asyncio.run(run())
+
+
+def test_shutdown_completes_queued_registration_and_flush_waiters():
+    class BlockedHost(Host):
+        def __init__(self):
+            super().__init__()
+            self.entered = asyncio.Event()
+
+        async def SubmitDiagnostic(self, request, **kwargs):
+            if request.WhichOneof("operation") == "record":
+                self.entered.set()
+                await asyncio.Future()
+            return await super().SubmitDiagnostic(request, **kwargs)
+
+    async def run():
+        host = BlockedHost()
+        facade = await WorkerDiagnostics.connect(host, "activation", "token")
+        component = await facade.component("internal", [])
+        component.try_record_lazy(observation)
+        await asyncio.wait_for(host.entered.wait(), timeout=1)
+        component.try_record_lazy(observation)
+        registration = asyncio.create_task(facade.component("queued", []))
+        flush = asyncio.create_task(facade.flush())
+        await asyncio.sleep(0)  # Both waiters enqueue before shutdown starts.
+        with pytest.raises(DiagnosticDeliveryError, match="uncertain"):
+            await facade.close(timeout=0.01)
+        for waiter in (registration, flush):
+            with pytest.raises(DiagnosticDeliveryError, match="closed"):
+                await asyncio.wait_for(waiter, timeout=1)
+        assert facade.delivery_stats().uncertain == 1
+        assert facade.delivery_stats().dropped == 2
+        assert facade._task is not None and facade._task.done()
+        assert facade._queue is not None and facade._queue.empty()
+
+    asyncio.run(run())
+
+
+def test_component_close_is_ordered_and_delivery_failure_cannot_fail_runtime_shutdown():
+    async def run():
+        host = Host()
+        runtime = PluginRuntime(activation_id="activation", auth_token="token", host_stub=None, diagnostic_stub=host)
+        facade = await runtime.diagnostics()
+        component = await facade.component("internal", [])
+        component.try_record_lazy(observation)
+        await component.close()
+        requests = [pb.DiagnosticSubmission.FromString(raw) for raw in host.requests]
+        assert [request.sequence for request in requests] == [1, 2, 3]
+        assert [request.WhichOneof("operation") for request in requests] == [
+            "register_component",
+            "record",
+            "close_component",
+        ]
+        host.fail = True
+        # Losing the CloseSession receipt must not fail plugin termination.
+        await asyncio.wait_for(runtime._close_diagnostics(), timeout=1)
+        assert facade.delivery_stats().uncertain == 1
+        assert facade._task is not None and facade._task.done()
+        await runtime._close_diagnostics()
+
+    asyncio.run(run())

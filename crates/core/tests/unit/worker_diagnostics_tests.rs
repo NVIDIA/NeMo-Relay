@@ -449,3 +449,232 @@ async fn diagnostic_decode_limit_rejects_oversized_frames_before_acceptance() {
     );
     server.abort();
 }
+
+#[test]
+fn plugin_registration_rejects_host_owned_and_malformed_vocabulary() {
+    use wire::diagnostic_code_definition::Definition;
+    let builtin = |name: &str| wire::DiagnosticCodeDefinition {
+        definition: Some(Definition::BuiltinName(name.into())),
+    };
+    let extension = wire::DiagnosticExtensionDefinition {
+        name: "internal_failure".into(),
+        description: "An internal operation failed".into(),
+        outcome: wire::DiagnosticObservationOutcome::Failure as i32,
+        allowed_failure_classes: vec!["internal".into()],
+    };
+    let wrap = |value| wire::DiagnosticCodeDefinition {
+        definition: Some(Definition::Extension(value)),
+    };
+    let mut cases = vec![
+        vec![builtin("plugin.worker.callback_failed")],
+        vec![builtin("plugin.worker.started")],
+        vec![builtin("plugin.internal"), builtin("plugin.internal")],
+        vec![wrap(extension.clone()), wrap(extension.clone())],
+        vec![wire::DiagnosticCodeDefinition::default()],
+    ];
+    for variant in 0..6 {
+        let mut invalid = extension.clone();
+        match variant {
+            0 => invalid.name.clear(),
+            1 => invalid.name = "x".repeat(33),
+            2 => invalid.description = "x".repeat(257),
+            3 => invalid.allowed_failure_classes = vec!["invented".into()],
+            4 => invalid.allowed_failure_classes.clear(),
+            _ => invalid.outcome = wire::DiagnosticObservationOutcome::Success as i32,
+        }
+        cases.push(vec![wrap(invalid)]);
+    }
+    for codes in cases {
+        let host = host();
+        let session = open(&host);
+        let request = submission(
+            &session,
+            1,
+            Operation::RegisterComponent(wire::DiagnosticComponentRegistration {
+                local_name: "internal".into(),
+                codes,
+            }),
+        );
+        let rejected = host.submit(request.clone()).unwrap();
+        assert_eq!(
+            rejected.status,
+            wire::DiagnosticReceiptStatus::Rejected as i32
+        );
+        assert_eq!(host.submit(request).unwrap(), rejected);
+        assert!(snapshot(&host).components.is_empty());
+        let accepted = host
+            .submit(submission(
+                &session,
+                2,
+                Operation::RegisterComponent(registration()),
+            ))
+            .unwrap();
+        assert_eq!(
+            accepted.status,
+            wire::DiagnosticReceiptStatus::Registered as i32
+        );
+        assert_eq!(accepted.component, 1); // Invalid declarations used no quota.
+    }
+}
+
+#[test]
+fn rejected_observation_contracts_do_not_increment_counters() {
+    for variant in 0..5 {
+        let host = host();
+        let session = open(&host);
+        register(&host, &session);
+        let mut invalid = observation(7);
+        match variant {
+            0 => invalid.outcome = 999,
+            1 => invalid.outcome = wire::DiagnosticObservationOutcome::Success as i32,
+            2 => invalid.severity = 999,
+            3 => invalid.failure_class = Some("invented".into()),
+            _ => invalid.code = 99,
+        }
+        let request = submission(&session, 2, Operation::Record(invalid));
+        let receipt = host.submit(request.clone()).unwrap();
+        assert_eq!(
+            receipt.status,
+            wire::DiagnosticReceiptStatus::Rejected as i32
+        );
+        assert_eq!(host.submit(request).unwrap(), receipt);
+        assert_eq!(
+            snapshot(&host)
+                .lifetime
+                .totals
+                .occurrences_total
+                .value
+                .get(),
+            0
+        );
+        host.submit(submission(&session, 3, Operation::Record(observation(2))))
+            .unwrap();
+        assert_eq!(
+            snapshot(&host).lifetime.totals.failures_total.value.get(),
+            2
+        );
+    }
+}
+
+#[test]
+fn evidence_loss_receipts_preserve_exactly_once_summary_counts() {
+    for (max_events, expected) in [
+        (1, wire::DiagnosticEvidenceRetention::Truncated),
+        (0, wire::DiagnosticEvidenceRetention::Dropped),
+    ] {
+        let host = WorkerDiagnostics::new(
+            context(DiagnosticLimits {
+                max_events,
+                max_detail_bytes: 4,
+                detail_pool_bytes: 4,
+                detail_block_bytes: 4,
+                ..Default::default()
+            }),
+            Uuid::now_v7(),
+        );
+        let session = open(&host);
+        register(&host, &session);
+        for (sequence, count) in [(2, 2), (3, 3)] {
+            let request = submission(&session, sequence, Operation::Record(observation(count)));
+            let receipt = host.submit(request.clone()).unwrap();
+            assert_eq!(
+                receipt.status,
+                wire::DiagnosticReceiptStatus::Recorded as i32
+            );
+            assert_eq!(receipt.evidence, expected as i32);
+            assert!(receipt.host_sequence > 0);
+            assert_eq!(host.submit(request).unwrap(), receipt);
+        }
+        let view = snapshot(&host);
+        assert_eq!(view.lifetime.totals.recorded_events_total.value.get(), 2);
+        assert_eq!(view.lifetime.totals.failures_total.value.get(), 5);
+        assert_eq!(view.events.len(), max_events);
+        assert_eq!(
+            view.components[0]
+                .lifetime
+                .totals
+                .failures_total
+                .value
+                .get(),
+            5
+        );
+        if max_events != 0 {
+            assert_eq!(view.events[0].remote.unwrap().submission_sequence.get(), 3);
+            let detail = view.events[0].detail.as_ref().unwrap();
+            assert!(detail.truncated);
+            assert!(detail.message.len() <= 4);
+        }
+    }
+}
+
+#[test]
+fn revocation_closes_live_components_but_retains_evidence_and_context() {
+    let host = host();
+    let session = open(&host);
+    register(&host, &session);
+    host.submit(submission(&session, 2, Operation::Record(observation(2))))
+        .unwrap();
+    host.revoke();
+    assert!(host.state.lock().unwrap().session.is_none());
+    let view = snapshot(&host);
+    assert_eq!(view.events.len(), 1);
+    assert!(view.components[0].closed_at.is_some());
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 2);
+    assert_eq!(
+        host.submit(submission(&session, 3, Operation::Record(observation(9))))
+            .unwrap_err()
+            .code(),
+        tonic::Code::FailedPrecondition
+    );
+    assert!(
+        host.context
+            .register_component(ComponentRegistration::new("unrelated", &[]))
+            .is_ok()
+    );
+    assert_eq!(
+        host.open(&wire::DiagnosticOpenRequest {
+            protocol_version: 1,
+            snapshot_version: 1,
+            provenance_version: 1,
+            ..Default::default()
+        })
+        .unwrap_err()
+        .code(),
+        tonic::Code::FailedPrecondition
+    );
+}
+
+#[test]
+fn incompatible_open_and_closed_session_cannot_create_a_new_counting_period() {
+    let host = host();
+    let request = wire::DiagnosticOpenRequest {
+        protocol_version: 1,
+        snapshot_version: 1,
+        provenance_version: 1,
+        ..Default::default()
+    };
+    for field in 0..3 {
+        let mut invalid = request.clone();
+        match field {
+            0 => invalid.protocol_version = 2,
+            1 => invalid.snapshot_version = 2,
+            _ => invalid.provenance_version = 2,
+        }
+        assert_eq!(
+            host.open(&invalid).unwrap_err().code(),
+            tonic::Code::FailedPrecondition
+        );
+        assert!(host.state.lock().unwrap().session.is_none());
+    }
+    let session = open(&host);
+    host.submit(submission(
+        &session,
+        1,
+        Operation::CloseSession(wire::DiagnosticSessionClose {}),
+    ))
+    .unwrap();
+    assert_eq!(
+        host.open(&request).unwrap_err().code(),
+        tonic::Code::FailedPrecondition
+    );
+}

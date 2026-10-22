@@ -9271,3 +9271,143 @@ async fn native_async_stream_http_error_rejection_preserves_status() {
         matches!(error, FlowError::Upstream(failure) if failure.status == Some(503) && !failure.is_retryable())
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn synchronous_sanitizer_wrappers_record_once_without_projecting_details() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let context = Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let projected = Arc::new(AtomicUsize::new(0));
+    let calls = projected.clone();
+    let _projection = context
+        .subscribe_projection(move |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+    let instance = Arc::new(NativePluginInstance {
+        diagnostics: super::super::diagnostics::PluginDiagnostics::new(
+            &context,
+            "test.native.sanitizers",
+            crate::diagnostics::PluginExecution::NativeAbi,
+            Uuid::now_v7(),
+        ),
+        plugin_kind: "test.native.sanitizers".into(),
+        relay_compat: "^0.8".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(NemoRelayNativePluginV1::default()),
+        _library: libloading::os::unix::Library::this().into(),
+        _artifact_snapshot: None,
+    });
+    let payload = json!({"restricted": "input sentinel"});
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: payload.clone(),
+    };
+    let sanitize = wrap_tool_json_fn(instance.clone(), tool_json_echo, ptr::null_mut(), None);
+    assert_eq!(
+        sanitize("tool".into(), payload.clone()).await.unwrap(),
+        payload
+    );
+    let intercept = wrap_tool_intercept_fn(instance.clone(), tool_json_echo, ptr::null_mut(), None);
+    assert_eq!(
+        intercept("tool".into(), payload.clone()).await.unwrap(),
+        payload
+    );
+    let llm_request =
+        wrap_llm_sanitize_request_fn(instance.clone(), llm_request_echo, ptr::null_mut(), None);
+    assert_eq!(
+        llm_request(request.clone(), LlmSanitizeRequestContext::default())
+            .await
+            .unwrap(),
+        Some(request.clone())
+    );
+    let llm_response =
+        wrap_llm_sanitize_response_fn(instance.clone(), llm_response_alias, ptr::null_mut(), None);
+    assert_eq!(
+        llm_response(payload.clone(), LlmSanitizeResponseContext::default())
+            .await
+            .unwrap(),
+        Some(payload.clone())
+    );
+    assert_eq!(
+        context
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap()
+            .lifetime
+            .totals
+            .failures_total
+            .value
+            .get(),
+        0
+    );
+
+    let sanitize = wrap_tool_json_fn(instance.clone(), tool_json_error, ptr::null_mut(), None);
+    assert!(
+        sanitize("tool".into(), payload.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("tool callback rejected input")
+    );
+    let intercept =
+        wrap_tool_intercept_fn(instance.clone(), tool_json_error, ptr::null_mut(), None);
+    assert!(
+        intercept("tool".into(), payload.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("tool callback rejected input")
+    );
+    let llm_request =
+        wrap_llm_sanitize_request_fn(instance.clone(), llm_request_error, ptr::null_mut(), None);
+    assert!(
+        llm_request(request, LlmSanitizeRequestContext::default())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("LLM request sanitizer failed")
+    );
+    let llm_response =
+        wrap_llm_sanitize_response_fn(instance, llm_response_error, ptr::null_mut(), None);
+    assert!(
+        llm_response(payload, LlmSanitizeResponseContext::default())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("LLM response sanitizer failed")
+    );
+    let view = context
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(view.lifetime.totals.failures_total.value.get(), 4);
+    assert_eq!(view.events.len(), 4);
+    for event in &view.events {
+        assert_eq!(event.code(), "plugin.native.callback_failed");
+        assert_eq!(event.classification.failure_class(), Some("invalid_input"));
+        assert_eq!(
+            event.context.execution.as_ref().unwrap().as_str(),
+            "native_abi"
+        );
+        assert_eq!(event.context.phase.as_ref().unwrap().as_str(), "runtime");
+        assert_eq!(event.count.get(), 1);
+        assert_eq!(event.message(), Some("A dynamic plugin operation failed"));
+    }
+    assert_eq!(projected.load(Ordering::Relaxed), 0);
+}

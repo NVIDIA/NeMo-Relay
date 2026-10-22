@@ -849,3 +849,116 @@ manifest = "relay-plugin.toml"
         }
     }
 }
+
+#[test]
+fn configuration_observations_preserve_validation_reports_and_isolate_projections() {
+    use crate::diagnostics::{DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity};
+    use crate::plugin::dynamic::{DynamicPluginManifestIntegrity, DynamicPluginManifestSource};
+    use sha2::{Digest, Sha256};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use uuid::Uuid;
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(temp.path().join("artifact.bin"), b"fixture").unwrap();
+    let digest = format!(
+        "sha256:{}",
+        Sha256::digest(b"fixture")
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let manifest_ref = temp
+        .path()
+        .join("relay-plugin.toml")
+        .to_string_lossy()
+        .into_owned();
+    for scenario in ["valid", "policy", "trust", "schema"] {
+        let context = Diagnostics::from_settings(
+            SourceIdentity {
+                instance_id: Uuid::now_v7(),
+                process_id: None,
+                process_role: "test".into(),
+                relay_version: "test".into(),
+            },
+            DiagnosticsSettings {
+                enabled: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let projected = Arc::new(AtomicUsize::new(0));
+        let calls = projected.clone();
+        let _projection = context
+            .subscribe_projection(move |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap();
+        let mut manifest = worker_manifest(
+            "fixture.validation",
+            (scenario == "schema").then_some("missing.schema.json"),
+        );
+        manifest.source = Some(DynamicPluginManifestSource {
+            artifact: Some("artifact.bin".into()),
+            ..Default::default()
+        });
+        manifest.integrity = Some(DynamicPluginManifestIntegrity {
+            sha256: Some(if scenario == "trust" {
+                format!("sha256:{}", "00".repeat(32))
+            } else {
+                digest.clone()
+            }),
+            ..Default::default()
+        });
+        let mut policy = DynamicPluginHostPolicy::default();
+        policy.defaults.allowed = Some(scenario != "policy");
+        let policy = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
+        let baseline =
+            validate_declaration(&manifest, manifest_ref.clone(), true, &Map::new(), &policy);
+        let (report, _) = validate_declaration_with_artifact(
+            &manifest,
+            manifest_ref.clone(),
+            true,
+            &Map::new(),
+            &policy,
+            Some(&context),
+        );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap(),
+            serde_json::to_value(&baseline).unwrap()
+        );
+        assert_eq!(report.selected, scenario == "valid");
+        let view = context
+            .snapshot(&DiagnosticQuery::default())
+            .unwrap()
+            .to_snapshot()
+            .unwrap();
+        let expected = match scenario {
+            "policy" => Some(("plugin.policy_failed", "policy_rejected", "policy")),
+            "trust" => Some((
+                "plugin.artifact_verification_failed",
+                "authentication",
+                "validation",
+            )),
+            "schema" => Some(("plugin.schema_validation_failed", "unknown", "validation")),
+            _ => None,
+        };
+        if let Some((code, class, phase)) = expected {
+            assert_eq!(view.events.len(), 1, "{scenario}");
+            assert_eq!(view.lifetime.totals.failures_total.value.get(), 1);
+            let event = &view.events[0];
+            assert_eq!(event.code(), code);
+            assert_eq!(event.classification.failure_class(), Some(class));
+            assert_eq!(event.context.phase.as_ref().unwrap().as_str(), phase);
+            assert_eq!(
+                event.context.execution.as_ref().unwrap().as_str(),
+                "worker_protocol"
+            );
+        } else {
+            assert!(view.components.is_empty());
+            assert!(view.events.is_empty());
+        }
+        assert_eq!(projected.load(Ordering::Relaxed), 0);
+    }
+}
