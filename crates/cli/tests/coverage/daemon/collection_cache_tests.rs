@@ -31,6 +31,10 @@ fn page(context: &Diagnostics, pool: &BufferPool) -> Buffer {
     buffer
 }
 #[test]
+fn collector_budget_includes_staged_session_metadata_without_panicking() {
+    assert!(owned_bytes() >= MAX_STAGED_WORKER_SESSIONS * PER_SESSION_METADATA_ALLOWANCE_BYTES);
+}
+#[test]
 fn collection_buffers_return_on_body_drop_and_enforce_byte_caps() {
     let pool = BufferPool::new(1, 16).unwrap();
     let mut buffer = pool.reserve().unwrap();
