@@ -306,6 +306,12 @@ existing independent behavior. Native code remains trusted and unsandboxed.
 
 ### Inspect Canonical Diagnostics
 
+`runtime_diagnostics()` reads the existing legacy host report. Use
+`diagnostics()` to record canonical observations and its `reader()` to query the
+canonical store. Recording requires no read grant; granting reads discloses the
+whole selected context, including other components' restricted detail. A query
+filter limits the selected results and does not narrow this permission.
+
 Whole-context reads require an explicit host-policy grant, resolved from the
 existing configuration layers:
 
@@ -315,14 +321,24 @@ native_diagnostics_read_context = true
 ```
 
 The key is the manifest plugin ID. The default is false; workers receive no
-read grant. `diagnostics.reader()` returns a permission error without the grant.
-An authorized reader offers `discovery()`, `snapshot(&DiagnosticQuery)`,
+read grant. Set this field in host policy defaults, matching rules, or ID
+overrides; plugin configuration and the plugin manifest cannot grant access.
+`plugins inspect <id>` and `plugins validate <id-or-path>` report the effective
+permission as `native_diagnostics_read_context` in text and JSON. That permission
+is independent of service enablement and activation liveness. Changes apply to
+active plugins through the existing owner-controlled reload/reactivation path.
+
+`diagnostics.reader()` returns a permission error without the grant. An authorized
+reader offers `discovery()`, `snapshot(&DiagnosticQuery)`,
 `inspect_memory(&DiagnosticQuery)`, and snapshot/memory JSON methods. These read
 the selected host context, including other components' restricted diagnostics,
 and preserve the shared schema, cursor rules, precision-safe counts, and read
 reasons. Each call checks live authority and returns an independently owned page.
 
-`runtime_diagnostics()` retains the legacy host report contract; it does not
-return the canonical store. Neither API starts a resource collector or service.
-See the [native ABI contract](/build-plugins/native/native-abi-reference#native-diagnostics-extension)
-for admission limits and buffer ownership.
+Neither reader starts a resource collector or service. The SDK discovers the
+optional diagnostics extension by table size and version. On a compatible host
+without the extension, the facade is unsupported and skips recording factories;
+existing execution callbacks and the legacy reader keep their established
+behavior. The extension leaves execution ABI 8 and `compat.native_api = "1"`
+unchanged. See the [native ABI contract](/build-plugins/native/native-abi-reference#native-diagnostics-extension)
+for admission limits, buffer ownership, and compatibility requirements.

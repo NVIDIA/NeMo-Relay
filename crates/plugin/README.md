@@ -167,6 +167,18 @@ host's selected diagnostics context. It shares core's counters, bounded circular
 history, and detail pool. It does not start another service. The host resolves
 runtime enablement through the existing configuration layers.
 
+The SDK exposes three distinct diagnostic operations:
+
+| API | Purpose | Read permission |
+|---|---|---|
+| `runtime_diagnostics()` | Read the existing legacy host report. | Retains its existing access contract. |
+| `diagnostics().component_lazy(...)` and component `try_record_lazy(...)` | Register and record plugin-internal observations in the canonical store. | Recording does not require a context read grant. |
+| `diagnostics().reader()` | Read canonical discovery, snapshots, and memory views. | Requires the host's whole-context `native_diagnostics_read_context` grant. |
+
+The [native SDK guide](../../docs/build-plugins/native/runtime-events-and-scopes.mdx#record-internal-diagnostics)
+covers authoring and reads. The [native ABI reference](../../docs/build-plugins/native/native-abi-reference.mdx#native-diagnostics-extension)
+defines table discovery, buffer ownership, and compatibility behavior.
+
 ```rust
 use nemo_relay_plugin::diagnostics::{
     ComponentDeclaration, DiagnosticCode, DiagnosticOutcome, FailureClass, Observation,

@@ -281,6 +281,16 @@ pointed table's size and independent `contract_version` before copying callbacks
 A missing, null, truncated, or unknown table is unsupported. The execution ABI
 remains 8, ABI-7 negotiation is retained, and `compat.native_api = "1"` is unchanged.
 
+The existing `get_runtime_diagnostics` callback keeps its original position and
+legacy host-report JSON contract. The diagnostics extension supplies separate
+registration, recording, and canonical-read callbacks; it does not replace that
+reader. Existing plugins continue to use the frozen host prefix. A new SDK on a
+compatible host without the extension exposes an unsupported facade and skips
+recording factories while preserving execution and legacy-reader behavior. A
+plugin that requires the extension must declare a Relay compatibility range that
+includes its availability. See the [native SDK guide](/build-plugins/native/runtime-events-and-scopes#record-internal-diagnostics)
+for the authoring and reader APIs.
+
 The table provides capabilities, component registration, recording, closure,
 and canonical reads. Registration and recording use fixed C layouts and borrowed
 UTF-8 byte spans, never Rust-owned objects. Arrays and outputs must be aligned
