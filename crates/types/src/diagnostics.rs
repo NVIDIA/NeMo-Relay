@@ -14,6 +14,9 @@
 //! catalogue names remain opaque in supported envelopes; unsupported schema
 //! versions require adapter negotiation.
 
+/// Version of the side-effect-free discovery contract.
+pub const DIAGNOSTIC_DISCOVERY_VERSION: u32 = 1;
+
 /// Initial version of the canonical diagnostic snapshot envelope.
 pub const DIAGNOSTIC_SCHEMA_VERSION: u32 = 1;
 
@@ -31,6 +34,8 @@ pub use catalogue::{
     LoggingFailureCode, NoticeCode, PluginDiagnosticFamily, PluginExecution, PluginFailureCode,
     PluginOperationFailureCode, PluginPhase, SuccessCode,
 };
+mod reason;
+pub use reason::DiagnosticReadReason;
 mod number;
 pub use number::DiagnosticNumber;
 mod identity;
@@ -91,4 +96,31 @@ pub struct DiagnosticDiscovery {
     pub memory_inspection: bool,
     /// Detailed retained evidence requires explicit inspection authority.
     pub restricted_detail: bool,
+    /// Compiled producer integrations, not proof of registration or observations.
+    /// Owners supply a finite inventory; names describe operations, not instances.
+    #[serde(default)]
+    pub producer_support: Vec<DiagnosticProducerSupport>,
+    /// Maximum component rows accepted by one read request.
+    #[serde(default)]
+    pub max_query_components: DiagnosticNumber,
+    /// Maximum event rows accepted by one read request.
+    #[serde(default)]
+    pub max_query_events: DiagnosticNumber,
+    /// Per-entry/per-component memory inspection is implemented.
+    #[serde(default)]
+    pub detailed_memory_inspection: bool,
+    /// Resource-sample identity correlation is implemented.
+    #[serde(default)]
+    pub resource_correlation: bool,
+}
+
+/// One finite integration entry. Support is independent of collection enablement,
+/// configured/admitted registrations, observed evidence, and read authority.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DiagnosticProducerSupport {
+    /// Stable integration name; unfamiliar names may be preserved by consumers.
+    pub name: String,
+    /// This binary contains the producer integration.
+    pub supported: bool,
 }

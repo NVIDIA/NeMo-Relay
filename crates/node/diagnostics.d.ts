@@ -231,6 +231,8 @@ export interface DiagnosticCursor {
 
 /** DiagnosticQuery preserves the shared diagnostic contract. */
 export interface DiagnosticQuery {
+  /** Optional canonical snapshot version, rejected when unsupported. */
+  schemaVersion?: number | null;
   /** Select one logical component key across retained registrations. */
   componentKey?: string | null;
   /** Select one registration incarnation. */
@@ -249,11 +251,11 @@ export interface DiagnosticQuery {
   ownership?: Partial<ComponentOwnership>;
   /** Select later recent events; summary and code counters remain cumulative. */
   afterSequence?: bigint | null;
-  /** Requested component-instance row cap, further constrained by core limits. */
+  /** Requested component-instance row cap, rejected above core limits. */
   maxComponents?: number | null;
-  /** Requested recent-event cap, further constrained by core limits. */
+  /** Requested recent-event cap, rejected above core limits. */
   maxEvents?: number | null;
-  /** Requested encoded response cap, further constrained by core limits. */
+  /** Requested encoded response cap, rejected above core limits. */
   maxResponseBytes?: number | null;
   /** Resume a compatible bounded selection without granting additional scope. */
   continuation?: DiagnosticCursor | null;
@@ -389,6 +391,29 @@ export interface PluginObservationContext {
   phase: string | null;
 }
 
+/** Core capability view; support does not imply active/admitted producers or evidence. */
+export interface DiagnosticDiscovery {
+  discoveryVersion: number;
+  snapshotVersion: number;
+  catalogueVersion: number;
+  source: SourceIdentity;
+  collectionEnabled: boolean;
+  queriesEnabled: boolean;
+  maxComponents: bigint;
+  maxEvents: bigint;
+  detailPoolBytes: bigint;
+  maxQueries: bigint;
+  maxSnapshotBytes: bigint;
+  maxOwnedBytes: bigint;
+  maxQueryComponents: bigint;
+  maxQueryEvents: bigint;
+  memoryInspection: boolean;
+  restrictedDetail: boolean;
+  producerSupport: Array<{ name: string; supported: boolean }>;
+  detailedMemoryInspection: boolean;
+  resourceCorrelation: boolean;
+}
+
 /** Stable reader failure; messages contain no query or retained evidence. */
 export class DiagnosticsError extends Error {
   readonly reason: string;
@@ -401,7 +426,7 @@ export class DiagnosticsReader {
   snapshotJson(query?: DiagnosticQuery): string;
   /** Inspect separate core/copy budgets, occupancy, and logging coverage. */
   info(): {
-    discovery: Record<string, unknown>;
+    discovery: DiagnosticDiscovery;
     limits: Record<string, number>;
     memory: Record<string, number>;
     bindingCopyConcurrency: number;

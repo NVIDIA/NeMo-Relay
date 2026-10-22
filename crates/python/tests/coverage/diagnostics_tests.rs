@@ -18,3 +18,22 @@ fn native_diagnostic_numbers_are_lossless_without_changing_text() {
     assert_eq!(value["classification"]["canonical_code"], "future.unknown");
     assert!(value["since_last_failure_millis"].is_null());
 }
+
+#[test]
+fn canonical_fixture_converts_numbers_and_keeps_restricted_text() {
+    let mut value: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../types/tests/fixtures/diagnostics/diagnostic-snapshot-schema-1.json"
+    ))
+    .unwrap();
+    native_numbers(&mut value, "");
+    assert_eq!(value["sequence"].as_u64(), Some(u64::MAX));
+    assert_eq!(
+        value["events"][0]["count"].as_u64(),
+        Some(9_007_199_254_740_993)
+    );
+    assert_eq!(value["events"][0]["correlation"]["session_id"], "session-1");
+    assert_eq!(
+        value["components"][0]["lifetime"]["totals"]["occurrences_total"]["saturated"],
+        true
+    );
+}

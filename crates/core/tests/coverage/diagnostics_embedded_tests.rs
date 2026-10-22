@@ -305,3 +305,148 @@ fn native_integer_field_inventory_covers_the_canonical_schema() {
         "",
     );
 }
+
+#[test]
+fn shared_query_fixture_and_duplicate_selectors_have_safe_reasons() {
+    let cases: Json = serde_json::from_str(include_str!(
+        "../../../types/tests/fixtures/diagnostics/read-queries.json"
+    ))
+    .unwrap();
+    for case in cases.as_array().unwrap() {
+        let result = decode_query(&case["query"].to_string());
+        assert_eq!(
+            result.err().map(|error| error.reason()),
+            case["reason"].as_str()
+        );
+    }
+    for input in [
+        r#"{"schema_version":1,"schema_version":2}"#,
+        r#"{"ownership":{"responsibility":"a","responsibility":"b"}}"#,
+    ] {
+        assert_eq!(decode_query(input).unwrap_err().reason(), "invalid_query");
+    }
+}
+
+#[test]
+fn direct_and_embedded_reads_preserve_facts_and_return_matching_capacity_reasons() {
+    let service = service();
+    let failure =
+        BuiltinDiagnosticCode::Failure(FailureCode::Logging(LoggingFailureCode::SinkWriteFailed));
+    let success = BuiltinDiagnosticCode::Success(SuccessCode::SinkInitialized);
+    for (name, delta) in [("example.a", 2), ("example.b", 3)] {
+        let recorder = service
+            .context
+            .register_component(ComponentRegistration::new(name, &[failure, success]))
+            .unwrap();
+        recorder
+            .record_lazy(|| {
+                Observation::new(
+                    Classification::failure(
+                        FailureCode::Logging(LoggingFailureCode::SinkWriteFailed),
+                        FailureClass::Io,
+                    )
+                    .unwrap(),
+                    "restricted-fact",
+                    NonZeroU64::new(delta).unwrap(),
+                )
+            })
+            .unwrap();
+        recorder
+            .record_without_projection_lazy(|| {
+                Observation::new(
+                    Classification::success(SuccessCode::SinkInitialized),
+                    "success",
+                    NonZeroU64::MIN,
+                )
+            })
+            .unwrap();
+    }
+    let direct = service
+        .context
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    let copied: DiagnosticSnapshot =
+        serde_json::from_str(service.reader.snapshot_json("{}").unwrap().as_str()).unwrap();
+    assert_eq!(direct.source, copied.source);
+    assert_eq!(direct.sequence, copied.sequence);
+    assert_eq!(direct.events, copied.events);
+    assert_eq!(direct.lifetime.totals, copied.lifetime.totals);
+    assert_eq!(copied.lifetime.totals.failures_total.value.get(), 5);
+    assert_eq!(copied.lifetime.totals.successes_total.value.get(), 2);
+    assert_eq!(copied.lifetime.totals.recorded_events_total.value.get(), 4);
+    for (query, expected) in [
+        (
+            DiagnosticQuery {
+                schema_version: Some(2),
+                ..Default::default()
+            },
+            "unsupported_schema",
+        ),
+        (
+            DiagnosticQuery {
+                max_events: Some(u32::MAX),
+                ..Default::default()
+            },
+            "invalid_query",
+        ),
+        (
+            DiagnosticQuery {
+                max_response_bytes: Some(1),
+                ..Default::default()
+            },
+            "snapshot_capacity",
+        ),
+    ] {
+        assert_eq!(
+            service
+                .context
+                .snapshot(&query)
+                .err()
+                .unwrap()
+                .read_reason()
+                .as_str(),
+            expected
+        );
+        assert_eq!(
+            service.reader.snapshot(&query).err().unwrap().reason(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn discovery_is_independent_of_query_permits_and_matches_core() {
+    let context = Diagnostics::from_settings(
+        Diagnostics::default().source().clone(),
+        DiagnosticsSettings {
+            enabled: true,
+            limits: DiagnosticLimits {
+                max_queries: 0,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let service = EmbeddedService::new(context).unwrap();
+    let info = service.reader.info().unwrap();
+    assert_eq!(info.discovery, service.context.reader().discovery());
+    assert!(info.discovery.collection_enabled);
+    assert!(!info.discovery.queries_enabled);
+    assert_eq!(
+        service.reader.snapshot_json("{}").err().unwrap().reason(),
+        "query_disabled"
+    );
+    assert_eq!(info.binding_reserved_bytes, 0);
+    assert!(
+        info.discovery
+            .producer_support
+            .iter()
+            .any(|p| p.name == "otel" && !p.supported)
+    );
+    assert!(info.discovery.producer_support.iter().any(
+        |p| p.name == "plugin.worker.emission" && p.supported == cfg!(feature = "worker-grpc")
+    ));
+    assert!(!info.discovery.detailed_memory_inspection && !info.discovery.resource_correlation);
+}

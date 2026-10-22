@@ -1,0 +1,223 @@
+---
+title: "Diagnostics API Consistency"
+description: "Shared read semantics, discovery, compatibility, and conformance across Relay deployment modes."
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The [runtime diagnostics reference](/reference/diagnostics) describes startup,
+recording, retention, and deployment-specific access. This page defines the common
+inspection contract delivered by Phase 6. Evidence supports decisions made by the
+embedding application or deployment owner; Relay does not classify health, close
+errors, or infer recovery from an empty page.
+
+## Ownership and Available Surfaces
+
+| Surface | Startup owner | Inspection | Producer coverage |
+| --- | --- | --- | --- |
+| Direct Rust | Explicit `DiagnosticsSettings` and context | `DiagnosticsReader` | Producers explicitly given that context |
+| CLI gateway and wrapped commands | Existing CLI configuration resolver | Authorized shared HTTP routes; `nemo-relay diagnostics` reads an existing gateway | Command, configuration, gateway lifecycle, acquisition, child lifecycle, hook, upstream operations |
+| Daemon broker | CLI composition plus daemon resolver | Shared local HTTP routes and worker collection wrapper | Control, forwarding, collection, and accepted supervisor observations |
+| Managed Relay worker | Managed launch policy and worker resolver | Shared HTTP routes under negotiated session authority | Worker lifecycle/forwarding, shared logging, and plugin host operations |
+| Python and Node.js | Existing plugin-host startup and file layering | Optional reader; native view or canonical JSON | Same embedded host producers, independent of language/framework |
+| Experimental C and Go | Same embedded host resolver | Owned JSON/checked Go model | Same embedded host producers |
+| Native plugin | Host-selected context | Host reader; existing native legacy query remains separate | Host verification, policy, load, validation, registration, callback errors |
+| Dynamic-plugin worker | Host context and authenticated diagnostic session | Emission negotiation; host snapshot reads are **not granted** | Host lifecycle/transport operations and SDK-authored internal operations |
+
+Read adapters never resolve startup files, select enablement, initialize loggers,
+start plugins, or acquire/recover a gateway. The service survives plugin failure,
+close, and reload. Existing CLI idle/shutdown, daemon admission, and runtime unload
+rules remain the owners of execution lifetime.
+
+A managed Relay worker and a dynamic-plugin worker are different roles. The former
+owns a process context and serves authorized inspection. The latter submits typed
+observations to its host under a separate bounded grant.
+
+## Discovery
+
+Rust `reader.discovery()`, HTTP `GET /_nemo_relay/v1/diagnostics/capabilities`, and
+embedded `reader.info().discovery` expose the same `DiagnosticDiscovery` fields.
+Go/C expose the embedded metadata through `InfoJSON`/`nemo_relay_diagnostics_info_json`.
+Discovery uses no snapshot workspace and remains available when `max_queries = 0`.
+HTTP delivery still requires an available adapter response/connection permit.
+
+| Field | Meaning |
+| --- | --- |
+| `discovery_version`, `snapshot_version`, `catalogue_version` | Independent contract revisions, currently 1 |
+| `source` | This context incarnation and descriptive process metadata |
+| `collection_enabled` | The running owner's immutable startup selection |
+| `queries_enabled` | Collection enabled and a nonzero query pool; transient busy state is separate |
+| Capacity fields | Configured component/event/detail/read limits, including maximum query rows and bytes |
+| `producer_support` | Finite inventory of integrations compiled into core; independent of registration, enablement, observed evidence, and authority |
+| `memory_inspection` | Aggregate core allocation/occupancy inspection exists |
+| `detailed_memory_inspection`, `resource_correlation` | False until Phase 7 implements these capabilities |
+| `restricted_detail` | Inspection can expose bounded unsanitized evidence |
+
+`producer_support` lists logging, common configuration/activation, native plugin,
+policy, worker-host, and worker-emission integrations. Worker support follows the
+existing `worker-grpc` build feature; this is separate from runtime diagnostics
+enablement. OTel and resource-metrics integration are explicitly unsupported.
+
+HTTP adds `producers`, the admitted CLI/daemon recorders for that process, plus
+its effective limits and independent response budget. This list is not a complete
+inventory of plugin registrations. `inspection_policy` distinguishes private
+bootstrap authority from managed-worker session authority. Embedded metadata adds
+logging attachment coverage and core/copy budgets. No endpoint claims arbitrary
+restricted details or a configured plugin's presence from enum support alone.
+
+Older discovery payloads may lack the additive producer/read-limit fields. Treat
+missing capability information as unadvertised; do not infer it from an empty
+snapshot. A supported feature still needs appropriate read authority.
+
+## One Query and One Page
+
+All snapshot readers use `DiagnosticQuery`. Canonical JSON uses `snake_case`;
+Node's native helper uses `camelCase`. Optional `schema_version` selects the
+required envelope; omission or null selects the current version. Direct Rust can
+set the same field. Requests above configured row/byte limits return
+`invalid_query`; zero row caps select no rows of that kind. An admitted byte cap
+that cannot fit the envelope returns `snapshot_capacity`.
+
+HTTP accepts one percent-encoded JSON `query` parameter. Its encoded URI query and
+the decoded JSON are each capped at 4,096 bytes. Embedded JSON has the same decoded
+cap. Native helpers also bound object conversion. Duplicate and unknown fields,
+including nested selectors, are rejected. Query decoding uses bounded input and
+Serde's recursion limit; it performs no query capture. HTTP authenticates first.
+
+Snapshots always include context-lifetime totals and loss accounting. Selectors
+filter component/code/event rows, not global totals. Read permission therefore
+covers the **whole context**. A filter is not tenant or plugin isolation.
+
+Each continuation binds source, selection, offsets, and mutation revision.
+Reauthorize every page: a cursor is not a credential. Mutation/eviction can return
+`invalid_cursor`; callers start a new capture. There is no frozen multi-page
+transaction. `/components` and `/events` supply row-selection defaults using the
+same page envelope. HTTP uses `Cache-Control: no-store`.
+
+Core leases are released before HTTP/RPC delivery or foreign object conversion.
+Independent adapter permits remain held until delivery/conversion finishes or is
+cancelled. Retained caller objects are outside service storage budgets. Daemon
+collection wraps source-authored pages with receipt/freshness metadata; it never
+replays remote counts or produces an unlabeled fleet total. Its cached-worker
+wrapper accepts no query selectors or continuations; unexpected query parameters
+return `invalid_query`.
+
+## Stable Read Errors
+
+`DiagnosticReadReason` defines the shared meanings. Rust `DiagnosticError` maps to
+it using `read_reason()`. Python/Node errors expose `.reason`, Go exposes
+`DiagnosticsError.Reason`, and C exposes the reason through `nemo_relay_last_error`.
+Messages contain no query text, source errors, credentials, or retained detail.
+
+| Reason | HTTP status | Meaning |
+| --- | --- | --- |
+| `disabled` | 503 | Startup disabled collection |
+| `query_disabled` | 503 | Collection enabled, zero query workspaces |
+| `unsupported_schema` | 406 | Requested snapshot envelope unsupported |
+| `invalid_query` | 400 | Malformed, oversized, unknown, or inadmissible request |
+| `invalid_cursor` | 409 | Source, selection, or revision no longer matches |
+| `busy` | 429 with `Retry-After: 1` | Core or adapter read capacity temporarily exhausted |
+| `snapshot_capacity` | 422 | An admitted page cannot contain a required envelope/row |
+| `internal` | 500 | Unexpected read failure, with no raw source error |
+
+The HTTP envelope is `{"error":{"reason":"invalid_query"}}`.
+`unsupported_schema` additionally includes `supported_schema_version`.
+Startup `invalid_limits` is distinct from `allocation_failed`; neither establishes
+runtime health. Binding lifecycle reasons (`not_initialized`, `configuration_conflict`,
+`fork_requires_exec`, and Go `closed`) and transport authority/lifecycle failures
+remain separate. Unauthorized HTTP is 401/403; plain HTTP requires the existing
+TLS upgrade (426). Filtered requests get no weaker authority check.
+
+Phase 6 normalizes the unreleased binding names `queries_disabled` to
+`query_disabled` and `page_capacity` to `snapshot_capacity`. HTTP concurrency
+failures now use `busy` instead of separate query/response-capacity names; invalid
+selector/page/size failures use `invalid_query`. Update pre-release consumers that
+match these earlier spellings. No legacy health, status, or report DTO is renamed.
+
+Rust/embedded page requests now reject oversized caps rather than silently
+clamping them; use the discovered limits. Rust struct literals should use
+`..Default::default()` or supply the new optional `schema_version`. HTTP's stale
+`deferred` list is replaced by the shared `producer_support` inventory. These
+are changes to the unpublished diagnostics stack, not a snapshot-schema revision.
+
+## Numbers, Schema, and Compatibility
+
+| Representation | Diagnostic u64 values | Text and unknown names |
+| --- | --- | --- |
+| Rust | `DiagnosticNumber` with checked u64 access | Typed construction; decoded catalogue/context names remain opaque |
+| Canonical JSON / C / Go JSON | Canonical unsigned decimal strings | Preserved inside supported envelopes |
+| Python native | `int` | Strings remain strings |
+| Node native | `bigint`, including small quantities | `snapshotJson()` emits portable strings; ordinary `JSON.stringify` cannot encode bigint |
+| Go model | Checked `DiagnosticNumber` codec | No float64 intermediary |
+| Worker protobuf | Explicit uint64 sequences/counts | Negotiated version and bounded structured inputs |
+
+This applies to growing counts, generations, sequences, durations, and discovery
+capacities. Schema/catalogue revisions, PID, and small row-cap requests remain JSON
+numbers. Embedded `info()` reports architecture-sized allocation gauges separately
+from the canonical snapshot; these are bounded metadata, not process RSS.
+
+Values above 2^53 and up to u64 maximum remain exact. Saturation marks a lower bound;
+absence/null means unavailable, not zero or recovery. Future catalogue/context
+names may be read within schema 1, but cannot automatically become admitted local
+producer input. Unknown snapshot object fields support additive evolution;
+unknown query selectors fail. Unsupported snapshot schemas are rejected by the
+Rust and Go owned decoders. Python/Node readers consume their matching core's
+canonical pages; they do not expose a decoder for arbitrary remote snapshots.
+
+Generate the authoritative snapshot, discovery, and query JSON Schemas from Rust:
+
+```bash
+cargo run --locked -p nemo-relay-types --features schema --example diagnostics_schema
+```
+
+The reviewed fixture at
+`crates/types/tests/fixtures/diagnostics/diagnostic-snapshot-schema-1.json` freezes
+identities, classification, attribution, correlation, saturation, a count above
+2^53, and u64 maximum. It is independent of live process/plugin state. Shared
+request cases live beside it in `read-queries.json`.
+
+| Versioned boundary | Compatibility rule |
+| --- | --- |
+| Snapshot/discovery/catalogue | Independent revisions; document revisions have no wire meaning |
+| Dynamic-plugin `RelayDiagnostics` | Protocol/provenance 1; emission registration/replay unchanged; old methods may return `UNIMPLEMENTED` |
+| Worker host snapshot access | `can_read_context = false`; emission does not grant reading, and the RPC returns `PERMISSION_DENIED` |
+| Managed-worker diagnostic offer | Optional authenticated offer/grant; missing offer is unsupported; existing execution is unaffected |
+| Native ABI and legacy worker query | Existing payloads/tags and execution statuses retain their meaning |
+
+## Legacy Boundaries and Deferred Work
+
+CLI doctor/config validation, daemon health/status/readiness, `ConfigReport`, active
+plugin runtime reports, OTel subscriber diagnostics, native legacy callbacks, and
+worker `GetRuntimeDiagnostics` remain independent consumer contracts. Canonical
+readers do not fall back to those caches or mirror restricted evidence into them.
+
+OTel migration must move producer ownership, exact deltas, classifiers, and coupled
+readers together before retiring caches/mirrors. Delivery queues, flush/shutdown,
+retries, operational rate limits, and sanitizer ordering remain owned by existing
+output paths. Phase 6 changes none of those contracts.
+
+Diagnostic detail, names, paths, and caller correlation remain restricted.
+Projection callbacks receive only the approved built-in summary; state-only
+recording invokes none. A diagnostic page is never automatically fed into logs,
+legacy reports, observability events, or exporters. Truncation is not sanitization.
+An application explicitly exporting an authorized reader result owns that action.
+
+Phase 7 owns per-entry/component attribution, resource-sample correlation, and
+possible typed leased reads. CPU attribution, durable restart history, and OTel
+producer migration are not included in this API qualification.
+
+## Qualification and Operational Limits
+
+Conformance covers shared request/error fixtures, exact numbers and unknown names,
+same-source read accounting, default-off/query-disabled discovery, cursor/authority
+checks, cancellation/permit return, plugin lifetime, remote retry/provenance, and
+restricted-output boundaries. Each adapter exercises its public representation;
+existing core tests own storage/refresh/window behavior. No framework-specific
+setup or duplicated private state machine is required.
+
+The validation suites also retain sanitizer success/failure ordering, logger
+ownership, worker transport/replay, and source-preserving broker collection tests.
+Bounded capacities and these tests do not establish a whole-process RSS ceiling,
+a production polling rate, or latency objectives. Sustained churn, cancellation,
+contention, fleet polling, and platform-specific RSS/tail-latency qualification
+remain deployment release gates; do not infer benchmark results from capacities.

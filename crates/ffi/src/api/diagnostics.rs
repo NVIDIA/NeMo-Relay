@@ -18,8 +18,10 @@ pub extern "C" fn nemo_relay_diagnostics_query_max_bytes() -> u32 {
 fn failure(error: EmbeddedDiagnosticError) -> NemoRelayStatus {
     set_last_error(error.reason());
     match error.reason() {
-        "not_initialized" | "disabled" | "queries_disabled" => NemoRelayStatus::NotFound,
-        "invalid_query" | "invalid_cursor" | "invalid_limits" => NemoRelayStatus::InvalidArg,
+        "not_initialized" | "disabled" | "query_disabled" => NemoRelayStatus::NotFound,
+        "invalid_query" | "invalid_cursor" | "invalid_limits" | "unsupported_schema" => {
+            NemoRelayStatus::InvalidArg
+        }
         _ => NemoRelayStatus::Internal,
     }
 }

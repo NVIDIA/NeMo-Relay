@@ -366,6 +366,16 @@ async fn authentication_and_read_authority_are_separate() {
         .unwrap()
         .into_inner();
     assert!(capability.enabled);
+    let discovery = service
+        .state
+        .diagnostics
+        .as_ref()
+        .unwrap()
+        .context
+        .reader()
+        .discovery();
+    assert_eq!(capability.snapshot_version, discovery.snapshot_version);
+    assert_eq!(capability.catalogue_version, discovery.catalogue_version);
     assert!(!capability.can_read_context);
     assert_eq!(
         service

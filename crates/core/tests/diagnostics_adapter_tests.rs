@@ -745,3 +745,76 @@ fn diagnostic_logging_projection_profile() {
         }
     }
 }
+
+#[test]
+fn diagnostic_reads_and_recording_do_not_feed_observability_subscribers() {
+    use nemo_relay::api::scope::{EmitMarkEventParams, event};
+    use nemo_relay::api::subscriber::{
+        deregister_subscriber, flush_subscribers, register_subscriber,
+    };
+    use nemo_relay::diagnostics::{ComponentOwnership, DiagnosticCorrelation};
+    let _guard = LOGGING.lock().unwrap_or_else(|error| error.into_inner());
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let output = observed.clone();
+    register_subscriber(
+        "diagnostic-isolation",
+        Arc::new(move |value| {
+            output.lock().unwrap().push(value.name().to_owned());
+        }),
+    )
+    .unwrap();
+    let service = enabled();
+    let mut registration = ComponentRegistration::new("restricted.component", &[PLUGIN_ERROR]);
+    registration.ownership = ComponentOwnership {
+        configuration_id: Some("restricted-path".into()),
+        ..Default::default()
+    };
+    let producer = service.register_component(registration).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("output.jsonl");
+    let logger = file_logging(&service, path.clone());
+    for project in [true, false] {
+        let observation = || {
+            internal("restricted-payload").with_correlation(DiagnosticCorrelation {
+                request_id: Some("restricted-request".into()),
+                session_id: Some("restricted-session".into()),
+            })
+        };
+        if project {
+            producer.record_lazy(observation).unwrap();
+        } else {
+            producer
+                .record_without_projection_lazy(observation)
+                .unwrap();
+        }
+    }
+    let page = service.snapshot(&DiagnosticQuery::default()).unwrap();
+    let raw = std::str::from_utf8(page.as_bytes()).unwrap();
+    for marker in [
+        "restricted.component",
+        "restricted-path",
+        "restricted-payload",
+        "restricted-request",
+        "restricted-session",
+    ] {
+        assert!(raw.contains(marker));
+    }
+    drop(page);
+    // The event path remains usable and independent; no diagnostic-generated event
+    // should be queued before this explicit application mark.
+    event(
+        EmitMarkEventParams::builder()
+            .name("application-mark")
+            .build(),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+    deregister_subscriber("diagnostic-isolation").unwrap();
+    logger.shutdown();
+    assert_eq!(*observed.lock().unwrap(), ["application-mark"]);
+    assert!(
+        !std::fs::read_to_string(path)
+            .unwrap()
+            .contains("restricted")
+    );
+}

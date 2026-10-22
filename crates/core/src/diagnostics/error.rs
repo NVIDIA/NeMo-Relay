@@ -51,6 +51,9 @@ pub enum DiagnosticError {
     /// Every bounded query workspace is currently leased.
     #[error("diagnostic query capacity exhausted")]
     QueryCapacity,
+    /// The requested snapshot envelope version is unsupported.
+    #[error("unsupported diagnostic snapshot schema")]
+    UnsupportedSchema,
     /// A selector or page request exceeds its admission constraints.
     #[error("diagnostic query is invalid")]
     InvalidQuery,
@@ -66,6 +69,25 @@ pub enum DiagnosticError {
     /// The process context was already installed or consumed, even while disabled.
     #[error("the process diagnostic context is already installed or used")]
     AlreadyInitialized,
+}
+impl DiagnosticError {
+    /// Safe transport-neutral meaning for read/startup failures. Recording-only
+    /// errors are internal here; they must never be mislabeled invalid input.
+    pub fn read_reason(self) -> super::DiagnosticReadReason {
+        use super::DiagnosticReadReason as Reason;
+        match self {
+            Self::Disabled => Reason::Disabled,
+            Self::QueryDisabled => Reason::QueryDisabled,
+            Self::QueryCapacity => Reason::Busy,
+            Self::InvalidQuery => Reason::InvalidQuery,
+            Self::UnsupportedSchema => Reason::UnsupportedSchema,
+            Self::InvalidCursor => Reason::InvalidCursor,
+            Self::SnapshotCapacity => Reason::SnapshotCapacity,
+            Self::InvalidLimits => Reason::InvalidLimits,
+            Self::Allocation => Reason::AllocationFailed,
+            _ => Reason::Internal,
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 /// Subscriber conversion or delivery failure after canonical acceptance.

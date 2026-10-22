@@ -449,7 +449,7 @@ impl DiagnosticsReader {
         let limits = &self.inner.limits;
         let enabled = self.inner.backend.is_some();
         super::DiagnosticDiscovery {
-            discovery_version: 1,
+            discovery_version: super::DIAGNOSTIC_DISCOVERY_VERSION,
             snapshot_version: super::DIAGNOSTIC_SCHEMA_VERSION,
             catalogue_version: super::DIAGNOSTIC_CATALOGUE_VERSION,
             source: self.inner.source.clone(),
@@ -463,6 +463,27 @@ impl DiagnosticsReader {
             max_owned_bytes: (limits.max_owned_bytes as u64).into(),
             memory_inspection: true,
             restricted_detail: true,
+            producer_support: [
+                ("logging", true),
+                ("plugin.configuration", true),
+                ("plugin.activation", true),
+                ("plugin.native", true),
+                ("plugin.policy", true),
+                ("plugin.worker.host", cfg!(feature = "worker-grpc")),
+                ("plugin.worker.emission", cfg!(feature = "worker-grpc")),
+                ("otel", false),
+                ("resource_metrics", false),
+            ]
+            .into_iter()
+            .map(|(name, supported)| super::DiagnosticProducerSupport {
+                name: name.into(),
+                supported,
+            })
+            .collect(),
+            max_query_components: (limits.max_query_components as u64).into(),
+            max_query_events: (limits.max_query_events as u64).into(),
+            detailed_memory_inspection: false,
+            resource_correlation: false,
         }
     }
 

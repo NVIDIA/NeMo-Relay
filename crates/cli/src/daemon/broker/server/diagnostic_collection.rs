@@ -291,6 +291,7 @@ async fn fetch(
 pub(super) async fn read(
     State(state): State<Arc<DaemonState>>,
     AxumPath(worker_id): AxumPath<String>,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     headers: HeaderMap,
 ) -> Response<Body> {
     // Authenticate the full selected context before revealing assignment/cache metadata.
@@ -300,6 +301,9 @@ pub(super) async fn read(
     if let Err(e) = adapter.authorize(&headers) {
         return e.into_response();
     }
+    if uri.query().is_some() {
+        return error(StatusCode::BAD_REQUEST, "invalid_query");
+    }
     let Some(collector) = &state.collector else {
         return error(StatusCode::SERVICE_UNAVAILABLE, "collection_disabled");
     };
@@ -307,7 +311,7 @@ pub(super) async fn read(
         return error(StatusCode::SERVICE_UNAVAILABLE, "shutting_down");
     }
     let Some(mut output) = collector.responses.reserve() else {
-        return error(StatusCode::TOO_MANY_REQUESTS, "response_capacity");
+        return error(StatusCode::TOO_MANY_REQUESTS, "busy");
     };
     {
         let sessions = lock(&state.worker_sessions);
@@ -336,7 +340,7 @@ pub(super) async fn read(
             .write_page(&key, Instant::now(), &mut output)
             .is_err()
         {
-            return error(StatusCode::UNPROCESSABLE_ENTITY, "response_capacity");
+            return error(StatusCode::UNPROCESSABLE_ENTITY, "snapshot_capacity");
         }
     }
     // No state lock, source lease, or grant survives into the response body.

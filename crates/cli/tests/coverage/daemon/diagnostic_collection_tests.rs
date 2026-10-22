@@ -58,6 +58,11 @@ async fn wrapper(state: &Arc<DaemonState>, token: &str) -> Response<Body> {
     read(
         State(state.clone()),
         AxumPath("worker".into()),
+        axum::extract::OriginalUri(
+            "/_nemo_relay/v1/workers/worker/diagnostics"
+                .parse()
+                .unwrap(),
+        ),
         HeaderMap::from_iter([(
             HeaderName::from_static(AUTH_HEADER),
             HeaderValue::from_str(token).unwrap(),
@@ -149,15 +154,31 @@ async fn daemon_collection_preserves_source_totals_and_reauthorizes_cached_pages
         );
         tokio::time::sleep(Duration::from_millis(6100)).await;
     }
+    let invalid = read(
+        State(state.clone()),
+        AxumPath("worker".into()),
+        axum::extract::OriginalUri(
+            "/_nemo_relay/v1/workers/worker/diagnostics?query=private"
+                .parse()
+                .unwrap(),
+        ),
+        HeaderMap::from_iter([(
+            HeaderName::from_static(AUTH_HEADER),
+            HeaderValue::from_str(&token).unwrap(),
+        )]),
+    )
+    .await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
     let collector = state.collector.as_ref().unwrap();
     let mut held = Vec::new();
     for _ in 0..collection::POLLS {
         held.push(wrapper(&state, &token).await);
     }
-    assert_eq!(
-        wrapper(&state, &token).await.status(),
-        StatusCode::TOO_MANY_REQUESTS
-    );
+    let busy = wrapper(&state, &token).await;
+    assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body: serde_json::Value =
+        serde_json::from_slice(&busy.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["error"]["reason"], "busy");
     drop(held);
     assert!(collector.responses.reserve().is_some());
     lock(&state.worker_sessions)

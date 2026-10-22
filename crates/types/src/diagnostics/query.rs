@@ -29,7 +29,10 @@ pub struct DiagnosticCursor {
 /// Portable bounded selection; consumers never reset or mutate evidence.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(default, deny_unknown_fields)]
 pub struct DiagnosticQuery {
+    /// Optional required snapshot version; omission selects this runtime's version.
+    pub schema_version: Option<u32>,
     /// Select one logical component key across retained registrations.
     pub component_key: Option<String>,
     /// Select one registration incarnation.
@@ -50,11 +53,11 @@ pub struct DiagnosticQuery {
     pub ownership: ComponentOwnership,
     /// Select later recent events; summary and code counters remain cumulative.
     pub after_sequence: Option<DiagnosticNumber>,
-    /// Requested component-instance row cap, further constrained by core limits.
+    /// Requested component-instance row cap, rejected above core limits.
     pub max_components: Option<u32>,
-    /// Requested recent-event cap, further constrained by core limits.
+    /// Requested recent-event cap, rejected above core limits.
     pub max_events: Option<u32>,
-    /// Requested encoded response cap, further constrained by core limits.
+    /// Requested encoded response cap, rejected above core limits.
     pub max_response_bytes: Option<u32>,
     /// Resume a compatible bounded selection without granting additional scope.
     pub continuation: Option<DiagnosticCursor>,

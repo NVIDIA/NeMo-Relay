@@ -94,11 +94,45 @@ func TestDiagnosticsConfiguredService(t *testing.T) {
 	if first.Source.InstanceID != second.Source.InstanceID {
 		t.Fatal("plugin close replaced service")
 	}
+	version := uint32(2)
+	_, versionErr := reader.Snapshot(DiagnosticQuery{SchemaVersion: &version})
+	var unsupported *DiagnosticsError
+	if !errors.As(versionErr, &unsupported) || unsupported.Reason != "unsupported_schema" {
+		t.Fatalf("unsupported version: %v", versionErr)
+	}
 	reader.Close()
 	reader.Close()
 	_, err = reader.Snapshot(DiagnosticQuery{})
 	var unavailable *DiagnosticsError
 	if !errors.As(err, &unavailable) || unavailable.Reason != "closed" {
 		t.Fatalf("closed: %v", err)
+	}
+}
+
+func TestDiagnosticCanonicalFixture(t *testing.T) {
+	data, err := os.ReadFile("../../crates/types/tests/fixtures/diagnostics/diagnostic-snapshot-schema-1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page DiagnosticSnapshot
+	if err := json.Unmarshal(data, &page); err != nil {
+		t.Fatal(err)
+	}
+	if uint64(page.Sequence) != math.MaxUint64 || uint64(page.Events[0].Count) != 9007199254740993 {
+		t.Fatal("canonical fixture lost precision")
+	}
+	if !page.Lifetime.Totals.OccurrencesTotal.Saturated {
+		t.Fatal("lost saturation")
+	}
+}
+
+func TestDiagnosticSnapshotRejectsUnsupportedEnvelope(t *testing.T) {
+	for _, data := range []string{`{"schema_version":2}`, `{}`} {
+		var page DiagnosticSnapshot
+		var reason *DiagnosticsError
+		err := json.Unmarshal([]byte(data), &page)
+		if !errors.As(err, &reason) || reason.Reason != "unsupported_schema" {
+			t.Fatalf("unsupported snapshot: %v", err)
+		}
 	}
 }

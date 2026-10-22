@@ -895,6 +895,24 @@ fn validate_query(
     query: &DiagnosticQuery,
     limits: &DiagnosticLimits,
 ) -> Result<(), DiagnosticError> {
+    if query
+        .schema_version
+        .is_some_and(|version| version != DIAGNOSTIC_SCHEMA_VERSION)
+    {
+        return Err(DiagnosticError::UnsupportedSchema);
+    }
+    if query
+        .max_components
+        .is_some_and(|n| n as usize > limits.max_query_components)
+        || query
+            .max_events
+            .is_some_and(|n| n as usize > limits.max_query_events)
+        || query
+            .max_response_bytes
+            .is_some_and(|n| n as usize > limits.max_snapshot_bytes)
+    {
+        return Err(DiagnosticError::InvalidQuery);
+    }
     let fields = [
         query.component_key.as_deref(),
         query.ownership.configuration_id.as_deref(),

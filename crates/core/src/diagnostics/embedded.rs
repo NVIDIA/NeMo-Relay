@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
+#[cfg(test)]
 use serde_json::Value as Json;
 
 use super::{
@@ -18,7 +19,7 @@ use super::{
 };
 
 /// Maximum encoded query accepted by an embedded reader, before JSON parsing.
-pub const MAX_BINDING_QUERY_BYTES: usize = 4096;
+pub const MAX_BINDING_QUERY_BYTES: usize = super::MAX_DIAGNOSTIC_QUERY_BYTES;
 /// Query fields whose canonical JSON value is a lossless unsigned integer.
 /// Binding adapters use this descriptor when accepting native integer inputs.
 pub const DIAGNOSTIC_QUERY_INTEGER_FIELDS: &[&str] = &[
@@ -44,6 +45,9 @@ pub enum EmbeddedDiagnosticError {
     /// Startup-only settings cannot change through plugin reload.
     #[error("configuration_conflict")]
     ConfigurationConflict,
+    /// Shared bounded request admission result.
+    #[error("{0}")]
+    Request(#[from] super::DiagnosticReadReason),
     /// Core admission or query result.
     #[error("{0}")]
     Core(#[from] DiagnosticError),
@@ -55,15 +59,9 @@ impl EmbeddedDiagnosticError {
             Self::NotInitialized => "not_initialized",
             Self::ForkRequiresExec => "fork_requires_exec",
             Self::ConfigurationConflict => "configuration_conflict",
-            Self::Core(DiagnosticError::Disabled) => "disabled",
-            Self::Core(DiagnosticError::QueryCapacity) => "busy",
-            Self::Core(DiagnosticError::QueryDisabled) => "queries_disabled",
-            Self::Core(DiagnosticError::InvalidCursor) => "invalid_cursor",
-            Self::Core(DiagnosticError::SnapshotCapacity) => "page_capacity",
-            Self::Core(DiagnosticError::Allocation) => "allocation_failed",
-            Self::Core(DiagnosticError::InvalidLimits) => "invalid_limits",
+            Self::Request(reason) => reason.as_str(),
             Self::Core(DiagnosticError::AlreadyInitialized) => "configuration_conflict",
-            Self::Core(_) => "invalid_query",
+            Self::Core(error) => error.read_reason().as_str(),
         }
     }
 }
@@ -302,64 +300,9 @@ impl Drop for EmbeddedDiagnosticPage {
     }
 }
 
-/// Reject unknown nested selector names at query input boundaries.
-///
-/// Shared ownership and cursor models remain permissive when decoding snapshots.
-/// The adapter must bound input and validate value types during deserialization.
-#[doc(hidden)]
-pub fn validate_query_selector_fields(query: &Json) -> std::result::Result<(), DiagnosticError> {
-    for (selector, allowed) in [
-        (
-            "ownership",
-            &[
-                "subscriber_instance_id",
-                "plugin_instance_id",
-                "configuration_id",
-                "responsibility",
-            ][..],
-        ),
-        (
-            "continuation",
-            &[
-                "source_instance_id",
-                "sequence",
-                "component_offset",
-                "event_offset",
-                "scope",
-            ][..],
-        ),
-    ] {
-        if let Some(Json::Object(fields)) = query.get(selector)
-            && fields
-                .keys()
-                .any(|field| !allowed.contains(&field.as_str()))
-        {
-            return Err(DiagnosticError::InvalidQuery);
-        }
-    }
-    Ok(())
-}
-
 /// Decode bounded input without copying an unbounded foreign query graph.
 pub fn decode_query(input: &str) -> Result<DiagnosticQuery> {
-    if input.len() > MAX_BINDING_QUERY_BYTES {
-        return Err(DiagnosticError::InvalidQuery.into());
-    }
-    let Json::Object(fields) =
-        serde_json::from_str(input).map_err(|_| DiagnosticError::InvalidQuery)?
-    else {
-        return Err(DiagnosticError::InvalidQuery.into());
-    };
-    let mut defaults = serde_json::to_value(DiagnosticQuery::default()).expect("query serializes");
-    let target = defaults.as_object_mut().expect("query object");
-    for (key, value) in fields {
-        if !target.contains_key(&key) {
-            return Err(DiagnosticError::InvalidQuery.into());
-        }
-        target.insert(key, value);
-    }
-    validate_query_selector_fields(&defaults)?;
-    serde_json::from_value(defaults).map_err(|_| DiagnosticError::InvalidQuery.into())
+    super::decode_diagnostic_query(input).map_err(Into::into)
 }
 
 /// Exact schema fields holding decimal-string DiagnosticNumber values. Binding
@@ -390,6 +333,8 @@ pub fn is_diagnostic_number_field(field: &str) -> bool {
             | "components_retained"
             | "max_components"
             | "max_events"
+            | "max_query_components"
+            | "max_query_events"
             | "detail_pool_bytes"
             | "max_queries"
             | "max_snapshot_bytes"

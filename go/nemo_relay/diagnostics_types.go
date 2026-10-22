@@ -259,6 +259,7 @@ type DiagnosticCursor struct {
 
 // DiagnosticQuery is the canonical diagnostic query view.
 type DiagnosticQuery struct {
+	SchemaVersion *uint32 `json:"schema_version,omitempty"`
 	// Select one logical component key across retained registrations.
 	ComponentKey *string `json:"component_key,omitempty"`
 	// Select one registration incarnation.
@@ -425,7 +426,7 @@ func (snapshot *DiagnosticSnapshot) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if value.SchemaVersion != 1 {
-		return fmt.Errorf("unsupported diagnostic snapshot schema")
+		return &DiagnosticsError{Reason: "unsupported_schema"}
 	}
 	*snapshot = DiagnosticSnapshot(value)
 	return nil
