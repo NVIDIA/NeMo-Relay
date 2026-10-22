@@ -17,15 +17,19 @@
 /// Initial version of the canonical diagnostic snapshot envelope.
 pub const DIAGNOSTIC_SCHEMA_VERSION: u32 = 1;
 
-/// Initial stable typed-catalogue revision, independent of the envelope version.
+/// Stable typed-catalogue revision, independent of the envelope version.
+///
+/// Additive catalogue names do not change this revision: supported envelopes
+/// preserve unknown names opaquely. Increment it only when an existing
+/// catalogue name's meaning or representation changes incompatibly.
 pub const DIAGNOSTIC_CATALOGUE_VERSION: u32 = 1;
 
 mod catalogue;
 pub use catalogue::{
     BuiltinDiagnosticCode, ClassificationError, CliFailureCode, CommonPluginFailureCode,
     DiagnosticClassifier, DiagnosticDomain, FailureClass, FailureCode, LoggingFailureCode,
-    NoticeCode, PluginDiagnosticFamily, PluginExecution, PluginFailureCode, PluginPhase,
-    SuccessCode,
+    NoticeCode, PluginDiagnosticFamily, PluginExecution, PluginFailureCode,
+    PluginOperationFailureCode, PluginPhase, SuccessCode,
 };
 mod number;
 pub use number::DiagnosticNumber;
@@ -41,7 +45,7 @@ pub use accounting::{
 mod event;
 pub use event::{
     Classification, DiagnosticCorrelation, DiagnosticDetail, DiagnosticEvent, DiagnosticOutcome,
-    DiagnosticOutputSummary, DiagnosticSeverity,
+    DiagnosticOutputSummary, DiagnosticSeverity, RemoteDiagnosticOrigin,
 };
 mod context;
 pub use context::{PluginExecutionName, PluginObservationContext, PluginPhaseName};

@@ -130,6 +130,8 @@ pub(super) enum ObservationCode {
 #[derive(Debug, Clone)]
 pub struct Observation<'a> {
     pub(super) code: ObservationCode,
+    // Only core's authorized transport adapter can supply remote identity.
+    pub(crate) remote: Option<nemo_relay_types::diagnostics::RemoteDiagnosticOrigin>,
     /// Optional producer-approved explanation; bounding does not perform redaction.
     pub detail: DiagnosticDetailRef<'a>,
     /// Positive input occurrence delta, never a cumulative report total.
@@ -165,6 +167,7 @@ impl<'a> Observation<'a> {
             };
         Self {
             code: ObservationCode::Builtin(classification),
+            remote: None,
             detail: detail.into(),
             count,
             severity,
@@ -186,6 +189,7 @@ impl<'a> Observation<'a> {
     ) -> Self {
         Self {
             code: ObservationCode::Extension(handle, class),
+            remote: None,
             detail: detail.into(),
             count,
             severity: if outcome == DiagnosticOutcome::Failure {
@@ -208,6 +212,7 @@ impl<'a> Observation<'a> {
     ) -> Self {
         Self {
             code: ObservationCode::OpaqueExtension(handle, class),
+            remote: None,
             detail: detail.into(),
             count,
             severity: DiagnosticSeverity::Error,
@@ -221,6 +226,7 @@ impl<'a> Observation<'a> {
     pub fn classification_overflow(outcome: DiagnosticOutcome, count: NonZeroU64) -> Self {
         Self {
             code: ObservationCode::Overflow,
+            remote: None,
             detail: DiagnosticDetailRef::None,
             count,
             severity: DiagnosticSeverity::Warning,

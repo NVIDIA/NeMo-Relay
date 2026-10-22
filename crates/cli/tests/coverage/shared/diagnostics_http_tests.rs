@@ -79,7 +79,13 @@ async fn authorization_precedes_parsing_and_private_reads() {
 async fn discovery_distinguishes_disabled_collection_and_disabled_queries() {
     for enabled in [true, false] {
         let context = context(enabled, 0);
-        let adapter = adapter(&context);
+        let runtime = crate::runtime_diagnostics::CliDiagnostics::new(context.clone(), true);
+        let adapter = DiagnosticsHttp::new(
+            context.reader(),
+            BootstrapChallengeKey::from_bytes(b"diagnostic-test-key"),
+            runtime.coverage(),
+        )
+        .unwrap();
         let token = adapter.key.diagnostics_token();
         let router = adapter.router();
         let discovery = json(
@@ -92,6 +98,16 @@ async fn discovery_distinguishes_disabled_collection_and_disabled_queries() {
         .await;
         assert_eq!(discovery["collection_enabled"], enabled);
         assert_eq!(discovery["queries_enabled"], false);
+        // Supported families remain discoverable before plugin registration and
+        // without allocating a snapshot workspace, even with collection disabled.
+        let producers = discovery["producers"].as_array().unwrap();
+        for family in ["cli.command", "plugin.native_abi", "plugin.worker_protocol"] {
+            assert!(producers.iter().any(|value| value == family));
+        }
+        assert_eq!(
+            discovery["deferred"],
+            serde_json::json!(["otel", "daemon", "bindings"])
+        );
         let response = router.oneshot(request(PREFIX, Some(&token))).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(

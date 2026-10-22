@@ -272,6 +272,7 @@ impl PluginHostActivation {
                     &load_trust,
                     &mut skipped,
                     native_artifacts,
+                    &diagnostic_context,
                 )
                 .map_err(|error| plugin_error_context("native plugin load failed", error))
             })
@@ -293,8 +294,13 @@ impl PluginHostActivation {
                 .collect::<Vec<_>>();
             (!worker_specs.is_empty())
                 .then(|| {
-                    prepare_worker_plugins_with_trust(worker_specs, &load_trust, &mut skipped)
-                        .map_err(|error| plugin_error_context("worker plugin load failed", error))
+                    prepare_worker_plugins_with_trust(
+                        worker_specs,
+                        &load_trust,
+                        &mut skipped,
+                        &diagnostic_context,
+                    )
+                    .map_err(|error| plugin_error_context("worker plugin load failed", error))
                 })
                 .transpose()?
         };

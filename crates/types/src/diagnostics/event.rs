@@ -164,6 +164,9 @@ pub struct DiagnosticEvent {
     pub component: ComponentIdentity,
     /// Original configuration attribution, preserved through component refresh.
     pub origin: DiagnosticOrigin,
+    /// Authenticated remote submission provenance, absent for local observations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteDiagnosticOrigin>,
     /// Canonical event classification; never reconstructed from a latest message.
     pub classification: Classification,
     /// Bounded plugin-operation wire facts, excluded from aggregation keys.
@@ -179,6 +182,28 @@ pub struct DiagnosticEvent {
     pub count: DiagnosticNumber,
     /// Restricted caller correlation, excluded from aggregation identity.
     pub correlation: DiagnosticCorrelation<'static>,
+}
+
+/// Fixed-size provenance retained by an authorized ingestion adapter.
+///
+/// Producer wall time is a claim with unknown clock skew. Host summaries and
+/// windows use host receipt time; clocks from different processes are never
+/// subtracted. Session rotation assigns a fresh source before sequence reset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RemoteDiagnosticOrigin {
+    /// Host-issued diagnostic session/source incarnation.
+    pub source_instance_id: uuid::Uuid,
+    /// Host-issued plugin activation incarnation, distinct from the session.
+    pub activation_instance_id: uuid::Uuid,
+    /// Ordered terminal submission sequence; not the host event sequence.
+    pub submission_sequence: DiagnosticNumber,
+    /// Optional producer-reported wall time, with unknown clock uncertainty.
+    pub observed_at: Option<ObservationTime>,
+    /// Host wall time at acceptance, also used as the event observation time.
+    pub received_at: ObservationTime,
+    /// Host monotonic elapsed time at acceptance, relative to context startup.
+    pub accepted_elapsed_millis: DiagnosticNumber,
 }
 
 impl DiagnosticEvent {

@@ -100,8 +100,8 @@ pub use nemo_relay_types::diagnostics::{
     DiagnosticSummaryScope, DiagnosticTotals, DiagnosticWindow, DiagnosticWindowBucket,
     DiagnosticWindowCoverage, FailureClass, FailureCode, LoggingFailureCode, NoticeCode,
     ObservationTime, PluginDiagnosticFamily, PluginExecution, PluginExecutionName,
-    PluginFailureCode, PluginObservationContext, PluginPhase, PluginPhaseName, SourceIdentity,
-    SuccessCode,
+    PluginFailureCode, PluginObservationContext, PluginOperationFailureCode, PluginPhase,
+    PluginPhaseName, RemoteDiagnosticOrigin, SourceIdentity, SuccessCode,
 };
 pub use read::SnapshotLease;
 use state::{

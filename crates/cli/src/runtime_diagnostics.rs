@@ -118,15 +118,13 @@ impl CliDiagnostics {
             });
         }
     }
+    /// Supported producer families, independent of collection enablement or
+    /// successful component registration. Snapshots identify actual instances.
     pub(crate) fn coverage(&self) -> Vec<&'static str> {
         OPERATIONS
             .into_iter()
-            .filter(|op| {
-                self.recorders[op.index()]
-                    .as_ref()
-                    .is_some_and(|r| r.identity().is_some())
-            })
             .map(Operation::key)
+            .chain(["plugin.native_abi", "plugin.worker_protocol"])
             .collect()
     }
 }

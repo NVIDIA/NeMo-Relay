@@ -120,6 +120,8 @@ pub enum DiagnosticDomain {
 pub enum PluginDiagnosticFamily {
     /// Shared plugin-operation codes applicable across execution mechanisms.
     Common,
+    /// Host-observed loading, validation, execution, and cleanup operations.
+    Operations,
 }
 
 /// Producer-authored plugin execution mechanism, excluded from counter identity.
@@ -207,6 +209,8 @@ pub enum PluginPhase {
     Runtime,
     /// Host policy evaluation that permits or blocks plugin realization.
     Policy,
+    /// Plugin cleanup and confirmed process termination.
+    Shutdown,
 }
 
 impl PluginPhase {
@@ -223,6 +227,7 @@ impl PluginPhase {
             Self::Activation => "activation",
             Self::Runtime => "runtime",
             Self::Policy => "policy",
+            Self::Shutdown => "shutdown",
         }
     }
 }
@@ -291,6 +296,91 @@ impl CommonPluginFailureCode {
             ],
             Self::Internal => &[FailureClass::Internal],
         }
+    }
+}
+
+/// Failures at observed dynamic-plugin operation boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(strum::EnumIter))]
+pub enum PluginOperationFailureCode {
+    /// Failure of the plugin artifact_verification operation.
+    ArtifactVerification,
+    /// Failure of the plugin policy operation.
+    Policy,
+    /// Failure of the plugin schema_validation operation.
+    SchemaValidation,
+    /// Failure of the plugin native load operation.
+    NativeLoad,
+    /// Failure of the plugin native validation operation.
+    NativeValidation,
+    /// Failure of the plugin native registration operation.
+    NativeRegistration,
+    /// Failure of the plugin native callback operation.
+    NativeCallback,
+    /// Failure of the plugin worker launch operation.
+    WorkerLaunch,
+    /// Failure of the plugin worker handshake operation.
+    WorkerHandshake,
+    /// Failure of the plugin worker validation operation.
+    WorkerValidation,
+    /// Failure of the plugin worker registration operation.
+    WorkerRegistration,
+    /// Failure of the plugin worker transport operation.
+    WorkerTransport,
+    /// Failure of the plugin worker callback operation.
+    WorkerCallback,
+    /// Failure of the plugin worker cancellation operation.
+    WorkerCancellation,
+    /// Failure of the plugin worker shutdown operation.
+    WorkerShutdown,
+    /// Failure of the plugin worker exit operation.
+    WorkerExit,
+}
+impl PluginOperationFailureCode {
+    /// Stable operation-specific name.
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::ArtifactVerification => "plugin.artifact_verification_failed",
+            Self::Policy => "plugin.policy_failed",
+            Self::SchemaValidation => "plugin.schema_validation_failed",
+            Self::NativeLoad => "plugin.native.load_failed",
+            Self::NativeValidation => "plugin.native.validation_failed",
+            Self::NativeRegistration => "plugin.native.registration_failed",
+            Self::NativeCallback => "plugin.native.callback_failed",
+            Self::WorkerLaunch => "plugin.worker.launch_failed",
+            Self::WorkerHandshake => "plugin.worker.handshake_failed",
+            Self::WorkerValidation => "plugin.worker.validation_failed",
+            Self::WorkerRegistration => "plugin.worker.registration_failed",
+            Self::WorkerTransport => "plugin.worker.transport_failed",
+            Self::WorkerCallback => "plugin.worker.callback_failed",
+            Self::WorkerCancellation => "plugin.worker.cancellation_failed",
+            Self::WorkerShutdown => "plugin.worker.shutdown_failed",
+            Self::WorkerExit => "plugin.worker.exit_failed",
+        }
+    }
+    /// A producer must establish the cause from structured operation evidence.
+    pub const fn allowed_classes(self) -> &'static [FailureClass] {
+        &[
+            FailureClass::Unknown,
+            FailureClass::InvalidInput,
+            FailureClass::InvalidState,
+            FailureClass::NotFound,
+            FailureClass::Conflict,
+            FailureClass::Authentication,
+            FailureClass::PermissionDenied,
+            FailureClass::Unsupported,
+            FailureClass::Incompatible,
+            FailureClass::Timeout,
+            FailureClass::Unavailable,
+            FailureClass::ResourceExhausted,
+            FailureClass::Io,
+            FailureClass::ExecutionFailed,
+            FailureClass::PolicyRejected,
+            FailureClass::Internal,
+        ]
     }
 }
 
@@ -389,6 +479,8 @@ impl LoggingFailureCode {
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum PluginFailureCode {
+    /// Host-observed operations across native and worker execution.
+    Operation(PluginOperationFailureCode),
     /// Common plugin failures.
     Common(CommonPluginFailureCode),
 }
@@ -398,6 +490,7 @@ impl PluginFailureCode {
     #[must_use]
     pub const fn family(self) -> PluginDiagnosticFamily {
         match self {
+            Self::Operation(_) => PluginDiagnosticFamily::Operations,
             Self::Common(_) => PluginDiagnosticFamily::Common,
         }
     }
@@ -405,6 +498,7 @@ impl PluginFailureCode {
     #[must_use]
     pub const fn canonical_name(self) -> &'static str {
         match self {
+            Self::Operation(code) => code.canonical_name(),
             Self::Common(code) => code.canonical_name(),
         }
     }
@@ -412,6 +506,7 @@ impl PluginFailureCode {
     #[must_use]
     pub const fn allowed_classes(self) -> &'static [FailureClass] {
         match self {
+            Self::Operation(code) => code.allowed_classes(),
             Self::Common(code) => code.allowed_classes(),
         }
     }
@@ -533,6 +628,23 @@ impl FailureCode {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(strum::EnumIter))]
 pub enum SuccessCode {
+    /// Observation identified by `plugin.native.loaded`.
+    PluginNativeLoaded,
+    /// Observation identified by `plugin.native.validated`.
+    PluginNativeValidated,
+    /// Observation identified by `plugin.native.registered`.
+    PluginNativeRegistered,
+    /// Observation identified by `plugin.worker.started`.
+    PluginWorkerStarted,
+    /// Observation identified by `plugin.worker.handshake_completed`.
+    PluginWorkerHandshakeCompleted,
+    /// Observation identified by `plugin.worker.validated`.
+    PluginWorkerValidated,
+    /// Observation identified by `plugin.worker.registered`.
+    PluginWorkerRegistered,
+    /// Observation identified by `plugin.worker.process_cleaned`.
+    PluginWorkerProcessCleaned,
+
     /// An upstream transport returned headers, independently of provider status.
     CliUpstreamHeadersReceived,
     /// An upstream response body was fully read, independently of provider status.
@@ -567,6 +679,15 @@ impl SuccessCode {
     #[must_use]
     pub const fn canonical_name(self) -> &'static str {
         match self {
+            Self::PluginNativeLoaded => "plugin.native.loaded",
+            Self::PluginNativeValidated => "plugin.native.validated",
+            Self::PluginNativeRegistered => "plugin.native.registered",
+            Self::PluginWorkerStarted => "plugin.worker.started",
+            Self::PluginWorkerHandshakeCompleted => "plugin.worker.handshake_completed",
+            Self::PluginWorkerValidated => "plugin.worker.validated",
+            Self::PluginWorkerRegistered => "plugin.worker.registered",
+            Self::PluginWorkerProcessCleaned => "plugin.worker.process_cleaned",
+
             Self::CliUpstreamHeadersReceived => "cli.upstream.headers_received",
             Self::CliUpstreamBodyCompleted => "cli.upstream.body_completed",
             Self::CliChildCleaned => "cli.child.cleaned",
@@ -650,6 +771,16 @@ impl BuiltinDiagnosticCode {
         match self {
             Self::Failure(code) => code.domain(),
             Self::Success(
+                SuccessCode::PluginNativeLoaded
+                | SuccessCode::PluginNativeValidated
+                | SuccessCode::PluginNativeRegistered
+                | SuccessCode::PluginWorkerStarted
+                | SuccessCode::PluginWorkerHandshakeCompleted
+                | SuccessCode::PluginWorkerValidated
+                | SuccessCode::PluginWorkerRegistered
+                | SuccessCode::PluginWorkerProcessCleaned,
+            ) => DiagnosticDomain::Plugin,
+            Self::Success(
                 SuccessCode::CliUpstreamHeadersReceived
                 | SuccessCode::CliUpstreamBodyCompleted
                 | SuccessCode::CliChildCleaned
@@ -682,6 +813,16 @@ impl BuiltinDiagnosticCode {
     pub const fn plugin_family(self) -> Option<PluginDiagnosticFamily> {
         match self {
             Self::Failure(FailureCode::Plugin(code)) => Some(code.family()),
+            Self::Success(
+                SuccessCode::PluginNativeLoaded
+                | SuccessCode::PluginNativeValidated
+                | SuccessCode::PluginNativeRegistered
+                | SuccessCode::PluginWorkerStarted
+                | SuccessCode::PluginWorkerHandshakeCompleted
+                | SuccessCode::PluginWorkerValidated
+                | SuccessCode::PluginWorkerRegistered
+                | SuccessCode::PluginWorkerProcessCleaned,
+            ) => Some(PluginDiagnosticFamily::Operations),
             Self::Notice(NoticeCode::ConfigurationInherited) => {
                 Some(PluginDiagnosticFamily::Common)
             }
@@ -732,6 +873,62 @@ impl BuiltinDiagnosticCode {
     #[must_use]
     pub fn all() -> &'static [Self] {
         &[
+            Self::Success(SuccessCode::PluginNativeLoaded),
+            Self::Success(SuccessCode::PluginNativeValidated),
+            Self::Success(SuccessCode::PluginNativeRegistered),
+            Self::Success(SuccessCode::PluginWorkerStarted),
+            Self::Success(SuccessCode::PluginWorkerHandshakeCompleted),
+            Self::Success(SuccessCode::PluginWorkerValidated),
+            Self::Success(SuccessCode::PluginWorkerRegistered),
+            Self::Success(SuccessCode::PluginWorkerProcessCleaned),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::ArtifactVerification,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::Policy,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::SchemaValidation,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::NativeLoad,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::NativeValidation,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::NativeRegistration,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::NativeCallback,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::WorkerLaunch,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::WorkerHandshake,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::WorkerValidation,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::WorkerRegistration,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::WorkerTransport,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::WorkerCallback,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::WorkerCancellation,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::WorkerShutdown,
+            ))),
+            Self::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                PluginOperationFailureCode::WorkerExit,
+            ))),
             Self::Failure(FailureCode::Cli(CliFailureCode::ChildCleanup)),
             Self::Failure(FailureCode::Cli(CliFailureCode::UpstreamResponse)),
             Self::Success(SuccessCode::CliUpstreamHeadersReceived),
@@ -836,6 +1033,11 @@ mod tests {
             .map(|code| {
                 BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Common(code)))
             })
+            .chain(PluginOperationFailureCode::iter().map(|code| {
+                BuiltinDiagnosticCode::Failure(FailureCode::Plugin(PluginFailureCode::Operation(
+                    code,
+                )))
+            }))
             .chain(
                 LoggingFailureCode::iter()
                     .map(|code| BuiltinDiagnosticCode::Failure(FailureCode::Logging(code))),

@@ -3479,6 +3479,7 @@ fn diagnostic_recording_profile() {
 fn builtin_query_selectors_are_independent_of_small_identity_limits() {
     let service = diagnostics(DiagnosticLimits {
         max_identity_bytes: 8,
+        max_counters: BuiltinDiagnosticCode::all().len(),
         ..limits()
     });
     let component = service
