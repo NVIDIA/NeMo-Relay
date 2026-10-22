@@ -4,6 +4,92 @@
 use super::*;
 use crate::api::resource_metrics::{CpuMetrics, DataUnit, DurationUnit};
 
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn manager_installation_reconciles_inherited_inspection_ownership() {
+    use nemo_relay_types::diagnostics::ResourceMemoryAvailability;
+
+    // Isolate process-global ownership markers and bound regressions that could deadlock.
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_RESOURCE_MANAGER_OWNER_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let current_thread = std::thread::current();
+        let test_name = current_thread.name().expect("named test thread");
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env(CHILD_ENV, "1")
+            .spawn()
+            .expect("ownership regression process should start");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "ownership regression failed: {status}");
+                return;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("ownership regression did not finish within 20 seconds");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    let pid = std::process::id();
+    let inherited_pid = pid.wrapping_add(1).max(1);
+    assert_eq!(
+        latest_memory_view(Some(pid)).availability,
+        ResourceMemoryAvailability::Disabled
+    );
+    assert!(GLOBAL_MANAGER.lock().unwrap().is_none());
+    assert_eq!(MANAGER_OWNER_PID.load(Ordering::Acquire), pid);
+
+    // Simulate a parent that inspected before activation, then forked while idle.
+    MANAGER_OWNER_PID.store(inherited_pid, Ordering::Release);
+    assert_eq!(
+        latest_memory_view(Some(pid)).availability,
+        ResourceMemoryAvailability::Invalidated
+    );
+    let manager = global_manager().unwrap();
+    let target = current_process_target(ResourceMeasurementScope::ApplicationProcess).unwrap();
+    let config = ResourceMetricsConfig {
+        measurement_scope: ResourceMetricsMeasurementScope::ApplicationProcess,
+        ..Default::default()
+    };
+    let generation = manager.activate(target, config).unwrap();
+    assert!(
+        manager
+            .collect_blocking(SamplingSeries::OnDemand)
+            .unwrap()
+            .memory
+            .is_some()
+    );
+    assert_eq!(
+        latest_memory_view(Some(pid)).availability,
+        ResourceMemoryAvailability::Available
+    );
+    assert_eq!(MANAGER_OWNER_PID.load(Ordering::Acquire), pid);
+    assert!(Arc::ptr_eq(&manager, &global_manager().unwrap()));
+    manager.deactivate(generation);
+
+    // Neither inspection nor initialization may wait on an inherited locked mutex.
+    *GLOBAL_MANAGER.lock().unwrap() = None;
+    MANAGER_OWNER_PID.store(inherited_pid, Ordering::Release);
+    let _locked = GLOBAL_MANAGER.lock().unwrap();
+    ACTIVE_OWNER_PID.store(inherited_pid, Ordering::Release);
+    assert!(global_manager().is_err());
+    assert_eq!(
+        latest_memory_view(Some(pid)).availability,
+        ResourceMemoryAvailability::Invalidated
+    );
+    ACTIVE_OWNER_PID.store(0, Ordering::Release);
+    assert!(global_manager().is_err());
+    assert_eq!(MANAGER_OWNER_PID.load(Ordering::Acquire), inherited_pid);
+    assert_eq!(
+        latest_memory_view(Some(pid)).availability,
+        ResourceMemoryAvailability::Invalidated
+    );
+}
+
 fn snapshot(total_time: u64) -> ResourceMetricsSnapshot {
     ResourceMetricsSnapshot {
         timestamp: Utc::now(),

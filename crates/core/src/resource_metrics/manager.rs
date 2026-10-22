@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Mutex, RwLock, TryLockError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -682,22 +682,38 @@ pub(crate) async fn collect_on_demand() -> Result<ResourceMetricsSnapshot> {
 
 pub(crate) fn global_manager() -> Result<Arc<ResourceMetricsManager>> {
     ensure_process_owner()?;
-    // Also fence inspection after an inactive manager is inherited across fork.
-    MANAGER_OWNER_PID
-        .compare_exchange(0, std::process::id(), Ordering::AcqRel, Ordering::Acquire)
-        .ok();
-    let mut manager = GLOBAL_MANAGER
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    if let Some(manager) = manager
-        .as_ref()
-        .filter(|manager| manager.owner_pid == std::process::id())
-    {
-        return Ok(Arc::clone(manager));
-    }
-    let created = Arc::new(ResourceMetricsManager::new()?);
-    *manager = Some(Arc::clone(&created));
-    Ok(created)
+    let pid = std::process::id();
+    let owner = MANAGER_OWNER_PID
+        .compare_exchange(0, pid, Ordering::AcqRel, Ordering::Acquire)
+        .unwrap_or_else(|owner| owner);
+    let mut manager = if owner != 0 && owner != pid {
+        // A vanished parent thread may have held this mutex at fork. Never wait on it.
+        match GLOBAL_MANAGER.try_lock() {
+            Ok(manager) => manager,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                return Err(FlowError::InvalidArgument(
+                    "resource_metrics manager lock was inherited across fork and is unavailable; exec and activate it in the child before collecting"
+                        .into(),
+                ));
+            }
+        }
+    } else {
+        GLOBAL_MANAGER
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    };
+    let selected =
+        if let Some(manager) = manager.as_ref().filter(|manager| manager.owner_pid == pid) {
+            Arc::clone(manager)
+        } else {
+            let created = Arc::new(ResourceMetricsManager::new()?);
+            *manager = Some(Arc::clone(&created));
+            created
+        };
+    // Reconcile inspection ownership after installation/reuse, before releasing the lock.
+    MANAGER_OWNER_PID.store(pid, Ordering::Release);
+    Ok(selected)
 }
 
 /// Owns the optional resource metrics polling thread for a built-in plugin activation.
