@@ -274,8 +274,16 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
     )
     .await
     .unwrap();
+    let diagnostic_offer = Some(crate::daemon::diagnostics::DiagnosticOffer {
+        source: uuid::Uuid::now_v7(),
+        schema_version: nemo_relay::diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+        enabled: false,
+        query_available: false,
+        whole_context_read: false,
+        max_page_bytes: 0,
+    });
     let mut register = WorkerRegisterRequest {
-        diagnostics: None,
+        diagnostics: diagnostic_offer.clone(),
         proof: handshake.proof,
         worker_id: "worker".into(),
         endpoint: endpoint.clone(),
@@ -428,7 +436,7 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
     .unwrap();
     let recovered: WorkerRegisterResponse = restored
         .request(Command::RecoverWorker(WorkerRecoverRequest {
-            diagnostics: None,
+            diagnostics: diagnostic_offer,
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint: endpoint.clone(),

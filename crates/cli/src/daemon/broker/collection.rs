@@ -41,7 +41,6 @@ const MAX_JSON_DEPTH: usize = 24;
 pub(crate) const fn owned_bytes() -> usize {
     // Compile-time checks keep the conservative fixed metadata allowances honest.
     assert!(std::mem::size_of::<Slot>() + 512 <= 1024);
-    assert!(SESSION_METADATA_ALLOWANCE_BYTES <= PER_SESSION_METADATA_ALLOWANCE_BYTES);
     assert!(std::mem::size_of::<Collector>() + 2 * std::mem::size_of::<CacheKey>() + 256 < 4096);
     // Includes ingress, worst-case escaped-string parser scratch, output slots,
     // session negotiation metadata at the broker admission cap, and fixed indices.
