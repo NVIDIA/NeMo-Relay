@@ -533,7 +533,6 @@ impl State {
         };
         self.reclaim_component(index, true)
     }
-    #[cfg(feature = "worker-grpc")]
     pub(super) fn discard_unobserved_component(&mut self, handle: ComponentHandle) -> bool {
         if self.component(handle).is_none_or(|component| {
             component.lifetime.totals.recorded_events_total.value.get() != 0

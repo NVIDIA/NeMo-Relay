@@ -36,6 +36,8 @@ pub use catalogue::{
 };
 mod reason;
 pub use reason::DiagnosticReadReason;
+mod recording;
+pub use recording::{EvidenceDisposition, RecordOutcome, RecordReceipt};
 mod number;
 pub use number::DiagnosticNumber;
 mod identity;

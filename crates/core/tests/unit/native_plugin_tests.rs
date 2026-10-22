@@ -5,6 +5,26 @@
 
 use super::*;
 
+fn native_test_diagnostic_context() -> crate::diagnostics::Diagnostics {
+    crate::diagnostics::Diagnostics::from_settings(
+        crate::diagnostics::SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "native-test".into(),
+            relay_version: "test".into(),
+        },
+        crate::diagnostics::DiagnosticsSettings::default(),
+    )
+    .unwrap()
+}
+fn native_test_diagnostics() -> Arc<native_diagnostics::NativeDiagnostics> {
+    Arc::new(native_diagnostics::NativeDiagnostics::new(
+        native_test_diagnostic_context(),
+        false,
+        "fixture",
+    ))
+}
+
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Barrier;
@@ -170,6 +190,7 @@ fn native_logging_rejects_invalid_targets_and_fields_without_leaking_strings() {
 fn native_owned_gate_handles_are_activation_scoped_and_cleanup_disables_the_capability() {
     let _context = GlobalContextRestore::replace_with_empty();
     let runtime = Arc::new(NativeHostPluginRuntime {
+        diagnostics: native_test_diagnostics(),
         namespace: "fixture:".into(),
         encode_local_names: true,
         instance: Weak::new(),
@@ -278,6 +299,7 @@ fn native_owned_gate_handles_are_activation_scoped_and_cleanup_disables_the_capa
 #[test]
 fn native_runtime_discovery_validates_filters_and_returns_matching_registrations() {
     let runtime = NativeHostPluginRuntime {
+        diagnostics: native_test_diagnostics(),
         namespace: "fixture:".into(),
         encode_local_names: false,
         instance: Weak::new(),
@@ -321,6 +343,7 @@ fn native_runtime_discovery_validates_filters_and_returns_matching_registrations
 #[test]
 fn native_runtime_control_rejects_missing_arguments_and_invalid_registration_kinds() {
     let runtime = NativeHostPluginRuntime {
+        diagnostics: native_test_diagnostics(),
         namespace: "fixture:".into(),
         encode_local_names: false,
         instance: Weak::new(),
@@ -438,6 +461,8 @@ fn native_runtime_control_rejects_missing_arguments_and_invalid_registration_kin
 #[test]
 fn native_context_gate_registration_validates_inputs_and_rolls_back_the_gate() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native".into(),
         relay_compat: "^0.8".into(),
@@ -448,6 +473,7 @@ fn native_context_gate_registration_validates_inputs_and_rolls_back_the_gate() {
     });
     let mut registration = PluginRegistrationContext::with_namespace("fixture:");
     let mut host = NativeHostPluginContext {
+        diagnostics: native_test_diagnostics(),
         ctx: ptr::from_mut(&mut registration),
         instance,
     };
@@ -1002,6 +1028,8 @@ fn native_test_adapter(
         plugin_kind: "test.native.adapter".into(),
         allows_multiple_components: false,
         instance: Arc::new(NativePluginInstance {
+            diagnostic_context: native_test_diagnostic_context(),
+            diagnostic_read_context: false,
             diagnostics: Default::default(),
             plugin_kind: "test.native.adapter".into(),
             relay_compat: "^0.8".into(),
@@ -1144,7 +1172,7 @@ fn assert_native_host_api_versions() {
     assert_native_host_api_descriptor(
         current,
         NEMO_RELAY_NATIVE_ABI_VERSION,
-        std::mem::size_of::<NemoRelayNativeHostApiV8>(),
+        std::mem::size_of::<nemo_relay_plugin::diagnostics::abi::NativeHostApiV8WithDiagnostics>(),
     );
     assert_native_host_api_descriptor(
         native_host_api_v7(),
@@ -2393,7 +2421,7 @@ fn assert_native_json_output_and_host_api() {
     assert_eq!(host_api.abi_version, NEMO_RELAY_NATIVE_ABI_VERSION);
     assert_eq!(
         host_api.struct_size,
-        std::mem::size_of::<NemoRelayNativeHostApiV8>()
+        std::mem::size_of::<nemo_relay_plugin::diagnostics::abi::NativeHostApiV8WithDiagnostics>()
     );
 }
 
@@ -5747,6 +5775,8 @@ fn native_registration_entrypoints_reject_null_contexts() {
 #[test]
 fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native".into(),
         relay_compat: "^0.8".into(),
@@ -5756,6 +5786,7 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
         _artifact_snapshot: None,
     });
     let mut invalid_host = NativeHostPluginContext {
+        diagnostics: native_test_diagnostics(),
         ctx: ptr::null_mut(),
         instance: Arc::clone(&instance),
     };
@@ -5774,6 +5805,7 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
 
     let mut registration = PluginRegistrationContext::new();
     let mut host = NativeHostPluginContext {
+        diagnostics: native_test_diagnostics(),
         ctx: ptr::from_mut(&mut registration),
         instance,
     };
@@ -6201,6 +6233,8 @@ fn assert_async_registration_entrypoints_validate_contracts(
 #[cfg(unix)]
 fn assert_context_registrations_reject_legacy_relay_contracts() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native.legacy".into(),
         relay_compat: "^0.5".into(),
@@ -6211,6 +6245,7 @@ fn assert_context_registrations_reject_legacy_relay_contracts() {
     });
     let mut registration = PluginRegistrationContext::new();
     let mut host = NativeHostPluginContext {
+        diagnostics: native_test_diagnostics(),
         ctx: ptr::from_mut(&mut registration),
         instance,
     };
@@ -6233,6 +6268,8 @@ fn assert_context_registrations_reject_legacy_relay_contracts() {
     assert_last_error_contains("excludes Relay 0.5");
 
     let context_instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native.context-legacy".into(),
         relay_compat: "^0.8".into(),
@@ -6243,6 +6280,7 @@ fn assert_context_registrations_reject_legacy_relay_contracts() {
     });
     let mut context_registration = PluginRegistrationContext::new();
     let mut context_host = NativeHostPluginContext {
+        diagnostics: native_test_diagnostics(),
         ctx: ptr::from_mut(&mut context_registration),
         instance: context_instance,
     };
@@ -6693,6 +6731,8 @@ fn concurrent_native_stream_callbacks_close_scopes_on_isolated_stacks() {
 #[tokio::test]
 async fn native_async_wrappers_validate_callback_result_shapes() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native.async".into(),
         relay_compat: "^0.8".into(),
@@ -7690,6 +7730,8 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
 #[tokio::test]
 async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native.callback-errors".into(),
         relay_compat: "^0.8".into(),
@@ -7845,6 +7887,8 @@ async fn native_callback_diagnostics_exclude_propagated_next_failures() {
         Uuid::now_v7(),
     );
     let instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics,
         plugin_kind: "test.native.provenance".into(),
         relay_compat: "^0.8".into(),
@@ -7937,6 +7981,8 @@ async fn native_callback_diagnostics_exclude_propagated_next_failures() {
 #[tokio::test]
 async fn native_tool_execution_context_preserves_fields_and_callback_boundaries() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native.tool-execution-context".into(),
         relay_compat: ">=0.9,<1.0".into(),
@@ -8390,6 +8436,7 @@ fn native_conditional_callback_registration_consumes_state_on_every_rejected_pat
     assert_eq!(frees.load(Ordering::SeqCst), 2);
 
     let inactive_runtime = NativeHostPluginRuntime {
+        diagnostics: native_test_diagnostics(),
         namespace: "test:".into(),
         encode_local_names: false,
         instance: Weak::new(),
@@ -8414,6 +8461,7 @@ fn native_conditional_callback_registration_consumes_state_on_every_rejected_pat
     assert_eq!(frees.load(Ordering::SeqCst), 3);
 
     let active_runtime = NativeHostPluginRuntime {
+        diagnostics: native_test_diagnostics(),
         namespace: "test:".into(),
         encode_local_names: false,
         instance: Weak::new(),
@@ -9004,6 +9052,8 @@ unsafe extern "C" fn echo_native_llm_intercept(
 #[tokio::test]
 async fn native_llm_intercept_preserves_annotations_and_releases_invalid_output_strings() {
     let instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics: Default::default(),
         plugin_kind: "test.native.intercept".into(),
         relay_compat: "^0.10".into(),
@@ -9298,6 +9348,8 @@ async fn synchronous_sanitizer_wrappers_record_once_without_projecting_details()
         })
         .unwrap();
     let instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics: super::super::diagnostics::PluginDiagnostics::new(
             &context,
             "test.native.sanitizers",
@@ -9432,6 +9484,8 @@ fn enabled_native_diagnostics_fixture(
     )
     .unwrap();
     let instance = Arc::new(NativePluginInstance {
+        diagnostic_context: native_test_diagnostic_context(),
+        diagnostic_read_context: false,
         diagnostics: super::super::diagnostics::PluginDiagnostics::new(
             &context,
             "test.native.accounting",
