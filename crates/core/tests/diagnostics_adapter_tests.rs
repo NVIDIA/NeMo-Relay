@@ -232,10 +232,37 @@ fn windows_rotation_sharing_violation_records_once_without_projection_recursion(
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["message"], "first record");
+    assert_eq!(rows[0]["message"], "Diagnostic observation");
+    assert_eq!(rows[0]["event"], "plugin.internal");
+    assert!(rows[0]["fields"]["diagnostic"].get("detail").is_none());
+    assert!(!output.contains("first record"));
+    assert!(!output.contains("rotation fails"));
     assert!(sink.closed_at.is_some());
     drop(locked);
     file_logging(&service, path).shutdown();
+}
+
+fn read_closed_summary_log(path: &std::path::Path, excluded_details: &[&str]) -> Vec<Value> {
+    let output = std::fs::read_to_string(path).unwrap();
+    // JSON escaping must not hide raw detail leaking into the log file.
+    for message in excluded_details {
+        assert!(!output.contains(&serde_json::to_string(message).unwrap()));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // An exclusive open verifies all worker-owned file handles closed.
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(path)
+            .unwrap();
+    }
+    output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
 }
 
 #[test]
@@ -280,30 +307,10 @@ fn unicode_paths_preserve_summary_logs_and_retained_details_through_rotation_and
         } else {
             vec![path.clone()]
         };
-        let mut rows = Vec::<Value>::new();
-        for file in files {
-            let output = std::fs::read_to_string(&file).unwrap();
-            // JSON escaping must not hide raw detail leaking into either log file.
-            for message in messages {
-                assert!(!output.contains(&serde_json::to_string(message).unwrap()));
-            }
-            rows.extend(
-                output
-                    .lines()
-                    .map(|line| serde_json::from_str::<Value>(line).unwrap()),
-            );
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::OpenOptionsExt;
-                // An exclusive open verifies all worker-owned file handles closed.
-                std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .share_mode(0)
-                    .open(&file)
-                    .unwrap();
-            }
-        }
+        let rows: Vec<Value> = files
+            .iter()
+            .flat_map(|file| read_closed_summary_log(file, &messages))
+            .collect();
         assert_eq!(rows.len(), messages.len());
         for row in &rows {
             assert_eq!(row["message"], "Diagnostic observation");
