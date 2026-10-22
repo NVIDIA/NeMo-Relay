@@ -232,7 +232,11 @@ fn windows_rotation_sharing_violation_records_once_without_projection_recursion(
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["message"], "first record");
+    assert_eq!(rows[0]["message"], "Diagnostic observation");
+    assert_eq!(rows[0]["event"], "plugin.internal");
+    assert!(rows[0]["fields"]["diagnostic"].get("detail").is_none());
+    assert!(!output.contains("first record"));
+    assert!(!output.contains("rotation fails"));
     assert!(sink.closed_at.is_some());
     drop(locked);
     file_logging(&service, path).shutdown();
